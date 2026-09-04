@@ -1,8 +1,8 @@
 # Argus / Heimdall 边缘端一体化 AI 视频分析系统 产品需求文档 (PRD)
 
-| 文档版本 | 创建时间 | 负责人 | 评审状态 | 目标形态 |
+| 文档版本 | 修订时间 | 架构负责人 | 评审状态 | 目标形态 |
 |---|---|---|---|---|
-| **V1.0** | 2025-05-18 | Antigravity 架构组 | 待评审 | 纯 Rust 单一可执行文件 (All-in-One Binary) + React 现代化内嵌控制台 |
+| **V1.1 (正式定稿版)** | 2026-09-04 | Antigravity 架构组 | 评审通过 (Grilling 决策收敛) | 纯 Rust 单一可执行文件 (All-in-One Binary) + React 现代化内嵌控制台 |
 
 ---
 
@@ -12,315 +12,270 @@
 
 | 版本号 | 修订日期 | 修订人 | 修订说明 |
 |---|---|---|---|
-| V1.0 | 2025-05-18 | 架构组 | 首发正式稿：明确自 `/Users/zhang/dev/go/argus` 重构为 Rust 单二进制系统；确定砍掉传统企业级多用户 RBAC、保留核心操作审计日志；确定首发基于 Apple Silicon (ANE/CoreML) 的 YOLO 通用目标检测管线与 WebRTC 超低延迟流媒体传输。 |
+| V1.0 | 2026-09-04 | 架构组 | 初版草稿：提出由 Go+C++ 重构为 Rust 单二进制系统；保留操作审计日志。 |
+| **V1.1** | 2026-09-04 | 架构组 & 评审组 | **重构架构全量收敛定稿**：<br>1. **流媒体协议锁定**：全面废除 WebRTC/WHEP，正式确立轻量自研 Enhanced FLV (HTTP-FLV / WS-FLV) + 前端 MSE 硬件解码播放；<br>2. **算法包生态与 C ABI**：推翻硬编码单一 YOLO 设想，100% 继承并升级原有 C ABI 规范（兼容 `sdk/include/argus/algo.h`），保留 `algo-packages/{platform_id}/{algo_id}` 动态热插拔与七步沙箱校验；<br>3. **两级分工体系**：确立“算法包只做纯感知（Perception）推理，Engine 宿主管线统管硬件级预裁剪（Pre-crop ROI）、坐标映射、ByteTrack 航迹管理、空间几何规则（ROI/Line/Mask）与 5 秒防重复冷却”；<br>4. **边缘高能效解码与双流高清抓拍**：默认拉取子码流（640×360）进行硬解与推理；主码流以 NALU 数据包仅进内存环形队列（Ring Buffer，零解码开销），告警瞬间按时标 $T$ 快速解码主码流帧，产出 1080P/4K 高清证据原图与目标特写图；<br>5. **业务证据中心三支柱**：重构单一告警表，建立“📸 抓拍（行迹回溯）”、“🚨 告警（违规事件）”、“👤 识别对账（人脸/车牌底库 1:N 对比）”及底库管理体系；<br>6. **存储保护与原子淘汰**：统一存储池，拒绝死板物理分区与高开销 `du` 磁盘扫描；依托系统调用 `statvfs` 水位兜底，优先淘汰普通抓拍以保全告警大图，严格执行“图在案在，图销案销”原子级清理；<br>7. **实时流动态布防工作台**：废除静态截图标注，布防设计器直接在子码流动态实时流画面上叠加透明交互层绘制几何规则；前端无违规时不推高频噪点框，仅在告警时弹出卡片与大图。 |
 
 ### 1.2 名词解释与关键术语
 
 | 术语 / 缩写 | 英文全称 | 说明 |
 |---|---|---|
-| **All-in-One Binary** | 单一可执行文件 | 系统构建产物为一个独立的二进制程序（`argus`），无需外挂动态库、无 Python/Node/Go 运行时依赖，前端构建产物通过 `rust-embed` 直接内嵌。 |
-| **WebRTC / WHEP** | WebRTC HTTP Egress Protocol (RFC 9385) | 轻量低延迟媒体拉流协议，浏览器通过单次 HTTP POST SDP 协商建立 PeerConnection，延迟通常在 100~300ms 之间。 |
-| **CVPixelBuffer** | Core Video Pixel Buffer | Apple macOS / iOS 系统的原生硬件图像缓冲区，封装由 VideoToolbox 硬解出的 YUV/NV12 纹理，可直接零拷贝投递给 ANE/Metal。 |
-| **ANE / Core ML** | Apple Neural Engine / Core ML | 苹果自研神经网络硬件加速单元与专属推理框架，低功耗、高能效比端侧推理核心。 |
-| **ByteTrack** | ByteTrack Multi-Object Tracking | 基于检测框高低分两阶段关联的多目标跟踪算法，纯 Rust 实现，用于维持同一摄像机画面内目标的连续轨迹 (`track_id`)。 |
-| **ROI / Mask / Line** | 空间几何检测规则 | **ROI**：感兴趣检测区域（仅在此区域内报警）；**Mask**：屏蔽遮罩（忽略此区域内的干扰）；**Line**：越界分界线（目标跨越设定方向触发越界告警）。 |
-| **Motion Gate** | 运动检测门控 | 基于低分辨率差分的帧级前置门控机制，画面无明显运动时跳过高算力 NPU 推理，大幅降低空闲期功耗与温度。 |
-| **Operation Log** | 操作日志 (Oplog) | 记录系统管理端所有写操作（新增/修改/删除/启停）的安全审计记录，包含操作人、IP、路径、耗时与脱敏后的请求体。 |
+| **All-in-One Binary** | 单一可执行文件 | 系统构建产物为一个独立的单二进制程序（`argus`），无需外挂动态运行时、无 Python/Node/Go 依赖，前端构建产物通过 `rust-embed` 直接编译内嵌。 |
+| **Enhanced FLV** | Enhanced RTMP/FLV (v1.0.1) | 扩展版 FLV 容器标准，支持 FourCC `hvc1`（H.265/HEVC）与 `avc1`（H.264）的原生封装，通过 HTTP-FLV / WS-FLV 分块传输，延迟在 200~400ms 级别。 |
+| **MSE** | Media Source Extensions | 浏览器 W3C 标准多媒体扩展接口，前端借助 `mpegts.js` 将接收到的 FLV 分块流直接解封装并交由浏览器/显卡底层硬件解码播放。 |
+| **C ABI Algorithm Package** | C ABI 算法包 | 遵循标准 C ABI 虚拟函数表（`av_algo_abi`）封装的动态库（`.dylib` / `.so`），由独立目录资产管理（`algo-packages/{platform_id}/{algo_id}`），支持热插拔与沙箱自测。 |
+| **Pre-crop ROI** | 硬件级预裁剪推理 | 用户指定特写区域（如道闸口车牌、收银台），由 Engine 利用底层 2D 硬件单元裁剪后再送入模型推理，坐标自动无损还原至全画面。 |
+| **Evidence Triad** | 证据中心三支柱 | 系统承载的 3 种独立生命周期业务数据：**抓拍记录**（行迹回溯）、**告警记录**（安全防范违规）、**识别记录**（人脸/车牌底库 1:N 对比）。 |
+| **Atomic Eviction** | 原子联动淘汰 | 磁盘配额告急时，系统将最老批次的证据图片与 SQLite 数据库行在同一事务中同步销毁，恪守“图在案在，图销案销”，绝不产生无图死记录。 |
 
 ---
 
 ## 2. 产品背景与重构愿景
 
-### 2.1 现状与痛点剖析（原 Go + C++ 多进程架构）
+### 2.1 现状与痛点剖析（原 Go + C++ 异构架构）
 
-原系统 `/Users/zhang/dev/go/argus` 采用了典型的传统异构拆分架构：
-1. **进程碎片与部署极其沉重**：
-   - 系统被割裂为 Go 业务服务（Gin + GORM）、C++20 流媒体与推理引擎（依赖 ZLMediaKit、动态 C ABI 插件）、Vue 3 前端工程（基于 Vben Admin 5.7 重度脚手架）。
-   - 依赖 Nginx 进行跨域反向代理与静态托管，依赖外部动态库。在边缘盒子（如 ARM/嵌入式 Linux/Mac mini 等）上交付时，交叉编译门槛高、容器镜像体积大、排障链路长。
-2. **IPC 跨进程通信与数据拷贝损耗**：
-   - 业务调度在 Go，流媒体解码与算法推理在 C++ 引擎，两者通过 IPC / Protobuf 通信。
-   - 告警图片抓拍与元数据流转经历跨进程序列化与文件系统二次读写，增加了不必要的 CPU 开销与内存拷贝。
+原系统 `/Users/zhang/dev/go/argus` 验证了算法包生态与媒体底座的可行性，但也暴露了多进程拆分架构的严重瓶颈：
+1. **跨进程 IPC 与内存二次拷贝损耗**：
+   业务调度运行于 Go，流媒体与算法推理运行于 C++ 引擎，二者通过 UNIX Domain Socket (UDS) / Protobuf 频繁序列化通信。告警图片和元数据在不同进程间打转落盘，增加了不必要的内存拷贝与 CPU 缓存抖动。
+2. **进程碎片与部署极其沉重**：
+   依赖 Nginx 跨域反代、依赖外部动态运行时，多进程守护与崩溃恢复逻辑脆弱。在边缘嵌入式硬件（RK3588、Atlas 200I 等）上交付时容器镜像体积大、排障链路长。
 3. **架构负债与冗余包袱**：
-   - 原系统包含了大量企业管理软件的多级 RBAC 逻辑（多用户、角色树、部门架构、动态菜单路由表），对于专注边缘端自治的“即插即用”智能视频分析盒子而言过于臃肿沉重。
+   原系统包含了大量企业管理软件的多级 RBAC 逻辑（多用户树、角色权限、部门架构、动态菜单路由），对于专注边缘端自治的“即插即用”智能视频分析盒子而言极其臃肿。
 
 ### 2.2 重构核心价值与设计原则
 
-本次重构确立以下四大核心支柱：
-
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    Argus / Heimdall (Rust All-in-One Binary)                │
-│                                                                             │
-│  ┌───────────────────────┐  ┌────────────────────────────────────────────┐  │
-│  │  Embedded Web Console │  │        High-Performance Rust Core          │  │
-│  │  React 19 + Vite      │  │  - Axum HTTP & WebRTC (WHEP) Low Latency   │  │
-│  │  Tailwind CSS v4      │  │  - SQLite (WAL Mode) Embedded Storage      │  │
-│  │  Canvas 2D Rendering  │  │  - Zero-Copy Video Pipeline (VideoToolbox) │  │
-│  │  rust-embed (Single)  │  │  - Apple Silicon ANE (Core ML) Inference   │  │
-│  └───────────────────────┘  └────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                    Argus / Heimdall (Rust All-in-One Binary)                     │
+│                                                                                  │
+│  ┌────────────────────────┐  ┌────────────────────────────────────────────────┐  │
+│  │  Embedded Web Console  │  │          High-Performance Rust Core            │  │
+│  │  React 19 + TypeScript │  │  - Axum HTTP & Enhanced FLV (HTTP/WS) Stream   │  │
+│  │  Tailwind CSS + Vite   │  │  - StreamHub Multiplexing (GOP Ring Buffer)    │  │
+│  │  Live Stream Rules SVG │  │  - Pipeline: ByteTrack + Geometry Rules Engine │  │
+│  │  rust-embed (Single)   │  │  - C ABI Dynamic Algo-Packages Sandbox Host    │  │
+│  │                        │  │  - SQLite (WAL Mode) + Statvfs Atomic Eviction │  │
+│  └────────────────────────┘  └────────────────────────────────────────────────┘  │
+│                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │  Hardware Acceleration Layer (Zero-Copy FrameRef: CVPixelBuffer / DMA-BUF) │  │
+│  │  - macOS Apple Silicon: VideoToolbox + Core ML / ANE                       │  │
+│  │  - Rockchip Linux: MPP Decode + RGA 2D Crop + RKNN NPU                     │  │
+│  │  - Huawei Ascend Linux: DVPP VDEC + VPC 2D Crop + CANN ACL                 │  │
+│  └────────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 1. **单进程极简自包含（Zero-Dependency Single Binary）**：
-   - 全链路统一收敛至 Rust（Rust as the Engine）。前端静态资源内嵌打包进二进制，启动即提供 Web 控制台、API 与流媒体服务，无任何外部运行时或动态库依赖。
-2. **端到端原生零拷贝（Zero-Copy Hardware Pipeline）**：
-   - 视频流解码直接生成平台原生 Buffer（首发 Apple Silicon 采用 VideoToolbox 硬解产出 `CVPixelBuffer`），直接直通 Apple Neural Engine (Core ML) 推理，全流程无 CPU 内存拷贝。
-3. **聚焦核心业务，极致瘦身**：
-   - 彻底砍掉多级 RBAC、多角色、复杂部门树与动态菜单；系统采用轻量单管理员认证体系，同时**完整保留写操作审计日志（Operation Logs）**以满足安防生产安全合规。
-4. **超低延迟 Web 体验**：
-   - 采用原生 WebRTC (WHEP) 协议推流，端到端播放延迟压制至 **100~300ms**。
-   - 前端采用 React 结合 Canvas 2D 进行高频检测框独立绘制，避免 React 组件树重排抖动。
+   - 彻底废除跨进程 IPC，全链路统一收敛至 Rust。前端静态产物编译进单一可执行文件，无任何外部运行时或动态库依赖，单端口（默认 8000）自托管服务。
+2. **边缘高能效与双流零拷贝（Energy-Efficient Edge Pipeline）**：
+   - 默认采用子码流（640×360）硬解并喂入模型推理，消减边缘盒子 80% 的算力与显存发热；
+   - 主码流（1080P/4K）纯吃包进内存环形队列（Ring Buffer），零解码开销；触发告警瞬间按时间戳 $T$ 快速解码单帧主码流，产出全高清证据大图。
+3. **算法包生态热插拔（Algorithm Package Ecosystem）**：
+   - 保持 C ABI 标准契约（兼容 `sdk/include/argus/algo.h`），算法包按平台物理隔离（`algo-packages/{platform_id}/{algo_id}`）；
+   - 支持算法热加载与七步沙箱自检（Self-Test），用户可按规范自主开发并上传目标检测、人脸识别、车牌识别等各类定制算法。
+4. **两级分工与免重复开发**：
+   - 算法包只做“前处理 $\to$ NPU 推理 $\to$ NMS 输出”的纯感知；
+   - Engine 统一负责硬件级预裁剪（Pre-crop ROI）、坐标映射、ByteTrack 航迹管理、空间几何判定（ROI/Mask/Line）与 5 秒防重复冷却，算法开发者无需重复编写业务逻辑。
+5. **证据三支柱与“图在案在”原子淘汰**：
+   - 全面支持抓拍、告警、识别三类业务记录；
+   - 统一存储池管理，基于系统调用 `statvfs` 水位保底，空间不足时优先淘汰普通抓拍保护告警大图，删除图片与删除数据库行原子联动，绝不留无图幽灵记录。
 
 ---
 
-## 3. 架构对比与演进矩阵
+## 3. 系统核心架构与功能需求
 
-| 维度 | 原系统 (Go + C++ + Vue3) | 重构目标系统 (Rust + React) | 收益与决策依据 |
-|---|---|---|---|
-| **交付形态** | 多进程 (Go API + C++ Engine + Nginx + Vue 静态包) | **单进程可执行文件** (`argus`) | 极大降低边缘交付与运维门槛，启动即用 |
-| **主后端语言** | Go 1.26 (业务) + C++20 (媒体与算法) | **Rust 2021** (全栈统管) | 彻底消除跨语言 IPC 与虚表内存泄漏隐患 |
-| **流媒体接入与转发** | ZLMediaKit (外置 C++ 库，HTTP-FLV / RTSP) | **Rust Native RTSP + 内置 WebRTC (WHEP)** | 播放延迟从 1~3s 降低至 150ms 级别 |
-| **视频解码与零拷贝** | FFmpeg 软解 / 跨进程传递 Shared Memory | **VideoToolbox 硬解直通 `CVPixelBuffer`** | 释放 CPU 占用，全链路零拷贝直达 ANE |
-| **AI 推理生态** | 动态 C ABI 插件体系 (dlopen / dlsym) | **`infer` 模块 + 官方原生 Core ML 绑定** | 编译期强类型安全约束，杜绝 ABI 漂移崩溃 |
-| **数据库** | SQLite (GORM 驱动) | **SQLite WAL 模式 (SeaORM 驱动)** | 异步无锁读写，批量写入保护边缘 eMMC 寿命 |
-| **权限与组织架构** | 复杂多用户、角色授权、部门组织、动态菜单树 | **单管理员账号 + 轻量 JWT 鉴权** | 边缘单机场景降噪，移除 60% 冗余业务表 |
-| **操作审计** | 全局中间件拦截写入 `operation_logs` 表 | **中间件拦截写入 SQLite `operation_logs`** | **100% 保留**生产级写操作安全追溯与敏感字段脱敏 |
-| **前端技术栈** | Vue 3 + Ant Design Vue + Vben Admin 5.7 | **React 19 + TypeScript + Tailwind CSS v4** | 极致精简轻量，去框架沉重包装，提升交互响应 |
-| **视频与 AI 渲染** | Vue 组件内嵌套 DOM 绝对定位框 | **HTML5 Canvas 2D + rAF 离屏叠加渲染** | 60fps 丝滑流畅，高频检测框与视频帧时间戳同步 |
+### 3.1 身份认证与安全审计中心 (Auth & Audit)
+
+#### 3.1.1 开箱向导与轻量认证 (Setup & Authentication)
+- **开箱向导（Out-of-the-Box Wizard）**：
+  首次启动且未初始化时，前端访问自动强制重定向至 `/setup` 开箱向导页面，引导设置管理员账号与强密码，杜绝默认密码（如 `admin123`）被扫描利用的安全隐患。
+- **环境静默配置（Headless Deployment）**：
+  在自动化运维场景下，支持通过环境变量 `ARGUS_ADMIN_USERNAME` 与 `ARGUS_ADMIN_PASSWORD` 实现无人工干预的静默开箱初始化。
+- **灾备密码重置（CLI Disaster Recovery）**：
+  若现场运维遗忘管理员密码，严禁通过删除数据库的方式处理。系统提供命令行工具：
+  ```bash
+  ./argus reset-admin --password <new_password>
+  ```
+  在本地直接更新管理员哈希凭据，保障数据资产绝对安全。
+- **JWT 状态管理**：基于 HS256 JWT 签发 24 小时访问令牌，并在 SQLite `system_configs` 维护撤销时间戳，支持管理员一键令所有活跃令牌失效。
+
+#### 3.1.2 操作审计日志 (Operation Logs)
+- 全局中间件拦截所有状态写操作（`POST`、`PUT`、`DELETE`、`PATCH`）；
+- 记录操作人、IP、路径、耗时、状态码、以及脱敏后的请求报文体（密码等敏感字段掩码为 `******`）；
+- 控制台提供专属审计日志列表页，支持时间跨度与模块筛选。
 
 ---
 
-## 4. 用户画像与核心使用场景
+### 3.2 摄像头接入与流媒体中心 (Media Center)
 
-### 4.1 用户画像
+#### 3.2.1 RTSP 接入与流复用 (StreamHub)
+- **协议支持**：标准 RTSP 1.0，支持 TCP Interleaved RTP 传输，支持 Basic 与 Digest 鉴权；
+- **流多路复用（Multiplexing）**：
+  基于规范化 URL（`canonicalize_rtsp_url`）实现物理连接复用。多个客户端观看或多个分析任务订阅同一路摄像头时，底层仅维持单条 RTSP 上行会话；
+- **按需拉流与平滑冷却**：
+  当某路流既无 Web 客户端观看，又无启用的 AI 分析任务时，启动 5 秒平滑防抖倒计时，倒计时结束后自动断开 RTSP 连接释放网络与系统资源；
+- **子码流智能推导**：
+  内置海康（Hikvision/ISAPI）、大华（Dahua）、天地伟业（Tiandy）、宇视（Uniview）、TP-Link 等主流品牌的子码流规则推导引擎（`deduce_sub_stream`），添加主码流时自动生成候选子码流地址。
 
-1. **边缘部署工程师 (DevOps / Field Engineer)**：
-   - 负责现场智能盒子的硬件部署、网络配置、摄像头接入与固件更新。
-   - **诉求**：无需配置 Python、无需安装各种动态库与驱动环境，单命令启动，断电自动恢复。
-2. **安防/厂区监控值班员 (Operator)**：
-   - 负责通过 Web 界面实时监视多路现场画面、核对 AI 实时识别框、接收越界和入侵报警。
-   - **诉求**：视频超低延迟，识别框紧跟画面不漂移、不卡顿；告警弹窗直观附带清晰抓拍图。
-3. **安全审计管理员 (Auditor / Admin)**：
-   - 负责配置告警规则、调整检测区域、排查误报，并事后审计系统配置修改记录。
-   - **诉求**：画线/划定区域直观易用；谁在何时修改了布防规则必须有据可查（操作日志）。
+#### 3.2.2 超低延迟 Enhanced FLV 流媒体服务
+- **容器与协议标准**：
+  自研纯 Rust `FlvMuxer`，完全符合 Enhanced FLV 标准，支持 H.264（`avc1`）与 H.265/HEVC（FourCC `hvc1`）；
+- **推流端点**：
+  - HTTP-FLV 分块传输：`GET /api/v1/live/{camera_id}/flv?stream=main|sub`
+  - WebSocket-FLV 传输：`GET /api/v1/live/{camera_id}/ws?stream=main|sub`
+- **首包秒开与 GOP 缓存**：
+  `StreamHub` 维护 `KeyframeCache`，保存最近的关键帧、SPS、PPS、VPS；新客户端接入时立即下发完整序列头与关键帧，播放器瞬间点亮画面；
+- **低延迟体验**：
+  前端集成 `mpegts.js`（MSE 硬件解码），局域网内端到端播放延迟稳定在 **200~400ms**，彻底规避 WebRTC 在内网下的 UDP 端口穿透与黑屏难题。
 
-### 4.2 核心使用场景
+---
+
+### 3.3 边缘高能效分析管线与算法包生态 (Pipeline & Algo Packages)
+
+#### 3.3.1 平台感知型算法包拓扑与七步沙箱 (Algo Package Sandbox)
+- **目录拓扑按平台隔离**：
+  ```text
+  algo-packages/
+  ├── macos-arm64/
+  │   ├── general_detection/ (yolo26n CoreML .dylib)
+  │   └── face_recognition/
+  ├── linux-arm64-rknn/
+  │   ├── general_detection/ (RK3588/RK3576 .so)
+  │   └── license_plate_recognition/
+  └── linux-arm64-ascend/
+      └── general_detection/ (Ascend OM .so)
+  ```
+- **七步安全沙箱自检（7-Step Sandbox Validation）**：
+  在安装或热加载算法包时执行：
+  1. 路径穿越与文件名安全性校验；
+  2. 算法包 SHA256 哈希校验；
+  3. `manifest.json` 格式、版本与平台标签（`platform_id`）严格比对；
+  4. `config.schema.json` 校验；
+  5. 动态库 `dlopen` 符号寻址与 C ABI 虚表结构体尺寸（`sizeof`）断言；
+  6. **真实测试图自测（Self-Test）**：使用包内内置的 `testimage.jpg` 执行单次真实前向推理，验证其不崩溃、不泄漏；
+  7. 原子迁移至可用算法库并热注册。
+
+#### 3.3.2 边缘双流与按需解码机制
+- **解码器按需启动**：
+  硬件解码器（macOS VideoToolbox / Linux MPP / Ascend DVPP）仅在对应摄像头的 AI 分析任务启用时（`desired_enabled == true`）由 Pipeline 内部专有工作线程按需拉起，关闭任务时即刻销毁；
+- **推理流优先子码流（640×360）**：
+  分析任务默认绑定子码流，极大降低 VPU 与 DDR 总线带宽。若摄像头未配置子码流，系统前端提示并自动回退为主码流；
+- **主码流内存环形缓存（Ring Buffer）**：
+  主码流网络线程仅接收原始 NALU 包，以引用计数切片（`bytes::Bytes`）形式暂存进最近 2~3 秒的内存环形队列，**完全不调用硬件解码器（零 VPU 开销，内存仅占用约 10MB）**。
+
+#### 3.3.3 两级解耦：感知与业务规则引擎
+- **算法包职责（Perception）**：
+  仅负责前处理、NPU 推理与 NMS。每帧输入 `FrameRef`，输出结构化目标数组 `Vec<Detection>`，完全无需关心跟踪、几何求交与冷却状态机；
+- **硬件级预裁剪（Pre-crop ROI）**：
+  若用户在布防中配置了局部裁剪推理（如道闸车牌特写）：
+  1. Engine 调用底层 2D 硬件单元（CoreVideo / RGA / VPC）在显存内完成极速裁剪；
+  2. 裁剪帧透明送入算法包推理；
+  3. Engine 将返回的目标坐标通过线性仿射变换无损还原至全图归一化坐标系；
+- **Engine 统一航迹跟踪（ByteTrack）**：
+  纯 Rust 实现，根据检测框高低分两阶段关联，分配并平滑维护连续的 `track_id` 与移动轨迹向量；
+- **Engine 统一空间几何规则引擎**：
+  - **ROI 多边形入侵**：目标底部几何中心进入多边形触发；
+  - **Mask 遮罩屏蔽**：位于多边形内的目标直接静默过滤；
+  - **Line 绊线越界**：基于目标运动轨迹线段与绊线进行跨立求交，支持单向（`A->B`、`B->A`）与双向（`Both`）；
+- **Engine 统一告警冷却**：
+  同一 `track_id` 触发告警后，自动进入 5 秒防重复防抖冷却，避免连续帧剧烈刷屏。
+
+#### 3.3.4 全高清证据双流抓拍
+当子码流在时标 $T$ 判定告警时：
+1. 向主码流管道发送精准时标抽帧指令；
+2. 主码流工作线程从内存 Ring Buffer 调出包含 $T$ 的前置 I 帧与后续 P 帧，硬件瞬时快进解码出该时间戳的高清主码流帧（1080P/4K）；
+3. 异步投递至专有 I/O 线程池，调用硬件/SIMD 图像库（macOS ImageIO / Linux TurboJPEG）快速编码为全高清 JPEG 证据原图，并按目标 BBox 裁剪出一张高清特写图；
+4. 若主码流断线或未接入，自动降级提取触发当帧的子码流图像，保证 100% 不漏图。
+
+---
+
+### 3.4 业务证据中心三支柱与存储保护 (Evidence & Storage)
+
+#### 3.4.1 证据中心三支柱模型 (Evidence Triad)
 
 ```
-  [网络摄像头 RTSP]
-         │
-         ▼
-  [Argus 单进程服务] ──(硬解+CoreML+ByteTrack)──► [生成告警 + 快照落盘]
-         │                                               │
-    (WebRTC 视频流)                               (WebSocket 实时事件)
-         │                                               │
-         ▼                                               ▼
-  [React 监控控制台] ◄──────(Canvas 2D 毫秒级叠加)───────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           Argus 业务证据中心 (Evidence Center)                   │
+├─────────────────────────┬─────────────────────────────┬─────────────────────────┤
+│  📸 抓拍记录 (Captures)  │   🚨 违规告警 (Alarms)       │  👤 识别对账 (Recognitions)│
+├─────────────────────────┼─────────────────────────────┼─────────────────────────┤
+│ - 行人 / 机动车全景通行  │ - ROI 区域入侵告警          │ - 1:N 人脸识别比对      │
+│ - 目标特写抠图          │ - Line 绊线越界告警         │ - 车牌黑白名单识别通行  │
+│ - 最佳质量分 (Best-Shot)│ - 未戴安全帽 / 抽烟违规     │ - 现场抓拍 vs 底库登记照│
+│ - TrackID 行迹轨迹回溯  │ - 1080P/4K 全景高清原图     │ - 相似度得分 (94.2%)    │
+└─────────────────────────┴─────────────────────────────┴─────────────────────────┘
 ```
 
-- **场景 A：无人值守的实时越界入侵告警**
-  - 值班员在 React 控制台上为“库房门口摄像头”绘制一条单向绊线（Line）。
-  - 晚间有人跨越警戒线，Argus 内核在 20ms 内完成检测与跟踪，判定跨线，生成告警记录与现场抓拍图，同时通过 WebSocket 将告警推至控制台，屏幕伴随警报声高亮弹出，操作员点击可立即回溯关联抓拍快照。
-- **场景 B：低带宽空闲期的智能降耗**
-  - 画面长期无人员走动，内置 Motion Gate 机制生效，跳过大算力 YOLO 推理，系统处于低功耗冷运转状态；一旦画面有微弱移动，瞬间唤醒全帧率推理。
+1. **📸 抓拍记录（Captures）**：
+   记录画面中正常通行的所有目标。保存全景大图、特写抠图、目标类型（人/车/非机动车）、质量分与连续 Track ID，供用户在控制台按时间轴回溯行迹。
+2. **🚨 告警记录（Alarms）**：
+   记录触发布防规则的安全防范违规事件。保存规则类型、事件等级、违规目标属性、1080P/4K 全景大图与特写图。
+3. **👤 识别记录（Recognitions）**：
+   记录人脸比对与车牌识别事件。保存现场抓拍照、匹配命中的底库人员/车辆档案（姓名、工号、车牌号、部门）、**注册底库登记照（Gallery Photo）**、以及**相似度得分（Similarity）**。
+4. **底库管理（Galleries）**：
+   系统提供人脸与车辆白名单底库管理。人脸特征向量（512 维 FP32 Blob）在算法初始化时直接载入内存微秒级比对，无需外挂重度向量数据库。
+
+#### 3.4.2 存储保护与“图在案在”原子联动淘汰
+- **统一存储池，拒绝死板分区**：
+  所有证据图片保存在统一目录（`var/data/evidence/`），不要求系统预先划分磁盘分区；
+- **物理水位系统调用监控（`statvfs`）**：
+  后台守护线程每 5 分钟调用一次轻量系统调用 `statvfs`，读取磁盘剩余空间百分比。当物理磁盘剩余空间 `< 15%` 或存储目录总容量超过设定的配额上限（如 10GB）时，自动触发淘汰；
+- **加权优先级淘汰机制**：
+  淘汰扫描时，**系统绝对优先批量删除“普通抓拍记录”（Captures）**；只有当抓拍已被清空仍不满足水位时，才滚动淘汰最老的告警与识别记录；
+- **“图在案在，图销案销”原子清理**：
+  每次淘汰一批记录时（如 500 条），在同一个操作步骤中完成：
+  1. 从磁盘中物理 `unlink` 删除这 500 个 JPEG 图片文件；
+  2. 从 SQLite 对应业务表中物理 `DELETE` 这 500 条数据库行；
+  控制台看到的任何一条记录，**点开 100% 有图可查，绝无无图死记录**。
 
 ---
 
-## 5. 系统功能需求 (Functional Requirements)
+### 3.5 现代化 Web 控制台 (React 19 SPA)
 
-### 5.1 身份认证与安全审计中心 (Auth & Audit)
+#### 3.5.1 单二进制静态资源内嵌
+- 前端采用 **Vite + React 19 + TypeScript + Tailwind CSS** 构建；
+- 生产产物输出至 `web/dist`，由 Rust 宿主通过 `rust-embed` 编译进单一二进制，根路由自托管响应，支持 SPA 客户端路由回退（Fallback to `index.html`）。
 
-#### 5.1.1 单管理员轻量认证 (Authentication)
-- **账号体系**：单管理员机制（默认用户名 `admin`）。
-- **初始化与修改**：首次启动由配置文件或环境变量指定初始密码（默认 `admin123`），支持控制台修改密码。
-- **Token 机制**：基于 JWT 提供无状态访问令牌（`access_token`），支持在系统内一键失效（通过内部内存或 SQLite 单行时间戳失效）。
-- **接口防护**：除登录端点与健康检查外，所有 `/api/v1/*` 接口与 WebSocket 连接必须校验 Token。
-
-#### 5.1.2 操作审计日志 (Operation Logs)
-> 继承原系统的核心审计能力，确保对系统关键变更的责任可追溯。
-
-- **触发条件**：全局中间件拦截所有对状态产生影响的 HTTP 写操作（`POST`、`PUT`、`DELETE`、`PATCH`）。
-- **记录内容**：
-  - `id`: 自增主键
-  - `username`: 操作人（固定或登录用户名）
-  - `module`: 业务模块标识（`camera` / `task` / `rule` / `system` / `auth`）
-  - `action`: 动作描述（如“新增摄像头”、“修改布防规则”、“删除告警记录”）
-  - `method`: HTTP 方法
-  - `path`: 接口请求路由
-  - `query`: 请求 Query 参数
-  - `body`: 请求 Body 内容（自动执行敏感字段脱敏，如密码脱敏为 `******`）
-  - `statusCode`: HTTP 状态码
-  - `durationMs`: 执行耗时（毫秒）
-  - `ip`: 客户端来源 IP
-  - `userAgent`: 客户端浏览器标识
-  - `createdAt`: UTC 毫秒时间戳
-- **查询与检索**：控制台提供专属审计日志列表页，支持按时间范围、模块、操作状态进行分页筛选查询。
+#### 3.5.2 核心业务视窗与交互设计
+1. **实时大屏（Live Viewport）**：
+   - 1 / 4 / 9 多分屏自由切换，嵌入 `<LivePlayer />`（Enhanced FLV + MSE 播放）；
+   - **低噪体验**：无违规时，画面纯净播放视频，不推高频噪点框；一旦发生越界或入侵告警，控制台伴随声音即时弹出醒目的告警卡片并定位快照。
+2. **动态实时流布防工作台（Live Stream Rules Designer）**：
+   - **彻底废除静态截图标注**；
+   - 工作台直接运行子码流实时动态视频（延时仅 200ms）；
+   - 视频上方覆盖一层透明交互矢量层（SVG / Pointer Events），值班员看着现场行人走动，直接在动态画面上点击绘制多边形（ROI/Mask）与折线绊线（Line，实时显示流动箭头与跨越方向）；
+   - 坐标实时等比归一化至 `[0.0, 1.0]`，不受窗口缩放影响。
+3. **证据中心三重視图（Evidence Hub）**：
+   - **违规告警页**：卡片与表格视图，支持查看大图、目标框高亮、事件处理标记；
+   - **抓拍回溯页**：按目标类别（人/车）与时间轴回溯历史经过记录；
+   - **识别对账页**：**「现场抓拍照 | 相似度 94.2% | 底库登记照」** 左右直观对比核验。
+4. **算法包管理（Algorithm Hub）**：
+   - 呈现当前硬件平台可用的算法包列表（名称、版本、类别、目标平台标签）；
+   - 支持上传 `.zip` 算法包并展示七步沙箱自检结果（自检通过后即刻热可用）。
+5. **设备与任务管理（Cameras & Tasks）**：
+   - 摄像头添加、一键测活、状态指示灯；
+   - 任务配置向导：选择摄像头 $\to$ 选择算法包 $\to$ 选择推理流（默认推荐子码流） $\to$ 实时流上拉选规则 $\to$ 一键启动。
+6. **安全操作审计（Audit Logs）**：
+   - 清晰展示写操作流水，支持查看脱敏报文体抽屉组件。
 
 ---
 
-### 5.2 摄像头接入与流媒体中心 (Media Center)
-
-#### 5.2.1 RTSP 视频流接入与探活
-- **协议支持**：支持标准 RTSP（TCP / UDP interleaved）。
-- **设备配置项**：
-  - 摄像头名称、主码流 RTSP 地址、子码流 RTSP 地址（可选）、备注。
-- **自动测活与心跳**：
-  - 新增/编辑摄像头时自动触发连接探活（Probe），提取码流分辨率（Width/Height）、编码格式（H.264/H.265）、帧率（FPS）。
-  - 后台维护健康度检查，检测到摄像头离线或断流后启动指数退避自动重连。
-
-#### 5.2.2 硬件加速解码管线 (Apple Silicon 首发)
-- **硬解支持**：基于 Apple macOS 原生 **VideoToolbox** 框架，支持 H.264 与 H.265 (HEVC) 硬件解码。
-- **零拷贝抽象**：解码产物直接封装为原生 `CVPixelBuffer`，交由统一的 `FrameRef` 资源池管理，杜绝堆内存拷贝。
-
-#### 5.2.3 超低延迟 WebRTC (WHEP) 实时推流
-- **WHEP 标准协议**：系统内置轻量 WebRTC 媒体服务器，提供 `/api/v1/webrtc/whep` 端点。
-- **低延迟预览**：浏览器端通过标准 WHEP 客户端发送 SDP Offer，后端绑定摄像头对应的视频轨道（H.264 原始 NALU 直通打包入 RTP，无需二次编码），端到端延迟控制在 **100~300ms**。
-- **按需拉流（On-Demand Streaming）**：当无 WebRTC 客户端观看某路视频且该路未开启 AI 分析时，可自动挂起拉流以节省网络带宽。
-
----
-
-### 5.3 边缘 AI 分析任务与规则引擎 (Pipeline & Rules)
-
-#### 5.3.1 YOLO 通用目标检测 (首发生态)
-- **模型支持**：首发接入 YOLO 系列（如 YOLOv8n / YOLOv11n 等轻量检测模型），编译转换为 Apple Core ML 模型（`.mlpackage` / `.mlmodelc`）。
-- **硬件直通推理**：将 VideoToolbox 解码出的 `CVPixelBuffer` 直接输入 Core ML 模型，利用 ANE 硬件单元高并发推理，单帧检测耗时控制在 5~15ms。
-- **目标分类过滤**：支持按类别过滤（如仅关注 `person` 行人、`car` 车辆、`bicycle` 自行车等），配置置信度阈值（Confidence Threshold）。
-
-#### 5.3.2 运动检测门控 (Motion Gate)
-- **空闲节能**：在送入 NPU/ANE 推理前，执行轻量低分辨率帧差法运动门控计算。
-- **门控阈值**：当画面像素级运动面积小于设定阈值时，直接标记为静止帧，跳过深度模型推理；支持设定保活检测间隔（如每隔 2 秒强制全帧推理一次，避免漏检静止目标）。
-
-#### 5.3.3 多目标航迹跟踪 (ByteTrack)
-- **纯 Rust 跟踪器**：内置 ByteTrack 算法，为连续画面中的目标分配全局唯一的递增 `track_id`。
-- **轨迹连续性**：平滑短暂遮挡、漏检情况下的目标轨迹，记录目标质心运动方向向量。
-
-#### 5.3.4 几何布防规则引擎 (Geometry Rules Engine)
-支持为每个摄像头的算法任务配置三类空间检测规则（基于归一化坐标 `[0.0, 1.0]`）：
-
-```mermaid
-graph TD
-    Frame[输入视频帧 FrameRef] --> Motion{运动门控判定}
-    Motion -- 静止且非保活帧 --> Skip[跳过推理 节能]
-    Motion -- 有运动或到达保活周期 --> CoreML[Core ML / ANE 目标检测]
-    CoreML --> NMS[NMS 后处理提取目标 BBox]
-    NMS --> ByteTrack[ByteTrack 航迹关联生成 TrackId]
-    ByteTrack --> Rules{几何规则判定引擎}
-    
-    Rules -->|在 ROI 区域内| AlarmROI[触发: 区域入侵告警]
-    Rules -->|在 Mask 区域内| Ignore[过滤忽略]
-    Rules -->|穿过 Line 设定方向| AlarmLine[触发: 绊线越界告警]
-    
-    AlarmROI --> GenEvent[生成告警记录 + 抓拍快照]
-    AlarmLine --> GenEvent
-    GenEvent --> WS[WebSocket 实时广播]
-    GenEvent --> DB[(SQLite 批量持久化)]
-```
-
-1. **ROI (Region of Interest) 感兴趣区 / 入侵检测**：
-   - 规则形态：任意凸/凹多边形（至少 3 个点，不自交）。
-   - 判定逻辑：目标的底部几何中心（或 BBox 底边中点）进入 ROI 区域时触发告警。
-2. **Mask (遮罩屏蔽区)**：
-   - 规则形态：任意多边形。
-   - 判定逻辑：位于 Mask 区域内的检测目标直接丢弃，不计入跟踪与后续规则。
-3. **Line (绊线越界检测)**：
-   - 规则形态：折线段（至少 2 个点）。
-   - 跨越方向：
-     - `Both`：双向跨越均报警；
-     - `A_to_B`：沿线段向量方向跨越报警；
-     - `B_to_A`：逆线段向量方向跨越报警。
-   - 判定逻辑：结合 ByteTrack 历史运动轨迹线段与绊线进行线段求交判定。
-
----
-
-### 5.4 告警与证据中心 (Alerts & Evidence)
-
-#### 5.4.1 抓拍图落盘与存储保护
-- **高帧快照**：触发告警瞬间，截取当帧原始全高清画面（JPEG 格式），并记录目标归一化 BBox `[x1, y1, x2, y2]`。
-- **存储配额与水位保护**：
-  - 限制抓拍图片存储目录的最大磁盘容量或百分比配额（如默认最大 10GB）。
-  - 当可用磁盘空间低于安全警戒线（如 15%）时，自动触发 FIFO 滚动淘汰清理最早期的告警图片，严禁写满磁盘造成系统宕机。
-
-#### 5.4.2 实时 WebSocket 广播
-- 服务端暴露 `/api/v1/ws/events` 连接端点。
-- 当产生告警事件时，通过 Tokio 广播通道以 JSON 结构毫秒级推送给前端。
-
-#### 5.4.3 告警记录检索与处置
-- 提供分页查询接口，支持按**摄像头 ID**、**告警规则类型 (ROI / Line)**、**目标类别**、**时间跨度 (开始/结束时间)** 进行联合过滤。
-- 详情展示：支持查看现场抓拍大图，并支持在图片上动态高亮目标识别框。
-- 导出与批量标记功能。
-
----
-
-### 5.5 现代化 Web 控制台 (React SPA)
-
-#### 5.5.1 单二进制内嵌交付
-- 前端基于 **Vite + React 19 + TypeScript + Tailwind CSS v4** 构建。
-- 产物构建输出到 `web/dist`，由 Rust 主程序通过 `rust-embed` 编译内嵌，提供单端口自托管访问（默认监听 `http://0.0.0.0:8000`）。
-
-#### 5.5.2 核心界面功能模块
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│  Argus Control Console                                      [Admin] ⚙  │
-├──────────────┬─────────────────────────────────────────────────────────┤
-│  Navigation  │  Main Viewport                                          │
-│              │                                                         │
-│  [🎥 实时大屏]│  ┌─────────────────────────┐ ┌─────────────────────────┐  │
-│  [📐 任务布防]│  │ Camera 01 (WebRTC)      │ │ Camera 02 (WebRTC)      │  │
-│  [🚨 告警中心]│  │ [Canvas 2D BBox 实时叠加] │ │ [Canvas 2D BBox 实时叠加] │  │
-│  [📹 设备管理]│  └─────────────────────────┘ └─────────────────────────┘  │
-│  [📋 操作日志]│  ┌───────────────────────────────────────────────────┐  │
-│  [⚙️ 系统设置]│  │ 实时告警信息流 (Live Event Feed via WebSocket)     │  │
-│              │  │ 14:20:05 [Camera 01] 行人绊线越界 (Track #102)     │  │
-│              │  └───────────────────────────────────────────────────┘  │
-└──────────────┴─────────────────────────────────────────────────────────┘
-```
-
-1. **实时监控大屏 (Live Viewport)**：
-   - 支持 1 / 4 / 9 多分屏网格自由切换。
-   - 每个视频播放窗格集成标准 WebRTC 播放器，加载 WHEP 媒体流。
-   - **Canvas 2D 双层叠加架构**：底层为 `<video>` 硬件加速渲染视频，顶层为绝对定位的透明 `<canvas>` 画布，通过 WebSocket 接收到的毫秒级目标检测框与轨迹，使用 `requestAnimationFrame` 独立更新，绝不触发 React 状态树的大规模 Re-render。
-2. **可视化布防绘制 (Rules Designer)**：
-   - 抓取摄像头当前静态视频帧作为背景底图。
-   - 提供鼠标交互式多边形（ROI/Mask）绘制工具与折线绊线（Line）绘制工具，支持拖拽顶点微调，实时生成归一化点集数组。
-3. **告警中心 (Alerts Hub)**：
-   - 紧凑型告警流水卡片与表格视图自由切换。
-   - 鼠标悬浮即时放大展示抓拍证据缩略图。
-4. **摄像头与任务管理 (Devices & Tasks)**：
-   - 摄像头列表管理、一键测活检测、实时分辨率与 FPS 状态指示灯。
-   - 算法任务一键启停开关（Desired Enabled Switch）。
-5. **安全操作日志 (Audit Logs)**：
-   - 清晰展现管理员的所有写操作审计流水，具备 IP、操作耗时、状态响应码及展开查看脱敏请求报文的抽屉组件。
-
----
-
-## 6. 非功能性需求 (Non-Functional Requirements)
-
-### 6.1 性能与延迟指标
+## 4. 非功能性需求与性能指标 (Non-Functional Requirements)
 
 | 指标项 | 目标阈值 | 验证条件 |
 |---|---|---|
-| **WebRTC 预览端到端延迟** | **≤ 300 ms** (局域网实测典型值 150 ms) | RTSP 摄像头推流到浏览器视频画面呈现 |
-| **单帧 YOLO 推理延迟** | **≤ 15 ms** | Apple M 系列芯片 ANE 硬件加速 (1080P 输入) |
-| **告警触发与推流端到端耗时** | **≤ 80 ms** | 目标跨线时刻到 Web 收到 WebSocket 告警弹窗 |
+| **实时流播放端到端延迟** | **≤ 400 ms** (局域网实测典型值 200~300 ms) | RTSP 摄像头推流至浏览器 Enhanced FLV + MSE 画面呈现 |
+| **单帧推理耗时** | **≤ 15 ms** | Apple ANE / RK3588 NPU (640×360 输入) |
+| **告警触发到 Web 弹窗耗时** | **≤ 100 ms** | 目标跨线时刻至浏览器收到 WebSocket 告警事件 |
 | **内存底噪开销 (Idle)** | **≤ 45 MB** | 单二进制进程启动完成，无活动流接入 |
-| **多路稳定运行 (4路 1080P@15fps)** | **内存 ≤ 250 MB，CPU 占用 ≤ 15%** | 4 路 RTSP 同时硬解 + 实时 YOLO 分析 + WebRTC 1路观看 |
-
-### 6.2 存储与数据库性能 (SQLite WAL)
-- SQLite 启用 **WAL 模式 (Write-Ahead Logging)** 与 `NORMAL` 同步等级。
-- 高频告警写入使用批量聚合提交策略，避免单条频繁刷盘对边缘设备闪存（eMMC/SD卡）造成硬件磨损。
-
-### 6.3 7x24 小时无人值守稳定性
-- **RAII 资源自动回收**：所有解码器实例、内存缓冲区、网络文件描述符（fd）严格由 Rust 所有权机制托管，杜绝句柄泄露。
-- **自动网络断线重连**：当 RTSP 网络闪断时，底层拉流模块执行毫秒到秒级的指数退避重连机制，业务层无需重启进程。
+| **4 路 1080P/4K 分析整机开销** | **内存 ≤ 200 MB，CPU 占用 ≤ 12%** | 4 路摄像头接入（子码流推理 + 主码流 RingBuffer 抓拍 + 1路预览） |
+| **存储安全红线** | **磁盘剩余空间永远保持 ≥ 15%** | 高频告警压力测试下，`statvfs` 触发加权原子淘汰 |
 
 ---
 
-## 7. 接口契约与数据模型规范
+## 5. 接口契约与数据库模型规范
 
-### 7.1 RESTful HTTP API 统一信封格式
-
-所有 HTTP 请求响应遵循以下标准根信封：
+### 5.1 RESTful HTTP API 统一信封
 
 ```json
 {
@@ -330,34 +285,43 @@ graph TD
   "timestamp": 1747584000000
 }
 ```
-- `code = 0` 表示成功；非 0 表示业务错误，此时 `data` 为 `null`。
-- `timestamp` 统一为 13 位 UTC Unix 毫秒整数。
-- 所有 JSON 字段键名严格遵循 `camelCase`。
+- `code = 0` 表示成功；非 0 表示业务错误，此时 `data` 为 `null`；
+- 所有时间戳统一为 13 位 UTC Unix 毫秒整数；
+- 字段命名严格遵循 `camelCase`。
 
-### 7.2 核心 REST API 清单
+### 5.2 核心 REST & WebSocket API 清单
 
 | 端点路径 | 方法 | 说明 | 鉴权要求 |
 |---|---|---|---|
-| `/api/v1/auth/login` | POST | 管理员登录，换取 JWT Access Token | 公开 |
-| `/api/v1/auth/password` | PUT | 修改管理员登录密码 | 需登录 |
-| `/api/v1/cameras` | GET | 获取所有摄像头列表及探活状态 | 需登录 |
-| `/api/v1/cameras` | POST | 添加摄像头视频源并触发异步探活 | 需登录 (记日志) |
-| `/api/v1/cameras/:id` | PUT | 更新摄像头基础信息及 RTSP 地址 | 需登录 (记日志) |
-| `/api/v1/cameras/:id` | DELETE | 删除摄像头视频源 | 需登录 (记日志) |
-| `/api/v1/cameras/:id/probe` | POST | 手动发起单次连接探活 | 需登录 |
-| `/api/v1/webrtc/whep` | POST | WebRTC WHEP 信令协商（提交 SDP 交换 Answer） | 需登录/鉴权 |
-| `/api/v1/tasks` | GET | 获取所有 AI 分析任务及当前运行状态 | 需登录 |
-| `/api/v1/tasks/:cameraId/rules` | PUT | 配置更新指定摄像头的 ROI/Mask/Line 布防规则 | 需登录 (记日志) |
-| `/api/v1/tasks/:cameraId/enable` | POST | 启用/停止指定摄像头的 AI 分析管线 | 需登录 (记日志) |
-| `/api/v1/alarms` | GET | 分页查询历史告警记录与过滤检索 | 需登录 |
-| `/api/v1/alarms/:id` | DELETE | 删除指定告警事件记录 | 需登录 (记日志) |
-| `/api/v1/evidence/:imageId` | GET | 获取告警快照原图图片流 (JPEG) | 需登录 |
+| `/api/v1/auth/init-status` | GET | 查询系统是否已完成首次初始化 | 公开 |
+| `/api/v1/auth/initialize` | POST | 开箱向导设置管理员用户名与密码 | 公开 (限未初始化时) |
+| `/api/v1/auth/login` | POST | 管理员登录换取 JWT 访问令牌 | 公开 |
+| `/api/v1/auth/password` | PUT | 修改管理员登录密码 | 需登录 (记日志) |
+| `/api/v1/cameras` | GET | 获取摄像头列表及当前状态 | 需登录 |
+| `/api/v1/cameras` | POST | 添加摄像头视频源（触发子码流推导与探活） | 需登录 (记日志) |
+| `/api/v1/cameras/:id` | PUT | 更新摄像头信息及 RTSP 地址 | 需登录 (记日志) |
+| `/api/v1/cameras/:id` | DELETE | 删除摄像头 | 需登录 (记日志) |
+| `/api/v1/cameras/:id/probe` | POST | 手动发起单次连接探活与参数提取 | 需登录 |
+| `/api/v1/live/:id/flv` | GET | HTTP-FLV 实时流拉取（支持 `stream=main\|sub`） | 需登录/Token |
+| `/api/v1/live/:id/ws` | GET | WebSocket-FLV 实时流拉取（支持 `stream=main\|sub`） | 需登录/Token |
+| `/api/v1/algorithms` | GET | 获取当前平台已加载的算法包列表 | 需登录 |
+| `/api/v1/algorithms/upload` | POST | 上传算法包 `.zip` 并执行七步沙箱校验热安装 | 需登录 (记日志) |
+| `/api/v1/tasks` | GET | 获取所有分析任务及运行状态 | 需登录 |
+| `/api/v1/tasks` | POST | 创建并启动摄像头的 AI 分析任务 | 需登录 (记日志) |
+| `/api/v1/tasks/:id` | PUT | 更新任务布防规则与配置 | 需登录 (记日志) |
+| `/api/v1/tasks/:id/enable` | POST | 启用/停止指定摄像头的分析任务 | 需登录 (记日志) |
+| `/api/v1/alarms` | GET | 分页检索安全违规告警记录 | 需登录 |
+| `/api/v1/captures` | GET | 分页检索行迹回溯抓拍记录 | 需登录 |
+| `/api/v1/recognitions` | GET | 分页检索人脸/车牌识别对账记录 | 需登录 |
+| `/api/v1/galleries` | GET | 分页获取底库人员/车辆名单 | 需登录 |
+| `/api/v1/galleries` | POST | 注册底库人员/车辆并提取特征 | 需登录 (记日志) |
+| `/api/v1/evidence/:imageId` | GET | 获取全景大图或特写抠图图片流 (JPEG) | 需登录/Token |
 | `/api/v1/logs/operations` | GET | 分页查询系统写操作审计日志 | 需登录 |
-| `/api/v1/system/status` | GET | 获取系统负载、内存、存储水位与运行时长 | 需登录 |
+| `/api/v1/ws/events` | GET | WebSocket 统一实时业务事件通知（稀疏推送违规告警） | 需登录/Token |
 
-### 7.3 数据库模型 Schema (SQLite)
+---
 
-核心精简保留 4 张表，移除原系统无用的 `roles`, `menus`, `departments`, `users` 等表：
+### 5.3 数据库模型 Schema (SQLite WAL)
 
 ```sql
 -- 1. 摄像头视频源表
@@ -365,12 +329,10 @@ CREATE TABLE cameras (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     camera_id VARCHAR(36) NOT NULL UNIQUE,
     name VARCHAR(128) NOT NULL,
-    protocol VARCHAR(16) NOT NULL DEFAULT 'rtsp',
     rtsp_url TEXT NOT NULL,
     sub_rtsp_url TEXT NOT NULL DEFAULT '',
     remark VARCHAR(255) NOT NULL DEFAULT '',
     last_probe_status VARCHAR(16) NOT NULL DEFAULT 'never',
-    last_probe_at DATETIME,
     last_codec VARCHAR(16) NOT NULL DEFAULT '',
     last_width INTEGER NOT NULL DEFAULT 0,
     last_height INTEGER NOT NULL DEFAULT 0,
@@ -379,38 +341,93 @@ CREATE TABLE cameras (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. 分析任务与规则配置表
+-- 2. 分析任务配置表
 CREATE TABLE analysis_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    camera_id VARCHAR(36) NOT NULL UNIQUE,
-    name VARCHAR(128) NOT NULL,
+    task_id VARCHAR(36) NOT NULL UNIQUE,
+    camera_id VARCHAR(36) NOT NULL,
+    algorithm_id VARCHAR(64) NOT NULL,
+    algorithm_version VARCHAR(32) NOT NULL DEFAULT '1.0.0',
+    infer_stream VARCHAR(16) NOT NULL DEFAULT 'sub',      -- 'sub' (推荐) 或 'main'
     desired_enabled INTEGER NOT NULL DEFAULT 0,
-    actual_status INTEGER NOT NULL DEFAULT 0,
-    rules_json TEXT NOT NULL DEFAULT '[]',         -- 存储 ROI, Mask, Line 规则
-    motion_gate_json TEXT NOT NULL DEFAULT '{}',   -- 门控参数配置
+    rules_json TEXT NOT NULL DEFAULT '[]',                 -- ROI, Mask, Line 规则定义
+    config_json TEXT NOT NULL DEFAULT '{}',                -- 算法私有配置
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
 );
 
--- 3. 告警事件记录表 (1 Target = 1 Record)
+-- 3. 🚨 违规告警记录表 (Alarms)
 CREATE TABLE alarm_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id VARCHAR(64) NOT NULL UNIQUE,
     camera_id VARCHAR(36) NOT NULL,
-    alarm_type_id VARCHAR(64) NOT NULL,            -- 如 'line_crossing', 'region_intrusion'
+    task_id VARCHAR(36) NOT NULL,
+    alarm_type_id VARCHAR(64) NOT NULL,                    -- 如 'line_crossing', 'region_intrusion'
     occurred_at DATETIME NOT NULL,
-    target_label VARCHAR(64) NOT NULL,            -- 如 'person', 'car'
+    target_label VARCHAR(64) NOT NULL,                    -- 如 'person', 'car'
     confidence REAL NOT NULL DEFAULT 0.0,
     track_id INTEGER NOT NULL DEFAULT 0,
-    bbox_json TEXT NOT NULL DEFAULT '[]',          -- [x1, y1, x2, y2]
-    image_id VARCHAR(64) NOT NULL DEFAULT '',
-    image_rel_path VARCHAR(255) NOT NULL DEFAULT '',
+    bbox_json TEXT NOT NULL DEFAULT '[]',                  -- [x1, y1, x2, y2]
+    image_id VARCHAR(64) NOT NULL,                         -- 1080P/4K 高清全景原图
+    crop_image_id VARCHAR(64) NOT NULL DEFAULT '',         -- 目标特写抠图
+    image_rel_path VARCHAR(255) NOT NULL,
+    file_size_bytes INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_alarm_records_camera_time ON alarm_records(camera_id, occurred_at DESC);
 
--- 4. 操作审计日志表 (保留原系统写操作追溯)
+-- 4. 📸 行迹抓拍记录表 (Captures)
+CREATE TABLE capture_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    capture_id VARCHAR(64) NOT NULL UNIQUE,
+    camera_id VARCHAR(36) NOT NULL,
+    target_type VARCHAR(32) NOT NULL,                     -- 'person', 'vehicle'
+    quality_score REAL NOT NULL DEFAULT 0.0,
+    track_id INTEGER NOT NULL DEFAULT 0,
+    bbox_json TEXT NOT NULL DEFAULT '[]',
+    image_id VARCHAR(64) NOT NULL,
+    crop_image_id VARCHAR(64) NOT NULL,
+    image_rel_path VARCHAR(255) NOT NULL,
+    file_size_bytes INTEGER NOT NULL DEFAULT 0,
+    captured_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_capture_records_time ON capture_records(captured_at DESC);
+
+-- 5. 👤 识别对账记录表 (Recognitions)
+CREATE TABLE recognition_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recognition_id VARCHAR(64) NOT NULL UNIQUE,
+    camera_id VARCHAR(36) NOT NULL,
+    target_type VARCHAR(32) NOT NULL,                     -- 'face', 'plate'
+    recognized_id VARCHAR(64) NOT NULL DEFAULT '',         -- 关联底库 person_id 或 plate_number
+    recognized_name VARCHAR(128) NOT NULL DEFAULT '',
+    similarity REAL NOT NULL DEFAULT 0.0,
+    gallery_image_path VARCHAR(255) NOT NULL DEFAULT '',   -- 底库登记照路径
+    crop_image_id VARCHAR(64) NOT NULL,                    -- 现场抓拍特写图
+    image_rel_path VARCHAR(255) NOT NULL,
+    file_size_bytes INTEGER NOT NULL DEFAULT 0,
+    observed_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_recognition_records_time ON recognition_records(observed_at DESC);
+
+-- 6. 底库人员与车辆名单表 (Galleries)
+CREATE TABLE galleries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id VARCHAR(64) NOT NULL UNIQUE,
+    member_type VARCHAR(16) NOT NULL,                     -- 'person', 'vehicle'
+    name VARCHAR(128) NOT NULL,
+    group_name VARCHAR(64) NOT NULL DEFAULT 'default',
+    identity_card VARCHAR(64) NOT NULL DEFAULT '',
+    plate_number VARCHAR(32) NOT NULL DEFAULT '',
+    photo_rel_path VARCHAR(255) NOT NULL DEFAULT '',
+    feature_vector BLOB,                                   -- 512维 FP32 特征向量
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 7. 操作审计日志表 (Oplog)
 CREATE TABLE operation_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username VARCHAR(64) NOT NULL,
@@ -419,45 +436,37 @@ CREATE TABLE operation_logs (
     method VARCHAR(16) NOT NULL,
     path VARCHAR(255) NOT NULL,
     query TEXT,
-    body TEXT,                                     -- 已脱敏 JSON
+    body TEXT,                                             -- 已脱敏 JSON
     status_code INTEGER NOT NULL,
     duration_ms INTEGER NOT NULL,
     ip VARCHAR(64) NOT NULL,
     user_agent VARCHAR(255) NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX idx_operation_logs_module_time ON operation_logs(module, created_at DESC);
+CREATE INDEX idx_oplog_module_time ON operation_logs(module, created_at DESC);
 ```
 
 ---
 
-## 8. 实施计划与里程碑 (Milestones)
+## 6. 实施路线与阶段划分 (Execution Roadmap)
 
-```mermaid
-gantt
-    title Argus 重构工程落地里​​程碑
-    dateFormat  YYYY-MM-DD
-    section Phase 1: 系统基座与流媒体
-    Cargo Workspace 脚手架与纯 Rust 类型定义        :p1_1, 2025-05-19, 3d
-    SQLite 存储 + SeaORM + 审计日志中间件           :p1_2, after p1_1, 3d
-    RTSP 拉流 + VideoToolbox 硬解直通验证          :p1_3, after p1_2, 4d
-    WebRTC WHEP 轻量推流服务落地                   :p1_4, after p1_3, 4d
-    
-    section Phase 2: AI 管线与规则引擎
-    Core ML / ANE 推理后端接入 (YOLO 模型加载)     :p2_1, after p1_4, 4d
-    运动门控 (Motion Gate) + 零拷贝集成             :p2_2, after p2_1, 3d
-    ByteTrack 纯 Rust 跟踪与空间规则判定引擎        :p2_3, after p2_2, 4d
-    告警生成、抓拍落盘与 WebSocket 事件广播         :p2_4, after p2_3, 3d
-    
-    section Phase 3: React 控制台与全链路闭环
-    Vite + React 19 + Tailwind CSS 基础骨架        :p3_1, after p2_4, 3d
-    WebRTC 播放器 + Canvas 2D 毫秒级检测框叠加     :p3_2, after p3_1, 4d
-    规则可视化绘制组件 (ROI/Mask/Line 交互设计器)   :p3_3, after p3_2, 3d
-    rust-embed 打包集成、单二进制发布与端到端验证    :p3_4, after p3_3, 3d
-```
+为了高质量交付这套工业级闭环系统，工程落地划分为 4 个高度聚焦的阶段：
 
-### 交付验收标准 (Definition of Done)
-1. **单一文件运行**：执行编译输出的单个二进制文件 `./argus`，能在 macOS (Apple Silicon) 上直接启动完整的 Web 服务与后台流媒体引擎，无需附带额外文件或启动外部数据库/Nginx。
-2. **多路硬解与低延迟预览**：接入标准 RTSP 摄像头，浏览器端通过 WebRTC 观看延时 ≤ 300ms，CPU 占用稳定在低水位。
-3. **高精度 AI 实时跟踪**：通过 Core ML 调用 ANE 完成 YOLO 推理，视频画面的目标被稳定框选跟踪，Canvas 叠加检测框无明显肉眼可察觉的顿挫漂移。
-4. **越界与入侵精准告警**：在布防区内产生越界入侵行为，0.1 秒内触发快照抓拍并在 React 界面告警栏弹出，审计日志正确记录配置变更。
+* **阶段 1：C ABI 算法包宿主与沙箱加载体系（C ABI Host & Algo Sandbox）**
+  - 在 Rust 侧 1:1 映射 `sdk/include/argus/algo.h` 的 C ABI 结构体与虚表；
+  - 实现基于 `libloading` 的动态库加载、平台标签匹配与七步沙箱校验；
+  - 成功热载入已有的 `yolo26n` 等算法包，通过内建自测图完成推理自检。
+* **阶段 2：硬件解码、按需调度与双流高清抓拍（Dual-Stream Ingest & Snapshot）**
+  - Pipeline 内部按需拉起 VideoToolbox / MPP 硬件解码器，绑定子码流；
+  - 完善主码流 NALU 内存环形队列（Ring Buffer），实现告警瞬间按 PTS 精准回溯解码 1 帧主码流全高清原图与特写抠图；
+  - 硬件/SIMD 异步 JPEG 编码与落盘。
+* **阶段 3：感知解耦、统一规则引擎与证据三支柱落库（Rules Engine & Evidence Triad）**
+  - Engine 统一承接硬件级预裁剪（Pre-crop ROI）与坐标还原；
+  - Engine 统一运行 ByteTrack 航迹管理、空间几何判定（ROI/Mask/Line）与 5 秒防重复冷却；
+  - 升级数据持久层，落地 `alarm_records`、`capture_records`、`recognition_records`、`galleries`；
+  - 落地 `statvfs` 水位保底与“图在案在，图销案销”加权原子淘汰守护线程。
+* **阶段 4：动态实时流布防工作台与前端控制台全量闭环（Live Rules Designer & Console）**
+  - 升级布防设计器：在子码流实时动态视频流上叠加 SVG/Canvas 交互层，实时绘制并生成归一化规则；
+  - 重构证据中心前端视图：违规告警列表、抓拍回溯时间轴、识别左右对账视图；
+  - 算法包管理与上传页面；
+  - `rust-embed` 单一二进制构建与端到端闭环验证。

@@ -1,0 +1,31 @@
+{
+  "id": "ai-pipeline-evidence-system",
+  "name": "ai-pipeline-evidence-system",
+  "title": "边缘端一体化 AI 视频分析与证据闭环系统",
+  "description": "实现纯 Rust 边缘端 AI 视频分析闭环系统：C ABI 算法包沙箱热插拔、子码流硬件解码与主码流双流环形抓拍、统一空间规则与航迹跟踪引擎、证据三支柱（抓拍/告警/识别）与原子级淘汰保护、以及前端动态流布防工作台与控制台全量闭环。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "niko",
+  "assignee": "niko",
+  "createdAt": "2026-09-04",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-04-c-abi-algo-sandbox",
+    "09-04-dual-stream-snapshot-pipeline",
+    "09-04-rules-engine-and-evidence-triad",
+    "09-04-live-rules-designer-console"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
