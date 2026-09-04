@@ -1,8 +1,20 @@
-import React, { useState } from 'react'
-import { ArrowRight, Eye, EyeOff, KeyRound, Lock, Moon, ShieldCheck, Sun, User } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import {
+  ArrowRight,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Lock,
+  Moon,
+  ShieldCheck,
+  Sun,
+  User,
+  Wand2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LocaleDropdown } from '../../components/LocaleDropdown'
 import { useTheme } from '../../hooks/use-theme'
+import { authApi } from '../../lib/api'
 import { useAuthStore } from '../../stores/auth'
 import { CursorRing } from './components/CursorRing'
 import { GargantuaCanvas } from './components/GargantuaCanvas'
@@ -18,8 +30,11 @@ export const LoginPage: React.FC = () => {
   const { t } = useTranslation('auth')
   const login = useAuthStore((state) => state.login)
 
+  // 初始化状态与模式
+  const [isInitialized, setIsInitialized] = useState<boolean | null>(null)
   const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('admin123')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [remember, setRemember] = useState(true)
   const [loading, setLoading] = useState(false)
@@ -41,8 +56,32 @@ export const LoginPage: React.FC = () => {
     }, 3500)
   }
 
+  // 探活后端管理员账号初始化状态
+  useEffect(() => {
+    let mounted = true
+    authApi
+      .getInitStatus()
+      .then((status) => {
+        if (mounted) {
+          setIsInitialized(status.initialized)
+          if (!status.initialized) {
+            addToast('info', 'SETUP REQUIRED', t('setupSubtitle'))
+          }
+        }
+      })
+      .catch(() => {
+        // 网络尚未连通或本地静态环境，默认进入登录模式
+        if (mounted) {
+          setIsInitialized(true)
+        }
+      })
+    return () => {
+      mounted = false
+    }
+  }, [t])
+
   // 键盘快捷键支持：按 T 键快速切换日/夜模式
-  React.useEffect(() => {
+  useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return
       if (e.key === 't' || e.key === 'T') {
@@ -55,33 +94,56 @@ export const LoginPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!username || !password) {
+    const trimmedUsername = username.trim()
+    if (!trimmedUsername || !password) {
       addToast('error', 'AUTH ERROR', t('loginError'))
       return
     }
 
-    setLoading(true)
-
-    try {
-      // 本地验证 / API 鉴权 (MVP 默认账号 admin / admin123)
-      if (username === 'admin' && (password === 'admin123' || password === 'argus-admin-2026')) {
-        const fakeToken = `argus-jwt-${Date.now()}`
-        setTimeout(() => {
-          setLoading(false)
-          addToast('success', 'SESSION GRANTED', t('loginSuccess'))
-          setTimeout(() => {
-            login(fakeToken, username)
-          }, 800)
-        }, 600)
-      } else {
-        setTimeout(() => {
-          setLoading(false)
-          addToast('error', 'ACCESS DENIED', t('loginError'))
-        }, 500)
+    // 开箱向导分支：密码确认与强度校验
+    if (isInitialized === false) {
+      if (password.length < 6) {
+        addToast('error', 'PASSWORD TOO SHORT', t('passwordLengthError'))
+        return
       }
-    } catch {
+      if (password !== confirmPassword) {
+        addToast('error', 'MISMATCH', t('passwordMismatch'))
+        return
+      }
+
+      setLoading(true)
+      try {
+        const res = await authApi.initialize({
+          username: trimmedUsername,
+          password,
+        })
+        addToast('success', 'SYSTEM INITIALIZED', t('setupSuccess'))
+        setTimeout(() => {
+          login(res.accessToken, res.username, remember)
+        }, 600)
+      } catch (err: unknown) {
+        setLoading(false)
+        const msg = err instanceof Error ? err.message : t('loginError')
+        addToast('error', 'INIT FAILED', msg)
+      }
+      return
+    }
+
+    // 正常登录分支
+    setLoading(true)
+    try {
+      const res = await authApi.login({
+        username: trimmedUsername,
+        password,
+      })
+      addToast('success', 'SESSION GRANTED', t('loginSuccess'))
+      setTimeout(() => {
+        login(res.accessToken, res.username, remember)
+      }, 600)
+    } catch (err: unknown) {
       setLoading(false)
-      addToast('error', 'NETWORK ERROR', t('loginError'))
+      const msg = err instanceof Error ? err.message : t('loginError')
+      addToast('error', 'ACCESS DENIED', msg)
     }
   }
 
@@ -146,7 +208,7 @@ export const LoginPage: React.FC = () => {
 
         {/* 右上角：全局视口控制组（FPS 标尺 + 语言自由选择下拉 + 日/夜胶囊滑块） */}
         <div className="pointer-events-auto flex items-center gap-3">
-          {/* 实时 FPS 指示：直接 DOM 更新，避免触发 React 父组件重渲染 */}
+          {/* 实时 FPS 指示 */}
           <span
             id="webgl-fps-badge"
             className="rounded-full border border-black/5 bg-white/60 px-2.5 py-1 font-mono text-[10px] text-slate-500 tabular-nums shadow-sm backdrop-blur-md select-none dark:border-white/10 dark:bg-black/40 dark:text-slate-400"
@@ -190,15 +252,10 @@ export const LoginPage: React.FC = () => {
 
       {/* 核心双栏架构：左侧纯净深空光学视窗 + 右侧先锋悬浮控制吊舱 */}
       <div className="pointer-events-none relative z-20 flex min-h-screen w-full flex-col items-center justify-between px-6 pt-20 pb-6 sm:px-10 sm:pb-8 lg:flex-row lg:px-12 lg:pt-24">
-        {/* 左侧：纯净深空光学观测视窗 (Clean Optical Viewport) */}
+        {/* 左侧：纯净深空光学观测视窗 */}
         <div className="flex min-h-[38vh] w-full flex-col justify-between select-none lg:min-h-[calc(100vh-8rem)] lg:flex-1">
-          {/* 顶部占位 (保持垂直对称) */}
           <div />
-
-          {/* 视窗中心区域：100% 绝对净空！没有文字遮挡黑洞/白洞奇点光线追踪 */}
           <div className="flex flex-1 items-center justify-center" />
-
-          {/* 视窗左下角：发丝级天文物理标尺 */}
           <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] tracking-widest text-slate-400/80 uppercase select-none dark:text-slate-500/80">
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
@@ -211,24 +268,30 @@ export const LoginPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 右侧：先锋悬浮控制吊舱 (Floating Aerospace Flight Deck Pod) */}
+        {/* 右侧：先锋悬浮控制吊舱 */}
         <div className="pointer-events-auto my-auto w-full lg:mr-2 lg:w-[410px] xl:mr-6 xl:w-[430px]">
           <aside
             id="command-dock"
             className="lens-glass relative w-full overflow-hidden rounded-3xl p-6 shadow-2xl backdrop-blur-3xl transition-all duration-300 sm:p-7"
           >
-            {/* 吊舱顶部内嵌柔光 */}
             <div className="pointer-events-none absolute -top-20 left-1/2 h-32 w-64 -translate-x-1/2 rounded-full bg-gradient-to-b from-indigo-500/20 via-pink-500/10 to-transparent blur-2xl" />
 
-            {/* 吊舱头部状态条：纯粹专注的系统节点状态 */}
             <div className="relative z-10 flex items-center justify-between border-b border-black/5 pb-4 dark:border-white/5">
               <div className="flex items-center gap-2">
                 <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                  <span
+                    className={`absolute inline-flex h-full w-full animate-ping rounded-full ${
+                      isInitialized === false ? 'bg-amber-400' : 'bg-emerald-400'
+                    } opacity-75`}
+                  />
+                  <span
+                    className={`relative inline-flex h-2 w-2 rounded-full ${
+                      isInitialized === false ? 'bg-amber-500' : 'bg-emerald-500'
+                    }`}
+                  />
                 </span>
                 <span className="font-mono text-[10px] font-semibold tracking-widest text-slate-700 uppercase dark:text-slate-300">
-                  {t('nodeStatus')}
+                  {isInitialized === false ? 'OOBE // FIRST BOOT' : t('nodeStatus')}
                 </span>
               </div>
 
@@ -237,18 +300,19 @@ export const LoginPage: React.FC = () => {
               </span>
             </div>
 
-            {/* 控制台核心认证面板 */}
+            {/* 控制台核心面板 */}
             <div className="my-auto py-5">
               <div className="mb-5 space-y-1">
-                <h2 className="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-                  {t('title')}
+                <h2 className="font-display flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+                  {isInitialized === false && <Wand2 className="h-5 w-5 text-amber-500" />}
+                  <span>{isInitialized === false ? t('setupTitle') : t('title')}</span>
                 </h2>
                 <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                  {t('subtitle')}
+                  {isInitialized === false ? t('setupSubtitle') : t('subtitle')}
                 </p>
               </div>
 
-              {/* 登录表单 */}
+              {/* 表单 */}
               <form onSubmit={handleSubmit} className="space-y-4">
                 {/* 用户名 */}
                 <div>
@@ -281,7 +345,7 @@ export const LoginPage: React.FC = () => {
                     htmlFor="password"
                     className="mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300"
                   >
-                    {t('password')}
+                    {isInitialized === false ? t('newPassword') : t('password')}
                   </label>
                   <div className="relative">
                     <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
@@ -308,23 +372,52 @@ export const LoginPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 记住凭证 */}
-                <div className="flex items-center justify-between pt-0.5">
-                  <label className="flex cursor-pointer items-center gap-2 select-none">
-                    <input
-                      type="checkbox"
-                      checked={remember}
-                      onChange={(e) => setRemember(e.target.checked)}
-                      className="h-4 w-4 rounded border-slate-300 bg-slate-100 text-indigo-600 accent-indigo-500 dark:border-slate-700 dark:bg-slate-900"
-                    />
-                    <span className="text-xs text-slate-600 dark:text-slate-400">
-                      {t('remember')}
+                {/* 开箱向导模式：确认密码 */}
+                {isInitialized === false && (
+                  <div>
+                    <label
+                      htmlFor="confirmPassword"
+                      className="mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300"
+                    >
+                      {t('confirmPassword')}
+                    </label>
+                    <div className="relative">
+                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
+                        <KeyRound className="h-4 w-4" />
+                      </div>
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        id="confirmPassword"
+                        name="confirmPassword"
+                        required
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="••••••••••••"
+                        className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-10 pl-10 text-sm text-[var(--text-primary)] placeholder:text-slate-400 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/50 focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* 记住凭证选项（仅正常登录） */}
+                {isInitialized !== false && (
+                  <div className="flex items-center justify-between pt-0.5">
+                    <label className="flex cursor-pointer items-center gap-2 select-none">
+                      <input
+                        type="checkbox"
+                        checked={remember}
+                        onChange={(e) => setRemember(e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 bg-slate-100 text-indigo-600 accent-indigo-500 dark:border-slate-700 dark:bg-slate-900"
+                      />
+                      <span className="text-xs text-slate-600 dark:text-slate-400">
+                        {t('remember')}
+                      </span>
+                    </label>
+                    <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500">
+                      {t('keystoreOk')}
                     </span>
-                  </label>
-                  <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500">
-                    {t('keystoreOk')}
-                  </span>
-                </div>
+                  </div>
+                )}
 
                 {/* 提交按钮 */}
                 <div className="pt-2">
@@ -334,7 +427,13 @@ export const LoginPage: React.FC = () => {
                     className="font-display flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 px-4 py-3 text-xs font-bold tracking-wider text-white uppercase shadow-lg shadow-indigo-600/25 transition-all duration-200 hover:opacity-95 active:scale-[0.99] disabled:opacity-50"
                   >
                     <ArrowRight className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                    <span>{loading ? t('submitting') : t('submit')}</span>
+                    <span>
+                      {loading
+                        ? t('submitting')
+                        : isInitialized === false
+                          ? t('setupSubmit')
+                          : t('submit')}
+                    </span>
                   </button>
                 </div>
               </form>

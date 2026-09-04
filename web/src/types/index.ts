@@ -5,6 +5,37 @@ export interface ApiResponse<T> {
   timestamp: number
 }
 
+export interface InitStatusResponse {
+  initialized: boolean
+}
+
+export interface InitializeRequest {
+  username: string
+  password: string
+}
+
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
+export interface LoginResponse {
+  accessToken: string
+  username: string
+  expiresAt: number
+}
+
+export interface ChangePasswordRequest {
+  oldPassword: string
+  newPassword: string
+}
+
+export interface AdminUserDto {
+  username: string
+  createdAt: number
+  updatedAt: number
+}
+
 export type ProbeStatus = 'never' | 'success' | 'failed'
 
 export interface Camera {

@@ -1,6 +1,17 @@
 import React, { useState } from 'react'
-import { AlertCircle, Camera, FileText, LogOut, Moon, Sliders, Sun, Video } from 'lucide-react'
+import {
+  AlertCircle,
+  Camera,
+  FileText,
+  KeyRound,
+  LogOut,
+  Moon,
+  Sliders,
+  Sun,
+  Video,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { ChangePasswordModal } from '../components/ChangePasswordModal'
 import { LocaleDropdown } from '../components/LocaleDropdown'
 import { AlarmsPage } from '../features/alarms/AlarmsPage'
 import { LoginPage } from '../features/auth'
@@ -8,15 +19,27 @@ import { LivePage } from '../features/live/LivePage'
 import { OplogPage } from '../features/oplog/OplogPage'
 import { TasksPage } from '../features/tasks/TasksPage'
 import { useTheme } from '../hooks/use-theme'
+import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
 export type NavTab = 'live' | 'tasks' | 'alarms' | 'oplog'
 
 export const Layout: React.FC = () => {
-  const { t } = useTranslation('common')
+  const { t } = useTranslation(['common', 'auth'])
   const { isAuthenticated, logout, username } = useAuthStore()
   const [currentTab, setCurrentTab] = useState<NavTab>('live')
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
   const { isDark, toggleTheme } = useTheme()
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+    } catch {
+      // 忽略登出请求网络异常
+    } finally {
+      logout()
+    }
+  }
 
   // 未登录状态展示先锋高奢登录页
   if (!isAuthenticated) {
@@ -99,8 +122,16 @@ export const Layout: React.FC = () => {
           </button>
 
           <button
-            onClick={logout}
-            title={`登出当前用户 (${username || 'admin'})`}
+            onClick={() => setIsPasswordModalOpen(true)}
+            title={t('auth:changePasswordTooltip', { username: username || 'admin' })}
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)]"
+          >
+            <KeyRound className="h-5 w-5" />
+          </button>
+
+          <button
+            onClick={handleLogout}
+            title={t('auth:logoutTooltip', { username: username || 'admin' })}
             className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--destructive)] transition-colors hover:bg-rose-500/10"
           >
             <LogOut className="h-5 w-5" />
@@ -115,6 +146,12 @@ export const Layout: React.FC = () => {
         {currentTab === 'alarms' && <AlarmsPage />}
         {currentTab === 'oplog' && <OplogPage />}
       </main>
+
+      {/* 修改密码模态框 */}
+      <ChangePasswordModal
+        isOpen={isPasswordModalOpen}
+        onClose={() => setIsPasswordModalOpen(false)}
+      />
     </div>
   )
 }
