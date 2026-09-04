@@ -49,4 +49,8 @@ async-trait = "0.1"
 rust-embed = "8.5"
 clap = { version = "4.5", features = ["derive"] }
 uuid = { version = "1.15", features = ["v4", "serde"] }
+bytes = "1.10"
+base64 = "0.22"
+url = "2.5"
+webrtc = "0.12"
 mime_guess = "2.0"

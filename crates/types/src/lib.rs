@@ -12,7 +12,10 @@ pub use auth::{
     AdminUser, AdminUserDto, AuthClaims, ChangePasswordRequest, InitStatusResponse,
     InitializeRequest, LoginRequest, LoginResponse,
 };
-pub use camera::{Camera, ProbeStatus, TransportPolicy};
+pub use camera::{
+    Camera, CameraProbeEvent, CameraProtocol, CameraTelemetryEvent, CodecType, CreateCameraRequest,
+    EncodedPacket, ProbeResult, ProbeStatus, TransportPolicy, UpdateCameraRequest,
+};
 pub use detection::{BoundingBox, Detection, TrackedObject};
 pub use error::{FrameError, TypeError};
 pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};

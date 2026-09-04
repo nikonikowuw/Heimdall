@@ -73,6 +73,10 @@ async fn main() -> Result<()> {
     // 5. 组装 API 共享状态与路由器并同步初始化与撤销时间戳
     let state = api::AppState::new(db_conn, pipeline_mgr);
     state.sync_auth_state().await;
+
+    // 启动后台静默待机摄像头定时巡检与防抖三态调度器 (30s 周期)
+    Arc::new(state.clone()).start_periodic_probe_worker(std::time::Duration::from_secs(30));
+
     let is_init = state
         .is_initialized
         .load(std::sync::atomic::Ordering::Relaxed);

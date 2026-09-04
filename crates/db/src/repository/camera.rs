@@ -3,6 +3,17 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Qu
 use crate::entity::camera::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
 
+/// 探活结果更新参数
+#[derive(Debug, Clone)]
+pub struct ProbeUpdateParams<'a> {
+    pub status: &'a str,
+    pub codec: &'a str,
+    pub width: i32,
+    pub height: i32,
+    pub fps: f64,
+    pub error_code: &'a str,
+}
+
 #[derive(Debug)]
 pub struct CameraRepo;
 
@@ -43,20 +54,20 @@ impl CameraRepo {
     pub async fn update_probe_status(
         db: &DatabaseConnection,
         camera_id: &str,
-        status: &str,
-        codec: &str,
-        width: i32,
-        height: i32,
-        fps: f64,
+        params: ProbeUpdateParams<'_>,
     ) -> Result<(), DbError> {
         if let Some(model) = Self::find_by_camera_id(db, camera_id).await? {
             let mut active: ActiveModel = model.into();
-            active.last_probe_status = Set(status.to_string());
+            active.last_probe_status = Set(params.status.to_string());
             active.last_probe_at = Set(Some(chrono::Utc::now()));
-            active.last_codec = Set(codec.to_string());
-            active.last_width = Set(width);
-            active.last_height = Set(height);
-            active.last_fps = Set(fps);
+            active.last_codec = Set(params.codec.to_string());
+            active.last_width = Set(params.width);
+            active.last_height = Set(params.height);
+            active.last_fps = Set(params.fps);
+            active.last_probe_error_code = Set(params.error_code.to_string());
+            if params.status == "healthy" || params.status == "success" {
+                active.last_success_at = Set(Some(chrono::Utc::now()));
+            }
             active.updated_at = Set(chrono::Utc::now());
             active.update(db).await?;
         }

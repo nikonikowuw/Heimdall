@@ -36,7 +36,7 @@ export interface AdminUserDto {
   updatedAt: number
 }
 
-export type ProbeStatus = 'never' | 'success' | 'failed'
+export type ProbeStatus = 'never' | 'healthy' | 'success' | 'degraded' | 'reconnecting' | 'failed'
 
 export interface Camera {
   id: number
@@ -47,13 +47,55 @@ export interface Camera {
   subRtspUrl: string
   remark: string
   lastProbeStatus: ProbeStatus
-  lastProbeAt: string | null
+  lastProbeAt?: number | null
+  lastProbeErrorCode?: string
+  lastSuccessAt?: number | null
   lastCodec: string
   lastWidth: number
   lastHeight: number
   lastFps: number
-  createdAt: string
-  updatedAt: string
+  gb28181DeviceId?: string | null
+  gb28181ChannelId?: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CreateCameraRequest {
+  name: string
+  protocol?: 'rtsp' | 'gb28181'
+  rtspUrl: string
+  subRtspUrl?: string
+  remark?: string
+  transportPolicy?: 'auto' | 'tcp' | 'udp'
+  gb28181DeviceId?: string
+  gb28181ChannelId?: string
+}
+
+export interface UpdateCameraRequest {
+  name?: string
+  rtspUrl?: string
+  subRtspUrl?: string
+  remark?: string
+  transportPolicy?: 'auto' | 'tcp' | 'udp'
+  gb28181DeviceId?: string
+  gb28181ChannelId?: string
+}
+
+export interface TrackedBBox {
+  trackId: number
+  label: string
+  confidence: number
+  bbox: [number, number, number, number] // [x1, y1, x2, y2] 归一化坐标 0.0 ~ 1.0
+  trajectory?: [number, number][]
+}
+
+export interface CameraTelemetry {
+  cameraId: string
+  activeTracks: number
+  personCount: number
+  carCount: number
+  motionScore: number
+  isMotionGated: boolean
 }
 
 export type DetectionRuleRole = 'roi' | 'mask' | 'line'

@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 types = { workspace = true }
 db = { workspace = true }
+media = { workspace = true }
 pipeline = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -27,3 +28,4 @@ uuid = { workspace = true }
 sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
+webrtc = { workspace = true }

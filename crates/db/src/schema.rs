@@ -16,10 +16,14 @@ pub async fn create_tables_if_not_exist(db: &DatabaseConnection) -> Result<(), D
             remark TEXT NOT NULL DEFAULT '',
             last_probe_status TEXT NOT NULL DEFAULT 'never',
             last_probe_at DATETIME,
+            last_probe_error_code TEXT NOT NULL DEFAULT '',
+            last_success_at DATETIME,
             last_codec TEXT NOT NULL DEFAULT '',
             last_width INTEGER NOT NULL DEFAULT 0,
             last_height INTEGER NOT NULL DEFAULT 0,
             last_fps REAL NOT NULL DEFAULT 0.0,
+            gb28181_device_id TEXT,
+            gb28181_channel_id TEXT,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );

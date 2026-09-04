@@ -37,6 +37,9 @@ pub enum ApiError {
     #[error("数据库操作错误: {0}")]
     Db(#[from] db::DbError),
 
+    #[error("流媒体接入与解码错误: {0}")]
+    Media(#[from] media::MediaError),
+
     #[error("分析管线错误: {0}")]
     Pipeline(#[from] pipeline::PipelineError),
 
@@ -56,6 +59,7 @@ impl IntoResponse for ApiError {
             Self::InvalidCredentials => (StatusCode::BAD_REQUEST, 10007, self.to_string()),
             Self::WeakPassword(m) => (StatusCode::BAD_REQUEST, 10008, m.clone()),
             Self::NotFound(m) => (StatusCode::NOT_FOUND, 40401, m.clone()),
+            Self::Media(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
             Self::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, 50001, e.to_string()),
             Self::Pipeline(e) => (StatusCode::INTERNAL_SERVER_ERROR, 50002, e.to_string()),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, 50000, m.clone()),

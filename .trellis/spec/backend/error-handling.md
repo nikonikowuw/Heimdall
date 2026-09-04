@@ -52,6 +52,7 @@ pub enum InferError {
 
 - **错误消息用中文**，与团队文档语言一致；但**变体名和字段名用英文**。
 - 消息里必须带上定位信息（哪个模型、哪一路、什么形状）。`#[error("推理失败")]` 这种没有排查价值。
+- **结构化错误码导出**：底层领域错误枚举（如 `MediaError`、`DbError`）必须实现 `error_code(&self) -> u32` 导出对应的 5 位业务错误码（如 `20001`），`thiserror` 的 `Display` 文本仅用于后端 `tracing::error!` 日志，客户端多语言消息由 `api::i18n` 模块化字典全量接管。
 - 跨 crate 传播用 `#[from]`；只有语义确实不变时才用 `#[error(transparent)]`。
 - **不要给每个错误都加 `Other(String)` 兜底变体** —— 它会变成所有人偷懒的垃圾桶，让调用方无法分支。
 
@@ -94,9 +95,22 @@ fn check(code: i32, op: &'static str) -> Result<(), BackendError> {
 
 ---
 
-## HTTP 错误映射
+## 服务端国际化 (i18n) 模块化分层
 
-`api` 定义统一的 `ApiError` 并实现 `IntoResponse`，返回统一响应体：
+`crates/api/src/i18n/` 必须按业务领域拆分独立子模块，严禁将全系统错误消息堆叠在单个文件中：
+
+```
+crates/api/src/i18n/
+├── mod.rs      # Locale 解析与全局 5 位错误码段路由调度中心
+├── common.rs   # 0 成功码、40001 参数校验、50000 系统通用错误
+├── auth.rs     # 10000~19999 认证授权、Token 撤销、密码强度错误
+├── camera.rs   # 20000~29999 摄像头、RTSP 握手、SPS 解析、硬解及探活错误
+├── task.rs     # 30000~39999 分析任务、几何规则配置、模型推理错误
+└── alarm.rs    # 40000~49999 告警记录、快照证据错误
+```
+
+- 规则：`localize_api_message` 依据错误码千位/万位高位段路由至对应子模块，实现局部 $O(1)$ 静态匹配；
+- 多语言支持：所有模块统一支持 `zh-CN`（简体中文）、`zh-TW`（繁体中文）、`en`（英文）。
 
 ```json
 {
