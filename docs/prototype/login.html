@@ -39,12 +39,12 @@
       --bg-page: #F5F7FA;
       --text-main: #0B0F19;
       --text-sub: #475569;
-      --card-bg: rgba(255, 255, 255, 0.86);
+      --card-bg: rgba(255, 255, 255, 0.72);
       --card-border: rgba(15, 23, 42, 0.09);
       --card-border-hover: rgba(244, 63, 94, 0.4);
-      --card-shadow: 0 25px 60px -15px rgba(15, 23, 42, 0.07), 0 0 1px rgba(0, 0, 0, 0.08), inset 0 1px 1px rgba(255, 255, 255, 1.0);
-      --input-bg: #FFFFFF;
-      --input-border: rgba(15, 23, 42, 0.14);
+      --card-shadow: 0 30px 70px -15px rgba(15, 23, 42, 0.08), 0 0 1px rgba(0, 0, 0, 0.1), inset 0 1px 1px rgba(255, 255, 255, 1.0);
+      --input-bg: rgba(0, 0, 0, 0.03);
+      --input-border: rgba(15, 23, 42, 0.10);
       --input-text: #0B0F19;
       --grid-line: rgba(15, 23, 42, 0.035);
       --cursor-border: rgba(244, 63, 94, 0.65);
@@ -59,12 +59,12 @@
       --bg-page: #030408;
       --text-main: #F8FAFC;
       --text-sub: #94A3B8;
-      --card-bg: rgba(8, 11, 20, 0.78);
-      --card-border: rgba(255, 255, 255, 0.09);
-      --card-border-hover: rgba(99, 102, 241, 0.45);
-      --card-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.90), inset 0 1px 1px rgba(255, 255, 255, 0.12);
-      --input-bg: rgba(2, 6, 23, 0.75);
-      --input-border: rgba(255, 255, 255, 0.14);
+      --card-bg: rgba(8, 11, 24, 0.65);
+      --card-border: rgba(255, 255, 255, 0.12);
+      --card-border-hover: rgba(99, 102, 241, 0.5);
+      --card-shadow: 0 35px 80px -15px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      --input-bg: rgba(255, 255, 255, 0.035);
+      --input-border: rgba(255, 255, 255, 0.10);
       --input-text: #F8FAFC;
       --grid-line: rgba(255, 255, 255, 0.022);
       --cursor-border: rgba(129, 140, 248, 0.6);
@@ -178,193 +178,215 @@
   <!-- 全局 HUD 消息提示浮层 -->
   <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2.5 pointer-events-none max-w-sm w-[calc(100vw-2.5rem)]"></div>
 
-  <!-- 顶部通栏：Logo 严格居左上角，主题切换严格居右上角 -->
-  <header class="fixed top-0 inset-x-0 z-30 w-full px-6 sm:px-10 lg:px-12 py-5 sm:py-6 flex items-center justify-between pointer-events-none">
+  <!-- 先锋高奢工业美学架构：左侧纯净深空光学视窗 + 右侧先锋悬浮控制吊舱 (Clean Viewport + Floating Flight Deck Pod) -->
+  <div class="relative z-20 min-h-screen w-full flex flex-col lg:flex-row justify-between items-center px-6 sm:px-10 lg:px-12 py-6 sm:py-8 pointer-events-none">
     
-    <!-- 左上角 Logo -->
-    <a href="#" class="pointer-events-auto flex items-center gap-3 group">
-      <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-pink-500 to-cyan-400 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20 ring-1 ring-white/20 transition-transform group-hover:scale-105">
-        <i data-lucide="shield-check" class="w-4 h-4 stroke-[2]"></i>
-      </div>
-      <div class="flex flex-col">
-        <span class="font-display font-extrabold text-sm tracking-wide text-slate-900 dark:text-white">
-          ARGUS
-        </span>
-      </div>
-    </a>
-
-    <!-- 右上角：帧率微指示与精致日/月微滑块开关 -->
-    <div class="pointer-events-auto flex items-center gap-3">
-      <span id="fpsDisplay" class="hidden sm:inline-block font-data text-[10px] text-slate-400 dark:text-slate-500 tabular-nums select-none tracking-wider px-2 py-0.5 rounded border border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.04]">-- FPS</span>
-      <button 
-        type="button" 
-        id="theme-pill-toggle"
-        onclick="toggleTheme()"
-        role="switch"
-        aria-checked="true"
-        aria-label="Toggle theme between Light and Dark"
-        title="Toggle Theme: Light / Dark [Hotkey: T]"
-        class="relative w-[54px] h-[28px] rounded-full p-[2.5px] transition-colors duration-300 focus:outline-none cursor-pointer select-none bg-slate-200/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700/80 shadow-inner group shrink-0"
-      >
-        <!-- 轨道底衬微图标 -->
-        <div class="absolute inset-0 flex items-center justify-between px-2 text-[10px] pointer-events-none opacity-50">
-          <i data-lucide="sun" class="w-3 h-3 text-amber-500"></i>
-          <i data-lucide="moon" class="w-3 h-3 text-indigo-400"></i>
-        </div>
-
-        <!-- 弹簧滑块核心 (Thumb) -->
-        <div 
-          id="theme-pill-thumb"
-          class="relative z-10 w-[22px] h-[22px] rounded-full flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] shadow-md bg-white dark:bg-indigo-600 text-slate-800 dark:text-white"
-        >
-          <i id="pill-icon-sun" data-lucide="sun" class="w-3.5 h-3.5 text-amber-500"></i>
-          <i id="pill-icon-moon" data-lucide="moon" class="w-3.5 h-3.5 text-white hidden"></i>
-        </div>
-      </button>
-    </div>
-
-  </header>
-
-  <!-- 主内容区：中央奇点视界 · 沉浸式浮空 HUD 控制台 -->
-  <main class="relative z-20 w-full max-w-md mx-auto flex-1 flex flex-col justify-center items-center px-4 sm:px-6 py-10 min-h-[calc(100vh-140px)]">
-    
-    <!-- 中央先锋品牌与系统身份徽标 (垂直对称轴，轻盈优雅) -->
-    <div class="flex flex-col items-center text-center mb-6 space-y-2.5 select-none">
+    <!-- 左侧：纯净深空光学观测视窗 (Clean Optical Viewport) -->
+    <!-- 工业准则：中心视域神圣不可侵犯，零文本遮挡，让黑洞/白洞奇点光线追踪尽情呈现！ -->
+    <div class="w-full lg:flex-1 min-h-[38vh] lg:min-h-[calc(100vh-4rem)] flex flex-col justify-between select-none">
       
-      <!-- 节点状态微指示徽章 -->
-      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-black/10 dark:border-white/15 bg-white/50 dark:bg-white/[0.06] backdrop-blur-xl shadow-sm text-[11px] font-sans font-medium text-slate-700 dark:text-slate-200 tracking-wider">
-        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-        <span class="font-data text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400">ARGUS CORE // NODE-01</span>
-      </div>
-
-      <!-- 纯粹主标题 -->
-      <h1 class="font-display text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white">
-        Singularity Access
-      </h1>
-
-      <p class="text-xs font-sans text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs">
-        Authenticate to connect with edge vision telemetry & zero-copy NPU cluster.
-      </p>
-    </div>
-
-    <!-- 登录面板本体 (精雕细琢的浮空磨砂玻璃容器) -->
-    <div class="w-full lens-glass rounded-3xl p-6 sm:p-7 relative overflow-hidden backdrop-blur-2xl shadow-2xl shadow-black/10 dark:shadow-2xl dark:shadow-indigo-950/60 ring-1 ring-black/5 dark:ring-white/10">
-      
-      <!-- 卡片顶部漫反射柔光 -->
-      <div class="absolute -top-20 left-1/2 -translate-x-1/2 w-64 h-32 bg-gradient-to-b from-indigo-500/20 via-pink-500/10 to-transparent rounded-full blur-2xl pointer-events-none"></div>
-
-      <!-- 核心登录表单 (聚焦纯粹凭证输入) -->
-      <form id="login-form" onsubmit="handleLoginSubmit(event)" class="relative z-10 space-y-4">
-        
-        <!-- 用户名 -->
-        <div>
-          <label for="username" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-            Username
-          </label>
-          <div class="relative">
-            <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <i data-lucide="user" class="w-4 h-4"></i>
-            </div>
-            <input 
-              type="text" 
-              id="username" 
-              name="username"
-              required
-              autocomplete="username"
-              placeholder="admin" 
-              value="admin"
-              style="background-color: var(--input-bg); border-color: var(--input-border); color: var(--input-text);"
-              class="w-full pl-10 pr-4 py-2.5 rounded-xl border placeholder:text-slate-400 dark:placeholder:text-slate-600 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 transition-all font-sans"
-            >
+      <!-- 视窗左上角：极简微型系统标识 (贴边，绝不侵犯中心视界) -->
+      <div class="flex items-center gap-3 pointer-events-auto">
+        <a href="#" class="flex items-center gap-3 group">
+          <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-pink-500 to-cyan-400 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20 ring-1 ring-white/20 transition-transform group-hover:scale-105">
+            <i data-lucide="shield-check" class="w-4 h-4 stroke-[2]"></i>
           </div>
-        </div>
+          <div class="flex flex-col">
+            <span class="font-display font-black text-sm tracking-wider text-slate-900 dark:text-white uppercase">
+              Argus
+            </span>
+            <span class="font-data text-[9px] text-slate-400 dark:text-slate-500 tracking-widest uppercase">
+              Edge AI Telemetry
+            </span>
+          </div>
+        </a>
+      </div>
 
-        <!-- 密码 -->
-        <div>
-          <label for="password" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-            Password
-          </label>
-          <div class="relative">
-            <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <i data-lucide="key-round" class="w-4 h-4"></i>
-            </div>
-            <input 
-              type="password" 
-              id="password" 
-              name="password"
-              required
-              autocomplete="current-password"
-              placeholder="••••••••••••" 
-              value="argus-admin-2026"
-              style="background-color: var(--input-bg); border-color: var(--input-border); color: var(--input-text);"
-              class="w-full pl-10 pr-10 py-2.5 rounded-xl border placeholder:text-slate-400 dark:placeholder:text-slate-600 text-sm focus:outline-none focus:border-pink-400 focus:ring-1 focus:ring-pink-400/50 transition-all font-sans"
-            >
+      <!-- 视窗中心区域：100% 绝对净空！没有文字！没有卡片！黑洞/白洞物理模拟纯粹展露！ -->
+      <div class="flex-1 flex items-center justify-center">
+        <!-- PURE CLEAN VIEWPORT: ZERO OBSTRUCTION -->
+      </div>
+
+      <!-- 视窗左下角：发丝级天文物理标尺 (贴在视窗最下边缘，与黑洞保持开阔安全距离) -->
+      <div class="flex flex-wrap items-center gap-4 text-[10px] font-data text-slate-400/80 dark:text-slate-500/80 tracking-widest uppercase select-none">
+        <span class="flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>OPTICAL SENSOR // KERR METRIC a*=0.94</span>
+        </span>
+        <span class="hidden sm:inline text-slate-300 dark:text-slate-800">|</span>
+        <span class="hidden sm:inline">SCHWARZSCHILD // ISCO 2.60 Rs</span>
+        <span class="hidden md:inline text-slate-300 dark:text-slate-800">|</span>
+        <span class="hidden md:inline">DIRECT BUS: DMA-BUF</span>
+      </div>
+
+    </div>
+
+    <!-- 右侧：先锋悬浮控制吊舱 (Floating Aerospace Flight Deck Pod) -->
+    <!-- 极简高奢光学玻璃材质，精密微凹槽输入床，高能极简按键，拒绝土味渐变与厚重侧栏！ -->
+    <div class="w-full lg:w-[410px] xl:w-[430px] my-auto pointer-events-auto lg:mr-2 xl:mr-6">
+      <aside id="command-dock" class="w-full lens-glass rounded-3xl p-6 sm:p-7 relative overflow-hidden backdrop-blur-3xl shadow-2xl transition-all duration-300">
+        
+        <!-- 吊舱顶部内嵌柔光 -->
+        <div class="absolute -top-20 left-1/2 -translate-x-1/2 w-64 h-32 bg-gradient-to-b from-indigo-500/20 via-pink-500/10 to-transparent rounded-full blur-2xl pointer-events-none"></div>
+
+        <!-- 吊舱头部状态条：微型脉冲点阵 + 状态 + 日/月切换滑块 -->
+        <div class="relative z-10 flex items-center justify-between gap-3 pb-5 border-b border-black/5 dark:border-white/5">
+          <div class="flex items-center gap-2">
+            <span class="relative flex h-2 w-2">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span class="font-data text-[10px] font-semibold tracking-widest text-slate-700 dark:text-slate-300 uppercase">
+              NODE-01 // READY
+            </span>
+          </div>
+          
+          <div class="flex items-center gap-2">
+            <span id="fpsDisplay" class="font-data text-[10px] text-slate-400 dark:text-slate-500 tabular-nums px-2 py-0.5 rounded border border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.04]">-- FPS</span>
             <button 
               type="button" 
-              onclick="togglePasswordVisibility()"
-              aria-label="Toggle password visibility"
-              class="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
+              id="theme-pill-toggle"
+              onclick="toggleTheme()"
+              role="switch"
+              aria-checked="true"
+              aria-label="Toggle theme between Light and Dark"
+              title="Toggle Theme: Light / Dark [Hotkey: T]"
+              class="relative w-[48px] h-[24px] rounded-full p-[2px] transition-colors duration-300 focus:outline-none cursor-pointer select-none bg-slate-200/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700/80 shadow-inner group shrink-0"
             >
-              <i id="eye-show" data-lucide="eye" class="w-4 h-4"></i>
-              <i id="eye-hide" data-lucide="eye-off" class="w-4 h-4 hidden"></i>
+              <!-- 轨道底衬微图标 -->
+              <div class="absolute inset-0 flex items-center justify-between px-1.5 text-[9px] pointer-events-none opacity-50">
+                <i data-lucide="sun" class="w-3 h-3 text-amber-500"></i>
+                <i data-lucide="moon" class="w-3 h-3 text-indigo-400"></i>
+              </div>
+
+              <!-- 弹簧滑块核心 (Thumb) -->
+              <div 
+                id="theme-pill-thumb"
+                class="relative z-10 w-[18px] h-[18px] rounded-full flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] shadow-md bg-white dark:bg-indigo-600 text-slate-800 dark:text-white"
+              >
+                <i id="pill-icon-sun" data-lucide="sun" class="w-3 h-3 text-amber-500"></i>
+                <i id="pill-icon-moon" data-lucide="moon" class="w-3 h-3 text-white hidden"></i>
+              </div>
             </button>
           </div>
         </div>
 
-        <!-- 记住会话 -->
-        <div class="flex items-center justify-between pt-0.5">
-          <label class="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" id="remember" checked class="w-4 h-4 rounded bg-slate-100 dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500/30 accent-indigo-500">
-            <span class="text-xs text-slate-600 dark:text-slate-400 font-sans">Remember this device</span>
-          </label>
+        <!-- 吊舱主标题 -->
+        <div class="relative z-10 my-5">
+          <div class="flex items-center justify-between">
+            <h2 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Singularity Access
+            </h2>
+            <span class="font-data text-[9px] px-2 py-0.5 rounded bg-black/5 dark:bg-white/5 text-slate-500 dark:text-slate-400 tracking-wider">SEC-AUTH</span>
+          </div>
+          <p class="text-xs font-sans text-slate-500 dark:text-slate-400 mt-1">
+            Authenticate terminal credentials to connect with edge inference cluster.
+          </p>
         </div>
 
-        <!-- 提交登录按钮 -->
-        <div class="pt-1.5">
-          <button 
-            type="submit" 
-            id="submit-btn"
-            class="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 text-white font-display font-bold text-xs tracking-wider uppercase transition-all duration-200 flex items-center justify-center gap-2 hover:opacity-95 shadow-lg shadow-indigo-600/25 active:scale-[0.99] cursor-pointer"
-          >
-            <i id="btn-spinner" data-lucide="arrow-right" class="w-4 h-4"></i>
-            <span id="btn-text">Sign In</span>
-          </button>
+        <!-- 精雕细琢的登录表单 (Micro-Inset Bed) -->
+        <form id="login-form" onsubmit="handleLoginSubmit(event)" class="relative z-10 space-y-3.5">
+          
+          <!-- 用户名输入凹槽 -->
+          <div class="space-y-1">
+            <label for="username" class="block text-[11px] font-medium text-slate-600 dark:text-slate-300">
+              Operator Identifier
+            </label>
+            <div class="relative flex items-center rounded-xl bg-black/[0.025] dark:bg-white/[0.03] border border-black/10 dark:border-white/10 focus-within:border-indigo-500/60 dark:focus-within:border-cyan-400/60 focus-within:ring-1 focus-within:ring-indigo-500/20 dark:focus-within:ring-cyan-400/20 transition-all">
+              <span class="pl-3 pr-2.5 font-data text-[10px] text-slate-400 select-none flex items-center gap-1.5 border-r border-black/5 dark:border-white/5">
+                <i data-lucide="user" class="w-3.5 h-3.5"></i>
+                <span class="tracking-widest">ID</span>
+              </span>
+              <input 
+                type="text" 
+                id="username" 
+                name="username"
+                required
+                autocomplete="username"
+                placeholder="admin" 
+                value="admin"
+                class="w-full bg-transparent px-3 py-2 text-sm font-sans placeholder:text-slate-400 dark:placeholder:text-slate-600 text-slate-900 dark:text-white focus:outline-none"
+              >
+            </div>
+          </div>
+
+          <!-- 密码输入凹槽 -->
+          <div class="space-y-1">
+            <label for="password" class="block text-[11px] font-medium text-slate-600 dark:text-slate-300">
+              Access Token / Password
+            </label>
+            <div class="relative flex items-center rounded-xl bg-black/[0.025] dark:bg-white/[0.03] border border-black/10 dark:border-white/10 focus-within:border-pink-500/60 dark:focus-within:border-pink-400/60 focus-within:ring-1 focus-within:ring-pink-500/20 dark:focus-within:ring-pink-400/20 transition-all">
+              <span class="pl-3 pr-2.5 font-data text-[10px] text-slate-400 select-none flex items-center gap-1.5 border-r border-black/5 dark:border-white/5">
+                <i data-lucide="key-round" class="w-3.5 h-3.5"></i>
+                <span class="tracking-widest">KEY</span>
+              </span>
+              <input 
+                type="password" 
+                id="password" 
+                name="password"
+                required
+                autocomplete="current-password"
+                placeholder="••••••••••••" 
+                value="argus-admin-2026"
+                class="w-full bg-transparent px-3 pr-10 py-2 text-sm font-sans placeholder:text-slate-400 dark:placeholder:text-slate-600 text-slate-900 dark:text-white focus:outline-none"
+              >
+              <button 
+                type="button" 
+                onclick="togglePasswordVisibility()"
+                aria-label="Toggle password visibility"
+                class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
+              >
+                <i id="eye-show" data-lucide="eye" class="w-3.5 h-3.5"></i>
+                <i id="eye-hide" data-lucide="eye-off" class="w-3.5 h-3.5 hidden"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- 记住会话 -->
+          <div class="flex items-center justify-between pt-0.5">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="remember" checked class="w-3.5 h-3.5 rounded bg-slate-100 dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500/30 accent-indigo-500">
+              <span class="text-xs text-slate-600 dark:text-slate-400 font-sans">Remember station</span>
+            </label>
+            <span class="font-data text-[10px] text-slate-400 dark:text-slate-500">KEYSTORE: OK</span>
+          </div>
+
+          <!-- 先锋极简高能按键 (抛弃三色大渐变，换用极致黑白纯净与物理质感！) -->
+          <div class="pt-2">
+            <button 
+              type="submit" 
+              id="submit-btn"
+              class="w-full py-2.5 px-4 rounded-xl bg-slate-950 dark:bg-white text-white dark:text-slate-950 font-display font-bold text-xs tracking-wider uppercase transition-all duration-200 flex items-center justify-center gap-2 hover:opacity-90 shadow-md dark:shadow-[0_0_20px_rgba(255,255,255,0.15)] active:scale-[0.98] cursor-pointer"
+            >
+              <i id="btn-spinner" data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+              <span id="btn-text">Authenticate Session</span>
+            </button>
+          </div>
+
+        </form>
+
+        <!-- 发丝级单行总线指示带 (替代死板的三个小方块) -->
+        <div class="relative z-10 mt-5 pt-3.5 border-t border-black/5 dark:border-white/5 flex items-center justify-between text-[10px] font-data text-slate-400 dark:text-slate-500 select-none">
+          <span class="flex items-center gap-1"><i data-lucide="radio" class="w-3 h-3 text-rose-500"></i> RTSP/WHEP</span>
+          <span class="text-slate-300 dark:text-slate-800">/</span>
+          <span class="flex items-center gap-1"><i data-lucide="cpu" class="w-3 h-3 text-cyan-500"></i> DMA-BUF</span>
+          <span class="text-slate-300 dark:text-slate-800">/</span>
+          <span class="flex items-center gap-1"><i data-lucide="sparkles" class="w-3 h-3 text-indigo-500 dark:text-pink-400"></i> ZERO-COPY</span>
         </div>
 
-      </form>
+        <!-- 吊舱底部安全与集群状态 -->
+        <div class="relative z-10 mt-3 pt-3 border-t border-black/5 dark:border-white/5 flex items-center justify-between text-[10px] font-data text-slate-400 dark:text-slate-500 select-none">
+          <span class="flex items-center gap-1.5">
+            <i data-lucide="lock" class="w-3 h-3 text-emerald-500"></i>
+            <span>TLS 1.3 · ENCRYPTED</span>
+          </span>
+          <span>CLUSTER: 16/16</span>
+        </div>
 
-      <!-- 卡片内置技术特性标尺 (精致克制的一体化微呈现) -->
-      <div class="mt-5 pt-4 border-t border-black/5 dark:border-white/5 flex items-center justify-between text-[11px] font-sans text-slate-400 dark:text-slate-500">
-        <span class="flex items-center gap-1.5"><i data-lucide="video" class="w-3.5 h-3.5 text-rose-500"></i> Ingestion</span>
-        <span class="flex items-center gap-1.5"><i data-lucide="cpu" class="w-3.5 h-3.5 text-amber-500 dark:text-cyan-400"></i> Zero-Copy</span>
-        <span class="flex items-center gap-1.5"><i data-lucide="sparkles" class="w-3.5 h-3.5 text-indigo-500 dark:text-pink-400"></i> AI Pipeline</span>
-      </div>
-
+      </aside>
     </div>
 
-    <!-- 卡片下方微型安全提示 -->
-    <div class="mt-4 flex items-center gap-1.5 text-[11px] font-data text-slate-400 dark:text-slate-500 select-none">
-      <i data-lucide="lock" class="w-3 h-3 text-emerald-500"></i>
-      <span>End-to-End Encrypted Session · TLS 1.3</span>
-    </div>
-
-  </main>
-
-  <!-- 底部极简页脚 (三段平衡展开) -->
-  <footer class="relative z-20 w-full px-6 sm:px-10 lg:px-12 py-5 border-t border-black/5 dark:border-slate-900/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-sans text-slate-500">
-    <div class="flex items-center gap-2">
-      <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-      <span>Cluster Nodes: 16/16 Online</span>
-    </div>
-    <div class="flex items-center gap-6">
-      <a href="#privacy" onclick="showToast('info', 'SECURITY', 'End-to-end encrypted session with TLS 1.3.')" class="hover:text-slate-800 dark:hover:text-slate-300 transition-colors">Privacy</a>
-      <a href="#terms" onclick="showToast('info', 'TERMS', 'Argus Enterprise Console Terms of Use.')" class="hover:text-slate-800 dark:hover:text-slate-300 transition-colors">Terms</a>
-      <a href="#status" onclick="showToast('info', 'CLUSTER STATUS', 'All local inference nodes operating at nominal capacity.')" class="hover:text-slate-800 dark:hover:text-slate-300 transition-colors">Status</a>
-    </div>
-    <div>
-      <span>© 2026 Argus Systems Inc.</span>
-    </div>
-  </footer>
+  </div>
 
   <script>
     // 渲染 Lucide 矢量图标
@@ -526,15 +548,13 @@
 
       setTimeout(() => {
         showToast('success', 'Sign In Successful', `Welcome back, ${username}. Opening dashboard...`);
-        btn.classList.remove('from-indigo-600', 'to-cyan-500');
-        btn.classList.add('from-emerald-600', 'to-cyan-600');
+        btn.classList.add('!bg-emerald-500', '!text-white');
         text.textContent = 'Authorized';
 
         setTimeout(() => {
           btn.disabled = false;
-          btn.classList.remove('opacity-80', 'cursor-wait', 'from-emerald-600', 'to-cyan-600');
-          btn.classList.add('from-indigo-600', 'to-cyan-500');
-          text.textContent = 'Sign In';
+          btn.classList.remove('opacity-80', 'cursor-wait', '!bg-emerald-500', '!text-white');
+          text.textContent = 'Authenticate Session';
           isSubmitting = false;
         }, 1800);
       }, 1000);
@@ -655,6 +675,7 @@
         uniform vec2 uResolution;
         uniform vec2 uMouse;
         uniform float uTheme; // 0.0 = Light (Black Hole), 1.0 = Dark (White Hole)
+        uniform vec2 uSingularityCenter; // 自适应非对称黄金分割奇点中心 (桌面端 0.35, 0.50; 移动端 0.50, 0.66)
         uniform vec3 uTintA;
         uniform vec3 uTintB;
         uniform vec3 uTintC;
@@ -932,9 +953,9 @@
 
         void main() {
           float aspect = uResolution.x / max(uResolution.y, 1.0);
-          // 直接使用物理像素坐标，避免 fullscreen triangle 的 UV 或 DPR 差异造成奇点漂移
+          // 直接使用物理像素坐标，自适应非对称黄金分割奇点中心，彻底避免黑洞被登录卡片遮挡
           vec2 screenUv = gl_FragCoord.xy / max(uResolution, vec2(1.0));
-          vec2 sp = (screenUv - vec2(0.50, 0.525)) * vec2(aspect, 1.0);
+          vec2 sp = (screenUv - uSingularityCenter) * vec2(aspect, 1.0);
           float az = uMouse.x * 0.02;
           float el = 0.05 + uMouse.y * 0.015;
           vec3 ro = CAM_DIST * vec3(cos(el) * sin(az), sin(el), -cos(el) * cos(az));
@@ -1067,6 +1088,7 @@
         const uResolutionLoc = gl.getUniformLocation(prog, 'uResolution');
         const uMouseLoc = gl.getUniformLocation(prog, 'uMouse');
         const uThemeLoc = gl.getUniformLocation(prog, 'uTheme');
+        const uSingularityCenterLoc = gl.getUniformLocation(prog, 'uSingularityCenter');
         const uTintALoc = gl.getUniformLocation(prog, 'uTintA');
         const uTintBLoc = gl.getUniformLocation(prog, 'uTintB');
         const uTintCLoc = gl.getUniformLocation(prog, 'uTintC');
@@ -1074,6 +1096,35 @@
         gl.uniform3f(uTintALoc, 0.349, 0.859, 0.933);
         gl.uniform3f(uTintBLoc, 0.988, 0.451, 0.749);
         gl.uniform3f(uTintCLoc, 0.420, 0.298, 1.000);
+
+        // 工业级严格几何对齐：奇点精确位于左侧 100% 纯净光学视窗的对称正中心
+        let curSingX = 0.35, curSingY = 0.50;
+        let targetSingX = 0.35, targetSingY = 0.50;
+
+        function updateSingularityCenterTarget() {
+          const isDesktop = window.innerWidth >= 1024;
+          if (isDesktop) {
+            const dock = document.getElementById('command-dock');
+            if (dock) {
+              const rect = dock.getBoundingClientRect();
+              const viewW = Math.max(rect.left, 200);
+              // 严格对准左侧纯净观测视窗的几何物理正中心！
+              targetSingX = (viewW * 0.5) / window.innerWidth;
+              targetSingY = 0.50;
+            } else {
+              targetSingX = 0.36;
+              targetSingY = 0.50;
+            }
+          } else {
+            // 移动端竖屏：黑洞位于屏幕上半视界 72% 高度，下半部为控制吊舱，上下分层完全不遮挡
+            targetSingX = 0.50;
+            targetSingY = 0.72;
+          }
+        }
+
+        updateSingularityCenterTarget();
+        curSingX = targetSingX;
+        curSingY = targetSingY;
 
         function resize() {
           const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -1085,6 +1136,7 @@
             gl.viewport(0, 0, w, h);
           }
           gl.uniform2f(uResolutionLoc, w, h);
+          updateSingularityCenterTarget();
         }
 
         window.addEventListener('resize', resize);
@@ -1116,9 +1168,14 @@
           // 平滑过渡黑洞 (0.0) 与白洞 (1.0)，电影级丝滑阻尼
           currentTheme += (targetTheme - currentTheme) * 0.042;
 
+          // 平滑过渡奇点中心，窗口缩放时无跳跃感
+          curSingX += (targetSingX - curSingX) * 0.05;
+          curSingY += (targetSingY - curSingY) * 0.05;
+
           gl.uniform1f(uTimeLoc, elapsed);
           gl.uniform1f(uThemeLoc, currentTheme);
           gl.uniform2f(uMouseLoc, curMx, curMy);
+          gl.uniform2f(uSingularityCenterLoc, curSingX, curSingY);
           gl.drawArrays(gl.TRIANGLES, 0, 3);
 
           frames++;
