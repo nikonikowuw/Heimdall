@@ -156,4 +156,4 @@ match pipeline.process(frame) {
 
 - [ ] `BackendError` 放 `types` 还是各后端 crate 自己定义
 - [ ] 错误码是否需要预留扩展空间（当前 5 位数是否够用）
-- [ ] 前端如何根据错误码做国际化（错误码 → 翻译键映射）
+- [x] 前端如何根据错误码做国际化（已验证：采用 HTTP RFC 9110 标准的 `Accept-Language` 语言协商机制。客户端请求自动附带 `Accept-Language` 头；服务端通过 `i18n_response_middleware` 拦截出站 JSON 响应，根据 5 位错误码及语言偏好将 `message` 自动本地化为三语 `zh-CN`/`zh-TW`/`en` 并注入 `Content-Language` 响应头；前端优先直接展示服务端国际化后的 `message`，同时也支持基于错误码在前端做本地精准映射）

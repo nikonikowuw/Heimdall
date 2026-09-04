@@ -90,6 +90,10 @@ pub struct AppState {
   - **游标分页参数**：统一使用 `before`（或 `after`），值为 UTC 毫秒时间戳。
   - **相对时长（Durations / Delays / Timeouts）**：保留单位后缀，如 `timeoutMs`、`durationMs`、`intervalMs`、`latencyMs`，消除时长单位歧义。
   - 后端只存 UTC，不存储也不传输时区信息，前端负责按用户本地时区显示。与数据库存储一致，见 [database-guidelines.md](./database-guidelines.md)。
+- **服务端响应国际化 (i18n) 契约**：
+  - 客户端通过标准 HTTP 请求头 `Accept-Language` 传递当前界面语言偏好（支持 `zh-CN`, `zh-TW`, `en` 等）；
+  - 服务端全局中间件 `i18n_response_middleware` 自动拦截所有 JSON 响应，根据状态码（`code`）将 `message` 转换为目标语言，并在响应头附带标准 `Content-Language: <lang>`；
+  - 杜绝非中文界面弹出硬编码中文错误的问题，保证 Web 控制台、API Client 与三方集成行为高度统一。
 
 ### 统一响应体
 
@@ -519,33 +523,36 @@ async fn ws_handler(ws: WebSocketUpgrade, State(st): State<AppState>) -> Respons
 
 ## 首次启动与开箱初始化向导 (First-Boot Setup)
 
-边缘工控机/一体机严禁使用弱硬编码出厂密码（如 `admin123`），采用**首次启动无感初始化（Out-of-the-Box Experience, OOBE）**流程：
+边缘工控机/一体机严禁使用弱硬编码出厂密码（如 `admin123`），杜绝在代码逻辑中硬编码固定账号名为 `"admin"`。系统采用**双轨开箱与无感初始化（Out-of-the-Box Experience, OOBE）**流程：
 
 ```
-首次开机访问 Web /
+首次开机启动
    │
-   ├── 1. 前端拉取 GET /api/v1/system/init-status ──> 返回 { "initialized": false }
+   ├── [轨道 A：自动化部署 / 环境变量注入]
+   │      检测到环境变量 ARGUS_ADMIN_PASSWORD（可选 ARGUS_ADMIN_USERNAME，缺省 admin）
+   │      后端直接加盐哈希落库，持久化标记 initialized = true
    │
-   ├── 2. 前端路由无感重定向至 /setup (开箱初始化向导)
-   │
-   ├── 3. 工程师输入管理员账号 (默认 admin)、初始高强度密码
-   │      POST /api/v1/system/initialize
-   │
-   ├── 4. 后端对密码执行 Argon2id 哈希落库，持久化标记 initialized = true
-   │      直接下发初始登录 Token 与系统基础参数
-   │
-   └── 5. 前端保存 Token，直接无缝跳入监控主页（无需二次登录）
+   └── [轨道 B：零弱密码交互式开箱向导 (OOBE)]
+          未配置环境变量且数据库为空，系统保持 initialized = false
+          前端拉取 GET /api/v1/auth/init-status ──> 返回 { "initialized": false }
+          前端控制台强制呈现开箱初始化向导 (Setup Wizard)
+          现场工程师输入自定义管理员账号与高强度密码
+          POST /api/v1/auth/initialize
+          落库并直接下发登录 Token 与系统基础参数，无感登入控制台
 ```
 
 **关键安全与幂等契约**：
 
-- **`GET /api/v1/system/init-status`**：免鉴权公开接口，仅返回 `{ "initialized": bool }`。
-- **`POST /api/v1/system/initialize`**：
+- **`GET /api/v1/auth/init-status`**：免鉴权公开接口，仅返回 `{ "initialized": bool }`。
+- **`POST /api/v1/auth/initialize`**：
   - 仅在 `initialized == false` 时允许调用；
-  - 一旦系统已完成初始化，该接口**永久锁死**并返回 `403 Forbidden`，防止任何恶意重入篡改；
+  - 一旦系统已完成初始化，该接口**永久锁死**并返回 `403 Forbidden`（错误码 `10006`），防止任何恶意重入篡改；
   - 初始化成功后，在同一个响应体内直接返回 JWT Token，前端无感登录，体验一气呵成。
-- **未初始化拦截**：在系统未完成初始化之前，除静态资源、`init-status`、`initialize` 之外的所有业务接口，鉴权中间件统一拦截并返回 `428 Precondition Required`。
-- **出厂重置与恢复**：若现场遗忘密码，支持通过物理重置按键或 CLI 命令（`argus reset-factory` / `argus reset-password`）重置数据库标记，使设备重新回到待初始化状态。
+- **动态用户名与密码安全**：
+  - 单用户架构下，用户名由管理员自由配置，服务端通过 `find_by_username` 动态检索，不硬编码 `"admin"`；
+  - 密码使用加盐 PBKDF2-HMAC-SHA256 计算，常数时间比对抵御时序攻击；
+  - 基于 JWT + 毫秒级时间戳 `token_invalid_before` 联动内存原子整型缓存，修改密码或登出时立即让此前签发的所有凭据失效（$O(1)$ 复杂度）。
+- **未初始化拦截**：在系统未完成初始化之前，除静态资源、`init-status`、`initialize` 之外的所有业务接口，鉴权中间件统一拦截并返回 `401/428`。
 
 ---
 
