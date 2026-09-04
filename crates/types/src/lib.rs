@@ -14,7 +14,8 @@ pub use auth::{
 };
 pub use camera::{
     Camera, CameraProbeEvent, CameraProtocol, CameraTelemetryEvent, CodecType, CreateCameraRequest,
-    EncodedPacket, ProbeResult, ProbeStatus, TransportPolicy, UpdateCameraRequest,
+    EncodedPacket, ProbeResult, ProbeStatus, StreamKey, StreamType, TransportPolicy,
+    UpdateCameraRequest,
 };
 pub use detection::{BoundingBox, Detection, TrackedObject};
 pub use error::{FrameError, TypeError};

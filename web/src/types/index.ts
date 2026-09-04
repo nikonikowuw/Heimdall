@@ -81,6 +81,12 @@ export interface UpdateCameraRequest {
   gb28181ChannelId?: string
 }
 
+export interface SubStreamCandidate {
+  brand: string
+  subUrl: string
+  description: string
+}
+
 export interface TrackedBBox {
   trackId: number
   label: string

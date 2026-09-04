@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
@@ -6,14 +5,6 @@ use tokio::sync::broadcast;
 use media::StreamHub;
 use pipeline::PipelineManager;
 use sea_orm::DatabaseConnection;
-
-/// WHEP 在线会话上下文
-#[derive(Clone, Debug)]
-pub struct WhepSessionContext {
-    pub camera_id: String,
-    pub peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
-    pub closed: Arc<AtomicBool>,
-}
 
 /// WebSocket 广播事件模型
 #[derive(Debug, Clone, serde::Serialize)]
@@ -33,12 +24,13 @@ pub struct AppState {
     pub jwt_secret: Arc<RwLock<Vec<u8>>>,
     pub token_invalid_before: Arc<AtomicI64>,
     pub is_initialized: Arc<AtomicBool>,
-    pub whep_sessions: Arc<tokio::sync::RwLock<HashMap<String, WhepSessionContext>>>,
+    pub shutdown_tx: broadcast::Sender<()>,
 }
 
 impl AppState {
     pub fn new(db: DatabaseConnection, pipeline: Arc<PipelineManager>) -> Self {
         let (event_broadcaster, _) = broadcast::channel(1024);
+        let (shutdown_tx, _) = broadcast::channel(16);
         let stream_hub = Arc::new(StreamHub::new());
         let jwt_secret = match std::env::var("ARGUS_JWT_SECRET") {
             Ok(secret) if !secret.trim().is_empty() => secret.into_bytes(),
@@ -60,8 +52,13 @@ impl AppState {
             jwt_secret: Arc::new(RwLock::new(jwt_secret)),
             token_invalid_before: Arc::new(AtomicI64::new(0)),
             is_initialized: Arc::new(AtomicBool::new(false)),
-            whep_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            shutdown_tx,
         }
+    }
+
+    /// 触发全局服务停机广播通知
+    pub fn notify_shutdown(&self) {
+        let _ = self.shutdown_tx.send(());
     }
 
     /// 获取当前的 JWT 签名密钥
@@ -111,6 +108,16 @@ impl AppState {
         camera_id: &str,
         params: db::ProbeUpdateParams<'_>,
     ) {
+        tracing::info!(
+            camera_id = %camera_id,
+            status = %params.status,
+            codec = %params.codec,
+            width = params.width,
+            height = params.height,
+            fps = params.fps,
+            error_code = %params.error_code,
+            "更新摄像头探活状态入库并向全网广播 WebSocket 事件"
+        );
         let _ = db::CameraRepo::update_probe_status(&self.db, camera_id, params.clone()).await;
 
         let _ = self.event_broadcaster.send(WsBroadcastEvent {
@@ -128,83 +135,125 @@ impl AppState {
         });
     }
 
-    /// 启动后台摄像头双轨健康巡检任务（带三态防抖与 WebSocket 状态广播）
+    /// 对单台摄像头执行双轨巡检（活跃看门狗优先，待机流轻量探活）
+    pub async fn probe_single_camera(&self, cam: db::entity::camera::Model) {
+        // 检查主码流、子码流、基础通道或其绑定的底层物理 RTSP 流是否正在健康接收视频帧（4秒内有数据包）
+        let main_key = types::StreamKey::main(&cam.camera_id).as_str_key();
+        let sub_key = types::StreamKey::sub(&cam.camera_id).as_str_key();
+        let is_healthy_main = self.stream_hub.is_healthy_streaming(&main_key, 4000).await;
+        let is_healthy_sub = self.stream_hub.is_healthy_streaming(&sub_key, 4000).await;
+        let is_healthy_bare = self
+            .stream_hub
+            .is_healthy_streaming(&cam.camera_id, 4000)
+            .await;
+        let is_healthy_url = self
+            .stream_hub
+            .is_healthy_streaming(&cam.rtsp_url, 4000)
+            .await;
+
+        if is_healthy_main || is_healthy_sub || is_healthy_bare || is_healthy_url {
+            // 活跃拉流且持续有帧流入，看门狗确认为 healthy
+            self.stream_hub.reset_failure_count(&cam.camera_id).await;
+            self.update_and_broadcast_probe(
+                &cam.camera_id,
+                db::ProbeUpdateParams {
+                    status: "healthy",
+                    codec: &cam.last_codec,
+                    width: cam.last_width,
+                    height: cam.last_height,
+                    fps: cam.last_fps,
+                    error_code: "",
+                },
+            )
+            .await;
+        } else {
+            // 未收到流或待机流：发起轻量 TCP/RTSP 探活
+            match media::StreamProber::probe(&cam.rtsp_url, std::time::Duration::from_secs(3)).await
+            {
+                Ok(info) => {
+                    self.stream_hub.reset_failure_count(&cam.camera_id).await;
+                    self.update_and_broadcast_probe(
+                        &cam.camera_id,
+                        db::ProbeUpdateParams {
+                            status: "healthy",
+                            codec: &info.codec,
+                            width: info.width as i32,
+                            height: info.height as i32,
+                            fps: info.fps,
+                            error_code: "",
+                        },
+                    )
+                    .await;
+                }
+                Err(err) => {
+                    let failures = self
+                        .stream_hub
+                        .increment_failure_count(&cam.camera_id)
+                        .await;
+                    let (status_str, err_code) = if failures < 3 {
+                        ("degraded", format!("RETRYING_{failures}"))
+                    } else {
+                        ("failed", format!("PROBE_FAILED: {err}"))
+                    };
+
+                    self.update_and_broadcast_probe(
+                        &cam.camera_id,
+                        db::ProbeUpdateParams {
+                            status: status_str,
+                            codec: "",
+                            width: 0,
+                            height: 0,
+                            fps: 0.0,
+                            error_code: &err_code,
+                        },
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    /// 启动后台摄像头双轨健康巡检任务（带受限并发控制、三态防抖与 WebSocket 状态广播）
     pub fn start_periodic_probe_worker(self: Arc<Self>, interval: std::time::Duration) {
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
         tokio::spawn(async move {
             tracing::info!(
                 interval_secs = interval.as_secs(),
-                "摄像头后台定时巡检任务已启动"
+                "摄像头后台定时巡检任务已启动 (6 路受限并发)"
             );
             loop {
-                tokio::time::sleep(interval).await;
                 if let Ok(cameras) = db::CameraRepo::list_all(&self.db).await {
-                    for cam in cameras {
-                        let is_active = self.stream_hub.is_streaming(&cam.camera_id).await;
+                    if !cameras.is_empty() {
+                        let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
+                        let mut join_set = tokio::task::JoinSet::new();
 
-                        if is_active {
-                            // 活跃拉流中，看门狗实时生效，直接标记为 healthy
-                            self.update_and_broadcast_probe(
-                                &cam.camera_id,
-                                db::ProbeUpdateParams {
-                                    status: "healthy",
-                                    codec: &cam.last_codec,
-                                    width: cam.last_width,
-                                    height: cam.last_height,
-                                    fps: cam.last_fps,
-                                    error_code: "",
-                                },
-                            )
-                            .await;
-                        } else {
-                            // 待机流：发起轻量探活
-                            match media::StreamProber::probe(
-                                &cam.rtsp_url,
-                                std::time::Duration::from_secs(3),
-                            )
-                            .await
-                            {
-                                Ok(info) => {
-                                    self.stream_hub.reset_failure_count(&cam.camera_id).await;
-                                    self.update_and_broadcast_probe(
-                                        &cam.camera_id,
-                                        db::ProbeUpdateParams {
-                                            status: "healthy",
-                                            codec: &info.codec,
-                                            width: info.width as i32,
-                                            height: info.height as i32,
-                                            fps: info.fps,
-                                            error_code: "",
-                                        },
-                                    )
-                                    .await;
-                                }
-                                Err(err) => {
-                                    let failures = self
-                                        .stream_hub
-                                        .increment_failure_count(&cam.camera_id)
-                                        .await;
-                                    let (status_str, err_code) = if failures < 3 {
-                                        ("degraded", format!("RETRYING_{failures}"))
-                                    } else {
-                                        ("failed", format!("PROBE_FAILED: {err}"))
-                                    };
+                        for cam in cameras {
+                            let sem = semaphore.clone();
+                            let state = self.clone();
+                            join_set.spawn(async move {
+                                let _permit = sem.acquire().await;
+                                state.probe_single_camera(cam).await;
+                            });
+                        }
 
-                                    self.update_and_broadcast_probe(
-                                        &cam.camera_id,
-                                        db::ProbeUpdateParams {
-                                            status: status_str,
-                                            codec: &cam.last_codec,
-                                            width: cam.last_width,
-                                            height: cam.last_height,
-                                            fps: cam.last_fps,
-                                            error_code: &err_code,
-                                        },
-                                    )
-                                    .await;
-                                }
+                        while let Some(res) = join_set.join_next().await {
+                            if shutdown_rx.try_recv().is_ok() {
+                                tracing::info!("后台巡检任务收到停机信号，中止当前批次并退出");
+                                join_set.abort_all();
+                                return;
+                            }
+                            if let Err(e) = res {
+                                tracing::debug!("巡检子任务执行中断: {:?}", e);
                             }
                         }
                     }
+                }
+                tokio::select! {
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("后台巡检任务收到停机信号，安全退出");
+                        break;
+                    }
+                    _ = tokio::time::sleep(interval) => {}
                 }
             }
         });

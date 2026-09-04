@@ -105,7 +105,44 @@ pub enum FrameHandle {
 
 ---
 
-## 解码器抽象 (`VideoDecoder`)
+## RTSP 纯 Rust 解包与 H.264/H.265 (RFC 6184 / RFC 7798) 规范
+
+为了保持极简与自包含单二进制交付，系统 RTSP Client 与 RTP 解包完全基于纯 Rust 实现：
+
+### 1. RTP 解包器矩阵
+
+| 编码类型 | RFC 标准 | 单包 (Single) | 聚合包 (AP) | 分片包 (FU) | 关键帧与参数集检测 |
+|---------|---------|--------------|------------|------------|-----------------|
+| **H.264** | **RFC 6184** | Type `1..=23` | STAP-A (Type `24`) | FU-A (Type `28`) | IDR (Type 5), SPS (Type 7), PPS (Type 8) |
+| **H.265 (HEVC)** | **RFC 7798** | Type `0..=47` | AP (Type `48`) | FU (Type `49`) | IRAP (`16..=21`, IDR/CRA/BLA), VPS (Type 32), SPS (Type 33), PPS (Type 34) |
+
+- **H.265 双字节头部与分片重组**：
+  - NAL Header 为 2 字节：`nal_unit_type = (payload[0] >> 1) & 0x3F`；
+  - FU (Type 49) 分片包：通过 `payload[2]` 中的 Start / End 位重组，Start 包提取原始 NAL Unit Type 并重建 2 字节原始 NAL Header（`byte0 = (payload[0] & 0x81) | ((fu_type & 0x3F) << 1)`, `byte1 = payload[1]`）。
+- **自适应调度器 (`StreamDepacketizer`)**：
+  - 在 RTSP DESCRIBE 阶段自动解析 SDP，若包含 `H265` 或 `HEVC`，自动挂载 `H265Depacketizer`，否则挂载 `H264Depacketizer`。
+
+### 2. 秒开关键帧与参数集缓存 (`KeyframeCache`)
+
+- `StreamHub` 针对每路活跃流维护轻量内存 `KeyframeCache`：
+  - **H.264**：缓存最近的 `SPS` (7)、`PPS` (8) 与 `IDR` 帧 (5)；
+  - **H.265**：缓存最近的 `VPS` (32)、`SPS` (33)、`PPS` (34) 与 `IRAP` 帧 (16..21)；
+- 无论客户端何时接入，在握手建连第一时刻直接注入缓存参数集与最新关键帧，实现 **<100ms 极速秒开首帧**。
+
+---
+
+## 实时流媒体分发引擎：HTTP-FLV / Enhanced FLV
+
+系统全面收敛于 **HTTP-FLV / Enhanced FLV (MSE 硬件解码流)** 架构，兼顾极致低延迟（~150ms）与 100% 跨浏览器 H.264 / H.265 硬件解码支持：
+
+- **端点**：`GET /api/v1/live/{cameraId}.flv?stream=main|sub&token={jwt}`
+- **协议格式**：
+  - 标准 FLV Header（9 字节 + 4 字节 PreviousTagSize0）；
+  - **H.264**：`AVCDecoderConfigurationRecord` (SPS/PPS) + FLV Video Tag (`0x17` / `0x27`)；
+  - **H.265**：**Enhanced FLV (FourCC `hvc1`)**，输出 `HEVCDecoderConfigurationRecord` (VPS/SPS/PPS) + ExVideoTag (`0x90` / `0x91` / `0xa1`)；
+- **前端消费**：基于 `mpegts.js`（MSE 架构），浏览器通过 GPU 硬件解码原生播放 **4K/1080P H.265 与 H.264**，杜绝浏览器 WebRTC 软解黑屏与复杂的 ICE/STUN/DTLS 端口穿透负担。
+
+---
 
 视频硬解能力在 `media` crate 内部通过统一 trait 抽象：
 
@@ -196,6 +233,12 @@ pub trait VideoDecoder: Send {
 - **RTSP 断流与网络波动是常态**：
   - 每路独立重连，**必须有指数退避**（1s → 2s → 4s → 上限 30s）。
   - 重连时释放旧的解码器与 buffer 池租约，杜绝内存与句柄泄漏。
+- **真·活跃数据包感知 (Watchdog Integrity)**：
+  - 严禁以“存在后台拉流协程任务”作为流在线判断依据；
+  - 看门狗必须通过 `StreamHub::is_healthy_streaming(camera_id, max_age_ms)` 严格校验**最近 4000ms 内是否确实有 NALU 数据包流入**；若超时无数据包流入，必须回退至主动探活并判定故障。
+- **主动探活门禁严谨性 (Prober Gate)**：
+  - RTSP TCP 探活在发送 DESCRIBE 后，必须严格校验返回状态码为 `200 OK` 且 SDP 中包含 `m=video` 视频轨；
+  - 严禁在 404 / 401 / 500 等错误响应下回退返回默认 1080P/H.264 虚拟信息，杜绝离线设备被误判为健康。
 - **三态防抖健康模型（Anti-Flapping 3-State Model）**：
   - 避免网络单包丢失导致状态在红绿灯之间频繁横跳：
     - `Healthy 🟢`：码流接收正常，探活连续成功；
@@ -203,7 +246,7 @@ pub trait VideoDecoder: Send {
     - `Failed 🔴`：连续 3 次探活失败或重连超过容错上限无数据，才正式判定为离线并记录错误日志。
 - **双轨感知机制**：
   - **活跃拉流流**：由 RTSP 接收 Actor 实时感知断线并触发重连；
-  - **静默待机流**：由后台定时巡检任务（30s 周期）轮询执行轻量探活并同步状态。
+  - **静默待机流**：由后台定时巡检任务（30s 周期，启动时立即执行首次判定）轮询执行轻量探活并通过 WebSocket 广播同步状态。
 - 连续失败超过阈值 → `warn!` 记录并上报状态，但**不退出进程**，也不影响其它路。
 - 单路故障不允许拖垮共享资源（NPU、数据库连接池）。
 

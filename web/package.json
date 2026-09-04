@@ -17,6 +17,7 @@
     "i18next": "^26.4.1",
     "i18next-resources-to-backend": "^1.2.3",
     "lucide-react": "^1.16.0",
+    "mpegts.js": "^1.8.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-i18next": "^17.0.13",

@@ -258,8 +258,7 @@ mod tests {
     use tower::ServiceExt;
 
     async fn setup_test_app() -> (axum::Router, AppState) {
-        let db = db::init_db(":memory:").await.unwrap();
-        db::create_tables_if_not_exist(&db).await.unwrap();
+        let db = db::init_test_db().await.unwrap();
         let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
         let state = AppState::new(db, pipeline);
         state.sync_auth_state().await;

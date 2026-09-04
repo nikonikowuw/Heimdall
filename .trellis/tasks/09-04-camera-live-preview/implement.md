@@ -40,14 +40,21 @@
    - 联动告警脉冲与智能追焦（Auto Spotlight）；
    - 提供全景 Bento 矩阵与主副流联动视图切换。
 
-## Phase 5: 全链路联调与门禁验证 (Verification & Quality Gate)
-1. **后端验证**：
-   - `cargo fmt --all -- --check`
-   - `cargo clippy --all-targets -- -D warnings`
-   - `cargo test --workspace`
-2. **前端验证**：
-   - `pnpm format`
-   - `pnpm lint`
-   - `pnpm typecheck`
-   - `pnpm test`
-   - `pnpm build`
+## Phase 6: H.265 (RFC 7798) / Enhanced FLV 混流与 MSE 硬件解码升级
+1. **`media::rtsp` RFC 7798 H.265 RTP 解包器**:
+   - 实现 2 字节 NAL Header 解析与 FU (Type 49) 分片重组；
+   - 提取 IRAP 关键帧 (`16..=21`) 与 VPS(32)/SPS(33)/PPS(34)；
+   - 实现 `StreamDepacketizer` 自适应挂载。
+2. **`media::flv` 纯 Rust Enhanced FLV Muxer**:
+   - 支持 H.264 `AVCDecoderConfigurationRecord`；
+   - 完整支持 **Enhanced FLV H.265 (FourCC `hvc1`)** `HEVCDecoderConfigurationRecord`；
+   - 封装视频 Tag 与流式分发。
+3. **`api::routes::live` HTTP-FLV 分发端点**:
+   - `GET /api/v1/live/:camera_id.flv?stream=main|sub&token={jwt}`；
+   - 支持 Query Token / Bearer Token 鉴权与流式 Transfer-Encoding。
+4. **前端集成 `mpegts.js` (MSE 硬件解码)**:
+   - 浏览器原生 GPU 硬件解码播放 4K/1080P H.265 与 H.264 码流；
+   - 消除 WebRTC H.265 浏览器兼容性黑屏。
+5. **探活与看门狗强化**:
+   - `StreamProber` 严格校验 DESCRIBE `200 OK` 与 `m=video` 视频轨；
+   - `StreamHub::is_healthy_streaming` 基于真实帧时间戳校验。

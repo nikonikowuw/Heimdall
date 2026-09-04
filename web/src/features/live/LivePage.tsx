@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import {
-  Activity,
   Camera as CameraIcon,
   Car,
   Compass,
+  Eye,
   Grid,
+  MonitorPlay,
   Plus,
   Radio,
   Sparkles,
@@ -13,26 +14,111 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cameraApi } from '@/lib/api'
-import type { Camera } from '@/types'
-import { WhepPlayer } from './components/WhepPlayer'
+import { useAuthStore } from '@/stores/auth'
+import type { Camera, ProbeStatus } from '@/types'
+import { LivePlayer } from './components/LivePlayer'
+
+function getCameraHealthRank(status?: string): number {
+  switch (status?.toLowerCase()) {
+    case 'healthy':
+    case 'success':
+    case 'online':
+      return 1 // 🟢 在线健康：第 1 名
+    case 'never':
+    case 'pending':
+    case 'connecting':
+    case '':
+      return 2 // ⚪ 待探测：第 2 名
+    case 'degraded':
+    case 'reconnecting':
+      return 3 // 🟡 网络波动：第 3 名
+    case 'failed':
+    case 'offline':
+    case 'error':
+      return 4 // 🔴 离线/故障：第 4 名
+    default:
+      return 5
+  }
+}
+
+function sortCamerasByHealth(list: Camera[]): Camera[] {
+  return [...list].sort((a, b) => {
+    const rankA = getCameraHealthRank(a.lastProbeStatus)
+    const rankB = getCameraHealthRank(b.lastProbeStatus)
+    if (rankA !== rankB) return rankA - rankB
+    if (a.lastSuccessAt && b.lastSuccessAt && a.lastSuccessAt !== b.lastSuccessAt) {
+      return b.lastSuccessAt - a.lastSuccessAt
+    }
+    return b.id - a.id
+  })
+}
+
+function getStatusBadge(status?: ProbeStatus | string) {
+  const s = status?.toLowerCase()
+  if (s === 'healthy' || s === 'success' || s === 'online') {
+    return {
+      text: '在线',
+      badgeClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
+      dotClass: 'bg-emerald-400 animate-pulse',
+      statusColor: 'text-emerald-400',
+    }
+  }
+  if (s === 'degraded' || s === 'reconnecting') {
+    return {
+      text: '网络波动',
+      badgeClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
+      dotClass: 'bg-amber-400 animate-ping',
+      statusColor: 'text-amber-400',
+    }
+  }
+  if (s === 'failed' || s === 'error' || s === 'offline') {
+    return {
+      text: '离线/故障',
+      badgeClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20',
+      dotClass: 'bg-rose-500',
+      statusColor: 'text-rose-400',
+    }
+  }
+  return {
+    text: '待探测',
+    badgeClass: 'bg-gray-500/10 text-gray-400 border border-gray-500/20',
+    dotClass: 'bg-gray-400',
+    statusColor: 'text-gray-400',
+  }
+}
+
+function getResolutionBadge(cam: Camera) {
+  if (cam.lastWidth > 0 && cam.lastHeight > 0) {
+    return `${cam.lastHeight}P`
+  }
+  if (cam.lastProbeStatus === 'healthy' || cam.lastProbeStatus === 'success') {
+    return '1080P'
+  }
+  return '--'
+}
 
 export function LivePage() {
   const { t } = useTranslation('camera')
 
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selectedHeroId, setSelectedHeroId] = useState<string>('')
+  const [heroStream, setHeroStream] = useState<'main' | 'sub'>('main')
   const [viewMode, setViewMode] = useState<'hero_rail' | 'bento_grid'>('hero_rail')
   const [autoSpotlight, setAutoSpotlight] = useState<boolean>(true)
   const [showAddModal, setShowAddModal] = useState<boolean>(false)
+  const [modalMainUrl, setModalMainUrl] = useState<string>('')
+  const [modalSubUrl, setModalSubUrl] = useState<string>('')
+  const [subCandidates, setSubCandidates] = useState<import('@/types').SubStreamCandidate[]>([])
 
-  // 加载摄像头列表
+  // 加载摄像头列表 (健康状态优先排序)
   useEffect(() => {
     async function loadCameras() {
       try {
         const list = await cameraApi.list()
         if (list && list.length > 0) {
-          setCameras(list)
-          setSelectedHeroId((prev) => prev || list[0].cameraId)
+          const sorted = sortCamerasByHealth(list)
+          setCameras(sorted)
+          setSelectedHeroId((prev) => (prev ? prev : sorted[0].cameraId))
         } else {
           setCameras([])
         }
@@ -44,8 +130,85 @@ export function LivePage() {
     void loadCameras()
   }, [])
 
-  const heroCamera = cameras.find((c) => c.cameraId === selectedHeroId) || cameras[0]
-  const railCameras = cameras.filter((c) => c.cameraId !== heroCamera?.cameraId)
+  // 监听全网 WebSocket 广播事件（实时刷新探活状态与健康度自动提权）
+  useEffect(() => {
+    let ws: WebSocket | null = null
+    let isCancelled = false
+    let reconnectTimer: NodeJS.Timeout | null = null
+
+    function connectWs() {
+      const token = useAuthStore.getState().token
+      if (!token) return
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const host = window.location.host
+      const wsUrl = `${protocol}//${host}/api/v1/ws/events?token=${encodeURIComponent(token)}`
+
+      try {
+        ws = new WebSocket(wsUrl)
+
+        ws.onmessage = (e) => {
+          try {
+            const event = JSON.parse(e.data) as {
+              topic: string
+              payload: {
+                cameraId: string
+                status: string
+                codec: string
+                width: number
+                height: number
+                fps: number
+                errorCode: string
+              }
+            }
+
+            if (event.topic === 'camera.probe_updated' && event.payload) {
+              const { cameraId, status, codec, width, height, fps, errorCode } = event.payload
+              setCameras((prev) => {
+                const next = prev.map((cam) => {
+                  if (cam.cameraId === cameraId) {
+                    return {
+                      ...cam,
+                      lastProbeStatus: status as ProbeStatus,
+                      lastCodec: codec || cam.lastCodec,
+                      lastWidth: width || cam.lastWidth,
+                      lastHeight: height || cam.lastHeight,
+                      lastFps: fps !== undefined ? fps : cam.lastFps,
+                      lastProbeErrorCode: errorCode,
+                    }
+                  }
+                  return cam
+                })
+                return sortCamerasByHealth(next)
+              })
+            }
+          } catch {
+            // ignore non-JSON or unrelated messages
+          }
+        }
+
+        ws.onclose = () => {
+          if (!isCancelled) {
+            reconnectTimer = setTimeout(connectWs, 3000)
+          }
+        }
+      } catch {
+        if (!isCancelled) {
+          reconnectTimer = setTimeout(connectWs, 3000)
+        }
+      }
+    }
+
+    connectWs()
+
+    return () => {
+      isCancelled = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (ws) ws.close()
+    }
+  }, [])
+
+  const heroCamera = cameras.find((c) => c.cameraId === selectedHeroId)
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -62,7 +225,7 @@ export function LivePage() {
               </span>
               <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
                 <Radio className="h-2.5 w-2.5 animate-pulse" />
-                <span>{t('live.protocolBadge', 'WebRTC · WHEP')}</span>
+                <span>{t('live.protocolBadge', 'HTTP-FLV · MSE')}</span>
               </span>
               <span className="flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-400">
                 <Zap className="h-2.5 w-2.5" />
@@ -138,22 +301,46 @@ export function LivePage() {
         <div className="grid flex-1 grid-cols-12 gap-3 overflow-hidden">
           {/* 左侧 72% 沉浸式 Hero Stage (占据 8.5 / 12 列) */}
           <div className="col-span-12 flex flex-col gap-2 overflow-hidden lg:col-span-8 xl:col-span-9">
-            <div className="relative flex-1 overflow-hidden rounded-xl">
+            <div className="relative flex-1 overflow-hidden rounded-xl border border-[var(--border)] bg-black/40">
               {heroCamera ? (
-                <WhepPlayer
-                  key={heroCamera.cameraId}
+                <LivePlayer
+                  key={`${heroCamera.cameraId}:${heroStream}`}
                   cameraId={heroCamera.cameraId}
                   cameraName={heroCamera.name}
                   className="h-full w-full"
                   showHud={true}
                   isHero={true}
+                  stream={heroStream}
+                  onClose={() => setSelectedHeroId('')}
+                  onSwitchStream={(s) => setHeroStream(s)}
                 />
               ) : (
-                <div className="flex h-full items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]">
-                  <div className="flex flex-col items-center gap-2">
-                    <CameraIcon className="h-8 w-8 opacity-40" />
-                    <span className="text-xs">{t('live.noCameras', '暂无活动摄像头')}</span>
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-[var(--text-muted)]">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--accent)]/10 text-[var(--accent)]">
+                    <MonitorPlay className="h-8 w-8 opacity-80" />
                   </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-[var(--text-primary)]">
+                      {cameras.length > 0
+                        ? '主屏预览已关闭'
+                        : t('live.noCameras', '暂无活动摄像头')}
+                    </h4>
+                    <p className="mt-1 max-w-sm text-xs text-[var(--text-secondary)]">
+                      {cameras.length > 0
+                        ? '右侧子码流正在持续低功耗运行，点击任意视频卡片即可一键切入高清大屏'
+                        : '请点击右上角接入 RTSP 视频流设备'}
+                    </p>
+                  </div>
+                  {cameras.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedHeroId(cameras[0].cameraId)}
+                      className="mt-1 flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white shadow-xs hover:opacity-90"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      <span>开启主屏预览</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -166,8 +353,9 @@ export function LivePage() {
                   {t('live.liveTelemetry', '实时遥测')}:
                 </span>
                 <span className="text-[var(--text-primary)]">
-                  [{heroCamera?.name || 'CAM'}] {heroCamera?.lastCodec.toUpperCase() || 'H264'}{' '}
-                  {heroCamera?.lastWidth ? `${heroCamera.lastWidth}x${heroCamera.lastHeight}` : ''}
+                  {heroCamera
+                    ? `[${heroCamera.name}] ${heroCamera.lastCodec.toUpperCase()} ${heroCamera.lastWidth ? `${heroCamera.lastWidth}x${heroCamera.lastHeight}` : ''}`
+                    : '待命中 (子码流待机中)'}
                 </span>
               </div>
               <div className="flex items-center gap-3 text-[11px]">
@@ -185,64 +373,102 @@ export function LivePage() {
             </div>
           </div>
 
-          {/* 右侧 28% Bento Live Rail 活动流轨道 (占据 3.5 / 12 列) */}
+          {/* 右侧 28% Bento Live Rail 活动流轨道 (占据 3.5 / 12 列) - 子码流持续播放 */}
           <div className="col-span-12 flex flex-col gap-3 overflow-y-auto lg:col-span-4 xl:col-span-3">
             <div className="flex items-center justify-between px-1 text-xs text-[var(--text-muted)]">
               <span className="font-medium tracking-wide">
-                {t('live.auxStreams', '活动监控流')} ({railCameras.length})
+                {t('live.auxStreams', '活动监控流')} ({cameras.length})
               </span>
               <span className="text-[10px]">{t('live.switchMainHint', '点击切换主流 ↗')}</span>
             </div>
 
             <div className="flex flex-1 flex-col gap-3">
-              {railCameras.map((cam) => (
-                <button
-                  type="button"
-                  key={cam.cameraId}
-                  onClick={() => setSelectedHeroId(cam.cameraId)}
-                  className="group relative cursor-pointer overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] text-left transition-all duration-300 hover:border-cyan-500/50 hover:shadow-lg hover:shadow-cyan-500/10"
-                >
-                  {/* 微缩播放器视口 */}
-                  <div className="relative aspect-video w-full">
-                    <WhepPlayer
-                      cameraId={cam.cameraId}
-                      cameraName={cam.name}
-                      showHud={false}
-                      isHero={false}
-                      onSpotlight={() => setSelectedHeroId(cam.cameraId)}
-                      className="h-full w-full"
-                    />
-                  </div>
-
-                  {/* 卡片底部遥测状态条 */}
-                  <div className="p-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-[var(--text-primary)] transition-colors group-hover:text-cyan-400">
-                        {cam.name}
-                      </span>
-                      <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-emerald-500">
-                        {cam.lastWidth ? `${cam.lastWidth}P` : '1080P'}
-                      </span>
+              {cameras.map((cam) => {
+                const isFocused = cam.cameraId === selectedHeroId
+                return (
+                  <div
+                    key={cam.cameraId}
+                    onClick={() => setSelectedHeroId(cam.cameraId)}
+                    className={`group relative cursor-pointer overflow-hidden rounded-xl border bg-[var(--bg-secondary)] text-left transition-all duration-300 hover:shadow-lg ${
+                      isFocused
+                        ? 'border-cyan-500 ring-1 shadow-cyan-500/20 ring-cyan-500'
+                        : 'border-[var(--border)] hover:border-cyan-500/50 hover:shadow-cyan-500/10'
+                    }`}
+                  >
+                    {/* 微缩播放器视口 (当被选为主大屏展示时，子码流预览窗口停止播放以释放硬件解码与网络资源) */}
+                    <div className="relative aspect-video w-full">
+                      {isFocused ? (
+                        <div className="flex h-full w-full flex-col items-center justify-center bg-black/80 p-2 text-center">
+                          <div className="flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-400">
+                            <Eye className="h-3 w-3 animate-pulse" />
+                            <span>主屏呈现中</span>
+                          </div>
+                          <span className="mt-1.5 text-[10px] text-[var(--text-muted)]">
+                            辅流已休眠，专注主屏渲染
+                          </span>
+                        </div>
+                      ) : (
+                        <LivePlayer
+                          cameraId={cam.cameraId}
+                          cameraName={cam.name}
+                          showHud={false}
+                          isHero={false}
+                          stream="sub"
+                          className="pointer-events-none h-full w-full"
+                        />
+                      )}
                     </div>
 
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--text-muted)]">
-                      <div className="flex items-center gap-2">
-                        <span className="flex items-center gap-0.5">
-                          <User className="h-3 w-3" /> 0
+                    {/* 卡片底部遥测状态条 */}
+                    <div className="p-2.5">
+                      <div className="flex items-center justify-between">
+                        <span
+                          className={`text-xs font-semibold transition-colors ${
+                            isFocused
+                              ? 'text-cyan-400'
+                              : 'text-[var(--text-primary)] group-hover:text-cyan-400'
+                          }`}
+                        >
+                          {cam.name}
                         </span>
-                        <span className="flex items-center gap-0.5">
-                          <Car className="h-3 w-3" /> 0
+                        <span
+                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                            cam.lastProbeStatus === 'healthy' || cam.lastProbeStatus === 'success'
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : 'bg-rose-500/10 text-rose-400'
+                          }`}
+                        >
+                          {getResolutionBadge(cam)}
                         </span>
                       </div>
-                      <span className="flex items-center gap-1 font-mono text-[10px] text-cyan-400">
-                        <Activity className="h-3 w-3" /> {t('live.active', '活跃')}
-                      </span>
+
+                      <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+                        <div className="flex items-center gap-2">
+                          <span className="flex items-center gap-0.5">
+                            <User className="h-3 w-3" /> 0
+                          </span>
+                          <span className="flex items-center gap-0.5">
+                            <Car className="h-3 w-3" /> 0
+                          </span>
+                        </div>
+                        {(() => {
+                          const badge = getStatusBadge(cam.lastProbeStatus)
+                          return (
+                            <span
+                              className={`flex items-center gap-1 font-mono text-[10px] ${badge.statusColor}`}
+                            >
+                              <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClass}`} />
+                              <span>{badge.text}</span>
+                            </span>
+                          )
+                        })()}
+                      </div>
                     </div>
                   </div>
-                </button>
-              ))}
+                )
+              })}
 
-              {railCameras.length === 0 && (
+              {cameras.length === 0 && (
                 <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-8 text-center text-xs text-[var(--text-muted)]">
                   <span>{t('live.noAuxStreams', '暂无更多辅路流')}</span>
                 </div>
@@ -259,11 +485,12 @@ export function LivePage() {
               className="flex flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]"
             >
               <div className="relative aspect-video w-full">
-                <WhepPlayer
+                <LivePlayer
                   cameraId={cam.cameraId}
                   cameraName={cam.name}
                   showHud={true}
                   isHero={false}
+                  stream="sub"
                   className="h-full w-full"
                 />
               </div>
@@ -297,18 +524,23 @@ export function LivePage() {
                 e.preventDefault()
                 const form = e.currentTarget
                 const name = (form.elements.namedItem('name') as HTMLInputElement).value
-                const rtspUrl = (form.elements.namedItem('rtspUrl') as HTMLInputElement).value
+                const rtspUrl = modalMainUrl.trim()
+                const subRtspUrl = modalSubUrl.trim()
                 const remark = (form.elements.namedItem('remark') as HTMLInputElement).value
 
                 try {
                   const created = await cameraApi.create({
                     name,
                     rtspUrl,
+                    subRtspUrl: subRtspUrl || undefined,
                     remark,
                   })
                   if (created) {
-                    setCameras((prev) => [...prev, created])
+                    setCameras((prev) => sortCamerasByHealth([...prev, created]))
                     setShowAddModal(false)
+                    setModalMainUrl('')
+                    setModalSubUrl('')
+                    setSubCandidates([])
                   }
                 } catch {
                   setShowAddModal(false)
@@ -330,17 +562,73 @@ export function LivePage() {
 
               <div>
                 <label className="text-xs font-medium text-[var(--text-secondary)]">
-                  {t('live.rtspUrl', 'RTSP 视频流地址')}
+                  {t('live.rtspUrl', '主码流 RTSP 地址 (4K/1080P 高清分析/大屏)')}
                 </label>
                 <input
                   name="rtspUrl"
                   required
+                  value={modalMainUrl}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setModalMainUrl(val)
+                  }}
+                  onBlur={async () => {
+                    if (modalMainUrl.trim()) {
+                      try {
+                        const candidates = await cameraApi.deduceSubStream(modalMainUrl.trim())
+                        setSubCandidates(candidates)
+                        if (candidates.length > 0 && !modalSubUrl) {
+                          setModalSubUrl(candidates[0].subUrl)
+                        }
+                      } catch {
+                        // ignore deduction failure
+                      }
+                    }
+                  }}
                   placeholder={t(
                     'live.rtspPlaceholder',
-                    'rtsp://admin:12345@192.168.1.100:554/h264',
+                    'rtsp://admin:12345@192.168.1.100:554/Streaming/Channels/101',
                   )}
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-hidden"
                 />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-[var(--text-secondary)]">
+                    {t('live.subRtspUrl', '子码流 RTSP 地址 (多分屏/Bento 辅流预览)')}
+                  </label>
+                  {subCandidates.length > 0 && (
+                    <span className="text-[10px] font-medium text-cyan-400">⚡ 已自动推导候选</span>
+                  )}
+                </div>
+                <input
+                  name="subRtspUrl"
+                  value={modalSubUrl}
+                  onChange={(e) => setModalSubUrl(e.target.value)}
+                  placeholder="可留空自动推导，或手动指定子码流"
+                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-hidden"
+                />
+
+                {subCandidates.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {subCandidates.map((c, i) => (
+                      <button
+                        type="button"
+                        key={i}
+                        onClick={() => setModalSubUrl(c.subUrl)}
+                        className={`rounded-md px-2 py-0.5 font-mono text-[10px] transition-colors ${
+                          modalSubUrl === c.subUrl
+                            ? 'border border-cyan-500/30 bg-cyan-500/20 text-cyan-400'
+                            : 'bg-[var(--accent-soft)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                        }`}
+                        title={c.description}
+                      >
+                        {c.brand}: {c.description}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -358,13 +646,13 @@ export function LivePage() {
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="rounded-lg px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]"
+                  className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]"
                 >
                   {t('live.cancel', '取消')}
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-[var(--accent)] px-4 py-1.5 text-xs font-medium text-white shadow-xs hover:opacity-90"
+                  className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white shadow-xs hover:opacity-90"
                 >
                   {t('live.saveAndProbe', '保存并探活')}
                 </button>

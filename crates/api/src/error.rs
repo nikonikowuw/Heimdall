@@ -65,6 +65,12 @@ impl IntoResponse for ApiError {
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, 50000, m.clone()),
         };
 
+        if status.is_server_error() {
+            tracing::error!(status = %status, code = code, error = %msg, "API 内部处理异常 (5xx)");
+        } else if status.is_client_error() && status != StatusCode::UNAUTHORIZED {
+            tracing::warn!(status = %status, code = code, error = %msg, "API 客户端请求错误 (4xx)");
+        }
+
         let body = Json(json!({
             "code": code,
             "message": msg,

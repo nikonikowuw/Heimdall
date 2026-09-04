@@ -28,7 +28,8 @@ crates/api/src/
 ├── routes/           # 路由模块划分
 │   ├── mod.rs        # Router 组装
 │   ├── auth.rs       # /api/v1/auth (login, change-password)
-│   ├── camera.rs     # /api/v1/cameras
+│   ├── camera.rs     # /api/v1/cameras (CRUD, probe, deduce-substream)
+│   ├── live.rs       # /api/v1/live (HTTP-FLV / Enhanced FLV H.265 / H.264 实时分发)
 │   ├── task.rs       # /api/v1/tasks
 │   ├── alarm.rs      # /api/v1/alarms
 │   ├── capture.rs    # /api/v1/captures
@@ -73,6 +74,8 @@ pub struct AppState {
 | 资源名 | 复数 kebab-case：`/api/v1/cameras`、`/api/v1/events` |
 | 路径参数 | `/api/v1/cameras/{id}` |
 | 动作类接口 | `POST /api/v1/cameras/{id}/restart`（动词作为子资源） |
+| HTTP-FLV 实时流 | `GET /api/v1/live/{id}.flv?stream=main\|sub&token={jwt}`（支持 H.264 与 Enhanced FLV H.265） |
+| WebRTC WHEP | `POST /api/v1/webrtc/whep?cameraId={id}&stream=main\|sub`、`DELETE /api/v1/webrtc/whep/{sessionId}` |
 | WebSocket | `/api/v1/ws/events`、`/api/v1/ws/stream/{camera_id}` |
 | 静态资源 | 根路径 `/`，SPA fallback 到 `index.html` |
 

@@ -2,7 +2,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 
 use crate::error::DbError;
 
-/// 创建核心数据表（如不存在）
+/// 创建核心数据表（如不存在）及执行轻量级增量字段迁移
 pub async fn create_tables_if_not_exist(db: &DatabaseConnection) -> Result<(), DbError> {
     let ddl_statements = [
         r#"
@@ -107,5 +107,42 @@ pub async fn create_tables_if_not_exist(db: &DatabaseConnection) -> Result<(), D
         .await?;
     }
 
+    // 增量字段无损迁移（针对已有历史数据库文件自动对齐字段）
+    let migrations = [
+        (
+            "cameras",
+            "last_probe_error_code",
+            "TEXT NOT NULL DEFAULT ''",
+        ),
+        ("cameras", "last_success_at", "DATETIME"),
+        ("cameras", "gb28181_device_id", "TEXT"),
+        ("cameras", "gb28181_channel_id", "TEXT"),
+    ];
+
+    for (table, col, def) in migrations {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {col} {def};");
+        let _ = db
+            .execute(Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                sql,
+            ))
+            .await;
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_create_tables_and_incremental_migration() {
+        let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+        create_tables_if_not_exist(&db).await.unwrap();
+
+        // 再次执行应幂等安全
+        create_tables_if_not_exist(&db).await.unwrap();
+    }
 }

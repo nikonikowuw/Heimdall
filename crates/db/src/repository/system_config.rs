@@ -56,14 +56,10 @@ impl SystemConfigRepo {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::connection::init_db;
 
     #[tokio::test]
     async fn test_system_config_lifecycle() {
-        let db = init_db(":memory:").await.unwrap();
-        crate::schema::create_tables_if_not_exist(&db)
-            .await
-            .unwrap();
+        let db = crate::init_test_db().await.unwrap();
 
         assert_eq!(SystemConfigRepo::get(&db, "test_key").await.unwrap(), None);
 

@@ -122,33 +122,8 @@ describe('API Client', () => {
     expect(list[0].cameraId).toBe('cam-01')
   })
 
-  it('cameraApi.negotiateWhep should handle SDP offer/answer with Location header', async () => {
-    const mockHeaders = new Headers({
-      Location: '/api/v1/webrtc/whep/session-1234',
-    })
-
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 201,
-      headers: mockHeaders,
-      text: async () => 'v=0\r\no=- 123 2 IN IP4 127.0.0.1\r\ns=-\r\n',
-    })
-
-    const res = await cameraApi.negotiateWhep('cam-01', 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n')
-    expect(res.answerSdp).toContain('v=0')
-    expect(res.location).toBe('/api/v1/webrtc/whep/session-1234')
-  })
-
-  it('cameraApi.closeWhep should send DELETE request', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 204,
-    })
-
-    await cameraApi.closeWhep('/api/v1/webrtc/whep/session-1234')
-    expect(global.fetch).toHaveBeenCalledWith(
-      '/api/v1/webrtc/whep/session-1234',
-      expect.objectContaining({ method: 'DELETE' }),
-    )
+  it('cameraApi.getLiveStreamUrl should build correct HTTP-FLV stream URL', () => {
+    const url = cameraApi.getLiveStreamUrl('cam-01', 'main')
+    expect(url).toContain('/api/v1/live/cam-01.flv?stream=main')
   })
 })

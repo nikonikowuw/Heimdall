@@ -1,10 +1,11 @@
 use base64::Engine;
+use bytes::BytesMut;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use crate::error::MediaError;
-use crate::rtsp::DigestAuthChallenge;
+use crate::rtsp::{mask_rtsp_url, read_rtsp_response, DigestAuthChallenge};
 use crate::sps::{parse_h264_sps, parse_h265_sps, SpsInfo};
 
 /// 视频流探活信息
@@ -14,6 +15,13 @@ pub struct StreamInfo {
     pub width: u32,
     pub height: u32,
     pub fps: f64,
+}
+
+impl StreamInfo {
+    /// 检查分辨率与帧率是否已通过 SPS 明确解析
+    pub fn is_dimension_known(&self) -> bool {
+        self.width > 0 && self.height > 0
+    }
 }
 
 impl From<SpsInfo> for StreamInfo {
@@ -40,15 +48,16 @@ impl StreamProber {
     }
 
     async fn probe_internal(rtsp_url: &str) -> Result<StreamInfo, MediaError> {
+        let masked_url = mask_rtsp_url(rtsp_url);
         let parsed_url = url::Url::parse(rtsp_url).map_err(|e| MediaError::RtspConnect {
-            url: rtsp_url.to_string(),
+            url: masked_url.clone(),
             reason: format!("URL 格式不合法: {e}"),
         })?;
 
         let host = parsed_url
             .host_str()
             .ok_or_else(|| MediaError::RtspConnect {
-                url: rtsp_url.to_string(),
+                url: masked_url.clone(),
                 reason: "缺少主机地址".into(),
             })?;
         let port = parsed_url.port().unwrap_or(554);
@@ -57,7 +66,7 @@ impl StreamProber {
         let mut stream = TcpStream::connect(&addr)
             .await
             .map_err(|e| MediaError::RtspConnect {
-                url: rtsp_url.to_string(),
+                url: masked_url.clone(),
                 reason: format!("TCP 连接失败 ({addr}): {e}"),
             })?;
 
@@ -81,6 +90,8 @@ impl StreamProber {
                 }
             };
 
+        let mut read_buf = BytesMut::with_capacity(8192);
+
         // 1. 发送 OPTIONS 检查可达性
         let mut cseq = 1;
         let mut auth_hdr = get_auth_header(&digest_auth, "OPTIONS", rtsp_url);
@@ -89,10 +100,7 @@ impl StreamProber {
             cseq, auth_hdr
         );
         stream.write_all(options_req.as_bytes()).await?;
-
-        let mut buf = vec![0u8; 4096];
-        let n = stream.read(&mut buf).await?;
-        let resp = String::from_utf8_lossy(&buf[..n]);
+        let resp = read_rtsp_response(&mut stream, &mut read_buf).await?;
 
         if resp.contains("401 Unauthorized") {
             if let Some(challenge) = DigestAuthChallenge::from_response(&resp) {
@@ -104,28 +112,27 @@ impl StreamProber {
                     cseq, auth_hdr
                 );
                 stream.write_all(options_req.as_bytes()).await?;
-                let n = stream.read(&mut buf).await?;
-                let resp = String::from_utf8_lossy(&buf[..n]);
+                let resp = read_rtsp_response(&mut stream, &mut read_buf).await?;
                 if !resp.starts_with("RTSP/1.0 200") && !resp.contains("200 OK") {
                     return Err(MediaError::RtspConnect {
-                        url: rtsp_url.to_string(),
+                        url: masked_url.clone(),
                         reason: "RTSP Digest 鉴权失败 (401 Unauthorized)".into(),
                     });
                 }
             } else {
                 return Err(MediaError::RtspConnect {
-                    url: rtsp_url.to_string(),
+                    url: masked_url.clone(),
                     reason: "RTSP 鉴权失败 (401 Unauthorized)".into(),
                 });
             }
         } else if !resp.starts_with("RTSP/1.0 200") && !resp.contains("200 OK") {
             return Err(MediaError::RtspConnect {
-                url: rtsp_url.to_string(),
+                url: masked_url.clone(),
                 reason: format!("OPTIONS 握手失败: {resp}"),
             });
         }
 
-        // 2. 发送 DESCRIBE 请求拉取 SDP
+        // 2. 发送 DESCRIBE 请求拉取 SDP (利用流式读取防止跨包截断)
         cseq += 1;
         auth_hdr = get_auth_header(&digest_auth, "DESCRIBE", rtsp_url);
         let describe_req = format!(
@@ -133,10 +140,7 @@ impl StreamProber {
             cseq, auth_hdr
         );
         stream.write_all(describe_req.as_bytes()).await?;
-
-        let mut sdp_buf = vec![0u8; 8192];
-        let n = stream.read(&mut sdp_buf).await?;
-        let mut sdp_resp = String::from_utf8_lossy(&sdp_buf[..n]).to_string();
+        let mut sdp_resp = read_rtsp_response(&mut stream, &mut read_buf).await?;
 
         if sdp_resp.contains("401 Unauthorized") {
             if let Some(challenge) = DigestAuthChallenge::from_response(&sdp_resp) {
@@ -148,21 +152,65 @@ impl StreamProber {
                     cseq, auth_hdr
                 );
                 stream.write_all(describe_req.as_bytes()).await?;
-                let n = stream.read(&mut sdp_buf).await?;
-                sdp_resp = String::from_utf8_lossy(&sdp_buf[..n]).to_string();
+                sdp_resp = read_rtsp_response(&mut stream, &mut read_buf).await?;
             }
         }
 
+        // 校验 DESCRIBE 响应状态码是否为 200 OK
+        if !sdp_resp.starts_with("RTSP/1.0 200") && !sdp_resp.contains("200 OK") {
+            tracing::warn!(
+                url = %masked_url,
+                resp = %sdp_resp.lines().next().unwrap_or(""),
+                "RTSP 探活 DESCRIBE 请求失败 (非 200 OK)"
+            );
+            return Err(MediaError::RtspConnect {
+                url: masked_url.clone(),
+                reason: format!(
+                    "DESCRIBE 握手失败: {}",
+                    sdp_resp.lines().next().unwrap_or("未知响应")
+                ),
+            });
+        }
+
+        // 严格校验 SDP 是否包含有效的视频轨道描述 (m=video)
+        if !sdp_resp.contains("m=video") {
+            tracing::warn!(url = %masked_url, "RTSP 探活未在响应中发现有效 SDP 视频描述 (缺少 m=video)");
+            return Err(MediaError::RtspConnect {
+                url: masked_url.clone(),
+                reason: "SDP 描述中缺少视频轨 (m=video)".into(),
+            });
+        }
+
         if let Some(info) = Self::parse_sdp(&sdp_resp) {
+            tracing::info!(
+                url = %masked_url,
+                codec = %info.codec,
+                width = info.width,
+                height = info.height,
+                fps = info.fps,
+                "RTSP 探活成功 (已从 SDP 解析出 SPS 宽高)"
+            );
             return Ok(info);
         }
 
-        // 若从 SDP 中未能直接解析出 SPS，则返回基于协议的标准默认值
+        let is_h265 =
+            sdp_resp.to_uppercase().contains("H265") || sdp_resp.to_uppercase().contains("HEVC");
+        tracing::info!(
+            url = %masked_url,
+            is_h265 = is_h265,
+            "RTSP 探活成功 (SDP 包含有效视频轨，宽高参数待首帧解码确定)"
+        );
+
+        // 若从 SDP 中未能直接解析出 SPS，返回已知编码格式但宽高待定的状态 (0x0 @ 0fps)，杜绝伪造 1080P
         Ok(StreamInfo {
-            codec: "h264".to_string(),
-            width: 1920,
-            height: 1080,
-            fps: 25.0,
+            codec: if is_h265 {
+                "h265".to_string()
+            } else {
+                "h264".to_string()
+            },
+            width: 0,
+            height: 0,
+            fps: 0.0,
         })
     }
 
@@ -218,9 +266,9 @@ impl StreamProber {
         if is_h265 {
             Some(StreamInfo {
                 codec: "h265".to_string(),
-                width: 1920,
-                height: 1080,
-                fps: 25.0,
+                width: 0,
+                height: 0,
+                fps: 0.0,
             })
         } else {
             None
@@ -248,6 +296,7 @@ a=fmtp:96 packetization-mode=1;sprop-parameter-sets=Z2QAKacyhEB4AiflwEQAAAMABAAA
         assert_eq!(info.width, 1920);
         assert_eq!(info.height, 1080);
         assert_eq!(info.fps.round() as u32, 30);
+        assert!(info.is_dimension_known());
     }
 
     #[test]
@@ -255,5 +304,32 @@ a=fmtp:96 packetization-mode=1;sprop-parameter-sets=Z2QAKacyhEB4AiflwEQAAAMABAAA
         let sdp = "v=0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 H265/90000\r\n";
         let info = StreamProber::parse_sdp(sdp).expect("parse h265 sdp");
         assert_eq!(info.codec, "h265");
+        assert_eq!(info.width, 0);
+        assert_eq!(info.height, 0);
+        assert_eq!(info.fps, 0.0);
+        assert!(!info.is_dimension_known());
+    }
+
+    #[test]
+    fn test_parse_sdp_with_h265_sprop_sps() {
+        let sdp = r#"
+v=0
+o=- 1747584000 1 IN IP4 127.0.0.1
+s=RTSP Session
+m=video 0 RTP/AVP 96
+a=rtpmap:96 H265/90000
+a=fmtp:96 sprop-sps=QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDllmZpJMreEAAAAEAg;sprop-pps=RAEBAw==
+"#;
+        let info = StreamProber::parse_sdp(sdp).expect("parse h265 sdp with sprop-sps");
+        assert_eq!(info.codec, "h265");
+        assert_eq!(info.width, 1920);
+        assert_eq!(info.height, 1080);
+        assert!(info.is_dimension_known());
+    }
+
+    #[test]
+    fn test_parse_sdp_rejects_audio_only() {
+        let sdp = "v=0\r\nm=audio 0 RTP/AVP 0\r\n";
+        assert!(!sdp.contains("m=video"));
     }
 }

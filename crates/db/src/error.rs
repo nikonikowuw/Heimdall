@@ -21,4 +21,7 @@ pub enum DbError {
 
     #[error("领域类型错误: {0}")]
     Type(#[from] types::TypeError),
+
+    #[error("数据库迁移错误: {0}")]
+    Migration(String),
 }

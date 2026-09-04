@@ -14,6 +14,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_cameras).post(create_camera))
+        .route("/deduce-substream", post(deduce_substream))
         .route(
             "/{cameraId}",
             get(get_camera).put(update_camera).delete(delete_camera),
@@ -50,8 +51,17 @@ fn model_to_camera_dto(m: db::entity::camera::Model) -> Camera {
 /// 异步触发摄像头探活并向全网广播 WebSocket 状态更新
 fn spawn_probe_and_broadcast(state: AppState, camera_id: String, rtsp_url: String) {
     tokio::spawn(async move {
+        tracing::info!(camera_id = %camera_id, rtsp_url = %media::mask_rtsp_url(&rtsp_url), "开始对摄像头执行异步探活...");
         match media::StreamProber::probe(&rtsp_url, Duration::from_secs(5)).await {
             Ok(info) => {
+                tracing::info!(
+                    camera_id = %camera_id,
+                    codec = %info.codec,
+                    width = info.width,
+                    height = info.height,
+                    fps = info.fps,
+                    "摄像头异步探活成功 -> 标记为 healthy"
+                );
                 state
                     .update_and_broadcast_probe(
                         &camera_id,
@@ -68,6 +78,11 @@ fn spawn_probe_and_broadcast(state: AppState, camera_id: String, rtsp_url: Strin
             }
             Err(e) => {
                 let err_str = e.to_string();
+                tracing::warn!(
+                    camera_id = %camera_id,
+                    error = %err_str,
+                    "摄像头异步探活失败 -> 标记为 failed"
+                );
                 state
                     .update_and_broadcast_probe(
                         &camera_id,
@@ -129,6 +144,12 @@ async fn create_camera(
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| "rtsp".to_string());
 
+    // 自动推导子码流候选（若用户未手动指定）
+    let sub_rtsp_url = match req.sub_rtsp_url {
+        Some(ref s) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => media::deduce_primary_sub_stream(rtsp_url).unwrap_or_default(),
+    };
+
     let req_json = serde_json::to_string(&req).unwrap_or_default();
 
     let active_model = db::entity::camera::ActiveModel {
@@ -136,7 +157,7 @@ async fn create_camera(
         name: Set(name.to_string()),
         protocol: Set(protocol),
         rtsp_url: Set(rtsp_url.to_string()),
-        sub_rtsp_url: Set(req.sub_rtsp_url.unwrap_or_default()),
+        sub_rtsp_url: Set(sub_rtsp_url),
         remark: Set(req.remark.unwrap_or_default()),
         last_probe_status: Set("never".to_string()),
         last_probe_at: Set(None),
@@ -296,28 +317,73 @@ async fn probe_camera_manual(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("摄像头未找到: {camera_id}")))?;
 
-    let probe_info = media::StreamProber::probe(&camera.rtsp_url, Duration::from_secs(5)).await?;
+    tracing::info!(camera_id = %camera_id, rtsp_url = %media::mask_rtsp_url(&camera.rtsp_url), "收到手动探活请求");
 
-    state
-        .update_and_broadcast_probe(
-            &camera_id,
-            db::ProbeUpdateParams {
-                status: "healthy",
-                codec: &probe_info.codec,
-                width: probe_info.width as i32,
-                height: probe_info.height as i32,
+    match media::StreamProber::probe(&camera.rtsp_url, Duration::from_secs(5)).await {
+        Ok(probe_info) => {
+            tracing::info!(
+                camera_id = %camera_id,
+                codec = %probe_info.codec,
+                width = probe_info.width,
+                height = probe_info.height,
+                fps = probe_info.fps,
+                "手动探活成功 -> 标记为 healthy"
+            );
+            state
+                .update_and_broadcast_probe(
+                    &camera_id,
+                    db::ProbeUpdateParams {
+                        status: "healthy",
+                        codec: &probe_info.codec,
+                        width: probe_info.width as i32,
+                        height: probe_info.height as i32,
+                        fps: probe_info.fps,
+                        error_code: "",
+                    },
+                )
+                .await;
+
+            Ok(ApiResponse::success(ProbeResult {
+                codec: probe_info.codec,
+                width: probe_info.width,
+                height: probe_info.height,
                 fps: probe_info.fps,
-                error_code: "",
-            },
-        )
-        .await;
+            }))
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            tracing::warn!(camera_id = %camera_id, error = %err_str, "手动探活失败 -> 标记为 failed");
+            state
+                .update_and_broadcast_probe(
+                    &camera_id,
+                    db::ProbeUpdateParams {
+                        status: "failed",
+                        codec: "",
+                        width: 0,
+                        height: 0,
+                        fps: 0.0,
+                        error_code: &err_str,
+                    },
+                )
+                .await;
 
-    Ok(ApiResponse::success(ProbeResult {
-        codec: probe_info.codec,
-        width: probe_info.width,
-        height: probe_info.height,
-        fps: probe_info.fps,
-    }))
+            Err(ApiError::Media(e))
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeduceSubStreamRequest {
+    pub rtsp_url: String,
+}
+
+/// 自动推导子码流候选地址
+async fn deduce_substream(
+    Json(req): Json<DeduceSubStreamRequest>,
+) -> ApiResponse<Vec<media::SubStreamCandidate>> {
+    let list = media::deduce_sub_stream(&req.rtsp_url);
+    ApiResponse::success(list)
 }
 
 #[cfg(test)]
@@ -329,8 +395,7 @@ mod tests {
     use tower::ServiceExt;
 
     async fn setup_test_app() -> (axum::Router, AppState, String) {
-        let db = db::init_db(":memory:").await.unwrap();
-        db::create_tables_if_not_exist(&db).await.unwrap();
+        let db = db::init_test_db().await.unwrap();
         let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
         let state = AppState::new(db, pipeline);
         state.sync_auth_state().await;

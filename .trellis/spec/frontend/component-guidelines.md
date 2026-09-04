@@ -99,6 +99,26 @@ function EventList({ events, loading }: EventListProps) {  // 纯展示
    - 8 路视频在高帧率下每秒产生大量检测框，**严禁将高频 Bounding Box 存入 React `useState` 驱动 DOM 节点更新**（每秒数百上千次 DOM 样式变动会引发浏览器主线程严重卡顿）。
    - 在播放器上层覆盖透明 HTML5 `<canvas>`，数据存入 `useRef`，通过 `requestAnimationFrame` 读取与当前视频 PTS 匹配的检测框批量绘制，彻底脱离 React 组件树渲染循环。
 
+---
+
+## 视频播放器与流媒体渲染架构 (`<LivePlayer />`)
+
+Argus 边缘监控台需要同时运行 1 大屏 (Hero Stage 72%) + 多小屏 (Bento Live Rail 28%)：
+
+### 1. MSE 硬件解码引擎 (`mpegts.js`)
+- 通过 `/api/v1/live/{cameraId}.flv?stream=main|sub&token={jwt}` 拉取 HTTP-FLV 流；
+- 完整支持 **Enhanced FLV (H.265 / HEVC FourCC `hvc1`)** 与标准 H.264；
+- 浏览器通过 GPU 硬件解码原生播放 4K/1080P H.265 画面，彻底消除 WebRTC 在主流浏览器（如 Chrome）下的 H.265 软解黑屏；
+- 启用低延迟追帧（`liveBufferLatencyChasing: true`，`enableWorker: true`），延时控制在 100~200ms。
+
+### 2. 双码流路由规则
+- **Bento 辅助轨道**：固定使用 `stream="sub"`，拉取轻量子码流（720P/360P H.264），保持持续活跃低功耗监控；
+- **Hero 主指挥舱**：默认拉取 `stream="main"`（支持 H.265 4K/1080P），支持主/子码流自由热切换与一键闭屏低功耗待机。
+
+### 3. `<video>` 与 `mpegts.js` 播放器生命周期
+- 必须在组件卸载或切换摄像头时调用 `player.destroy()` 释放 MSE SourceBuffer 与 Network Worker；
+- 播放器加载后必须捕获 `player.play().catch(() => {})` 规避浏览器 Autoplay 策略阻塞。
+
 **判断标准**：这个组件在事件流推送时会不会重渲染？如果它和事件无关却重渲染了，就是 bug。
 
 ---

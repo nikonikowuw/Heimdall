@@ -125,14 +125,12 @@ impl AdminUserRepo {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::connection::init_db;
 
     #[tokio::test]
     async fn test_admin_user_repository_flow() {
-        let db = init_db(":memory:").await.expect("init in-memory db failed");
-        crate::schema::create_tables_if_not_exist(&db)
+        let db = crate::init_test_db()
             .await
-            .expect("create tables failed");
+            .expect("init in-memory db failed");
 
         // 1. 初始状态为未初始化
         assert!(!AdminUserRepo::is_initialized(&db).await.unwrap());

@@ -397,6 +397,7 @@ pub fn parse_h265_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
 
     #[test]
     fn test_remove_emulation_prevention() {
@@ -438,5 +439,20 @@ mod tests {
         assert_eq!(res.width, 1280);
         assert_eq!(res.height, 720);
         assert_eq!(res.profile_idc, 66); // Baseline profile
+    }
+
+    #[test]
+    fn test_parse_1080p_h265_sps() {
+        // 标准 1080P (1920x1080) HEVC SPS (Main Profile)
+        let sps_b64 = "QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDllmZpJMreEAAAAEAg";
+        let sps_bytes = base64::engine::general_purpose::STANDARD
+            .decode(sps_b64)
+            .expect("decode b64");
+
+        let res = parse_h265_sps(&sps_bytes).expect("parse 1080p h265 sps");
+        assert_eq!(res.codec, "h265");
+        assert_eq!(res.width, 1920);
+        assert_eq!(res.height, 1080);
+        assert_eq!(res.profile_idc, 1); // Main Profile
     }
 }

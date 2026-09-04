@@ -111,51 +111,19 @@ export const cameraApi = {
     )
   },
 
-  async negotiateWhep(
-    cameraId: string,
-    offerSdp: string,
-  ): Promise<{ answerSdp: string; location?: string }> {
-    const token = useAuthStore.getState().token
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/sdp',
-    }
-    if (token) {
-      headers.Authorization = `Bearer ${token}`
-    }
-
-    const response = await fetch(
-      `${BASE_URL}/webrtc/whep?cameraId=${encodeURIComponent(cameraId)}`,
-      {
-        method: 'POST',
-        headers,
-        body: offerSdp,
-      },
-    )
-
-    if (!response.ok) {
-      throw new ApiError(`WHEP negotiation failed (${response.status})`, response.status)
-    }
-
-    const location = response.headers.get('Location') || undefined
-    const answerSdp = await response.text()
-    return { answerSdp, location }
+  deduceSubStream(rtspUrl: string): Promise<import('../types').SubStreamCandidate[]> {
+    return api.post<import('../types').SubStreamCandidate[]>('/cameras/deduce-substream', {
+      rtspUrl,
+    })
   },
 
-  async closeWhep(locationOrSessionId: string): Promise<void> {
-    const token = useAuthStore.getState().token
-    const headers: Record<string, string> = {}
-    if (token) {
-      headers.Authorization = `Bearer ${token}`
+  getLiveStreamUrl(cameraId: string, stream: 'main' | 'sub' = 'main'): string {
+    const token = useAuthStore.getState().token || ''
+    const path = `${BASE_URL}/live/${encodeURIComponent(cameraId)}.flv?stream=${stream}&token=${encodeURIComponent(token)}`
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      return new URL(path, window.location.origin).href
     }
-
-    const url = locationOrSessionId.startsWith('/')
-      ? locationOrSessionId
-      : `${BASE_URL}/webrtc/whep/${encodeURIComponent(locationOrSessionId)}`
-
-    await fetch(url, {
-      method: 'DELETE',
-      headers,
-    }).catch(() => {})
+    return path
   },
 }
 

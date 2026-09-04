@@ -19,7 +19,29 @@ pub struct CameraRepo;
 
 impl CameraRepo {
     pub async fn list_all(db: &DatabaseConnection) -> Result<Vec<Model>, DbError> {
-        Entity::find().all(db).await.map_err(DbError::from)
+        let mut list = Entity::find().all(db).await.map_err(DbError::from)?;
+        list.sort_by(|a, b| {
+            let rank_a = match a.last_probe_status.to_lowercase().as_str() {
+                "healthy" | "success" | "online" => 1,
+                "never" | "pending" | "" => 2,
+                "degraded" | "reconnecting" => 3,
+                "failed" | "error" | "offline" => 4,
+                _ => 5,
+            };
+            let rank_b = match b.last_probe_status.to_lowercase().as_str() {
+                "healthy" | "success" | "online" => 1,
+                "never" | "pending" | "" => 2,
+                "degraded" | "reconnecting" => 3,
+                "failed" | "error" | "offline" => 4,
+                _ => 5,
+            };
+            rank_a.cmp(&rank_b).then_with(|| {
+                b.last_success_at
+                    .cmp(&a.last_success_at)
+                    .then_with(|| b.id.cmp(&a.id))
+            })
+        });
+        Ok(list)
     }
 
     pub async fn find_by_camera_id(

@@ -20,6 +20,9 @@ struct Args {
     /// 监听地址
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
+    /// 开发调试模式：启动前重置并重建本地数据库
+    #[arg(short = 'r', long, default_value_t = false)]
+    reset_db: bool,
 }
 
 #[tokio::main]
@@ -28,7 +31,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,api=debug,pipeline=debug".into()),
+                .unwrap_or_else(|_| "info,api=debug,media=debug,pipeline=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -40,17 +43,26 @@ async fn main() -> Result<()> {
         port = args.port,
         host = %args.host,
         db_path = %args.db,
+        reset_db = args.reset_db,
         "正在启动 Argus 单进程服务..."
     );
 
-    // 2. 初始化数据库 (SQLite WAL 模式)
+    // 2. 执行版本化数据库迁移 (Refinery) 并建立 SeaORM 连接池 (SQLite WAL 模式)
+    let db_path = std::path::Path::new(&args.db);
+    if args.reset_db {
+        tracing::warn!(
+            db_path = %db_path.display(),
+            "已启用 --reset-db 参数，正在清空并重置本地数据库..."
+        );
+        db::reset_database(db_path).context("重置本地数据库失败")?;
+    } else {
+        db::run_migrations(db_path).context("执行数据库版本迁移失败")?;
+    }
+
     let db_conn = db::init_db(&args.db)
         .await
         .context("初始化 SQLite 数据库失败")?;
-    db::create_tables_if_not_exist(&db_conn)
-        .await
-        .context("初始化数据表 Schema 失败")?;
-    tracing::info!("SQLite 数据库连接与 Schema 初始化完成 (WAL 模式)");
+    tracing::info!("SQLite 数据库版本迁移与连接池初始化完成 (WAL 模式)");
 
     // 3. 初始化视频分析管线调度器
     let pipeline_mgr = Arc::new(pipeline::PipelineManager::new());
@@ -88,6 +100,7 @@ async fn main() -> Result<()> {
         tracing::info!("管理员账号已就绪，系统运行在正常防护模式");
     }
 
+    let state_shutdown = state.clone();
     let app = api::create_app(state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
@@ -100,9 +113,29 @@ async fn main() -> Result<()> {
 
     tracing::info!("Argus Web 控制台与 API 服务已就绪: http://{}", addr);
 
+    let shutdown_fut = async move {
+        shutdown_signal().await;
+        tracing::info!("正在广播全局停机通知，主动切断长连接流与后台巡检任务...");
+        state_shutdown.notify_shutdown();
+
+        // 兜底保护：若 2.5 秒内未完成退出，或用户再次按下 Ctrl+C，立即强制退出
+        tokio::spawn(async {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(2500)) => {
+                    tracing::warn!("优雅停机超时 (2.5s)，触发强制退出");
+                    std::process::exit(0);
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::warn!("再次接收到 Ctrl+C 中断信号，立即强制退出");
+                    std::process::exit(0);
+                }
+            }
+        });
+    };
+
     // 5. 启动 HTTP / WebSocket 服务并监听优雅停机信号
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_fut)
         .await
         .context("HTTP 服务运行发生异常")?;
 

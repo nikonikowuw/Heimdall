@@ -37,6 +37,65 @@ impl CameraProtocol {
     }
 }
 
+/// 码流通道类型 (主码流 / 子码流分流)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamType {
+    #[default]
+    Main,
+    Sub,
+}
+
+impl StreamType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Sub => "sub",
+        }
+    }
+
+    pub fn from_str_loose(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "sub" => Self::Sub,
+            _ => Self::Main,
+        }
+    }
+}
+
+/// 业务流唯一标识（封装 camera_id 与 stream_type，杜绝裸字符串拼接与 Primitive Obsession）
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StreamKey {
+    pub camera_id: String,
+    pub stream_type: StreamType,
+}
+
+impl StreamKey {
+    pub fn new(camera_id: impl Into<String>, stream_type: StreamType) -> Self {
+        Self {
+            camera_id: camera_id.into(),
+            stream_type,
+        }
+    }
+
+    pub fn main(camera_id: impl Into<String>) -> Self {
+        Self::new(camera_id, StreamType::Main)
+    }
+
+    pub fn sub(camera_id: impl Into<String>) -> Self {
+        Self::new(camera_id, StreamType::Sub)
+    }
+
+    pub fn as_str_key(&self) -> String {
+        format!("{}:{}", self.camera_id, self.stream_type.as_str())
+    }
+}
+
+impl std::fmt::Display for StreamKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.camera_id, self.stream_type.as_str())
+    }
+}
+
 /// 摄像头三态健康度状态机（具备防抖容错能力）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +124,16 @@ impl ProbeStatus {
             "degraded" | "reconnecting" => Self::Degraded,
             "failed" | "error" | "offline" => Self::Failed,
             _ => Self::Never,
+        }
+    }
+
+    /// 健康状态优先级权重 (在线 1 > 待探活/新设备 2 > 波动 3 > 故障离线 4)
+    pub fn priority(&self) -> u8 {
+        match self {
+            Self::Healthy => 1,
+            Self::Never => 2,
+            Self::Degraded => 3,
+            Self::Failed => 4,
         }
     }
 }
