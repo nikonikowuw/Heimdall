@@ -1,0 +1,49 @@
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Rust workspace
+/target/
+build/
+# Cargo.lock is intentionally tracked: Argus is an application.
+
+# Native and C/C++ build output
+out/
+cmake-build-*/
+*.dSYM/
+
+# Web and JavaScript tooling
+node_modules/
+/web/dist/
+coverage/
+.vite/
+.eslintcache
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Python tooling used by repository scripts
+__pycache__/
+*.py[cod]
+
+# Runtime data and generated logs
+/data/
+*.log
+
+# Temporary files
+*.tmp

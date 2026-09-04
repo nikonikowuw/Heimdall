@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="en" class="dark overflow-x-hidden w-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#030408">
+  <meta name="description" content="Sign in to Argus - High-Performance Edge AI Video Analytics Platform">
+  <title>Sign In - Argus</title>
+  
+  <!-- 样式与矢量图标 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- 字体：Unbounded (先锋艺术展示字体), Space Grotesk (深空几何), Inter (界面正文), Space Mono (等宽数据) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=Space+Mono:wght@400;700&family=Unbounded:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Unbounded"', '"Space Grotesk"', 'sans-serif'],
+            art: ['"Unbounded"', 'sans-serif'],
+            tech: ['"Space Grotesk"', 'sans-serif'],
+            sans: ['"Inter"', 'sans-serif'],
+            data: ['"Space Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* 双主题 CSS 变量体系 (白色主题: 黑洞 / 暗色主题: 白洞) */
+    :root {
+      --bg-page: #F5F7FA;
+      --text-main: #0B0F19;
+      --text-sub: #475569;
+      --card-bg: rgba(255, 255, 255, 0.86);
+      --card-border: rgba(15, 23, 42, 0.09);
+      --card-border-hover: rgba(244, 63, 94, 0.4);
+      --card-shadow: 0 25px 60px -15px rgba(15, 23, 42, 0.07), 0 0 1px rgba(0, 0, 0, 0.08), inset 0 1px 1px rgba(255, 255, 255, 1.0);
+      --input-bg: #FFFFFF;
+      --input-border: rgba(15, 23, 42, 0.14);
+      --input-text: #0B0F19;
+      --grid-line: rgba(15, 23, 42, 0.035);
+      --cursor-border: rgba(244, 63, 94, 0.65);
+      --cursor-bg: rgba(244, 63, 94, 0.05);
+      --cursor-text: #E11D48;
+      --mask-l-start: rgba(245, 247, 250, 0.95);
+      --mask-l-mid: rgba(245, 247, 250, 0.65);
+      color-scheme: light;
+    }
+
+    .dark {
+      --bg-page: #030408;
+      --text-main: #F8FAFC;
+      --text-sub: #94A3B8;
+      --card-bg: rgba(8, 11, 20, 0.78);
+      --card-border: rgba(255, 255, 255, 0.09);
+      --card-border-hover: rgba(99, 102, 241, 0.45);
+      --card-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.90), inset 0 1px 1px rgba(255, 255, 255, 0.12);
+      --input-bg: rgba(2, 6, 23, 0.75);
+      --input-border: rgba(255, 255, 255, 0.14);
+      --input-text: #F8FAFC;
+      --grid-line: rgba(255, 255, 255, 0.022);
+      --cursor-border: rgba(129, 140, 248, 0.6);
+      --cursor-bg: rgba(99, 102, 241, 0.05);
+      --cursor-text: #818cf8;
+      --mask-l-start: rgba(3, 4, 8, 0.95);
+      --mask-l-mid: rgba(3, 4, 8, 0.65);
+      color-scheme: dark;
+    }
+
+    .tnum {
+      font-feature-settings: "tnum" 1, "zero" 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    *, ::before, ::after {
+      box-sizing: border-box;
+    }
+
+    body {
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      background-color: var(--bg-page);
+      color: var(--text-main);
+      width: 100%;
+      max-width: 100vw;
+      transition: background-color 0.4s ease, color 0.4s ease;
+    }
+
+    /* 微米工程标定网格 */
+    .calibration-grid {
+      background-image: 
+        linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+      background-size: 32px 32px;
+      transition: background-image 0.4s ease;
+    }
+
+    /* 现代磨砂玻璃材质 */
+    .lens-glass {
+      background: var(--card-bg);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid var(--card-border);
+      box-shadow: var(--card-shadow);
+      transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
+    }
+    .lens-glass:hover {
+      border-color: var(--card-border-hover);
+    }
+
+    /* 现代先锋伴生柔光环 (Fluid Aura Ring) */
+    #cursor-ring {
+      pointer-events: none;
+      position: fixed;
+      left: 0;
+      top: 0;
+      z-index: 9999;
+      transform: translate3d(-50%, -50%, 0);
+      will-change: transform;
+      width: 32px;
+      height: 32px;
+      border-radius: 9999px;
+      border: 1.5px solid var(--cursor-border);
+      background: var(--cursor-bg);
+      backdrop-filter: blur(1px);
+      -webkit-backdrop-filter: blur(1px);
+      transition: width 0.20s cubic-bezier(0.16, 1, 0.3, 1), 
+                  height 0.20s cubic-bezier(0.16, 1, 0.3, 1), 
+                  border-radius 0.20s ease,
+                  border-color 0.20s ease,
+                  background-color 0.20s ease,
+                  opacity 0.25s ease;
+    }
+
+    @media (pointer: coarse), (max-width: 768px) {
+      #cursor-ring { display: none !important; }
+      body, a, button, input { cursor: auto !important; }
+    }
+
+    @media (pointer: fine) and (min-width: 769px) {
+      body { cursor: default; }
+      a, button, label, select { cursor: pointer; }
+      input { cursor: text; }
+    }
+
+    /* Toast 进度条衰减动画 */
+    @keyframes progressDecay {
+      from { width: 100%; }
+      to { width: 0%; }
+    }
+    .animate-progress {
+      animation: progressDecay linear forwards;
+    }
+  </style>
+</head>
+<body class="relative antialiased min-h-screen overflow-x-hidden w-full selection:bg-indigo-500/30 selection:text-cyan-200 flex flex-col justify-between">
+
+  <!-- 视觉底层：WebGL 真实相对论光线追踪 (白色: 黑洞+吸积盘+宝石星空 / 暗色: 白洞+向外喷射光辉) -->
+  <canvas id="gargantua-canvas" class="fixed inset-0 z-0 pointer-events-none opacity-0 transition-opacity duration-1000 ease-out"></canvas>
+
+  <!-- 氛围光效与空间层次过渡 (柔和暗角增强纵深，完美衬托中央奇点视界) -->
+  <div aria-hidden="true" class="fixed inset-0 z-[1] pointer-events-none bg-[radial-gradient(ellipse_75%_65%_at_50%_48%,transparent_35%,rgba(15,23,42,0.06)_100%)] dark:bg-[radial-gradient(ellipse_75%_65%_at_50%_48%,transparent_30%,rgba(0,0,0,0.55)_100%)]"></div>
+
+  <!-- 顶层工程标定微网格 -->
+  <div class="fixed inset-0 z-10 pointer-events-none calibration-grid opacity-30"></div>
+
+  <!-- 桌面伴生物理柔光环 (保留原生硬件光标，零输入延迟) -->
+  <div id="cursor-ring" class="opacity-0"></div>
+
+  <!-- 全局 HUD 消息提示浮层 -->
+  <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2.5 pointer-events-none max-w-sm w-[calc(100vw-2.5rem)]"></div>
+
+  <!-- 顶部通栏：Logo 严格居左上角，主题切换严格居右上角 -->
+  <header class="fixed top-0 inset-x-0 z-30 w-full px-6 sm:px-10 lg:px-12 py-5 sm:py-6 flex items-center justify-between pointer-events-none">
+    
+    <!-- 左上角 Logo -->
+    <a href="#" class="pointer-events-auto flex items-center gap-3 group">
+      <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-pink-500 to-cyan-400 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20 ring-1 ring-white/20 transition-transform group-hover:scale-105">
+        <i data-lucide="shield-check" class="w-4 h-4 stroke-[2]"></i>
+      </div>
+      <div class="flex flex-col">
+        <span class="font-display font-extrabold text-sm tracking-wide text-slate-900 dark:text-white">
+          ARGUS
+        </span>
+      </div>
+    </a>
+
+    <!-- 右上角：帧率微指示与精致日/月微滑块开关 -->
+    <div class="pointer-events-auto flex items-center gap-3">
+      <span id="fpsDisplay" class="hidden sm:inline-block font-data text-[10px] text-slate-400 dark:text-slate-500 tabular-nums select-none tracking-wider px-2 py-0.5 rounded border border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.04]">-- FPS</span>
+      <button 
+        type="button" 
+        id="theme-pill-toggle"
+        onclick="toggleTheme()"
+        role="switch"
+        aria-checked="true"
+        aria-label="Toggle theme between Light and Dark"
+        title="Toggle Theme: Light / Dark [Hotkey: T]"
+        class="relative w-[54px] h-[28px] rounded-full p-[2.5px] transition-colors duration-300 focus:outline-none cursor-pointer select-none bg-slate-200/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700/80 shadow-inner group shrink-0"
+      >
+        <!-- 轨道底衬微图标 -->
+        <div class="absolute inset-0 flex items-center justify-between px-2 text-[10px] pointer-events-none opacity-50">
+          <i data-lucide="sun" class="w-3 h-3 text-amber-500"></i>
+          <i data-lucide="moon" class="w-3 h-3 text-indigo-400"></i>
+        </div>
+
+        <!-- 弹簧滑块核心 (Thumb) -->
+        <div 
+          id="theme-pill-thumb"
+          class="relative z-10 w-[22px] h-[22px] rounded-full flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] shadow-md bg-white dark:bg-indigo-600 text-slate-800 dark:text-white"
+        >
+          <i id="pill-icon-sun" data-lucide="sun" class="w-3.5 h-3.5 text-amber-500"></i>
+          <i id="pill-icon-moon" data-lucide="moon" class="w-3.5 h-3.5 text-white hidden"></i>
+        </div>
+      </button>
+    </div>
+
+  </header>
+
+  <!-- 主内容区：中央奇点视界 · 沉浸式浮空 HUD 控制台 -->
+  <main class="relative z-20 w-full max-w-md mx-auto flex-1 flex flex-col justify-center items-center px-4 sm:px-6 py-10 min-h-[calc(100vh-140px)]">
+    
+    <!-- 中央先锋品牌与系统身份徽标 (垂直对称轴，轻盈优雅) -->
+    <div class="flex flex-col items-center text-center mb-6 space-y-2.5 select-none">
+      
+      <!-- 节点状态微指示徽章 -->
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-black/10 dark:border-white/15 bg-white/50 dark:bg-white/[0.06] backdrop-blur-xl shadow-sm text-[11px] font-sans font-medium text-slate-700 dark:text-slate-200 tracking-wider">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span class="font-data text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400">ARGUS CORE // NODE-01</span>
+      </div>
+
+      <!-- 纯粹主标题 -->
+      <h1 class="font-display text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white">
+        Singularity Access
+      </h1>
+
+      <p class="text-xs font-sans text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs">
+        Authenticate to connect with edge vision telemetry & zero-copy NPU cluster.
+      </p>
+    </div>
+
+    <!-- 登录面板本体 (精雕细琢的浮空磨砂玻璃容器) -->
+    <div class="w-full lens-glass rounded-3xl p-6 sm:p-7 relative overflow-hidden backdrop-blur-2xl shadow-2xl shadow-black/10 dark:shadow-2xl dark:shadow-indigo-950/60 ring-1 ring-black/5 dark:ring-white/10">
+      
+      <!-- 卡片顶部漫反射柔光 -->
+      <div class="absolute -top-20 left-1/2 -translate-x-1/2 w-64 h-32 bg-gradient-to-b from-indigo-500/20 via-pink-500/10 to-transparent rounded-full blur-2xl pointer-events-none"></div>
+
+      <!-- 核心登录表单 (聚焦纯粹凭证输入) -->
+      <form id="login-form" onsubmit="handleLoginSubmit(event)" class="relative z-10 space-y-4">
+        
+        <!-- 用户名 -->
+        <div>
+          <label for="username" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+            Username
+          </label>
+          <div class="relative">
+            <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+              <i data-lucide="user" class="w-4 h-4"></i>
+            </div>
+            <input 
+              type="text" 
+              id="username" 
+              name="username"
+              required
+              autocomplete="username"
+              placeholder="admin" 
+              value="admin"
+              style="background-color: var(--input-bg); border-color: var(--input-border); color: var(--input-text);"
+              class="w-full pl-10 pr-4 py-2.5 rounded-xl border placeholder:text-slate-400 dark:placeholder:text-slate-600 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 transition-all font-sans"
+            >
+          </div>
+        </div>
+
+        <!-- 密码 -->
+        <div>
+          <label for="password" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+            Password
+          </label>
+          <div class="relative">
+            <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+              <i data-lucide="key-round" class="w-4 h-4"></i>
+            </div>
+            <input 
+              type="password" 
+              id="password" 
+              name="password"
+              required
+              autocomplete="current-password"
+              placeholder="••••••••••••" 
+              value="argus-admin-2026"
+              style="background-color: var(--input-bg); border-color: var(--input-border); color: var(--input-text);"
+              class="w-full pl-10 pr-10 py-2.5 rounded-xl border placeholder:text-slate-400 dark:placeholder:text-slate-600 text-sm focus:outline-none focus:border-pink-400 focus:ring-1 focus:ring-pink-400/50 transition-all font-sans"
+            >
+            <button 
+              type="button" 
+              onclick="togglePasswordVisibility()"
+              aria-label="Toggle password visibility"
+              class="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
+            >
+              <i id="eye-show" data-lucide="eye" class="w-4 h-4"></i>
+              <i id="eye-hide" data-lucide="eye-off" class="w-4 h-4 hidden"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- 记住会话 -->
+        <div class="flex items-center justify-between pt-0.5">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="remember" checked class="w-4 h-4 rounded bg-slate-100 dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500/30 accent-indigo-500">
+            <span class="text-xs text-slate-600 dark:text-slate-400 font-sans">Remember this device</span>
+          </label>
+        </div>
+
+        <!-- 提交登录按钮 -->
+        <div class="pt-1.5">
+          <button 
+            type="submit" 
+            id="submit-btn"
+            class="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 text-white font-display font-bold text-xs tracking-wider uppercase transition-all duration-200 flex items-center justify-center gap-2 hover:opacity-95 shadow-lg shadow-indigo-600/25 active:scale-[0.99] cursor-pointer"
+          >
+            <i id="btn-spinner" data-lucide="arrow-right" class="w-4 h-4"></i>
+            <span id="btn-text">Sign In</span>
+          </button>
+        </div>
+
+      </form>
+
+      <!-- 卡片内置技术特性标尺 (精致克制的一体化微呈现) -->
+      <div class="mt-5 pt-4 border-t border-black/5 dark:border-white/5 flex items-center justify-between text-[11px] font-sans text-slate-400 dark:text-slate-500">
+        <span class="flex items-center gap-1.5"><i data-lucide="video" class="w-3.5 h-3.5 text-rose-500"></i> Ingestion</span>
+        <span class="flex items-center gap-1.5"><i data-lucide="cpu" class="w-3.5 h-3.5 text-amber-500 dark:text-cyan-400"></i> Zero-Copy</span>
+        <span class="flex items-center gap-1.5"><i data-lucide="sparkles" class="w-3.5 h-3.5 text-indigo-500 dark:text-pink-400"></i> AI Pipeline</span>
+      </div>
+
+    </div>
+
+    <!-- 卡片下方微型安全提示 -->
+    <div class="mt-4 flex items-center gap-1.5 text-[11px] font-data text-slate-400 dark:text-slate-500 select-none">
+      <i data-lucide="lock" class="w-3 h-3 text-emerald-500"></i>
+      <span>End-to-End Encrypted Session · TLS 1.3</span>
+    </div>
+
+  </main>
+
+  <!-- 底部极简页脚 (三段平衡展开) -->
+  <footer class="relative z-20 w-full px-6 sm:px-10 lg:px-12 py-5 border-t border-black/5 dark:border-slate-900/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-sans text-slate-500">
+    <div class="flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+      <span>Cluster Nodes: 16/16 Online</span>
+    </div>
+    <div class="flex items-center gap-6">
+      <a href="#privacy" onclick="showToast('info', 'SECURITY', 'End-to-end encrypted session with TLS 1.3.')" class="hover:text-slate-800 dark:hover:text-slate-300 transition-colors">Privacy</a>
+      <a href="#terms" onclick="showToast('info', 'TERMS', 'Argus Enterprise Console Terms of Use.')" class="hover:text-slate-800 dark:hover:text-slate-300 transition-colors">Terms</a>
+      <a href="#status" onclick="showToast('info', 'CLUSTER STATUS', 'All local inference nodes operating at nominal capacity.')" class="hover:text-slate-800 dark:hover:text-slate-300 transition-colors">Status</a>
+    </div>
+    <div>
+      <span>© 2026 Argus Systems Inc.</span>
+    </div>
+  </footer>
+
+  <script>
+    // 渲染 Lucide 矢量图标
+    lucide.createIcons();
+
+    // ------------------------------------------------------------- 双主题系统 (方案 1: 物理微滑块驱动)
+    let currentTheme = document.documentElement.classList.contains('dark') ? 1.0 : 0.0;
+    let targetTheme = currentTheme;
+
+    function updateThemeUI(theme) {
+      const isDark = theme === 'dark';
+      const toggleBtn = document.getElementById('theme-pill-toggle');
+      const thumb = document.getElementById('theme-pill-thumb');
+      const sunIcon = document.getElementById('pill-icon-sun');
+      const moonIcon = document.getElementById('pill-icon-moon');
+
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+        targetTheme = 1.0;
+        localStorage.setItem('argus-theme', 'dark');
+
+        if (toggleBtn) toggleBtn.setAttribute('aria-checked', 'true');
+        if (thumb) {
+          thumb.style.transform = 'translateX(25px)';
+          thumb.className = 'relative z-10 w-[22px] h-[22px] rounded-full flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] shadow-md bg-indigo-600 text-white';
+        }
+        if (sunIcon) sunIcon.classList.add('hidden');
+        if (moonIcon) moonIcon.classList.remove('hidden');
+      } else {
+        document.documentElement.classList.remove('dark');
+        targetTheme = 0.0;
+        localStorage.setItem('argus-theme', 'light');
+
+        if (toggleBtn) toggleBtn.setAttribute('aria-checked', 'false');
+        if (thumb) {
+          thumb.style.transform = 'translateX(1px)';
+          thumb.className = 'relative z-10 w-[22px] h-[22px] rounded-full flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] shadow-md bg-white text-amber-500';
+        }
+        if (sunIcon) sunIcon.classList.remove('hidden');
+        if (moonIcon) moonIcon.classList.add('hidden');
+      }
+      lucide.createIcons();
+    }
+
+    function setTheme(theme) {
+      updateThemeUI(theme);
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    }
+
+    // 初始化恢复用户主题
+    const savedTheme = localStorage.getItem('argus-theme') || 'dark';
+    setTheme(savedTheme);
+
+    // 快捷键 T 切换主题
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 't' || e.key === 'T') {
+        if (!['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+          toggleTheme();
+        }
+      }
+    });
+
+    // ------------------------------------------------------------- HUD 提示浮层系统
+    function showToast(type, title, message, duration = 3500) {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+
+      const toast = document.createElement('div');
+      toast.className = 'lens-glass pointer-events-auto rounded-2xl p-4 shadow-2xl relative overflow-hidden transition-all duration-300 opacity-0 translate-y-2';
+
+      let icon = 'info';
+      let accent = 'text-cyan-500 dark:text-cyan-400';
+      let progress = 'bg-cyan-500 dark:bg-cyan-400';
+
+      if (type === 'success') {
+        icon = 'check-circle-2';
+        accent = 'text-emerald-500 dark:text-emerald-400';
+        progress = 'bg-emerald-500 dark:bg-emerald-400';
+      } else if (type === 'error') {
+        icon = 'alert-octagon';
+        accent = 'text-rose-500 dark:text-rose-400';
+        progress = 'bg-rose-500 dark:bg-rose-400';
+      }
+
+      toast.innerHTML = `
+        <div class="flex items-start gap-3">
+          <div class="w-6 h-6 rounded-lg bg-black/5 dark:bg-white/5 flex items-center justify-center ${accent} shrink-0 mt-0.5">
+            <i data-lucide="${icon}" class="w-3.5 h-3.5"></i>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-sans font-semibold text-xs ${accent}">${title}</span>
+              <button type="button" class="close-btn text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 transition-colors cursor-pointer">
+                <i data-lucide="x" class="w-3.5 h-3.5"></i>
+              </button>
+            </div>
+            <p class="text-xs text-slate-600 dark:text-slate-300 mt-1 font-sans leading-normal">${message}</p>
+          </div>
+        </div>
+        <div class="absolute bottom-0 left-0 h-[2px] ${progress} animate-progress" style="animation-duration: ${duration}ms;"></div>
+      `;
+
+      container.appendChild(toast);
+      lucide.createIcons({ root: toast });
+
+      requestAnimationFrame(() => {
+        toast.classList.remove('opacity-0', 'translate-y-2');
+      });
+
+      const remove = () => {
+        toast.classList.add('opacity-0', 'translate-x-4');
+        setTimeout(() => toast.remove(), 250);
+      };
+
+      const timer = setTimeout(remove, duration);
+      toast.querySelector('.close-btn').addEventListener('click', () => {
+        clearTimeout(timer);
+        remove();
+      });
+    }
+
+    // ------------------------------------------------------------- 密码明文显隐切换
+    function togglePasswordVisibility() {
+      const input = document.getElementById('password');
+      const show = document.getElementById('eye-show');
+      const hide = document.getElementById('eye-hide');
+      if (!input || !show || !hide) return;
+
+      if (input.type === 'password') {
+        input.type = 'text';
+        show.classList.add('hidden');
+        hide.classList.remove('hidden');
+      } else {
+        input.type = 'password';
+        show.classList.remove('hidden');
+        hide.classList.add('hidden');
+      }
+    }
+
+    // ------------------------------------------------------------- 登录提交与模拟认证
+    let isSubmitting = false;
+
+    function handleLoginSubmit(e) {
+      e.preventDefault();
+      if (isSubmitting) return;
+
+      const btn = document.getElementById('submit-btn');
+      const text = document.getElementById('btn-text');
+      const username = document.getElementById('username').value;
+
+      isSubmitting = true;
+      btn.disabled = true;
+      btn.classList.add('opacity-80', 'cursor-wait');
+      text.textContent = 'Signing in...';
+
+      setTimeout(() => {
+        showToast('success', 'Sign In Successful', `Welcome back, ${username}. Opening dashboard...`);
+        btn.classList.remove('from-indigo-600', 'to-cyan-500');
+        btn.classList.add('from-emerald-600', 'to-cyan-600');
+        text.textContent = 'Authorized';
+
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.classList.remove('opacity-80', 'cursor-wait', 'from-emerald-600', 'to-cyan-600');
+          btn.classList.add('from-indigo-600', 'to-cyan-500');
+          text.textContent = 'Sign In';
+          isSubmitting = false;
+        }, 1800);
+      }, 1000);
+    }
+
+    // 快捷键支持 (回车一键提交)
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        handleLoginSubmit(new Event('submit'));
+      }
+    });
+
+    // ------------------------------------------------------------- 桌面先锋伴生柔光环交互系统 (零延迟原生光标 + 柔性物理弹簧环)
+    const cursorRing = document.getElementById('cursor-ring');
+
+    let mouseX = -100, mouseY = -100;
+    let ringX = -100, ringY = -100;
+    let isCursorActive = false;
+    let isHoveringInteractive = false;
+    let isMouseDown = false;
+
+    // 纯数据记录，主线程零阻塞高频节流
+    window.addEventListener('pointermove', (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+
+      if (!isCursorActive && cursorRing) {
+        cursorRing.style.opacity = '1';
+        ringX = mouseX;
+        ringY = mouseY;
+        isCursorActive = true;
+      }
+    }, { passive: true });
+
+    document.addEventListener('mouseleave', () => {
+      if (cursorRing) cursorRing.style.opacity = '0';
+      isCursorActive = false;
+    });
+
+    document.addEventListener('mouseenter', () => {
+      if (cursorRing) cursorRing.style.opacity = '1';
+      isCursorActive = true;
+    });
+
+    // 鼠标点击物理弹性力反馈 (Click Feedback)
+    window.addEventListener('pointerdown', () => {
+      isMouseDown = true;
+      if (cursorRing) {
+        cursorRing.style.transform = `translate3d(${ringX}px, ${ringY}px, 0) translate(-50%, -50%) scale(0.75)`;
+      }
+    }, { passive: true });
+
+    window.addEventListener('pointerup', () => {
+      isMouseDown = false;
+      if (cursorRing) {
+        const baseScale = isHoveringInteractive ? 'scale(1.18)' : 'scale(1)';
+        cursorRing.style.transform = `translate3d(${ringX}px, ${ringY}px, 0) translate(-50%, -50%) ${baseScale}`;
+      }
+    }, { passive: true });
+
+    function renderCursor() {
+      if (cursorRing && isCursorActive) {
+        // 外部柔光环：柔和物理弹簧阻尼跟随
+        ringX += (mouseX - ringX) * 0.30;
+        ringY += (mouseY - ringY) * 0.30;
+        const scaleStr = isMouseDown ? 'scale(0.75)' : (isHoveringInteractive ? 'scale(1.18)' : 'scale(1)');
+        cursorRing.style.transform = `translate3d(${ringX}px, ${ringY}px, 0) translate(-50%, -50%) ${scaleStr}`;
+      }
+      requestAnimationFrame(renderCursor);
+    }
+    requestAnimationFrame(renderCursor);
+
+    // 交互元素形态流转 (可点击元素吸附与扩散)
+    document.querySelectorAll('button, a, input[type=checkbox], label').forEach(el => {
+      el.addEventListener('pointerenter', () => {
+        isHoveringInteractive = true;
+        if (!cursorRing) return;
+        cursorRing.style.width = '42px';
+        cursorRing.style.height = '42px';
+        cursorRing.style.borderColor = 'var(--cursor-text)';
+      });
+      el.addEventListener('pointerleave', () => {
+        isHoveringInteractive = false;
+        if (!cursorRing) return;
+        cursorRing.style.width = '32px';
+        cursorRing.style.height = '32px';
+        cursorRing.style.borderColor = 'var(--cursor-border)';
+      });
+    });
+
+    // 文本输入框形态流转 (输入区域自适应收窄)
+    document.querySelectorAll('input[type=text], input[type=password]').forEach(el => {
+      el.addEventListener('pointerenter', () => {
+        if (!cursorRing) return;
+        cursorRing.style.width = '20px';
+        cursorRing.style.height = '32px';
+        cursorRing.style.borderRadius = '6px';
+      });
+      el.addEventListener('pointerleave', () => {
+        if (!cursorRing) return;
+        cursorRing.style.width = '32px';
+        cursorRing.style.height = '32px';
+        cursorRing.style.borderRadius = '9999px';
+      });
+    });
+
+    // ------------------------------------------------------------- WebGL 相对论奇点渲染器 (白色黑洞 / 暗色白洞)
+    const canvas = document.getElementById('gargantua-canvas');
+    const gl = canvas.getContext('webgl2', { alpha: false, depth: false, antialias: false, powerPreference: 'high-performance' }) 
+            || canvas.getContext('webgl', { alpha: false, depth: false, antialias: false, powerPreference: 'high-performance' });
+
+    if (gl) {
+      const vsSrc = `attribute vec2 position;
+        void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+      const fsSrc = `precision highp float;
+        uniform float uTime;
+        uniform vec2 uResolution;
+        uniform vec2 uMouse;
+        uniform float uTheme; // 0.0 = Light (Black Hole), 1.0 = Dark (White Hole)
+        uniform vec3 uTintA;
+        uniform vec3 uTintB;
+        uniform vec3 uTintC;
+
+        const float DISK_IN = 2.6;
+        const float DISK_OUT = 8.8;
+        const float CAM_DIST = 39.0;
+        const float FOCAL = 1.25;
+        const int STEPS = 85;
+
+        vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
+        vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+        float snoise(vec3 v) {
+          const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+          const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+          vec3 i = floor(v + dot(v, C.yyy));
+          vec3 x0 = v - i + dot(i, C.xxx);
+          vec3 g = step(x0.yzx, x0.xyz);
+          vec3 l = 1.0 - g;
+          vec3 i1 = min(g.xyz, l.zxy);
+          vec3 i2 = max(g.xyz, l.zxy);
+          vec3 x1 = x0 - i1 + C.xxx;
+          vec3 x2 = x0 - i2 + C.yyy;
+          vec3 x3 = x0 - D.yyy;
+          i = mod289(i);
+          vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+          float n_ = 0.142857142857;
+          vec3 ns = n_ * D.wyz - D.xzx;
+          vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+          vec4 x_ = floor(j * ns.z);
+          vec4 y_ = floor(j - 7.0 * x_);
+          vec4 x = x_ * ns.x + ns.yyyy;
+          vec4 y = y_ * ns.x + ns.yyyy;
+          vec4 h = 1.0 - abs(x) - abs(y);
+          vec4 b0 = vec4(x.xy, y.xy);
+          vec4 b1 = vec4(x.zw, y.zw);
+          vec4 s0 = floor(b0) * 2.0 + 1.0;
+          vec4 s1 = floor(b1) * 2.0 + 1.0;
+          vec4 sh = -step(h, vec4(0.0));
+          vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+          vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+          vec3 p0 = vec3(a0.xy, h.x);
+          vec3 p1 = vec3(a0.zw, h.y);
+          vec3 p2 = vec3(a1.xy, h.z);
+          vec3 p3 = vec3(a1.zw, h.w);
+          vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+          p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+          vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+          m = m * m;
+          return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+        }
+
+        float hash21(vec2 p) {
+          p = fract(p * vec2(234.34, 435.345));
+          p += dot(p, p + 34.23);
+          return fract(p.x * p.y);
+        }
+
+        // 增积盘流体、开普勒差速涡流与相对论多普勒频移 (电影级高精物理美学)
+        vec4 diskShade(vec3 hit, vec3 rd, float theme) {
+          float hr = length(hit.xz);
+          float ang = atan(hit.z, hit.x);
+          
+          // 1. 角向开普勒差速旋转：内圈极速、外圈从容，恒定匀速自转
+          float omega = 3.0 * pow(hr, -1.5);
+          float sa = ang + uTime * omega;
+          
+          // 2. 径向相对论引力流场 (单组极速 Simplex 采样，计算量直接砍半，彻底消除掉帧延迟！)
+          float inflowDrift = mod(uTime * 1.6, 31.416) * pow(clamp(hr, 1.0, 10.0), -0.65);
+          float outflowDrift = -mod(uTime * 2.0, 31.416);
+          float radialFlow = mix(inflowDrift, outflowDrift, smoothstep(0.15, 0.85, theme));
+
+          vec3 np1 = vec3(cos(sa) * 1.3, sin(sa) * 1.3, log(hr) * 5.2 + radialFlow);
+          vec3 np2 = vec3(cos(sa * 2.2 - uTime * 0.12) * 2.4, sin(sa * 2.2) * 2.4, log(hr) * 8.6 + radialFlow * 1.3);
+          float n1 = snoise(np1) * 0.5 + 0.5;
+          float n2 = snoise(np2) * 0.5 + 0.5;
+          float streak = pow(n1 * 0.62 + n2 * 0.38, 2.0) * 1.4;
+          
+          // 平滑权重调制 (消除任何硬切阈值)
+          float wInflow = 1.0 - smoothstep(0.15, 0.85, theme);
+          float wOutflow = smoothstep(0.15, 0.85, theme);
+
+          // 黑洞引力潮汐吞噬流光 (连续平滑衰减)
+          float spiral = sin(ang * 3.0 - log(hr) * 8.5 + uTime * 3.2);
+          float innerPull = smoothstep(DISK_IN + 3.0, DISK_IN, hr);
+          float tidalInflow = smoothstep(0.45, 0.95, spiral) * innerPull * 1.5 * wInflow;
+
+          // 白洞向外喷吐的脉冲激波环 (连续平滑显现)
+          float wavePhase = sin(hr * 4.4 - uTime * 5.0);
+          float corePush = smoothstep(DISK_OUT, DISK_IN, hr);
+          float ejectBurst = smoothstep(0.25, 0.92, wavePhase) * corePush * 1.4 * wOutflow;
+          
+          // 局部等离子体微湍流与热斑
+          float hotspot = smoothstep(0.70, 0.98, n1 * n2);
+          
+          float fade = smoothstep(DISK_IN, DISK_IN + 0.8, hr) * (1.0 - smoothstep(6.4, DISK_OUT, hr));
+          float density = fade * pow(DISK_IN / hr, 1.55);
+          float t = clamp((hr - DISK_IN) / (DISK_OUT - DISK_IN), 0.0, 1.0);
+          
+          // 多普勒引力聚束效应 (Doppler Beaming - 适度平衡左右光辉，确保视觉构图对称稳定)
+          vec3 tangent = normalize(vec3(-hit.z, 0.0, hit.x));
+          float dop = dot(tangent, normalize(rd));
+          float beam = pow(clamp(1.0 - 0.20 * dop, 0.7, 1.4), 1.3);
+
+          // 宇宙微湍流呼吸闪烁
+          float flick = 0.94 + 0.06 * sin(uTime * 1.2 + sin(uTime * 0.4) * 2.5);
+          float e = density * streak * beam * flick * (1.0 + 1.4 * hotspot);
+
+          // 紧贴事件视界外缘的极锐利物理光子环 (Photon Ring - 卡冈图雅黑洞金边)
+          float photonRing = exp(-pow(abs(hr - (DISK_IN + 0.35)) * 5.2, 2.0)) * 1.7;
+
+          // ==================== 亮色模式：经典炽烈相对论黑洞 (清透高奢爱马仕橙与朱砂红) ====================
+          vec3 colInner = vec3(1.0, 0.98, 0.92); // 极温白金灼热核心
+          vec3 colFire  = vec3(1.0, 0.48, 0.08); // 鲜亮明艳火橙
+          vec3 colRuby  = vec3(0.96, 0.18, 0.08); // 纯净朱砂宝石红
+          vec3 colDeep  = vec3(0.88, 0.12, 0.16); // 外圈清透玫瑰绯红 (绝不发暗发脏)
+
+          vec3 diskColorLight = mix(colInner, colFire, smoothstep(0.0, 0.20, t));
+          diskColorLight = mix(diskColorLight, colRuby, smoothstep(0.18, 0.55, t));
+          diskColorLight = mix(diskColorLight, colDeep, smoothstep(0.50, 1.0, t));
+          
+          // 多普勒迎面蓝移/背向红移增强
+          diskColorLight += vec3(0.20, 0.12, 0.0) * clamp(-dop * 0.5, 0.0, 0.5);
+          diskColorLight = mix(diskColorLight, vec3(0.78, 0.12, 0.08), clamp(dop * 0.45, 0.0, 0.45));
+          // 叠加热斑、高能光子环与向内吞噬的引力潮汐旋流
+          diskColorLight += colInner * photonRing * 1.1 + colFire * tidalInflow * 0.9;
+
+          // ==================== 暗色模式：高能时空逆喷涌白洞 (White Hole Quantum Singularity) ====================
+          // 向外喷涌的量子激波环与脉冲引力波 (Expanding Relativistic Shockwaves)
+          float shock = sin(hr * 4.2 - uTime * 4.0) * 0.5 + 0.5;
+          float pulse = sin(uTime * 2.2) * 0.18 + 0.82;
+          
+          vec3 whCore = vec3(1.4, 1.5, 1.8);                               // 超高能炽白奇点光斑
+          vec3 whCyan = mix(uTintA, vec3(0.25, 0.95, 1.0), 0.65);          // 电离超导青蓝
+          vec3 whPink = mix(uTintB, uTintC, 0.55);                         // 天鹅绒量子紫粉
+          vec3 whDeep = vec3(0.08, 0.02, 0.22);                            // 深空霓虹余晖
+
+          vec3 diskColorDark = mix(whCore, whCyan, smoothstep(0.0, 0.25, t));
+          diskColorDark = mix(diskColorDark, whPink, smoothstep(0.22, 0.70, t));
+          diskColorDark = mix(diskColorDark, whDeep, smoothstep(0.65, 1.0, t));
+          // 白洞向外爆发的量子脉动、喷吐激波光圈与向外辐射激流
+          diskColorDark += (whCore * shock * 0.35 + whCyan * 0.4) * pulse;
+          diskColorDark += whCore * photonRing * 1.3 + whCore * ejectBurst * 0.85;
+
+          // 根据当前主题平滑流转 (亮色红黑洞 ⟷ 暗色白洞)
+          vec3 finalRgb = mix(diskColorLight * e * 1.65, diskColorDark * e * 1.55, theme);
+          
+          // 强化不透明度与物理凝结感
+          float alpha = clamp(e * (mix(2.3, 1.7, 1.0 - theme)) + photonRing * 0.7, 0.0, 0.99);
+          return vec4(finalRgb, alpha);
+        }
+
+        // 深空星斗与引力星云背景 (在白色与暗色主题下均清晰闪耀，质感饱满)
+        vec3 background(vec3 dir, float theme) {
+          vec3 d = normalize(dir);
+          vec2 sc = vec2(atan(d.z, d.x) * 3.2, asin(clamp(d.y, -1.0, 1.0)) * 6.4);
+          
+          // 第 1 层亮星 (红色晶莹墨点 / 琥珀金引力星辰)
+          vec2 cell = floor(sc * 14.0);
+          vec2 cuv = fract(sc * 14.0);
+          float sh = hash21(cell);
+          vec2 spos = vec2(hash21(cell + 7.13), hash21(cell + 3.71));
+          float sd = length(cuv - spos);
+          float star1 = step(0.90, sh) * exp(-sd * sd * 420.0);
+          float tw1 = 0.58 + 0.42 * sin(uTime * 0.85 + sh * 42.0);
+
+          // 第 2 层细密微星沙
+          vec2 sc2 = sc + vec2(17.3, 9.1);
+          vec2 cell2 = floor(sc2 * 26.0);
+          float sh2 = hash21(cell2);
+          vec2 spos2 = vec2(hash21(cell2 + 3.1), hash21(cell2 + 8.4));
+          float sd2 = length(fract(sc2 * 26.0) - spos2);
+          float star2 = step(0.85, sh2) * exp(-sd2 * sd2 * 540.0);
+          float tw2 = 0.50 + 0.50 * sin(uTime * 1.15 + sh2 * 35.0);
+
+          float totalStars = star1 * tw1 + star2 * tw2 * 0.60;
+
+          // 暗色背景 (白洞宇宙深空：深黑 + 彩色璀璨星光 + 星云)
+          vec3 starDark = mix(uTintA, uTintB, 0.35 + 0.45 * sh) * totalStars * 1.15;
+          float nn = snoise(d * 2.6) * 0.5 + 0.5;
+          float nn2 = snoise(d * 5.2 + vec3(uTime * 0.02)) * 0.5 + 0.5;
+          vec3 colDark = vec3(0.012, 0.015, 0.024) + starDark + mix(uTintA, uTintC, 0.35) * 0.04 * nn * nn;
+
+          // 亮色背景 (黑洞深空：经典白底 + 晶莹朱砂红宝石墨点星辰 + 丰富的宇宙微霞与星际灰斑尘埃)
+          vec3 colLight = vec3(0.968, 0.972, 0.982);
+          
+          // 宇宙微霞与星际尘埃灰斑特效 (丰富的双层物理湍流烟岚)
+          vec3 nebulaCloud = mix(vec3(0.052, 0.038, 0.025), vec3(0.032, 0.038, 0.060), d.x * 0.5 + 0.5);
+          colLight -= nebulaCloud * (nn * 0.72 + nn2 * 0.28) * 0.09;
+
+          // 柔和边缘羽化
+          float vignette = smoothstep(0.4, 1.4, length(d.xy));
+          colLight -= vec3(0.014, 0.013, 0.011) * vignette;
+
+          // 白色背景上的引力星辰与晶莹红色墨点特效：闪耀的朱砂红与琥珀金星光
+          vec3 starGemLight = mix(vec3(0.92, 0.20, 0.06), vec3(0.66, 0.05, 0.14), sh);
+          colLight = mix(colLight, starGemLight, clamp(totalStars * 0.88, 0.0, 1.0));
+
+          return mix(colLight, colDark, theme);
+        }
+
+        // 相对论流星尾迹算法 (优雅慢速滑行、长尾拖曳、双轨道错峰、自适应双主题)
+        vec4 calcMeteors(vec2 uv, float time, float theme) {
+          vec4 total = vec4(0.0);
+          
+          // 轨道 1: 倾角约 -32度，横穿画面右上天幕与深空，慢速优雅飞掠 2.0 秒，周期 9.6 秒
+          {
+            float period = 9.6;
+            float localT = mod(time + 17.3, period);
+            if (localT < 2.0) {
+              float prog = localT / 2.0;
+              float ang = -0.56;
+              float ca = cos(ang), sa = sin(ang);
+              vec2 rotUv = vec2(uv.x * ca - uv.y * sa, uv.x * sa + uv.y * ca);
+              
+              float headX = mix(-1.7, 1.8, prog);
+              float trackY = 0.22;
+              float dx = rotUv.x - headX;
+              float dy = abs(rotUv.y - trackY);
+              float trailLen = 0.78;
+              
+              if (dx < 0.04 && dx > -trailLen && dy < 0.005) {
+                float headCore = exp(-dx * dx * 2000.0) * exp(-dy * dy * 55000.0);
+                float tailFade = pow(max(0.0, 1.0 + dx / trailLen), 2.0);
+                float trailGlow = tailFade * exp(-dy * dy * 32000.0);
+                float mIntensity = headCore * 2.2 + trailGlow * 1.35;
+                
+                // 亮色下：炽白金核 -> 鲜艳朱砂火红拖尾
+                vec3 colLight = mix(vec3(0.96, 0.22, 0.06), vec3(1.0, 0.98, 0.88), clamp(headCore * 1.4, 0.0, 1.0));
+                // 暗色下：炽白光斑 -> 电离超导青蓝余晖
+                vec3 colDark = mix(vec3(0.25, 0.92, 1.0), vec3(1.0, 1.0, 1.0), clamp(headCore * 1.4, 0.0, 1.0));
+                vec3 mCol = mix(colLight, colDark, theme);
+                total += vec4(mCol * mIntensity, clamp(mIntensity * 0.95, 0.0, 1.0));
+              }
+            }
+          }
+          
+          // 轨道 2: 倾角约 -22度，高空掠星，慢速滑行 1.7 秒，周期 13.2 秒
+          {
+            float period = 13.2;
+            float localT = mod(time + 43.8, period);
+            if (localT < 1.7) {
+              float prog = localT / 1.7;
+              float ang = -0.38;
+              float ca = cos(ang), sa = sin(ang);
+              vec2 rotUv = vec2(uv.x * ca - uv.y * sa, uv.x * sa + uv.y * ca);
+              
+              float headX = mix(-1.8, 1.6, prog);
+              float trackY = 0.52;
+              float dx = rotUv.x - headX;
+              float dy = abs(rotUv.y - trackY);
+              float trailLen = 0.68;
+              
+              if (dx < 0.04 && dx > -trailLen && dy < 0.004) {
+                float headCore = exp(-dx * dx * 2400.0) * exp(-dy * dy * 70000.0);
+                float tailFade = pow(max(0.0, 1.0 + dx / trailLen), 2.2);
+                float trailGlow = tailFade * exp(-dy * dy * 40000.0);
+                float mIntensity = headCore * 2.0 + trailGlow * 1.15;
+                
+                // 亮色下：白金金核 -> 耀斑琥珀金拖尾
+                vec3 colLight = mix(vec3(1.0, 0.46, 0.08), vec3(1.0, 0.98, 0.92), clamp(headCore * 1.4, 0.0, 1.0));
+                // 暗色下：炽白光斑 -> 天鹅绒紫粉余晖
+                vec3 colDark = mix(vec3(0.96, 0.42, 0.85), vec3(1.0, 1.0, 1.0), clamp(headCore * 1.4, 0.0, 1.0));
+                vec3 mCol = mix(colLight, colDark, theme);
+                total += vec4(mCol * mIntensity, clamp(mIntensity * 0.95, 0.0, 1.0));
+              }
+            }
+          }
+          
+          return total;
+        }
+
+        void main() {
+          float aspect = uResolution.x / max(uResolution.y, 1.0);
+          // 直接使用物理像素坐标，避免 fullscreen triangle 的 UV 或 DPR 差异造成奇点漂移
+          vec2 screenUv = gl_FragCoord.xy / max(uResolution, vec2(1.0));
+          vec2 sp = (screenUv - vec2(0.50, 0.525)) * vec2(aspect, 1.0);
+          float az = uMouse.x * 0.02;
+          float el = 0.05 + uMouse.y * 0.015;
+          vec3 ro = CAM_DIST * vec3(cos(el) * sin(az), sin(el), -cos(el) * cos(az));
+          vec3 fwd = normalize(-ro);
+          vec3 worldUp = vec3(0.0, 1.0, 0.0);
+          vec3 right = normalize(cross(worldUp, fwd));
+          vec3 up = cross(fwd, right);
+          vec3 rd = normalize(fwd * FOCAL + right * sp.x + up * sp.y);
+
+          vec3 pos = ro;
+          float b = dot(ro, rd);
+          float disc = b * b - (dot(ro, ro) - 324.0);
+          if (disc > 0.0) {
+            float tEnter = -b - sqrt(disc);
+            if (tEnter > 0.0) pos = ro + rd * tEnter;
+          }
+
+          vec3 hv = cross(pos, rd);
+          float h2 = dot(hv, hv);
+          vec3 vel = rd;
+          vec3 col = vec3(0.0);
+          float through = 1.0;
+          bool captured = false;
+
+          for (int i = 0; i < STEPS; i++) {
+            float r2 = dot(pos, pos);
+            float r = sqrt(r2);
+
+            // 视界中心判定：
+            // 黑洞 (theme=0)：纯黑视界剪影，吸积吞噬一切
+            // 白洞 (theme=1)：量子高能奇点，中心深邃通透并向外喷发幽蓝霓虹电离日冕
+            if (r < 1.0) { 
+              captured = true; 
+              float rim = pow(clamp(r, 0.0, 1.0), 3.0);
+              vec3 blackHoleCore = mix(vec3(0.003, 0.005, 0.008), vec3(0.15, 0.03, 0.01), rim);
+              
+              float whPulse = sin(uTime * 3.6) * 0.15 + 0.85;
+              // 告别刺眼实心大白饼：中心深邃暗核 + 边缘超高能电离青蓝与天鹅绒紫光冕
+              vec3 whiteHoleCore = mix(vec3(0.015, 0.02, 0.04), vec3(1.2, 1.4, 1.8), pow(rim, 4.0)) * whPulse;
+              col += mix(blackHoleCore, whiteHoleCore, uTheme) * through;
+              through = 0.0;
+              break; 
+            }
+
+            if (r > 18.5 && dot(pos, vel) > 0.0) break;
+            float dt = clamp(0.30 * (r - 1.0), 0.035, 0.82);
+            vel += (-1.5 * h2 * pos / (r2 * r2 * r)) * dt;
+            vec3 next = pos + vel * dt;
+
+            // 穿过吸积盘平面：上下引力透镜弯曲光环在两侧立体呈现
+            if (pos.y * next.y < 0.0) {
+              vec3 hit = mix(pos, next, pos.y / (pos.y - next.y));
+              float hr = length(hit.xz);
+              if (hr > DISK_IN && hr < DISK_OUT) {
+                vec4 e = diskShade(hit, vel, uTheme);
+                col += e.rgb * through;
+                through *= (1.0 - e.a);
+                if (through < 0.02) break;
+              }
+            }
+            pos = next;
+          }
+
+          // 未被吞噬的光线与星空背景进行物理透射合成
+          if (!captured) {
+            vec3 bg = background(vel, uTheme);
+            col += bg * through;
+          }
+
+          // 动态相对论流星微粒 (自然穿越深空天穹，发丝级物理拖尾)
+          vec4 meteor = calcMeteors(sp, uTime, uTheme);
+          if (meteor.a > 0.001) {
+            if (uTheme > 0.5) {
+              // 暗色模式：高光加色与电离光晕
+              col += meteor.rgb;
+            } else {
+              // 亮色模式：以自发光朱砂/琥珀色彩与底色优雅印染
+              col = mix(col, meteor.rgb, meteor.a * 0.92);
+            }
+          }
+
+          // 引力透镜各向异性微光晕 (Gravitational Lensing Anisotropic Bloom)
+          vec2 hp = sp * vec2(1.0, 1.75);
+          float halo = exp(-length(hp) * 2.8) * 0.12;
+          
+          vec3 haloLight = vec3(1.0, 0.45, 0.08); // 亮色：纯正琥珀火红微晕
+          vec3 haloDark = mix(uTintA, uTintB, 0.6); // 暗色：白洞青粉极光日冕
+          vec3 haloCol = mix(haloLight * 0.25, haloDark * 1.6, uTheme);
+          col += haloCol * halo * smoothstep(0.06, 0.16, length(sp));
+
+          // 色调映射与高动态范围压缩 (Film Grain & Reinhard Tone Mapping)
+          if (uTheme > 0.5) {
+            // 暗色白洞模式：电影级高动态压缩，保留超高亮核心爆发感与深空胶片噪点
+            col = col / (1.0 + col * 0.5);
+            col = 1.0 - exp(-col * 1.8);
+            col *= 0.95 + 0.10 * hash21(gl_FragCoord.xy * 0.73);
+          } else {
+            // 亮色黑洞模式：保留纯净雪石白明度与色彩饱和度，高光自然收敛
+            col = clamp(col, 0.0, 1.0);
+          }
+
+          gl_FragColor = vec4(col, 1.0);
+        }`;
+
+      function compile(type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null;
+      }
+
+      const vs = compile(gl.VERTEX_SHADER, vsSrc);
+      const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+
+      if (gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        gl.useProgram(prog);
+
+        const posBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        const posLoc = gl.getAttribLocation(prog, 'position');
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+        const uTimeLoc = gl.getUniformLocation(prog, 'uTime');
+        const uResolutionLoc = gl.getUniformLocation(prog, 'uResolution');
+        const uMouseLoc = gl.getUniformLocation(prog, 'uMouse');
+        const uThemeLoc = gl.getUniformLocation(prog, 'uTheme');
+        const uTintALoc = gl.getUniformLocation(prog, 'uTintA');
+        const uTintBLoc = gl.getUniformLocation(prog, 'uTintB');
+        const uTintCLoc = gl.getUniformLocation(prog, 'uTintC');
+
+        gl.uniform3f(uTintALoc, 0.349, 0.859, 0.933);
+        gl.uniform3f(uTintBLoc, 0.988, 0.451, 0.749);
+        gl.uniform3f(uTintCLoc, 0.420, 0.298, 1.000);
+
+        function resize() {
+          const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+          const w = Math.round(window.innerWidth * dpr);
+          const h = Math.round(window.innerHeight * dpr);
+          if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+            gl.viewport(0, 0, w, h);
+          }
+          gl.uniform2f(uResolutionLoc, w, h);
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        requestAnimationFrame(() => canvas.style.opacity = '1');
+
+        let targetMx = 0, targetMy = 0, curMx = 0, curMy = 0;
+        window.addEventListener('pointermove', (e) => {
+          targetMx = (e.clientX / window.innerWidth) * 2 - 1;
+          targetMy = -((e.clientY / window.innerHeight) * 2 - 1);
+        }, { passive: true });
+
+        let lastTime = performance.now();
+        let elapsed = 0;
+        let frames = 0;
+        let fpsTimer = performance.now();
+        const fpsDisplay = document.getElementById('fpsDisplay');
+
+        function render(now) {
+          requestAnimationFrame(render);
+          const dt = Math.min((now - lastTime) / 1000, 0.05);
+          lastTime = now;
+          elapsed += dt;
+
+          curMx += (targetMx - curMx) * 0.045;
+          curMy += (targetMy - curMy) * 0.045;
+
+          // 平滑过渡黑洞 (0.0) 与白洞 (1.0)，电影级丝滑阻尼
+          currentTheme += (targetTheme - currentTheme) * 0.042;
+
+          gl.uniform1f(uTimeLoc, elapsed);
+          gl.uniform1f(uThemeLoc, currentTheme);
+          gl.uniform2f(uMouseLoc, curMx, curMy);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+          frames++;
+          if (now - fpsTimer >= 500) {
+            const fps = Math.round((frames * 1000) / (now - fpsTimer));
+            frames = 0;
+            fpsTimer = now;
+            if (fpsDisplay) fpsDisplay.textContent = fps + 'FPS';
+          }
+        }
+        requestAnimationFrame(render);
+      }
+    }
+  </script>
+</body>
+</html>
