@@ -43,11 +43,13 @@ web/
     │   └── system/          # 设备网络、存储配额、系统资源(CPU/NPU/内存)、API Key与重启
     ├── components/
     │   ├── ui/              # shadcn/ui 生成的组件，不手改
-    │   ├── background/      # Three.js 拓扑背景等全局装饰
-    │   └── cursor/          # Reticle 光标组件
+    │   ├── background/      # Three.js / WebGL 等全局装饰
+    │   ├── cursor/          # Reticle / CursorRing 光标组件
+    │   ├── LocaleDropdown.tsx # 全局多语言自由下拉选择器
+    │   └── ErrorBoundary.tsx  # 全局与局部 React 渲染崩溃隔离面板
     ├── lib/
-    │   ├── api/             # 后端接口调用
-    │   ├── ws/              # WebSocket 客户端
+    │   ├── api/             # 后端接口调用与统一客户端 (apiClient: 统一信封解包, 401 拦截)
+    │   ├── ws/              # WebSocket 客户端 (指数退避自动重连)
     │   ├── time.ts          # 时间格式化（Intl API，统一出口）
     │   └── utils.ts         # cn() 等工具函数
     ├── hooks/               # 全局共享 hooks

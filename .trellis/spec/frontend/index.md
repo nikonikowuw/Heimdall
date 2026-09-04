@@ -27,6 +27,7 @@
 | [样式规范](./styling-guidelines.md) | 写样式、加设计 token、双主题 CSS 变量、Reticle 光标 |
 | [Hook 规范](./hook-guidelines.md) | 抽 hook、处理订阅与清理、useTheme、useLocale |
 | [状态管理](./state-management.md) | 加 store、接 WebSocket、获取服务端数据 |
+| [错误处理与容灾](./error-handling.md) | 处理异常、API 统一拦截、401 登出、ErrorBoundary、媒体流自愈 |
 | [类型安全](./type-safety.md) | 定义类型、对接后端 DTO |
 | [质量规范](./quality-guidelines.md) | 提交前、写测试、做 code review、视觉回归检查 |
 
