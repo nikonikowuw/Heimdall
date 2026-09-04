@@ -1,11 +1,31 @@
 use super::{Locale, StaticMessage};
 
-pub const STATIC_MESSAGES: &[StaticMessage] = &[StaticMessage {
-    code: 0,
-    zh_cn: "success",
-    zh_tw: "成功",
-    en: "success",
-}];
+pub const STATIC_MESSAGES: &[StaticMessage] = &[
+    StaticMessage {
+        code: 0,
+        zh_cn: "success",
+        zh_tw: "成功",
+        en: "success",
+    },
+    StaticMessage {
+        code: 50000,
+        zh_cn: "内部服务器错误",
+        zh_tw: "內部伺服器錯誤",
+        en: "Internal server error",
+    },
+    StaticMessage {
+        code: 50001,
+        zh_cn: "数据库操作异常",
+        zh_tw: "資料庫操作異常",
+        en: "Database operation error",
+    },
+    StaticMessage {
+        code: 50002,
+        zh_cn: "分析管线处理异常",
+        zh_tw: "分析管線處理異常",
+        en: "Pipeline processing error",
+    },
+];
 
 pub fn translate_common(code: u32, original_msg: &str, locale: Locale) -> Option<String> {
     if let Some(entry) = STATIC_MESSAGES.iter().find(|m| m.code == code) {

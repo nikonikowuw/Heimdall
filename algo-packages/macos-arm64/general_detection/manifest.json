@@ -1,0 +1,36 @@
+{
+  "manifest_version": 1,
+  "algorithm_id": "general_detection",
+  "version": "1.0.0",
+  "name": "General Object Detection",
+  "description": "Built-in general object detection model powered by CoreML on Apple Silicon with customizable target class filtering",
+  "algorithm_type": "object_detection",
+  "alarm_type_id": "object_detect",
+  "platform_id": "macos-arm64-coreml",
+  "min_adapter_version": "1.0.0",
+  "runtime_constraints": {
+    "min_os_version": "14.0"
+  },
+  "resource_profile": {
+    "min_free_memory_mb": 256,
+    "fps_tiers": [
+      {
+        "fps": 5,
+        "units": 60
+      },
+      {
+        "fps": 15,
+        "units": 150
+      },
+      {
+        "fps": 30,
+        "units": 300
+      }
+    ]
+  },
+  "self_test": {
+    "timeout_ms": 10000,
+    "input_mode": "test_image"
+  }
+}
+

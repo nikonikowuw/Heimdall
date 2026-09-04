@@ -40,6 +40,9 @@ pub enum ApiError {
     #[error("流媒体接入与解码错误: {0}")]
     Media(#[from] media::MediaError),
 
+    #[error("算法推理与沙箱错误: {0}")]
+    Infer(#[from] infer::InferError),
+
     #[error("分析管线错误: {0}")]
     Pipeline(#[from] pipeline::PipelineError),
 
@@ -60,8 +63,9 @@ impl IntoResponse for ApiError {
             Self::WeakPassword(m) => (StatusCode::BAD_REQUEST, 10008, m.clone()),
             Self::NotFound(m) => (StatusCode::NOT_FOUND, 40401, m.clone()),
             Self::Media(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
+            Self::Infer(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
+            Self::Pipeline(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
             Self::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, 50001, e.to_string()),
-            Self::Pipeline(e) => (StatusCode::INTERNAL_SERVER_ERROR, 50002, e.to_string()),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, 50000, m.clone()),
         };
 
@@ -79,5 +83,30 @@ impl IntoResponse for ApiError {
         }));
 
         (status, body).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_api_error_code_mapping() {
+        let infer_err = infer::InferError::SandboxValidation {
+            step: "1.路径防穿透".to_string(),
+            reason: "非法路径".to_string(),
+        };
+        assert_eq!(infer_err.error_code(), 30016);
+        let api_err = ApiError::from(infer_err);
+        let resp = api_err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let pipeline_err = pipeline::PipelineError::PipelineNotFound {
+            camera_id: "cam-1".to_string(),
+        };
+        assert_eq!(pipeline_err.error_code(), 30001);
+        let api_err = ApiError::from(pipeline_err);
+        let resp = api_err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

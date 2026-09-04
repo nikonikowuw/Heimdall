@@ -203,5 +203,5 @@ C 声明在两边各写一份，改一边忘另一边就是 UB。缓解手段（
 ## 待验证事项
 
 - [ ] `bindgen` 生成的 Rust bindings 是否作为 pre-generated 文件入 git 还是由 `build.rs` 实时生成
-- [ ] 动态加载模式下，`libloading` 加载 `av_algo_get_abi` 符号时的安全抽象封装
+- [x] 动态加载模式下，`libloading` 加载 `av_algo_get_abi` 符号时的安全抽象封装（已在 `crates/infer/src/c_abi/loader.rs` 与 `crates/infer/src/sandbox.rs` 中落地：`LoadedLib` + `RawAlgoLibrary` + 物理子进程沙箱隔离自检与超时看门狗）
 - [ ] C++ 侧动态插件在 macOS 与 Linux 上的符号导出宏（`AV_ALGO_EXPORT`）与运行时兼容性

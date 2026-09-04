@@ -1,1 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/ffi-guidelines.md", "reason": "Validate unsafe blocks and layout assertions"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Validate code style, clippy warnings, tests"}
+{"check": "quality-gate", "status": "passed", "tests_passed": 63, "clippy_warnings": 0, "fmt": "clean"}

@@ -21,3 +21,17 @@ pub enum PipelineError {
     #[error("领域类型错误: {0}")]
     Type(#[from] types::TypeError),
 }
+
+impl PipelineError {
+    /// 对应的 API 规范标准 5 位业务错误码 (30000~39999 算法管线模块)
+    pub fn error_code(&self) -> u32 {
+        match self {
+            Self::PipelineNotFound { .. } => 30001,
+            Self::InvalidRule { .. } => 30002,
+            Self::PipelineAlreadyExists { .. } => 30004,
+            Self::Type(_) => 30005,
+            Self::Infer(e) => e.error_code(),
+            Self::Media(e) => e.error_code(),
+        }
+    }
+}

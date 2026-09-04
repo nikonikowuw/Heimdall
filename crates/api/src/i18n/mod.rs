@@ -125,10 +125,56 @@ mod tests {
             "摄像头探活超时"
         );
 
-        // Task 30000 段
+        // Task & Infer 30000 段
         assert_eq!(
             localize_api_message(30001, "原消息", Locale::En),
             "Analysis task not found"
+        );
+        assert_eq!(
+            localize_api_message(30004, "原消息", Locale::ZhTw),
+            "攝影機分析管線已存在"
+        );
+        assert_eq!(
+            localize_api_message(30011, "原消息", Locale::En),
+            "Failed to load AI model file"
+        );
+        assert_eq!(
+            localize_api_message(30012, "原消息", Locale::ZhTw),
+            "演算法包動態庫加載失敗"
+        );
+        assert_eq!(
+            localize_api_message(30014, "原消息", Locale::ZhCn),
+            "算法 C ABI 虚表不匹配或无效"
+        );
+        assert_eq!(
+            localize_api_message(30016, "原消息", Locale::En),
+            "Algorithm sandbox security validation failed"
+        );
+        assert_eq!(
+            localize_api_message(30016, "原消息", Locale::ZhTw),
+            "演算法包沙箱安全校驗失敗"
+        );
+        assert_eq!(
+            localize_api_message(30016, "原消息", Locale::ZhCn),
+            "算法包沙箱安全校验失败"
+        );
+        assert_eq!(
+            localize_api_message(30020, "原消息", Locale::En),
+            "Algorithm hardware inference timed out"
+        );
+
+        // Common & Db 50000 段
+        assert_eq!(
+            localize_api_message(50001, "原消息", Locale::En),
+            "Database operation error"
+        );
+        assert_eq!(
+            localize_api_message(50001, "原消息", Locale::ZhTw),
+            "資料庫操作異常"
+        );
+        assert_eq!(
+            localize_api_message(50001, "原消息", Locale::ZhCn),
+            "数据库操作异常"
         );
 
         // Alarm 40000 段

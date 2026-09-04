@@ -27,6 +27,10 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 0. 隐藏子命令：自测子进程物理隔离入口（用于算法包沙箱校验防崩溃）
+    let raw_args: Vec<String> = std::env::args().collect();
+    handle_verify_algo_subprocess(&raw_args);
+
     // 1. 初始化结构化日志
     tracing_subscriber::registry()
         .with(
@@ -140,6 +144,35 @@ async fn main() -> Result<()> {
         .context("HTTP 服务运行发生异常")?;
 
     tracing::info!("Argus 服务已安全优雅停机");
+    Ok(())
+}
+
+/// 处理算法包沙箱物理隔离自检子进程请求
+fn handle_verify_algo_subprocess(raw_args: &[String]) {
+    if raw_args.len() < 3 || raw_args[1] != "__verify-algo" {
+        return;
+    }
+    let pkg_path = std::path::Path::new(&raw_args[2]);
+    if let Err(err) = execute_algo_verification(pkg_path) {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
+}
+
+fn execute_algo_verification(pkg_path: &std::path::Path) -> Result<(), String> {
+    let manifest_path = pkg_path.join("manifest.json");
+    let manifest_str =
+        std::fs::read_to_string(&manifest_path).map_err(|e| format!("读取 manifest 失败: {e}"))?;
+    let manifest: infer::AlgoManifest =
+        serde_json::from_str(&manifest_str).map_err(|e| format!("解析 manifest 失败: {e}"))?;
+    let entry_lib = infer::sandbox::find_entry_library(pkg_path, &manifest.algorithm_id)
+        .map_err(|e| format!("查找动态库失败: {e}"))?;
+    let report =
+        infer::sandbox::AlgoSandbox::run_in_process_self_test(pkg_path, &entry_lib, &manifest)
+            .map_err(|e| format!("自测执行失败: {e}"))?;
+    let json = serde_json::to_string(&report).map_err(|e| format!("序列化自测报告失败: {e}"))?;
+    println!("{json}");
     Ok(())
 }
 

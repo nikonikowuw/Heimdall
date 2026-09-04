@@ -11,6 +11,7 @@ workspace = true
 types = { workspace = true }
 db = { workspace = true }
 media = { workspace = true }
+infer = { workspace = true }
 pipeline = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
