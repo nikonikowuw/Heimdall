@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 
+/* ── 强制 Tailwind v4 的 dark 变体绑定至 .dark 根类 ── */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ── Tailwind v4 Theme 扩展 ── */
 @theme {
   --font-display: 'Unbounded', 'Space Grotesk', sans-serif;
@@ -66,6 +69,38 @@
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border);
+}
+
+/* ── 高奢镜头级磨砂玻璃材质 ── */
+.lens-glass {
+  background: var(--bg-surface);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  transition:
+    border-color 0.25s ease,
+    background 0.25s ease,
+    box-shadow 0.25s ease;
+}
+.lens-glass:hover {
+  border-color: var(--border-strong);
+}
+
+.dark .lens-glass {
+  background: rgba(10, 12, 20, 0.82);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* ── 微米工程标定网格 ── */
+.calibration-grid {
+  background-image:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-size: 32px 32px;
 }
 
 /* 等宽纯平数字，解决实时数值微抖 */

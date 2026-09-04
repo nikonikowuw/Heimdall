@@ -26,7 +26,7 @@ i18n
     lng: getInitialLocale(),
     fallbackLng: 'en',
     defaultNS: 'common',
-    ns: ['common', 'camera', 'alarm', 'task', 'oplog'],
+    ns: ['common', 'camera', 'alarm', 'task', 'oplog', 'auth'],
     interpolation: {
       escapeValue: false,
     },

@@ -1,35 +1,26 @@
 import React, { useState } from 'react'
-import { AlertCircle, Camera, FileText, Globe, Moon, Sliders, Sun, Video } from 'lucide-react'
+import { AlertCircle, Camera, FileText, LogOut, Moon, Sliders, Sun, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { LocaleDropdown } from '../components/LocaleDropdown'
 import { AlarmsPage } from '../features/alarms/AlarmsPage'
+import { LoginPage } from '../features/auth'
 import { LivePage } from '../features/live/LivePage'
 import { OplogPage } from '../features/oplog/OplogPage'
 import { TasksPage } from '../features/tasks/TasksPage'
-import { useLocale } from '../hooks/use-locale'
-import type { Locale } from '../i18n'
+import { useTheme } from '../hooks/use-theme'
+import { useAuthStore } from '../stores/auth'
 
 export type NavTab = 'live' | 'tasks' | 'alarms' | 'oplog'
 
 export const Layout: React.FC = () => {
   const { t } = useTranslation('common')
-  const { locale, setLocale, supportedLocales } = useLocale()
+  const { isAuthenticated, logout, username } = useAuthStore()
   const [currentTab, setCurrentTab] = useState<NavTab>('live')
-  const [isDark, setIsDark] = useState<boolean>(false)
+  const { isDark, toggleTheme } = useTheme()
 
-  const toggleTheme = () => {
-    const next = !isDark
-    setIsDark(next)
-    if (next) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
-  }
-
-  const cycleLocale = () => {
-    const currentIndex = supportedLocales.indexOf(locale)
-    const nextLocale: Locale = supportedLocales[(currentIndex + 1) % supportedLocales.length]
-    setLocale(nextLocale)
+  // 未登录状态展示先锋高奢登录页
+  if (!isAuthenticated) {
+    return <LoginPage />
   }
 
   return (
@@ -91,18 +82,9 @@ export const Layout: React.FC = () => {
           </nav>
         </div>
 
-        {/* 底部控制区：多语言切换 + 主题切换 */}
+        {/* 底部控制区：多语言自由下拉选择 + 主题切换 + 退出登录 */}
         <div className="flex flex-col items-center gap-3">
-          <button
-            onClick={cycleLocale}
-            title={`${t('actions.edit')} ${locale}`}
-            className="flex h-10 w-10 flex-col items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)]"
-          >
-            <Globe className="h-4 w-4" />
-            <span className="text-[9px] font-bold uppercase">
-              {locale === 'zh-CN' ? '简' : locale === 'zh-TW' ? '繁' : 'EN'}
-            </span>
-          </button>
+          <LocaleDropdown variant="icon" placement="right-bottom" />
 
           <button
             onClick={toggleTheme}
@@ -114,6 +96,14 @@ export const Layout: React.FC = () => {
             ) : (
               <Moon className="h-5 w-5 text-[var(--text-secondary)]" />
             )}
+          </button>
+
+          <button
+            onClick={logout}
+            title={`登出当前用户 (${username || 'admin'})`}
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--destructive)] transition-colors hover:bg-rose-500/10"
+          >
+            <LogOut className="h-5 w-5" />
           </button>
         </div>
       </aside>

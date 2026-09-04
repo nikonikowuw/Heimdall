@@ -1,10 +1,30 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Argus / Heimdall 边缘 AI 视频分析系统</title>
+    <!-- 主题初始化：防止白屏闪烁 -->
+    <script>
+      ;(function () {
+        try {
+          var saved = localStorage.getItem('argus_theme')
+          if (saved === 'light') {
+            document.documentElement.classList.remove('dark')
+          } else {
+            document.documentElement.classList.add('dark')
+          }
+        } catch (e) {}
+      })()
+    </script>
+    <!-- 先锋高奢工业字体族 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=Space+Mono:wght@400;700&family=Unbounded:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body class="bg-[var(--bg-primary)] text-[var(--text-primary)] antialiased">
     <div id="root"></div>
