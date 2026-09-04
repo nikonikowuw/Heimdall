@@ -1,0 +1,15 @@
+{
+  "title": "系统写操作安全审计日志",
+  "refreshStream": "刷新审计流",
+  "columns": {
+    "username": "操作人",
+    "module": "模块",
+    "action": "动作",
+    "method": "HTTP 方法",
+    "path": "请求路径",
+    "ip": "客户端 IP",
+    "status": "状态码",
+    "duration": "耗时",
+    "time": "时间"
+  }
+}

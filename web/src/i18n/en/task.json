@@ -1,0 +1,11 @@
+{
+  "title": "Camera Ingestion & AI Pipeline Setup",
+  "addCamera": "Add Camera",
+  "camerasSection": "Cameras & Pipelines",
+  "ruleConfigTitle": "Spatial Geometry Rules (ROI / Mask / Line)",
+  "ruleConfigDesc": "Use your mouse on the video frame to draw intrusion polygons or tripwire lines",
+  "drawRoi": "Draw ROI Region",
+  "drawLine": "Draw Tripwire Line",
+  "canvasPlaceholder": "Interactive Video Canvas",
+  "saveRules": "Save Rules"
+}

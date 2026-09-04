@@ -1,0 +1,11 @@
+{
+  "title": "攝影機接入與 AI 任務布防",
+  "addCamera": "新增攝影機",
+  "camerasSection": "攝影機與分析管線",
+  "ruleConfigTitle": "空間幾何規則配置 (ROI / Mask / Line)",
+  "ruleConfigDesc": "在視訊背景上使用滑鼠勾選多邊形感興趣區或跨越絆線",
+  "drawRoi": "畫 ROI 區域",
+  "drawLine": "畫絆線 Line",
+  "canvasPlaceholder": "視訊畫格互動布防畫板",
+  "saveRules": "儲存布防規則"
+}

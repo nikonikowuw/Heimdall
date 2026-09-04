@@ -1,0 +1,26 @@
+{
+  "nav": {
+    "live": "Live View",
+    "tasks": "Tasks & Rules",
+    "alarms": "Alerts Hub",
+    "oplog": "Audit Logs"
+  },
+  "theme": {
+    "toLight": "Switch to Light Mode",
+    "toDark": "Switch to Dark Mode"
+  },
+  "actions": {
+    "refresh": "Refresh",
+    "filter": "Filter",
+    "search": "Search",
+    "save": "Save",
+    "add": "Add",
+    "delete": "Delete",
+    "edit": "Edit"
+  },
+  "lang": {
+    "zhCN": "简体中文",
+    "zhTW": "繁體中文",
+    "en": "English"
+  }
+}

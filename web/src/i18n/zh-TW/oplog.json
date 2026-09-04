@@ -1,0 +1,15 @@
+{
+  "title": "系統寫入操作安全審計日誌",
+  "refreshStream": "重新整理審計流",
+  "columns": {
+    "username": "操作人",
+    "module": "模組",
+    "action": "動作",
+    "method": "HTTP 方法",
+    "path": "請求路徑",
+    "ip": "客戶端 IP",
+    "status": "狀態碼",
+    "duration": "耗時",
+    "time": "時間"
+  }
+}

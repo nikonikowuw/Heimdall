@@ -1,0 +1,15 @@
+{
+  "title": "System Write Operation Security Audit Logs",
+  "refreshStream": "Refresh Stream",
+  "columns": {
+    "username": "Operator",
+    "module": "Module",
+    "action": "Action",
+    "method": "HTTP Method",
+    "path": "Request Path",
+    "ip": "Client IP",
+    "status": "Status Code",
+    "duration": "Latency",
+    "time": "Timestamp"
+  }
+}

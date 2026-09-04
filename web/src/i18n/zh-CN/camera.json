@@ -1,0 +1,15 @@
+{
+  "live": {
+    "title": "实时多路监控大屏",
+    "protocolBadge": "WebRTC 超低延迟",
+    "single": "单屏",
+    "quad": "四分屏",
+    "nine": "九分屏",
+    "pending": "摄像头 #{{id}} 待接入"
+  },
+  "status": {
+    "online": "在线",
+    "offline": "离线",
+    "error": "故障"
+  }
+}

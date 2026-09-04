@@ -1,0 +1,26 @@
+{
+  "nav": {
+    "live": "即時大螢幕",
+    "tasks": "任務布防",
+    "alarms": "告警事件",
+    "oplog": "審計日誌"
+  },
+  "theme": {
+    "toLight": "切換至淺色模式",
+    "toDark": "切換至深色模式"
+  },
+  "actions": {
+    "refresh": "重新整理",
+    "filter": "篩選",
+    "search": "搜尋",
+    "save": "儲存",
+    "add": "新增",
+    "delete": "刪除",
+    "edit": "編輯"
+  },
+  "lang": {
+    "zhCN": "简体中文",
+    "zhTW": "繁體中文",
+    "en": "English"
+  }
+}

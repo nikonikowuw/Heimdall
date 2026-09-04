@@ -1,0 +1,26 @@
+{
+  "nav": {
+    "live": "实时大屏",
+    "tasks": "任务布防",
+    "alarms": "告警事件",
+    "oplog": "审计日志"
+  },
+  "theme": {
+    "toLight": "切换至亮色模式",
+    "toDark": "切换至暗色模式"
+  },
+  "actions": {
+    "refresh": "刷新",
+    "filter": "筛选",
+    "search": "搜索",
+    "save": "保存",
+    "add": "添加",
+    "delete": "删除",
+    "edit": "编辑"
+  },
+  "lang": {
+    "zhCN": "简体中文",
+    "zhTW": "繁體中文",
+    "en": "English"
+  }
+}

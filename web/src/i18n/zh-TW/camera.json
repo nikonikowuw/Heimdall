@@ -1,0 +1,15 @@
+{
+  "live": {
+    "title": "即時多路監控大螢幕",
+    "protocolBadge": "WebRTC 超低延遲",
+    "single": "單螢幕",
+    "quad": "四分割",
+    "nine": "九分割",
+    "pending": "攝影機 #{{id}} 待接入"
+  },
+  "status": {
+    "online": "在線",
+    "offline": "離線",
+    "error": "故障"
+  }
+}

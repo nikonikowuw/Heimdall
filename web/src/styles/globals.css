@@ -1,0 +1,74 @@
+@import 'tailwindcss';
+
+/* ── Tailwind v4 Theme 扩展 ── */
+@theme {
+  --font-display: 'Unbounded', 'Space Grotesk', sans-serif;
+  --font-tech: 'Space Grotesk', sans-serif;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-data: 'Space Mono', monospace;
+}
+
+/* ── 亮色主题（默认 Clean-Room Minimal Industrial） ── */
+:root {
+  --bg-primary: #fbfbfc;
+  --bg-secondary: #f0f2f5;
+  --bg-surface: rgba(255, 255, 255, 0.75);
+  --bg-surface-solid: #ffffff;
+
+  --text-primary: #0b0f19;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+
+  --accent: #0052ff;
+  --accent-soft: rgba(0, 82, 255, 0.08);
+  --accent-green: #10b981;
+  --accent-amber: #d97706;
+  --destructive: #dc2626;
+
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.15);
+  --ring: rgba(0, 82, 255, 0.4);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.08);
+}
+
+/* ── 暗色主题（Dark Industrial） ── */
+.dark {
+  --bg-primary: #030408;
+  --bg-secondary: #0a0c14;
+  --bg-surface: rgba(10, 12, 20, 0.75);
+  --bg-surface-solid: #0a0c14;
+
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #475569;
+
+  --accent: #3b82f6;
+  --accent-soft: rgba(59, 130, 246, 0.12);
+  --accent-green: #34d399;
+  --accent-amber: #fbbf24;
+  --destructive: #ef4444;
+
+  --border: rgba(241, 245, 249, 0.08);
+  --border-strong: rgba(241, 245, 249, 0.15);
+  --ring: rgba(59, 130, 246, 0.4);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+/* ── 磨砂玻璃通用类 ── */
+.frosted-glass {
+  background: var(--bg-surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+}
+
+/* 等宽纯平数字，解决实时数值微抖 */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

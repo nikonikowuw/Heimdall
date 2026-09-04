@@ -1,0 +1,11 @@
+{
+  "title": "摄像头接入与 AI 任务布防",
+  "addCamera": "添加摄像头",
+  "camerasSection": "摄像头与分析管线",
+  "ruleConfigTitle": "空间几何规则配置 (ROI / Mask / Line)",
+  "ruleConfigDesc": "在视频背景上使用鼠标勾选多边形感兴趣区或跨越绊线",
+  "drawRoi": "画 ROI 区域",
+  "drawLine": "画绊线 Line",
+  "canvasPlaceholder": "视频帧交互布防画板",
+  "saveRules": "保存布防规则"
+}

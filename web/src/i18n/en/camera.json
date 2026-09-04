@@ -1,0 +1,15 @@
+{
+  "live": {
+    "title": "Multi-Channel Live View",
+    "protocolBadge": "WebRTC Ultra-Low Latency",
+    "single": "Single",
+    "quad": "Quad (2x2)",
+    "nine": "Nine (3x3)",
+    "pending": "Camera #{{id}} Pending"
+  },
+  "status": {
+    "online": "Online",
+    "offline": "Offline",
+    "error": "Error"
+  }
+}
