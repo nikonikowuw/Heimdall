@@ -1,0 +1,27 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "argus"
+
+[[bin]]
+name = "argus"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+types = { workspace = true }
+db = { workspace = true }
+media = { workspace = true }
+infer = { workspace = true }
+pipeline = { workspace = true }
+api = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
