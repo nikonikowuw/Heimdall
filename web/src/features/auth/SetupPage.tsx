@@ -12,7 +12,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
   const { t } = useTranslation('auth')
   const login = useAuthStore((state) => state.login)
 
-  const [username, setUsername] = useState('admin')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -91,6 +91,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              placeholder="admin"
               className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-3.5 pl-10 text-sm text-[var(--text-primary)] focus:border-indigo-400 focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
             />
           </div>

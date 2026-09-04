@@ -15,7 +15,7 @@ import { useTranslation } from 'react-i18next'
 import { LocaleDropdown } from '../../components/LocaleDropdown'
 import { useTheme } from '../../hooks/use-theme'
 import { authApi } from '../../lib/api'
-import { useAuthStore } from '../../stores/auth'
+import { getRememberedUser, useAuthStore } from '../../stores/auth'
 import { CursorRing } from './components/CursorRing'
 import { GargantuaCanvas } from './components/GargantuaCanvas'
 
@@ -32,11 +32,11 @@ export const LoginPage: React.FC = () => {
 
   // 初始化状态与模式
   const [isInitialized, setIsInitialized] = useState<boolean | null>(null)
-  const [username, setUsername] = useState('admin')
+  const [username, setUsername] = useState(() => getRememberedUser())
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [remember, setRemember] = useState(true)
+  const [remember, setRemember] = useState(() => Boolean(getRememberedUser()))
   const [loading, setLoading] = useState(false)
   const { isDark, toggleTheme } = useTheme()
   const [toasts, setToasts] = useState<ToastInfo[]>([])
@@ -333,7 +333,7 @@ export const LoginPage: React.FC = () => {
                       required
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      placeholder="admin"
+                      placeholder={isInitialized === false ? 'admin' : t('operatorId')}
                       className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-4 pl-10 text-sm text-[var(--text-primary)] placeholder:text-slate-400 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
                     />
                   </div>

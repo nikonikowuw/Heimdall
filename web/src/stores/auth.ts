@@ -10,6 +10,14 @@ interface AuthState {
 
 const STORAGE_KEY_TOKEN = 'argus-token'
 const STORAGE_KEY_USER = 'argus-user'
+export const STORAGE_KEY_REMEMBER_USER = 'argus-remember-user'
+
+export function getRememberedUser(): string {
+  if (typeof window !== 'undefined') {
+    return window.localStorage?.getItem(STORAGE_KEY_REMEMBER_USER) || ''
+  }
+  return ''
+}
 
 function getInitialToken(): string | null {
   if (typeof window !== 'undefined') {
@@ -47,6 +55,7 @@ export const useAuthStore = create<AuthState>((set) => {
         if (remember) {
           window.localStorage?.setItem(STORAGE_KEY_TOKEN, token)
           window.localStorage?.setItem(STORAGE_KEY_USER, username)
+          window.localStorage?.setItem(STORAGE_KEY_REMEMBER_USER, username)
           window.sessionStorage?.removeItem(STORAGE_KEY_TOKEN)
           window.sessionStorage?.removeItem(STORAGE_KEY_USER)
         } else {
@@ -54,6 +63,7 @@ export const useAuthStore = create<AuthState>((set) => {
           window.sessionStorage?.setItem(STORAGE_KEY_USER, username)
           window.localStorage?.removeItem(STORAGE_KEY_TOKEN)
           window.localStorage?.removeItem(STORAGE_KEY_USER)
+          window.localStorage?.removeItem(STORAGE_KEY_REMEMBER_USER)
         }
       }
       set({ token, username, isAuthenticated: true })
@@ -65,6 +75,7 @@ export const useAuthStore = create<AuthState>((set) => {
         window.localStorage?.removeItem(STORAGE_KEY_USER)
         window.sessionStorage?.removeItem(STORAGE_KEY_TOKEN)
         window.sessionStorage?.removeItem(STORAGE_KEY_USER)
+        // 注意：保持 STORAGE_KEY_REMEMBER_USER，仅在登录时未勾选“记住我”才清除
       }
       set({ token: null, username: null, isAuthenticated: false })
     },

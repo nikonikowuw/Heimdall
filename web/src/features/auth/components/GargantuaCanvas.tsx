@@ -379,20 +379,37 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       if (!s) return null
       gl.shaderSource(s, src)
       gl.compileShader(s)
-      return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        gl.deleteShader(s)
+        return null
+      }
+      return s
     }
 
     const vs = compile(gl.VERTEX_SHADER, VS_SRC)
     const fs = compile(gl.FRAGMENT_SHADER, FS_SRC)
-    if (!vs || !fs) return
+    if (!vs || !fs) {
+      if (vs) gl.deleteShader(vs)
+      if (fs) gl.deleteShader(fs)
+      return
+    }
 
     const prog = gl.createProgram()
-    if (!prog) return
+    if (!prog) {
+      gl.deleteShader(vs)
+      gl.deleteShader(fs)
+      return
+    }
     gl.attachShader(prog, vs)
     gl.attachShader(prog, fs)
     gl.linkProgram(prog)
 
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      gl.deleteProgram(prog)
+      gl.deleteShader(vs)
+      gl.deleteShader(fs)
+      return
+    }
     gl.useProgram(prog)
 
     const buf = gl.createBuffer()
@@ -525,10 +542,21 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
 
+    // 处理 WebGL 上下文丢失防护（如系统休眠唤醒），防止上下文彻底报废
+    const onContextLost = (e: Event) => {
+      e.preventDefault()
+      if (animId) {
+        cancelAnimationFrame(animId)
+        animId = 0
+      }
+    }
+    canvas.addEventListener('webglcontextlost', onContextLost, false)
+
     return () => {
       if (animId) {
         cancelAnimationFrame(animId)
       }
+      canvas.removeEventListener('webglcontextlost', onContextLost)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('resize', resize)
       window.removeEventListener('pointermove', onPointerMove)
@@ -536,7 +564,6 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       gl.deleteShader(vs)
       gl.deleteShader(fs)
       gl.deleteBuffer(buf)
-      gl.getExtension('WEBGL_lose_context')?.loseContext()
     }
   }, [onFpsUpdate])
 
