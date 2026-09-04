@@ -29,3 +29,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: Implement Camera Ingestion, Enhanced FLV Streaming, and MSE Live Console
+
+**Date**: 2026-09-04
+**Task**: Implement Camera Ingestion, Enhanced FLV Streaming, and MSE Live Console
+**Branch**: `feat/users`
+
+### Summary
+
+Completed 09-04-camera-live-preview: implemented pure Rust RTSP ingestor with Exp-Golomb SPS parsing & RFC 7798 H.265/RFC 6184 H.264 depacketization, StreamHub multiplexing & keyframe cache, Enhanced FLV (hvc1) & HTTP/WS-FLV streaming endpoints, dual-track 3-state health probing, multi-vendor sub-stream rule deduction, Smart Hero + Bento Rail console with MSE hardware-decoded LivePlayer and 60fps Canvas 2D overlays, and aligned full codebase with two-axis review and quality gates.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6f5071a` | (see git log) |
+| `6f9fe10` | (see git log) |
+
+### Status
+
+[OK] **Completed**
