@@ -6,5 +6,5 @@ pub mod schema;
 
 pub use connection::init_db;
 pub use error::DbError;
-pub use repository::{AlarmRepo, CameraRepo, OplogRepo, TaskRepo};
+pub use repository::{AdminUserRepo, AlarmRepo, CameraRepo, OplogRepo, SystemConfigRepo, TaskRepo};
 pub use schema::create_tables_if_not_exist;

@@ -1,4 +1,5 @@
 pub mod alarm;
+pub mod auth;
 pub mod camera;
 pub mod detection;
 pub mod error;
@@ -7,6 +8,10 @@ pub mod oplog;
 pub mod task;
 
 pub use alarm::{AlarmRecord, AlarmType};
+pub use auth::{
+    AdminUser, AdminUserDto, AuthClaims, ChangePasswordRequest, InitStatusResponse,
+    InitializeRequest, LoginRequest, LoginResponse,
+};
 pub use camera::{Camera, ProbeStatus, TransportPolicy};
 pub use detection::{BoundingBox, Detection, TrackedObject};
 pub use error::{FrameError, TypeError};

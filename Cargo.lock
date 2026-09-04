@@ -93,20 +93,24 @@ name = "api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "db",
+ "hmac",
  "mime_guess",
  "pipeline",
  "rust-embed",
  "sea-orm",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
  "types",
+ "uuid",
 ]
 
 [[package]]

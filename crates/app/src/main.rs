@@ -56,8 +56,34 @@ async fn main() -> Result<()> {
     let pipeline_mgr = Arc::new(pipeline::PipelineManager::new());
     tracing::info!("核心视频分析管线调度器初始化完成");
 
-    // 4. 组装 API 共享状态与路由器
+    // 4. 检查双轨初始化状态与环境变量
+    let env_password = std::env::var("ARGUS_ADMIN_PASSWORD").ok();
+    if let Some(pwd) = env_password {
+        let pwd = pwd.trim();
+        if !pwd.is_empty() {
+            let username =
+                std::env::var("ARGUS_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
+            let hash = api::crypto::hash_password(pwd);
+            if db::AdminUserRepo::ensure_silent_admin(&db_conn, &username, &hash).await? {
+                tracing::info!(username = %username, "已通过环境变量自动完成管理员静默初始化");
+            }
+        }
+    }
+
+    // 5. 组装 API 共享状态与路由器并同步初始化与撤销时间戳
     let state = api::AppState::new(db_conn, pipeline_mgr);
+    state.sync_auth_state().await;
+    let is_init = state
+        .is_initialized
+        .load(std::sync::atomic::Ordering::Relaxed);
+    if !is_init {
+        tracing::warn!(
+            "系统尚未初始化管理员账号，访问 Web 控制台时将强制导航至开箱向导进行初始配置"
+        );
+    } else {
+        tracing::info!("管理员账号已就绪，系统运行在正常防护模式");
+    }
+
     let app = api::create_app(state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)

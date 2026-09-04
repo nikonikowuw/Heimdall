@@ -77,6 +77,22 @@ pub async fn create_tables_if_not_exist(db: &DatabaseConnection) -> Result<(), D
         r#"
         CREATE INDEX IF NOT EXISTS idx_operation_logs_module_time ON operation_logs(module, created_at DESC);
         "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            token_invalid_before INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS system_configs (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        "#,
     ];
 
     for ddl in ddl_statements {

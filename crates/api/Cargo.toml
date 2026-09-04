@@ -23,3 +23,7 @@ rust-embed = { workspace = true }
 chrono = { workspace = true }
 sea-orm = { workspace = true }
 mime_guess = { workspace = true }
+uuid = { workspace = true }
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"

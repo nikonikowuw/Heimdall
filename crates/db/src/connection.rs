@@ -4,7 +4,13 @@ use crate::error::DbError;
 
 /// 初始化 SQLite 数据库连接并配置高并发低延迟 WAL PRAGMA
 pub async fn init_db(db_path: &str) -> Result<DatabaseConnection, DbError> {
-    let url = format!("sqlite://{db_path}?mode=rwc");
+    let url = if db_path == ":memory:" || db_path == "sqlite::memory:" {
+        "sqlite::memory:".to_string()
+    } else if db_path.starts_with("sqlite:") {
+        db_path.to_string()
+    } else {
+        format!("sqlite://{db_path}?mode=rwc")
+    };
     let mut opt = ConnectOptions::new(&url);
     opt.max_connections(4)
         .min_connections(1)

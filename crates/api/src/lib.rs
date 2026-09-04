@@ -1,4 +1,7 @@
+pub mod crypto;
 pub mod error;
+pub mod i18n;
+pub mod middleware;
 pub mod response;
 pub mod routes;
 pub mod state;
@@ -8,6 +11,7 @@ pub use error::ApiError;
 pub use response::ApiResponse;
 pub use state::{AppState, WsBroadcastEvent};
 
+use axum::middleware::from_fn;
 use axum::routing::get;
 use axum::Router;
 use tower_http::cors::CorsLayer;
@@ -15,8 +19,10 @@ use tower_http::trace::TraceLayer;
 
 /// 构造整体 HTTP + WebSocket + 静态前端 SPA 路由器
 pub fn create_app(state: AppState) -> Router {
+    let api = routes::api_router(&state).layer(from_fn(middleware::i18n_response_middleware));
+
     Router::new()
-        .nest("/api/v1", routes::api_router())
+        .nest("/api/v1", api)
         .fallback(get(static_files::static_handler))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
