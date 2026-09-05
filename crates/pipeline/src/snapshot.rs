@@ -30,16 +30,62 @@ pub struct SnapshotResult {
     pub is_fallback_sub_stream: bool,
 }
 
+/// 证据快照抓拍策略模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SnapshotCaptureMode {
+    /// 智能自适应双模（默认推荐）：
+    /// - 相位偏差 < 500ms：极速单帧硬解最近 I 帧（1080P/4K 高清且延时 < 5ms）；
+    /// - 相位偏差 >= 500ms：若包数 <= max_burst_packets，快速前向硬解 (Burst Decode) 至告警点；若超限或解码失败，则直接复用子码流真实检测帧。
+    #[default]
+    AdaptiveDualMode,
+
+    /// 极速优先 / 子码流直取模式：
+    /// - 相位偏差 < 500ms：极速单帧硬解最近 I 帧；
+    /// - 相位偏差 >= 500ms：直接复用子码流当时检测命中的那张真实解码帧（0 硬件争抢，100% 时标精准，避免大 GOP 前向硬解开销）。
+    SubStreamOnLargeGap,
+
+    /// 强制前向追帧硬解模式 (Burst Decode Only)：
+    /// - 无论相位偏差多大，只要有可用 GOP，始终从 I 帧逐包硬解追帧到目标点，确保抓拍必须为 1080P/4K 大图。
+    BurstDecodeOnly,
+}
+
+/// 证据快照引擎配置
+#[derive(Debug, Clone)]
+pub struct SnapshotConfig {
+    /// 极速单帧与精准追帧模式的时间戳相位差阈值（毫秒，默认 500ms）
+    pub phase_diff_threshold_ms: i64,
+    /// 前向追帧硬解的最大允许包数量（默认 30 包，约 1.2s GOP）
+    pub max_burst_packets: usize,
+    /// 抓拍策略模式
+    pub capture_mode: SnapshotCaptureMode,
+}
+
+impl Default for SnapshotConfig {
+    fn default() -> Self {
+        Self {
+            phase_diff_threshold_ms: 500,
+            max_burst_packets: 30,
+            capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+        }
+    }
+}
+
 /// 快照抓拍引擎
 #[derive(Debug, Clone)]
 pub struct SnapshotEngine {
     base_evidence_dir: PathBuf,
+    config: SnapshotConfig,
 }
 
 impl SnapshotEngine {
     pub fn new(base_evidence_dir: impl Into<PathBuf>) -> Self {
+        Self::with_config(base_evidence_dir, SnapshotConfig::default())
+    }
+
+    pub fn with_config(base_evidence_dir: impl Into<PathBuf>, config: SnapshotConfig) -> Self {
         Self {
             base_evidence_dir: base_evidence_dir.into(),
+            config,
         }
     }
 
@@ -47,7 +93,15 @@ impl SnapshotEngine {
         &self.base_evidence_dir
     }
 
-    /// 根据时标从主码流 GOP 快速解码，或回退至子码流当前帧
+    pub fn config(&self) -> &SnapshotConfig {
+        &self.config
+    }
+
+    pub fn config_mut(&mut self) -> &mut SnapshotConfig {
+        &mut self.config
+    }
+
+    /// 根据时标从主码流 GOP 快速解码，或回退至子码流当前帧 (默认配置)
     pub async fn decode_target_frame(
         camera_id: &str,
         target_pts_ms: i64,
@@ -55,21 +109,156 @@ impl SnapshotEngine {
         sub_stream_fallback: Option<&FrameRef>,
         main_decoder: Option<&mut (dyn VideoDecoder + Send)>,
     ) -> Result<(FrameRef, bool), PipelineError> {
+        Self::decode_target_frame_with_config(
+            camera_id,
+            target_pts_ms,
+            ring_buffer,
+            sub_stream_fallback,
+            main_decoder,
+            &SnapshotConfig::default(),
+        )
+        .await
+    }
+
+    /// 根据时标与配置从主码流 GOP 快速解码，或回退至子码流当前帧 (双模证据抓取机制)
+    pub async fn decode_target_frame_with_config(
+        camera_id: &str,
+        target_pts_ms: i64,
+        ring_buffer: Option<&MainStreamRingBuffer>,
+        sub_stream_fallback: Option<&FrameRef>,
+        main_decoder: Option<&mut (dyn VideoDecoder + Send)>,
+        config: &SnapshotConfig,
+    ) -> Result<(FrameRef, bool), PipelineError> {
         let mut decoded_frame: Option<FrameRef> = None;
 
-        // 1. 尝试从主码流 RingBuffer 快进解码
+        // 1. 尝试从主码流 RingBuffer 提取 GOP 并根据双模策略解码
         if let (Some(rb), Some(decoder)) = (ring_buffer, main_decoder) {
             if let Some(gop) = rb.get_gop_for_timestamp(target_pts_ms) {
-                tracing::debug!(
-                    camera_id = %camera_id,
-                    target_pts = target_pts_ms,
-                    packet_count = gop.len(),
-                    "从主码流 RingBuffer 提取出 GOP 切片，开始快进解码"
-                );
+                if !gop.is_empty() {
+                    let keyframe = &gop[0];
+                    let keyframe_pts = keyframe.pts_ms;
+                    let phase_diff_ms = (target_pts_ms - keyframe_pts).abs();
+                    let packet_count = gop.len();
 
-                for pkt in gop {
-                    if let Ok(Some(frame)) = decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
-                        decoded_frame = Some(frame);
+                    match config.capture_mode {
+                        SnapshotCaptureMode::AdaptiveDualMode => {
+                            if phase_diff_ms < config.phase_diff_threshold_ms {
+                                // 1. 极速模式：相位偏差在阈值以内 (< 500ms)，单帧解码最近 I 帧
+                                tracing::info!(
+                                    camera_id = %camera_id,
+                                    target_pts = target_pts_ms,
+                                    keyframe_pts,
+                                    phase_diff_ms,
+                                    threshold_ms = config.phase_diff_threshold_ms,
+                                    "大 GOP 极速模式命中 (< 500ms)：单帧解码 I 帧 (极低延时 1080P/4K 出图)"
+                                );
+                                if let Ok(Some(frame)) = decoder
+                                    .decode_packet(&keyframe.payload, keyframe.pts_ms)
+                                    .await
+                                {
+                                    decoded_frame = Some(frame);
+                                }
+                            } else if packet_count <= config.max_burst_packets {
+                                // 2. 精准追帧模式 (Burst Decode)：偏差较大且包数在预算内，从 I 帧快速前向硬解至告警点
+                                tracing::info!(
+                                    camera_id = %camera_id,
+                                    target_pts = target_pts_ms,
+                                    keyframe_pts,
+                                    phase_diff_ms,
+                                    packet_count,
+                                    "大 GOP 精准追帧模式：从 I 帧开始快速前向硬解 (Burst Decode) 至告警点"
+                                );
+                                for pkt in gop {
+                                    if let Ok(Some(frame)) =
+                                        decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
+                                    {
+                                        decoded_frame = Some(frame);
+                                    }
+                                }
+                            } else if let Some(fallback) = sub_stream_fallback {
+                                // 3. 精准追帧模式 (子码流直接复用)：前向追解包数超限，直接复用子码流当时检测命中的那张真实解码帧
+                                tracing::warn!(
+                                    camera_id = %camera_id,
+                                    target_pts = target_pts_ms,
+                                    keyframe_pts,
+                                    phase_diff_ms,
+                                    packet_count,
+                                    max_burst = config.max_burst_packets,
+                                    "大 GOP 前向追解包数超限，精准追帧模式直接复用子码流检测命中的真实解码帧 (时标零偏差)"
+                                );
+                                return Ok((fallback.clone(), true));
+                            } else {
+                                // 子码流不可用，尽力而为前向硬解
+                                tracing::warn!(
+                                    camera_id = %camera_id,
+                                    target_pts = target_pts_ms,
+                                    keyframe_pts,
+                                    phase_diff_ms,
+                                    packet_count,
+                                    "子码流未就绪，尽力而为前向硬解"
+                                );
+                                for pkt in gop {
+                                    if let Ok(Some(frame)) =
+                                        decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
+                                    {
+                                        decoded_frame = Some(frame);
+                                    }
+                                }
+                            }
+                        }
+                        SnapshotCaptureMode::SubStreamOnLargeGap => {
+                            if phase_diff_ms < config.phase_diff_threshold_ms {
+                                // 极速模式：相位偏差在 500ms 内，单帧硬解最近 I 帧
+                                tracing::info!(
+                                    camera_id = %camera_id,
+                                    target_pts = target_pts_ms,
+                                    keyframe_pts,
+                                    phase_diff_ms,
+                                    "大 GOP 极速模式命中 (< 500ms)：单帧解码 I 帧"
+                                );
+                                if let Ok(Some(frame)) = decoder
+                                    .decode_packet(&keyframe.payload, keyframe.pts_ms)
+                                    .await
+                                {
+                                    decoded_frame = Some(frame);
+                                }
+                            } else if let Some(fallback) = sub_stream_fallback {
+                                // 精准追帧模式：偏差较大，直接复用子码流当时检测命中的真实解码帧 (0延迟/100%时标精准)
+                                tracing::info!(
+                                    camera_id = %camera_id,
+                                    target_pts = target_pts_ms,
+                                    keyframe_pts,
+                                    phase_diff_ms,
+                                    "大 GOP 相位偏差较大 (>= 500ms)，直接复用子码流检测命中的真实解码帧 (时标零偏差)"
+                                );
+                                return Ok((fallback.clone(), true));
+                            } else {
+                                // 子码流不可用，回退至前向硬解
+                                for pkt in gop {
+                                    if let Ok(Some(frame)) =
+                                        decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
+                                    {
+                                        decoded_frame = Some(frame);
+                                    }
+                                }
+                            }
+                        }
+                        SnapshotCaptureMode::BurstDecodeOnly => {
+                            // 强制全量前向硬解追帧
+                            tracing::info!(
+                                camera_id = %camera_id,
+                                target_pts = target_pts_ms,
+                                packet_count,
+                                "强制执行全量前向硬解追帧 (Burst Decode)"
+                            );
+                            for pkt in gop {
+                                if let Ok(Some(frame)) =
+                                    decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
+                                {
+                                    decoded_frame = Some(frame);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -90,6 +279,26 @@ impl SnapshotEngine {
                 camera_id: format!("{camera_id} (无可用视频帧用于抓拍)"),
             })
         }
+    }
+
+    /// 实例级别解码目标帧 (采用当前引擎绑定的 SnapshotConfig)
+    pub async fn decode_frame(
+        &self,
+        camera_id: &str,
+        target_pts_ms: i64,
+        ring_buffer: Option<&MainStreamRingBuffer>,
+        sub_stream_fallback: Option<&FrameRef>,
+        main_decoder: Option<&mut (dyn VideoDecoder + Send)>,
+    ) -> Result<(FrameRef, bool), PipelineError> {
+        Self::decode_target_frame_with_config(
+            camera_id,
+            target_pts_ms,
+            ring_buffer,
+            sub_stream_fallback,
+            main_decoder,
+            &self.config,
+        )
+        .await
     }
 
     /// 将 CPU 密集型图像色彩转换、扩边裁剪、JPEG 压缩与磁盘 IO 卸载至 blocking 线程池
@@ -120,14 +329,15 @@ impl SnapshotEngine {
         sub_stream_fallback: Option<&FrameRef>,
         main_decoder: Option<&mut (dyn VideoDecoder + Send)>,
     ) -> Result<SnapshotResult, PipelineError> {
-        let (frame, is_fallback) = Self::decode_target_frame(
-            camera_id,
-            target_pts_ms,
-            ring_buffer,
-            sub_stream_fallback,
-            main_decoder,
-        )
-        .await?;
+        let (frame, is_fallback) = self
+            .decode_frame(
+                camera_id,
+                target_pts_ms,
+                ring_buffer,
+                sub_stream_fallback,
+                main_decoder,
+            )
+            .await?;
 
         self.save_snapshot_async(camera_id, frame, target_bbox, is_fallback)
             .await

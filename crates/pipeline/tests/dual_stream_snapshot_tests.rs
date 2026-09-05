@@ -3,7 +3,7 @@
 
 use bytes::Bytes;
 use media::decoders::MockDecoder;
-use pipeline::PipelineManager;
+use pipeline::{PipelineManager, SnapshotCaptureMode, SnapshotConfig};
 use std::fs;
 use std::sync::Arc;
 use types::{
@@ -136,6 +136,259 @@ async fn test_dual_stream_fallback_to_sub_stream() {
 
     let full_img_path = temp_dir.join(&snapshot.image_rel_path);
     assert!(full_img_path.is_file());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_large_gop_fast_mode_within_threshold() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_large_gop_fast_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let config = SnapshotConfig {
+        phase_diff_threshold_ms: 500,
+        max_burst_packets: 30,
+        capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+    };
+    let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
+    let cam_id = "cam_large_gop_fast";
+
+    let ctx = manager.get_or_create_context(cam_id).await;
+    {
+        let mut decoder_guard = ctx.snapshot_decoder.lock().await;
+        *decoder_guard = Some(Box::new(MockDecoder::new(
+            cam_id,
+            CodecType::H264,
+            1920,
+            1080,
+        )));
+    }
+
+    // 注入主码流：I 帧位于 1000ms，P 帧位于 1200ms
+    manager
+        .push_main_packet(cam_id, make_packet(1000, true))
+        .await;
+    manager
+        .push_main_packet(cam_id, make_packet(1200, false))
+        .await;
+
+    // 注入子码流备用帧 (640x360)
+    let fallback_nv12 = vec![128u8; (640 * 360 * 3 / 2) as usize].into();
+    let fallback_frame = FrameRef::new(
+        cam_id.to_string(),
+        1200,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(fallback_nv12),
+    );
+    manager
+        .update_sub_stream_frame(cam_id, fallback_frame)
+        .await;
+
+    // 告警时标位于 1200ms，与 I 帧相位差 200ms (< 500ms 阈值)
+    let snapshot = manager
+        .trigger_snapshot(cam_id, 1200, None)
+        .await
+        .expect("极速模式单帧解码抓拍应成功");
+
+    // 命中极速模式：单帧硬解 I 帧，不降级子码流，保持 1080P 高清
+    assert!(!snapshot.is_fallback_sub_stream);
+    assert_eq!(snapshot.width, 1920);
+    assert_eq!(snapshot.height, 1080);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_large_gop_sub_stream_reuse_on_large_gap() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_large_gop_sub_reuse_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    // 配置大偏差直接复用子码流
+    let config = SnapshotConfig {
+        phase_diff_threshold_ms: 500,
+        max_burst_packets: 30,
+        capture_mode: SnapshotCaptureMode::SubStreamOnLargeGap,
+    };
+    let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
+    let cam_id = "cam_large_gop_sub_reuse";
+
+    let ctx = manager.get_or_create_context(cam_id).await;
+    {
+        let mut decoder_guard = ctx.snapshot_decoder.lock().await;
+        *decoder_guard = Some(Box::new(MockDecoder::new(
+            cam_id,
+            CodecType::H264,
+            1920,
+            1080,
+        )));
+    }
+
+    // 模拟大 GOP (I 帧位于 1000ms，越界告警发生在 3000ms，偏差 2000ms >= 500ms)
+    manager
+        .push_main_packet(cam_id, make_packet(1000, true))
+        .await;
+    for pts in (1040..=3000).step_by(40) {
+        manager
+            .push_main_packet(cam_id, make_packet(pts, false))
+            .await;
+    }
+
+    // 注入子码流在告警时刻 3000ms 真实检测命中的帧 (640x360)
+    let fallback_nv12 = vec![128u8; (640 * 360 * 3 / 2) as usize].into();
+    let fallback_frame = FrameRef::new(
+        cam_id.to_string(),
+        3000,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(fallback_nv12),
+    );
+    manager
+        .update_sub_stream_frame(cam_id, fallback_frame)
+        .await;
+
+    // 触发抓拍 (告警时标 3000ms)
+    let snapshot = manager
+        .trigger_snapshot(cam_id, 3000, None)
+        .await
+        .expect("抓拍应成功");
+
+    // 相位差 2000ms >= 500ms 且配置 SubStreamOnLargeGap，直接复用子码流真实检测帧 (时标绝对精准，零 VPU 压力)
+    assert!(snapshot.is_fallback_sub_stream);
+    assert_eq!(snapshot.width, 640);
+    assert_eq!(snapshot.height, 360);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_large_gop_adaptive_burst_decode() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_large_gop_burst_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    // 默认自适应双模配置 (max_burst_packets = 30)
+    let config = SnapshotConfig {
+        phase_diff_threshold_ms: 500,
+        max_burst_packets: 30,
+        capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+    };
+    let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
+    let cam_id = "cam_large_gop_burst";
+
+    let ctx = manager.get_or_create_context(cam_id).await;
+    {
+        let mut decoder_guard = ctx.snapshot_decoder.lock().await;
+        *decoder_guard = Some(Box::new(MockDecoder::new(
+            cam_id,
+            CodecType::H264,
+            1920,
+            1080,
+        )));
+    }
+
+    // 模拟前向 15 包 (I 帧位于 1000ms，告警位于 1600ms，偏差 600ms >= 500ms，但包数 16 <= 30)
+    manager
+        .push_main_packet(cam_id, make_packet(1000, true))
+        .await;
+    for pts in (1040..=1600).step_by(40) {
+        manager
+            .push_main_packet(cam_id, make_packet(pts, false))
+            .await;
+    }
+
+    let fallback_nv12 = vec![128u8; (640 * 360 * 3 / 2) as usize].into();
+    let fallback_frame = FrameRef::new(
+        cam_id.to_string(),
+        1600,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(fallback_nv12),
+    );
+    manager
+        .update_sub_stream_frame(cam_id, fallback_frame)
+        .await;
+
+    let snapshot = manager
+        .trigger_snapshot(cam_id, 1600, None)
+        .await
+        .expect("自适应追帧解码应成功");
+
+    // 包数未超限，成功执行 Burst Decode 追帧至 1600ms，输出 1080P 高清大图
+    assert!(!snapshot.is_fallback_sub_stream);
+    assert_eq!(snapshot.width, 1920);
+    assert_eq!(snapshot.height, 1080);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_large_gop_overflow_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    // 限制最大追帧包数为 15 包
+    let config = SnapshotConfig {
+        phase_diff_threshold_ms: 500,
+        max_burst_packets: 15,
+        capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+    };
+    let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
+    let cam_id = "cam_large_gop_overflow";
+
+    let ctx = manager.get_or_create_context(cam_id).await;
+    {
+        let mut decoder_guard = ctx.snapshot_decoder.lock().await;
+        *decoder_guard = Some(Box::new(MockDecoder::new(
+            cam_id,
+            CodecType::H264,
+            1920,
+            1080,
+        )));
+    }
+
+    // 模拟大 GOP：I 帧位于 1000ms，告警位于 2200ms (31 个包，超出 15 包限额)
+    manager
+        .push_main_packet(cam_id, make_packet(1000, true))
+        .await;
+    for pts in (1040..=2200).step_by(40) {
+        manager
+            .push_main_packet(cam_id, make_packet(pts, false))
+            .await;
+    }
+
+    let fallback_nv12 = vec![128u8; (640 * 360 * 3 / 2) as usize].into();
+    let fallback_frame = FrameRef::new(
+        cam_id.to_string(),
+        2200,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(fallback_nv12),
+    );
+    manager
+        .update_sub_stream_frame(cam_id, fallback_frame)
+        .await;
+
+    let snapshot = manager
+        .trigger_snapshot(cam_id, 2200, None)
+        .await
+        .expect("抓拍应平滑回退成功");
+
+    // 包数超限，自动平滑复用子码流真实检测帧，防止 VPU 争抢阻塞
+    assert!(snapshot.is_fallback_sub_stream);
+    assert_eq!(snapshot.width, 640);
+    assert_eq!(snapshot.height, 360);
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

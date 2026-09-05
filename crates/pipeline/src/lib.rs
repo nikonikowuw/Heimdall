@@ -14,7 +14,7 @@ pub use manager::PipelineManager;
 pub use motion_gate::MotionGate;
 pub use roi::RoiAffineMapper;
 pub use rules::{RuleEvaluator, TriggeredAlarm};
-pub use snapshot::{SnapshotEngine, SnapshotResult};
+pub use snapshot::{SnapshotCaptureMode, SnapshotConfig, SnapshotEngine, SnapshotResult};
 pub use storage_cleaner::{
     get_disk_free_ratio, EvictionReport, EvictionStore, StorageCleaner, StorageCleanerConfig,
 };

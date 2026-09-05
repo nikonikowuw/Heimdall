@@ -15,7 +15,7 @@ use types::{
 use crate::error::PipelineError;
 use crate::roi::RoiAffineMapper;
 use crate::rules::{RuleEvaluator, TriggeredAlarm};
-use crate::snapshot::{SnapshotEngine, SnapshotResult};
+use crate::snapshot::{SnapshotConfig, SnapshotEngine, SnapshotResult};
 use crate::tracker::SimpleTracker;
 
 /// 单路摄像头管线运行时上下文
@@ -112,6 +112,18 @@ impl PipelineManager {
             tasks: Arc::new(TokioRwLock::new(HashMap::new())),
             pipelines: Arc::new(TokioRwLock::new(HashMap::new())),
             snapshot_engine: Arc::new(SnapshotEngine::new(dir)),
+        }
+    }
+
+    /// 使用自定义证据存储路径与快照抓拍配置构建管线管理器
+    pub fn with_evidence_dir_and_snapshot_config(
+        dir: impl Into<PathBuf>,
+        config: SnapshotConfig,
+    ) -> Self {
+        Self {
+            tasks: Arc::new(TokioRwLock::new(HashMap::new())),
+            pipelines: Arc::new(TokioRwLock::new(HashMap::new())),
+            snapshot_engine: Arc::new(SnapshotEngine::with_config(dir, config)),
         }
     }
 
@@ -220,14 +232,15 @@ impl PipelineManager {
                 *decoder_guard = Some(media::create_decoder(camera_id, codec));
             }
 
-            SnapshotEngine::decode_target_frame(
-                camera_id,
-                target_pts_ms,
-                Some(&ctx.ring_buffer),
-                fallback_frame.as_ref(),
-                decoder_guard.as_deref_mut(),
-            )
-            .await?
+            self.snapshot_engine
+                .decode_frame(
+                    camera_id,
+                    target_pts_ms,
+                    Some(&ctx.ring_buffer),
+                    fallback_frame.as_ref(),
+                    decoder_guard.as_deref_mut(),
+                )
+                .await?
         };
 
         // 将色彩转换、抠图裁切与 JPEG 写盘卸载至专用 blocking 线程池

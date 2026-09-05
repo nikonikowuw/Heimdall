@@ -74,6 +74,23 @@ impl MainStreamRingBuffer {
         Some(queue.range(keyframe_idx..=target_idx).cloned().collect())
     }
 
+    /// 根据时标向后查找最近的前置关键帧 (I-Frame)
+    pub fn find_prior_keyframe(&self, target_pts_ms: i64) -> Option<Arc<EncodedPacket>> {
+        let queue = self.queue.read().unwrap_or_else(|e| e.into_inner());
+        if queue.is_empty() {
+            return None;
+        }
+
+        let target_idx = queue
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, pkt)| (pkt.pts_ms - target_pts_ms).abs())
+            .map(|(idx, _)| idx)?;
+
+        let keyframe_idx = (0..=target_idx).rev().find(|&idx| queue[idx].is_keyframe)?;
+        Some(queue[keyframe_idx].clone())
+    }
+
     /// 获取当前队列中最老的数据包时间戳
     pub fn oldest_pts(&self) -> Option<i64> {
         self.queue
@@ -216,5 +233,25 @@ mod tests {
         assert_eq!(gop[0].pts_ms, 1240);
         assert!(gop[0].is_keyframe);
         assert_eq!(gop[1].pts_ms, 1280);
+    }
+
+    #[test]
+    fn test_ring_buffer_find_prior_keyframe() {
+        let rb = MainStreamRingBuffer::new(RingBufferConfig::default());
+        // GOP 1: 1000(I), 1040(P)
+        rb.push(make_packet(1000, true));
+        rb.push(make_packet(1040, false));
+        // GOP 2: 2000(I), 2040(P), 2080(P)
+        rb.push(make_packet(2000, true));
+        rb.push(make_packet(2040, false));
+        rb.push(make_packet(2080, false));
+
+        // 查找 1040 对应的关键帧 -> 1000
+        let kf1 = rb.find_prior_keyframe(1040).expect("should find kf1");
+        assert_eq!(kf1.pts_ms, 1000);
+
+        // 查找 2060 对应的关键帧 -> 2000
+        let kf2 = rb.find_prior_keyframe(2060).expect("should find kf2");
+        assert_eq!(kf2.pts_ms, 2000);
     }
 }
