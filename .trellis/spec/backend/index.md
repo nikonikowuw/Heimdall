@@ -27,6 +27,7 @@
 | [推理后端](./inference-backends.md) | 加/改推理后端、动模型加载 |
 | [媒体管线](./media-pipeline.md) | 动解码、帧缓冲、零拷贝、预处理、门控 |
 | [FFI 边界](./ffi-guidelines.md) | 写 Rust ↔ C++ 绑定、动 `unsafe` |
+| [算法套件 (algo-sdk)](./algo-sdk-guidelines.md) | 开发算法插件、实现 C ABI 导出、处理帧布局与硬件预处理 |
 | [质量规范](./quality-guidelines.md) | 提交前、写测试、做 code review |
 
 ---
