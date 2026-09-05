@@ -15,6 +15,9 @@ pub enum PipelineError {
     #[error("快照抓拍失败: {0}")]
     Snapshot(String),
 
+    #[error("安全沙箱违规: {0}")]
+    Security(String),
+
     #[error("媒体层错误: {0}")]
     Media(#[from] media::MediaError),
 
@@ -32,6 +35,7 @@ impl PipelineError {
             Self::PipelineNotFound { .. } => 30001,
             Self::InvalidRule { .. } => 30002,
             Self::Snapshot(_) => 30003,
+            Self::Security(_) => 30006,
             Self::PipelineAlreadyExists { .. } => 30004,
             Self::Type(_) => 30005,
             Self::Infer(e) => e.error_code(),
