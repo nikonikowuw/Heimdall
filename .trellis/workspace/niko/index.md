@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
-- **Last Active**: 2026-09-05
+- **Total Sessions**: 9
+- **Last Active**: 2026-09-06
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~243 | Active |
+| `journal-1.md` | ~264 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-09-06 | 实现纯 Rust 算法包开发套件 algo-sdk 与硬件预处理测试脚手架 | `2a771ab` | `dev` |
 | 8 | 2026-09-05 | 算法包管理系统级资源接入与控制台落地 | `8d76782` | `dev` |
 | 7 | 2026-09-05 | 实现子码流驱动泵与专用常驻推理线程架构 | `19a1e45` | `dev` |
 | 6 | 2026-09-05 | 设备管理解耦、任务全生命周期管理与矢量布防工程化重构 | `1e1983e`, `43a9889` | `dev` |

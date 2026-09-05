@@ -241,3 +241,24 @@ Completed 09-04-camera-live-preview: implemented pure Rust RTSP ingestor with Ex
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: 实现纯 Rust 算法包开发套件 algo-sdk 与硬件预处理测试脚手架
+
+**Date**: 2026-09-06
+**Task**: 实现纯 Rust 算法包开发套件 algo-sdk 与硬件预处理测试脚手架
+**Branch**: `dev`
+
+### Summary
+
+完成 crates/algo-sdk 轻量独立套件开发，导出 export_algo! 宏及 C ABI 虚拟方法表；实现 SafeFrame 零拷贝内存布局与 Stride 校验；封装 AppleCvEngine / CpuCvEngine 硬件预处理及 Letterbox 坐标反算；提供高效 NMS、零分配 ResultEmitter 及多核心轮询调度；构建 MockFrameBuilder 测试脚手架并通过全套单元与集成测试。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2a771ab` | (see git log) |
+
+### Status
+
+[OK] **Completed**
