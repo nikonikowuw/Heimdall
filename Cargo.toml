@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/algo-sdk",
     "crates/types",
     "crates/db",
     "crates/media",
@@ -25,6 +26,7 @@ unwrap_used = "warn"
 
 [workspace.dependencies]
 # Internal crates
+algo-sdk = { path = "crates/algo-sdk" }
 types = { path = "crates/types" }
 db = { path = "crates/db" }
 media = { path = "crates/media" }

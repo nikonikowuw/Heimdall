@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/guides/architecture-overview.md", "reason": "crate 拓扑与依赖方向，确认 algo-sdk 的独立定位"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端五条铁律与 Pre-Development Checklist"}
+{"file": ".trellis/spec/backend/ffi-guidelines.md", "reason": "C ABI 设计约定、unsafe 收敛规则、SAFETY 注释要求"}
+{"file": ".trellis/spec/backend/inference-backends.md", "reason": "InferenceBackend trait 设计、预处理内聚原则、feature flag 约定"}
+{"file": ".trellis/spec/guides/edge-constraints-guide.md", "reason": "内存约束与资源上限思考清单"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SDK 与宿主 infer 的跨层数据流审查"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "C ABI 类型双副本复用策略与常量同步"}

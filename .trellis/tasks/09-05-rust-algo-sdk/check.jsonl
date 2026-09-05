@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Quality Check 门禁清单"}
+{"file": ".trellis/spec/backend/ffi-guidelines.md", "reason": "检查 unsafe 收敛与 SAFETY 注释合规性"}
+{"file": ".trellis/spec/backend/inference-backends.md", "reason": "验证 SDK 侧推理抽象是否与宿主侧 trait 设计一致"}
+{"file": ".trellis/spec/guides/architecture-overview.md", "reason": "验证 crate 依赖方向不违反拓扑约束"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查 C ABI 双副本是否存在漂移风险"}
