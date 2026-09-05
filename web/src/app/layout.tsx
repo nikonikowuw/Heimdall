@@ -1,10 +1,11 @@
 import React, { useState } from 'react'
 import {
   AlertCircle,
-  Camera,
   FileText,
   KeyRound,
+  Layers,
   LogOut,
+  Monitor,
   Moon,
   Sliders,
   Sun,
@@ -15,6 +16,7 @@ import { ChangePasswordModal } from '../components/ChangePasswordModal'
 import { LocaleDropdown } from '../components/LocaleDropdown'
 import { AlarmsPage } from '../features/alarms/AlarmsPage'
 import { LoginPage } from '../features/auth'
+import { CamerasPage } from '../features/cameras'
 import { LivePage } from '../features/live/LivePage'
 import { OplogPage } from '../features/oplog/OplogPage'
 import { TasksPage } from '../features/tasks/TasksPage'
@@ -22,12 +24,13 @@ import { useTheme } from '../hooks/use-theme'
 import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
-export type NavTab = 'live' | 'tasks' | 'alarms' | 'oplog'
+export type NavTab = 'live' | 'cameras' | 'tasks' | 'alarms' | 'oplog'
 
 export const Layout: React.FC = () => {
   const { t } = useTranslation(['common', 'auth'])
   const { isAuthenticated, logout, username } = useAuthStore()
   const [currentTab, setCurrentTab] = useState<NavTab>('live')
+  const [targetTaskCameraId, setTargetTaskCameraId] = useState<string | null>(null)
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
   const { isDark, toggleTheme } = useTheme()
 
@@ -53,7 +56,7 @@ export const Layout: React.FC = () => {
         <div className="flex flex-col items-center gap-6">
           {/* Logo 标志 */}
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-white shadow-md">
-            <Video className="h-5 w-5" />
+            <Layers className="h-5 w-5" />
           </div>
 
           {/* 导航菜单 */}
@@ -67,7 +70,18 @@ export const Layout: React.FC = () => {
                   : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
               }`}
             >
-              <Camera className="h-5 w-5" />
+              <Monitor className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => setCurrentTab('cameras')}
+              title={t('nav.cameras', { defaultValue: '设备管理' })}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
+                currentTab === 'cameras'
+                  ? 'bg-[var(--accent)] text-white'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
+              }`}
+            >
+              <Video className="h-5 w-5" />
             </button>
             <button
               onClick={() => setCurrentTab('tasks')}
@@ -142,7 +156,20 @@ export const Layout: React.FC = () => {
       {/* 主工作视口 */}
       <main className="flex flex-1 flex-col overflow-hidden p-4">
         {currentTab === 'live' && <LivePage onNavigateToAlarms={() => setCurrentTab('alarms')} />}
-        {currentTab === 'tasks' && <TasksPage />}
+        {currentTab === 'cameras' && (
+          <CamerasPage
+            onNavigateToTasks={(camera) => {
+              setTargetTaskCameraId(camera.cameraId)
+              setCurrentTab('tasks')
+            }}
+          />
+        )}
+        {currentTab === 'tasks' && (
+          <TasksPage
+            initialConfigCameraId={targetTaskCameraId}
+            onNavigateToCameras={() => setCurrentTab('cameras')}
+          />
+        )}
         {currentTab === 'alarms' && <AlarmsPage />}
         {currentTab === 'oplog' && <OplogPage />}
       </main>

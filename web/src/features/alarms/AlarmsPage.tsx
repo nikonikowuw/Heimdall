@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   Camera as CameraIcon,
@@ -75,6 +75,7 @@ function AlarmStatusButton({
 
 interface AlarmCardItemProps {
   alarm: AlarmRecord
+  cameraName?: string
   onSelect: () => void
   onToggleStatus: () => void
   t: (key: string) => string
@@ -82,6 +83,7 @@ interface AlarmCardItemProps {
 
 function AlarmCardItem({
   alarm,
+  cameraName,
   onSelect,
   onToggleStatus,
   t,
@@ -147,7 +149,9 @@ function AlarmCardItem({
         </div>
 
         <div className="flex items-center justify-between font-mono text-[11px] text-[var(--text-muted)]">
-          <span>{alarm.cameraId}</span>
+          <span className="font-sans font-medium text-[var(--text-secondary)]">
+            {cameraName || alarm.cameraId}
+          </span>
           <span className="flex items-center gap-1">
             <Clock className="h-3 w-3" />
             {formatTimestamp(alarm.occurredAt)}
@@ -182,6 +186,7 @@ function AlarmCardItem({
 
 interface AlarmTableRowProps {
   alarm: AlarmRecord
+  cameraName?: string
   onSelect: () => void
   onToggleStatus: () => void
   t: (key: string) => string
@@ -189,6 +194,7 @@ interface AlarmTableRowProps {
 
 function AlarmTableRow({
   alarm,
+  cameraName,
   onSelect,
   onToggleStatus,
   t,
@@ -218,7 +224,9 @@ function AlarmTableRow({
       <td className="px-3 py-2 font-mono text-[11px] text-[var(--text-primary)]">
         {alarm.eventId.slice(0, 12)}...
       </td>
-      <td className="px-3 py-2 font-mono text-[11px]">{alarm.cameraId}</td>
+      <td className="px-3 py-2 font-medium text-[var(--text-primary)]">
+        {cameraName || alarm.cameraId}
+      </td>
       <td className="px-3 py-2 font-semibold text-[var(--text-primary)]">{alarm.targetLabel}</td>
       <td className="px-3 py-2 font-mono text-[11px]">{getRuleTypeLabel(alarm.ruleType, t)}</td>
       <td className="px-3 py-2">
@@ -271,6 +279,7 @@ function AlarmTableRow({
 interface AlarmsContentProps {
   alarms: AlarmRecord[]
   viewMode: ViewMode
+  cameraNameMap?: Record<string, string>
   onSelect: (alarm: AlarmRecord) => void
   onToggleStatus: (alarm: AlarmRecord) => void
   t: (key: string) => string
@@ -279,6 +288,7 @@ interface AlarmsContentProps {
 function AlarmsContent({
   alarms,
   viewMode,
+  cameraNameMap,
   onSelect,
   onToggleStatus,
   t,
@@ -300,6 +310,7 @@ function AlarmsContent({
           <AlarmCardItem
             key={alarm.id}
             alarm={alarm}
+            cameraName={cameraNameMap?.[alarm.cameraId]}
             onSelect={() => onSelect(alarm)}
             onToggleStatus={() => onToggleStatus(alarm)}
             t={t}
@@ -331,6 +342,7 @@ function AlarmsContent({
             <AlarmTableRow
               key={alarm.id}
               alarm={alarm}
+              cameraName={cameraNameMap?.[alarm.cameraId]}
               onSelect={() => onSelect(alarm)}
               onToggleStatus={() => onToggleStatus(alarm)}
               t={t}
@@ -719,6 +731,14 @@ export function AlarmsPage(): React.ReactElement {
     }
   }, [])
 
+  const cameraNameMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const c of cameras) {
+      map[c.cameraId] = c.name
+    }
+    return map
+  }, [cameras])
+
   const loadData = useCallback(async () => {
     setIsLoading(true)
     setErrorMessage(null)
@@ -1012,6 +1032,7 @@ export function AlarmsPage(): React.ReactElement {
           <AlarmsContent
             alarms={alarms}
             viewMode={viewMode}
+            cameraNameMap={cameraNameMap}
             onSelect={setLightboxAlarm}
             onToggleStatus={handleToggleAlarmStatus}
             t={t}

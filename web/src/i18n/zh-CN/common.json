@@ -1,6 +1,7 @@
 {
   "nav": {
     "live": "实时大屏",
+    "cameras": "设备管理",
     "tasks": "任务布防",
     "alarms": "告警事件",
     "oplog": "审计日志"

@@ -1,0 +1,332 @@
+import React, { useEffect, useState } from 'react'
+import { AlertCircle, Check, Loader2, Plus, Sliders, Video, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { taskApi } from '@/lib/api'
+import type { Camera, TaskConfigDto } from '@/types'
+
+export interface CreateTaskModalProps {
+  isOpen: boolean
+  cameras: Camera[]
+  existingCameraIdsWithTasks: Set<string>
+  preselectedCameraId?: string | null
+  onClose: () => void
+  onSuccess: (camera: Camera, task: TaskConfigDto) => void
+  onGoToCameras: () => void
+}
+
+export function CreateTaskModal({
+  isOpen,
+  cameras,
+  existingCameraIdsWithTasks,
+  preselectedCameraId,
+  onClose,
+  onSuccess,
+  onGoToCameras,
+}: CreateTaskModalProps): React.ReactElement | null {
+  const { t } = useTranslation('task')
+  const { t: tc } = useTranslation('common')
+
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('')
+  const [taskName, setTaskName] = useState<string>('')
+  const [desiredEnabled, setDesiredEnabled] = useState<boolean>(true)
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // 当弹窗打开时，默认选第一个未绑定任务的摄像头
+  useEffect(() => {
+    if (isOpen) {
+      setErrorMsg(null)
+      if (preselectedCameraId && cameras.some((c) => c.cameraId === preselectedCameraId)) {
+        setSelectedCameraId(preselectedCameraId)
+        const cam = cameras.find((c) => c.cameraId === preselectedCameraId)
+        setTaskName(`Task-${cam?.name || preselectedCameraId}`)
+      } else {
+        const firstUnassigned = cameras.find((c) => !existingCameraIdsWithTasks.has(c.cameraId))
+        if (firstUnassigned) {
+          setSelectedCameraId(firstUnassigned.cameraId)
+          setTaskName(`Task-${firstUnassigned.name || firstUnassigned.cameraId}`)
+        } else if (cameras.length > 0) {
+          setSelectedCameraId(cameras[0].cameraId)
+          setTaskName(`Task-${cameras[0].name || cameras[0].cameraId}`)
+        } else {
+          setSelectedCameraId('')
+          setTaskName('')
+        }
+      }
+      setDesiredEnabled(true)
+    }
+  }, [isOpen, cameras, existingCameraIdsWithTasks, preselectedCameraId])
+
+  // ESC 快捷键关闭
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSubmitting) {
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, isSubmitting, onClose])
+
+  if (!isOpen) return null
+
+  const selectedCam = cameras.find((c) => c.cameraId === selectedCameraId)
+
+  const handleCameraChange = (camId: string) => {
+    setSelectedCameraId(camId)
+    const cam = cameras.find((c) => c.cameraId === camId)
+    if (cam) {
+      setTaskName(`Task-${cam.name || cam.cameraId}`)
+    }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedCameraId) {
+      setErrorMsg(t('selectChannelPlaceholder', { defaultValue: '请选择要分配任务的摄像头通道' }))
+      return
+    }
+
+    const trimmedName = taskName.trim()
+    if (!trimmedName) {
+      setErrorMsg(t('validation.nameRequired', { defaultValue: '任务名称不能为空' }))
+      return
+    }
+
+    const cam = cameras.find((c) => c.cameraId === selectedCameraId)
+    if (!cam) {
+      setErrorMsg(t('validation.cameraNotFound', { defaultValue: '所选摄像头不存在' }))
+      return
+    }
+
+    setIsSubmitting(true)
+    setErrorMsg(null)
+
+    try {
+      const payload: TaskConfigDto = {
+        cameraId: selectedCameraId,
+        name: trimmedName,
+        desiredEnabled,
+        rules: [],
+        motionGate: {
+          enabled: true,
+          threshold: 25,
+          contourArea: 100,
+          keepaliveIntervalMs: 2000,
+        },
+      }
+
+      const created = await taskApi.updateTask(selectedCameraId, payload)
+      onSuccess(cam, created)
+      onClose()
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : t('errors.createFailed', { defaultValue: '创建任务失败，请稍后重试' })
+      setErrorMsg(msg)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isSubmitting) {
+          onClose()
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+    >
+      <div className="frosted-glass relative w-full max-w-lg rounded-2xl border border-[var(--border)] p-6 shadow-2xl transition-all">
+        {/* 右上角关闭 */}
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={isSubmitting}
+          className="absolute top-5 right-5 rounded-lg p-1 text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] disabled:opacity-50"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
+        {/* 头部标题与图标 */}
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] shadow-2xs">
+            <Sliders className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-[var(--text-primary)]">
+              {t('createTaskTitle', { defaultValue: '创建 AI 分析与布防任务' })}
+            </h3>
+            <p className="text-xs text-[var(--text-muted)]">
+              {t('createTaskDesc', {
+                defaultValue: '为已接入的摄像头通道建立计算任务，配置空间几何规则并开启 NPU 推理。',
+              })}
+            </p>
+          </div>
+        </div>
+
+        {cameras.length === 0 ? (
+          <div className="mt-6 flex flex-col items-center justify-center py-6 text-center text-xs">
+            <Video className="mb-2 h-8 w-8 text-[var(--text-muted)] opacity-50" />
+            <p className="font-semibold text-[var(--text-primary)]">
+              {t('noCamerasAvailable', {
+                defaultValue: '系统中暂无任何摄像头设备，请先接入摄像机',
+              })}
+            </p>
+            <p className="mt-1 text-[var(--text-muted)]">
+              {t('noCamerasHint', { defaultValue: 'AI 任务需要绑定在有效的视频流通道上运行。' })}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                onClose()
+                onGoToCameras()
+              }}
+              className="mt-4 flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>{t('goToCameras', { defaultValue: '前往设备管理' })}</span>
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="mt-5 space-y-4 text-xs">
+            {/* 1. 选择通道 */}
+            <div>
+              <label className="mb-1.5 block font-semibold text-[var(--text-primary)]">
+                {t('selectChannel', { defaultValue: '选择摄像头通道' })}
+                <span className="ml-1 text-rose-500">*</span>
+              </label>
+              <select
+                value={selectedCameraId}
+                onChange={(e) => handleCameraChange(e.target.value)}
+                disabled={isSubmitting}
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+              >
+                {cameras.map((cam) => {
+                  const alreadyHas = existingCameraIdsWithTasks.has(cam.cameraId)
+                  return (
+                    <option key={cam.cameraId} value={cam.cameraId}>
+                      {cam.name || cam.cameraId} ({cam.cameraId}){' '}
+                      {alreadyHas
+                        ? t('alreadyConfiguredTag', { defaultValue: '· [已配置任务]' })
+                        : ''}
+                    </option>
+                  )
+                })}
+              </select>
+
+              {selectedCam && (
+                <div className="mt-1.5 flex items-center gap-2 font-mono text-[11px] text-[var(--text-muted)]">
+                  <span>
+                    {selectedCam.lastWidth && selectedCam.lastHeight
+                      ? `${selectedCam.lastWidth}x${selectedCam.lastHeight}`
+                      : '1080P'}
+                  </span>
+                  <span>·</span>
+                  <span className="text-[var(--accent)]">
+                    {selectedCam.lastCodec?.toUpperCase() || 'H.264'}
+                  </span>
+                  <span>·</span>
+                  <span className="text-emerald-500">
+                    {selectedCam.lastFps ? selectedCam.lastFps.toFixed(1) : '25.0'} fps
+                  </span>
+                  {existingCameraIdsWithTasks.has(selectedCam.cameraId) && (
+                    <span className="font-sans text-amber-500">
+                      {t('alreadyHasTask', {
+                        defaultValue: '(该通道已有任务，保存将覆盖更新)',
+                      })}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 2. 任务名称 */}
+            <div>
+              <label className="mb-1.5 block font-semibold text-[var(--text-primary)]">
+                {t('taskName', { defaultValue: '任务名称' })}
+                <span className="ml-1 text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={taskName}
+                onChange={(e) => setTaskName(e.target.value)}
+                placeholder={t('taskNamePlaceholder', {
+                  defaultValue: '例如：周界入侵防护 - 库房正门',
+                })}
+                disabled={isSubmitting}
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+              />
+            </div>
+
+            {/* 3. 初始布防状态 */}
+            <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
+              <div>
+                <span className="font-semibold text-[var(--text-primary)]">
+                  {t('enableArmImmediately', { defaultValue: '创建后立即启动布防' })}
+                </span>
+                <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
+                  开启后系统将启动该路摄像头的子码流解码并在后台调度 NPU 规则判定。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDesiredEnabled(!desiredEnabled)}
+                disabled={isSubmitting}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  desiredEnabled ? 'bg-[var(--accent)]' : 'bg-slate-400'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    desiredEnabled ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* 错误提示 */}
+            {errorMsg && (
+              <div className="flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-500">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {/* 底部按钮 */}
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isSubmitting}
+                className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] disabled:opacity-50"
+              >
+                {tc('actions.cancel', { defaultValue: '取消' })}
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>{t('creating', { defaultValue: '创建中...' })}</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="h-3.5 w-3.5" />
+                    <span>{t('confirmAndDrawRules', { defaultValue: '创建并进入标定画板' })}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}

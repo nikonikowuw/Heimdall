@@ -473,7 +473,7 @@ export function LivePlayer({
           <span className="text-cyan-300">{latencyMs}ms</span>
           <span className="text-white/40">|</span>
           <span
-            className={`rounded px-1.5 py-0.2 text-[9px] font-bold tracking-wider ${
+            className={`py-0.2 rounded px-1.5 text-[9px] font-bold tracking-wider ${
               activeProtocol === 'webcodecs'
                 ? 'bg-cyan-500/25 text-cyan-300'
                 : 'bg-emerald-500/25 text-emerald-300'

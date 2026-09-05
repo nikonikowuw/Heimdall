@@ -1,6 +1,7 @@
 {
   "nav": {
     "live": "即時大螢幕",
+    "cameras": "設備管理",
     "tasks": "任務布防",
     "alarms": "告警事件",
     "oplog": "審計日誌"

@@ -284,8 +284,14 @@ async fn delete_camera(
         return Err(ApiError::NotFound(format!("摄像头未找到: {camera_id}")));
     }
 
-    // 停止并清理流会话
+    // 停止并清理流会话与任务流水线
     state.stream_hub.remove_session(&camera_id).await;
+    let _ = state.pipeline.stop_task(&camera_id).await;
+    state
+        .pipeline
+        .set_camera_rules(&camera_id, Vec::new())
+        .await;
+    state.pipeline.set_ai_active(&camera_id, false).await;
 
     // 记录审计日志
     let _ = db::OplogRepo::record(

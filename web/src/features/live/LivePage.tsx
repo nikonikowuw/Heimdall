@@ -6,15 +6,18 @@ import {
   Eye,
   Grid,
   MonitorPlay,
+  Pencil,
   Plus,
   Radio,
   ShieldAlert,
   Sparkles,
+  Trash2,
   User,
   X,
   Zap,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { CameraModal, DeleteCameraModal, normalizeProbeStatus } from '@/features/cameras'
 import { cameraApi, evidenceApi } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 import type { Camera, ProbeStatus } from '@/types'
@@ -44,25 +47,15 @@ function playAlarmChime() {
 }
 
 function getCameraHealthRank(status?: string): number {
-  switch (status?.toLowerCase()) {
+  switch (normalizeProbeStatus(status)) {
     case 'healthy':
-    case 'success':
-    case 'online':
-      return 1 // 🟢 在线健康：第 1 名
-    case 'never':
-    case 'pending':
-    case 'connecting':
-    case '':
-      return 2 // ⚪ 待探测：第 2 名
+      return 1 // 在线健康
+    case 'unprobed':
+      return 2 // 待探测
     case 'degraded':
-    case 'reconnecting':
-      return 3 // 🟡 网络波动：第 3 名
-    case 'failed':
+      return 3 // 网络波动
     case 'offline':
-    case 'error':
-      return 4 // 🔴 离线/故障：第 4 名
-    default:
-      return 5
+      return 4 // 离线/故障
   }
 }
 
@@ -79,36 +72,36 @@ function sortCamerasByHealth(list: Camera[]): Camera[] {
 }
 
 function getStatusBadge(status?: ProbeStatus | string) {
-  const s = status?.toLowerCase()
-  if (s === 'healthy' || s === 'success' || s === 'online') {
-    return {
-      text: '在线',
-      badgeClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
-      dotClass: 'bg-emerald-400 animate-pulse',
-      statusColor: 'text-emerald-400',
-    }
-  }
-  if (s === 'degraded' || s === 'reconnecting') {
-    return {
-      text: '网络波动',
-      badgeClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
-      dotClass: 'bg-amber-400 animate-ping',
-      statusColor: 'text-amber-400',
-    }
-  }
-  if (s === 'failed' || s === 'error' || s === 'offline') {
-    return {
-      text: '离线/故障',
-      badgeClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20',
-      dotClass: 'bg-rose-500',
-      statusColor: 'text-rose-400',
-    }
-  }
-  return {
-    text: '待探测',
-    badgeClass: 'bg-gray-500/10 text-gray-400 border border-gray-500/20',
-    dotClass: 'bg-gray-400',
-    statusColor: 'text-gray-400',
+  switch (normalizeProbeStatus(status)) {
+    case 'healthy':
+      return {
+        text: '在线',
+        badgeClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
+        dotClass: 'bg-emerald-400 animate-pulse',
+        statusColor: 'text-emerald-400',
+      }
+    case 'degraded':
+      return {
+        text: '网络波动',
+        badgeClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
+        dotClass: 'bg-amber-400 animate-ping',
+        statusColor: 'text-amber-400',
+      }
+    case 'offline':
+      return {
+        text: '离线/故障',
+        badgeClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20',
+        dotClass: 'bg-rose-500',
+        statusColor: 'text-rose-400',
+      }
+    case 'unprobed':
+    default:
+      return {
+        text: '待探测',
+        badgeClass: 'bg-gray-500/10 text-gray-400 border border-gray-500/20',
+        dotClass: 'bg-gray-400',
+        statusColor: 'text-gray-400',
+      }
   }
 }
 
@@ -134,12 +127,14 @@ interface LiveAlarmToast {
 
 interface LiveAlarmToastItemProps {
   alarm: LiveAlarmToast
+  cameraName?: string
   onClose: () => void
   onNavigateToAlarms?: () => void
 }
 
 function LiveAlarmToastItem({
   alarm,
+  cameraName,
   onClose,
   onNavigateToAlarms,
 }: LiveAlarmToastItemProps): React.ReactElement {
@@ -164,7 +159,7 @@ function LiveAlarmToastItem({
       <div className="space-y-0.5 text-xs">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-bold text-rose-400 uppercase">{ruleTypeLabel}</span>
-          <span className="font-mono text-[10px] text-slate-400">{alarm.cameraId}</span>
+          <span className="font-semibold text-slate-300">{cameraName || alarm.cameraId}</span>
         </div>
         <p className="font-medium text-slate-200">
           {t('toast.ruleTriggered', { target: alarm.targetLabel })}
@@ -202,10 +197,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   const [heroStream, setHeroStream] = useState<'main' | 'sub'>('main')
   const [viewMode, setViewMode] = useState<'hero_rail' | 'bento_grid'>('hero_rail')
   const [autoSpotlight, setAutoSpotlight] = useState<boolean>(true)
-  const [showAddModal, setShowAddModal] = useState<boolean>(false)
-  const [modalMainUrl, setModalMainUrl] = useState<string>('')
-  const [modalSubUrl, setModalSubUrl] = useState<string>('')
-  const [subCandidates, setSubCandidates] = useState<import('@/types').SubStreamCandidate[]>([])
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState<boolean>(false)
+  const [cameraToEdit, setCameraToEdit] = useState<Camera | null>(null)
+  const [cameraToDelete, setCameraToDelete] = useState<Camera | null>(null)
   const [activeAlarm, setActiveAlarm] = useState<LiveAlarmToast | null>(null)
 
   useEffect(() => {
@@ -239,8 +233,17 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
     let ws: WebSocket | null = null
     let isCancelled = false
     let reconnectTimer: NodeJS.Timeout | null = null
+    let reconnectAttempts = 0
+
+    function scheduleReconnect() {
+      if (isCancelled) return
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)
+      reconnectAttempts += 1
+      reconnectTimer = setTimeout(connectWs, delay)
+    }
 
     function connectWs() {
+      if (isCancelled) return
       const token = useAuthStore.getState().token
       if (!token) return
 
@@ -249,9 +252,14 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       const wsUrl = `${protocol}//${host}/api/v1/ws/events?token=${encodeURIComponent(token)}`
 
       try {
-        ws = new WebSocket(wsUrl)
+        const socket = new WebSocket(wsUrl)
+        ws = socket
 
-        ws.onmessage = (e) => {
+        socket.onopen = () => {
+          reconnectAttempts = 0
+        }
+
+        socket.onmessage = (e) => {
           try {
             const event = JSON.parse(e.data) as {
               topic: string
@@ -314,14 +322,18 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           }
         }
 
-        ws.onclose = () => {
+        socket.onclose = () => {
           if (!isCancelled) {
-            reconnectTimer = setTimeout(connectWs, 3000)
+            scheduleReconnect()
           }
+        }
+
+        socket.onerror = () => {
+          // onclose 将被触发并处理重连
         }
       } catch {
         if (!isCancelled) {
-          reconnectTimer = setTimeout(connectWs, 3000)
+          scheduleReconnect()
         }
       }
     }
@@ -330,8 +342,36 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
 
     return () => {
       isCancelled = true
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      if (ws) ws.close()
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+      if (ws) {
+        // 解绑监听器，防止组件卸载后仍触发重连或处理消息
+        ws.onmessage = null
+        ws.onerror = null
+        ws.onclose = null
+
+        if (ws.readyState === WebSocket.CONNECTING) {
+          // 若处于握手阶段，等待建立后再安全关闭，防止浏览器在控制台产生
+          // "WebSocket is closed before the connection is established" 报错
+          const pendingWs = ws
+          pendingWs.onopen = () => {
+            try {
+              pendingWs.close(1000, 'unmounted')
+            } catch {
+              // 忽略关闭异常
+            }
+          }
+        } else if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.close(1000, 'unmounted')
+          } catch {
+            // 忽略关闭异常
+          }
+        }
+        ws = null
+      }
     }
   }, [])
 
@@ -343,6 +383,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       {activeAlarm && (
         <LiveAlarmToastItem
           alarm={activeAlarm}
+          cameraName={cameras.find((c) => c.cameraId === activeAlarm.cameraId)?.name}
           onClose={() => setActiveAlarm(null)}
           onNavigateToAlarms={onNavigateToAlarms}
         />
@@ -423,7 +464,10 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           {/* 添加摄像头按钮 */}
           <button
             type="button"
-            onClick={() => setShowAddModal(true)}
+            onClick={() => {
+              setCameraToEdit(null)
+              setIsCameraModalOpen(true)
+            }}
             className="flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -505,6 +549,30 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   {t('live.latency', '端到端延时')}:{' '}
                   <strong className="text-cyan-400">128 ms</strong>
                 </span>
+                {heroCamera && (
+                  <div className="flex items-center gap-1.5 border-l border-[var(--border)] pl-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCameraToEdit(heroCamera)
+                        setIsCameraModalOpen(true)
+                      }}
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                      title={t('manage.editCamera')}
+                    >
+                      <Pencil className="h-3 w-3" />
+                      <span>{t('manage.editCamera')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCameraToDelete(heroCamera)}
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-rose-500/10 hover:text-rose-500"
+                      title={t('manage.deleteCamera')}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -533,6 +601,33 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   >
                     {/* 微缩播放器视口 (当被选为主大屏展示时，子码流预览窗口停止播放以释放硬件解码与网络资源) */}
                     <div className="relative aspect-video w-full">
+                      {/* 悬停快捷操作组 */}
+                      <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-0 backdrop-blur-xs transition-opacity group-hover:opacity-100">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setCameraToEdit(cam)
+                            setIsCameraModalOpen(true)
+                          }}
+                          className="rounded p-1 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+                          title={t('manage.editCamera')}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setCameraToDelete(cam)
+                          }}
+                          className="rounded p-1 text-rose-400 transition-colors hover:bg-rose-500/20 hover:text-rose-300"
+                          title={t('manage.deleteCamera')}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+
                       {isFocused ? (
                         <div className="flex h-full w-full flex-col items-center justify-center bg-black/80 p-2 text-center">
                           <div className="flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-400">
@@ -615,23 +710,73 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       ) : (
         /* 全景自适应 Bento 网格视图 */
         <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto md:grid-cols-2 lg:grid-cols-3">
-          {cameras.map((cam) => (
-            <div
-              key={cam.cameraId}
-              className="flex flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]"
-            >
-              <div className="relative aspect-video w-full">
-                <LivePlayer
-                  cameraId={cam.cameraId}
-                  cameraName={cam.name}
-                  showHud={true}
-                  isHero={false}
-                  stream="sub"
-                  className="h-full w-full"
-                />
+          {cameras.map((cam) => {
+            const statusBadge = getStatusBadge(cam.lastProbeStatus)
+            return (
+              <div
+                key={cam.cameraId}
+                className="group flex flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] shadow-xs transition-all hover:border-[var(--accent)]/40 hover:shadow-md"
+              >
+                {/* 顶部设备标识与操作栏 */}
+                <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full ${statusBadge.dotClass}`} />
+                    <span className="max-w-[140px] truncate font-semibold text-[var(--text-primary)]">
+                      {cam.name}
+                    </span>
+                    <span className="font-mono text-[10px] text-[var(--text-muted)]">
+                      {cam.lastCodec ? cam.lastCodec.toUpperCase() : 'H264'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedHeroId(cam.cameraId)
+                        setViewMode('hero_rail')
+                      }}
+                      className="flex h-6 items-center gap-1 rounded px-1.5 text-[10px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                      title={t('live.focusHero')}
+                    >
+                      <Eye className="h-3 w-3" />
+                      <span>{t('live.focus')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCameraToEdit(cam)
+                        setIsCameraModalOpen(true)
+                      }}
+                      className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                      title={t('manage.editCamera')}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCameraToDelete(cam)}
+                      className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-secondary)] transition-colors hover:bg-rose-500/10 hover:text-rose-500"
+                      title={t('manage.deleteCamera')}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative aspect-video w-full">
+                  <LivePlayer
+                    cameraId={cam.cameraId}
+                    cameraName={cam.name}
+                    showHud={true}
+                    isHero={false}
+                    stream="sub"
+                    className="h-full w-full"
+                  />
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
 
           {cameras.length === 0 && (
             <div className="col-span-full flex items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-12 text-center text-xs text-[var(--text-muted)]">
@@ -641,162 +786,43 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
         </div>
       )}
 
-      {/* 快捷添加摄像头弹窗 */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="frosted-glass w-full max-w-md rounded-2xl border border-[var(--border)] p-6 shadow-2xl">
-            <h3 className="text-base font-semibold text-[var(--text-primary)]">
-              {t('live.addCameraTitle', '接入网络摄像头 (RTSP)')}
-            </h3>
-            <p className="mt-1 text-xs text-[var(--text-muted)]">
-              {t(
-                'live.addCameraDesc',
-                '支持主流标准 RTSP 协议，系统将自动发起异步握手探活与 SPS 解析。',
-              )}
-            </p>
+      {/* 统一添加/编辑摄像头模态框 */}
+      <CameraModal
+        isOpen={isCameraModalOpen}
+        camera={cameraToEdit}
+        onClose={() => {
+          setIsCameraModalOpen(false)
+          setCameraToEdit(null)
+        }}
+        onSuccess={(saved) => {
+          setCameras((prev) => {
+            const exists = prev.some((c) => c.cameraId === saved.cameraId)
+            const updated = exists
+              ? prev.map((c) => (c.cameraId === saved.cameraId ? saved : c))
+              : [...prev, saved]
+            return sortCamerasByHealth(updated)
+          })
+          if (!selectedHeroId) {
+            setSelectedHeroId(saved.cameraId)
+          }
+        }}
+      />
 
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault()
-                const form = e.currentTarget
-                const name = (form.elements.namedItem('name') as HTMLInputElement).value
-                const rtspUrl = modalMainUrl.trim()
-                const subRtspUrl = modalSubUrl.trim()
-                const remark = (form.elements.namedItem('remark') as HTMLInputElement).value
-
-                try {
-                  const created = await cameraApi.create({
-                    name,
-                    rtspUrl,
-                    subRtspUrl: subRtspUrl || undefined,
-                    remark,
-                  })
-                  if (created) {
-                    setCameras((prev) => sortCamerasByHealth([...prev, created]))
-                    setShowAddModal(false)
-                    setModalMainUrl('')
-                    setModalSubUrl('')
-                    setSubCandidates([])
-                  }
-                } catch {
-                  setShowAddModal(false)
-                }
-              }}
-              className="mt-4 flex flex-col gap-3"
-            >
-              <div>
-                <label className="text-xs font-medium text-[var(--text-secondary)]">
-                  {t('live.deviceName', '设备名称')}
-                </label>
-                <input
-                  name="name"
-                  required
-                  placeholder={t('live.namePlaceholder', '例如：库房正门东区')}
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-hidden"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-[var(--text-secondary)]">
-                  {t('live.rtspUrl', '主码流 RTSP 地址 (4K/1080P 高清分析/大屏)')}
-                </label>
-                <input
-                  name="rtspUrl"
-                  required
-                  value={modalMainUrl}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    setModalMainUrl(val)
-                  }}
-                  onBlur={async () => {
-                    if (modalMainUrl.trim()) {
-                      try {
-                        const candidates = await cameraApi.deduceSubStream(modalMainUrl.trim())
-                        setSubCandidates(candidates)
-                        if (candidates.length > 0 && !modalSubUrl) {
-                          setModalSubUrl(candidates[0].subUrl)
-                        }
-                      } catch {
-                        // ignore deduction failure
-                      }
-                    }
-                  }}
-                  placeholder={t(
-                    'live.rtspPlaceholder',
-                    'rtsp://admin:12345@192.168.1.100:554/Streaming/Channels/101',
-                  )}
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-hidden"
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-[var(--text-secondary)]">
-                    {t('live.subRtspUrl', '子码流 RTSP 地址 (多分屏/Bento 辅流预览)')}
-                  </label>
-                  {subCandidates.length > 0 && (
-                    <span className="text-[10px] font-medium text-cyan-400">⚡ 已自动推导候选</span>
-                  )}
-                </div>
-                <input
-                  name="subRtspUrl"
-                  value={modalSubUrl}
-                  onChange={(e) => setModalSubUrl(e.target.value)}
-                  placeholder="可留空自动推导，或手动指定子码流"
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-hidden"
-                />
-
-                {subCandidates.length > 0 && (
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {subCandidates.map((c, i) => (
-                      <button
-                        type="button"
-                        key={i}
-                        onClick={() => setModalSubUrl(c.subUrl)}
-                        className={`rounded-md px-2 py-0.5 font-mono text-[10px] transition-colors ${
-                          modalSubUrl === c.subUrl
-                            ? 'border border-cyan-500/30 bg-cyan-500/20 text-cyan-400'
-                            : 'bg-[var(--accent-soft)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                        }`}
-                        title={c.description}
-                      >
-                        {c.brand}: {c.description}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-[var(--text-secondary)]">
-                  {t('live.remark', '备注说明')}
-                </label>
-                <input
-                  name="remark"
-                  placeholder={t('live.remarkPlaceholder', '例如：主要出入口布防')}
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-hidden"
-                />
-              </div>
-
-              <div className="mt-2 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]"
-                >
-                  {t('live.cancel', '取消')}
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white shadow-xs hover:opacity-90"
-                >
-                  {t('live.saveAndProbe', '保存并探活')}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* 摄像头删除确认模态框 */}
+      <DeleteCameraModal
+        isOpen={Boolean(cameraToDelete)}
+        camera={cameraToDelete}
+        onClose={() => setCameraToDelete(null)}
+        onSuccess={(deletedId) => {
+          setCameras((prev) => {
+            const updated = prev.filter((c) => c.cameraId !== deletedId)
+            if (selectedHeroId === deletedId) {
+              setSelectedHeroId(updated.length > 0 ? updated[0].cameraId : '')
+            }
+            return updated
+          })
+        }}
+      />
     </div>
   )
 }

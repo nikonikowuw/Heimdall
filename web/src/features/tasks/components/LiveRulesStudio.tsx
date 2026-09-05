@@ -1,105 +1,53 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  AlertCircle,
   ArrowLeft,
   Check,
-  CheckCircle2,
-  Copy,
-  Cpu,
   Crop,
-  Eye,
-  EyeOff,
   Hexagon,
-  Layers,
   Magnet,
   MousePointer2,
   Save,
   ShieldAlert,
-  ShieldCheck,
   Slash,
-  SlidersHorizontal,
-  Trash2,
-  Upload,
-  X,
+  Square,
+  Video,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { algoApi, cameraApi, taskApi } from '../../../lib/api'
+import { LivePlayer } from '@/features/live/components/LivePlayer'
+import { algoApi, taskApi } from '@/lib/api'
 import type {
   AlgoManifest,
   Camera,
   DetectionLineDirection,
   DetectionPoint,
-  DetectionRule,
   DetectionRuleRole,
   SandboxCheckResult,
   TaskConfigDto,
-} from '../../../types'
-import { LivePlayer } from '../../live/components/LivePlayer'
+} from '@/types'
+import { AlgoSandboxDrawer } from './AlgoSandboxDrawer'
+import { AlgoSettingsSidebar } from './AlgoSettingsSidebar'
+import { RuleInspectorSidebar } from './RuleInspectorSidebar'
+import {
+  DEFAULT_ALGO_PACKAGES,
+  DEFAULT_SANDBOX_STEPS,
+  ExtendedRule,
+  getDefaultRuleName,
+  getInitialRuleColor,
+  getLineMarkerEnd,
+  getRuleTheme,
+  getToolTheme,
+  isPointInPolygon,
+  isPointNearLine,
+  ToolMode,
+} from './rulesStudioTypes'
 
-const DEFAULT_ALGO_PACKAGES: AlgoManifest[] = [
-  {
-    algorithmId: 'general_detection',
-    name: '通用人体与车辆检测器',
-    version: '1.0.0',
-    author: 'Argus AI Team',
-    description: '高能效实时多类目标检测，适配 ANE/NPU 零拷贝管线',
-    category: 'detection',
-    supportedPlatforms: ['macos-arm64', 'linux-rknn'],
-    classes: ['person', 'car', 'bicycle', 'motorcycle', 'bus', 'truck'],
-  },
-]
-
-type ToolMode = 'select' | 'roi' | 'line' | 'mask' | 'precrop'
-
-interface ExtendedRule extends DetectionRule {
-  id: string
-  name: string
-  visible: boolean
-  boundAlgo?: string
-  targetClasses?: string[]
-}
-
-interface LiveRulesStudioProps {
-  initialCamera?: Camera | null
+export interface LiveRulesStudioProps {
+  camera: Camera
   onBack?: () => void
 }
 
-function getDefaultRuleName(role: DetectionRuleRole, index: number): string {
-  switch (role) {
-    case 'roi':
-      return `入侵防区 ${index}`
-    case 'line':
-      return `越界绊线 ${index}`
-    case 'mask':
-      return `屏蔽遮罩 ${index}`
-    default:
-      return `规则 ${index}`
-  }
-}
-
-function getLineMarkerEnd(direction?: DetectionLineDirection): string | undefined {
-  if (direction === 'a_to_b') {
-    return 'url(#line-arrow-a-to-b)'
-  }
-  if (direction === 'b_to_a') {
-    return 'url(#line-arrow-b-to-a)'
-  }
-  return undefined
-}
-
-function getDirectionLabel(dir: string, t: (key: string) => string): string {
-  if (dir === 'both') return t('inspector.dirBoth')
-  if (dir === 'a_to_b') return t('inspector.dirAtoB')
-  return t('inspector.dirBtoA')
-}
-
-export function LiveRulesStudio({
-  initialCamera,
-  onBack,
-}: LiveRulesStudioProps): React.ReactElement {
+export function LiveRulesStudio({ camera, onBack }: LiveRulesStudioProps): React.ReactElement {
   const { t } = useTranslation('task')
-  const [cameras, setCameras] = useState<Camera[]>([])
-  const [selectedCamera, setSelectedCamera] = useState<Camera | null>(initialCamera || null)
   const [taskConfig, setTaskConfig] = useState<TaskConfigDto | null>(null)
   const [rules, setRules] = useState<ExtendedRule[]>([])
   const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null)
@@ -117,33 +65,57 @@ export function LiveRulesStudio({
   const [isSaving, setIsSaving] = useState(false)
   const [saveToast, setSaveToast] = useState<string | null>(null)
 
+  // 算法选择与目标感知配置
+  const [selectedAlgoId, setSelectedAlgoId] = useState<string>('general_detection')
+  const [globalTargetClasses, setGlobalTargetClasses] = useState<string[]>(['person', 'car'])
+  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.5)
+  const [motionGateEnabled, setMotionGateEnabled] = useState<boolean>(true)
+  const [motionGateThreshold, setMotionGateThreshold] = useState<number>(25)
+
+  const activeAlgo =
+    availableAlgos.find((a) => a.algorithmId === selectedAlgoId) ||
+    availableAlgos[0] ||
+    DEFAULT_ALGO_PACKAGES[0]
+
+  const handleAlgoChange = (newAlgoId: string) => {
+    setSelectedAlgoId(newAlgoId)
+    const found = availableAlgos.find((a) => a.algorithmId === newAlgoId)
+    if (found && found.classes && found.classes.length > 0) {
+      const valid = globalTargetClasses.filter((c) => found.classes.includes(c))
+      setGlobalTargetClasses(valid.length > 0 ? valid : found.classes.slice(0, 3))
+    }
+  }
+
   // 顶点拖拽状态
   const [draggingVertex, setDraggingVertex] = useState<{
     ruleId: string
     pointIndex: number
   } | null>(null)
 
+  // 图形整体平移状态
+  const [draggingShape, setDraggingShape] = useState<{
+    ruleId: string
+    startCursor: DetectionPoint
+    initialPoints: DetectionPoint[]
+  } | null>(null)
+
   const stageRef = useRef<HTMLDivElement>(null)
 
-  // 加载摄像头与算法包列表
+  // 加载该摄像头的挂载算法包列表
   useEffect(() => {
     let isMounted = true
-    cameraApi
-      .list()
-      .then((list) => {
-        if (!isMounted) return
-        setCameras(list)
-        if (!selectedCamera && list.length > 0) {
-          setSelectedCamera(list[0])
-        }
-      })
-      .catch(() => {})
-
     algoApi
       .listPackages()
       .then((pkgs) => {
         if (!isMounted) return
-        setAvailableAlgos(pkgs.length > 0 ? pkgs : DEFAULT_ALGO_PACKAGES)
+        const list = pkgs.length > 0 ? pkgs : DEFAULT_ALGO_PACKAGES
+        setAvailableAlgos(list)
+        if (!list.some((p) => p.algorithmId === selectedAlgoId)) {
+          setSelectedAlgoId(list[0].algorithmId)
+          if (list[0].classes && list[0].classes.length > 0) {
+            setGlobalTargetClasses(list[0].classes.slice(0, 3))
+          }
+        }
       })
       .catch(() => {
         if (!isMounted) return
@@ -153,92 +125,82 @@ export function LiveRulesStudio({
     return () => {
       isMounted = false
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedAlgoId])
 
   // 加载选定摄像头的任务布防配置
   useEffect(() => {
-    if (!selectedCamera) return
-
     taskApi
-      .getTask(selectedCamera.cameraId)
+      .getTask(camera.cameraId)
       .then((dto) => {
         setTaskConfig(dto)
         setIsArmed(dto.desiredEnabled)
 
-        const extRules: ExtendedRule[] = dto.rules.map((r, idx) => ({
-          ...r,
-          lineDirection:
-            r.lineDirection ||
-            (r as unknown as { line_direction?: DetectionLineDirection }).line_direction ||
-            'both',
-          id: `rule_${idx}_${Date.now()}`,
-          name: getDefaultRuleName(r.role, idx + 1),
-          visible: true,
-          boundAlgo: 'general_detection',
-          targetClasses: ['person', 'car'],
-        }))
+        if (dto.motionGate) {
+          setMotionGateEnabled(dto.motionGate.enabled)
+          if (dto.motionGate.threshold !== undefined) {
+            setMotionGateThreshold(dto.motionGate.threshold)
+          }
+        }
+
+        let roiIdx = 0
+        const extRules: ExtendedRule[] = dto.rules.map((r, idx) => {
+          const color = getInitialRuleColor(r.role, roiIdx)
+          if (r.role === 'roi') {
+            roiIdx += 1
+          }
+
+          return {
+            ...r,
+            lineDirection:
+              r.lineDirection ||
+              (r as unknown as { line_direction?: DetectionLineDirection }).line_direction ||
+              'both',
+            id: `rule_${idx}_${Date.now()}`,
+            name: getDefaultRuleName(r.role, idx + 1),
+            visible: true,
+            boundAlgo: selectedAlgoId,
+            targetClasses: ['person', 'car'],
+            color,
+          }
+        })
         setRules(extRules)
         if (extRules.length > 0) {
           setSelectedRuleId(extRules[0].id)
         }
       })
       .catch(() => {})
-  }, [selectedCamera])
+  }, [camera, selectedAlgoId])
 
-  // 键盘快捷键响应
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-
-      if (e.key === 'v' || e.key === 'V') setTool('select')
-      if (e.key === 'r' || e.key === 'R') {
-        setTool('roi')
-        setCurrentPoints([])
-      }
-      if (e.key === 'l' || e.key === 'L') {
-        setTool('line')
-        setCurrentPoints([])
-      }
-      if (e.key === 'm' || e.key === 'M') {
-        setTool('mask')
-        setCurrentPoints([])
-      }
-      if (e.key === 'c' || e.key === 'C') {
-        setTool('precrop')
-        setCurrentPoints([])
-      }
-      if (e.key === 'Enter') {
-        finishDrawing()
-      }
-      if (e.key === 'Escape') {
-        setCurrentPoints([])
-        setTool('select')
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedRuleId && tool === 'select') {
-          deleteRule(selectedRuleId)
-        }
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [tool, currentPoints, selectedRuleId, rules.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 删除规则
+  const deleteRule = useCallback((ruleId: string) => {
+    setRules((prev) => prev.filter((r) => r.id !== ruleId))
+    setSelectedRuleId((prev) => (prev === ruleId ? null : prev))
+  }, [])
 
   // 获取归一化鼠标相对坐标 [0.0, 1.0]
   const getNormalizedPoint = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>): DetectionPoint => {
+    (
+      e:
+        | React.MouseEvent<HTMLElement | SVGElement>
+        | MouseEvent
+        | { clientX: number; clientY: number },
+      skipPoint?: { ruleId: string; pointIndex: number },
+    ): DetectionPoint => {
       if (!stageRef.current) return { x: 0, y: 0 }
       const rect = stageRef.current.getBoundingClientRect()
       let x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
       let y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height))
 
-      // 磁吸吸附到既有顶点
+      // 磁吸吸附到其他既有顶点
       if (snapEnabled) {
-        const threshold = 0.02
+        const threshold = 0.015
         for (const rule of rules) {
           if (!rule.visible) continue
-          for (const pt of rule.points) {
+          for (let i = 0; i < rule.points.length; i++) {
+            if (skipPoint && rule.id === skipPoint.ruleId && i === skipPoint.pointIndex) {
+              continue
+            }
+            const pt = rule.points[i]
             if (Math.hypot(pt.x - x, pt.y - y) < threshold) {
               x = pt.x
               y = pt.y
@@ -253,67 +215,207 @@ export function LiveRulesStudio({
     [snapEnabled, rules],
   )
 
-  // 完成当前绘制
-  const finishDrawing = () => {
-    if (currentPoints.length < 2) {
+  // 完成并提交绘制点集
+  const finishDrawingPoints = useCallback(
+    (points: DetectionPoint[], activeTool: ToolMode = tool) => {
+      if (activeTool === 'line') {
+        if (points.length < 2) {
+          setCurrentPoints([])
+          return
+        }
+      } else if (points.length < 3) {
+        setCurrentPoints([])
+        return
+      }
+
+      let role: DetectionRuleRole = 'roi'
+      if (activeTool === 'line') {
+        role = 'line'
+      } else if (activeTool === 'mask') {
+        role = 'mask'
+      }
+
+      const existingRoiCount = rules.filter((r) => r.role === 'roi').length
+      const assignedColor = getInitialRuleColor(role, existingRoiCount)
+
+      const newRule: ExtendedRule = {
+        id: `rule_${Date.now()}`,
+        name: getDefaultRuleName(role, rules.length + 1),
+        role,
+        lineDirection: role === 'line' ? 'both' : undefined,
+        points: [...points],
+        visible: true,
+        boundAlgo: 'general_detection',
+        targetClasses: ['person', 'car'],
+        color: assignedColor,
+      }
+
+      setRules((prev) => [...prev, newRule])
+      setSelectedRuleId(newRule.id)
       setCurrentPoints([])
-      return
+      setTool('select')
+    },
+    [rules, tool],
+  )
+
+  // 完成当前绘制
+  const finishDrawing = useCallback(() => {
+    finishDrawingPoints(currentPoints, tool)
+  }, [currentPoints, finishDrawingPoints, tool])
+
+  // 键盘快捷键响应
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+
+      if (e.key === 'v' || e.key === 'V') {
+        setTool('select')
+        setCurrentPoints([])
+      }
+      if (e.key === 'r' || e.key === 'R' || e.key === 'p' || e.key === 'P') {
+        setTool('roi')
+        setCurrentPoints([])
+      }
+      if (e.key === 'l' || e.key === 'L') {
+        setTool('line')
+        setCurrentPoints([])
+      }
+      if (e.key === 'm' || e.key === 'M') {
+        setTool('mask')
+        setCurrentPoints([])
+      }
+      if (e.key === 'b' || e.key === 'B') {
+        setTool('rect')
+        setCurrentPoints([])
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        setTool('precrop')
+        setCurrentPoints([])
+      }
+      if (e.key === 'Enter') {
+        finishDrawing()
+      }
+      if (e.key === 'Escape') {
+        if (isAlgoDrawerOpen) {
+          setIsAlgoDrawerOpen(false)
+          return
+        }
+        if (currentPoints.length > 0) {
+          setCurrentPoints([])
+        } else if (tool !== 'select') {
+          setTool('select')
+        } else if (onBack) {
+          onBack()
+        }
+      }
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        if (currentPoints.length > 0) {
+          e.preventDefault()
+          setCurrentPoints((prev) => prev.slice(0, -1))
+          return
+        }
+        if (selectedRuleId && tool === 'select') {
+          deleteRule(selectedRuleId)
+        }
+      }
     }
 
-    let role: DetectionRuleRole = 'roi'
-    if (tool === 'line') role = 'line'
-    if (tool === 'mask') role = 'mask'
-    if (tool === 'precrop') role = 'roi'
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [tool, currentPoints, selectedRuleId, onBack, isAlgoDrawerOpen, finishDrawing, deleteRule])
 
-    const newRule: ExtendedRule = {
-      id: `rule_${Date.now()}`,
-      name: getDefaultRuleName(role, rules.length + 1),
-      role,
-      lineDirection: role === 'line' ? 'both' : undefined,
-      points: [...currentPoints],
-      visible: true,
-      boundAlgo: 'general_detection',
-      targetClasses: ['person', 'car'],
+  // 鼠标在画布按下 (MouseDown)
+  const handleStageMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+
+    const pt = getNormalizedPoint(e)
+
+    if (tool === 'select' && selectedRuleId) {
+      const rule = rules.find((r) => r.id === selectedRuleId)
+      if (rule && rule.visible) {
+        const hit =
+          rule.role === 'line'
+            ? isPointNearLine(pt, rule.points[0], rule.points[1])
+            : isPointInPolygon(pt, rule.points)
+        if (hit) {
+          setDraggingShape({
+            ruleId: rule.id,
+            startCursor: pt,
+            initialPoints: rule.points.map((p) => ({ ...p })),
+          })
+        }
+      }
     }
-
-    setRules((prev) => [...prev, newRule])
-    setSelectedRuleId(newRule.id)
-    setCurrentPoints([])
-    setTool('select')
   }
 
-  // 画布点击处理
+  // 全局平滑拖拽监听器
+  useEffect(() => {
+    if (!draggingVertex && !draggingShape) return
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (draggingVertex) {
+        const pt = getNormalizedPoint(e, draggingVertex)
+        setRules((prev) =>
+          prev.map((r) => {
+            if (r.id !== draggingVertex.ruleId) return r
+            const pts = [...r.points]
+            pts[draggingVertex.pointIndex] = pt
+            return { ...r, points: pts }
+          }),
+        )
+      } else if (draggingShape) {
+        const pt = getNormalizedPoint(e)
+        const dx = pt.x - draggingShape.startCursor.x
+        const dy = pt.y - draggingShape.startCursor.y
+        setRules((prev) =>
+          prev.map((r) => {
+            if (r.id !== draggingShape.ruleId) return r
+            const movedPts = draggingShape.initialPoints.map((p) => ({
+              x: Math.max(0, Math.min(1, Number((p.x + dx).toFixed(4)))),
+              y: Math.max(0, Math.min(1, Number((p.y + dy).toFixed(4)))),
+            }))
+            return { ...r, points: movedPts }
+          }),
+        )
+      }
+    }
+
+    const handleGlobalMouseUp = () => {
+      setDraggingVertex(null)
+      setDraggingShape(null)
+    }
+
+    window.addEventListener('mousemove', handleGlobalMouseMove)
+    window.addEventListener('mouseup', handleGlobalMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove)
+      window.removeEventListener('mouseup', handleGlobalMouseUp)
+    }
+  }, [draggingVertex, draggingShape, getNormalizedPoint])
+
+  const handleStageMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (draggingVertex || draggingShape) return
+    const pt = getNormalizedPoint(e)
+    setCursorPos(pt)
+  }
+
+  const handleStageMouseUp = () => {
+    if (draggingVertex) setDraggingVertex(null)
+    if (draggingShape) setDraggingShape(null)
+  }
+
   const handleStageClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (tool === 'select') return
 
     const pt = getNormalizedPoint(e)
 
-    if (tool === 'line') {
-      const next = [...currentPoints, pt]
-      if (next.length >= 2) {
-        const newRule: ExtendedRule = {
-          id: `rule_${Date.now()}`,
-          name: `越界绊线 ${rules.length + 1}`,
-          role: 'line',
-          lineDirection: 'both',
-          points: next,
-          visible: true,
-          boundAlgo: 'general_detection',
-          targetClasses: ['person', 'car'],
-        }
-        setRules((prev) => [...prev, newRule])
-        setSelectedRuleId(newRule.id)
-        setCurrentPoints([])
-        setTool('select')
+    if (tool === 'rect' || tool === 'precrop') {
+      if (currentPoints.length === 0) {
+        setCurrentPoints([pt])
       } else {
-        setCurrentPoints(next)
-      }
-    } else if (tool === 'precrop') {
-      const next = [...currentPoints, pt]
-      if (next.length >= 2) {
-        // 转换两点为 4 顶点矩形
-        const p1 = next[0]
-        const p2 = next[1]
+        const p1 = currentPoints[0]
+        const p2 = pt
+        if (Math.hypot(p2.x - p1.x, p2.y - p1.y) < 0.005) return
         const x1 = Math.min(p1.x, p2.x)
         const y1 = Math.min(p1.y, p2.y)
         const x2 = Math.max(p1.x, p2.x)
@@ -324,76 +426,78 @@ export function LiveRulesStudio({
           { x: x2, y: y2 },
           { x: x1, y: y2 },
         ]
+        finishDrawingPoints(rectPoints, tool)
+      }
+      return
+    }
 
-        const newRule: ExtendedRule = {
-          id: `rule_${Date.now()}`,
-          name: `局部特写 ${rules.length + 1}`,
-          role: 'roi',
-          points: rectPoints,
-          visible: true,
-          boundAlgo: 'general_detection',
-          targetClasses: ['person'],
-        }
-        setRules((prev) => [...prev, newRule])
-        setSelectedRuleId(newRule.id)
-        setCurrentPoints([])
-        setTool('select')
+    if (tool === 'line') {
+      if (currentPoints.length === 0) {
+        setCurrentPoints([pt])
       } else {
-        setCurrentPoints(next)
+        if (Math.hypot(pt.x - currentPoints[0].x, pt.y - currentPoints[0].y) < 0.005) return
+        finishDrawingPoints([currentPoints[0], pt], 'line')
       }
-    } else {
-      // 多边形 (roi / mask)
-      if (currentPoints.length >= 3) {
-        const first = currentPoints[0]
-        if (Math.hypot(first.x - pt.x, first.y - pt.y) < 0.03) {
-          finishDrawing()
-          return
+      return
+    }
+
+    if (tool === 'polygon' || tool === 'roi' || tool === 'mask') {
+      if (currentPoints.length === 0) {
+        setCurrentPoints([pt])
+      } else {
+        if (currentPoints.length >= 3) {
+          const first = currentPoints[0]
+          if (Math.hypot(first.x - pt.x, first.y - pt.y) < 0.035) {
+            finishDrawing()
+            return
+          }
         }
+        const last = currentPoints[currentPoints.length - 1]
+        if (Math.hypot(last.x - pt.x, last.y - pt.y) < 0.005) return
+        setCurrentPoints((prev) => [...prev, pt])
       }
-      setCurrentPoints((prev) => [...prev, pt])
     }
   }
 
-  // 鼠标移动
-  const handleStageMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const pt = getNormalizedPoint(e)
-    setCursorPos(pt)
-
-    if (draggingVertex) {
-      setRules((prev) =>
-        prev.map((r) => {
-          if (r.id !== draggingVertex.ruleId) return r
-          const pts = [...r.points]
-          pts[draggingVertex.pointIndex] = pt
-          return { ...r, points: pts }
-        }),
-      )
+  const handleStageDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (currentPoints.length >= 3 && (tool === 'polygon' || tool === 'mask' || tool === 'roi')) {
+      finishDrawing()
     }
   }
 
-  const handleStageMouseUp = () => {
-    setDraggingVertex(null)
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    if (currentPoints.length > 0) {
+      setCurrentPoints([])
+    } else if (tool !== 'select') {
+      setTool('select')
+    }
   }
 
-  // 保存任务配置到后端
   const handleSave = async () => {
-    if (!selectedCamera) return
     setIsSaving(true)
 
     try {
       const payloadDto: TaskConfigDto = {
-        cameraId: selectedCamera.cameraId,
-        name: taskConfig?.name || `Task-${selectedCamera.cameraId}`,
+        cameraId: camera.cameraId,
+        name: taskConfig?.name || camera.name || `Task-${camera.cameraId}`,
         desiredEnabled: isArmed,
         rules: rules.map((r) => ({
           role: r.role,
           lineDirection: r.lineDirection,
           points: r.points,
         })),
-        motionGate: taskConfig?.motionGate || { enabled: true },
+        motionGate: {
+          enabled: motionGateEnabled,
+          threshold: motionGateThreshold,
+          contourArea: 100,
+          keepaliveIntervalMs: 2000,
+        },
       }
 
-      await taskApi.updateTask(selectedCamera.cameraId, payloadDto)
+      await taskApi.updateTask(camera.cameraId, payloadDto)
       setSaveToast(t('footer.saveSuccess'))
       setTimeout(() => setSaveToast(null), 3000)
     } catch (err) {
@@ -404,15 +508,6 @@ export function LiveRulesStudio({
     }
   }
 
-  // 删除规则
-  const deleteRule = (ruleId: string) => {
-    setRules((prev) => prev.filter((r) => r.id !== ruleId))
-    if (selectedRuleId === ruleId) {
-      setSelectedRuleId(null)
-    }
-  }
-
-  // 克隆规则
   const cloneRule = (ruleId: string) => {
     const target = rules.find((r) => r.id === ruleId)
     if (!target) return
@@ -429,7 +524,6 @@ export function LiveRulesStudio({
     setSelectedRuleId(cloned.id)
   }
 
-  // 触发沙箱七步安全验证
   const handleRunSandboxTest = async () => {
     setIsVerifyingSandbox(true)
     setSandboxResult(null)
@@ -441,15 +535,7 @@ export function LiveRulesStudio({
         passed: false,
         stepsTotal: 7,
         stepsPassed: 3,
-        steps: [
-          '1. 路径防穿透与目录结构检查',
-          '2. SHA256 完整性与安全指纹校验',
-          '3. 解析 Manifest 与平台拓扑匹配',
-          '4. Config Schema 参数格式校验',
-          '5. 派生隔离子进程与超时守护',
-          '6. 算法库 C ABI 导出符号核对',
-          '7. 真实前向推理自测与内存复核',
-        ],
+        steps: DEFAULT_SANDBOX_STEPS,
         errorMessage: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -457,7 +543,6 @@ export function LiveRulesStudio({
     }
   }
 
-  // 上传算法包归档 (.zip / .tar.gz / .tar) 并在隔离沙箱中加载
   const handleUploadPackageFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -478,15 +563,7 @@ export function LiveRulesStudio({
         passed: false,
         stepsTotal: 7,
         stepsPassed: 0,
-        steps: [
-          '1. 路径防穿透与目录结构检查',
-          '2. SHA256 完整性与安全指纹校验',
-          '3. 解析 Manifest 与平台拓扑匹配',
-          '4. Config Schema 参数格式校验',
-          '5. 派生隔离子进程与超时守护',
-          '6. 算法库 C ABI 导出符号核对',
-          '7. 真实前向推理自测与内存复核',
-        ],
+        steps: DEFAULT_SANDBOX_STEPS,
         errorMessage: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -495,330 +572,402 @@ export function LiveRulesStudio({
     }
   }
 
+  const handleUpdateRule = (ruleId: string, partial: Partial<ExtendedRule>) => {
+    setRules((prev) => prev.map((r) => (r.id === ruleId ? { ...r, ...partial } : r)))
+  }
+
   const selectedRule = rules.find((r) => r.id === selectedRuleId)
+  const isLineOrPolyReadyToClose =
+    (tool === 'line' && currentPoints.length >= 2) || currentPoints.length >= 3
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-[var(--bg-primary)] font-sans text-[var(--text-primary)] select-none">
-      {/* ----------------- 左侧：通道身份与挂载算法栈 ----------------- */}
-      <aside className="frosted-glass flex w-80 min-w-80 flex-col overflow-y-auto border-r border-[var(--border)] text-xs">
-        {/* 通道主控区 */}
-        <div className="space-y-3 border-b border-[var(--border)] bg-[var(--bg-secondary)]/50 p-4">
-          <div className="flex items-center justify-between">
-            {onBack && (
-              <button
-                onClick={onBack}
-                className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:text-[var(--accent)]"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                <span>{t('studio.backToChannels')}</span>
-              </button>
-            )}
-            <div className="flex items-center gap-1.5">
-              <span
-                className={`h-2 w-2 rounded-full ${isArmed ? 'animate-pulse bg-emerald-500' : 'bg-slate-400'}`}
-              />
-              <span
-                className={`font-mono text-[10px] font-semibold tracking-wide ${isArmed ? 'text-emerald-500' : 'text-[var(--text-muted)]'}`}
-              >
-                {isArmed ? t('studio.armed') : t('studio.unarmed')}
-              </span>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between">
-              <select
-                value={selectedCamera?.cameraId || ''}
-                onChange={(e) => {
-                  const found = cameras.find((c) => c.cameraId === e.target.value)
-                  if (found) setSelectedCamera(found)
-                }}
-                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-              >
-                {cameras.map((c) => (
-                  <option key={c.cameraId} value={c.cameraId}>
-                    {c.name} ({c.cameraId})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-[var(--text-muted)]">
-              <span>
-                {selectedCamera?.lastCodec?.toUpperCase() || 'H.264'} {t('studio.rtspPassthrough')}
-              </span>
-              <span>
-                {selectedCamera?.lastWidth}x{selectedCamera?.lastHeight}@{selectedCamera?.lastFps}
-                fps
-              </span>
-            </div>
-          </div>
-
-          {/* 一键布防总闸 */}
-          <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-2.5">
-            <div className="flex flex-col">
-              <span className="text-xs font-medium text-[var(--text-primary)]">
-                {t('studio.masterArm')}
-              </span>
-              <span className="text-[10px] text-[var(--text-muted)]">
-                {t('studio.masterArmDesc')}
-              </span>
-            </div>
-            <input
-              type="checkbox"
-              checked={isArmed}
-              onChange={(e) => setIsArmed(e.target.checked)}
-              className="h-4 w-4 cursor-pointer rounded accent-[var(--accent)]"
-            />
-          </div>
-        </div>
-
-        {/* 挂载算法栈 */}
-        <div className="space-y-3 border-b border-[var(--border)] p-4">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
-              <Cpu className="h-3.5 w-3.5 text-[var(--accent)]" />
-              <span>{t('studio.mountedAlgos')}</span>
-            </span>
-            <span className="rounded-full border border-[var(--border)] bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[10px] text-[var(--accent)]">
-              {availableAlgos.length} {t('studio.verified')}
-            </span>
-          </div>
-
-          <div className="space-y-2">
-            {availableAlgos.map((algo) => (
-              <div
-                key={algo.algorithmId}
-                className="cursor-pointer space-y-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-2.5 shadow-2xs transition-all hover:border-[var(--accent)]"
-                onClick={() => {
-                  setSelectedAlgoForConfig(algo)
-                  setIsAlgoDrawerOpen(true)
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-[var(--text-primary)]">
-                    {algo.name}
-                  </span>
-                  <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[9px] text-emerald-500">
-                    v{algo.version}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)]">
-                  <span className="font-mono">{algo.algorithmId}</span>
-                  <span className="text-[var(--accent)] hover:underline">
-                    {t('studio.configParams')} &gt;
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 证据抓拍策略 */}
-        <div className="space-y-2.5 p-4">
-          <span className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
-            <Check className="h-3.5 w-3.5 text-emerald-500" />
-            <span>{t('studio.snapshotPolicy')}</span>
-          </span>
-          <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-2.5 text-[10px] text-[var(--text-secondary)]">
-            <div className="flex items-center justify-between">
-              <span>{t('studio.policy4k')}</span>
-              <span className="font-mono text-emerald-500">{t('studio.policy4kDesc')}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>{t('studio.policyCrop')}</span>
-              <span className="font-mono text-[var(--accent)]">{t('studio.policyCropDesc')}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>{t('studio.policyFallback')}</span>
-              <span className="font-mono text-amber-500">{t('studio.policyFallbackDesc')}</span>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      {/* ----------------- 中央：实时流互动舞台 (STAGE) ----------------- */}
-      <main className="relative flex flex-1 flex-col overflow-hidden bg-[var(--bg-primary)]">
-        {/* 顶部悬浮绘制工具栏 (Floating Island HUD) */}
-        <div className="frosted-glass absolute top-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--border)] p-1 shadow-xl">
-          <button
-            onClick={() => {
-              setTool('select')
-              setCurrentPoints([])
-            }}
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
-              tool === 'select'
-                ? 'bg-[var(--accent)] text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-            title={`${t('tools.select')} (V)`}
-          >
-            <MousePointer2 className="h-3.5 w-3.5" />
-            <span>{t('tools.select')}</span>
-            <span className="font-mono text-[10px] opacity-70">V</span>
-          </button>
-
-          <span className="mx-0.5 h-4 w-[1px] bg-[var(--border)]" />
-
-          <button
-            onClick={() => {
-              setTool('roi')
-              setCurrentPoints([])
-            }}
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
-              tool === 'roi'
-                ? 'bg-cyan-500 text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-            title={`${t('tools.roi')} (R)`}
-          >
-            <Hexagon className="h-3.5 w-3.5" />
-            <span>{t('tools.roi')}</span>
-            <span className="font-mono text-[10px] opacity-70">R</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setTool('line')
-              setCurrentPoints([])
-            }}
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
-              tool === 'line'
-                ? 'bg-emerald-500 text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-            title={`${t('tools.line')} (L)`}
-          >
-            <Slash className="h-3.5 w-3.5" />
-            <span>{t('tools.line')}</span>
-            <span className="font-mono text-[10px] opacity-70">L</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setTool('mask')
-              setCurrentPoints([])
-            }}
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
-              tool === 'mask'
-                ? 'bg-slate-700 text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-            title={`${t('tools.mask')} (M)`}
-          >
-            <ShieldAlert className="h-3.5 w-3.5" />
-            <span>{t('tools.mask')}</span>
-            <span className="font-mono text-[10px] opacity-70">M</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setTool('precrop')
-              setCurrentPoints([])
-            }}
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
-              tool === 'precrop'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-            title={`${t('tools.precrop')} (C)`}
-          >
-            <Crop className="h-3.5 w-3.5" />
-            <span>{t('tools.precrop')}</span>
-            <span className="font-mono text-[10px] opacity-70">C</span>
-          </button>
-
-          <span className="mx-0.5 h-4 w-[1px] bg-[var(--border)]" />
-
-          <button
-            onClick={() => setSnapEnabled(!snapEnabled)}
-            className={`rounded-full p-1.5 ${snapEnabled ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}
-            title={t('tools.snap')}
-          >
-            <Magnet className="h-4 w-4" />
-          </button>
-
-          {currentPoints.length > 0 && (
+    <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--bg-primary)] font-sans text-[var(--text-primary)] select-none">
+      {/* 顶部 Header */}
+      <header className="frosted-glass z-30 flex h-14 shrink-0 items-center justify-between border-b border-[var(--border)] px-4 shadow-xs">
+        <div className="flex items-center gap-3">
+          {onBack && (
             <button
-              onClick={finishDrawing}
-              className="ml-1 flex items-center gap-1 rounded-full bg-cyan-500 px-2.5 py-1 text-xs font-semibold text-white shadow-xs hover:bg-cyan-600"
+              type="button"
+              onClick={onBack}
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+              title={`${t('studio.backToChannels', { defaultValue: '返回通道列表' })} (Esc)`}
             >
-              <Check className="h-3.5 w-3.5" />
-              <span>{t('tools.closePolygon')}</span>
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">
+                {t('studio.backToChannels', { defaultValue: '返回' })}
+              </span>
             </button>
           )}
+
+          <div className="h-5 w-[1px] bg-[var(--border)]" />
+
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
+              <Video className="h-4 w-4" />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span
+                className="max-w-[180px] truncate text-sm font-bold text-[var(--text-primary)]"
+                title={camera.name || camera.cameraId}
+              >
+                {camera.name || camera.cameraId}
+              </span>
+              <span className="font-mono text-xs text-[var(--text-muted)]">
+                ({camera.cameraId})
+              </span>
+            </div>
+          </div>
+
+          <div className="hidden items-center gap-1.5 font-mono text-xs md:flex">
+            <span className="rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 font-semibold text-[var(--accent)]">
+              {camera.lastCodec?.toUpperCase() || 'H.264'}
+            </span>
+            <span className="text-[var(--text-muted)]">
+              {camera.lastWidth && camera.lastHeight
+                ? `${camera.lastWidth}x${camera.lastHeight}`
+                : '1080P'}
+            </span>
+            <span className="text-emerald-500">
+              {camera.lastFps ? camera.lastFps.toFixed(1) : '25.0'} fps
+            </span>
+          </div>
+
+          <div className="hidden h-5 w-[1px] bg-[var(--border)] sm:block" />
+
+          {/* 布防总闸 Toggle */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsArmed(!isArmed)}
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                isArmed ? 'bg-rose-500' : 'bg-slate-400'
+              }`}
+              title={isArmed ? t('status.armed') : t('status.disarmed')}
+            >
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                  isArmed ? 'translate-x-4' : 'translate-x-0'
+                }`}
+              />
+            </button>
+            <span
+              className={`font-mono text-xs font-semibold ${
+                isArmed ? 'text-rose-500' : 'text-[var(--text-muted)]'
+              }`}
+            >
+              {isArmed ? t('status.armed') : t('status.disarmed')}
+            </span>
+          </div>
         </div>
 
-        {/* 交互视口区 */}
-        <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
-          <div
-            ref={stageRef}
-            onClick={handleStageClick}
-            onMouseMove={handleStageMouseMove}
-            onMouseUp={handleStageMouseUp}
-            className={`relative max-h-full max-w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-black/95 shadow-2xl ${
-              tool !== 'select' ? 'cursor-crosshair' : 'cursor-default'
-            }`}
-            style={{
-              width: '100%',
-              height: 'auto',
-              maxWidth: '1280px',
-              aspectRatio:
-                selectedCamera?.lastWidth && selectedCamera?.lastHeight
-                  ? `${selectedCamera.lastWidth} / ${selectedCamera.lastHeight}`
-                  : '16 / 9',
-            }}
+        {/* 右侧：规则计数 + 保存主操作 */}
+        <div className="flex items-center gap-3">
+          {saveToast && (
+            <span className="animate-fade-in font-mono text-xs font-semibold text-emerald-500">
+              {saveToast}
+            </span>
+          )}
+
+          <div className="hidden items-center gap-1.5 text-xs text-[var(--text-muted)] sm:flex">
+            <span>{t('card.geometryRules')}:</span>
+            <span className="font-mono font-bold text-[var(--accent)]">{rules.length}</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
           >
-            {/* 真实子码流播放器 */}
-            {selectedCamera ? (
+            <Save className="h-4 w-4" />
+            <span>{isSaving ? t('footer.saving') : t('footer.saveTask')}</span>
+          </button>
+        </div>
+      </header>
+
+      {/* 主标定工作区：三段式布局 */}
+      <div className="relative flex flex-1 overflow-hidden">
+        {/* 左侧：算法模型与目标感知 */}
+        <AlgoSettingsSidebar
+          availableAlgos={availableAlgos}
+          selectedAlgoId={selectedAlgoId}
+          activeAlgo={activeAlgo}
+          onAlgoChange={handleAlgoChange}
+          onOpenAlgoDrawer={() => {
+            setSelectedAlgoForConfig(activeAlgo)
+            setIsAlgoDrawerOpen(true)
+          }}
+          globalTargetClasses={globalTargetClasses}
+          onToggleTargetClass={(cls) =>
+            setGlobalTargetClasses((prev) =>
+              prev.includes(cls) ? prev.filter((c) => c !== cls) : [...prev, cls],
+            )
+          }
+          onSelectAllClasses={() => setGlobalTargetClasses([...activeAlgo.classes])}
+          onClearAllClasses={() => setGlobalTargetClasses([])}
+          confidenceThreshold={confidenceThreshold}
+          onConfidenceThresholdChange={setConfidenceThreshold}
+          motionGateEnabled={motionGateEnabled}
+          onMotionGateEnabledChange={setMotionGateEnabled}
+        />
+
+        {/* 中央：实时流互动舞台 */}
+        <main className="relative flex flex-1 flex-col overflow-hidden bg-[var(--bg-primary)]">
+          {/* 顶部悬浮绘制工具栏 */}
+          <div className="frosted-glass absolute top-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--border)] p-1.5 whitespace-nowrap shadow-xl">
+            <button
+              type="button"
+              onClick={() => {
+                setTool('select')
+                setCurrentPoints([])
+              }}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all ${
+                tool === 'select'
+                  ? 'bg-[var(--accent)] text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={`${t('tools.select')} (V)`}
+            >
+              <MousePointer2 className="h-4 w-4 shrink-0" />
+              <span>{t('tools.select')}</span>
+              <kbd className="font-mono text-[10px] opacity-70">V</kbd>
+            </button>
+
+            <span className="mx-0.5 h-4 w-[1px] shrink-0 bg-[var(--border)]" />
+
+            {/* 多边形防区 */}
+            <button
+              type="button"
+              onClick={() => {
+                setTool('roi')
+                setCurrentPoints([])
+              }}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all ${
+                tool === 'roi' || tool === 'polygon'
+                  ? 'bg-cyan-500 text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={`${t('tools.roi')} (R)`}
+            >
+              <Hexagon className="h-4 w-4 shrink-0" />
+              <span>{t('tools.roi')}</span>
+              <kbd className="font-mono text-[10px] opacity-70">R</kbd>
+            </button>
+
+            {/* 越界绊线 */}
+            <button
+              type="button"
+              onClick={() => {
+                setTool('line')
+                setCurrentPoints([])
+              }}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all ${
+                tool === 'line'
+                  ? 'bg-emerald-500 text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={`${t('tools.line')} (L)`}
+            >
+              <Slash className="h-4 w-4 shrink-0" />
+              <span>{t('tools.line')}</span>
+              <kbd className="font-mono text-[10px] opacity-70">L</kbd>
+            </button>
+
+            {/* 屏蔽遮罩 */}
+            <button
+              type="button"
+              onClick={() => {
+                setTool('mask')
+                setCurrentPoints([])
+              }}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all ${
+                tool === 'mask'
+                  ? 'bg-slate-700 text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={`${t('tools.mask')} (M)`}
+            >
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              <span>{t('tools.mask')}</span>
+              <kbd className="font-mono text-[10px] opacity-70">M</kbd>
+            </button>
+
+            {/* 矩形框 */}
+            <button
+              type="button"
+              onClick={() => {
+                setTool('rect')
+                setCurrentPoints([])
+              }}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all ${
+                tool === 'rect'
+                  ? 'bg-sky-600 text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={`${t('tools.rect')} (B)`}
+            >
+              <Square className="h-4 w-4 shrink-0" />
+              <span>{t('tools.rect')}</span>
+              <kbd className="font-mono text-[10px] opacity-70">B</kbd>
+            </button>
+
+            {/* 局部特写 */}
+            <button
+              type="button"
+              onClick={() => {
+                setTool('precrop')
+                setCurrentPoints([])
+              }}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all ${
+                tool === 'precrop'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={`${t('tools.precrop')} (C)`}
+            >
+              <Crop className="h-4 w-4 shrink-0" />
+              <span>{t('tools.precrop')}</span>
+              <kbd className="font-mono text-[10px] opacity-70">C</kbd>
+            </button>
+
+            <span className="mx-0.5 h-4 w-[1px] shrink-0 bg-[var(--border)]" />
+
+            <button
+              type="button"
+              onClick={() => setSnapEnabled(!snapEnabled)}
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors ${
+                snapEnabled
+                  ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              }`}
+              title={
+                snapEnabled
+                  ? t('studio.snapEnabled', { defaultValue: '顶点自动磁吸已开启 (S)' })
+                  : t('studio.snapDisabled', { defaultValue: '顶点自动磁吸已关闭 (S)' })
+              }
+            >
+              <Magnet className="h-3.5 w-3.5" />
+            </button>
+
+            {isLineOrPolyReadyToClose && (
+              <button
+                type="button"
+                onClick={finishDrawing}
+                className="ml-1 flex shrink-0 animate-pulse items-center gap-1 rounded-full bg-emerald-500 px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap text-white shadow-xs transition-all hover:bg-emerald-600"
+              >
+                <Check className="h-4 w-4" />
+                <span>{t('tools.closePolygon')}</span>
+              </button>
+            )}
+          </div>
+
+          {/* 交互视口区 */}
+          <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
+            <div
+              ref={stageRef}
+              onMouseDown={handleStageMouseDown}
+              onMouseMove={handleStageMouseMove}
+              onMouseUp={handleStageMouseUp}
+              onClick={handleStageClick}
+              onDoubleClick={handleStageDoubleClick}
+              onContextMenu={handleContextMenu}
+              onMouseLeave={() => setCursorPos(null)}
+              className={`relative max-h-full max-w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-black/95 shadow-2xl select-none ${
+                tool !== 'select' ? 'cursor-crosshair' : 'cursor-default'
+              }`}
+              style={{
+                width: '100%',
+                height: 'auto',
+                maxWidth: '1280px',
+                aspectRatio:
+                  camera.lastWidth && camera.lastHeight
+                    ? `${camera.lastWidth} / ${camera.lastHeight}`
+                    : '16 / 9',
+              }}
+            >
+              {/* 真实子码流播放器 */}
               <LivePlayer
-                cameraId={selectedCamera.cameraId}
+                cameraId={camera.cameraId}
+                cameraName={camera.name}
                 stream="sub"
                 className="pointer-events-none h-full w-full"
               />
-            ) : (
-              <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                {t('tools.selectVideoPrompt')}
-              </div>
-            )}
 
-            {/* 矢量绘制与高频标定交互 SVG 覆盖层 */}
-            <svg
-              className="pointer-events-auto absolute inset-0 h-full w-full"
-              viewBox="0 0 100 100"
-              preserveAspectRatio="none"
-            >
-              {/* 绊线 Line 跨界箭头指示标记 */}
-              <defs>
-                <marker
-                  id="line-arrow-a-to-b"
-                  markerWidth="8"
-                  markerHeight="8"
-                  refX="4"
-                  refY="4"
-                  orient="auto"
-                >
-                  <path d="M 1 1 L 7 4 L 1 7 Z" fill="#10b981" />
-                </marker>
-                <marker
-                  id="line-arrow-b-to-a"
-                  markerWidth="8"
-                  markerHeight="8"
-                  refX="4"
-                  refY="4"
-                  orient="auto-start-reverse"
-                >
-                  <path d="M 1 1 L 7 4 L 1 7 Z" fill="#10b981" />
-                </marker>
-              </defs>
+              {/* 矢量绘制与标定交互 SVG 覆盖层 */}
+              <svg
+                className="pointer-events-auto absolute inset-0 h-full w-full"
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+              >
+                <defs>
+                  <marker
+                    id="line-arrow-a-to-b"
+                    markerWidth="8"
+                    markerHeight="8"
+                    refX="4"
+                    refY="4"
+                    orient="auto"
+                  >
+                    <path d="M 1 1 L 7 4 L 1 7 Z" fill="#10b981" />
+                  </marker>
+                  <marker
+                    id="line-arrow-b-to-a"
+                    markerWidth="8"
+                    markerHeight="8"
+                    refX="4"
+                    refY="4"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 1 1 L 7 4 L 1 7 Z" fill="#10b981" />
+                  </marker>
+                </defs>
 
-              {/* 既有布防规则渲染 */}
-              {rules.map((rule) => {
-                if (!rule.visible || rule.points.length < 2) return null
-                const isSelected = rule.id === selectedRuleId
+                {/* 既有布防规则渲染 */}
+                {rules.map((rule, ruleIdx) => {
+                  if (!rule.visible || rule.points.length < 2) return null
+                  const isSelected = rule.id === selectedRuleId
+                  const theme = getRuleTheme(rule, ruleIdx)
 
-                if (rule.role === 'line') {
-                  const p1 = rule.points[0]
-                  const p2 = rule.points[1]
+                  if (rule.role === 'line') {
+                    const p1 = rule.points[0]
+                    const p2 = rule.points[1]
+                    return (
+                      <g
+                        key={rule.id}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedRuleId(rule.id)
+                        }}
+                      >
+                        <line
+                          x1={`${p1.x * 100}%`}
+                          y1={`${p1.y * 100}%`}
+                          x2={`${p2.x * 100}%`}
+                          y2={`${p2.y * 100}%`}
+                          stroke={isSelected ? theme.selectedStroke : theme.stroke}
+                          strokeWidth={isSelected ? '2.5' : '1.5'}
+                          vectorEffect="non-scaling-stroke"
+                          markerEnd={getLineMarkerEnd(rule.lineDirection)}
+                          className={tool === 'select' ? 'cursor-move' : 'cursor-pointer'}
+                          onMouseDown={(e) => {
+                            if (tool === 'select') {
+                              e.stopPropagation()
+                              setSelectedRuleId(rule.id)
+                              const pt = getNormalizedPoint(e)
+                              setDraggingShape({
+                                ruleId: rule.id,
+                                startCursor: pt,
+                                initialPoints: rule.points.map((p) => ({ ...p })),
+                              })
+                            }
+                          }}
+                        />
+                      </g>
+                    )
+                  }
+
+                  const ptsStr = rule.points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')
+
                   return (
                     <g
                       key={rule.id}
@@ -827,526 +976,282 @@ export function LiveRulesStudio({
                         setSelectedRuleId(rule.id)
                       }}
                     >
-                      <line
-                        x1={`${p1.x * 100}%`}
-                        y1={`${p1.y * 100}%`}
-                        x2={`${p2.x * 100}%`}
-                        y2={`${p2.y * 100}%`}
-                        stroke={isSelected ? '#34d399' : '#10b981'}
-                        strokeWidth={isSelected ? '3' : '2'}
-                        markerEnd={getLineMarkerEnd(rule.lineDirection)}
+                      <polygon
+                        points={ptsStr}
+                        fill={theme.fill}
+                        stroke={isSelected ? theme.selectedStroke : theme.stroke}
+                        strokeWidth={isSelected ? '2.5' : '1.5'}
+                        vectorEffect="non-scaling-stroke"
+                        className={tool === 'select' ? 'cursor-move' : 'cursor-pointer'}
+                        onMouseDown={(e) => {
+                          if (tool === 'select') {
+                            e.stopPropagation()
+                            setSelectedRuleId(rule.id)
+                            const pt = getNormalizedPoint(e)
+                            setDraggingShape({
+                              ruleId: rule.id,
+                              startCursor: pt,
+                              initialPoints: rule.points.map((p) => ({ ...p })),
+                            })
+                          }
+                        }}
                       />
-                      {isSelected && (
-                        <>
-                          <circle
-                            cx={`${p1.x * 100}%`}
-                            cy={`${p1.y * 100}%`}
-                            r="1.5"
-                            fill="#10b981"
-                            stroke="#ffffff"
-                            strokeWidth="0.5"
-                            className="cursor-move"
-                            onMouseDown={(e) => {
-                              e.stopPropagation()
-                              setDraggingVertex({ ruleId: rule.id, pointIndex: 0 })
-                            }}
-                          />
-                          <circle
-                            cx={`${p2.x * 100}%`}
-                            cy={`${p2.y * 100}%`}
-                            r="1.5"
-                            fill="#10b981"
-                            stroke="#ffffff"
-                            strokeWidth="0.5"
-                            className="cursor-move"
-                            onMouseDown={(e) => {
-                              e.stopPropagation()
-                              setDraggingVertex({ ruleId: rule.id, pointIndex: 1 })
-                            }}
-                          />
-                        </>
-                      )}
                     </g>
                   )
-                }
+                })}
 
-                // 多边形 (ROI, Mask)
-                const ptsStr = rule.points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')
-                let fillColor = 'rgba(0, 242, 254, 0.2)'
-                let strokeColor = '#00f2fe'
-                if (rule.role === 'mask') {
-                  fillColor = 'rgba(15, 23, 42, 0.65)'
-                  strokeColor = '#94a3b8'
-                }
+                {/* 绘制中的交互图形与橡皮筋引导线 */}
+                {currentPoints.length > 0 &&
+                  (() => {
+                    const activeToolTheme = getToolTheme(
+                      tool,
+                      rules.filter((r) => r.role === 'roi').length,
+                    )
+                    return (
+                      <g className="pointer-events-none">
+                        {(tool === 'rect' || tool === 'precrop') && cursorPos && (
+                          <>
+                            <rect
+                              x={Math.min(currentPoints[0].x, cursorPos.x) * 100}
+                              y={Math.min(currentPoints[0].y, cursorPos.y) * 100}
+                              width={Math.abs(cursorPos.x - currentPoints[0].x) * 100}
+                              height={Math.abs(cursorPos.y - currentPoints[0].y) * 100}
+                              fill={activeToolTheme.fill}
+                              stroke={activeToolTheme.stroke}
+                              strokeWidth={1.5}
+                              strokeDasharray="4 3"
+                              vectorEffect="non-scaling-stroke"
+                            />
+                            <line
+                              x1={currentPoints[0].x * 100}
+                              y1={currentPoints[0].y * 100}
+                              x2={cursorPos.x * 100}
+                              y2={cursorPos.y * 100}
+                              stroke={activeToolTheme.stroke}
+                              strokeWidth={1}
+                              strokeDasharray="2 2"
+                              opacity={0.5}
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          </>
+                        )}
 
-                return (
-                  <g
-                    key={rule.id}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setSelectedRuleId(rule.id)
-                    }}
-                  >
-                    <polygon
-                      points={ptsStr}
-                      fill={fillColor}
-                      stroke={isSelected ? '#ffffff' : strokeColor}
-                      strokeWidth={isSelected ? '3' : '1.5'}
-                    />
-                    {isSelected &&
-                      rule.points.map((pt, idx) => (
-                        <circle
-                          key={idx}
-                          cx={`${pt.x * 100}%`}
-                          cy={`${pt.y * 100}%`}
-                          r="1.5"
-                          fill={strokeColor}
-                          stroke="#ffffff"
-                          strokeWidth="0.5"
-                          className="cursor-move"
+                        {(tool === 'polygon' || tool === 'roi' || tool === 'mask') &&
+                          currentPoints.length >= 2 &&
+                          cursorPos && (
+                            <polygon
+                              points={[
+                                ...currentPoints.map((p) => `${p.x * 100},${p.y * 100}`),
+                                `${cursorPos.x * 100},${cursorPos.y * 100}`,
+                              ].join(' ')}
+                              fill={activeToolTheme.fill}
+                              stroke="none"
+                            />
+                          )}
+
+                        {tool !== 'rect' && tool !== 'precrop' && currentPoints.length >= 2 && (
+                          <polyline
+                            points={currentPoints.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')}
+                            fill="none"
+                            stroke={activeToolTheme.stroke}
+                            strokeWidth={1.5}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        )}
+
+                        {tool !== 'rect' && tool !== 'precrop' && cursorPos && (
+                          <line
+                            x1={currentPoints[currentPoints.length - 1].x * 100}
+                            y1={currentPoints[currentPoints.length - 1].y * 100}
+                            x2={cursorPos.x * 100}
+                            y2={cursorPos.y * 100}
+                            stroke={activeToolTheme.stroke}
+                            strokeWidth={1.5}
+                            strokeDasharray="4 3"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        )}
+
+                        {(tool === 'polygon' || tool === 'roi' || tool === 'mask') &&
+                          currentPoints.length >= 2 &&
+                          cursorPos && (
+                            <line
+                              x1={cursorPos.x * 100}
+                              y1={cursorPos.y * 100}
+                              x2={currentPoints[0].x * 100}
+                              y2={currentPoints[0].y * 100}
+                              stroke={activeToolTheme.stroke}
+                              strokeWidth={1}
+                              strokeDasharray="3 3"
+                              opacity={0.4}
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          )}
+                      </g>
+                    )
+                  })()}
+              </svg>
+
+              {/* 精致 HTML 矢量控制点与交互层 */}
+              <div className="pointer-events-none absolute inset-0 h-full w-full overflow-hidden">
+                {tool === 'select' &&
+                  rules.map((rule, ruleIdx) => {
+                    if (rule.id !== selectedRuleId || !rule.visible) return null
+                    const theme = getRuleTheme(rule, ruleIdx)
+
+                    return rule.points.map((pt, idx) => {
+                      const isBeingDragged =
+                        draggingVertex?.ruleId === rule.id && draggingVertex?.pointIndex === idx
+
+                      return (
+                        <div
+                          key={`handle-${rule.id}-${idx}`}
+                          style={{ left: `${pt.x * 100}%`, top: `${pt.y * 100}%` }}
                           onMouseDown={(e) => {
                             e.stopPropagation()
                             setDraggingVertex({ ruleId: rule.id, pointIndex: idx })
                           }}
-                        />
-                      ))}
-                  </g>
-                )
-              })}
-
-              {/* 绘制中的当前多边形/折线预览 */}
-              {currentPoints.length > 0 && (
-                <g>
-                  {tool === 'line' ? (
-                    <line
-                      x1={`${currentPoints[0].x * 100}%`}
-                      y1={`${currentPoints[0].y * 100}%`}
-                      x2={`${(cursorPos?.x ?? currentPoints[0].x) * 100}%`}
-                      y2={`${(cursorPos?.y ?? currentPoints[0].y) * 100}%`}
-                      stroke="#10b981"
-                      strokeWidth="2.5"
-                      strokeDasharray="4 4"
-                    />
-                  ) : (
-                    <>
-                      <polygon
-                        points={[
-                          ...currentPoints.map((p) => `${p.x * 100}%,${p.y * 100}%`),
-                          ...(cursorPos ? [`${cursorPos.x * 100}%,${cursorPos.y * 100}%`] : []),
-                        ].join(' ')}
-                        fill="rgba(0, 242, 254, 0.15)"
-                        stroke="#00f2fe"
-                        strokeWidth="1.5"
-                        strokeDasharray="4 4"
-                      />
-                      {currentPoints.map((p, idx) => (
-                        <circle
-                          key={idx}
-                          cx={`${p.x * 100}%`}
-                          cy={`${p.y * 100}%`}
-                          r="1.5"
-                          fill="#00f2fe"
-                        />
-                      ))}
-                    </>
-                  )}
-                </g>
-              )}
-            </svg>
-          </div>
-        </div>
-
-        {/* 底部信息栏与保存控制 */}
-        <footer className="frosted-glass flex h-12 items-center justify-between border-t border-[var(--border)] px-6 text-xs">
-          <div className="flex items-center gap-3 text-[var(--text-muted)]">
-            <span>
-              {t('footer.rulesCount')}：
-              <strong className="font-bold text-emerald-500">{rules.length}</strong>{' '}
-              {t('footer.items')}
-            </span>
-            <span className="hidden text-[var(--border-strong)] md:inline">|</span>
-            <span className="hidden text-[var(--text-secondary)] md:inline">
-              {t('footer.shortcuts')}：
-              <kbd className="rounded border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px]">
-                V
-              </kbd>{' '}
-              {t('tools.select')}{' '}
-              <kbd className="rounded border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px]">
-                R
-              </kbd>{' '}
-              {t('tools.roi')}{' '}
-              <kbd className="rounded border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px]">
-                L
-              </kbd>{' '}
-              {t('tools.line')}{' '}
-              <kbd className="rounded border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px]">
-                Enter
-              </kbd>{' '}
-              {t('tools.closePolygon')}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {saveToast && (
-              <span className="text-xs font-semibold text-emerald-500">{saveToast}</span>
-            )}
-            <button
-              onClick={handleSave}
-              disabled={isSaving}
-              className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-1.5 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 disabled:opacity-50"
-            >
-              <Save className="h-3.5 w-3.5" />
-              <span>{isSaving ? t('footer.saving') : t('footer.save')}</span>
-            </button>
-          </div>
-        </footer>
-      </main>
-
-      {/* ----------------- 右侧：图层列表与属性检查器 ----------------- */}
-      <aside className="frosted-glass flex w-80 min-w-80 flex-col overflow-hidden border-l border-[var(--border)] text-xs">
-        <div className="flex items-center justify-between border-b border-[var(--border)] p-3.5">
-          <span className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
-            <Layers className="h-4 w-4 text-[var(--accent)]" />
-            <span>{t('layers.title')}</span>
-          </span>
-          <span className="rounded-full border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 font-mono text-[10px] font-bold text-[var(--accent)]">
-            {rules.length} {t('footer.items')}
-          </span>
-        </div>
-
-        {/* 图层列表 */}
-        <div className="max-h-56 space-y-1.5 overflow-y-auto border-b border-[var(--border)] p-2.5">
-          {rules.length === 0 ? (
-            <div className="py-6 text-center text-[var(--text-muted)]">
-              <p>{t('layers.empty')}</p>
-              <p className="text-[10px] opacity-75">{t('layers.emptyTip')}</p>
-            </div>
-          ) : (
-            rules.map((rule) => {
-              const isSelected = rule.id === selectedRuleId
-              return (
-                <div
-                  key={rule.id}
-                  onClick={() => setSelectedRuleId(rule.id)}
-                  className={`flex cursor-pointer items-center justify-between rounded-xl p-2 transition-all ${
-                    isSelected
-                      ? 'border border-[var(--accent)]/40 bg-[var(--accent-soft)] font-medium text-[var(--text-primary)] shadow-2xs'
-                      : 'border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    {rule.role === 'roi' && <Hexagon className="h-3.5 w-3.5 text-cyan-500" />}
-                    {rule.role === 'line' && <Slash className="h-3.5 w-3.5 text-emerald-500" />}
-                    {rule.role === 'mask' && <ShieldAlert className="h-3.5 w-3.5 text-slate-400" />}
-                    <span className="max-w-[140px] truncate text-[11px] font-medium">
-                      {rule.name}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setRules((prev) =>
-                          prev.map((r) => (r.id === rule.id ? { ...r, visible: !r.visible } : r)),
-                        )
-                      }}
-                      className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                    >
-                      {rule.visible ? (
-                        <Eye className="h-3 w-3" />
-                      ) : (
-                        <EyeOff className="h-3 w-3 opacity-40" />
-                      )}
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        deleteRule(rule.id)
-                      }}
-                      className="text-[var(--text-muted)] hover:text-rose-500"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
-              )
-            })
-          )}
-        </div>
-
-        {/* 规则属性检查器 */}
-        <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
-              <SlidersHorizontal className="h-3.5 w-3.5 text-[var(--accent)]" />
-              <span>{t('inspector.title')}</span>
-            </span>
-            {selectedRule && (
-              <span className="rounded-md border border-[var(--border)] bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[9px] font-bold text-[var(--accent)] uppercase">
-                {selectedRule.role}
-              </span>
-            )}
-          </div>
-
-          {!selectedRule ? (
-            <div className="py-8 text-center text-[11px] text-[var(--text-muted)]">
-              {t('inspector.emptyTip')}
-            </div>
-          ) : (
-            <div className="space-y-3.5">
-              <div>
-                <label className="mb-1 block font-mono text-[10px] text-[var(--text-muted)] uppercase">
-                  {t('inspector.ruleName')}
-                </label>
-                <input
-                  type="text"
-                  value={selectedRule.name}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    setRules((prev) =>
-                      prev.map((r) => (r.id === selectedRule.id ? { ...r, name: val } : r)),
-                    )
-                  }}
-                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-                />
-              </div>
-
-              {/* 绑定算法 */}
-              <div>
-                <label className="mb-1 block font-mono text-[10px] font-bold text-[var(--accent)] uppercase">
-                  {t('inspector.boundAlgo')}
-                </label>
-                <select
-                  value={selectedRule.boundAlgo || 'general_detection'}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    setRules((prev) =>
-                      prev.map((r) => (r.id === selectedRule.id ? { ...r, boundAlgo: val } : r)),
-                    )
-                  }}
-                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-                >
-                  {availableAlgos.map((a) => (
-                    <option key={a.algorithmId} value={a.algorithmId}>
-                      {a.name} ({a.algorithmId})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 绊线方向 */}
-              {selectedRule.role === 'line' && (
-                <div>
-                  <label className="mb-1 block font-mono text-[10px] text-[var(--text-muted)] uppercase">
-                    {t('inspector.lineDirection')}
-                  </label>
-                  <div className="grid grid-cols-3 gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-center text-[10px]">
-                    {(['both', 'a_to_b', 'b_to_a'] as DetectionLineDirection[]).map((dir) => (
-                      <button
-                        key={dir}
-                        type="button"
-                        onClick={() =>
-                          setRules((prev) =>
-                            prev.map((r) =>
-                              r.id === selectedRule.id ? { ...r, lineDirection: dir } : r,
-                            ),
-                          )
-                        }
-                        className={`rounded-lg py-1 font-medium transition-all ${
-                          selectedRule.lineDirection === dir
-                            ? 'bg-[var(--accent)] font-semibold text-white shadow-xs'
-                            : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                        }`}
-                      >
-                        {getDirectionLabel(dir, t)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* 克隆与删除 */}
-              <div className="grid grid-cols-2 gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => cloneRule(selectedRule.id)}
-                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] py-1.5 text-xs font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]"
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                  <span>{t('inspector.clone')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => deleteRule(selectedRule.id)}
-                  className="flex items-center justify-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 py-1.5 text-xs font-semibold text-rose-500 transition-colors hover:bg-rose-500/20"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>{t('inspector.delete')}</span>
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </aside>
-
-      {/* ----------------- 算法参数配置与沙箱自检抽屉 ----------------- */}
-      {isAlgoDrawerOpen && selectedAlgoForConfig && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs">
-          <div className="flex h-full w-96 flex-col space-y-4 overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-surface-solid)] p-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
-              <div className="flex items-center gap-2">
-                <Cpu className="h-4 w-4 text-[var(--accent)]" />
-                <span className="text-sm font-semibold text-[var(--text-primary)]">
-                  {selectedAlgoForConfig.name}
-                </span>
-              </div>
-              <button
-                onClick={() => setIsAlgoDrawerOpen(false)}
-                className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2 text-xs text-[var(--text-secondary)]">
-              <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">{t('algoDrawer.id')}</span>
-                <span className="font-mono font-bold text-[var(--accent)]">
-                  {selectedAlgoForConfig.algorithmId}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">{t('algoDrawer.version')}</span>
-                <span>
-                  v{selectedAlgoForConfig.version} ({selectedAlgoForConfig.author})
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">{t('algoDrawer.platforms')}</span>
-                <span className="font-mono text-[10px] font-bold text-emerald-500">
-                  {selectedAlgoForConfig.supportedPlatforms.join(', ')}
-                </span>
-              </div>
-              <p className="pt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">
-                {selectedAlgoForConfig.description}
-              </p>
-            </div>
-
-            <div className="space-y-2 border-t border-[var(--border)] pt-3">
-              <span className="text-xs font-semibold text-[var(--text-primary)]">
-                {t('algoDrawer.classes')}
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {selectedAlgoForConfig.classes.map((cls) => (
-                  <span
-                    key={cls}
-                    className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 font-mono text-[10px] font-medium text-[var(--accent)]"
-                  >
-                    {cls}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            {/* 上传算法包归档 */}
-            <div className="space-y-2 border-t border-[var(--border)] pt-3">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]">
-                  <Upload className="h-3.5 w-3.5 text-[var(--accent)]" />
-                  <span>{t('actions.uploadPackage')}</span>
-                </span>
-              </div>
-              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)] transition-all hover:border-[var(--accent)] hover:text-[var(--accent)]">
-                <input
-                  type="file"
-                  accept=".zip,.tar,.tar.gz,.tgz"
-                  className="hidden"
-                  onChange={handleUploadPackageFile}
-                  disabled={isUploadingPkg}
-                />
-                <Upload className="h-4 w-4" />
-                <span>{isUploadingPkg ? t('actions.uploading') : t('actions.uploadPackage')}</span>
-              </label>
-            </div>
-
-            {/* 七步沙箱安全自检互动区 (PRD §3.2) */}
-            <div className="space-y-3 border-t border-[var(--border)] pt-3">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1 text-xs font-semibold text-[var(--text-primary)]">
-                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-                  <span>{t('sandbox.title')}</span>
-                </span>
-                <button
-                  onClick={handleRunSandboxTest}
-                  disabled={isVerifyingSandbox}
-                  className="text-[10px] font-semibold text-[var(--accent)] hover:underline disabled:opacity-50"
-                >
-                  {isVerifyingSandbox ? t('actions.verifyingSandbox') : t('actions.executeSandbox')}
-                </button>
-              </div>
-
-              {sandboxResult ? (
-                <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-medium">{t('sandbox.status')}</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-bold ${
-                        sandboxResult.passed
-                          ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500'
-                          : 'border border-rose-500/30 bg-rose-500/15 text-rose-500'
-                      }`}
-                    >
-                      {sandboxResult.passed
-                        ? t('sandbox.allPassed')
-                        : t('sandbox.interrupted', { passed: sandboxResult.stepsPassed })}
-                    </span>
-                  </div>
-
-                  <div className="space-y-1 pt-1">
-                    {sandboxResult.steps.map((step, idx) => {
-                      const isStepOk = idx < sandboxResult.stepsPassed
-                      return (
-                        <div
-                          key={idx}
-                          className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]"
+                          className={`pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 select-none ${
+                            isBeingDragged ? 'z-30 cursor-grabbing' : 'z-20 cursor-grab'
+                          }`}
                         >
-                          {isStepOk ? (
-                            <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
-                          ) : (
-                            <AlertCircle className="h-3 w-3 shrink-0 text-rose-500" />
-                          )}
-                          <span
-                            className={isStepOk ? 'text-[var(--text-secondary)]' : 'text-rose-400'}
-                          >
-                            {step}
-                          </span>
+                          <div
+                            className={`rounded-full border-2 shadow-md ${theme.handleBg} ${
+                              isBeingDragged
+                                ? 'h-3 w-3 ring-4'
+                                : 'h-2.5 w-2.5 hover:h-3 hover:w-3 hover:ring-2'
+                            }`}
+                          />
                         </div>
                       )
-                    })}
-                  </div>
+                    })
+                  })}
 
-                  {sandboxResult.errorMessage && (
-                    <p className="mt-1 border-t border-[var(--border)] pt-1 font-mono text-[10px] text-rose-500">
-                      {sandboxResult.errorMessage}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-[10px] text-[var(--text-muted)]">{t('sandbox.tip')}</p>
-              )}
-            </div>
+                {currentPoints.map((pt, idx) => {
+                  const activeToolTheme = getToolTheme(
+                    tool,
+                    rules.filter((r) => r.role === 'roi').length,
+                  )
+                  const isFirst = idx === 0
+                  const canCloseOnFirst = isFirst && currentPoints.length >= 3
+                  const isHoveredFirst =
+                    canCloseOnFirst &&
+                    cursorPos &&
+                    Math.hypot(pt.x - cursorPos.x, pt.y - cursorPos.y) < 0.035
 
-            <div className="flex justify-end pt-4">
-              <button
-                onClick={() => setIsAlgoDrawerOpen(false)}
-                className="rounded-xl bg-[var(--accent)] px-4 py-1.5 text-xs font-semibold text-white shadow-xs hover:opacity-90"
-              >
-                {t('algoDrawer.done')}
-              </button>
+                  return (
+                    <div
+                      key={`draw-pt-${idx}`}
+                      style={{ left: `${pt.x * 100}%`, top: `${pt.y * 100}%` }}
+                      onClick={
+                        canCloseOnFirst
+                          ? (e) => {
+                              e.stopPropagation()
+                              finishDrawing()
+                            }
+                          : undefined
+                      }
+                      className={`absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center select-none ${
+                        canCloseOnFirst
+                          ? 'pointer-events-auto z-30 cursor-pointer'
+                          : 'pointer-events-none z-20'
+                      }`}
+                    >
+                      {isHoveredFirst && (
+                        <div
+                          className="absolute h-5 w-5 rounded-full border ring-2"
+                          style={{
+                            borderColor: activeToolTheme.stroke,
+                            backgroundColor: activeToolTheme.fill,
+                          }}
+                        />
+                      )}
+
+                      <div
+                        className="h-2 w-2 rounded-full border border-black/70 shadow-xs"
+                        style={{
+                          backgroundColor: activeToolTheme.stroke,
+                        }}
+                      />
+
+                      <span className="py-0.2 pointer-events-none absolute -top-4 left-1/2 -translate-x-1/2 rounded bg-black/80 px-1 font-mono text-[10px] font-bold text-white shadow-xs backdrop-blur-xs">
+                        {idx + 1}
+                      </span>
+
+                      {isHoveredFirst && (
+                        <span
+                          className="pointer-events-none absolute -bottom-6 left-1/2 -translate-x-1/2 rounded px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-white shadow-md"
+                          style={{ backgroundColor: activeToolTheme.stroke }}
+                        >
+                          点击闭合
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+
+                {tool !== 'select' &&
+                  cursorPos &&
+                  (() => {
+                    const activeToolTheme = getToolTheme(
+                      tool,
+                      rules.filter((r) => r.role === 'roi').length,
+                    )
+                    return (
+                      <div
+                        style={{
+                          left: `${cursorPos.x * 100}%`,
+                          top: `${cursorPos.y * 100}%`,
+                          backgroundColor: activeToolTheme.stroke,
+                        }}
+                        className="pointer-events-none absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-black/70 shadow-xs"
+                      />
+                    )
+                  })()}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+
+          {/* 舞台底部交互指引 HUD */}
+          <div className="frosted-glass pointer-events-none absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-surface)]/85 px-4 py-1.5 text-xs font-medium whitespace-nowrap text-[var(--text-secondary)] shadow-xl backdrop-blur-md">
+            {(tool === 'roi' || tool === 'polygon') && <span>{t('tools.hudRoi')}</span>}
+            {tool === 'line' && <span>{t('tools.hudLine')}</span>}
+            {tool === 'mask' && <span>{t('tools.hudMask')}</span>}
+            {(tool === 'rect' || tool === 'precrop') && <span>{t('tools.hudRect')}</span>}
+            {tool === 'select' && <span>{t('tools.hudSelect')}</span>}
+          </div>
+        </main>
+
+        {/* 右侧：图层列表与属性检查器 */}
+        <RuleInspectorSidebar
+          rules={rules}
+          selectedRuleId={selectedRuleId}
+          selectedRule={selectedRule}
+          activeAlgo={activeAlgo}
+          globalTargetClasses={globalTargetClasses}
+          onSelectRule={setSelectedRuleId}
+          onToggleRuleVisibility={(ruleId) =>
+            setRules((prev) =>
+              prev.map((r) => (r.id === ruleId ? { ...r, visible: !r.visible } : r)),
+            )
+          }
+          onDeleteRule={deleteRule}
+          onCloneRule={cloneRule}
+          onUpdateRule={handleUpdateRule}
+        />
+      </div>
+
+      {/* 算法参数配置与沙箱自检抽屉 */}
+      <AlgoSandboxDrawer
+        isOpen={isAlgoDrawerOpen}
+        algo={selectedAlgoForConfig}
+        onClose={() => setIsAlgoDrawerOpen(false)}
+        onUploadPackageFile={handleUploadPackageFile}
+        isUploadingPkg={isUploadingPkg}
+        onRunSandboxTest={handleRunSandboxTest}
+        isVerifyingSandbox={isVerifyingSandbox}
+        sandboxResult={sandboxResult}
+      />
     </div>
   )
 }

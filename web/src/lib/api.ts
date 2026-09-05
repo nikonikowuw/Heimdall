@@ -204,6 +204,10 @@ export const taskApi = {
   list(): Promise<TaskSummaryDto[]> {
     return api.get<TaskSummaryDto[]>('/tasks')
   },
+
+  deleteTask(cameraId: string): Promise<void> {
+    return api.delete<void>(`/tasks/${encodeURIComponent(cameraId)}`)
+  },
 }
 
 export const alarmApi = {

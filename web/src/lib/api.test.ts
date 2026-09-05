@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { authApi, cameraApi, ApiError } from './api'
+import { authApi, cameraApi, taskApi, ApiError } from './api'
 import { useAuthStore } from '../stores/auth'
 
 describe('API Client', () => {
@@ -210,5 +210,51 @@ describe('API Client', () => {
   it('cameraApi.getWebCodecsWsUrl should build correct WebSocket WebCodecs URL', () => {
     const url = cameraApi.getWebCodecsWsUrl('cam-01', 'sub')
     expect(url).toContain('/api/v1/live/cam-01/webcodecs?stream=sub')
+  })
+
+  it('taskApi.deleteTask should send DELETE request with encoded cameraId', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: null,
+        timestamp: 1747584000000,
+      }),
+    })
+
+    await taskApi.deleteTask('cam/01')
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/tasks/cam%2F01',
+      expect.objectContaining({
+        method: 'DELETE',
+      }),
+    )
+  })
+
+  it('taskApi.list should fetch task summary list', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: [
+          {
+            cameraId: 'cam-01',
+            name: 'Perimeter',
+            desiredEnabled: true,
+            rulesCount: 2,
+            motionGateEnabled: true,
+            updatedAt: 1747584000000,
+          },
+        ],
+        timestamp: 1747584000000,
+      }),
+    })
+
+    const tasks = await taskApi.list()
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0].cameraId).toBe('cam-01')
+    expect(tasks[0].rulesCount).toBe(2)
   })
 })
