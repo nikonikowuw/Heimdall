@@ -6,7 +6,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use infer::{current_platform_id, AlgoManifest, AlgoPackage, AlgoSandbox, InferError};
+use infer::{
+    current_platform_id, AlgoManifest, AlgoPackage, AlgoSandbox, InferError,
+    ALGO_MANIFEST_FILENAME, DEFAULT_ALGO_PACKAGES_DIR,
+};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
@@ -115,7 +118,7 @@ async fn verify_package(
 }
 
 async fn scan_packages(State(state): State<AppState>) -> Result<ApiResponse<usize>, ApiError> {
-    let base = Path::new("algo-packages");
+    let base = Path::new(DEFAULT_ALGO_PACKAGES_DIR);
     let count = state
         .algo_registry
         .scan_and_register(base, false)
@@ -181,14 +184,15 @@ async fn upload_package(
     };
 
     // 2. 预读 manifest 确定 algorithm_id
-    let manifest_bytes = std::fs::read(src_pkg_dir.join("manifest.json"))
-        .map_err(|e| ApiError::BadRequest(format!("读取 manifest.json 失败: {e}")))?;
-    let manifest: AlgoManifest = serde_json::from_slice(&manifest_bytes)
-        .map_err(|e| ApiError::BadRequest(format!("解析 manifest.json 格式失败: {e}")))?;
+    let manifest_bytes = std::fs::read(src_pkg_dir.join(ALGO_MANIFEST_FILENAME))
+        .map_err(|e| ApiError::BadRequest(format!("读取 {ALGO_MANIFEST_FILENAME} 失败: {e}")))?;
+    let manifest: AlgoManifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
+        ApiError::BadRequest(format!("解析 {ALGO_MANIFEST_FILENAME} 格式失败: {e}"))
+    })?;
 
     // 3. 搬迁至本地专用算法目录: algo-packages/{current_platform}/{algorithm_id}
     let cur_plat = current_platform_id();
-    let target_dir = PathBuf::from("algo-packages")
+    let target_dir = PathBuf::from(DEFAULT_ALGO_PACKAGES_DIR)
         .join(cur_plat)
         .join(&manifest.algorithm_id);
 
@@ -369,18 +373,18 @@ fn extract_tar<R: std::io::Read>(reader: R, temp_dir: &Path) -> Result<(), Strin
 }
 
 fn find_manifest_dir(temp_dir: &Path) -> Result<PathBuf, String> {
-    if temp_dir.join("manifest.json").is_file() {
+    if temp_dir.join(ALGO_MANIFEST_FILENAME).is_file() {
         return Ok(temp_dir.to_path_buf());
     }
     if let Ok(entries) = std::fs::read_dir(temp_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && path.join("manifest.json").is_file() {
+            if path.is_dir() && path.join(ALGO_MANIFEST_FILENAME).is_file() {
                 return Ok(path);
             }
         }
     }
-    Err("算法包内未找到 manifest.json 描述文件".to_string())
+    Err(format!("算法包内未找到 {ALGO_MANIFEST_FILENAME} 描述文件"))
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {

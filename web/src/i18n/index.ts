@@ -5,9 +5,11 @@ import { initReactI18next } from 'react-i18next'
 export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en'] as const
 export type Locale = (typeof SUPPORTED_LOCALES)[number]
 
+export const LOCALE_STORAGE_KEY = 'argus-locale'
+
 function getInitialLocale(): Locale {
   if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
-    const saved = window.localStorage.getItem('argus-locale') as Locale
+    const saved = window.localStorage.getItem(LOCALE_STORAGE_KEY) as Locale
     if (saved && SUPPORTED_LOCALES.includes(saved)) {
       return saved
     }

@@ -16,6 +16,12 @@ use crate::c_abi::types::*;
 use crate::error::InferError;
 use crate::sandbox::{find_entry_library, AlgoManifest, AlgoSandbox};
 
+/// 算法描述清单固定文件名
+pub const ALGO_MANIFEST_FILENAME: &str = "manifest.json";
+
+/// 算法包默认存储与加载目录
+pub const DEFAULT_ALGO_PACKAGES_DIR: &str = "algo-packages";
+
 /// 已通过沙箱自检并在主进程中加载的算法包
 #[derive(Debug)]
 pub struct AlgoPackage {
@@ -334,7 +340,7 @@ impl AlgoRegistry {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && path.join("manifest.json").is_file() {
+            if path.is_dir() && path.join(ALGO_MANIFEST_FILENAME).is_file() {
                 match AlgoPackage::load_and_verify(&path, use_subprocess) {
                     Ok(pkg) => {
                         let id = pkg.manifest().algorithm_id.clone();

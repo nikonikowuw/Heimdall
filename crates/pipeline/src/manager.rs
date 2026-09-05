@@ -112,7 +112,7 @@ impl Default for PipelineManager {
 
 impl PipelineManager {
     pub fn new() -> Self {
-        Self::with_evidence_dir("var/data/evidence")
+        Self::with_evidence_dir(crate::DEFAULT_EVIDENCE_DIR)
     }
 
     pub fn with_evidence_dir(dir: impl Into<PathBuf>) -> Self {

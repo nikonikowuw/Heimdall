@@ -133,7 +133,7 @@ async fn main() -> Result<()> {
     Arc::new(state.clone()).start_periodic_probe_worker(std::time::Duration::from_secs(30));
 
     // 扫描并沙箱自检加载本地算法包 (algo-packages/{platform})
-    let algo_dir = std::path::Path::new("algo-packages");
+    let algo_dir = std::path::Path::new(infer::DEFAULT_ALGO_PACKAGES_DIR);
     if algo_dir.is_dir() {
         let current_platform = infer::current_platform_id();
         match state.algo_registry.scan_and_register(algo_dir, true).await {
@@ -210,7 +210,7 @@ async fn main() -> Result<()> {
 
 /// 处理算法包沙箱物理隔离自检子进程请求
 fn handle_verify_algo_subprocess(raw_args: &[String]) {
-    if raw_args.len() < 3 || raw_args[1] != "__verify-algo" {
+    if raw_args.len() < 3 || raw_args[1] != infer::VERIFY_ALGO_ARG {
         return;
     }
     let pkg_path = std::path::Path::new(&raw_args[2]);
@@ -222,7 +222,7 @@ fn handle_verify_algo_subprocess(raw_args: &[String]) {
 }
 
 fn execute_algo_verification(pkg_path: &std::path::Path) -> Result<(), String> {
-    let manifest_path = pkg_path.join("manifest.json");
+    let manifest_path = pkg_path.join(infer::ALGO_MANIFEST_FILENAME);
     let manifest_str =
         std::fs::read_to_string(&manifest_path).map_err(|e| format!("读取 manifest 失败: {e}"))?;
     let manifest: infer::AlgoManifest =

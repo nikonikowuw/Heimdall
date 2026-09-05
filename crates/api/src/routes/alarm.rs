@@ -3,6 +3,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
+use types::{AlarmSeverity, AlarmStatus, TOPIC_ALARM_STATUS_CHANGED};
 
 use db::AlarmRepo;
 
@@ -28,8 +29,8 @@ pub struct AlarmDto {
     pub crop_image_id: String,
     pub crop_image_rel_path: String,
     pub rule_type: String,
-    pub severity: String,
-    pub status: String,
+    pub severity: AlarmSeverity,
+    pub status: AlarmStatus,
     pub handled_at: Option<i64>,
     pub created_at: i64,
 }
@@ -51,8 +52,8 @@ impl From<db::entity::alarm::Model> for AlarmDto {
             crop_image_id: m.crop_image_id,
             crop_image_rel_path: m.crop_image_rel_path,
             rule_type: m.rule_type,
-            severity: m.severity,
-            status: m.status,
+            severity: AlarmSeverity::from_str_loose(&m.severity),
+            status: AlarmStatus::from_str_loose(&m.status),
             handled_at: m.handled_at.map(|t| t.timestamp_millis()),
             created_at: m.created_at.timestamp_millis(),
         }
@@ -73,7 +74,7 @@ pub struct AlarmQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateAlarmStatusRequest {
-    pub status: String,
+    pub status: AlarmStatus,
 }
 
 fn default_limit() -> u64 {
@@ -113,16 +114,16 @@ async fn update_alarm_status(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateAlarmStatusRequest>,
 ) -> Result<ApiResponse<AlarmDto>, ApiError> {
-    let updated = AlarmRepo::update_status(&state.db, id, &payload.status).await?;
+    let updated = AlarmRepo::update_status(&state.db, id, payload.status.as_str()).await?;
     let dto = AlarmDto::from(updated);
 
     // 广播告警状态变更事件
     let _ = state.event_broadcaster.send(WsBroadcastEvent {
-        topic: "alarm.status_changed".to_string(),
+        topic: TOPIC_ALARM_STATUS_CHANGED.to_string(),
         payload: serde_json::json!({
             "id": dto.id,
             "eventId": dto.event_id,
-            "status": dto.status,
+            "status": dto.status.as_str(),
             "handledAt": dto.handled_at,
         }),
         timestamp: chrono::Utc::now().timestamp_millis(),

@@ -18,6 +18,11 @@ export interface ParsedVideoChunk {
 
 export const WEBCODECS_HEADER_LEN = 12
 
+export const CODEC_MIME_STRINGS = {
+  h264: 'avc1.42E01E',
+  h265: 'hev1.1.6.L93.B0',
+} as const
+
 /**
  * 解析服务端下发的 12 字节二进制帧头与 NALU 载荷
  */
@@ -61,7 +66,7 @@ export async function isWebCodecsSupported(codec: 'h264' | 'h265' = 'h265'): Pro
   }
 
   try {
-    const codecString = codec === 'h265' ? 'hev1.1.6.L93.B0' : 'avc1.42E01E'
+    const codecString = CODEC_MIME_STRINGS[codec]
     const res = await VideoDecoder.isConfigSupported({
       codec: codecString,
     })
@@ -155,7 +160,7 @@ export class WebCodecsPlayer {
         },
       })
 
-      const codecString = codec === 'h265' ? 'hev1.1.6.L93.B0' : 'avc1.42E01E'
+      const codecString = CODEC_MIME_STRINGS[codec]
       this.decoder.configure({
         codec: codecString,
         optimizeForLatency: true,

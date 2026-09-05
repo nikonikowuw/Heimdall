@@ -125,7 +125,7 @@ impl AppState {
         let _ = db::CameraRepo::update_probe_status(&self.db, camera_id, params.clone()).await;
 
         let _ = self.event_broadcaster.send(WsBroadcastEvent {
-            topic: "camera.probe_updated".to_string(),
+            topic: types::TOPIC_CAMERA_PROBE_UPDATED.to_string(),
             payload: serde_json::json!({
                 "cameraId": camera_id,
                 "status": params.status,

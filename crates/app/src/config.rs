@@ -180,7 +180,7 @@ fn default_max_connections() -> u32 {
 }
 
 fn default_evidence_dir() -> PathBuf {
-    PathBuf::from("var/data/evidence")
+    PathBuf::from(pipeline::DEFAULT_EVIDENCE_DIR)
 }
 
 fn default_max_concurrent_decoders() -> usize {

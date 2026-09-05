@@ -20,7 +20,13 @@ import { useTranslation } from 'react-i18next'
 import { CameraModal, DeleteCameraModal, normalizeProbeStatus } from '@/features/cameras'
 import { cameraApi, evidenceApi } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
-import type { Camera, ProbeStatus } from '@/types'
+import {
+  type AlarmSeverity,
+  type AlarmStatus,
+  type Camera,
+  type ProbeStatus,
+  WS_TOPICS,
+} from '@/types'
 import { LivePlayer } from './components/LivePlayer'
 
 function playAlarmChime() {
@@ -109,7 +115,7 @@ function getResolutionBadge(cam: Camera) {
   if (cam.lastWidth > 0 && cam.lastHeight > 0) {
     return `${cam.lastHeight}P`
   }
-  if (cam.lastProbeStatus === 'healthy' || cam.lastProbeStatus === 'success') {
+  if (normalizeProbeStatus(cam.lastProbeStatus) === 'healthy') {
     return '1080P'
   }
   return '--'
@@ -120,7 +126,7 @@ interface LiveAlarmToast {
   cameraId: string
   targetLabel: string
   ruleType: string
-  severity: string
+  severity: AlarmSeverity
   cropImageRelPath?: string
   imageRelPath?: string
 }
@@ -274,7 +280,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               }
             }
 
-            if (event.topic === 'camera.probe_updated' && event.payload) {
+            if (event.topic === WS_TOPICS.CAMERA_PROBE_UPDATED && event.payload) {
               const { cameraId, status, codec, width, height, fps, errorCode } = event.payload
               setCameras((prev) => {
                 const next = prev.map((cam) => {
@@ -295,14 +301,14 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               })
             }
 
-            if (event.topic === 'alarm.triggered' && event.payload) {
+            if (event.topic === WS_TOPICS.ALARM_TRIGGERED && event.payload) {
               const p = event.payload as {
                 id?: number
                 eventId?: string
                 cameraId?: string
                 targetLabel?: string
                 ruleType?: string
-                severity?: string
+                severity?: AlarmSeverity
                 cropImageRelPath?: string
                 imageRelPath?: string
               }
@@ -316,6 +322,23 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                 cropImageRelPath: p.cropImageRelPath,
                 imageRelPath: p.imageRelPath,
               })
+            }
+
+            if (event.topic === WS_TOPICS.ALARM_STATUS_CHANGED && event.payload) {
+              const p = event.payload as {
+                id?: number
+                eventId?: string
+                status?: AlarmStatus
+              }
+              if (p.status === 'processed') {
+                setActiveAlarm((prev) => {
+                  if (!prev) return null
+                  if (prev.id === p.eventId || prev.id === String(p.id)) {
+                    return null
+                  }
+                  return prev
+                })
+              }
             }
           } catch {
             // ignore non-JSON or unrelated messages
@@ -664,7 +687,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                         </span>
                         <span
                           className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                            cam.lastProbeStatus === 'healthy' || cam.lastProbeStatus === 'success'
+                            normalizeProbeStatus(cam.lastProbeStatus) === 'healthy'
                               ? 'bg-emerald-500/10 text-emerald-400'
                               : 'bg-rose-500/10 text-rose-400'
                           }`}

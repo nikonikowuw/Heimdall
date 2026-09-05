@@ -36,6 +36,17 @@ export interface AdminUserDto {
   updatedAt: number
 }
 
+export const WS_TOPICS = {
+  CAMERA_PROBE_UPDATED: 'camera.probe_updated',
+  ALARM_TRIGGERED: 'alarm.triggered',
+  ALARM_STATUS_CHANGED: 'alarm.status_changed',
+} as const
+
+export type WsTopic = (typeof WS_TOPICS)[keyof typeof WS_TOPICS]
+
+export type AlarmStatus = 'unprocessed' | 'processed'
+export type AlarmSeverity = 'warning' | 'critical'
+
 export type ProbeStatus = 'never' | 'healthy' | 'success' | 'degraded' | 'reconnecting' | 'failed'
 
 export interface Camera {
@@ -145,8 +156,8 @@ export interface AlarmRecord {
   cropImageId?: string
   cropImageRelPath?: string
   ruleType?: string
-  severity?: string
-  status: string
+  severity?: AlarmSeverity
+  status: AlarmStatus
   handledAt?: number | null
   createdAt: number
 }

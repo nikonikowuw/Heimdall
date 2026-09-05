@@ -11,6 +11,10 @@ use sha2::{Digest, Sha256};
 use crate::c_abi::loader::{check_c_status, LoadedLib, RawAlgoLibrary};
 use crate::c_abi::types::*;
 use crate::error::InferError;
+use crate::package::ALGO_MANIFEST_FILENAME;
+
+/// 算法沙箱物理隔离子进程私有 CLI 自测标志参数
+pub const VERIFY_ALGO_ARG: &str = "__verify-algo";
 
 /// 获取当前编译运行环境的标准精炼平台代号
 pub fn current_platform_id() -> &'static str {
@@ -92,11 +96,11 @@ impl AlgoSandbox {
                 })?;
 
         // 检查核心必备文件
-        let manifest_path = canonical_dir.join("manifest.json");
+        let manifest_path = canonical_dir.join(ALGO_MANIFEST_FILENAME);
         if !manifest_path.is_file() {
             return Err(InferError::SandboxValidation {
                 step: step.to_string(),
-                reason: "缺少 manifest.json 文件".to_string(),
+                reason: format!("缺少 {ALGO_MANIFEST_FILENAME} 文件"),
             });
         }
 
@@ -136,13 +140,13 @@ impl AlgoSandbox {
         let manifest_str =
             std::fs::read_to_string(&manifest_path).map_err(|e| InferError::SandboxValidation {
                 step: step.to_string(),
-                reason: format!("读取 manifest.json 失败: {e}"),
+                reason: format!("读取 {ALGO_MANIFEST_FILENAME} 失败: {e}"),
             })?;
 
         let manifest: AlgoManifest =
             serde_json::from_str(&manifest_str).map_err(|e| InferError::SandboxValidation {
                 step: step.to_string(),
-                reason: format!("manifest.json 格式非法: {e}"),
+                reason: format!("{ALGO_MANIFEST_FILENAME} 格式非法: {e}"),
             })?;
 
         if manifest.manifest_version != 1 {
@@ -211,7 +215,7 @@ impl AlgoSandbox {
             })?;
 
         let mut child = std::process::Command::new(&current_exe)
-            .arg("__verify-algo")
+            .arg(VERIFY_ALGO_ARG)
             .arg(package_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

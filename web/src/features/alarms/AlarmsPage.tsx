@@ -16,7 +16,13 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { alarmApi, cameraApi, evidenceApi } from '../../lib/api'
-import type { AlarmRecord, Camera, CaptureRecord, RecognitionRecord } from '../../types'
+import type {
+  AlarmRecord,
+  AlarmStatus,
+  Camera,
+  CaptureRecord,
+  RecognitionRecord,
+} from '../../types'
 
 type EvidenceTab = 'alarms' | 'captures' | 'recognition'
 type ViewMode = 'cards' | 'table'
@@ -798,7 +804,7 @@ export function AlarmsPage(): React.ReactElement {
   }
 
   const handleToggleAlarmStatus = async (alarm: AlarmRecord): Promise<void> => {
-    const nextStatus = alarm.status === 'processed' ? 'unprocessed' : 'processed'
+    const nextStatus: AlarmStatus = alarm.status === 'processed' ? 'unprocessed' : 'processed'
     try {
       const updated = await alarmApi.updateStatus(alarm.id, nextStatus)
       setAlarms((prev) => prev.map((a) => (a.id === alarm.id ? updated : a)))

@@ -55,7 +55,7 @@ pub struct StorageCleanerConfig {
 impl Default for StorageCleanerConfig {
     fn default() -> Self {
         Self {
-            evidence_dir: PathBuf::from("var/data/evidence"),
+            evidence_dir: PathBuf::from(crate::DEFAULT_EVIDENCE_DIR),
             min_free_ratio: 0.15,
             batch_delete_size: 100,
         }

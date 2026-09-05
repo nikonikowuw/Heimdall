@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/auth'
 import type {
   AdminUserDto,
   AlarmRecord,
+  AlarmStatus,
   AlgoManifest,
   ApiResponse,
   Camera,
@@ -213,7 +214,7 @@ export const taskApi = {
 export const alarmApi = {
   list(params?: {
     cameraId?: string
-    status?: string
+    status?: AlarmStatus | string
     startTime?: number
     endTime?: number
     limit?: number
@@ -230,7 +231,7 @@ export const alarmApi = {
     return api.get<AlarmRecord[]>(`/alarms${qs}`)
   },
 
-  updateStatus(id: number, status: string): Promise<AlarmRecord> {
+  updateStatus(id: number, status: AlarmStatus): Promise<AlarmRecord> {
     return api.put<AlarmRecord>(`/alarms/${id}/status`, { status })
   },
 }
