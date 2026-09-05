@@ -47,43 +47,92 @@ use crate::decoder::{DecodeCommand, VideoDecoder};
 use crate::error::MediaError;
 
 /// 水平宽度步长对齐（华为 DVPP 严格要求水平 16 字节对齐）
-#[inline]
-pub fn align_dvpp_width_stride(width: u32) -> u32 {
-    width.div_ceil(16) * 16
-}
+/// 单个压缩码流包硬上限（4 MB，主流 4K H.264/H.265 I帧上限通常 <= 2MB，防止恶意大包 DoS 攻击）
+pub const MAX_COMPRESSED_PACKET_SIZE: usize = 4 * 1024 * 1024;
 
-/// 垂直高度步长对齐（华为 DVPP 严格要求垂直 2 行对齐）
-#[inline]
-pub fn align_dvpp_height_stride(height: u32) -> u32 {
-    height.div_ceil(2) * 2
-}
+/// 支持的最大帧宽（4K Ultra HD: 3840）
+pub const MAX_FRAME_WIDTH: u32 = 3840;
 
-/// 计算 NV12 在步长对齐后的单帧设备显存字节需求
-#[inline]
-pub fn calculate_dvpp_nv12_size(width: u32, height: u32) -> usize {
-    let stride_w = align_dvpp_width_stride(width) as usize;
-    let stride_h = align_dvpp_height_stride(height) as usize;
-    stride_w * stride_h * 3 / 2
-}
+/// 支持的最大帧高（4K Ultra HD: 2160）
+pub const MAX_FRAME_HEIGHT: u32 = 2160;
+
+/// 支持的最小帧宽
+pub const MIN_FRAME_WIDTH: u32 = 128;
+
+/// 支持的最小帧高
+pub const MIN_FRAME_HEIGHT: u32 = 128;
+
+/// 单通道设备显存最大硬预算（200 MB，防止恶意大分辨率耗尽连续物理显存）
+pub const MAX_DEVICE_BUFFER_BYTES: usize = 200 * 1024 * 1024;
+
+/// 单路解码器每分钟最大允许的分辨率变更次数（超过 3 次判定为恶意 DoS 抖动触发熔断）
+pub const MAX_RESOLUTION_RECONFIGURES_PER_MINUTE: usize = 3;
 
 /// 动态分辨率变更冷却时间（5 秒内忽略连续重配请求）
 pub const DVPP_RECONFIG_COOLDOWN: Duration = Duration::from_secs(5);
 /// 动态分辨率抖动检测滑动窗口（60 秒）
 pub const DVPP_FLAPPING_WINDOW: Duration = Duration::from_secs(60);
-/// 动态分辨率滑动窗口内最大允许重配次数（达到 3 次触发熔断降级）
-pub const DVPP_MAX_FLAPPING_COUNT: usize = 3;
-/// 单通道显存硬预算上限（200 MB，防止恶意大分辨率耗尽显存）
-pub const DVPP_MAX_POOL_MEMORY_BYTES: usize = 200 * 1024 * 1024;
 /// 单通道显存池最小块数保底
 pub const DVPP_MIN_POOL_BLOCKS: usize = 8;
 /// 单通道显存池最大块数
 pub const DVPP_MAX_POOL_BLOCKS: usize = 20;
 
+/// 水平宽度步长对齐（华为 DVPP 严格要求水平 16 字节对齐，使用 checked 运算防止整数溢出）
+#[inline]
+pub fn align_dvpp_width_stride(width: u32) -> u32 {
+    width
+        .checked_add(15)
+        .map(|v| (v / 16) * 16)
+        .unwrap_or(MAX_FRAME_WIDTH)
+}
+
+/// 垂直高度步长对齐（华为 DVPP 严格要求垂直 2 行对齐，使用 checked 运算防止整数溢出）
+#[inline]
+pub fn align_dvpp_height_stride(height: u32) -> u32 {
+    height
+        .checked_add(1)
+        .map(|v| (v / 2) * 2)
+        .unwrap_or(MAX_FRAME_HEIGHT)
+}
+
+/// 计算 NV12 在步长对齐后的单帧设备显存字节需求（严格实施 Checked Arithmetic 乘法防护）
+#[inline]
+pub fn calculate_dvpp_nv12_size(width: u32, height: u32) -> usize {
+    let stride_w = align_dvpp_width_stride(width) as usize;
+    let stride_h = align_dvpp_height_stride(height) as usize;
+    stride_w
+        .checked_mul(stride_h)
+        .and_then(|v| v.checked_mul(3))
+        .map(|v| v / 2)
+        .unwrap_or(usize::MAX)
+}
+
+/// 计算 NV12 显存大小并在溢出或非法尺寸时返回明确错误
+#[inline]
+pub fn calculate_dvpp_nv12_size_checked(width: u32, height: u32) -> Result<usize, MediaError> {
+    if !is_valid_dvpp_resolution(width, height) {
+        return Err(MediaError::Decode {
+            reason: format!("分辨率 {width}x{height} 超出安全边界约束"),
+        });
+    }
+    let stride_w = align_dvpp_width_stride(width) as usize;
+    let stride_h = align_dvpp_height_stride(height) as usize;
+    stride_w
+        .checked_mul(stride_h)
+        .and_then(|v| v.checked_mul(3))
+        .map(|v| v / 2)
+        .ok_or_else(|| MediaError::Decode {
+            reason: "NV12 显存容量计算乘法溢出".to_string(),
+        })
+}
+
 /// 校验流分辨率是否处于允许的安全边界范围内（防御恶意构造畸形 SPS）
 #[inline]
 pub fn is_valid_dvpp_resolution(width: u32, height: u32) -> bool {
     // 1. 范围校验：128x128 ~ 3840x2160 (4K)
-    if !(128..=3840).contains(&width) || !(128..=2160).contains(&height) {
+    if !(MIN_FRAME_WIDTH..=MAX_FRAME_WIDTH).contains(&width)
+        || !(MIN_FRAME_HEIGHT..=MAX_FRAME_HEIGHT).contains(&height)
+    {
         return false;
     }
     // 2. 偶数约束（针对 YUV420 采样必须为偶数像素）
@@ -91,10 +140,10 @@ pub fn is_valid_dvpp_resolution(width: u32, height: u32) -> bool {
         return false;
     }
     // 3. 总像素数防溢出与 4K 超清上限保护
-    if (width as u64) * (height as u64) > 3840 * 2160 {
-        return false;
+    match (width as u64).checked_mul(height as u64) {
+        Some(pixels) => pixels <= (MAX_FRAME_WIDTH as u64) * (MAX_FRAME_HEIGHT as u64),
+        None => false,
     }
-    true
 }
 
 #[allow(non_snake_case, dead_code)]
@@ -804,8 +853,8 @@ impl DvppDecoderInner {
             is_degraded: false,
             reconfig_cooldown: DVPP_RECONFIG_COOLDOWN,
             flapping_window: DVPP_FLAPPING_WINDOW,
-            max_flapping_count: DVPP_MAX_FLAPPING_COUNT,
-            max_pool_memory_bytes: DVPP_MAX_POOL_MEMORY_BYTES,
+            max_flapping_count: MAX_RESOLUTION_RECONFIGURES_PER_MINUTE,
+            max_pool_memory_bytes: MAX_DEVICE_BUFFER_BYTES,
         }
     }
 
@@ -924,11 +973,32 @@ impl DvppDecoderInner {
             });
         }
 
+        // 0. 输入码流零长度防御：空包直接跳过，绝不进入显存分配与硬件投递
+        if packet.is_empty() {
+            return Ok(None);
+        }
+
+        // 0.1 输入码流硬上限防御：超限拒绝分配显存，防止 DoS 内存轰炸
+        if packet.len() > MAX_COMPRESSED_PACKET_SIZE {
+            return Err(MediaError::Decode {
+                reason: format!(
+                    "输入压缩码流包大小 ({} 字节) 超出单包硬上限 ({} 字节)",
+                    packet.len(),
+                    MAX_COMPRESSED_PACKET_SIZE
+                ),
+            });
+        }
+
+        // 0.2 ABI 尺寸表达范围校验（防止 64 位 usize 截断为 32 位 c_uint）
+        let stream_size_u32 = u32::try_from(packet.len()).map_err(|_| MediaError::Decode {
+            reason: "输入码流包大小超出 u32 表达范围".to_string(),
+        })?;
+
         self.update_dimensions_if_needed(packet);
 
         // 1. 为当前输入 NALU 码流申请独立显存，实现严格的在途隔离，杜绝覆写破坏
         let mut stream_buf: *mut c_void = std::ptr::null_mut();
-        // SAFETY: acldvppMalloc 为输入码流分配显存
+        // SAFETY: acldvppMalloc 为输入码流分配显存（受 MAX_COMPRESSED_PACKET_SIZE 严格限制）
         let ret = unsafe { ffi::acldvppMalloc(&mut stream_buf, packet.len()) };
         if ret != 0 || stream_buf.is_null() {
             return Err(MediaError::Decode {
@@ -970,10 +1040,10 @@ impl DvppDecoderInner {
                 reason: "acldvppCreateStreamDesc 创建失败".to_string(),
             });
         }
-        // SAFETY: 设置输入码流元数据
+        // SAFETY: 设置输入码流元数据，使用校验过的 stream_size_u32
         unsafe {
             let _ = ffi::acldvppSetStreamDescData(stream_desc, stream_buf);
-            let _ = ffi::acldvppSetStreamDescSize(stream_desc, packet.len() as u32);
+            let _ = ffi::acldvppSetStreamDescSize(stream_desc, stream_size_u32);
             let _ = ffi::acldvppSetStreamDescEos(stream_desc, 0);
         }
 
@@ -988,6 +1058,22 @@ impl DvppDecoderInner {
                 }
                 return Err(MediaError::Decode {
                     reason: "DVPP 显存池耗尽超时 (下游租约未释放或处理阻塞)".to_string(),
+                });
+            }
+        };
+
+        // 3.1 校验 block_size 是否处于 u32 安全范围
+        let block_size_u32 = match u32::try_from(block_size) {
+            Ok(v) => v,
+            Err(_) => {
+                self.pool.return_buffer(dev_ptr);
+                // SAFETY: 超出范围回滚释放输入资源
+                unsafe {
+                    let _ = ffi::acldvppDestroyStreamDesc(stream_desc);
+                    let _ = ffi::acldvppFree(stream_buf);
+                }
+                return Err(MediaError::Decode {
+                    reason: "输出显存块容量超出 u32 表达范围".to_string(),
                 });
             }
         };
@@ -1009,7 +1095,7 @@ impl DvppDecoderInner {
         // SAFETY: 配置输出图像描述符属性
         unsafe {
             let _ = ffi::acldvppSetPicDescData(pic_desc, dev_ptr);
-            let _ = ffi::acldvppSetPicDescSize(pic_desc, block_size as u32);
+            let _ = ffi::acldvppSetPicDescSize(pic_desc, block_size_u32);
             let _ = ffi::acldvppSetPicDescFormat(pic_desc, ffi::PIXEL_FORMAT_YUV_SEMIPLANAR_420);
             let _ = ffi::acldvppSetPicDescWidth(pic_desc, self.width);
             let _ = ffi::acldvppSetPicDescHeight(pic_desc, self.height);
@@ -1272,7 +1358,17 @@ impl DvppDecoderInner {
 
         let new_stride_w = align_dvpp_width_stride(new_w);
         let new_stride_h = align_dvpp_height_stride(new_h);
-        let required_size = calculate_dvpp_nv12_size(new_w, new_h);
+        let required_size = match calculate_dvpp_nv12_size_checked(new_w, new_h) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    camera_id = %self.camera_id,
+                    error = %e,
+                    "显存块容量计算溢出或尺寸超出边界，拒绝重配"
+                );
+                return;
+            }
+        };
 
         // 6. 依据显存预算建立安全新池（Buffer Budget）
         let new_pool_count = (self.max_pool_memory_bytes / required_size)
@@ -1741,5 +1837,37 @@ mod tests {
             .decode(&dummy_nalu, 1033)
             .expect("送入新分辨率帧应成功");
         assert!(res2.is_some() || opt.is_some() || !inner.drained_frames.is_empty());
+    }
+
+    #[test]
+    fn test_dvpp_empty_and_oversized_packet_defense() {
+        let mut inner = DvppDecoderInner::new("test_limits".to_string(), CodecType::H264);
+        inner.init().expect("初始化通道应当成功");
+
+        // 1. 空包防御：直接返回 Ok(None)，不消耗任何显存
+        let empty_res = inner.decode(&[], 1000);
+        assert!(empty_res.is_ok(), "空包应优雅返回 Ok");
+        assert!(empty_res.expect("空包应为 Ok").is_none(), "空包应返回 None");
+        assert_eq!(inner.in_flight_count, 0, "空包不应增加在途硬件计数");
+
+        // 2. 构造超大 NALU 包（超过 MAX_COMPRESSED_PACKET_SIZE，比如 4MB + 1）
+        let oversized = vec![0u8; MAX_COMPRESSED_PACKET_SIZE + 1];
+        let over_res = inner.decode(&oversized, 1033);
+        assert!(over_res.is_err(), "超大压缩包必须被防御性拦截拒收");
+        assert_eq!(inner.in_flight_count, 0, "超大包不应分配显存或投递硬件");
+    }
+
+    #[test]
+    fn test_dvpp_checked_arithmetic_overflow() {
+        // 1. 正常计算
+        let size_1080p = calculate_dvpp_nv12_size_checked(1920, 1080).expect("1080p 应合法");
+        assert_eq!(size_1080p, 1920 * 1080 * 3 / 2);
+
+        // 2. 超出 MAX_FRAME_WIDTH / MAX_FRAME_HEIGHT 边界
+        assert!(calculate_dvpp_nv12_size_checked(4096, 2160).is_err());
+        assert!(calculate_dvpp_nv12_size_checked(1920, 4096).is_err());
+
+        // 3. 极端 u32::MAX 防溢出
+        assert!(calculate_dvpp_nv12_size_checked(u32::MAX, u32::MAX).is_err());
     }
 }
