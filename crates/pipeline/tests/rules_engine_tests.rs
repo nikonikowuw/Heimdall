@@ -171,6 +171,7 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
         evidence_dir: temp_evidence_dir.clone(),
         min_free_ratio: 0.99, // 触发淘汰
         batch_delete_size: 10,
+        ..Default::default()
     });
 
     let report = cleaner
@@ -182,6 +183,9 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
     // 必须仅淘汰普通抓拍
     assert_eq!(report.captures_deleted, 1);
     assert_eq!(report.alarms_deleted, 0);
+
+    // 等待异步 Unlink 排空以验证物理回收
+    cleaner.flush_pending_unlinks().await;
 
     // 验证“图在案在，图销案销”：抓拍物理文件被删除，但告警文件与数据库行完好无损！
     assert!(!cap_full_path.exists(), "普通抓拍文件必须被清理");

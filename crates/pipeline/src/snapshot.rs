@@ -415,20 +415,38 @@ pub(crate) fn encode_and_save_snapshot(
     base_evidence_dir: &std::path::Path,
     is_fallback: bool,
 ) -> Result<SnapshotResult, PipelineError> {
-    // 0. 物理存储空间硬断路器 (Storage Circuit Breaker)
-    // 写入前做轻量级 statvfs 预检：若磁盘物理剩余空间低于 5% 临界红线，立即拒绝落盘，保全 SQLite WAL 日志与核心系统生命线
-    if let Ok(free_ratio) = crate::storage_cleaner::get_disk_free_ratio(base_evidence_dir) {
-        const CRITICAL_FREE_RATIO: f64 = 0.05;
-        if free_ratio < CRITICAL_FREE_RATIO {
+    // 0. 物理存储空间与 Inode 全维度硬断路器 (Storage Circuit Breaker)
+    // 写入前做轻量级 statvfs 预检：根据健康决策评估硬熔断与紧急抓拍降级
+    if let Ok(stat) = crate::storage_cleaner::stat_fs(base_evidence_dir) {
+        let decision = crate::storage_cleaner::StorageCircuitBreaker::evaluate_with_defaults(&stat);
+        if decision.is_circuit_broken {
+            let reason = decision
+                .reason
+                .as_deref()
+                .unwrap_or("存储资源严重匮乏触发熔断");
             tracing::error!(
-                camera_id = %camera_id,
-                free_ratio = %format!("{:.2}%", free_ratio * 100.0),
-                threshold = %format!("{:.2}%", CRITICAL_FREE_RATIO * 100.0),
-                "磁盘空间极度匮乏已触碰 5% 临界红线，触发写盘断路器，拒绝写入快照以保全系统数据库"
+                %camera_id,
+                %reason,
+                "触发存储写盘硬熔断保护，拒绝写入快照以保全系统数据库核心生命线"
             );
             return Err(PipelineError::Snapshot(format!(
-                "磁盘空间不足 ({:.2}% < 5.00%)，触发写盘断路保护",
-                free_ratio * 100.0
+                "触发写盘断路保护: {reason}"
+            )));
+        }
+
+        // 紧急严重水位：抑制普通抓拍，仅放行携带靶向检测目标的违规告警凭据
+        if !decision.allow_normal_capture && target_bbox.is_none() {
+            let reason = decision
+                .reason
+                .as_deref()
+                .unwrap_or("存储处于紧急水位，已抑制普通抓拍");
+            tracing::warn!(
+                %camera_id,
+                %reason,
+                "存储处于紧急水位：自动抑制普通抓拍写入，保全关键违规告警证据"
+            );
+            return Err(PipelineError::Snapshot(format!(
+                "存储紧急降级抑制: {reason}"
             )));
         }
     }

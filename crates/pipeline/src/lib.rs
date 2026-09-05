@@ -19,8 +19,10 @@ pub use roi::RoiAffineMapper;
 pub use rules::{RuleEvaluator, TriggeredAlarm};
 pub use snapshot::{SnapshotCaptureMode, SnapshotConfig, SnapshotEngine, SnapshotResult};
 pub use storage_cleaner::{
-    get_disk_free_ratio, EvictionMetricsSnapshot, EvictionReport, EvictionStore,
-    ReconciliationReport, StorageCleaner, StorageCleanerConfig,
+    detect_emmc_health, get_disk_free_ratio, get_sqlite_wal_size, stat_fs, EmmcHealthInfo,
+    EvictionMetricsSnapshot, EvictionReport, EvictionStore, FsStorageStat, ReconciliationReport,
+    StorageCircuitBreaker, StorageCleaner, StorageCleanerConfig, StorageDecision,
+    StorageHealthLevel, StorageWatermarkThresholds,
 };
 pub use thermal::{
     ThermalActionPlan, ThermalGuard, ThermalLevel, ThermalPolicyConfig, ThermalZoneInfo,

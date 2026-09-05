@@ -24,6 +24,14 @@ pub struct EvictionMetrics {
     pub unlink_failures_total: AtomicU64,
     /// 当前重试队列堆积项数量
     pub retry_queue_size: AtomicUsize,
+    /// 连续回滞排空循环执行的总子轮次
+    pub drain_iterations_total: AtomicU64,
+    /// 触发紧急严重水位淘汰的次数
+    pub emergency_evictions_total: AtomicU64,
+    /// 写盘断路器触发绝对阻断的次数
+    pub circuit_breaker_tripped_total: AtomicU64,
+    /// 普通抓拍被自适应降级抑制的次数
+    pub normal_captures_throttled_total: AtomicU64,
 }
 
 impl EvictionMetrics {
@@ -43,6 +51,14 @@ impl EvictionMetrics {
             unlink_retries_total: self.unlink_retries_total.load(Ordering::Relaxed),
             unlink_failures_total: self.unlink_failures_total.load(Ordering::Relaxed),
             retry_queue_size: self.retry_queue_size.load(Ordering::Relaxed),
+            drain_iterations_total: self.drain_iterations_total.load(Ordering::Relaxed),
+            emergency_evictions_total: self.emergency_evictions_total.load(Ordering::Relaxed),
+            circuit_breaker_tripped_total: self
+                .circuit_breaker_tripped_total
+                .load(Ordering::Relaxed),
+            normal_captures_throttled_total: self
+                .normal_captures_throttled_total
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -59,4 +75,8 @@ pub struct EvictionMetricsSnapshot {
     pub unlink_retries_total: u64,
     pub unlink_failures_total: u64,
     pub retry_queue_size: usize,
+    pub drain_iterations_total: u64,
+    pub emergency_evictions_total: u64,
+    pub circuit_breaker_tripped_total: u64,
+    pub normal_captures_throttled_total: u64,
 }
