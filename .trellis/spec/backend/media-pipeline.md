@@ -308,6 +308,28 @@ pub trait VideoDecoder: Send {
 
 ---
 
+## 异构硬件解码器工作线程优雅停机与超时隔离规范 (Graceful Shutdown & Join Timeout)
+
+Linux 系统工程与嵌入式多媒体管线中，单纯依赖 `drop(sender)` + `blocking_recv() -> None` + `thread.join()` 是**致命的无界阻塞缺陷**。若工作线程恰好进入底层驱动 FFI（如 `mpp_decode_put_packet`、`mpp_decode_get_frame`、`aclvdecSendFrame`、`aclrtProcessReport`）而硬件因内核态挂死未返回，主析构线程将永久死等，导致整个守护进程在摄像头注销、重构或停机时挂死（Hang）。
+
+必须严格遵循以下六步停机生命周期与隔离策略：
+
+1. **协同停止信号 (Stop Signal)**：
+   - 维护 `shutdown_flag: Arc<AtomicBool>`，停机时首先置为 `true`，向解码命令队列显式发送 `DecodeCommand::Stop` 并释放 `tx`；
+   - 内部每一步耗时硬件操作（如 `decode`、`flush`、`drain_in_flight_frames`）在循环与入口处检查 `shutdown_flag`，若为 true 立即提前 abort 退出。
+2. **显式唤醒与队列停止**：
+   - 显式调用显存池的 `pool.close()`，唤醒所有因显存池耗尽挂起的解码线程；
+   - 显式通知 Report 驱动线程退出循环（`report_running.store(false)`）。
+3. **带超时的退出等待 (Join with Timeout)**：
+   - 工作线程在退出前最后一刻通过标准 channel 发送 `exit_tx.send(())`；
+   - 外壳在 `stop(timeout: Duration)` 中通过 `exit_rx.recv_timeout(timeout)`（默认 500ms）等待线程退出；
+   - **成功退出**：调用 `thread.join()` 保证 0 毫秒立即返回并彻底回收 OS 线程资源；
+   - **超时挂死 (Driver Hang)**：记录 `error!` 级别日志（包含 `camera_id`、`timeout_ms` 及驱动挂起警告），**绝对不再调用阻塞的 `thread.join()`**，执行线程隔离放弃，确保守护进程能够继续安全清理其他摄像头并正常执行关机/重启流程。
+4. **统一析构顺序**：
+   - `Signal Stop` -> `Close Channel/Pool` -> `Wait Worker with Timeout` -> `Destroy Hardware Desc/Context` -> `Release Native Buffers`。
+
+---
+
 ## 异构硬件解码器动态分辨率安全重配与防抖规范 (DVPP / MPP)
 
 在网络视频流出现分辨率动态切换（如监控摄像头自适应码率或恶意流构造 SPS 扰动）时，硬件解码器必须遵循严格的物理硬件生命周期与安全防护约束：

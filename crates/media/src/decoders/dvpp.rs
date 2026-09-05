@@ -43,7 +43,7 @@ use tracing::{debug, error, info, warn};
 use types::{CodecType, FrameHandle, FrameRef, PixelFormat, StrideInfo};
 
 use crate::buffer_pool::DvppBufferPool;
-use crate::decoder::{DecodeCommand, VideoDecoder};
+use crate::decoder::{DecodeCommand, VideoDecoder, DEFAULT_THREAD_SHUTDOWN_TIMEOUT};
 use crate::error::MediaError;
 
 /// 水平宽度步长对齐（华为 DVPP 严格要求水平 16 字节对齐）
@@ -843,10 +843,12 @@ struct DvppDecoderInner {
     flapping_window: Duration,
     max_flapping_count: usize,
     max_pool_memory_bytes: usize,
+    // 关停与中止协同标志
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl DvppDecoderInner {
-    fn new(camera_id: String, codec: CodecType) -> Self {
+    fn new(camera_id: String, codec: CodecType, shutdown_flag: Arc<AtomicBool>) -> Self {
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         Self {
             camera_id,
@@ -872,7 +874,13 @@ impl DvppDecoderInner {
             flapping_window: DVPP_FLAPPING_WINDOW,
             max_flapping_count: MAX_RESOLUTION_RECONFIGURES_PER_MINUTE,
             max_pool_memory_bytes: MAX_DEVICE_BUFFER_BYTES,
+            shutdown_flag,
         }
+    }
+
+    #[cfg(test)]
+    fn new_test(camera_id: String, codec: CodecType) -> Self {
+        Self::new(camera_id, codec, Arc::new(AtomicBool::new(false)))
     }
 
     fn init(&mut self) -> Result<(), MediaError> {
@@ -984,6 +992,13 @@ impl DvppDecoderInner {
     }
 
     fn decode(&mut self, packet: &[u8], pts: i64) -> Result<Option<FrameRef>, MediaError> {
+        // -1. 关停协同检查：若收到 stop 信号立即拒绝新帧，防止硬件挂起
+        if self.shutdown_flag.load(Ordering::Relaxed) {
+            return Err(MediaError::Decode {
+                reason: "DVPP 解码器正在停止，丢弃输入数据".to_string(),
+            });
+        }
+
         if !self.is_initialized {
             return Err(MediaError::Decode {
                 reason: "DVPP 解码器未初始化".to_string(),
@@ -1280,6 +1295,14 @@ impl DvppDecoderInner {
     fn drain_in_flight_frames(&mut self, timeout: Duration) -> Result<(), MediaError> {
         let deadline = std::time::Instant::now() + timeout;
         while self.in_flight_count > 0 && std::time::Instant::now() < deadline {
+            if self.shutdown_flag.load(Ordering::Relaxed) {
+                warn!(
+                    camera_id = %self.camera_id,
+                    remaining = self.in_flight_count,
+                    "Drain 期间检测到关停信号，提前中止等待"
+                );
+                break;
+            }
             match self.out_rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(Ok(frame)) => {
                     self.in_flight_count = self.in_flight_count.saturating_sub(1);
@@ -1536,13 +1559,18 @@ impl Drop for DvppDecoderInner {
 
 /// 华为昇腾 DVPP 硬件解码器异步外壳
 pub struct DvppDecoder {
+    camera_id: String,
     tx: Option<mpsc::Sender<DecodeCommand>>,
+    shutdown_flag: Arc<AtomicBool>,
+    exit_rx: std::sync::mpsc::Receiver<()>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for DvppDecoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DvppDecoder").finish()
+        f.debug_struct("DvppDecoder")
+            .field("camera_id", &self.camera_id)
+            .finish()
     }
 }
 
@@ -1551,11 +1579,14 @@ impl DvppDecoder {
         let (tx, mut rx) = mpsc::channel::<DecodeCommand>(4);
         let cam_id = camera_id.to_string();
         let thread_name = format!("dvpp-dec-{cam_id}");
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = Arc::clone(&shutdown_flag);
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel();
 
         let thread = std::thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
-                let mut inner = DvppDecoderInner::new(cam_id.clone(), codec);
+                let mut inner = DvppDecoderInner::new(cam_id.clone(), codec, shutdown_clone);
                 if let Err(e) = inner.init() {
                     error!(camera_id = %cam_id, error = %e, "DVPP 解码器线程初始化失败");
                     while let Some(cmd) = rx.blocking_recv() {
@@ -1572,8 +1603,10 @@ impl DvppDecoder {
                                     reason: e.to_string(),
                                 }));
                             }
+                            DecodeCommand::Stop => break,
                         }
                     }
+                    let _ = exit_tx.send(());
                     return;
                 }
 
@@ -1617,14 +1650,56 @@ impl DvppDecoder {
                             let res = inner.flush();
                             let _ = reply.send(res);
                         }
+                        DecodeCommand::Stop => {
+                            debug!(camera_id = %cam_id, "DVPP 收到 Stop 命令，退出事件循环");
+                            break;
+                        }
                     }
                 }
+                // 退出循环后显式析构 inner
+                drop(inner);
+                let _ = exit_tx.send(());
             })
             .expect("创建 DVPP 解码专用线程失败");
 
         Self {
+            camera_id: camera_id.to_string(),
             tx: Some(tx),
+            shutdown_flag,
+            exit_rx,
             thread: Some(thread),
+        }
+    }
+
+    /// 优雅停止工作线程（带超时保护，超时后强制隔离放弃，杜绝无界阻塞守护进程）
+    pub fn stop(&mut self, timeout: Duration) -> bool {
+        self.shutdown_flag.store(true, Ordering::SeqCst);
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.try_send(DecodeCommand::Stop);
+            drop(tx);
+        }
+        if let Some(thread) = self.thread.take() {
+            match self.exit_rx.recv_timeout(timeout) {
+                Ok(()) => {
+                    let _ = thread.join();
+                    debug!(camera_id = %self.camera_id, "DVPP 专用工作线程已正常优雅退出并回收");
+                    true
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    error!(
+                        camera_id = %self.camera_id,
+                        timeout_ms = timeout.as_millis(),
+                        "DVPP 工作线程在指定超时时间内未能退出（疑似硬件驱动内核调用挂起），执行隔离放弃，避免阻塞主守护进程"
+                    );
+                    false
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = thread.join();
+                    true
+                }
+            }
+        } else {
+            true
         }
     }
 }
@@ -1676,11 +1751,7 @@ impl VideoDecoder for DvppDecoder {
 
 impl Drop for DvppDecoder {
     fn drop(&mut self) {
-        // 显式释放 tx，使得专用线程中的 rx.blocking_recv() 退出，安全解除阻塞
-        drop(self.tx.take());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        let _ = self.stop(DEFAULT_THREAD_SHUTDOWN_TIMEOUT);
     }
 }
 
@@ -1773,7 +1844,7 @@ mod tests {
 
     #[test]
     fn test_dvpp_reconfigure_drain_and_cooldown_and_flapping() {
-        let mut inner = DvppDecoderInner::new("test_reconfig".to_string(), CodecType::H264);
+        let mut inner = DvppDecoderInner::new_test("test_reconfig".to_string(), CodecType::H264);
         inner.init().expect("初始化通道应当成功");
 
         // 缩短冷却与滑动窗口用于单元测试
@@ -1832,7 +1903,8 @@ mod tests {
 
     #[test]
     fn test_dvpp_in_flight_drain_during_resolution_switch() {
-        let mut inner = DvppDecoderInner::new("test_drain_switch".to_string(), CodecType::H264);
+        let mut inner =
+            DvppDecoderInner::new_test("test_drain_switch".to_string(), CodecType::H264);
         inner.init().expect("初始化通道应当成功");
 
         inner.reconfig_cooldown = Duration::from_millis(10);
@@ -1865,7 +1937,7 @@ mod tests {
 
     #[test]
     fn test_dvpp_empty_and_oversized_packet_defense() {
-        let mut inner = DvppDecoderInner::new("test_limits".to_string(), CodecType::H264);
+        let mut inner = DvppDecoderInner::new_test("test_limits".to_string(), CodecType::H264);
         inner.init().expect("初始化通道应当成功");
 
         // 1. 空包防御：直接返回 Ok(None)，不消耗任何显存
@@ -1893,5 +1965,23 @@ mod tests {
 
         // 3. 极端 u32::MAX 防溢出
         assert!(calculate_dvpp_nv12_size_checked(u32::MAX, u32::MAX).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dvpp_graceful_shutdown_and_stop_command() {
+        let mut decoder = DvppDecoder::new("test_shutdown_dvpp", CodecType::H264);
+
+        // 验证正常解码一帧
+        let dummy_nalu = [0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00];
+        let res = decoder.decode_packet(&dummy_nalu, 1000).await;
+        assert!(res.is_ok());
+
+        // 触发 stop，验证带超时正常退出回收
+        let stopped = decoder.stop(Duration::from_millis(200));
+        assert!(stopped, "工作线程应在超时时限内优雅退出并成功 join");
+
+        // 退出后再次提交任务应立即返回通道已关闭错误
+        let res_after = decoder.decode_packet(&dummy_nalu, 1033).await;
+        assert!(res_after.is_err(), "已停止的解码器应当拒绝新任务");
     }
 }

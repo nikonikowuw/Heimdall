@@ -8,16 +8,18 @@
 
 use std::ffi::c_void;
 use std::os::fd::{FromRawFd, OwnedFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use types::{CodecType, FrameHandle, FrameRef, PixelFormat, StrideInfo};
 
-use crate::decoder::{DecodeCommand, VideoDecoder};
+use crate::decoder::{DecodeCommand, VideoDecoder, DEFAULT_THREAD_SHUTDOWN_TIMEOUT};
 use crate::error::MediaError;
 
 /// 水平步长对齐（Rockchip MPP 要求水平 16 字节对齐）
@@ -146,10 +148,11 @@ struct MppDecoderInner {
     hor_stride: u32,
     ver_stride: u32,
     is_initialized: bool,
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl MppDecoderInner {
-    fn new(camera_id: String, codec: CodecType) -> Self {
+    fn new(camera_id: String, codec: CodecType, shutdown_flag: Arc<AtomicBool>) -> Self {
         Self {
             camera_id,
             codec,
@@ -160,6 +163,7 @@ impl MppDecoderInner {
             hor_stride: 0,
             ver_stride: 0,
             is_initialized: false,
+            shutdown_flag,
         }
     }
 
@@ -215,6 +219,12 @@ impl MppDecoderInner {
     }
 
     fn decode(&mut self, packet_data: &[u8], pts: i64) -> Result<Option<FrameRef>, MediaError> {
+        // -1. 关停协同检查：若收到 stop 信号立即拒绝新帧，防止硬件挂起
+        if self.shutdown_flag.load(Ordering::Relaxed) {
+            return Err(MediaError::Decode {
+                reason: "MPP 解码器正在停止，丢弃输入数据".to_string(),
+            });
+        }
         if !self.is_initialized {
             return Err(MediaError::Decode {
                 reason: "MPP 解码器未初始化".to_string(),
@@ -527,7 +537,10 @@ impl Drop for MppDecoderInner {
 
 /// Rockchip MPP 硬件解码器异步外壳
 pub struct MppDecoder {
-    tx: mpsc::Sender<DecodeCommand>,
+    camera_id: String,
+    tx: Option<mpsc::Sender<DecodeCommand>>,
+    shutdown_flag: Arc<AtomicBool>,
+    exit_rx: std::sync::mpsc::Receiver<()>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -536,11 +549,14 @@ impl MppDecoder {
         let (tx, mut rx) = mpsc::channel::<DecodeCommand>(4);
         let cam_id = camera_id.to_string();
         let thread_name = format!("mpp-dec-{cam_id}");
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = Arc::clone(&shutdown_flag);
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel();
 
         let thread = std::thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
-                let mut inner = MppDecoderInner::new(cam_id.clone(), codec);
+                let mut inner = MppDecoderInner::new(cam_id.clone(), codec, shutdown_clone);
                 if let Err(e) = inner.init() {
                     error!(camera_id = %cam_id, error = %e, "MPP 解码器线程初始化失败");
                     while let Some(cmd) = rx.blocking_recv() {
@@ -557,8 +573,10 @@ impl MppDecoder {
                                     reason: e.to_string(),
                                 }));
                             }
+                            DecodeCommand::Stop => break,
                         }
                     }
+                    let _ = exit_tx.send(());
                     return;
                 }
 
@@ -602,14 +620,56 @@ impl MppDecoder {
                             let res = inner.flush();
                             let _ = reply.send(res);
                         }
+                        DecodeCommand::Stop => {
+                            debug!(camera_id = %cam_id, "MPP 收到 Stop 命令，退出事件循环");
+                            break;
+                        }
                     }
                 }
+                // 退出循环后显式析构 inner
+                drop(inner);
+                let _ = exit_tx.send(());
             })
             .expect("创建 MPP 解码专用线程失败");
 
         Self {
-            tx,
+            camera_id: camera_id.to_string(),
+            tx: Some(tx),
+            shutdown_flag,
+            exit_rx,
             thread: Some(thread),
+        }
+    }
+
+    /// 优雅停止工作线程（带超时保护，超时后强制隔离放弃，杜绝无界阻塞守护进程）
+    pub fn stop(&mut self, timeout: Duration) -> bool {
+        self.shutdown_flag.store(true, Ordering::SeqCst);
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.try_send(DecodeCommand::Stop);
+            drop(tx);
+        }
+        if let Some(thread) = self.thread.take() {
+            match self.exit_rx.recv_timeout(timeout) {
+                Ok(()) => {
+                    let _ = thread.join();
+                    debug!(camera_id = %self.camera_id, "MPP 专用线程已正常优雅退出并回收");
+                    true
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    error!(
+                        camera_id = %self.camera_id,
+                        timeout_ms = timeout.as_millis(),
+                        "MPP 工作线程在指定超时时间内未能退出（疑似硬件驱动内核调用挂死），执行隔离放弃，避免阻塞主守护进程"
+                    );
+                    false
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = thread.join();
+                    true
+                }
+            }
+        } else {
+            true
         }
     }
 }
@@ -628,7 +688,11 @@ impl VideoDecoder for MppDecoder {
             reply: reply_tx,
         };
 
-        self.tx.send(cmd).await.map_err(|_| MediaError::Decode {
+        let tx = self.tx.as_ref().ok_or_else(|| MediaError::Decode {
+            reason: "MPP 解码专用通道已关闭".to_string(),
+        })?;
+
+        tx.send(cmd).await.map_err(|_| MediaError::Decode {
             reason: "MPP 解码专用线程已退出".to_string(),
         })?;
 
@@ -641,7 +705,11 @@ impl VideoDecoder for MppDecoder {
         let (reply_tx, reply_rx) = oneshot::channel();
         let cmd = DecodeCommand::Flush { reply: reply_tx };
 
-        self.tx.send(cmd).await.map_err(|_| MediaError::Decode {
+        let tx = self.tx.as_ref().ok_or_else(|| MediaError::Decode {
+            reason: "MPP 解码专用通道已关闭".to_string(),
+        })?;
+
+        tx.send(cmd).await.map_err(|_| MediaError::Decode {
             reason: "MPP 解码专用线程已退出".to_string(),
         })?;
 
@@ -653,10 +721,7 @@ impl VideoDecoder for MppDecoder {
 
 impl Drop for MppDecoder {
     fn drop(&mut self) {
-        // self.tx 被释放后，rx.blocking_recv() 返回 None，专用线程退出
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        let _ = self.stop(DEFAULT_THREAD_SHUTDOWN_TIMEOUT);
     }
 }
 

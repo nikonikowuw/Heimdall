@@ -5,6 +5,11 @@ use types::FrameRef;
 
 use crate::error::MediaError;
 
+use std::time::Duration;
+
+/// 工作线程优雅关停超时上限（500ms，超时后强制解离防止拖死守护进程退出）
+pub const DEFAULT_THREAD_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
+
 /// 解码线程收到的异步控制命令
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -19,6 +24,8 @@ pub(crate) enum DecodeCommand {
     Flush {
         reply: oneshot::Sender<Result<Vec<FrameRef>, MediaError>>,
     },
+    /// 显式通知工作线程优雅停止并退出事件循环
+    Stop,
 }
 
 /// 视频硬解器抽象接口
