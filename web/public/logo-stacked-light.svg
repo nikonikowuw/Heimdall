@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 192" fill="none">
+  <g transform="translate(88, 12)">
+    <path d="M 16 32 C 16 20, 20 16, 32 16" stroke="#0284C7" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M 48 16 C 60 16, 64 20, 64 32" stroke="#0284C7" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M 64 48 C 64 60, 60 64, 48 64" stroke="#0284C7" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M 32 64 C 20 64, 16 60, 16 48" stroke="#0284C7" stroke-width="5.5" stroke-linecap="round"/>
+    <circle cx="40" cy="40" r="8.5" fill="#0F172A"/>
+    <circle cx="40" cy="40" r="3.5" fill="#FFFFFF"/>
+  </g>
+
+  <g transform="translate(128, 0)">
+    <text x="0" y="132" text-anchor="middle" 
+          font-family="-apple-system, BlinkMacSystemFont, 'Outfit', 'Space Grotesk', 'Inter', sans-serif" 
+          font-size="26" font-weight="900" letter-spacing="4.5" fill="#0F172A">
+      HEIMDALL
+    </text>
+
+    <text x="0" y="156" text-anchor="middle" 
+          font-family="'JetBrains Mono', 'Space Mono', monospace" 
+          font-size="8.5" font-weight="600" letter-spacing="1.8" fill="#0284C7">
+      EDGE AI VISION GATEWAY
+    </text>
+  </g>
+</svg>

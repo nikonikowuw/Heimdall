@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 64" fill="none">
+  <!-- 左侧图标：亮色高对比深湛蓝 -->
+  <g transform="translate(6, 6)">
+    <path d="M 10 20 C 10 13, 13 10, 20 10" stroke="#0284C7" stroke-width="3.8" stroke-linecap="round"/>
+    <path d="M 32 10 C 39 10, 42 13, 42 20" stroke="#0284C7" stroke-width="3.8" stroke-linecap="round"/>
+    <path d="M 42 32 C 42 39, 39 42, 32 42" stroke="#0284C7" stroke-width="3.8" stroke-linecap="round"/>
+    <path d="M 20 42 C 13 42, 10 39, 10 32" stroke="#0284C7" stroke-width="3.8" stroke-linecap="round"/>
+    <circle cx="26" cy="26" r="5.5" fill="#0F172A"/>
+    <circle cx="26" cy="26" r="2.2" fill="#FFFFFF"/>
+  </g>
+
+  <!-- 细浅色分割线 -->
+  <line x1="72" y1="18" x2="72" y2="46" stroke="#E2E8F0" stroke-width="1.5"/>
+
+  <!-- 右侧文本区 (针对白底/浅底) -->
+  <g transform="translate(86, 0)">
+    <text x="0" y="32" font-family="-apple-system, BlinkMacSystemFont, 'Outfit', 'Space Grotesk', 'Inter', sans-serif" 
+          font-size="21" font-weight="900" letter-spacing="3.8" fill="#0F172A">
+      HEIMDALL
+    </text>
+    <text x="1" y="47" font-family="'JetBrains Mono', 'Space Mono', monospace" 
+          font-size="8.5" font-weight="600" letter-spacing="1.6" fill="#0284C7">
+      EDGE AI VISION GATEWAY
+    </text>
+    <circle cx="236" cy="27" r="3" fill="#059669"/>
+    <text x="244" y="30" font-family="'JetBrains Mono', monospace" font-size="7.5" font-weight="600" fill="#059669" letter-spacing="1">
+      ONLINE
+    </text>
+  </g>
+</svg>

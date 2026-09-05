@@ -1,48 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <defs>
-    <!-- 高对比度发光渐变 -->
-    <linearGradient id="favApertureRing" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00F0FF"/>
-      <stop offset="60%" stop-color="#0284C7"/>
-      <stop offset="100%" stop-color="#1E3A8A"/>
-    </linearGradient>
-    <radialGradient id="favIrisGlow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="30%" stop-color="#00F0FF"/>
-      <stop offset="75%" stop-color="#0284C7"/>
-      <stop offset="100%" stop-color="#070D1A"/>
-    </radialGradient>
-  </defs>
+  <style>
+    .bg { fill: #090D16; stroke: #1E293B; }
+    .bracket { stroke: #00F0FF; }
+    .core-outer { fill: #FFFFFF; }
+    .core-inner { fill: #090D16; }
 
-  <!-- 1. 深色高对比度微圆角底板 (适配亮/暗色浏览器标签) -->
-  <rect width="64" height="64" rx="15" fill="#0A0E17"/>
-  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" stroke="#1E293B" stroke-width="1.5"/>
+    @media (prefers-color-scheme: light) {
+      .bg { fill: #F1F5F9; stroke: #CBD5E1; }
+      .bracket { stroke: #0284C7; }
+      .core-outer { fill: #0F172A; }
+      .core-inner { fill: #F1F5F9; }
+    }
+  </style>
 
-  <!-- 2. AI 目标检测 BBox 边界角标 (16px 下依然清晰锚定机器视觉属性) -->
-  <g stroke="#00F0FF" stroke-width="2.2" stroke-linecap="round" opacity="0.9">
-    <path d="M 8 16 L 8 8 L 16 8"/>
-    <path d="M 48 8 L 56 8 L 56 16"/>
-    <path d="M 56 48 L 56 56 L 48 56"/>
-    <path d="M 16 56 L 8 56 L 8 48"/>
-  </g>
+  <!-- 自适应底板 (暗色深底，亮色浅灰底带描边) -->
+  <rect width="64" height="64" rx="16" class="bg" stroke-width="1.5"/>
+  
+  <!-- 4 个取景锁定角标 -->
+  <path d="M 16 26 C 16 19, 19 16, 26 16" class="bracket" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M 38 16 C 45 16, 48 19, 48 26" class="bracket" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M 48 38 C 48 45, 45 48, 38 48" class="bracket" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M 26 48 C 19 48, 16 45, 16 38" class="bracket" stroke-width="4.5" stroke-linecap="round"/>
 
-  <!-- 3. 外层光圈环 -->
-  <circle cx="32" cy="32" r="21" stroke="url(#favApertureRing)" stroke-width="3.5"/>
-
-  <!-- 4. 旋转光圈刀片切口 -->
-  <path d="M 32 11 L 38 18 M 53 32 L 46 38 M 32 53 L 26 46 M 11 32 L 18 26" 
-        stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round"/>
-
-  <!-- 5. 核心全视天眼：发光虹膜与超白核 -->
-  <circle cx="32" cy="32" r="9.5" fill="url(#favIrisGlow)"/>
-  <circle cx="32" cy="32" r="3.5" fill="#FFFFFF"/>
-
-  <!-- 6. 十字瞄准准星 (Crosshair Ticks) -->
-  <line x1="19" y1="32" x2="23" y2="32" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-  <line x1="41" y1="32" x2="45" y2="32" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-  <line x1="32" y1="19" x2="32" y2="23" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-  <line x1="32" y1="41" x2="32" y2="45" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-
-  <!-- 7. 越界警戒琥珀点 -->
-  <circle cx="45" cy="19" r="2.8" fill="#F59E0B"/>
+  <!-- 核心天眼 -->
+  <circle cx="32" cy="32" r="6" class="core-outer"/>
+  <circle cx="32" cy="32" r="2.5" class="core-inner"/>
 </svg>

@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Heimdall - 亮色与暗色官方双主题品牌系统 (Dual-Theme Design System)</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Space+Grotesk:wght@600;700&family=Outfit:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Outfit"', '"Space Grotesk"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+            sans: ['"Inter"', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #06080D;
+      color: #F8FAFC;
+      font-family: 'Inter', sans-serif;
+    }
+    .grid-dark {
+      background-size: 28px 28px;
+      background-image: 
+        linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+    }
+    .grid-light {
+      background-size: 28px 28px;
+      background-image: 
+        linear-gradient(to right, rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(15, 23, 42, 0.035) 1px, transparent 1px);
+    }
+  </style>
+</head>
+<body class="min-h-screen grid-dark pb-32 transition-colors duration-300">
+
+  <!-- 顶部导航 -->
+  <header class="sticky top-0 z-50 backdrop-blur-md bg-[#06080D]/85 border-b border-slate-800/80">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <img src="../../web/public/logo-horizontal-dark.svg" class="h-8 w-auto" alt="Heimdall Dark Logo">
+      </div>
+
+      <div class="flex items-center space-x-4">
+        <span class="text-xs font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/40 px-2.5 py-1 rounded-full font-semibold">
+          DARK & LIGHT DUAL SYSTEM
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 pt-12 space-y-20">
+
+    <!-- 方案总览声明 -->
+    <div class="space-y-4 max-w-4xl">
+      <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-mono">
+        <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+        <span>工业级官方双主题 · 暗色与亮色全套系交付</span>
+      </div>
+      <h1 class="text-3xl lg:text-4xl font-display font-black tracking-tight text-white leading-tight">
+        Heimdall 亮色与暗色全套品牌视觉体系
+      </h1>
+      <p class="text-slate-400 text-sm leading-relaxed">
+        针对边缘 AI 监控大屏（7×24h 暗夜低疲劳环境）与白天明亮办公室/白底 PDF 导出审查场景，为你量身设计了<strong>色彩严格对标 WCAG AAA 高对比度</strong>的【暗色套件】与【亮色套件】。SVG Favicon 更内置原生媒体查询，无论操作系统处于何种主题，均自动切换最佳视效。
+      </p>
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- 1. 暗色模式官方套件 (Dark Mode Brand Suite)                 -->
+    <!-- ======================================================== -->
+    <section class="space-y-6">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-3">
+          <div class="w-7 h-7 rounded-lg bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+            <i data-lucide="moon" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h2 class="text-xl font-display font-bold text-white">01. 暗色套件 (Dark Mode Suite)</h2>
+            <span class="text-xs text-slate-400 font-mono">专为监控大屏、暗色模式 Web/Desktop 控制台定制</span>
+          </div>
+        </div>
+        <span class="text-xs font-mono text-cyan-400 bg-cyan-950 px-2.5 py-1 rounded border border-cyan-800/40">CYBER VOID #06080D</span>
+      </div>
+
+      <!-- 暗色内容网格 -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+        
+        <!-- 暗色横版 Logo -->
+        <div class="lg:col-span-7 rounded-2xl border border-slate-800 bg-[#0A0D15] p-6 flex flex-col justify-between shadow-2xl">
+          <div>
+            <div class="flex justify-between items-center mb-3">
+              <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/40 font-semibold">HORIZONTAL LOGO</span>
+              <span class="text-xs text-slate-500 font-mono">web/public/logo-horizontal-dark.svg</span>
+            </div>
+
+            <div class="h-44 rounded-xl bg-[#06080F] border border-slate-800/80 flex items-center justify-center p-6 my-2 shadow-inner">
+              <img src="../../web/public/logo-horizontal-dark.svg" class="h-11 w-auto max-w-full drop-shadow-[0_12px_24px_rgba(0,240,255,0.2)]" alt="Dark Horizontal">
+            </div>
+
+            <div class="grid grid-cols-4 gap-2 mt-4 text-[11px] font-mono text-slate-400">
+              <div class="p-2 rounded bg-[#06080F] border border-slate-800">角标: <span class="text-cyan-400 font-bold">#00F0FF</span></div>
+              <div class="p-2 rounded bg-[#06080F] border border-slate-800">字标: <span class="text-white font-bold">#FFFFFF</span></div>
+              <div class="p-2 rounded bg-[#06080F] border border-slate-800">副标: <span class="text-cyan-400 font-bold">#00F0FF</span></div>
+              <div class="p-2 rounded bg-[#06080F] border border-slate-800">指示灯: <span class="text-emerald-400 font-bold">#10B981</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 暗色居中版与 Favicon -->
+        <div class="lg:col-span-5 grid grid-cols-2 gap-6">
+          <!-- 居中版 -->
+          <div class="rounded-2xl border border-slate-800 bg-[#0A0D15] p-5 flex flex-col justify-between shadow-2xl">
+            <div class="text-[11px] font-mono text-cyan-400 font-semibold mb-2">STACKED HERO</div>
+            <div class="h-36 rounded-xl bg-[#06080F] border border-slate-800 flex items-center justify-center p-3 shadow-inner">
+              <img src="../../web/public/logo-stacked-dark.svg" class="h-28 w-auto drop-shadow-[0_10px_20px_rgba(0,240,255,0.2)]" alt="Dark Stacked">
+            </div>
+            <div class="text-[10px] text-slate-400 font-mono mt-2 truncate">logo-stacked-dark.svg</div>
+          </div>
+
+          <!-- 暗色 Favicon -->
+          <div class="rounded-2xl border border-slate-800 bg-[#0A0D15] p-5 flex flex-col justify-between shadow-2xl">
+            <div class="text-[11px] font-mono text-cyan-400 font-semibold mb-2">FAVICON DARK</div>
+            <div class="h-36 rounded-xl bg-[#06080F] border border-slate-800 flex flex-col items-center justify-center p-3 shadow-inner space-y-2">
+              <img src="../../web/public/favicon-dark.svg" class="w-12 h-12" alt="Favicon Dark">
+              <span class="text-[10px] font-mono text-cyan-400">16/32/64px</span>
+            </div>
+            <div class="text-[10px] text-slate-400 font-mono mt-2 truncate">favicon-dark.svg</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 暗色控制台顶栏实装预览 -->
+      <div class="rounded-2xl border border-slate-800 bg-[#0A0D15] p-4 shadow-2xl">
+        <div class="text-[11px] font-mono text-slate-400 mb-2 font-semibold flex items-center space-x-2">
+          <i data-lucide="layout" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span>暗色顶栏实装效果 (Dark Navbar Simulation)</span>
+        </div>
+        <div class="h-16 px-6 bg-[#07090F] rounded-xl border border-slate-800/80 flex items-center justify-between">
+          <div class="flex items-center space-x-6">
+            <img src="../../web/public/logo-horizontal-dark.svg" class="h-9 w-auto" alt="Nav Dark">
+            <nav class="hidden md:flex items-center space-x-1 pl-4 border-l border-slate-800 text-xs font-mono">
+              <span class="px-3 py-1.5 rounded-lg text-cyan-400 bg-cyan-950/40 border border-cyan-800/50 font-semibold">LIVE MONITOR</span>
+              <span class="px-3 py-1.5 text-slate-400">CAMERAS</span>
+              <span class="px-3 py-1.5 text-slate-400">RULES STUDIO</span>
+              <span class="px-3 py-1.5 text-slate-400">EVIDENCE TRIAD</span>
+            </nav>
+          </div>
+          <div class="flex items-center space-x-2 bg-emerald-950/40 border border-emerald-800/40 px-3 py-1 rounded-lg text-[11px] font-mono text-emerald-300">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>ANE 14.2ms</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- 2. 亮色模式官方套件 (Light Mode Brand Suite)                -->
+    <!-- ======================================================== -->
+    <section class="space-y-6 pt-6">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center space-x-3">
+          <div class="w-7 h-7 rounded-lg bg-sky-100 border border-sky-300 flex items-center justify-center text-sky-600">
+            <i data-lucide="sun" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h2 class="text-xl font-display font-bold text-white">02. 亮色套件 (Light Mode Suite)</h2>
+            <span class="text-xs text-slate-400 font-mono">专为白天明亮控制台、PDF 安全审查报表、白色纸质打印定制</span>
+          </div>
+        </div>
+        <span class="text-xs font-mono text-sky-400 bg-sky-950 px-2.5 py-1 rounded border border-sky-800/40">PAPER CRISP #FFFFFF</span>
+      </div>
+
+      <!-- 亮色内容网格 (使用真实的白底视窗包裹) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+        
+        <!-- 亮色横版 Logo -->
+        <div class="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-6 flex flex-col justify-between shadow-2xl text-slate-900">
+          <div>
+            <div class="flex justify-between items-center mb-3">
+              <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 font-semibold">HORIZONTAL LOGO (LIGHT)</span>
+              <span class="text-xs text-slate-500 font-mono">web/public/logo-horizontal-light.svg</span>
+            </div>
+
+            <div class="h-44 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center p-6 my-2 shadow-inner">
+              <img src="../../web/public/logo-horizontal-light.svg" class="h-11 w-auto max-w-full" alt="Light Horizontal">
+            </div>
+
+            <div class="grid grid-cols-4 gap-2 mt-4 text-[11px] font-mono text-slate-600">
+              <div class="p-2 rounded bg-slate-50 border border-slate-200">角标: <span class="text-sky-600 font-bold">#0284C7</span></div>
+              <div class="p-2 rounded bg-slate-50 border border-slate-200">字标: <span class="text-slate-900 font-bold">#0F172A</span></div>
+              <div class="p-2 rounded bg-slate-50 border border-slate-200">副标: <span class="text-sky-600 font-bold">#0284C7</span></div>
+              <div class="p-2 rounded bg-slate-50 border border-slate-200">指示灯: <span class="text-emerald-600 font-bold">#059669</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 亮色居中版与 Favicon -->
+        <div class="lg:col-span-5 grid grid-cols-2 gap-6">
+          <!-- 居中版 -->
+          <div class="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col justify-between shadow-2xl text-slate-900">
+            <div class="text-[11px] font-mono text-sky-700 font-semibold mb-2">STACKED HERO (LIGHT)</div>
+            <div class="h-36 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center p-3 shadow-inner">
+              <img src="../../web/public/logo-stacked-light.svg" class="h-28 w-auto" alt="Light Stacked">
+            </div>
+            <div class="text-[10px] text-slate-500 font-mono mt-2 truncate">logo-stacked-light.svg</div>
+          </div>
+
+          <!-- 亮色 Favicon -->
+          <div class="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col justify-between shadow-2xl text-slate-900">
+            <div class="text-[11px] font-mono text-sky-700 font-semibold mb-2">FAVICON LIGHT</div>
+            <div class="h-36 rounded-xl bg-slate-50 border border-slate-200 flex flex-col items-center justify-center p-3 shadow-inner space-y-2">
+              <img src="../../web/public/favicon-light.svg" class="w-12 h-12" alt="Favicon Light">
+              <span class="text-[10px] font-mono text-sky-600 font-semibold">16/32/64px</span>
+            </div>
+            <div class="text-[10px] text-slate-500 font-mono mt-2 truncate">favicon-light.svg</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 亮色控制台顶栏实装预览 -->
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl text-slate-900">
+        <div class="text-[11px] font-mono text-slate-500 mb-2 font-semibold flex items-center space-x-2">
+          <i data-lucide="layout" class="w-3.5 h-3.5 text-sky-600"></i>
+          <span>亮色顶栏实装效果 (Light Navbar Simulation)</span>
+        </div>
+        <div class="h-16 px-6 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+          <div class="flex items-center space-x-6">
+            <img src="../../web/public/logo-horizontal-light.svg" class="h-9 w-auto" alt="Nav Light">
+            <nav class="hidden md:flex items-center space-x-1 pl-4 border-l border-slate-200 text-xs font-mono">
+              <span class="px-3 py-1.5 rounded-lg text-sky-700 bg-sky-100/80 border border-sky-300 font-semibold">LIVE MONITOR</span>
+              <span class="px-3 py-1.5 text-slate-600">CAMERAS</span>
+              <span class="px-3 py-1.5 text-slate-600">RULES STUDIO</span>
+              <span class="px-3 py-1.5 text-slate-600">EVIDENCE TRIAD</span>
+            </nav>
+          </div>
+          <div class="flex items-center space-x-2 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-lg text-[11px] font-mono text-emerald-700">
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>ANE 14.2ms</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- 3. Chrome 标签栏跨主题真实测试 (Dark Tab vs Light Tab)       -->
+    <!-- ======================================================== -->
+    <section class="space-y-6 pt-6">
+      <div class="border-b border-slate-800 pb-3">
+        <h2 class="text-xl font-display font-bold text-white">03. Chrome 标签栏跨系统主题实测</h2>
+        <p class="text-xs text-slate-400 mt-1 font-mono">由于 favicon.svg 内部注入了 @media (prefers-color-scheme)，浏览器会随操作系统自动切色</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <!-- 深色标签栏 -->
+        <div class="space-y-2">
+          <div class="text-xs font-mono text-slate-400 flex items-center space-x-1.5">
+            <i data-lucide="moon" class="w-3.5 h-3.5 text-cyan-400"></i>
+            <span>当操作系统处于【暗色主题】时的标签页：</span>
+          </div>
+          <div class="rounded-xl bg-[#1E222B] border border-slate-700/60 p-3 shadow-xl">
+            <div class="h-9 px-3.5 bg-[#2B303C] rounded-t-lg flex items-center space-x-2.5 border-t-2 border-cyan-400 shadow-md">
+              <div class="w-4 h-4 rounded-[3px] bg-[#090D16] flex items-center justify-center p-0.5 shrink-0 border border-slate-700">
+                <img src="../../web/public/favicon-dark.svg" class="w-full h-full" alt="Dark Tab Favicon">
+              </div>
+              <span class="text-xs text-white font-semibold truncate">Heimdall · Edge Vision</span>
+              <i data-lucide="x" class="w-3 h-3 text-slate-400 hover:text-white cursor-pointer ml-auto"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- 浅色标签栏 -->
+        <div class="space-y-2">
+          <div class="text-xs font-mono text-slate-400 flex items-center space-x-1.5">
+            <i data-lucide="sun" class="w-3.5 h-3.5 text-amber-400"></i>
+            <span>当操作系统处于【浅色主题】时的标签页：</span>
+          </div>
+          <div class="rounded-xl bg-[#E2E8F0] border border-slate-300 p-3 shadow-xl">
+            <div class="h-9 px-3.5 bg-white rounded-t-lg flex items-center space-x-2.5 border-t-2 border-sky-600 shadow-md">
+              <div class="w-4 h-4 rounded-[3px] bg-slate-100 flex items-center justify-center p-0.5 shrink-0 border border-slate-300">
+                <img src="../../web/public/favicon-light.svg" class="w-full h-full" alt="Light Tab Favicon">
+              </div>
+              <span class="text-xs text-slate-900 font-semibold truncate">Heimdall · Edge Vision</span>
+              <i data-lucide="x" class="w-3 h-3 text-slate-400 hover:text-slate-900 cursor-pointer ml-auto"></i>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    lucide.createIcons();
+  </script>
+</body>
+</html>
