@@ -60,8 +60,12 @@ impl FlvMuxer {
         tag.freeze()
     }
 
-    /// 生成 H.264 AVC Sequence Header (AVCDecoderConfigurationRecord / SPS + PPS)
-    pub fn build_h264_sequence_header(sps: &[u8], pps: &[u8]) -> Option<Bytes> {
+    /// 生成指定时间戳的 H.264 AVC Sequence Header (AVCDecoderConfigurationRecord / SPS + PPS)
+    pub fn build_h264_sequence_header_with_ts(
+        sps: &[u8],
+        pps: &[u8],
+        timestamp_ms: u32,
+    ) -> Option<Bytes> {
         let sps = strip_nalu_start_code(sps);
         let pps = strip_nalu_start_code(pps);
 
@@ -90,11 +94,21 @@ impl FlvMuxer {
         body.put_u16(pps.len() as u16);
         body.put_slice(pps);
 
-        Some(Self::wrap_tag(0x09, 0, &body))
+        Some(Self::wrap_tag(0x09, timestamp_ms, &body))
     }
 
-    /// 生成 Enhanced FLV H.265 Sequence Header (HEVCDecoderConfigurationRecord / VPS + SPS + PPS)
-    pub fn build_h265_sequence_header(vps: Option<&[u8]>, sps: &[u8], pps: &[u8]) -> Option<Bytes> {
+    /// 生成 H.264 AVC Sequence Header (默认时间戳 0)
+    pub fn build_h264_sequence_header(sps: &[u8], pps: &[u8]) -> Option<Bytes> {
+        Self::build_h264_sequence_header_with_ts(sps, pps, 0)
+    }
+
+    /// 生成指定时间戳的 Enhanced FLV H.265 Sequence Header (HEVCDecoderConfigurationRecord / VPS + SPS + PPS)
+    pub fn build_h265_sequence_header_with_ts(
+        vps: Option<&[u8]>,
+        sps: &[u8],
+        pps: &[u8],
+        timestamp_ms: u32,
+    ) -> Option<Bytes> {
         let sps = strip_nalu_start_code(sps);
         let pps = strip_nalu_start_code(pps);
         let vps = vps.map(strip_nalu_start_code);
@@ -155,7 +169,12 @@ impl FlvMuxer {
         body.put_u16(pps.len() as u16);
         body.put_slice(pps);
 
-        Some(Self::wrap_tag(0x09, 0, &body))
+        Some(Self::wrap_tag(0x09, timestamp_ms, &body))
+    }
+
+    /// 生成 Enhanced FLV H.265 Sequence Header (默认时间戳 0)
+    pub fn build_h265_sequence_header(vps: Option<&[u8]>, sps: &[u8], pps: &[u8]) -> Option<Bytes> {
+        Self::build_h265_sequence_header_with_ts(vps, sps, pps, 0)
     }
 
     /// 将视频关键帧参数集缓存转换为首包 Sequence Header
@@ -365,6 +384,10 @@ pub struct FlvStreamPipeline {
     pub sps_buf: Option<Bytes>,
     pub pps_buf: Option<Bytes>,
     pub vps_buf: Option<Bytes>,
+    /// 当前生效的活跃参数集指纹 (Active SPS/PPS/VPS)，用于动态检测摄像头白天/黑夜模式切换与分辨率突变
+    pub active_sps: Option<Bytes>,
+    pub active_pps: Option<Bytes>,
+    pub active_vps: Option<Bytes>,
     pub frame_count: u64,
     pub bframe_mgr: BFrameTimeManager,
 }
@@ -382,6 +405,12 @@ impl FlvStreamPipeline {
         if let Some(seq_tag) = FlvMuxer::build_sequence_header_from_cache(codec, cache) {
             tags.push(seq_tag);
             self.sent_sequence_header = true;
+            self.sps_buf = cache.sps.clone();
+            self.pps_buf = cache.pps.clone();
+            self.vps_buf = cache.vps.clone();
+            self.active_sps = cache.sps.clone();
+            self.active_pps = cache.pps.clone();
+            self.active_vps = cache.vps.clone();
         }
 
         if !cache.gop_packets.is_empty() {
@@ -422,53 +451,68 @@ impl FlvStreamPipeline {
             return Vec::new();
         }
 
+        // 1. 提取当前数据包中携带的参数集（自动剥离可能携带的 Annex B 起始码）
         match pkt.codec {
             CodecType::H264 => {
                 for nalu in &nalus {
                     if !nalu.is_empty() {
-                        match nalu[0] & 0x1F {
-                            7 => self.sps_buf = Some(Bytes::copy_from_slice(nalu)),
-                            8 => self.pps_buf = Some(Bytes::copy_from_slice(nalu)),
+                        let clean = strip_nalu_start_code(nalu);
+                        match clean[0] & 0x1F {
+                            7 => self.sps_buf = Some(Bytes::copy_from_slice(clean)),
+                            8 => self.pps_buf = Some(Bytes::copy_from_slice(clean)),
                             _ => {}
-                        }
-                    }
-                }
-
-                if !self.sent_sequence_header {
-                    if let (Some(sps), Some(pps)) = (&self.sps_buf, &self.pps_buf) {
-                        if let Some(seq_tag) = FlvMuxer::build_h264_sequence_header(sps, pps) {
-                            out_tags.push(seq_tag);
-                            self.sent_sequence_header = true;
                         }
                     }
                 }
             }
             CodecType::H265 => {
                 for nalu in &nalus {
-                    if nalu.len() >= 2 {
-                        match (nalu[0] >> 1) & 0x3F {
-                            32 => self.vps_buf = Some(Bytes::copy_from_slice(nalu)),
-                            33 => self.sps_buf = Some(Bytes::copy_from_slice(nalu)),
-                            34 => self.pps_buf = Some(Bytes::copy_from_slice(nalu)),
+                    let clean = strip_nalu_start_code(nalu);
+                    if clean.len() >= 2 {
+                        match (clean[0] >> 1) & 0x3F {
+                            32 => self.vps_buf = Some(Bytes::copy_from_slice(clean)),
+                            33 => self.sps_buf = Some(Bytes::copy_from_slice(clean)),
+                            34 => self.pps_buf = Some(Bytes::copy_from_slice(clean)),
                             _ => {}
-                        }
-                    }
-                }
-
-                if !self.sent_sequence_header {
-                    if let (Some(sps), Some(pps)) = (&self.sps_buf, &self.pps_buf) {
-                        if let Some(seq_tag) =
-                            FlvMuxer::build_h265_sequence_header(self.vps_buf.as_deref(), sps, pps)
-                        {
-                            out_tags.push(seq_tag);
-                            self.sent_sequence_header = true;
                         }
                     }
                 }
             }
         }
 
-        // 严格对齐首个关键帧：未发送 Sequence Header 或尚未收到第一个关键帧前，丢弃非关键帧
+        // 2. 检测参数集指纹是否发生动态突变 (如安防 IPC 白天/黑夜模式切换、分辨率 1080P -> 720P 切换)
+        let sps_changed = self.sps_buf.is_some() && self.sps_buf != self.active_sps;
+        let pps_changed = self.pps_buf.is_some() && self.pps_buf != self.active_pps;
+        let vps_changed = match pkt.codec {
+            CodecType::H265 => self.vps_buf.is_some() && self.vps_buf != self.active_vps,
+            CodecType::H264 => false,
+        };
+
+        let is_mutation = self.sent_sequence_header && (sps_changed || pps_changed || vps_changed);
+        let is_initial =
+            !self.sent_sequence_header && self.sps_buf.is_some() && self.pps_buf.is_some();
+
+        // 3. 若尚未下发首包 Sequence Header，在提取到完整参数集后立即构建下发 (默认时间戳 0)
+        if is_initial {
+            if let (Some(sps), Some(pps)) = (&self.sps_buf, &self.pps_buf) {
+                let seq_tag = match pkt.codec {
+                    CodecType::H264 => FlvMuxer::build_h264_sequence_header(sps, pps),
+                    CodecType::H265 => {
+                        FlvMuxer::build_h265_sequence_header(self.vps_buf.as_deref(), sps, pps)
+                    }
+                };
+
+                if let Some(tag) = seq_tag {
+                    out_tags.push(tag);
+                    self.sent_sequence_header = true;
+                    self.active_sps = Some(sps.clone());
+                    self.active_pps = Some(pps.clone());
+                    self.active_vps = self.vps_buf.clone();
+                }
+            }
+        }
+
+        // 4. 严格对齐首个关键帧：未发送 Sequence Header 或尚未收到第一个关键帧前，丢弃非关键帧
         if !self.sent_sequence_header {
             return out_tags;
         }
@@ -481,8 +525,70 @@ impl FlvStreamPipeline {
             }
         }
 
+        // 5. 计算当前数据帧的 (DTS, CTS) 时间戳
         let base_pts = *self.base_pts_ms.get_or_insert(pkt.pts_ms);
         let (dts, cts) = self.bframe_mgr.calculate_dts_cts(pkt.pts_ms, base_pts);
+
+        // 6. 若检测到参数突变 (Mutation)，立即在关键帧前注入更新的 Sequence Header Tag (时间戳对齐当前 DTS)
+        if is_mutation {
+            if let (Some(sps), Some(pps)) = (&self.sps_buf, &self.pps_buf) {
+                let seq_tag = match pkt.codec {
+                    CodecType::H264 => FlvMuxer::build_h264_sequence_header_with_ts(sps, pps, dts),
+                    CodecType::H265 => FlvMuxer::build_h265_sequence_header_with_ts(
+                        self.vps_buf.as_deref(),
+                        sps,
+                        pps,
+                        dts,
+                    ),
+                };
+
+                if let Some(tag) = seq_tag {
+                    let dim_change = match pkt.codec {
+                        CodecType::H264 => {
+                            let old_info = self
+                                .active_sps
+                                .as_deref()
+                                .and_then(|s| crate::sps::parse_h264_sps(s).ok());
+                            let new_info = crate::sps::parse_h264_sps(sps).ok();
+                            match (old_info, new_info) {
+                                (Some(o), Some(n)) => {
+                                    format!("{}x{} -> {}x{}", o.width, o.height, n.width, n.height)
+                                }
+                                _ => "参数变更".to_string(),
+                            }
+                        }
+                        CodecType::H265 => {
+                            let old_info = self
+                                .active_sps
+                                .as_deref()
+                                .and_then(|s| crate::sps::parse_h265_sps(s).ok());
+                            let new_info = crate::sps::parse_h265_sps(sps).ok();
+                            match (old_info, new_info) {
+                                (Some(o), Some(n)) => {
+                                    format!("{}x{} -> {}x{}", o.width, o.height, n.width, n.height)
+                                }
+                                _ => "参数变更".to_string(),
+                            }
+                        }
+                    };
+
+                    tracing::info!(
+                        codec = ?pkt.codec,
+                        dts,
+                        resolution = %dim_change,
+                        frame_count = self.frame_count,
+                        "检测到视频流动态 SPS/PPS 参数突变 (白天/黑夜切换或分辨率变更)，优先下发更新 Sequence Header"
+                    );
+
+                    out_tags.push(tag);
+                    self.active_sps = Some(sps.clone());
+                    self.active_pps = Some(pps.clone());
+                    self.active_vps = self.vps_buf.clone();
+                }
+            }
+        }
+
+        // 7. 封装并输出当前数据帧 Video Tag
         let tag = FlvMuxer::packet_to_flv_tag_with_dts_cts(pkt, dts, cts);
         if !tag.is_empty() {
             self.frame_count += 1;
@@ -713,5 +819,226 @@ mod tests {
         assert_eq!(tag[13], 0x00);
         assert_eq!(tag[14], 0x00);
         assert_eq!(tag[15], 0x50); // 80 in hex
+    }
+
+    #[test]
+    fn test_dynamic_sps_mutation_resolution_switch() {
+        let mut pipeline = FlvStreamPipeline::new();
+
+        // 真实 1080P SPS
+        let sps_1080p = [
+            0x67, 0x64, 0x00, 0x29, 0xac, 0x72, 0x84, 0x40, 0x78, 0x02, 0x27, 0xe5, 0xc0, 0x44,
+            0x00, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60, 0xc6, 0x58,
+        ];
+        // 真实 720P SPS
+        let sps_720p = [
+            0x67, 0x42, 0x00, 0x1f, 0x96, 0x35, 0x40, 0xa0, 0x0b, 0x76, 0x02, 0xd4, 0x04, 0x04,
+            0x05, 0x00,
+        ];
+        let pps = [0x68, 0xce, 0x3c, 0x80];
+        let idr = [0x65, 0x88, 0xaa];
+
+        // 辅助闭包：拼接 Annex B 复合包
+        let make_compound_keyframe = |sps: &[u8], pts: i64| -> EncodedPacket {
+            let mut payload = Vec::new();
+            // 00 00 00 01 + SPS
+            payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+            payload.extend_from_slice(sps);
+            // 00 00 00 01 + PPS
+            payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+            payload.extend_from_slice(&pps);
+            // 00 00 00 01 + IDR
+            payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+            payload.extend_from_slice(&idr);
+
+            EncodedPacket {
+                pts_ms: pts,
+                is_keyframe: true,
+                codec: CodecType::H264,
+                payload: Bytes::from(payload),
+            }
+        };
+
+        // 1. 发送首包 1080P 关键帧
+        let pkt1 = make_compound_keyframe(&sps_1080p, 1000);
+        let tags1 = pipeline.process_packet(&pkt1);
+        // 应产生 首包 Sequence Header + 1080P IDR 视频 Tag
+        assert_eq!(tags1.len(), 2);
+        assert_eq!(tags1[0][12], 0x00); // Sequence Header
+        assert_eq!(tags1[1][12], 0x01); // Video Frame
+        assert_eq!(
+            pipeline.active_sps.as_deref(),
+            Some(&sps_1080p[..]),
+            "活跃 SPS 应记录为 1080P"
+        );
+
+        // 2. 发送普通 P 帧
+        let p_pkt = EncodedPacket {
+            pts_ms: 1040,
+            is_keyframe: false,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x01]),
+        };
+        let p_tags = pipeline.process_packet(&p_pkt);
+        assert_eq!(p_tags.len(), 1); // 仅视频帧
+
+        // 3. 发送相同分辨率 (1080P) 的下一个关键帧 (参数集未变)
+        let pkt2 = make_compound_keyframe(&sps_1080p, 1080);
+        let tags2 = pipeline.process_packet(&pkt2);
+        // 参数相同，不应重复产生 Sequence Header Tag，仅产生 IDR 视频 Tag
+        assert_eq!(
+            tags2.len(),
+            1,
+            "SPS 未发生突变时，禁止冗余发送 Sequence Header"
+        );
+        assert_eq!(tags2[0][12], 0x01); // Video Frame
+
+        // 4. 模拟工控 IPC 动态切换分辨率 (1080P -> 720P)
+        let pkt_720p = make_compound_keyframe(&sps_720p, 2000);
+        let tags_720p = pipeline.process_packet(&pkt_720p);
+        // 关键帧检测到 active_sps 突变，必须优先输出全新 Sequence Header 并紧跟 720P 视频帧
+        assert_eq!(
+            tags_720p.len(),
+            2,
+            "SPS 突变时必须输出更新的 Sequence Header Tag + 关键帧"
+        );
+        assert_eq!(tags_720p[0][12], 0x00); // 更新后的 Sequence Header
+        assert_eq!(tags_720p[1][12], 0x01); // 720P IDR 视频帧
+        assert_eq!(
+            pipeline.active_sps.as_deref(),
+            Some(&sps_720p[..]),
+            "活跃 SPS 必须无缝热更新为 720P"
+        );
+
+        // 验证更新后的 Sequence Header DTS 时间戳与随后的关键帧严格同步对齐 (2000 - 1000 = 1000ms)
+        let seq_dts = ((tags_720p[0][4] as u32) << 16)
+            | ((tags_720p[0][5] as u32) << 8)
+            | (tags_720p[0][6] as u32);
+        let frame_dts = ((tags_720p[1][4] as u32) << 16)
+            | ((tags_720p[1][5] as u32) << 8)
+            | (tags_720p[1][6] as u32);
+        assert_eq!(
+            seq_dts, frame_dts,
+            "突变插入的 Sequence Header 时间戳必须对齐当前帧 DTS，保持单调性"
+        );
+        assert_eq!(seq_dts, 1000);
+
+        // 5. 发送下一个 720P 关键帧 (参数已与 active_sps 保持一致)
+        let pkt_720p_next = make_compound_keyframe(&sps_720p, 2040);
+        let tags_720p_next = pipeline.process_packet(&pkt_720p_next);
+        assert_eq!(
+            tags_720p_next.len(),
+            1,
+            "720P 稳态后不应再次重复发送 Sequence Header"
+        );
+
+        // 6. 再次动态切回 1080P
+        let pkt_1080p_return = make_compound_keyframe(&sps_1080p, 3000);
+        let tags_return = pipeline.process_packet(&pkt_1080p_return);
+        assert_eq!(tags_return.len(), 2, "切回 1080P 时再次触发更新");
+        assert_eq!(tags_return[0][12], 0x00);
+        assert_eq!(pipeline.active_sps.as_deref(), Some(&sps_1080p[..]));
+    }
+
+    #[test]
+    fn test_inject_cache_mutation_flow() {
+        let mut pipeline = FlvStreamPipeline::new();
+
+        let sps_v1 = Bytes::from_static(&[0x67, 0x42, 0x00, 0x1E]);
+        let pps = Bytes::from_static(&[0x68, 0xCE]);
+        let cache = KeyframeCache {
+            codec: Some(CodecType::H264),
+            sps: Some(sps_v1.clone()),
+            pps: Some(pps.clone()),
+            ..Default::default()
+        };
+
+        // 通过 inject_cache 初始拉起
+        let init_tags = pipeline.inject_cache(&cache, CodecType::H264);
+        assert_eq!(init_tags.len(), 1);
+        assert_eq!(pipeline.active_sps.as_ref(), Some(&sps_v1));
+
+        // 收到相同参数包，不发 Sequence Header
+        let pkt_same = EncodedPacket {
+            pts_ms: 100,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[
+                0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
+                0x00, 0x00, 0x00, 0x01, 0x65, 0x88,
+            ]),
+        };
+        let tags_same = pipeline.process_packet(&pkt_same);
+        assert_eq!(tags_same.len(), 1); // 仅视频帧
+
+        // 收到突变参数包，立即发出新 Sequence Header
+        let sps_v2 = [0x67, 0x64, 0x00, 0x28];
+        let pkt_mutated = EncodedPacket {
+            pts_ms: 200,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[
+                0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x28, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
+                0x00, 0x00, 0x00, 0x01, 0x65, 0x88,
+            ]),
+        };
+        let tags_mutated = pipeline.process_packet(&pkt_mutated);
+        assert_eq!(tags_mutated.len(), 2);
+        assert_eq!(tags_mutated[0][12], 0x00); // New Sequence Header
+        assert_eq!(pipeline.active_sps.as_deref(), Some(&sps_v2[..]));
+    }
+
+    #[test]
+    fn test_dynamic_h265_vps_sps_pps_mutation() {
+        let mut pipeline = FlvStreamPipeline::new();
+
+        // 构造两个不同 SPS 的 H.265 复合关键帧
+        let vps = [0x40, 0x01, 0x0c, 0x01, 0xff];
+        let sps_v1 = [
+            0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03,
+            0x00, 0x78,
+        ];
+        let sps_v2 = [
+            0x42, 0x01, 0x01, 0x02, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03,
+            0x00, 0x90,
+        ];
+        let pps = [0x44, 0x01, 0xc0];
+        let idr = [0x26, 0x01, 0xaf];
+
+        let make_h265_pkt = |sps: &[u8], pts: i64| -> EncodedPacket {
+            let mut payload = Vec::new();
+            payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+            payload.extend_from_slice(&vps);
+            payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+            payload.extend_from_slice(sps);
+            payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+            payload.extend_from_slice(&pps);
+            payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+            payload.extend_from_slice(&idr);
+
+            EncodedPacket {
+                pts_ms: pts,
+                is_keyframe: true,
+                codec: CodecType::H265,
+                payload: Bytes::from(payload),
+            }
+        };
+
+        // 1. 首包 H.265 关键帧
+        let tags1 = pipeline.process_packet(&make_h265_pkt(&sps_v1, 1000));
+        assert_eq!(tags1.len(), 2);
+        assert_eq!(tags1[0][11], 0x90); // Enhanced FLV Sequence Header
+        assert_eq!(&tags1[0][12..16], b"hvc1");
+        assert_eq!(pipeline.active_sps.as_deref(), Some(&sps_v1[..]));
+
+        // 2. 相同 SPS H.265 帧
+        let tags2 = pipeline.process_packet(&make_h265_pkt(&sps_v1, 1040));
+        assert_eq!(tags2.len(), 1); // 仅视频帧
+
+        // 3. 突变 SPS H.265 帧
+        let tags_mutated = pipeline.process_packet(&make_h265_pkt(&sps_v2, 2000));
+        assert_eq!(tags_mutated.len(), 2);
+        assert_eq!(tags_mutated[0][11], 0x90);
+        assert_eq!(pipeline.active_sps.as_deref(), Some(&sps_v2[..]));
     }
 }
