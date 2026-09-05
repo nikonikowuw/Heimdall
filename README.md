@@ -1,4 +1,4 @@
-# Argus (Heimdall)
+# Heimdall
 
 > **工业级边缘端一体化 AI 视频分析与证据闭环系统**  
 > *Industrial Edge AI Video Analytics & Evidence Loop System*
@@ -12,13 +12,13 @@
 
 ## 📖 系统概览
 
-**Argus**（代号 **Heimdall**）专为边缘嵌入式算力设备与无人值守监控场景打造，是一套基于纯 Rust 核心构建、集成现代化前端控制台的**单二进制自包含（All-in-One Binary）**智能视频分析系统。
+**Heimdall**专为边缘嵌入式算力设备与无人值守监控场景打造，是一套基于纯 Rust 核心构建、集成现代化前端控制台的**单二进制自包含（All-in-One Binary）**智能视频分析系统。
 
 系统针对边缘端计算资源与 DDR 内存总线受限的特点进行了全链路深度优化，集成了**工业级 RTSP 拉流与子码流智能推导**、**Enhanced FLV / MSE 低延迟实时流分发**、**双流环形高清证据抓拍**、**C ABI 算法包物理沙箱与热插拔**、**统一空间几何规则引擎**以及**动态矢量布防工作台**，实现了从视频接入、按需低功耗推理到原子级证据闭环交付的完整链路。
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│                    Argus / Heimdall (Rust All-in-One Binary)                     │
+│                        Heimdall (Rust All-in-One Binary)                         │
 │                                                                                  │
 │  ┌────────────────────────┐  ┌────────────────────────────────────────────────┐  │
 │  │  Embedded Web Console  │  │          High-Performance Rust Core            │  │
@@ -115,19 +115,19 @@ pnpm build
 cd ..
 
 # 2. 编译 Rust 单二进制程序 (内嵌 web/dist)
-cargo build --release --bin argus
+cargo build --release --bin Heimdall
 
-# 编译产物位于: target/release/argus
+# 编译产物位于: target/release/Heimdall
 ```
 
 ### 2. 启动运行
 
 ```bash
 # 启动服务 (默认监听 0.0.0.0:8080)
-./target/release/argus
+./target/release/Heimdall
 
 # 或者通过 cargo 直接运行
-cargo run --bin argus
+cargo run --bin Heimdall
 ```
 
 服务启动后，在浏览器访问控制台：

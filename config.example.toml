@@ -1,5 +1,5 @@
 # ==============================================================================
-# Argus / Heimdall 边缘端一体化 AI 视频分析系统配置文件
+# Heimdall 边缘端一体化 AI 视频分析系统配置文件
 #
 # 优先级说明：
 # 命令行显式参数 / 环境变量 (ARGUS_*) > 本地 .env 文件 > config.toml > 代码内置默认值
@@ -17,7 +17,7 @@ port = 8000
 
 [database]
 # SQLite 数据库文件存储路径
-path = "argus.db"
+path = "Heimdall.db"
 # 数据库最大并发连接数 (SQLite 推荐 4)
 max_connections = 4
 
