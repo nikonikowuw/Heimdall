@@ -1,0 +1,26 @@
+{
+  "manifest_version": 1,
+  "algorithm_id": "license_plate_recognition",
+  "version": "1.0.0",
+  "name": "Chinese License Plate Recognition",
+  "description": "Chinese vehicle license plate detection, perspective rectification, CRNN OCR text recognition, and color classification on Apple Silicon Core ML",
+  "algorithm_type": "license_plate_recognition",
+  "platform_id": "macos-arm64-coreml",
+  "min_adapter_version": "1.0.0",
+  "runtime_constraints": {
+    "min_os_version": "14.0"
+  },
+  "resource_profile": {
+    "min_free_memory_mb": 256,
+    "fps_tiers": [
+      {"fps": 5, "units": 100},
+      {"fps": 15, "units": 250},
+      {"fps": 30, "units": 500}
+    ]
+  },
+  "self_test": {
+    "timeout_ms": 10000,
+    "input_mode": "test_image"
+  }
+}
+

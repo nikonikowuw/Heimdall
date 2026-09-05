@@ -2,6 +2,7 @@ pub mod error;
 pub mod geometry;
 pub mod manager;
 pub mod motion_gate;
+pub mod pump;
 pub mod roi;
 pub mod rules;
 pub mod snapshot;
@@ -15,6 +16,7 @@ pub use manager::{
     PipelineManager, DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS, DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,
 };
 pub use motion_gate::MotionGate;
+pub use pump::{AnalysisFpsGovernor, PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig};
 pub use roi::RoiAffineMapper;
 pub use rules::{RuleEvaluator, TriggeredAlarm};
 pub use snapshot::{SnapshotCaptureMode, SnapshotConfig, SnapshotEngine, SnapshotResult};

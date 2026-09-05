@@ -13,6 +13,7 @@ use types::{
 };
 
 use crate::error::PipelineError;
+use crate::pump::{PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig};
 use crate::roi::RoiAffineMapper;
 use crate::rules::{RuleEvaluator, TriggeredAlarm};
 use crate::snapshot::{SnapshotConfig, SnapshotEngine, SnapshotResult};
@@ -99,6 +100,7 @@ pub const DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS: u64 = 100;
 pub struct PipelineManager {
     tasks: Arc<TokioRwLock<HashMap<String, AnalysisTask>>>,
     pipelines: Arc<TokioRwLock<HashMap<String, Arc<CameraPipelineContext>>>>,
+    pumps: Arc<TokioRwLock<HashMap<String, SubStreamAnalysisPump>>>,
     snapshot_engine: Arc<SnapshotEngine>,
     snapshot_semaphore: Arc<tokio::sync::Semaphore>,
     permit_timeout_ms: u64,
@@ -142,6 +144,7 @@ impl PipelineManager {
         Self {
             tasks: Arc::new(TokioRwLock::new(HashMap::new())),
             pipelines: Arc::new(TokioRwLock::new(HashMap::new())),
+            pumps: Arc::new(TokioRwLock::new(HashMap::new())),
             snapshot_engine: Arc::new(SnapshotEngine::with_config(dir, config)),
             snapshot_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 max_concurrent_decoders.max(1),
@@ -392,14 +395,113 @@ impl PipelineManager {
         (tracked_objects, alarms)
     }
 
+    async fn mount_pump(&self, camera_id: &str, pump: SubStreamAnalysisPump) {
+        let old_pump = {
+            let mut pumps = self.pumps.write().await;
+            pumps.remove(camera_id)
+        };
+        if let Some(mut old) = old_pump {
+            old.stop().await;
+        }
+        self.pumps.write().await.insert(camera_id.to_string(), pump);
+    }
+
+    /// 启动某路摄像头的子码流分析驱动泵
+    pub async fn start_analysis_pump(
+        self: &Arc<Self>,
+        camera_id: &str,
+        session: Arc<media::CameraStreamSession>,
+        decoder: Box<dyn VideoDecoder + Send>,
+        worker: infer::InferenceWorkerHandle,
+        config: SubStreamPumpConfig,
+    ) {
+        let pump =
+            SubStreamAnalysisPump::start(camera_id, session, decoder, worker, self.clone(), config);
+        self.mount_pump(camera_id, pump).await;
+        tracing::info!(camera_id = %camera_id, "子码流驱动泵已挂载至管线管理器");
+    }
+
+    /// 启动某路摄像头的子码流分析驱动泵 (全量托管 InferenceWorker 运行周期)
+    pub async fn start_analysis_pump_with_worker(
+        self: &Arc<Self>,
+        camera_id: &str,
+        session: Arc<media::CameraStreamSession>,
+        decoder: Box<dyn VideoDecoder + Send>,
+        worker: infer::InferenceWorker,
+        config: SubStreamPumpConfig,
+    ) {
+        let pump = SubStreamAnalysisPump::start_with_worker(
+            camera_id,
+            session,
+            decoder,
+            worker,
+            self.clone(),
+            config,
+        );
+        self.mount_pump(camera_id, pump).await;
+        tracing::info!(camera_id = %camera_id, "子码流驱动泵 (含常驻工作线程) 已挂载至管线管理器");
+    }
+
+    /// 停止某路摄像头的子码流分析驱动泵
+    pub async fn stop_analysis_pump(&self, camera_id: &str) -> bool {
+        let old_pump = {
+            let mut pumps = self.pumps.write().await;
+            pumps.remove(camera_id)
+        };
+        if let Some(mut pump) = old_pump {
+            pump.stop().await;
+            tracing::info!(camera_id = %camera_id, "子码流驱动泵已停止并从管理器注销");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 停止所有摄像头的分析驱动泵并等待回收
+    pub async fn stop_all_pumps(&self) {
+        let old_pumps = {
+            let mut pumps = self.pumps.write().await;
+            pumps.drain().map(|(_, p)| p).collect::<Vec<_>>()
+        };
+        for mut pump in old_pumps {
+            pump.stop().await;
+        }
+        tracing::info!("已停止所有子码流分析驱动泵并回收资源");
+    }
+
+    /// 查询某路摄像头的驱动泵是否正在运行
+    pub async fn is_analysis_pump_running(&self, camera_id: &str) -> bool {
+        let pumps = self.pumps.read().await;
+        pumps
+            .get(camera_id)
+            .map(|p| p.is_running())
+            .unwrap_or(false)
+    }
+
+    /// 获取某路摄像头的驱动泵运行指标
+    pub async fn get_analysis_pump_metrics(&self, camera_id: &str) -> Option<Arc<PumpMetrics>> {
+        let pumps = self.pumps.read().await;
+        pumps.get(camera_id).map(|p| p.metrics().clone())
+    }
+
     /// 停止某路摄像头的分析任务
     pub async fn stop_task(&self, camera_id: &str) -> Result<(), PipelineError> {
-        let mut tasks = self.tasks.write().await;
-        if tasks.remove(camera_id).is_some() {
+        let removed = {
+            let mut tasks = self.tasks.write().await;
+            tasks.remove(camera_id).is_some()
+        };
+
+        if removed {
+            // 级联停用对应的分析驱动泵
+            self.stop_analysis_pump(camera_id).await;
+
             self.set_ai_active(camera_id, false).await;
 
-            let pipelines = self.pipelines.read().await;
-            if let Some(ctx) = pipelines.get(camera_id) {
+            let ctx = {
+                let pipelines = self.pipelines.read().await;
+                pipelines.get(camera_id).cloned()
+            };
+            if let Some(ctx) = ctx {
                 ctx.release_decoder_if_idle().await;
             }
 
@@ -652,5 +754,149 @@ mod tests {
 
         drop(held_permit);
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_manager_pump_lifecycle_and_cascade_stop() {
+        use async_trait::async_trait;
+        use infer::InferenceBackend;
+        use media::decoders::MockDecoder;
+        use std::sync::atomic::AtomicBool;
+        use tokio::sync::broadcast;
+        use types::TransportPolicy;
+
+        #[derive(Debug)]
+        struct DummyInferBackend;
+        #[async_trait]
+        impl InferenceBackend for DummyInferBackend {
+            fn name(&self) -> &'static str {
+                "DummyInfer"
+            }
+            async fn detect(
+                &self,
+                _frame: &FrameRef,
+            ) -> Result<Vec<types::Detection>, infer::InferError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_pump_lifecycle_test";
+
+        let (broadcast_tx, _) = broadcast::channel(16);
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let session = Arc::new(media::CameraStreamSession {
+            camera_id: cam_id.to_string(),
+            rtsp_url: "rtsp://dummy/sub".to_string(),
+            transport_policy: TransportPolicy::Tcp,
+            active_viewers: Arc::new(std::sync::atomic::AtomicUsize::new(1)),
+            ai_task_enabled: Arc::new(AtomicBool::new(true)),
+            keyframe_cache: Arc::new(tokio::sync::RwLock::new(
+                media::stream_hub::KeyframeCache::default(),
+            )),
+            broadcast_tx,
+            cancel_signal: Arc::new(AtomicBool::new(false)),
+            cancel_tx,
+            cancel_rx,
+            ingestor_running: Arc::new(AtomicBool::new(true)),
+            last_packet_time: Arc::new(std::sync::atomic::AtomicI64::new(1000)),
+            cooldown_cancel: Arc::new(tokio::sync::Mutex::new(None)),
+            consecutive_probe_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        });
+
+        let decoder = Box::new(MockDecoder::new(cam_id, CodecType::H264, 640, 360));
+        let worker = infer::InferenceWorker::new(Arc::new(DummyInferBackend));
+
+        assert!(!manager.is_analysis_pump_running(cam_id).await);
+
+        manager
+            .start_analysis_pump(
+                cam_id,
+                session,
+                decoder,
+                worker.handle(),
+                SubStreamPumpConfig::default(),
+            )
+            .await;
+
+        assert!(manager.is_analysis_pump_running(cam_id).await);
+        let metrics = manager.get_analysis_pump_metrics(cam_id).await;
+        assert!(metrics.is_some());
+
+        // 停止驱动泵
+        let stopped = manager.stop_analysis_pump(cam_id).await;
+        assert!(stopped);
+        assert!(!manager.is_analysis_pump_running(cam_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_manager_stop_all_pumps() {
+        use async_trait::async_trait;
+        use infer::InferenceBackend;
+        use media::decoders::MockDecoder;
+        use std::sync::atomic::AtomicBool;
+        use tokio::sync::broadcast;
+        use types::TransportPolicy;
+
+        #[derive(Debug)]
+        struct DummyInfer;
+        #[async_trait]
+        impl InferenceBackend for DummyInfer {
+            fn name(&self) -> &'static str {
+                "DummyInfer"
+            }
+            async fn detect(
+                &self,
+                _frame: &FrameRef,
+            ) -> Result<Vec<types::Detection>, infer::InferError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let manager = Arc::new(PipelineManager::new());
+        for i in 1..=2 {
+            let cam_id = format!("cam_all_{i}");
+            let (broadcast_tx, _) = broadcast::channel(16);
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+            let session = Arc::new(media::CameraStreamSession {
+                camera_id: cam_id.clone(),
+                rtsp_url: "rtsp://dummy/sub".to_string(),
+                transport_policy: TransportPolicy::Tcp,
+                active_viewers: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                ai_task_enabled: Arc::new(AtomicBool::new(false)),
+                keyframe_cache: Arc::new(tokio::sync::RwLock::new(
+                    media::stream_hub::KeyframeCache::default(),
+                )),
+                broadcast_tx,
+                cancel_signal: Arc::new(AtomicBool::new(false)),
+                cancel_tx,
+                cancel_rx,
+                ingestor_running: Arc::new(AtomicBool::new(true)),
+                last_packet_time: Arc::new(std::sync::atomic::AtomicI64::new(1000)),
+                cooldown_cancel: Arc::new(tokio::sync::Mutex::new(None)),
+                consecutive_probe_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            });
+
+            let decoder = Box::new(MockDecoder::new(&cam_id, CodecType::H264, 640, 360));
+            let worker = infer::InferenceWorker::new(Arc::new(DummyInfer));
+
+            manager
+                .start_analysis_pump(
+                    &cam_id,
+                    session,
+                    decoder,
+                    worker.handle(),
+                    SubStreamPumpConfig::default(),
+                )
+                .await;
+
+            assert!(manager.is_analysis_pump_running(&cam_id).await);
+        }
+
+        // 停止所有驱动泵
+        manager.stop_all_pumps().await;
+
+        assert!(!manager.is_analysis_pump_running("cam_all_1").await);
+        assert!(!manager.is_analysis_pump_running("cam_all_2").await);
     }
 }

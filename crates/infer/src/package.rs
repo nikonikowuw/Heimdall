@@ -258,11 +258,22 @@ impl InferenceBackend for AlgoInstance {
             reason: "instance_process 为空".to_string(),
         })?;
 
-        // 隔离阻塞的 FFI 推理调用，防止卡死 Tokio worker 线程
-        let code = tokio::task::block_in_place(|| {
+        // 隔离阻塞的 FFI 推理调用：仅在 Tokio 多线程工作池中调用 block_in_place
+        // 在专用 OS 线程或单线程运行时中直接执行，避免触发 Tokio 运行时 Panic
+        let run_process = || {
             // SAFETY: 调用 C ABI instance_process，传入有效实例与帧描述符
             unsafe { process_fn(self.raw, &desc) }
-        });
+        };
+
+        let is_multi_thread = tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false);
+
+        let code = if is_multi_thread {
+            tokio::task::block_in_place(run_process)
+        } else {
+            run_process()
+        };
 
         if code != AV_OK {
             // SAFETY: 调用方保证 abi 与 self.raw 内存有效

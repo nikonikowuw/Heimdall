@@ -43,7 +43,9 @@ use tracing::{debug, error, info, warn};
 use types::{CodecType, FrameHandle, FrameRef, PixelFormat, StrideInfo};
 
 use crate::buffer_pool::DvppBufferPool;
-use crate::decoder::{DecodeCommand, VideoDecoder, DEFAULT_THREAD_SHUTDOWN_TIMEOUT};
+use crate::decoder::{
+    DecodeCommand, DecodeDeliveryPolicy, VideoDecoder, DEFAULT_THREAD_SHUTDOWN_TIMEOUT,
+};
 use crate::error::MediaError;
 
 /// 水平宽度步长对齐（华为 DVPP 严格要求水平 16 字节对齐）
@@ -1560,7 +1562,11 @@ impl Drop for DvppDecoderInner {
 /// 华为昇腾 DVPP 硬件解码器异步外壳
 pub struct DvppDecoder {
     camera_id: String,
+    codec: CodecType,
     tx: Option<mpsc::Sender<DecodeCommand>>,
+    policy: DecodeDeliveryPolicy,
+    pruning_gop: bool,
+    dropped_p_frames: u64,
     shutdown_flag: Arc<AtomicBool>,
     exit_rx: std::sync::mpsc::Receiver<()>,
     thread: Option<JoinHandle<()>>,
@@ -1664,7 +1670,11 @@ impl DvppDecoder {
 
         Self {
             camera_id: camera_id.to_string(),
+            codec,
             tx: Some(tx),
+            policy: DecodeDeliveryPolicy::default(),
+            pruning_gop: false,
+            dropped_p_frames: 0,
             shutdown_flag,
             exit_rx,
             thread: Some(thread),
@@ -1702,6 +1712,16 @@ impl DvppDecoder {
             true
         }
     }
+
+    /// 当前是否处于 GOP 尾部修剪状态
+    pub fn is_pruning_gop(&self) -> bool {
+        self.pruning_gop
+    }
+
+    /// 累计丢弃的 P 帧数量
+    pub fn dropped_p_frames(&self) -> u64 {
+        self.dropped_p_frames
+    }
 }
 
 #[async_trait]
@@ -1711,6 +1731,34 @@ impl VideoDecoder for DvppDecoder {
         packet: &[u8],
         pts: i64,
     ) -> Result<Option<FrameRef>, MediaError> {
+        let is_keyframe = crate::sps::is_keyframe_or_parameter_set(packet, self.codec);
+
+        if self.policy == DecodeDeliveryPolicy::RealtimeDropOldest {
+            if is_keyframe {
+                if self.pruning_gop {
+                    tracing::info!(
+                        camera_id = %self.camera_id,
+                        dropped_p_frames = self.dropped_p_frames,
+                        pts,
+                        "DVPP 解码收到新关键帧/参数集，安全重置 GOP 修剪状态，恢复解码"
+                    );
+                    self.pruning_gop = false;
+                    self.dropped_p_frames = 0;
+                }
+            } else if self.pruning_gop {
+                // 当前处于修剪态：坚决丢弃后续残缺 P/B 帧，杜绝破坏运动参考链导致花屏
+                self.dropped_p_frames += 1;
+                return Ok(None);
+            }
+        } else {
+            self.pruning_gop = false;
+            self.dropped_p_frames = 0;
+        }
+
+        let tx = self.tx.as_ref().ok_or_else(|| MediaError::Decode {
+            reason: "DVPP 解码专用通道已关闭".to_string(),
+        })?;
+
         let (reply_tx, reply_rx) = oneshot::channel();
         let cmd = DecodeCommand::Decode {
             packet: Bytes::copy_from_slice(packet),
@@ -1718,13 +1766,44 @@ impl VideoDecoder for DvppDecoder {
             reply: reply_tx,
         };
 
-        let tx = self.tx.as_ref().ok_or_else(|| MediaError::Decode {
-            reason: "DVPP 解码专用通道已关闭".to_string(),
-        })?;
-
-        tx.send(cmd).await.map_err(|_| MediaError::Decode {
-            reason: "DVPP 解码专用线程已退出".to_string(),
-        })?;
+        match self.policy {
+            DecodeDeliveryPolicy::LosslessBackpressure => {
+                tx.send(cmd).await.map_err(|_| MediaError::Decode {
+                    reason: "DVPP 解码专用线程已退出".to_string(),
+                })?;
+            }
+            DecodeDeliveryPolicy::RealtimeDropOldest => match tx.try_send(cmd) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(rejected_cmd)) => {
+                    if is_keyframe {
+                        tracing::warn!(
+                            camera_id = %self.camera_id,
+                            pts,
+                            "DVPP 硬件通道满但当前为关键帧/参数集，等待投递以重建参考系"
+                        );
+                        tx.send(rejected_cmd)
+                            .await
+                            .map_err(|_| MediaError::Decode {
+                                reason: "DVPP 解码专用线程已退出".to_string(),
+                            })?;
+                    } else {
+                        self.pruning_gop = true;
+                        self.dropped_p_frames = 1;
+                        tracing::warn!(
+                            camera_id = %self.camera_id,
+                            pts,
+                            "DVPP 硬件通道饱和，实时策略丢弃该 P 帧并开启 GOP 尾部修剪防花屏"
+                        );
+                        return Ok(None);
+                    }
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(MediaError::Decode {
+                        reason: "DVPP 解码专用线程已退出".to_string(),
+                    });
+                }
+            },
+        }
 
         reply_rx.await.map_err(|_| MediaError::Decode {
             reason: "DVPP 解码响应通道已关闭".to_string(),
@@ -1732,6 +1811,8 @@ impl VideoDecoder for DvppDecoder {
     }
 
     async fn flush(&mut self) -> Result<Vec<FrameRef>, MediaError> {
+        self.pruning_gop = false;
+        self.dropped_p_frames = 0;
         let (reply_tx, reply_rx) = oneshot::channel();
         let cmd = DecodeCommand::Flush { reply: reply_tx };
 
@@ -1746,6 +1827,16 @@ impl VideoDecoder for DvppDecoder {
         reply_rx.await.map_err(|_| MediaError::Decode {
             reason: "DVPP 解码响应通道已关闭".to_string(),
         })?
+    }
+
+    fn set_delivery_policy(&mut self, policy: DecodeDeliveryPolicy) {
+        self.policy = policy;
+        self.pruning_gop = false;
+        self.dropped_p_frames = 0;
+    }
+
+    fn delivery_policy(&self) -> DecodeDeliveryPolicy {
+        self.policy
     }
 }
 
@@ -1983,5 +2074,48 @@ mod tests {
         // 退出后再次提交任务应立即返回通道已关闭错误
         let res_after = decoder.decode_packet(&dummy_nalu, 1033).await;
         assert!(res_after.is_err(), "已停止的解码器应当拒绝新任务");
+    }
+
+    #[test]
+    fn test_dvpp_delivery_policy_default_and_mutation() {
+        let mut decoder = DvppDecoder::new("test_dvpp_policy", CodecType::H264);
+        assert_eq!(
+            decoder.delivery_policy(),
+            DecodeDeliveryPolicy::LosslessBackpressure
+        );
+
+        decoder.set_delivery_policy(DecodeDeliveryPolicy::RealtimeDropOldest);
+        assert_eq!(
+            decoder.delivery_policy(),
+            DecodeDeliveryPolicy::RealtimeDropOldest
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn test_dvpp_realtime_pruning_prevents_broken_reference_chain() {
+        let mut decoder = DvppDecoder::new("test_dvpp_prune", CodecType::H264);
+        decoder.set_delivery_policy(DecodeDeliveryPolicy::RealtimeDropOldest);
+        assert_eq!(
+            decoder.delivery_policy(),
+            DecodeDeliveryPolicy::RealtimeDropOldest
+        );
+
+        // 人为将 decoder 置于修剪状态（模拟通道满触发丢 P 帧）
+        decoder.pruning_gop = true;
+        decoder.dropped_p_frames = 1;
+
+        // 在修剪状态下，送入新的 P 帧 (0x41)
+        let p_frame = [0x00, 0x00, 0x00, 0x01, 0x41, 0x9a, 0x00];
+        let res = decoder.decode_packet(&p_frame, 1033).await.unwrap();
+        assert!(res.is_none());
+        assert_eq!(decoder.dropped_p_frames(), 2);
+        assert!(decoder.is_pruning_gop());
+
+        // 送入新的关键帧 IDR (0x65) -> 自动重置修剪态并恢复正常
+        let idr_frame = [0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00];
+        let _ = decoder.decode_packet(&idr_frame, 1066).await;
+        assert!(!decoder.is_pruning_gop());
+        assert_eq!(decoder.dropped_p_frames(), 0);
     }
 }

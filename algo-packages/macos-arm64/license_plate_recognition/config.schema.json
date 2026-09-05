@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LicensePlateRecognitionConfig",
+  "type": "object",
+  "properties": {
+    "confidence_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.5,
+      "description": "Plate detection confidence threshold"
+    },
+    "iou_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.45,
+      "description": "NMS IoU threshold"
+    },
+    "ocr_confidence_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.6,
+      "description": "OCR text recognition minimum confidence threshold"
+    },
+    "voting_window_frames": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30,
+      "default": 5,
+      "description": "Multi-frame tracking observation voting window size"
+    },
+    "observation_cooldown_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600,
+      "default": 10,
+      "description": "Cooldown period in seconds before repeating identical plate report for same track"
+    },
+    "allowed_plate_colors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["black", "blue", "green", "white", "yellow"]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "default": ["black", "blue", "green", "white", "yellow"],
+      "description": "Plate colors eligible for reporting"
+    },
+    "save_plate_crop": {
+      "type": "boolean",
+      "default": true,
+      "description": "Request a cropped image for every reported plate"
+    }
+  },
+  "additionalProperties": false
+}

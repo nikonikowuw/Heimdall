@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, RgbImage};
-use media::decoder::VideoDecoder;
+use media::decoder::{DecodeDeliveryPolicy, VideoDecoder};
 use media::ring_buffer::MainStreamRingBuffer;
 use types::{BoundingBox, FrameRef};
 
@@ -137,6 +137,9 @@ impl SnapshotEngine {
 
         // 1. 尝试从主码流 RingBuffer 提取 GOP 并根据双模策略解码
         if let (Some(rb), Some(decoder)) = (ring_buffer, main_decoder) {
+            // 快照抽帧采用无损反压交付策略，确保大 GOP 追解帧一帧不漏
+            decoder.set_delivery_policy(DecodeDeliveryPolicy::LosslessBackpressure);
+
             if let Some(gop) = rb.get_gop_for_timestamp(target_pts_ms) {
                 if !gop.is_empty() {
                     let keyframe = &gop[0];

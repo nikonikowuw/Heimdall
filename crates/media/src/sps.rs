@@ -1,3 +1,5 @@
+use types::CodecType;
+
 use crate::error::MediaError;
 
 /// SPS 解析得出的视频参数元数据
@@ -441,6 +443,26 @@ pub fn parse_h265_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
     })
 }
 
+/// 快速判定切片中是否包含关键帧 (IDR) 或序列参数集 (SPS/PPS/VPS)
+///
+/// 零堆分配，通过解析 Annex B NALU 头部直接识别帧类型，用于实时丢帧防花屏判定
+pub fn is_keyframe_or_parameter_set(data: &[u8], codec: CodecType) -> bool {
+    for nalu in split_annex_b_nalus(data) {
+        if let Some(&first) = nalu.first() {
+            let matches_header = match codec {
+                // 5: IDR, 7: SPS, 8: PPS
+                CodecType::H264 => matches!(first & 0x1F, 5 | 7 | 8),
+                // 19, 20: IDR, 32: VPS, 33: SPS, 34: PPS
+                CodecType::H265 => matches!((first >> 1) & 0x3F, 19..=20 | 32..=34),
+            };
+            if matches_header {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,5 +535,35 @@ mod tests {
         assert_eq!(nalus[0], b"\x67sps_data");
         assert_eq!(nalus[1], b"\x68pps_data");
         assert_eq!(nalus[2], b"\x65idr_data");
+    }
+
+    #[test]
+    fn test_is_keyframe_or_parameter_set() {
+        // H.264 IDR (0x65 -> nalu_type 5)
+        assert!(is_keyframe_or_parameter_set(
+            b"\x00\x00\x00\x01\x65idr",
+            CodecType::H264
+        ));
+        // H.264 SPS (0x67 -> nalu_type 7)
+        assert!(is_keyframe_or_parameter_set(
+            b"\x00\x00\x01\x67sps",
+            CodecType::H264
+        ));
+        // H.264 P 帧 (0x41 -> nalu_type 1)
+        assert!(!is_keyframe_or_parameter_set(
+            b"\x00\x00\x00\x01\x41pframe",
+            CodecType::H264
+        ));
+
+        // H.265 IDR (0x26 -> nalu_type 19)
+        assert!(is_keyframe_or_parameter_set(
+            b"\x00\x00\x00\x01\x26idr",
+            CodecType::H265
+        ));
+        // H.265 P 帧 (0x02 -> nalu_type 1)
+        assert!(!is_keyframe_or_parameter_set(
+            b"\x00\x00\x00\x01\x02trail",
+            CodecType::H265
+        ));
     }
 }

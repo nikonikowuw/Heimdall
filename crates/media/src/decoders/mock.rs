@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 use types::{CodecType, FrameHandle, FrameRef, PixelFormat, StrideInfo};
 
-use crate::decoder::VideoDecoder;
+use crate::decoder::{DecodeDeliveryPolicy, VideoDecoder};
 use crate::error::MediaError;
 
 /// 模拟视频解码器
@@ -15,6 +15,7 @@ pub struct MockDecoder {
     width: u32,
     height: u32,
     decoded_count: usize,
+    policy: DecodeDeliveryPolicy,
 }
 
 impl MockDecoder {
@@ -25,6 +26,7 @@ impl MockDecoder {
             width,
             height,
             decoded_count: 0,
+            policy: DecodeDeliveryPolicy::default(),
         }
     }
 }
@@ -57,5 +59,37 @@ impl VideoDecoder for MockDecoder {
 
     async fn flush(&mut self) -> Result<Vec<FrameRef>, MediaError> {
         Ok(Vec::new())
+    }
+
+    fn set_delivery_policy(&mut self, policy: DecodeDeliveryPolicy) {
+        self.policy = policy;
+    }
+
+    fn delivery_policy(&self) -> DecodeDeliveryPolicy {
+        self.policy
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mock_decoder_delivery_policy_switch() {
+        let mut decoder = MockDecoder::new("cam1", CodecType::H264, 1920, 1080);
+        assert_eq!(
+            decoder.delivery_policy(),
+            DecodeDeliveryPolicy::LosslessBackpressure
+        );
+
+        decoder.set_delivery_policy(DecodeDeliveryPolicy::RealtimeDropOldest);
+        assert_eq!(
+            decoder.delivery_policy(),
+            DecodeDeliveryPolicy::RealtimeDropOldest
+        );
+
+        let frame = decoder.decode_packet(b"fake", 1000).await.unwrap();
+        assert!(frame.is_some());
     }
 }

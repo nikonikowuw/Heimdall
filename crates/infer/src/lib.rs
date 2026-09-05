@@ -4,6 +4,7 @@ pub mod c_abi;
 pub mod error;
 pub mod package;
 pub mod sandbox;
+pub mod worker;
 
 pub use backend::InferenceBackend;
 pub use backends::{CoreMlBackend, CpuBackend};
@@ -14,3 +15,4 @@ pub use package::{
 pub use sandbox::{
     current_platform_id, normalize_platform_id, AlgoManifest, AlgoSandbox, VERIFY_ALGO_ARG,
 };
+pub use worker::{InferenceWorker, InferenceWorkerConfig, InferenceWorkerHandle};

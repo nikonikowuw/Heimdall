@@ -89,7 +89,33 @@ fn push_frame_drop_oldest(
 }
 ```
 
+在异步推理工作线程（`InferenceWorkerHandle`）中，采用单槽（容量 = 1）`Mutex<Option<InferenceJob>>` + `Notify` 模式：
+新帧进入时通过 `slot.replace(new_job)` 原子弹出被插队的旧任务，旧任务的 oneshot reply 立即通知 `Err(InferError::Execution { "drop-oldest" })`，原子累加 `dropped_count`，常驻工作线程仅执行最新帧。
+
 帧数据 `FrameRef` 必须满足 `Send + 'static`（见 [media-pipeline.md](./media-pipeline.md)），生命周期由句柄的 RAII `Drop` 归还给缓冲池。
+
+---
+
+## 视频流 GOP 语义感知与防花屏修剪 (GOP-Aware Leaky Queue)
+
+在实时低延迟视频管线中，单纯按先进先出丢弃单包会导致解码器丢失参考帧，引发严重的马赛克与绿屏。丢帧机制必须具备 **GOP 拓扑感知**：
+1. **GOP 尾部修剪 (GOP Tail Pruning)**：当队列饱和丢弃某个 P 帧时，自动置位 `PruningTail` 状态，后续属于同一 GOP 的残缺 P/B 帧坚决丢弃，绝不送入解码器破坏参考帧链；
+2. **关键帧瞬间跳跃 (Instant Leap to IDR)**：当新的关键帧（IDR / SPS / PPS）到达时，重置为正常状态；若此时下游积压，瞬间排空积压旧帧，将延迟彻底清零；
+3. **参数集常驻保护**：SPS/PPS/VPS 关键参数集绝对不丢。
+
+---
+
+## 专用推理常驻线程 (InferenceWorker) 铁律
+
+1. **OS 线程绑定与单线程运行时**：每个 `InferenceWorker` 在独立的专用 OS 线程中运行，启动独立的单线程运行时 (`Builder::new_current_thread()`)。模型实例与硬件 NPU 上下文在线程内常驻，杜绝跨线程漂移。
+2. **`block_in_place` 运行时风味防御**：`tokio::task::block_in_place` 只能在 `MultiThread` 运行时中执行，在 `current_thread` 运行时调用会直接 Panic。库层阻塞包装需先检查：
+   ```rust
+   let is_multi_thread = tokio::runtime::Handle::try_current()
+       .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+       .unwrap_or(false);
+   ```
+3. **Panic 双重异常隔离**：同步构建期使用 `std::panic::catch_unwind` 隔离，异步 Future 执行期使用 `futures::FutureExt::catch_unwind` 隔离，底层 FFI 异常转换为 `InferError`，保证专用工作线程健康存活。
+4. **停机超时隔离 (Graceful Join Timeout)**：退出时通过 `recv_timeout` 等待工作线程回收。若超过上限（如 2500ms）底层硬件调用挂起，执行超时隔离放弃，杜绝挂死守护进程。
 
 ---
 

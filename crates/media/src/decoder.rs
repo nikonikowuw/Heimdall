@@ -28,6 +28,18 @@ pub(crate) enum DecodeCommand {
     Stop,
 }
 
+/// 视频解码交付策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DecodeDeliveryPolicy {
+    /// 吞吐优先 / 无损保序（推荐默认，确保 GOP 参考链完整一帧不漏）：
+    /// 命令队列满时反压等待解码线程，配合上游 `GopAwarePacketQueue` 杜绝花屏
+    #[default]
+    LosslessBackpressure,
+    /// 实时优先（单帧丢帧模式）：
+    /// 命令通道饱和时非阻塞丢弃，杜绝反压上游网络拉流
+    RealtimeDropOldest,
+}
+
 /// 视频硬解器抽象接口
 #[async_trait]
 pub trait VideoDecoder: Send + 'static {
@@ -40,4 +52,12 @@ pub trait VideoDecoder: Send + 'static {
 
     /// 刷新解码器内部残留缓冲帧
     async fn flush(&mut self) -> Result<Vec<FrameRef>, MediaError>;
+
+    /// 配置解码交付策略 (实时丢旧帧 vs 无损反压)
+    fn set_delivery_policy(&mut self, _policy: DecodeDeliveryPolicy) {}
+
+    /// 获取当前的解码交付策略
+    fn delivery_policy(&self) -> DecodeDeliveryPolicy {
+        DecodeDeliveryPolicy::LosslessBackpressure
+    }
 }

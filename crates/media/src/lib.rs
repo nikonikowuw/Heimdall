@@ -4,6 +4,7 @@ pub mod decoders;
 pub mod dmabuf_sync;
 pub mod error;
 pub mod flv;
+pub mod gop_queue;
 pub mod image_convert;
 pub mod probe;
 pub mod retina_ingest;
@@ -16,13 +17,16 @@ pub mod sub_stream;
 pub mod webcodecs;
 
 pub use buffer_pool::{BufferPoolStats, PoolDiagnostics, PoolError};
-pub use decoder::VideoDecoder;
+pub use decoder::{DecodeDeliveryPolicy, VideoDecoder};
 #[cfg(target_os = "macos")]
 pub use decoders::VideoToolboxDecoder;
 pub use decoders::{create_decoder, MockDecoder};
 pub use dmabuf_sync::{DmaBufSyncDirection, DmaBufSyncGuard};
 pub use error::MediaError;
 pub use flv::{FlvMuxer, FlvStreamPipeline};
+pub use gop_queue::{
+    GopAwarePacketQueue, GopDropState, GopQueueConfig, GopQueueMetrics, PushAction,
+};
 pub use image_convert::{
     debug_cpu_fallback_nv12_to_rgb, fast_nv12_to_rgb_image, frame_to_rgb_image,
     snapshot_readback_to_rgb_image,
@@ -35,7 +39,9 @@ pub use retina_ingest::{
 pub use rga::{RgaCore, RgaPolicyChecker, RgaScopedBuffer, RgaStaticBuffer};
 pub use ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
 pub use rtsp::{mask_rtsp_url, RtspIngestor};
-pub use sps::{parse_h264_sps, parse_h265_sps, split_annex_b_nalus, SpsInfo};
+pub use sps::{
+    is_keyframe_or_parameter_set, parse_h264_sps, parse_h265_sps, split_annex_b_nalus, SpsInfo,
+};
 pub use stream_hub::{CameraStreamSession, KeyframeCache, StreamHub};
 pub use sub_stream::{deduce_primary_sub_stream, deduce_sub_stream, SubStreamCandidate};
 pub use webcodecs::{

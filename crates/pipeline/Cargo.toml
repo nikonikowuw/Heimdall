@@ -21,6 +21,7 @@ uuid = { workspace = true }
 bytes = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true }
+tokio-util = "0.7"
 
 [dev-dependencies]
 db = { workspace = true }

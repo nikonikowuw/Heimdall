@@ -23,6 +23,7 @@ extern "C" {
         plane_index: usize,
     ) -> *mut c_void;
     fn CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer: *mut c_void, plane_index: usize) -> usize;
+    fn CVPixelBufferRetain(pixel_buffer: *mut c_void) -> *mut c_void;
     fn CVPixelBufferRelease(pixel_buffer: *mut c_void);
 }
 
@@ -149,6 +150,25 @@ impl NativePixelBuffer {
     #[inline]
     pub fn as_raw(&self) -> *mut c_void {
         self.raw
+    }
+
+    #[cfg(target_os = "macos")]
+    #[inline]
+    pub fn into_raw(mut self) -> *mut c_void {
+        let ptr = self.raw;
+        self.raw = std::ptr::null_mut();
+        ptr
+    }
+
+    #[cfg(target_os = "macos")]
+    #[inline]
+    pub fn to_frame_handle(&self) -> Option<types::FrameHandle> {
+        let ptr = std::ptr::NonNull::new(self.raw)?;
+        // SAFETY: 增加引用计数，确保交给 FrameHandle 时所有权对称
+        unsafe {
+            CVPixelBufferRetain(ptr.as_ptr());
+        }
+        Some(types::FrameHandle::ApplePixelBuffer { ptr })
     }
 
     #[cfg(target_os = "macos")]
