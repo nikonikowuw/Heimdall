@@ -38,7 +38,11 @@ Argus 仓库级协作入口，适用于 AI 智能体与工程师。本文只保�
 
 ### 帧、并发与资源
 
-- 生产媒体管线必须沿 `FrameRef` 传递平台原生 buffer（如 DMA-BUF、CVPixelBuffer 或 device memory），严禁未经明确许可的 CPU 像素拷贝、CPU 色彩转换或软解。CPU 回退只用于没有对应硬件的开发/测试环境。
+- **三大路径严格区隔与零拷贝边界精确定义**：
+  - 严禁笼统宣称“全链路零拷贝”。压缩输入码流存在一次网络/Host 内存向硬件解码器的 Host→Device DMA 复制（数据量极小）；
+  - **常驻推理主路径 (`infer_fast_path`)**：生产媒体管线必须沿 `FrameRef` 传递平台原生 buffer（如 DMA-BUF、CVPixelBuffer 或 device memory），解码输出到推理输入严格维持纯设备侧零拷贝（VPU/DVPP -> RGA/VPC/AIPP -> RKNN/ACL），严禁在常驻推理流水线上发生任何 CPU 像素拷贝、CPU 色彩转换或 CPU 软解；
+  - **低频证据生成路径 (`snapshot_readback_path`)**：作为显式特例，仅在告警触发或人工抓拍时按需单帧触发，允许将物理设备帧执行 Device-to-Host readback（如 `aclrtMemcpy(D2H)`、`mmap` cache sync）并交由 CPU 转为 RGB / JPEG 存盘；
+  - **开发调试回退路径 (`debug_cpu_fallback_path`)**：仅在目标环境物理上确无硬件加速单元时作为保底，严禁伪装为硬件加速。
 - 所有帧队列、事件缓冲、批处理和缓存必须有固定上限及明确丢弃/降级策略；帧路径禁止无界 channel。优先丢弃旧帧，不能用阻塞发送反压硬件解码。
 - 任何平台 SDK、FFI 或超过约 1 ms 的 CPU 密集工作都不得直接运行在 Tokio worker 中。使用启动时确定数量的专用线程和有界通道；模型/硬件上下文应在线程内常驻。
 - 不持锁执行 IO、FFI 或 `.await`；跨线程转移帧所有权，不复制帧。文件、fd、buffer pool 租约和模型句柄必须有 RAII 生命周期。

@@ -43,6 +43,7 @@ pub const AV_LAYOUT_PLATFORM_NATIVE: u32 = 2;
 pub const AV_OPAQUE_NONE: u32 = 0;
 pub const AV_OPAQUE_CVPIXELBUFFER: u32 = 0x1001;
 pub const AV_OPAQUE_DMABUF: u32 = 0x2001;
+pub const AV_OPAQUE_ASCEND_DEVICE_MEMORY: u32 = 0x3001;
 
 /// 实例运行模式
 pub const AV_INSTANCE_NORMAL: u32 = 1;

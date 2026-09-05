@@ -203,9 +203,12 @@ impl InferenceBackend for AlgoInstance {
             _ => desc.pixel_format = AV_PIX_UNKNOWN,
         }
 
-        // 适配原生平台帧零拷贝句柄直通
+        // 适配原生平台帧零拷贝句柄直通 (infer_fast_path) 与调试回退路径 (debug_cpu_fallback_path)
+        #[allow(unreachable_patterns)]
         match frame.handle() {
+            #[cfg(target_os = "macos")]
             FrameHandle::ApplePixelBuffer { ptr } => {
+                // [infer_fast_path] Apple ANE / Metal 直通
                 desc.opaque = ptr.as_ptr();
                 desc.frame_token = ptr.as_ptr();
                 desc.opaque_kind = AV_OPAQUE_CVPIXELBUFFER;
@@ -215,16 +218,39 @@ impl InferenceBackend for AlgoInstance {
             }
             #[cfg(target_os = "linux")]
             FrameHandle::DmaBuf { fd, .. } => {
+                // [infer_fast_path] Rockchip MPP -> RGA -> RKNN DRM DMA-BUF 直通
                 use std::os::fd::AsRawFd;
                 desc.opaque = fd.as_raw_fd() as usize as *mut c_void;
                 desc.opaque_kind = AV_OPAQUE_DMABUF;
                 desc.memory_type = AV_MEM_PLATFORM_SURFACE;
                 desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
             }
-            FrameHandle::Host(slice) => {
-                desc.opaque = slice.as_ptr() as *mut c_void;
+            FrameHandle::DeviceMemory { ptr, .. } => {
+                // [infer_fast_path] 华为昇腾 DVPP -> VPC/AIPP -> ACL 原生设备显存直通
+                desc.opaque = ptr.as_ptr();
+                desc.frame_token = ptr.as_ptr();
+                desc.opaque_kind = AV_OPAQUE_ASCEND_DEVICE_MEMORY;
+                desc.memory_type = AV_MEM_PLATFORM_SURFACE;
+                desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
+                desc.pixel_format = AV_PIX_NV12;
             }
-            _ => {}
+            FrameHandle::Host(slice) => {
+                // [debug_cpu_fallback_path] 开发与回退路径，使用 Host 内存传参
+                tracing::debug!(
+                    camera_id = %frame.camera_id,
+                    "Inference running via debug_cpu_fallback_path (Host memory)"
+                );
+                desc.opaque = slice.as_ptr() as *mut c_void;
+                desc.opaque_kind = AV_OPAQUE_NONE;
+                desc.memory_type = AV_MEM_HOST;
+                desc.layout = AV_LAYOUT_LINEAR;
+            }
+            _ => {
+                tracing::warn!(
+                    camera_id = %frame.camera_id,
+                    "Unknown frame handle passed to infer_fast_path"
+                );
+            }
         }
 
         let abi = self.lib.abi();

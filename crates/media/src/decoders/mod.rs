@@ -9,7 +9,7 @@ pub mod mock;
 #[cfg(all(target_os = "linux", feature = "mpp"))]
 pub mod mpp;
 
-#[cfg(all(target_os = "linux", feature = "dvpp"))]
+#[cfg(any(all(target_os = "linux", feature = "dvpp"), test))]
 pub mod dvpp;
 
 #[cfg(target_os = "macos")]

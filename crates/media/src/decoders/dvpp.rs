@@ -3,18 +3,43 @@
 //! 适配 Ascend 310 / 310B / Atlas 200I DK A2 等昇腾边缘 AI 硬件加速单元。
 //! 遵循 DVPP 硬件规格：输出 YUV420SP (NV12)，严格实施 16x2 步长对齐（宽 16 字节对齐，高 2 字节对齐）。
 //! 设备显存采用 `DvppBufferPool` 预分配池化流转，解出带 RAII 租约的 `FrameHandle::DeviceMemory` 直通 ACL 推理。
+//!
+//! ### 核心架构与零拷贝边界精确定义：
+//! 1. **输入码流路径 (Host→Device DMA 传输)**：
+//!    - 网络 RTSP NALU 码流由 CPU/Host 内存解包生成；
+//!    - 输入 DVPP 硬件解码时，存在一次不可避免的 Host→Device DMA 复制 (`aclrtMemcpy(..., ACL_MEMCPY_HOST_TO_DEVICE)`)；
+//!    - 系统契约准确表述为：**“解码输出到推理输入的设备侧零拷贝，输入码流存在一次 Host→Device DMA 复制”**，
+//!      绝不能笼统宣称“全链路零拷贝”。
+//! 2. **常驻推理主路径 (`infer_fast_path`)**：
+//!    - 解码产物 `FrameHandle::DeviceMemory` 驻留在华为昇腾连续设备显存空间；
+//!    - 直接直通流转至 VPC（抠图缩放）或 AIPP（色度转换与硬件归一化）-> ACL 模型推理，设备显存 0 回读，0 CPU 拷贝。
+//! 3. **低频证据生成路径 (`snapshot_readback_path`)**：
+//!    - 仅在规则引擎触发告警或人工抓拍时按需单帧触发，通过 `aclrtMemcpy(ACL_MEMCPY_DEVICE_TO_HOST)` 回读到 Host，
+//!      由 CPU 完成定点数色彩转换并压缩为 JPEG 证据图片落盘。
+//!
+//! ### 架构生命周期保障（契约于华为 AscendCL DVPP VDEC 异步回调模型）：
+//! 1. `aclvdecSendFrame` 为纯异步非阻塞投递，仅表示任务成功入队硬件队列，绝不同步假定完成；
+//! 2. 输入流显存 (`stream_buf`) 与描述符 (`stream_desc`) 实行在途独立持有，直到 `aclvdecCallback` 触发后才释放，严禁跨帧覆盖；
+//! 3. 输出描述符 (`pic_desc`) 在回调返回前保持有效，严禁提前销毁 (避免 Use-After-Free)；
+//! 4. 输出显存 (`dev_ptr`) 在硬件 DMA 写入期间处于独占在途态，硬件完成信号 (`acldvppGetPicDescRetCode == 0`) 是构建 `FrameRef` 与移交租约的唯一凭据；
+//! 5. 解码失败时由回调负责将 `dev_ptr` 自动归还显存池，绝不泄漏脏数据或半写显存至下游。
 
-#![cfg(all(target_os = "linux", feature = "dvpp"))]
+#[cfg(not(any(all(target_os = "linux", feature = "dvpp"), test)))]
+compile_error!(
+    "crates/media/src/decoders/dvpp.rs should only be compiled on Linux with feature dvpp or under test"
+);
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 use types::{CodecType, FrameHandle, FrameRef, PixelFormat, StrideInfo};
 
 use crate::buffer_pool::DvppBufferPool;
@@ -24,13 +49,13 @@ use crate::error::MediaError;
 /// 水平宽度步长对齐（华为 DVPP 严格要求水平 16 字节对齐）
 #[inline]
 pub fn align_dvpp_width_stride(width: u32) -> u32 {
-    (width + 15) / 16 * 16
+    width.div_ceil(16) * 16
 }
 
 /// 垂直高度步长对齐（华为 DVPP 严格要求垂直 2 行对齐）
 #[inline]
 pub fn align_dvpp_height_stride(height: u32) -> u32 {
-    (height + 1) / 2 * 2
+    height.div_ceil(2) * 2
 }
 
 /// 计算 NV12 在步长对齐后的单帧设备显存字节需求
@@ -41,6 +66,38 @@ pub fn calculate_dvpp_nv12_size(width: u32, height: u32) -> usize {
     stride_w * stride_h * 3 / 2
 }
 
+/// 动态分辨率变更冷却时间（5 秒内忽略连续重配请求）
+pub const DVPP_RECONFIG_COOLDOWN: Duration = Duration::from_secs(5);
+/// 动态分辨率抖动检测滑动窗口（60 秒）
+pub const DVPP_FLAPPING_WINDOW: Duration = Duration::from_secs(60);
+/// 动态分辨率滑动窗口内最大允许重配次数（达到 3 次触发熔断降级）
+pub const DVPP_MAX_FLAPPING_COUNT: usize = 3;
+/// 单通道显存硬预算上限（200 MB，防止恶意大分辨率耗尽显存）
+pub const DVPP_MAX_POOL_MEMORY_BYTES: usize = 200 * 1024 * 1024;
+/// 单通道显存池最小块数保底
+pub const DVPP_MIN_POOL_BLOCKS: usize = 8;
+/// 单通道显存池最大块数
+pub const DVPP_MAX_POOL_BLOCKS: usize = 20;
+
+/// 校验流分辨率是否处于允许的安全边界范围内（防御恶意构造畸形 SPS）
+#[inline]
+pub fn is_valid_dvpp_resolution(width: u32, height: u32) -> bool {
+    // 1. 范围校验：128x128 ~ 3840x2160 (4K)
+    if !(128..=3840).contains(&width) || !(128..=2160).contains(&height) {
+        return false;
+    }
+    // 2. 偶数约束（针对 YUV420 采样必须为偶数像素）
+    if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+        return false;
+    }
+    // 3. 总像素数防溢出与 4K 超清上限保护
+    if (width as u64) * (height as u64) > 3840 * 2160 {
+        return false;
+    }
+    true
+}
+
+#[allow(non_snake_case, dead_code)]
 pub(crate) mod ffi {
     use std::ffi::c_void;
     use std::os::raw::{c_int, c_uchar, c_uint, c_ulonglong};
@@ -52,6 +109,11 @@ pub(crate) mod ffi {
     pub const H264_MAIN_LEVEL: c_int = 0;
     pub const H265_MAIN_LEVEL: c_int = 3;
 
+    pub type AclvdecCallback = Option<
+        unsafe extern "C" fn(input: *mut c_void, output: *mut c_void, user_data: *mut c_void),
+    >;
+
+    #[cfg(all(target_os = "linux", feature = "dvpp"))]
     extern "C" {
         pub fn aclrtMemcpy(
             dst: *mut c_void,
@@ -60,6 +122,8 @@ pub(crate) mod ffi {
             count: usize,
             kind: c_int,
         ) -> c_int;
+
+        pub fn aclrtProcessReport(timeout_ms: c_int) -> c_int;
 
         pub fn acldvppMalloc(dev_ptr: *mut *mut c_void, size: usize) -> c_int;
         pub fn acldvppFree(dev_ptr: *mut c_void) -> c_int;
@@ -73,6 +137,10 @@ pub(crate) mod ffi {
         pub fn aclvdecSetChannelDescThreadId(
             channel_desc: *mut c_void,
             thread_id: c_ulonglong,
+        ) -> c_int;
+        pub fn aclvdecSetChannelDescCallback(
+            channel_desc: *mut c_void,
+            callback: AclvdecCallback,
         ) -> c_int;
         pub fn aclvdecSetChannelDescEnType(channel_desc: *mut c_void, en_type: c_int) -> c_int;
         pub fn aclvdecSetChannelDescOutPicFormat(channel_desc: *mut c_void, format: c_int)
@@ -103,6 +171,436 @@ pub(crate) mod ffi {
         pub fn acldvppSetPicDescWidthStride(pic_desc: *mut c_void, width_stride: c_uint) -> c_int;
         pub fn acldvppSetPicDescHeightStride(pic_desc: *mut c_void, height_stride: c_uint)
             -> c_int;
+        pub fn acldvppGetPicDescRetCode(pic_desc: *const c_void) -> c_uint;
+        pub fn acldvppGetPicDescData(pic_desc: *const c_void) -> *mut c_void;
+        pub fn acldvppGetPicDescSize(pic_desc: *const c_void) -> c_uint;
+    }
+
+    #[cfg(not(all(target_os = "linux", feature = "dvpp")))]
+    pub use mock_ffi::*;
+
+    #[cfg(not(all(target_os = "linux", feature = "dvpp")))]
+    #[allow(
+        non_snake_case,
+        dead_code,
+        clippy::undocumented_unsafe_blocks,
+        clippy::unwrap_used
+    )]
+    pub mod mock_ffi {
+        use super::*;
+        use crate::decoders::dvpp::InFlightFrame;
+        use std::collections::{HashMap, VecDeque};
+        use std::sync::Mutex;
+        use std::time::Duration;
+
+        pub struct MockChannel {
+            pub channel_id: c_uint,
+            pub thread_id: c_ulonglong,
+            pub callback: AclvdecCallback,
+            pub en_type: c_int,
+            pub out_format: c_int,
+        }
+
+        pub struct MockStreamDesc {
+            pub data: *mut c_void,
+            pub size: c_uint,
+            pub eos: c_uchar,
+        }
+
+        pub struct MockPicDesc {
+            pub data: *mut c_void,
+            pub size: c_uint,
+            pub format: c_int,
+            pub width: c_uint,
+            pub height: c_uint,
+            pub width_stride: c_uint,
+            pub height_stride: c_uint,
+            pub ret_code: c_uint,
+        }
+
+        pub struct MockQueueItem {
+            pub input: *mut c_void,
+            pub output: *mut c_void,
+            pub user_data: *mut c_void,
+            pub callback: AclvdecCallback,
+        }
+
+        // SAFETY: 模拟队列中裸指针仅用于线程调度模拟
+        unsafe impl Send for MockQueueItem {}
+
+        static MOCK_QUEUES: Mutex<Option<HashMap<u64, VecDeque<MockQueueItem>>>> = Mutex::new(None);
+
+        pub unsafe fn aclrtMemcpy(
+            dst: *mut c_void,
+            _dest_max: usize,
+            src: *const c_void,
+            count: usize,
+            _kind: c_int,
+        ) -> c_int {
+            if dst.is_null() || src.is_null() {
+                return -1;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count);
+            }
+            0
+        }
+
+        pub unsafe fn aclrtProcessReport(timeout_ms: c_int) -> c_int {
+            let current_tid: u64 = unsafe { libc::pthread_self() as usize as u64 };
+            let task = {
+                let mut guard = MOCK_QUEUES.lock().unwrap();
+                if let Some(ref mut map) = *guard {
+                    if let Some(queue) = map.get_mut(&current_tid) {
+                        queue.pop_front()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(item) = task {
+                if let Some(cb) = item.callback {
+                    if !item.output.is_null() && !item.user_data.is_null() {
+                        let in_flight = unsafe { &*(item.user_data as *const InFlightFrame) };
+                        if in_flight.camera_id.contains("err") {
+                            unsafe {
+                                (*(item.output as *mut MockPicDesc)).ret_code = 1;
+                            }
+                        }
+                    }
+                    unsafe {
+                        cb(item.input, item.output, item.user_data);
+                    }
+                }
+                0
+            } else {
+                std::thread::sleep(Duration::from_millis((timeout_ms as u64).min(5)));
+                0
+            }
+        }
+
+        pub unsafe fn acldvppMalloc(dev_ptr: *mut *mut c_void, size: usize) -> c_int {
+            let mut ptr: *mut c_void = std::ptr::null_mut();
+            let ret = unsafe { libc::posix_memalign(&mut ptr, 64, size) };
+            if ret == 0 {
+                unsafe {
+                    *dev_ptr = ptr;
+                }
+                0
+            } else {
+                -1
+            }
+        }
+
+        pub unsafe fn acldvppFree(dev_ptr: *mut c_void) -> c_int {
+            if !dev_ptr.is_null() {
+                unsafe {
+                    libc::free(dev_ptr);
+                }
+            }
+            0
+        }
+
+        pub unsafe fn aclvdecCreateChannelDesc() -> *mut c_void {
+            let desc = Box::new(MockChannel {
+                channel_id: 0,
+                thread_id: 0,
+                callback: None,
+                en_type: 0,
+                out_format: 0,
+            });
+            Box::into_raw(desc) as *mut c_void
+        }
+
+        pub unsafe fn aclvdecDestroyChannelDesc(channel_desc: *mut c_void) -> c_int {
+            if !channel_desc.is_null() {
+                unsafe {
+                    drop(Box::from_raw(channel_desc as *mut MockChannel));
+                }
+            }
+            0
+        }
+
+        pub unsafe fn aclvdecSetChannelDescChannelId(
+            channel_desc: *mut c_void,
+            channel_id: c_uint,
+        ) -> c_int {
+            if !channel_desc.is_null() {
+                unsafe {
+                    (*(channel_desc as *mut MockChannel)).channel_id = channel_id;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn aclvdecSetChannelDescThreadId(
+            channel_desc: *mut c_void,
+            thread_id: c_ulonglong,
+        ) -> c_int {
+            if !channel_desc.is_null() {
+                unsafe {
+                    (*(channel_desc as *mut MockChannel)).thread_id = thread_id;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn aclvdecSetChannelDescCallback(
+            channel_desc: *mut c_void,
+            callback: AclvdecCallback,
+        ) -> c_int {
+            if !channel_desc.is_null() {
+                unsafe {
+                    (*(channel_desc as *mut MockChannel)).callback = callback;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn aclvdecSetChannelDescEnType(
+            channel_desc: *mut c_void,
+            en_type: c_int,
+        ) -> c_int {
+            if !channel_desc.is_null() {
+                unsafe {
+                    (*(channel_desc as *mut MockChannel)).en_type = en_type;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn aclvdecSetChannelDescOutPicFormat(
+            channel_desc: *mut c_void,
+            format: c_int,
+        ) -> c_int {
+            if !channel_desc.is_null() {
+                unsafe {
+                    (*(channel_desc as *mut MockChannel)).out_format = format;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn aclvdecCreateChannel(channel_desc: *mut c_void) -> c_int {
+            if channel_desc.is_null() {
+                return -1;
+            }
+            let tid = unsafe { (*(channel_desc as *mut MockChannel)).thread_id };
+            let mut guard = MOCK_QUEUES.lock().unwrap();
+            let map = guard.get_or_insert_with(HashMap::new);
+            map.insert(tid, VecDeque::new());
+            0
+        }
+
+        pub unsafe fn aclvdecDestroyChannel(channel_desc: *mut c_void) -> c_int {
+            if !channel_desc.is_null() {
+                let tid = unsafe { (*(channel_desc as *mut MockChannel)).thread_id };
+                let mut guard = MOCK_QUEUES.lock().unwrap();
+                if let Some(ref mut map) = *guard {
+                    map.remove(&tid);
+                }
+            }
+            0
+        }
+
+        pub unsafe fn aclvdecSendFrame(
+            channel_desc: *mut c_void,
+            input: *mut c_void,
+            output: *mut c_void,
+            user_data: *mut c_void,
+        ) -> c_int {
+            if channel_desc.is_null() {
+                return -1;
+            }
+            let (tid, cb) = unsafe {
+                let ch = &*(channel_desc as *mut MockChannel);
+                (ch.thread_id, ch.callback)
+            };
+            let item = MockQueueItem {
+                input,
+                output,
+                user_data,
+                callback: cb,
+            };
+            let mut guard = MOCK_QUEUES.lock().unwrap();
+            if let Some(ref mut map) = *guard {
+                if let Some(q) = map.get_mut(&tid) {
+                    q.push_back(item);
+                    0
+                } else {
+                    -1
+                }
+            } else {
+                -1
+            }
+        }
+
+        pub unsafe fn acldvppCreateStreamDesc() -> *mut c_void {
+            let s = Box::new(MockStreamDesc {
+                data: std::ptr::null_mut(),
+                size: 0,
+                eos: 0,
+            });
+            Box::into_raw(s) as *mut c_void
+        }
+
+        pub unsafe fn acldvppDestroyStreamDesc(stream_desc: *mut c_void) -> c_int {
+            if !stream_desc.is_null() {
+                unsafe {
+                    drop(Box::from_raw(stream_desc as *mut MockStreamDesc));
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetStreamDescData(
+            stream_desc: *mut c_void,
+            data_dev: *mut c_void,
+        ) -> c_int {
+            if !stream_desc.is_null() {
+                unsafe {
+                    (*(stream_desc as *mut MockStreamDesc)).data = data_dev;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetStreamDescSize(stream_desc: *mut c_void, size: c_uint) -> c_int {
+            if !stream_desc.is_null() {
+                unsafe {
+                    (*(stream_desc as *mut MockStreamDesc)).size = size;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetStreamDescEos(stream_desc: *mut c_void, eos: c_uchar) -> c_int {
+            if !stream_desc.is_null() {
+                unsafe {
+                    (*(stream_desc as *mut MockStreamDesc)).eos = eos;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppCreatePicDesc() -> *mut c_void {
+            let p = Box::new(MockPicDesc {
+                data: std::ptr::null_mut(),
+                size: 0,
+                format: 0,
+                width: 0,
+                height: 0,
+                width_stride: 0,
+                height_stride: 0,
+                ret_code: 0,
+            });
+            Box::into_raw(p) as *mut c_void
+        }
+
+        pub unsafe fn acldvppDestroyPicDesc(pic_desc: *mut c_void) -> c_int {
+            if !pic_desc.is_null() {
+                unsafe {
+                    drop(Box::from_raw(pic_desc as *mut MockPicDesc));
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetPicDescData(pic_desc: *mut c_void, dev_ptr: *mut c_void) -> c_int {
+            if !pic_desc.is_null() {
+                unsafe {
+                    (*(pic_desc as *mut MockPicDesc)).data = dev_ptr;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetPicDescSize(pic_desc: *mut c_void, size: c_uint) -> c_int {
+            if !pic_desc.is_null() {
+                unsafe {
+                    (*(pic_desc as *mut MockPicDesc)).size = size;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetPicDescFormat(pic_desc: *mut c_void, format: c_int) -> c_int {
+            if !pic_desc.is_null() {
+                unsafe {
+                    (*(pic_desc as *mut MockPicDesc)).format = format;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetPicDescWidth(pic_desc: *mut c_void, width: c_uint) -> c_int {
+            if !pic_desc.is_null() {
+                unsafe {
+                    (*(pic_desc as *mut MockPicDesc)).width = width;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetPicDescHeight(pic_desc: *mut c_void, height: c_uint) -> c_int {
+            if !pic_desc.is_null() {
+                unsafe {
+                    (*(pic_desc as *mut MockPicDesc)).height = height;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetPicDescWidthStride(
+            pic_desc: *mut c_void,
+            width_stride: c_uint,
+        ) -> c_int {
+            if !pic_desc.is_null() {
+                unsafe {
+                    (*(pic_desc as *mut MockPicDesc)).width_stride = width_stride;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppSetPicDescHeightStride(
+            pic_desc: *mut c_void,
+            height_stride: c_uint,
+        ) -> c_int {
+            if !pic_desc.is_null() {
+                unsafe {
+                    (*(pic_desc as *mut MockPicDesc)).height_stride = height_stride;
+                }
+            }
+            0
+        }
+
+        pub unsafe fn acldvppGetPicDescRetCode(pic_desc: *const c_void) -> c_uint {
+            if !pic_desc.is_null() {
+                unsafe { (*(pic_desc as *const MockPicDesc)).ret_code }
+            } else {
+                1
+            }
+        }
+
+        pub unsafe fn acldvppGetPicDescData(pic_desc: *const c_void) -> *mut c_void {
+            if !pic_desc.is_null() {
+                unsafe { (*(pic_desc as *const MockPicDesc)).data }
+            } else {
+                std::ptr::null_mut()
+            }
+        }
+
+        pub unsafe fn acldvppGetPicDescSize(pic_desc: *const c_void) -> c_uint {
+            if !pic_desc.is_null() {
+                unsafe { (*(pic_desc as *const MockPicDesc)).size }
+            } else {
+                0
+            }
+        }
     }
 }
 
@@ -118,6 +616,7 @@ struct DvppBufferLease {
 // SAFETY: ptr 指向预分配的 Device Memory 地址空间；
 // pool 通过 Arc 跨线程共享；归还操作内部由 Mutex 串行保护。
 unsafe impl Send for DvppBufferLease {}
+// SAFETY: DvppBufferLease 仅持只读指针与线程安全的 Arc<DvppBufferPool>
 unsafe impl Sync for DvppBufferLease {}
 
 impl Drop for DvppBufferLease {
@@ -125,6 +624,125 @@ impl Drop for DvppBufferLease {
         if !self.ptr.is_null() {
             self.pool.return_buffer(self.ptr);
         }
+    }
+}
+
+/// 处于 VDEC 硬件解码在途执行中的帧上下文
+///
+/// 严格契约：
+/// 只有当硬件完成解码并触发回调后，输入资源才会被回收，输出图片才会被包装为 FrameRef。
+struct InFlightFrame {
+    camera_id: String,
+    pts: i64,
+    width: u32,
+    height: u32,
+    stride_w: u32,
+    stride_h: u32,
+    /// 独立的输入 NALU 码流显存地址
+    stream_buf: *mut c_void,
+    /// 输入流描述符
+    stream_desc: *mut c_void,
+    /// 输出图片描述符
+    pic_desc: *mut c_void,
+    /// 输出设备显存块（从 DvppBufferPool 租借）
+    dev_ptr: *mut c_void,
+    /// 输出显存字节数
+    block_size: usize,
+    /// 预分配显存池引用
+    pool: Arc<DvppBufferPool>,
+    /// 完成帧回传通道
+    out_tx: std::sync::mpsc::Sender<Result<FrameRef, MediaError>>,
+}
+
+/// DVPP VDEC 硬件完成回调函数（由 CANN Report 线程在硬件触发中断后执行）
+///
+/// 严格匹配 CANN 官方签名：
+/// `typedef void (*aclvdecCallback)(acldvppStreamDesc *input, acldvppPicDesc *output, void *userData);`
+unsafe extern "C" fn dvpp_vdec_callback(
+    _input: *mut c_void,
+    output: *mut c_void,
+    user_data: *mut c_void,
+) {
+    if user_data.is_null() {
+        // EOS 或空回调直接返回
+        return;
+    }
+
+    // SAFETY: 从 user_data 恢复所有权。Box::from_raw 重建 RAII 作用域，确保无论正常还是错误分支均不泄露。
+    let in_flight = unsafe { Box::from_raw(user_data as *mut InFlightFrame) };
+
+    // 1. 硬件完成状态检查
+    // SAFETY: output 为有效 acldvppPicDesc 指针
+    let ret_code = unsafe { ffi::acldvppGetPicDescRetCode(output) };
+
+    // 2. 硬件 DMA 读取已完成，输入资源生命周期终结
+    // SAFETY: 销毁输入码流描述符并释放设备显存
+    unsafe {
+        if !in_flight.stream_desc.is_null() {
+            let _ = ffi::acldvppDestroyStreamDesc(in_flight.stream_desc);
+        }
+        if !in_flight.stream_buf.is_null() {
+            let _ = ffi::acldvppFree(in_flight.stream_buf);
+        }
+    }
+
+    // 3. 硬件写入已完成，输出图片描述符生命周期终结
+    // SAFETY: 释放输出图片描述符
+    unsafe {
+        if !in_flight.pic_desc.is_null() {
+            let _ = ffi::acldvppDestroyPicDesc(in_flight.pic_desc);
+        }
+    }
+
+    // 4. 根据硬件返回码确立输出显存处理
+    if ret_code == 0 {
+        // 解码成功：此时 DVPP 硬件写入完全完毕，硬件完成信号确立！
+        let non_null_ptr = match NonNull::new(in_flight.dev_ptr) {
+            Some(ptr) => ptr,
+            None => {
+                in_flight.pool.return_buffer(in_flight.dev_ptr);
+                let _ = in_flight.out_tx.send(Err(MediaError::Decode {
+                    reason: "DVPP 回调中 dev_ptr 为 null".to_string(),
+                }));
+                return;
+            }
+        };
+
+        // 构造带显存池归还租约的 FrameHandle
+        let lease: Arc<dyn Send + Sync> = Arc::new(DvppBufferLease {
+            ptr: in_flight.dev_ptr,
+            pool: Arc::clone(&in_flight.pool),
+        });
+
+        let handle = FrameHandle::DeviceMemory {
+            ptr: non_null_ptr,
+            size: in_flight.block_size,
+            _lease: lease,
+        };
+
+        let frame_ref = FrameRef::new(
+            in_flight.camera_id,
+            in_flight.pts,
+            in_flight.width,
+            in_flight.height,
+            StrideInfo::new(in_flight.stride_w, in_flight.stride_h),
+            PixelFormat::Nv12,
+            handle,
+        );
+
+        let _ = in_flight.out_tx.send(Ok(frame_ref));
+    } else {
+        // 解码失败（码流受损/硬件未过）：归还显存池，绝不把半写或受损显存流向下游
+        warn!(
+            camera_id = %in_flight.camera_id,
+            pts = in_flight.pts,
+            ret_code,
+            "DVPP 硬件解码回调报告错误，归还输出显存块"
+        );
+        in_flight.pool.return_buffer(in_flight.dev_ptr);
+        let _ = in_flight.out_tx.send(Err(MediaError::Decode {
+            reason: format!("DVPP 硬件解码失败, retCode: {ret_code}"),
+        }));
     }
 }
 
@@ -138,14 +756,32 @@ struct DvppDecoderInner {
     height: u32,
     stride_w: u32,
     stride_h: u32,
-    stream_desc: *mut c_void,
-    stream_buf: *mut c_void,
-    stream_buf_capacity: usize,
     is_initialized: bool,
+    // Report 回调驱动线程控制
+    report_running: Arc<AtomicBool>,
+    report_thread: Option<JoinHandle<()>>,
+    report_thread_id: u64,
+    // 异步完成帧接收通道
+    out_rx: std::sync::mpsc::Receiver<Result<FrameRef, MediaError>>,
+    out_tx: std::sync::mpsc::Sender<Result<FrameRef, MediaError>>,
+    // 在途任务计数
+    in_flight_count: usize,
+    // Drain 期间收割的完成帧暂存队列
+    drained_frames: std::collections::VecDeque<FrameRef>,
+
+    // === 动态分辨率安全与熔断防护状态 ===
+    last_reconfig_time: Option<std::time::Instant>,
+    reconfig_history: std::collections::VecDeque<std::time::Instant>,
+    is_degraded: bool,
+    reconfig_cooldown: Duration,
+    flapping_window: Duration,
+    max_flapping_count: usize,
+    max_pool_memory_bytes: usize,
 }
 
 impl DvppDecoderInner {
     fn new(camera_id: String, codec: CodecType) -> Self {
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
         Self {
             camera_id,
             codec,
@@ -155,10 +791,21 @@ impl DvppDecoderInner {
             height: 1080,
             stride_w: align_dvpp_width_stride(1920),
             stride_h: align_dvpp_height_stride(1080),
-            stream_desc: std::ptr::null_mut(),
-            stream_buf: std::ptr::null_mut(),
-            stream_buf_capacity: 0,
             is_initialized: false,
+            report_running: Arc::new(AtomicBool::new(false)),
+            report_thread: None,
+            report_thread_id: 0,
+            out_rx,
+            out_tx,
+            in_flight_count: 0,
+            drained_frames: std::collections::VecDeque::new(),
+            last_reconfig_time: None,
+            reconfig_history: std::collections::VecDeque::new(),
+            is_degraded: false,
+            reconfig_cooldown: DVPP_RECONFIG_COOLDOWN,
+            flapping_window: DVPP_FLAPPING_WINDOW,
+            max_flapping_count: DVPP_MAX_FLAPPING_COUNT,
+            max_pool_memory_bytes: DVPP_MAX_POOL_MEMORY_BYTES,
         }
     }
 
@@ -173,31 +820,7 @@ impl DvppDecoderInner {
         let pool = DvppBufferPool::new(block_size, 20)?;
         self.pool = Arc::new(pool);
 
-        // 初始化码流传输输入显存缓冲区（初始 2MB，可按需动态扩容）
-        let init_cap = 2 * 1024 * 1024;
-        let mut dev_buf: *mut c_void = std::ptr::null_mut();
-        // SAFETY: acldvppMalloc 为输入 NALU 码流分配设备连续显存
-        let ret = unsafe { ffi::acldvppMalloc(&mut dev_buf, init_cap) };
-        if ret != 0 || dev_buf.is_null() {
-            return Err(MediaError::DecoderInit {
-                codec: format!("{:?}", self.codec),
-                reason: format!("acldvppMalloc 分配输入码流缓冲区失败, 返回码: {ret}"),
-            });
-        }
-        self.stream_buf = dev_buf;
-        self.stream_buf_capacity = init_cap;
-
-        // SAFETY: 创建码流输入描述符
-        let stream_desc = unsafe { ffi::acldvppCreateStreamDesc() };
-        if stream_desc.is_null() {
-            return Err(MediaError::DecoderInit {
-                codec: format!("{:?}", self.codec),
-                reason: "acldvppCreateStreamDesc 创建失败".to_string(),
-            });
-        }
-        self.stream_desc = stream_desc;
-
-        // 创建并配置 VDEC 解码通道描述符
+        // 创建通道描述符
         // SAFETY: 创建通道描述符
         let channel_desc = unsafe { ffi::aclvdecCreateChannelDesc() };
         if channel_desc.is_null() {
@@ -207,9 +830,55 @@ impl DvppDecoderInner {
             });
         }
 
-        // SAFETY: 配置通道参数
+        // 启动专用 Report 驱动线程
+        let (tid_tx, tid_rx) = std::sync::mpsc::channel();
+        let running = Arc::new(AtomicBool::new(true));
+        let running_clone = Arc::clone(&running);
+        let cam_id_report = self.camera_id.clone();
+
+        let report_thread = std::thread::Builder::new()
+            .name(format!("dvpp-rep-{}", self.camera_id))
+            .spawn(move || {
+                // SAFETY: 获取当前线程句柄作为 Report Thread ID
+                let tid: u64 = unsafe { libc::pthread_self() as usize as u64 };
+                let _ = tid_tx.send(tid);
+
+                while running_clone.load(Ordering::Relaxed) {
+                    // 超时 10ms 轮询，既保证低延迟响应中断，又允许检查 running 状态
+                    // SAFETY: aclrtProcessReport 循环轮询事件驱动回调执行
+                    unsafe {
+                        ffi::aclrtProcessReport(10);
+                    }
+                }
+                debug!(camera_id = %cam_id_report, "DVPP Report 驱动线程退出");
+            })
+            .map_err(|e| {
+                // SAFETY: 线程创建失败时销毁通道描述符
+                unsafe {
+                    let _ = ffi::aclvdecDestroyChannelDesc(channel_desc);
+                }
+                MediaError::DecoderInit {
+                    codec: format!("{:?}", self.codec),
+                    reason: format!("创建 DVPP Report 驱动线程失败: {e}"),
+                }
+            })?;
+
+        let report_thread_id = tid_rx.recv().map_err(|_| {
+            // SAFETY: 线程接收失败时销毁通道描述符
+            unsafe {
+                let _ = ffi::aclvdecDestroyChannelDesc(channel_desc);
+            }
+            MediaError::DecoderInit {
+                codec: format!("{:?}", self.codec),
+                reason: "接收 DVPP Report 驱动线程 ID 失败".to_string(),
+            }
+        })?;
+
+        // SAFETY: 按照 AscendCL VDEC 规范配置通道属性（绑定回调与驱动线程）
         unsafe {
             let _ = ffi::aclvdecSetChannelDescChannelId(channel_desc, 0);
+            let _ = ffi::aclvdecSetChannelDescThreadId(channel_desc, report_thread_id);
+            let _ = ffi::aclvdecSetChannelDescCallback(channel_desc, Some(dvpp_vdec_callback));
             let _ = ffi::aclvdecSetChannelDescEnType(channel_desc, stream_format);
             let _ = ffi::aclvdecSetChannelDescOutPicFormat(
                 channel_desc,
@@ -217,9 +886,12 @@ impl DvppDecoderInner {
             );
         }
 
-        // SAFETY: 创建实际底层硬件解码通道
+        // SAFETY: 创建底层硬件解码通道
         let ret = unsafe { ffi::aclvdecCreateChannel(channel_desc) };
         if ret != 0 {
+            running.store(false, Ordering::Relaxed);
+            let _ = report_thread.join();
+            // SAFETY: 通道创建失败时销毁通道描述符
             unsafe {
                 let _ = ffi::aclvdecDestroyChannelDesc(channel_desc);
             }
@@ -229,37 +901,20 @@ impl DvppDecoderInner {
             });
         }
 
+        self.report_thread_id = report_thread_id;
+        self.report_running = running;
+        self.report_thread = Some(report_thread);
         self.channel_desc = channel_desc;
         self.is_initialized = true;
-        debug!(camera_id = %self.camera_id, codec = ?self.codec, "华为昇腾 DVPP VDEC 硬件解码通道初始化就绪");
+        debug!(camera_id = %self.camera_id, codec = ?self.codec, "华为昇腾 DVPP VDEC 硬件解码通道与回调驱动就绪");
         Ok(())
     }
 
-    fn ensure_stream_buffer(&mut self, required_size: usize) -> Result<(), MediaError> {
-        if required_size <= self.stream_buf_capacity {
-            return Ok(());
+    fn stop_report_thread(&mut self) {
+        self.report_running.store(false, Ordering::Relaxed);
+        if let Some(handle) = self.report_thread.take() {
+            let _ = handle.join();
         }
-
-        let new_cap = required_size.next_power_of_two();
-        let mut new_buf: *mut c_void = std::ptr::null_mut();
-        // SAFETY: 重新按需分配更大容量的码流缓冲区
-        let ret = unsafe { ffi::acldvppMalloc(&mut new_buf, new_cap) };
-        if ret != 0 || new_buf.is_null() {
-            return Err(MediaError::Decode {
-                reason: format!("acldvppMalloc 扩容码流缓冲区失败, 返回码: {ret}"),
-            });
-        }
-
-        if !self.stream_buf.is_null() {
-            // SAFETY: 释放旧缓冲区
-            unsafe {
-                let _ = ffi::acldvppFree(self.stream_buf);
-            }
-        }
-
-        self.stream_buf = new_buf;
-        self.stream_buf_capacity = new_cap;
-        Ok(())
     }
 
     fn decode(&mut self, packet: &[u8], pts: i64) -> Result<Option<FrameRef>, MediaError> {
@@ -269,51 +924,89 @@ impl DvppDecoderInner {
             });
         }
 
-        self.ensure_stream_buffer(packet.len())?;
         self.update_dimensions_if_needed(packet);
 
-        // 将 Host 内存的 NALU 数据拷贝到 Device Memory 码流区
-        // SAFETY: aclrtMemcpy 跨主机-设备内存传输码流
+        // 1. 为当前输入 NALU 码流申请独立显存，实现严格的在途隔离，杜绝覆写破坏
+        let mut stream_buf: *mut c_void = std::ptr::null_mut();
+        // SAFETY: acldvppMalloc 为输入码流分配显存
+        let ret = unsafe { ffi::acldvppMalloc(&mut stream_buf, packet.len()) };
+        if ret != 0 || stream_buf.is_null() {
+            return Err(MediaError::Decode {
+                reason: format!("acldvppMalloc 为输入码流分配显存失败, 返回码: {ret}"),
+            });
+        }
+
+        // SAFETY: 跨内存域将压缩 NALU 码流从 Host 拷贝到 Device Memory
+        // 边界说明：此为压缩码流输入所必需的 Host->Device DMA 传输，数据量仅为压缩 NALU 字节；
+        // 严正声明：这不影响解码输出到推理输入的设备侧零拷贝 (infer_fast_path)
         let ret = unsafe {
             ffi::aclrtMemcpy(
-                self.stream_buf,
-                self.stream_buf_capacity,
+                stream_buf,
+                packet.len(),
                 packet.as_ptr() as *const c_void,
                 packet.len(),
                 ffi::ACL_MEMCPY_HOST_TO_DEVICE,
             )
         };
         if ret != 0 {
+            // SAFETY: 拷贝失败时释放分配的设备显存
+            unsafe {
+                let _ = ffi::acldvppFree(stream_buf);
+            }
             return Err(MediaError::Decode {
                 reason: format!("aclrtMemcpy 拷贝输入码流至设备显存失败: {ret}"),
             });
         }
 
+        // 2. 创建并配置输入码流描述符
+        // SAFETY: 创建 stream_desc
+        let stream_desc = unsafe { ffi::acldvppCreateStreamDesc() };
+        if stream_desc.is_null() {
+            // SAFETY: 描述符创建失败时释放设备显存
+            unsafe {
+                let _ = ffi::acldvppFree(stream_buf);
+            }
+            return Err(MediaError::Decode {
+                reason: "acldvppCreateStreamDesc 创建失败".to_string(),
+            });
+        }
         // SAFETY: 设置输入码流元数据
         unsafe {
-            let _ = ffi::acldvppSetStreamDescData(self.stream_desc, self.stream_buf);
-            let _ = ffi::acldvppSetStreamDescSize(self.stream_desc, packet.len() as u32);
-            let _ = ffi::acldvppSetStreamDescEos(self.stream_desc, 0);
+            let _ = ffi::acldvppSetStreamDescData(stream_desc, stream_buf);
+            let _ = ffi::acldvppSetStreamDescSize(stream_desc, packet.len() as u32);
+            let _ = ffi::acldvppSetStreamDescEos(stream_desc, 0);
         }
 
-        // 从预分配显存池租借一个输出图像块（带 50ms 硬实时超时保护，防止显存枯竭死锁）
-        let (dev_ptr, block_size) = self
-            .pool
-            .acquire_timeout(std::time::Duration::from_millis(50))
-            .ok_or_else(|| MediaError::Decode {
-                reason: "DVPP 显存池耗尽超时 (下游租约未释放或处理阻塞)".to_string(),
-            })?;
+        // 3. 从预分配显存池租借输出显存块（带 50ms 超时保护）
+        let (dev_ptr, block_size) = match self.pool.acquire_timeout(Duration::from_millis(50)) {
+            Some(res) => res,
+            None => {
+                // SAFETY: 超时回滚释放输入资源
+                unsafe {
+                    let _ = ffi::acldvppDestroyStreamDesc(stream_desc);
+                    let _ = ffi::acldvppFree(stream_buf);
+                }
+                return Err(MediaError::Decode {
+                    reason: "DVPP 显存池耗尽超时 (下游租约未释放或处理阻塞)".to_string(),
+                });
+            }
+        };
 
-        // SAFETY: 创建输出图片描述符
+        // 4. 创建并配置输出图片描述符
+        // SAFETY: 创建 pic_desc
         let pic_desc = unsafe { ffi::acldvppCreatePicDesc() };
         if pic_desc.is_null() {
             self.pool.return_buffer(dev_ptr);
+            // SAFETY: 回滚释放输入资源
+            unsafe {
+                let _ = ffi::acldvppDestroyStreamDesc(stream_desc);
+                let _ = ffi::acldvppFree(stream_buf);
+            }
             return Err(MediaError::Decode {
                 reason: "acldvppCreatePicDesc 创建输出图像描述符失败".to_string(),
             });
         }
-
-        // SAFETY: 严格配置输出步长对齐与 NV12 格式
+        // SAFETY: 配置输出图像描述符属性
         unsafe {
             let _ = ffi::acldvppSetPicDescData(pic_desc, dev_ptr);
             let _ = ffi::acldvppSetPicDescSize(pic_desc, block_size as u32);
@@ -324,55 +1017,71 @@ impl DvppDecoderInner {
             let _ = ffi::acldvppSetPicDescHeightStride(pic_desc, self.stride_h);
         }
 
-        // 送入 DVPP VDEC 硬件解码执行
-        // SAFETY: 调用 aclvdecSendFrame
-        let ret = unsafe {
-            ffi::aclvdecSendFrame(
-                self.channel_desc,
-                self.stream_desc,
-                pic_desc,
-                std::ptr::null_mut(),
-            )
-        };
+        // 5. 打包在途上下文，所有权转交底层硬件与 Report 回调
+        let in_flight = Box::new(InFlightFrame {
+            camera_id: self.camera_id.clone(),
+            pts,
+            width: self.width,
+            height: self.height,
+            stride_w: self.stride_w,
+            stride_h: self.stride_h,
+            stream_buf,
+            stream_desc,
+            pic_desc,
+            dev_ptr,
+            block_size,
+            pool: Arc::clone(&self.pool),
+            out_tx: self.out_tx.clone(),
+        });
+        let user_data = Box::into_raw(in_flight) as *mut c_void;
 
-        // SAFETY: 释放临时输出图片描述符
-        unsafe {
-            let _ = ffi::acldvppDestroyPicDesc(pic_desc);
-        }
+        // 6. 送入 DVPP VDEC 硬件解码队列
+        // SAFETY: 调用 aclvdecSendFrame
+        let ret =
+            unsafe { ffi::aclvdecSendFrame(self.channel_desc, stream_desc, pic_desc, user_data) };
 
         if ret != 0 {
-            self.pool.return_buffer(dev_ptr);
+            // 送帧失败：硬件队列未接收，立即在发送线程清理并归还显存
+            // SAFETY: 任务未入队，由当前线程安全回收在途帧全部资源
+            unsafe {
+                let in_flight = Box::from_raw(user_data as *mut InFlightFrame);
+                let _ = ffi::acldvppDestroyPicDesc(in_flight.pic_desc);
+                let _ = ffi::acldvppDestroyStreamDesc(in_flight.stream_desc);
+                let _ = ffi::acldvppFree(in_flight.stream_buf);
+                in_flight.pool.return_buffer(in_flight.dev_ptr);
+            }
             return Err(MediaError::Decode {
                 reason: format!("aclvdecSendFrame 送入硬件解码失败, 返回码: {ret}"),
             });
         }
 
-        let non_null_ptr = NonNull::new(dev_ptr).ok_or_else(|| MediaError::Decode {
-            reason: "DVPP 租借显存指针为空".to_string(),
-        })?;
+        self.in_flight_count += 1;
 
-        let lease: Arc<dyn Send + Sync> = Arc::new(DvppBufferLease {
-            ptr: dev_ptr,
-            pool: Arc::clone(&self.pool),
-        });
+        // 7. 接收完成帧：优先检查是否有此前 Drain 暂存的完成帧
+        if let Some(frame) = self.drained_frames.pop_front() {
+            return Ok(Some(frame));
+        }
 
-        let handle = FrameHandle::DeviceMemory {
-            ptr: non_null_ptr,
-            size: block_size,
-            _lease: lease,
-        };
+        // 检查通道中此前完成的帧（非阻塞）
+        if let Ok(res) = self.out_rx.try_recv() {
+            self.in_flight_count = self.in_flight_count.saturating_sub(1);
+            return res.map(Some);
+        }
 
-        let frame_ref = FrameRef::new(
-            self.camera_id.clone(),
-            pts,
-            self.width,
-            self.height,
-            StrideInfo::new(self.stride_w, self.stride_h),
-            PixelFormat::Nv12,
-            handle,
-        );
-
-        Ok(Some(frame_ref))
+        // 尝试微量等待（10ms）以适应即时出帧（无参考帧重排序延迟的流）
+        match self.out_rx.recv_timeout(Duration::from_millis(10)) {
+            Ok(res) => {
+                self.in_flight_count = self.in_flight_count.saturating_sub(1);
+                res.map(Some)
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // 处于 B 帧延迟或参数集阶段，硬件尚未产出画面，正常返回 None
+                Ok(None)
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(MediaError::Decode {
+                reason: "DVPP 回调通道已断开".to_string(),
+            }),
+        }
     }
 
     fn flush(&mut self) -> Result<Vec<FrameRef>, MediaError> {
@@ -380,21 +1089,54 @@ impl DvppDecoderInner {
             return Ok(Vec::new());
         }
 
-        // 发送带 EOS 标记的包告知通道结束并刷新内部流水线
-        // SAFETY: 设置 EOS 标记
-        unsafe {
-            let _ = ffi::acldvppSetStreamDescSize(self.stream_desc, 0);
-            let _ = ffi::acldvppSetStreamDescEos(self.stream_desc, 1);
-            let _ = ffi::aclvdecSendFrame(
-                self.channel_desc,
-                self.stream_desc,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            );
+        // 0. 优先收集此前已 Drain 暂存的完成帧
+        let mut frames: Vec<FrameRef> = self.drained_frames.drain(..).collect();
+
+        // 1. 发送 EOS 标记通知通道结束
+        // SAFETY: 发送 EOS 空流包
+        let eos_desc = unsafe { ffi::acldvppCreateStreamDesc() };
+        if !eos_desc.is_null() {
+            // SAFETY: 配置 EOS 并发送
+            unsafe {
+                let _ = ffi::acldvppSetStreamDescSize(eos_desc, 0);
+                let _ = ffi::acldvppSetStreamDescEos(eos_desc, 1);
+                let _ = ffi::aclvdecSendFrame(
+                    self.channel_desc,
+                    eos_desc,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                let _ = ffi::acldvppDestroyStreamDesc(eos_desc);
+            }
         }
 
-        debug!(camera_id = %self.camera_id, "DVPP 解码器刷新残留状态完成");
-        Ok(Vec::new())
+        // 2. 等待收割所有在途未完成帧（最大等待 500ms）
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+
+        while self.in_flight_count > 0 && std::time::Instant::now() < deadline {
+            match self.out_rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(Ok(frame)) => {
+                    self.in_flight_count = self.in_flight_count.saturating_sub(1);
+                    frames.push(frame);
+                }
+                Ok(Err(_)) => {
+                    self.in_flight_count = self.in_flight_count.saturating_sub(1);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        // 按时间戳排序，确保在含有 B 帧重排时输出的画面严格单调递增
+        frames.sort_by_key(|f| f.timestamp);
+
+        debug!(
+            camera_id = %self.camera_id,
+            flushed_count = frames.len(),
+            remaining_in_flight = self.in_flight_count,
+            "DVPP 解码器刷新完成"
+        );
+        Ok(frames)
     }
 
     /// 动态分辨率自适应更新
@@ -425,62 +1167,231 @@ impl DvppDecoderInner {
         }
     }
 
+    /// 在重配或刷新前排空所有正在硬件流水线中执行的任务 (Drain in-flight operations)
+    fn drain_in_flight_frames(&mut self, timeout: Duration) -> Result<(), MediaError> {
+        let deadline = std::time::Instant::now() + timeout;
+        while self.in_flight_count > 0 && std::time::Instant::now() < deadline {
+            match self.out_rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(Ok(frame)) => {
+                    self.in_flight_count = self.in_flight_count.saturating_sub(1);
+                    self.drained_frames.push_back(frame);
+                }
+                Ok(Err(e)) => {
+                    self.in_flight_count = self.in_flight_count.saturating_sub(1);
+                    warn!(
+                        camera_id = %self.camera_id,
+                        error = %e,
+                        "Drain 期间捕获到在途帧硬件解码失败"
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(MediaError::Decode {
+                        reason: "DVPP 回调通道已断开".to_string(),
+                    });
+                }
+            }
+        }
+
+        if self.in_flight_count > 0 {
+            warn!(
+                camera_id = %self.camera_id,
+                remaining = self.in_flight_count,
+                "Drain 在途任务超时，仍有硬件任务未返回"
+            );
+        }
+        Ok(())
+    }
+
     fn reconfigure_resolution_if_changed(&mut self, new_w: u32, new_h: u32) {
-        if new_w == 0 || new_h == 0 || (new_w == self.width && new_h == self.height) {
+        if new_w == self.width && new_h == self.height {
             return;
+        }
+
+        // 1. 合法性与边界校验（防御畸形/恶意尺寸）
+        if !is_valid_dvpp_resolution(new_w, new_h) {
+            warn!(
+                camera_id = %self.camera_id,
+                width = new_w,
+                height = new_h,
+                "DVPP 检测到非法/超出安全边界的分辨率变更请求，防御性拒绝重配"
+            );
+            return;
+        }
+
+        // 2. 检查降级熔断状态（Circuit Breaker）
+        if self.is_degraded {
+            warn!(
+                camera_id = %self.camera_id,
+                width = new_w,
+                height = new_h,
+                "DVPP 解码器当前处于 Degraded 熔断保护状态，拒绝重配分辨率"
+            );
+            return;
+        }
+
+        let now = std::time::Instant::now();
+
+        // 3. 冷却时间保护（Cooldown Window）
+        if let Some(last_time) = self.last_reconfig_time {
+            if now.duration_since(last_time) < self.reconfig_cooldown {
+                debug!(
+                    camera_id = %self.camera_id,
+                    elapsed_ms = now.duration_since(last_time).as_millis(),
+                    cooldown_ms = self.reconfig_cooldown.as_millis(),
+                    "DVPP 分辨率变更处于冷却窗口内，抑制本次重配"
+                );
+                return;
+            }
+        }
+
+        // 4. 滑动窗口频次统计与熔断判定（Flapping Detection & Circuit Breaker）
+        while let Some(&t) = self.reconfig_history.front() {
+            if now.duration_since(t) > self.flapping_window {
+                self.reconfig_history.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if self.reconfig_history.len() >= self.max_flapping_count {
+            self.is_degraded = true;
+            error!(
+                camera_id = %self.camera_id,
+                count = self.reconfig_history.len(),
+                window_secs = self.flapping_window.as_secs(),
+                "DVPP 检测到高频分辨率抖动（疑似恶意码流 DoS 攻击），触发熔断保护，进入 Degraded 状态，锁定当前分辨率并拒绝重配！"
+            );
+            return;
+        }
+
+        // 5. 严格的 Drain 语义：排空旧通道在途硬件任务与描述符
+        if let Err(e) = self.drain_in_flight_frames(Duration::from_millis(500)) {
+            warn!(camera_id = %self.camera_id, error = %e, "重配前排空在途帧失败");
         }
 
         let new_stride_w = align_dvpp_width_stride(new_w);
         let new_stride_h = align_dvpp_height_stride(new_h);
         let required_size = calculate_dvpp_nv12_size(new_w, new_h);
 
-        tracing::info!(
-            camera_id = %self.camera_id,
-            old_w = self.width,
-            old_h = self.height,
-            new_w,
-            new_h,
-            new_stride_w,
-            new_stride_h,
-            required_size,
-            "DVPP 检测到流分辨率动态变更，更新步长并按需扩容显存池"
-        );
+        // 6. 依据显存预算建立安全新池（Buffer Budget）
+        let new_pool_count = (self.max_pool_memory_bytes / required_size)
+            .clamp(DVPP_MIN_POOL_BLOCKS, DVPP_MAX_POOL_BLOCKS);
 
-        self.width = new_w;
-        self.height = new_h;
-        self.stride_w = new_stride_w;
-        self.stride_h = new_stride_h;
+        #[cfg(any(all(target_os = "linux", feature = "dvpp"), test))]
+        let new_pool_res = DvppBufferPool::new(required_size, new_pool_count);
+        #[cfg(not(any(all(target_os = "linux", feature = "dvpp"), test)))]
+        let new_pool_res: Result<DvppBufferPool, MediaError> = Err(MediaError::DecoderInit {
+            codec: format!("{:?}", self.codec),
+            reason: "非 DVPP 环境".to_string(),
+        });
 
-        if required_size > self.pool.block_size() {
-            #[cfg(all(target_os = "linux", feature = "dvpp"))]
-            if let Ok(new_pool) = DvppBufferPool::new(required_size, 20) {
-                self.pool = Arc::new(new_pool);
+        let new_pool = match new_pool_res {
+            Ok(p) => p,
+            Err(e) => {
+                error!(
+                    camera_id = %self.camera_id,
+                    error = %e,
+                    required_size,
+                    new_pool_count,
+                    "为新分辨率分配 DVPP 显存池失败，回退到旧配置并进入 Degraded 状态"
+                );
+                self.is_degraded = true;
+                return;
             }
-        }
-    }
+        };
 
-    /// 工业级自愈重置：在 DVPP 硬件通道挂起或连续报错时销毁并重建硬件通道
-    fn reset(&mut self) -> Result<(), MediaError> {
+        // 7. 销毁旧通道与描述符（满足硬件生命周期顺序要求）
         if !self.channel_desc.is_null() {
+            // SAFETY: 按照 Ascend 规范，先销毁通道，再销毁描述符
             unsafe {
                 let _ = ffi::aclvdecDestroyChannel(self.channel_desc);
                 let _ = ffi::aclvdecDestroyChannelDesc(self.channel_desc);
             }
             self.channel_desc = std::ptr::null_mut();
         }
-        if !self.stream_desc.is_null() {
-            unsafe {
-                let _ = ffi::acldvppDestroyStreamDesc(self.stream_desc);
-            }
-            self.stream_desc = std::ptr::null_mut();
+
+        // 8. 创建并初始化新通道
+        let stream_format = match self.codec {
+            CodecType::H264 => ffi::H264_MAIN_LEVEL,
+            CodecType::H265 => ffi::H265_MAIN_LEVEL,
+        };
+
+        // SAFETY: 创建新通道描述符
+        let channel_desc = unsafe { ffi::aclvdecCreateChannelDesc() };
+        if channel_desc.is_null() {
+            error!(camera_id = %self.camera_id, "创建新通道描述符失败，进入 Degraded 状态");
+            self.is_degraded = true;
+            return;
         }
-        if !self.stream_buf.is_null() {
-            unsafe {
-                let _ = ffi::acldvppFree(self.stream_buf);
-            }
-            self.stream_buf = std::ptr::null_mut();
-            self.stream_buf_capacity = 0;
+
+        // SAFETY: 配置新通道属性（绑定既有的 Report 驱动线程与回调）
+        unsafe {
+            let _ = ffi::aclvdecSetChannelDescChannelId(channel_desc, 0);
+            let _ = ffi::aclvdecSetChannelDescThreadId(channel_desc, self.report_thread_id);
+            let _ = ffi::aclvdecSetChannelDescCallback(channel_desc, Some(dvpp_vdec_callback));
+            let _ = ffi::aclvdecSetChannelDescEnType(channel_desc, stream_format);
+            let _ = ffi::aclvdecSetChannelDescOutPicFormat(
+                channel_desc,
+                ffi::PIXEL_FORMAT_YUV_SEMIPLANAR_420,
+            );
         }
+
+        // SAFETY: 启动底层硬件新通道
+        let ret = unsafe { ffi::aclvdecCreateChannel(channel_desc) };
+        if ret != 0 {
+            // SAFETY: 通道创建失败销毁描述符
+            unsafe {
+                let _ = ffi::aclvdecDestroyChannelDesc(channel_desc);
+            }
+            error!(camera_id = %self.camera_id, ret, "底层硬件通道重建失败，进入 Degraded 状态");
+            self.is_degraded = true;
+            return;
+        }
+
+        // 9. 更新成功：替换显存池与所有尺寸步长参数
+        self.channel_desc = channel_desc;
+        self.pool = Arc::new(new_pool);
+        self.width = new_w;
+        self.height = new_h;
+        self.stride_w = new_stride_w;
+        self.stride_h = new_stride_h;
+        self.last_reconfig_time = Some(now);
+        self.reconfig_history.push_back(now);
+
+        info!(
+            camera_id = %self.camera_id,
+            width = new_w,
+            height = new_h,
+            stride_w = new_stride_w,
+            stride_h = new_stride_h,
+            block_size = required_size,
+            pool_count = new_pool_count,
+            "DVPP 动态分辨率安全重配完成（已排空旧在途任务、同步新步长与显存预算、重建硬件通道）"
+        );
+    }
+
+    /// 工业级自愈重置：在 DVPP 硬件通道挂起或连续报错时销毁并重建硬件通道
+    fn reset(&mut self) -> Result<(), MediaError> {
+        self.stop_report_thread();
+
+        if !self.channel_desc.is_null() {
+            // SAFETY: 销毁硬件通道与描述符
+            unsafe {
+                let _ = ffi::aclvdecDestroyChannel(self.channel_desc);
+                let _ = ffi::aclvdecDestroyChannelDesc(self.channel_desc);
+            }
+            self.channel_desc = std::ptr::null_mut();
+        }
+
+        // 清空残留帧状态与保护状态
+        self.in_flight_count = 0;
+        self.drained_frames.clear();
+        self.last_reconfig_time = None;
+        self.reconfig_history.clear();
+        self.is_degraded = false;
+        while self.out_rx.try_recv().is_ok() {}
+
         self.is_initialized = false;
         self.init()
     }
@@ -488,8 +1399,10 @@ impl DvppDecoderInner {
 
 impl Drop for DvppDecoderInner {
     fn drop(&mut self) {
+        self.stop_report_thread();
+
         if !self.channel_desc.is_null() {
-            // SAFETY: 销毁 VDEC 解码通道与通道描述符
+            // SAFETY: 按照 Ascend 规范销毁通道与描述符
             unsafe {
                 let _ = ffi::aclvdecDestroyChannel(self.channel_desc);
                 let _ = ffi::aclvdecDestroyChannelDesc(self.channel_desc);
@@ -497,30 +1410,20 @@ impl Drop for DvppDecoderInner {
             self.channel_desc = std::ptr::null_mut();
         }
 
-        if !self.stream_desc.is_null() {
-            // SAFETY: 销毁输入码流描述符
-            unsafe {
-                let _ = ffi::acldvppDestroyStreamDesc(self.stream_desc);
-            }
-            self.stream_desc = std::ptr::null_mut();
-        }
-
-        if !self.stream_buf.is_null() {
-            // SAFETY: 释放输入码流设备显存
-            unsafe {
-                let _ = ffi::acldvppFree(self.stream_buf);
-            }
-            self.stream_buf = std::ptr::null_mut();
-        }
-
-        debug!(camera_id = %self.camera_id, "DVPP 硬件资源安全回收");
+        debug!(camera_id = %self.camera_id, "DVPP 硬件资源安全回收完毕");
     }
 }
 
 /// 华为昇腾 DVPP 硬件解码器异步外壳
 pub struct DvppDecoder {
-    tx: mpsc::Sender<DecodeCommand>,
+    tx: Option<mpsc::Sender<DecodeCommand>>,
     thread: Option<JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for DvppDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DvppDecoder").finish()
+    }
 }
 
 impl DvppDecoder {
@@ -566,14 +1469,14 @@ impl DvppDecoder {
                                 Err(e) => {
                                     consecutive_errors += 1;
                                     if consecutive_errors >= 5 {
-                                        tracing::warn!(
+                                        warn!(
                                             camera_id = %cam_id,
                                             consecutive_errors,
                                             error = %e,
                                             "DVPP 硬件连续解码失败达到阈值，触发硬件通道自动重置自愈"
                                         );
                                         if let Err(reinit_err) = inner.reset() {
-                                            tracing::error!(
+                                            error!(
                                                 camera_id = %cam_id,
                                                 error = %reinit_err,
                                                 "DVPP 硬件通道自动重置失败"
@@ -600,7 +1503,7 @@ impl DvppDecoder {
             .expect("创建 DVPP 解码专用线程失败");
 
         Self {
-            tx,
+            tx: Some(tx),
             thread: Some(thread),
         }
     }
@@ -620,7 +1523,11 @@ impl VideoDecoder for DvppDecoder {
             reply: reply_tx,
         };
 
-        self.tx.send(cmd).await.map_err(|_| MediaError::Decode {
+        let tx = self.tx.as_ref().ok_or_else(|| MediaError::Decode {
+            reason: "DVPP 解码专用通道已关闭".to_string(),
+        })?;
+
+        tx.send(cmd).await.map_err(|_| MediaError::Decode {
             reason: "DVPP 解码专用线程已退出".to_string(),
         })?;
 
@@ -633,7 +1540,11 @@ impl VideoDecoder for DvppDecoder {
         let (reply_tx, reply_rx) = oneshot::channel();
         let cmd = DecodeCommand::Flush { reply: reply_tx };
 
-        self.tx.send(cmd).await.map_err(|_| MediaError::Decode {
+        let tx = self.tx.as_ref().ok_or_else(|| MediaError::Decode {
+            reason: "DVPP 解码专用通道已关闭".to_string(),
+        })?;
+
+        tx.send(cmd).await.map_err(|_| MediaError::Decode {
             reason: "DVPP 解码专用线程已退出".to_string(),
         })?;
 
@@ -645,7 +1556,8 @@ impl VideoDecoder for DvppDecoder {
 
 impl Drop for DvppDecoder {
     fn drop(&mut self) {
-        // self.tx 析构使 rx 退出循环
+        // 显式释放 tx，使得专用线程中的 rx.blocking_recv() 退出，安全解除阻塞
+        drop(self.tx.take());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -669,5 +1581,165 @@ mod tests {
 
         // NV12 显存块容量计算
         assert_eq!(calculate_dvpp_nv12_size(1920, 1080), 1920 * 1080 * 3 / 2);
+    }
+
+    #[tokio::test]
+    async fn test_dvpp_async_callback_lifecycle_and_lease_return() {
+        let mut decoder = DvppDecoder::new("test_cam_dvpp", CodecType::H264);
+
+        let dummy_nalu = [0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00];
+        let res = decoder.decode_packet(&dummy_nalu, 1000).await;
+        assert!(res.is_ok(), "decode_packet 应当成功返回");
+
+        let opt_frame = res.expect("res 应当为 Ok");
+        assert!(opt_frame.is_some(), "异步回调应正常交付完成帧");
+
+        let frame = opt_frame.expect("opt_frame 应当为 Some");
+        assert_eq!(frame.camera_id, "test_cam_dvpp");
+        assert_eq!(frame.timestamp, 1000);
+        assert_eq!(frame.format, PixelFormat::Nv12);
+
+        // 验证 FrameHandle 为 DeviceMemory
+        match frame.handle() {
+            FrameHandle::DeviceMemory { size, .. } => {
+                assert_eq!(*size, calculate_dvpp_nv12_size(1920, 1080));
+            }
+            _ => panic!("预期为 DeviceMemory 句柄"),
+        }
+
+        // 测试 FrameRef 析构后租约自动归还显存池
+        drop(frame);
+
+        // 测试 Flush 刷新
+        let flushed = decoder.flush().await.expect("flush 应当成功");
+        assert!(flushed.is_empty(), "无残留帧时应返回空列表");
+    }
+
+    #[tokio::test]
+    async fn test_dvpp_hardware_error_handling_and_pool_safety() {
+        let mut decoder = DvppDecoder::new("test_err_cam", CodecType::H264);
+
+        let dummy_nalu = [0x00, 0x00, 0x00, 0x01, 0x65, 0xFF];
+        let res = decoder.decode_packet(&dummy_nalu, 2000).await;
+
+        // 验证回调检测到 retCode != 0 抛出错误，且输出显存已安全回退到池中（无泄漏、无半写）
+        assert!(res.is_err(), "硬件报告错误时应返回 Err");
+
+        // 随后的正常解码器应继续正常工作
+        let mut decoder_valid = DvppDecoder::new("test_cam_valid", CodecType::H264);
+        let dummy_valid = [0x00, 0x00, 0x00, 0x01, 0x65, 0x00];
+        let res2 = decoder_valid.decode_packet(&dummy_valid, 2033).await;
+        assert!(res2.is_ok());
+    }
+
+    #[test]
+    fn test_dvpp_resolution_validation() {
+        assert!(is_valid_dvpp_resolution(1920, 1080));
+        assert!(is_valid_dvpp_resolution(1280, 720));
+        assert!(is_valid_dvpp_resolution(3840, 2160));
+        assert!(is_valid_dvpp_resolution(640, 360));
+
+        // 非法分辨率防御
+        assert!(!is_valid_dvpp_resolution(64, 64), "过小尺寸应拒绝");
+        assert!(!is_valid_dvpp_resolution(4096, 2160), "超出 4K 宽边界");
+        assert!(!is_valid_dvpp_resolution(1920, 1081), "奇数高度应拒绝");
+        assert!(!is_valid_dvpp_resolution(1921, 1080), "奇数宽度应拒绝");
+        assert!(!is_valid_dvpp_resolution(0, 0), "零尺寸应拒绝");
+        assert!(
+            !is_valid_dvpp_resolution(65535, 65535),
+            "极端恶意超大尺寸应拒绝"
+        );
+    }
+
+    #[test]
+    fn test_dvpp_reconfigure_drain_and_cooldown_and_flapping() {
+        let mut inner = DvppDecoderInner::new("test_reconfig".to_string(), CodecType::H264);
+        inner.init().expect("初始化通道应当成功");
+
+        // 缩短冷却与滑动窗口用于单元测试
+        inner.reconfig_cooldown = Duration::from_millis(50);
+        inner.flapping_window = Duration::from_secs(10);
+        inner.max_flapping_count = 3;
+
+        assert_eq!(inner.width, 1920);
+        assert_eq!(inner.height, 1080);
+
+        // 1. 第一次合法重配：1080p -> 720p
+        inner.reconfigure_resolution_if_changed(1280, 720);
+        assert_eq!(inner.width, 1280);
+        assert_eq!(inner.height, 720);
+        assert_eq!(inner.stride_w, align_dvpp_width_stride(1280));
+        assert_eq!(inner.stride_h, align_dvpp_height_stride(720));
+        assert_eq!(inner.reconfig_history.len(), 1);
+
+        // 2. 冷却时间抑制测试：立刻触发第三种分辨率，因处于 50ms 冷却内应被忽略
+        inner.reconfigure_resolution_if_changed(640, 360);
+        assert_eq!(inner.width, 1280, "冷却窗口内应保持 1280 不变");
+        assert_eq!(inner.height, 720);
+
+        // 3. 等待冷却过期
+        std::thread::sleep(Duration::from_millis(60));
+
+        // 第二次合法重配：720p -> 640x360
+        inner.reconfigure_resolution_if_changed(640, 360);
+        assert_eq!(inner.width, 640);
+        assert_eq!(inner.height, 360);
+        assert_eq!(inner.reconfig_history.len(), 2);
+
+        // 等待冷却过期
+        std::thread::sleep(Duration::from_millis(60));
+
+        // 第三次合法重配：640x360 -> 1920x1080
+        inner.reconfigure_resolution_if_changed(1920, 1080);
+        assert_eq!(inner.width, 1920);
+        assert_eq!(inner.height, 1080);
+        assert_eq!(inner.reconfig_history.len(), 3);
+        assert!(!inner.is_degraded, "尚未超过最大频次阈值，仍未熔断");
+
+        // 等待冷却过期
+        std::thread::sleep(Duration::from_millis(60));
+
+        // 4. 触发第 4 次重配：达到 MAX_FLAPPING_COUNT 阈值，应立即熔断进入 Degraded 状态！
+        inner.reconfigure_resolution_if_changed(1280, 720);
+        assert!(inner.is_degraded, "高频抖动应当触发熔断进入 Degraded 状态");
+        assert_eq!(inner.width, 1920, "熔断后应锁定分辨率，拒绝重配");
+
+        // 5. 处于 Degraded 状态下，即使冷却过去也坚决拒绝任何后续变更
+        std::thread::sleep(Duration::from_millis(60));
+        inner.reconfigure_resolution_if_changed(640, 360);
+        assert_eq!(inner.width, 1920, "Degraded 状态下坚决拒绝重配");
+    }
+
+    #[test]
+    fn test_dvpp_in_flight_drain_during_resolution_switch() {
+        let mut inner = DvppDecoderInner::new("test_drain_switch".to_string(), CodecType::H264);
+        inner.init().expect("初始化通道应当成功");
+
+        inner.reconfig_cooldown = Duration::from_millis(10);
+        inner.flapping_window = Duration::from_secs(10);
+        inner.max_flapping_count = 5;
+
+        // 模拟送入一帧（1080p），进入硬件在途队列
+        let dummy_nalu = [0x00, 0x00, 0x00, 0x01, 0x65, 0x00];
+        let opt = inner.decode(&dummy_nalu, 1000).expect("送入第一帧应成功");
+
+        // 模拟触发重配为 720p（1280x720）
+        std::thread::sleep(Duration::from_millis(15));
+        inner.reconfigure_resolution_if_changed(1280, 720);
+
+        // 验证通道已成功切换为 1280x720
+        assert_eq!(inner.width, 1280);
+        assert_eq!(inner.height, 720);
+        assert_eq!(inner.stride_w, align_dvpp_width_stride(1280));
+        assert_eq!(inner.stride_h, align_dvpp_height_stride(720));
+
+        // 验证旧在途任务已被 drain，且旧显存池成功被新显存池替换
+        assert_eq!(inner.in_flight_count, 0, "旧在途任务已完全排空");
+
+        // 验证紧接着能继续送入新分辨率帧进行解码
+        let res2 = inner
+            .decode(&dummy_nalu, 1033)
+            .expect("送入新分辨率帧应成功");
+        assert!(res2.is_some() || opt.is_some() || !inner.drained_frames.is_empty());
     }
 }

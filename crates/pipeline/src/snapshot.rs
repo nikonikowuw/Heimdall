@@ -433,8 +433,9 @@ pub(crate) fn encode_and_save_snapshot(
         }
     }
 
-    // 1. 调用 media 层统一定点数快速图像色彩转换
-    let rgb_img = media::frame_to_rgb_image(&frame)
+    // 1. [snapshot_readback_path] 低频证据路径：Device-to-Host 回读与 CPU 图像转换
+    // 此路径为告警抓拍与特写生成的显式特例（低频离散事件），不参与常驻推理 fast path
+    let rgb_img = media::snapshot_readback_to_rgb_image(&frame)
         .map_err(|e| PipelineError::Snapshot(format!("提取视频帧 RGB 图像失败: {e}")))?;
 
     let width = rgb_img.width();

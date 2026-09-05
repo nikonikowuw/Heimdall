@@ -425,12 +425,31 @@ impl MppDecoderInner {
         let frame_pts = unsafe { ffi::mpp_frame_get_pts(frame) };
         let final_pts = if frame_pts != 0 { frame_pts } else { pts };
 
+        // 动态查询该帧的真实硬件步长（Runtime Stride Query），杜绝动态切片或固件对齐漂移
+        let frame_hor_s = unsafe { ffi::mpp_frame_get_hor_stride(frame) as u32 };
+        let frame_ver_s = unsafe { ffi::mpp_frame_get_ver_stride(frame) as u32 };
+        let final_hor_stride = if frame_hor_s > 0 {
+            frame_hor_s
+        } else {
+            self.hor_stride
+        };
+        let final_ver_stride = if frame_ver_s > 0 {
+            frame_ver_s
+        } else {
+            self.ver_stride
+        };
+
+        // 核心时序与完成证明（Producer Completion Fence Guarantee）：
+        // 1. MPP decode_get_frame 返回有效 frame，且 errinfo == 0, discard == 0，
+        //    根据 Rockchip MPP 驱动规范，此时硬件 VPU 的中断服务例程已执行完成，物理总线写入完全落盘；
+        // 2. 结合 mpp_buffer_inc_ref 阻止底层 CMA 缓冲池物理页回收；
+        // 3. 构建持有 OwnedFd 和 MppBufferLease 的 FrameHandle::DmaBuf，向下游提供空间互斥与生命周期保障。
         let frame_ref = FrameRef::new(
             self.camera_id.clone(),
             final_pts,
             self.width,
             self.height,
-            StrideInfo::new(self.hor_stride, self.ver_stride),
+            StrideInfo::new(final_hor_stride, final_ver_stride),
             PixelFormat::Nv12,
             handle,
         );

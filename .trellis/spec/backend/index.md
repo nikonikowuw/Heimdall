@@ -36,7 +36,7 @@
 这五条是本项目区别于普通 Rust 后端的地方，违反任何一条都是 bug 而非风格问题：
 
 1. **阻塞调用不进 async** —— 平台 SDK 全是阻塞的，跑进 tokio 会卡死整个 runtime。见 [并发模型](./concurrency-guidelines.md)。
-2. **硬件加速与端到端零拷贝（硬性规范）** —— 必须最大程度利用各平台硬件加速单元（VPU/硬解 -> 2D 硬件引擎 RGA/VPC/Metal -> NPU/ANE），全链路物理显存（DMA-BUF / CVPixelBuffer / DeviceMem）直通流转，严禁在生产流水线上发生任何 CPU 像素拷贝、CPU 色彩转换或 CPU 软解。除非目标环境物理上确无对应硬件单元（仅限白名单的本地开发机 CPU 回退），否则主流水线引入 CPU 内存拷贝直接判定为违规 Bug。见 [媒体管线](./media-pipeline.md)。
+2. **设备侧零拷贝与三路径分离（硬性规范）** —— 解码输出到推理输入严格维持设备侧零拷贝（VPU/硬解 -> 2D 硬件引擎 RGA/VPC/Metal -> NPU/ANE），物理显存（DMA-BUF / CVPixelBuffer / DeviceMem）直通流转，常驻推理流水线上严禁任何 CPU 像素拷贝与 CPU 色彩转换。严禁笼统宣称“全链路零拷贝”，严格切分 `infer_fast_path`、`snapshot_readback_path` 与 `debug_cpu_fallback_path` 三大路径，低频证据生成路径（Device-to-Host readback -> JPEG encode -> disk）仅作为告警触发时的显式特例。见 [媒体管线](./media-pipeline.md)。
 3. **平台差异不外泄** —— `#[cfg(feature = "backend-*")]` 只允许出现在 `infer` / `media` 内部。见 [推理后端](./inference-backends.md)。
 4. **`unsafe` 收敛在 `ffi.rs`** —— 且每块都有 `// SAFETY:` 注释。见 [FFI 边界](./ffi-guidelines.md)。
 5. **能降级不 panic** —— 设备无人值守，单路故障不能拖垮进程。见 [错误处理](./error-handling.md)。

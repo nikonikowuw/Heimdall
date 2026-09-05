@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-#[cfg(all(target_os = "linux", feature = "dvpp"))]
+#[cfg(any(all(target_os = "linux", feature = "dvpp"), test))]
 use crate::error::MediaError;
 
 /// 帧缓冲区池状态监视
@@ -57,10 +57,10 @@ unsafe impl Sync for DvppBufferPool {}
 
 #[allow(dead_code)]
 impl DvppBufferPool {
-    /// 启动时预分配 `count` 个连续显存块（仅在 Linux DVPP 环境下调用真实的 acldvppMalloc）
-    #[cfg(all(target_os = "linux", feature = "dvpp"))]
+    /// 启动时预分配 `count` 个连续显存块（在 Linux DVPP 或测试环境下调用 acldvppMalloc）
+    #[cfg(any(all(target_os = "linux", feature = "dvpp"), test))]
     pub fn new(block_size: usize, count: usize) -> Result<Self, MediaError> {
-        let mut blocks = Vec::with_capacity(count);
+        let mut blocks: Vec<*mut std::ffi::c_void> = Vec::with_capacity(count);
         for _ in 0..count {
             let mut ptr: *mut std::ffi::c_void = std::ptr::null_mut();
             // SAFETY: 调用 AscendCL DVPP 内存分配函数，分配固定大小的连续设备显存
@@ -183,7 +183,7 @@ impl DvppBufferPool {
 
 impl Drop for DvppBufferPool {
     fn drop(&mut self) {
-        #[cfg(all(target_os = "linux", feature = "dvpp"))]
+        #[cfg(any(all(target_os = "linux", feature = "dvpp"), test))]
         {
             if !self.is_mock {
                 for &ptr in &self.blocks {

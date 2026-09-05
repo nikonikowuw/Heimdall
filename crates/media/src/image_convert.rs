@@ -1,8 +1,20 @@
-//! 视频帧格式转换模块
+//! 图像格式转换与低频证据回读模块
 //!
-//! 将 FrameRef 平台原生帧转换为 RGB 图像（用于快照保存、Web 呈现与非加速模型推理）。
-//! 平台专有硬件加速（Apple Accelerate vImage / Rockchip RGA / Ascend DVPP）与安全保底逻辑收敛在此，
-//! 防止平台差异污染上层 pipeline。
+//! ### 核心架构与路径划分约束（严格三路径分离）：
+//!
+//! 1. **常驻推理主路径 (`infer_fast_path`)**：
+//!    - 流转链路：`VPU / DVPP -> RGA / VPC / AIPP -> RKNN / ACL / ANE`
+//!    - 内存驻留：全程保持在物理连续设备显存/统一内存内（`DMA-BUF` / `DeviceMemory` / `CVPixelBuffer`），
+//!      实现纯设备侧零拷贝直通推理，**严禁在常驻推理路径中调用本模块的任何图像转换或回读函数**！
+//! 2. **低频证据生成路径 (`snapshot_readback_path`)**：
+//!    - 流转链路：`VPU / DVPP 硬件句柄 -> Device-to-Host DMA 回读 / 内核 Cache 同步 -> CPU NV12-to-RGB -> JPEG 编码落盘`
+//!    - 触发频率：仅在规则引擎命中有违规告警，或人工触发抓拍时按需单帧触发（低频离散事件）；
+//!    - 主要入口：[`snapshot_readback_to_rgb_image`]；
+//!    - 架构定性：此路径为低频证据生成的显式特例，包含物理 D2H 搬运与 CPU 色彩计算，绝对不属于常驻推理零拷贝。
+//! 3. **开发调试回退路径 (`debug_cpu_fallback_path`)**：
+//!    - 流转链路：Host 内存切片 -> 纯 CPU 软件定点数 NV12-to-RGB
+//!    - 适用场景：本地开发机、单元测试桩或物理上无 NPU/VPU 的保底环境；
+//!    - 主要入口：[`debug_cpu_fallback_nv12_to_rgb`]。
 
 use image::RgbImage;
 use types::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
@@ -105,14 +117,22 @@ struct vImage_YpCbCrToARGB {
 }
 
 // ============================================================================
-// 统一分发入口
+// 统一分发入口：严格区隔 snapshot_readback_path 与 debug_cpu_fallback_path
 // ============================================================================
 
-/// 将 FrameRef 平台原生帧转换为标准 RGB 图像
+/// [snapshot_readback_path] 低频证据生成路径：将 FrameRef 平台原生帧回读并转换为 RGB 图像
 ///
-/// 按照平台能力优先调用专用硬件加速流水线（Apple Accelerate vImage / Rockchip RGA / Ascend DVPP），
-/// 并在硬件不可用或尺寸异常时自动且无缝回退至高速定点数算法。
-pub fn frame_to_rgb_image(frame: &FrameRef) -> Result<RgbImage, MediaError> {
+/// ### 严正路径约束：
+/// - **仅用于低频证据路径 (`snapshot_readback_path`)**：
+///   如规则引擎告警触发时的快照保存、特写抠图与 Web 管理台人工抓拍展示；
+/// - **包含物理 Device-to-Host DMA 传输与 CPU 色彩计算**：
+///   - 昇腾 DVPP：通过 `aclrtMemcpy(D2H)` 从 DeviceMemory 显存读回 Host 内存；
+///   - 瑞芯微 MPP：通过 `mmap` 与 `DMA_BUF_IOCTL_SYNC` 将连续物理页映射进 CPU 并同步 Cache；
+///   - 苹果 macOS：通过 `CVPixelBufferLockBaseAddress` 锁定 CPU 虚拟地址并由 vImage SIMD 转换；
+/// - **严禁在常驻推理路径 (`infer_fast_path`) 中调用**：
+///   NPU 推理主路径必须走 `DVPP -> VPC/AIPP -> ACL` 或 `MPP -> RGA -> RKNN` 的物理设备侧直通，
+///   绝对不走 Host 内存回读与本函数的任何逻辑！
+pub fn snapshot_readback_to_rgb_image(frame: &FrameRef) -> Result<RgbImage, MediaError> {
     let width = frame.width;
     let height = frame.height;
 
@@ -123,29 +143,10 @@ pub fn frame_to_rgb_image(frame: &FrameRef) -> Result<RgbImage, MediaError> {
     }
 
     match frame.handle() {
-        FrameHandle::Host(slice) => match frame.format {
-            PixelFormat::Nv12 => {
-                let y_stride = frame.stride.hor_stride.max(width) as usize;
-                let uv_stride = frame.stride.hor_stride.max(width) as usize;
-                fast_nv12_to_rgb_image(slice, width, height, y_stride, uv_stride)
-            }
-            PixelFormat::Rgb24 => {
-                let expected = (width * height * 3) as usize;
-                if slice.len() < expected {
-                    return Err(MediaError::Decode {
-                        reason: "RGB24 数据长度不足".into(),
-                    });
-                }
-                RgbImage::from_raw(width, height, slice[..expected].to_vec()).ok_or_else(|| {
-                    MediaError::Decode {
-                        reason: "构造 RGB24 图像失败".into(),
-                    }
-                })
-            }
-            _ => Err(MediaError::Decode {
-                reason: format!("未实现的 Host 像素格式: {:?}", frame.format),
-            }),
-        },
+        FrameHandle::Host(slice) => {
+            // [debug_cpu_fallback_path] Host 内存回退转换
+            debug_cpu_fallback_nv12_to_rgb(slice, width, height, frame.stride, frame.format)
+        }
         #[cfg(target_os = "macos")]
         FrameHandle::ApplePixelBuffer { ptr } => {
             convert_cvpixelbuffer_to_rgb(ptr.as_ptr(), width, height)
@@ -160,6 +161,47 @@ pub fn frame_to_rgb_image(frame: &FrameRef) -> Result<RgbImage, MediaError> {
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         _ => Err(MediaError::Decode {
             reason: "当前操作系统平台不支持直接提取原生硬件加速帧".into(),
+        }),
+    }
+}
+
+/// 兼容别名：调用 [`snapshot_readback_to_rgb_image`]
+///
+/// 架构警告：此函数执行的是低频证据生成路径（snapshot_readback_path），严禁用于常驻推理！
+#[inline]
+pub fn frame_to_rgb_image(frame: &FrameRef) -> Result<RgbImage, MediaError> {
+    snapshot_readback_to_rgb_image(frame)
+}
+
+/// [debug_cpu_fallback_path] 开发与调试 CPU 回退路径专用的色彩转换
+pub fn debug_cpu_fallback_nv12_to_rgb(
+    slice: &[u8],
+    width: u32,
+    height: u32,
+    stride: StrideInfo,
+    format: PixelFormat,
+) -> Result<RgbImage, MediaError> {
+    match format {
+        PixelFormat::Nv12 => {
+            let y_stride = stride.hor_stride.max(width) as usize;
+            let uv_stride = stride.hor_stride.max(width) as usize;
+            fast_nv12_to_rgb_image(slice, width, height, y_stride, uv_stride)
+        }
+        PixelFormat::Rgb24 => {
+            let expected = (width * height * 3) as usize;
+            if slice.len() < expected {
+                return Err(MediaError::Decode {
+                    reason: "RGB24 数据长度不足".into(),
+                });
+            }
+            RgbImage::from_raw(width, height, slice[..expected].to_vec()).ok_or_else(|| {
+                MediaError::Decode {
+                    reason: "构造 RGB24 图像失败".into(),
+                }
+            })
+        }
+        _ => Err(MediaError::Decode {
+            reason: format!("未实现的 Host 像素格式: {:?}", format),
         }),
     }
 }
@@ -453,9 +495,14 @@ fn convert_cvpixelbuffer_to_rgb_cpu(
 }
 
 // ============================================================================
-// Linux 平台实现：Rockchip RGA 硬件加速与内核 DMA-BUF mmap / cache-sync 映射
+// Linux 平台实现：[snapshot_readback_path] 内核 DMA-BUF mmap / cache-sync 映射与 CPU 转换
 // ============================================================================
 
+/// [snapshot_readback_path] Linux DMA-BUF 句柄 -> 内核 mmap 映射与 CPU 图像转换
+///
+/// ### 严正路径声明：
+/// 该路径通过 `mmap` 与 `DMA_BUF_IOCTL_SYNC` 将物理连续页映射到 CPU 空间执行软转换；
+/// 仅用于低频快照存盘，常驻推理路径 (`infer_fast_path`) 走 `MPP -> RGA -> RKNN` DMA-BUF 零拷贝直通。
 #[cfg(target_os = "linux")]
 fn convert_dmabuf_to_rgb(
     fd: &std::os::fd::OwnedFd,
@@ -463,6 +510,7 @@ fn convert_dmabuf_to_rgb(
     height: u32,
     stride: StrideInfo,
 ) -> Result<RgbImage, MediaError> {
+    use crate::dmabuf_sync::{wait_dmabuf_readable, DmaBufSyncDirection, DmaBufSyncGuard};
     use std::os::fd::AsRawFd;
 
     let raw_fd = fd.as_raw_fd();
@@ -472,12 +520,21 @@ fn convert_dmabuf_to_rgb(
         });
     }
 
+    // 1. 硬件栅障等待（Operation Ordering 证明）：等待硬件 Producer（VPU 或 RGA）彻底完成写入
+    wait_dmabuf_readable(raw_fd, 100)?;
+
     let y_stride = stride.hor_stride.max(width) as usize;
     let uv_stride = stride.hor_stride.max(width) as usize;
     let ver_stride = stride.ver_stride.max(height) as usize;
-    let total_size = y_stride * ver_stride * 3 / 2;
+    let total_size = y_stride
+        .checked_mul(ver_stride)
+        .and_then(|v| v.checked_mul(3))
+        .map(|v| v / 2)
+        .ok_or_else(|| MediaError::Decode {
+            reason: "步长乘法溢出".to_string(),
+        })?;
 
-    // 1. Linux 内核级 mmap 映射 DMA-BUF 连续物理页
+    // 2. Linux 内核级 mmap 映射 DMA-BUF 连续物理页
     // SAFETY: 基于具有生命周期的 OwnedFd 进行只读共享映射
     let map_ptr = unsafe {
         libc::mmap(
@@ -516,45 +573,31 @@ fn convert_dmabuf_to_rgb(
         len: total_size,
     };
 
-    // 2. DMA-BUF 驱动 CPU 读缓存同步 (DMA_BUF_IOCTL_SYNC)
-    #[repr(C)]
-    struct dma_buf_sync {
-        flags: u64,
-    }
-    const DMA_BUF_SYNC_READ: u64 = 1;
-    const DMA_BUF_SYNC_START: u64 = 0 << 2;
-    const DMA_BUF_SYNC_END: u64 = 1 << 2;
-    // _IOW('b', 0, struct dma_buf_sync) = 0x40086200
-    const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x40086200;
+    // 3. 启用带 EINTR/EAGAIN 循环重试与 RAII 自动回退的 CPU 缓存一致性同步 (Cache Coherency)
+    let _sync_guard = DmaBufSyncGuard::acquire(raw_fd, DmaBufSyncDirection::Read)?;
 
-    let mut sync_start = dma_buf_sync {
-        flags: DMA_BUF_SYNC_READ | DMA_BUF_SYNC_START,
-    };
-    // SAFETY: 同步 CPU cache，允许失败以兼容部分不支持 ioctl 的 Mock 句柄
-    unsafe {
-        libc::ioctl(raw_fd, DMA_BUF_IOCTL_SYNC, &mut sync_start);
-    }
-
-    // 3. 将映射的内存切片交由高速色彩空间转换算法转换为 RgbImage
+    // 4. 安全读取内存切片并转换为 RgbImage
     // SAFETY: map_ptr 在 MmapGuard 存活期间为有效的映射内存地址，长度为 total_size
     let slice = unsafe { std::slice::from_raw_parts(map_ptr as *const u8, total_size) };
-    let res = fast_nv12_to_rgb_image(slice, width, height, y_stride, uv_stride);
-
-    let mut sync_end = dma_buf_sync {
-        flags: DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END,
-    };
-    // SAFETY: 结束读同步
-    unsafe {
-        libc::ioctl(raw_fd, DMA_BUF_IOCTL_SYNC, &mut sync_end);
-    }
-
-    res
+    fast_nv12_to_rgb_image(slice, width, height, y_stride, uv_stride)
+    // 析构顺序：
+    // 1. _sync_guard Drop -> 自动调用 DMA_BUF_SYNC_END 结束读同步
+    // 2. _guard Drop -> 自动调用 munmap 解除内存映射
 }
 
 // ============================================================================
-// 昇腾平台实现：Ascend DVPP DeviceMemory 高速 DMA 直通传输与格式转换
+// 昇腾平台实现：[snapshot_readback_path] Ascend DVPP DeviceMemory 设备显存回读与 CPU 转换
 // ============================================================================
 
+/// [snapshot_readback_path] 华为昇腾 DVPP 设备显存 -> Host 内存回读与 CPU 图像转换
+///
+/// ### 严正路径声明：
+/// 该路径包含：
+/// 1. `aclrtMemcpy(ACL_MEMCPY_DEVICE_TO_HOST)`：将 1080p/4K 显存读回 Host CPU 内存；
+/// 2. CPU ITU-R BT.601 定点数 NV12 -> RGB 转换。
+///
+/// 仅作为“告警快照证据生成路径”的显式特例存在；
+/// 绝对不属于常驻 NPU 推理主路径（`infer_fast_path`），推理主路径走 `DVPP -> VPC/AIPP -> ACL` 物理设备侧直通。
 fn convert_devicememory_to_rgb(
     ptr: std::ptr::NonNull<std::ffi::c_void>,
     size: usize,
