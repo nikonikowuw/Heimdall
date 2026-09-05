@@ -657,8 +657,10 @@ pub(crate) mod ffi {
 ///
 /// 当持有该帧的所有 FrameHandle 副本全部 Drop 析构时，
 /// 自动触发将底层连续显存地址归还到 DvppBufferPool 中，无需任何运行时动态 free。
+/// 携带 generation 代际标记，防御跨池/跨重构周期的延迟归还。
 struct DvppBufferLease {
     ptr: *mut c_void,
+    generation: u64,
     pool: Arc<DvppBufferPool>,
 }
 
@@ -671,7 +673,17 @@ unsafe impl Sync for DvppBufferLease {}
 impl Drop for DvppBufferLease {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
-            self.pool.return_buffer(self.ptr);
+            if let Err(e) = self
+                .pool
+                .return_buffer_with_generation(self.ptr, self.generation)
+            {
+                warn!(
+                    error = %e,
+                    ptr = ?self.ptr,
+                    generation = self.generation,
+                    "DvppBufferLease: 归还显存块异常或代际不匹配"
+                );
+            }
         }
     }
 }
@@ -749,7 +761,9 @@ unsafe extern "C" fn dvpp_vdec_callback(
         let non_null_ptr = match NonNull::new(in_flight.dev_ptr) {
             Some(ptr) => ptr,
             None => {
-                in_flight.pool.return_buffer(in_flight.dev_ptr);
+                if let Err(e) = in_flight.pool.return_buffer(in_flight.dev_ptr) {
+                    warn!(error = %e, "dev_ptr 为 null 回滚归还失败");
+                }
                 let _ = in_flight.out_tx.send(Err(MediaError::Decode {
                     reason: "DVPP 回调中 dev_ptr 为 null".to_string(),
                 }));
@@ -760,6 +774,7 @@ unsafe extern "C" fn dvpp_vdec_callback(
         // 构造带显存池归还租约的 FrameHandle
         let lease: Arc<dyn Send + Sync> = Arc::new(DvppBufferLease {
             ptr: in_flight.dev_ptr,
+            generation: in_flight.pool.generation(),
             pool: Arc::clone(&in_flight.pool),
         });
 
@@ -788,7 +803,9 @@ unsafe extern "C" fn dvpp_vdec_callback(
             ret_code,
             "DVPP 硬件解码回调报告错误，归还输出显存块"
         );
-        in_flight.pool.return_buffer(in_flight.dev_ptr);
+        if let Err(e) = in_flight.pool.return_buffer(in_flight.dev_ptr) {
+            warn!(error = %e, ptr = ?in_flight.dev_ptr, "解码失败显存块归还异常");
+        }
         let _ = in_flight.out_tx.send(Err(MediaError::Decode {
             reason: format!("DVPP 硬件解码失败, retCode: {ret_code}"),
         }));
@@ -1066,7 +1083,9 @@ impl DvppDecoderInner {
         let block_size_u32 = match u32::try_from(block_size) {
             Ok(v) => v,
             Err(_) => {
-                self.pool.return_buffer(dev_ptr);
+                if let Err(e) = self.pool.return_buffer(dev_ptr) {
+                    warn!(error = %e, ptr = ?dev_ptr, "回滚归还显存块失败");
+                }
                 // SAFETY: 超出范围回滚释放输入资源
                 unsafe {
                     let _ = ffi::acldvppDestroyStreamDesc(stream_desc);
@@ -1082,7 +1101,9 @@ impl DvppDecoderInner {
         // SAFETY: 创建 pic_desc
         let pic_desc = unsafe { ffi::acldvppCreatePicDesc() };
         if pic_desc.is_null() {
-            self.pool.return_buffer(dev_ptr);
+            if let Err(e) = self.pool.return_buffer(dev_ptr) {
+                warn!(error = %e, ptr = ?dev_ptr, "回滚归还显存块失败");
+            }
             // SAFETY: 回滚释放输入资源
             unsafe {
                 let _ = ffi::acldvppDestroyStreamDesc(stream_desc);
@@ -1134,7 +1155,9 @@ impl DvppDecoderInner {
                 let _ = ffi::acldvppDestroyPicDesc(in_flight.pic_desc);
                 let _ = ffi::acldvppDestroyStreamDesc(in_flight.stream_desc);
                 let _ = ffi::acldvppFree(in_flight.stream_buf);
-                in_flight.pool.return_buffer(in_flight.dev_ptr);
+                if let Err(e) = in_flight.pool.return_buffer(in_flight.dev_ptr) {
+                    warn!(error = %e, ptr = ?in_flight.dev_ptr, "入队失败回滚归还显存块失败");
+                }
             }
             return Err(MediaError::Decode {
                 reason: format!("aclvdecSendFrame 送入硬件解码失败, 返回码: {ret}"),
@@ -1445,7 +1468,8 @@ impl DvppDecoderInner {
             return;
         }
 
-        // 9. 更新成功：替换显存池与所有尺寸步长参数
+        // 9. 更新成功：先安全关闭旧显存池（通知等待线程，标记旧池为 Closed），再替换新池与所有尺寸步长参数
+        self.pool.close();
         self.channel_desc = channel_desc;
         self.pool = Arc::new(new_pool);
         self.width = new_w;

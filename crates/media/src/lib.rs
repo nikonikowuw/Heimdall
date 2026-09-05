@@ -15,7 +15,7 @@ pub mod stream_hub;
 pub mod sub_stream;
 pub mod webcodecs;
 
-pub use buffer_pool::BufferPoolStats;
+pub use buffer_pool::{BufferPoolStats, PoolDiagnostics, PoolError};
 pub use decoder::VideoDecoder;
 #[cfg(target_os = "macos")]
 pub use decoders::VideoToolboxDecoder;
