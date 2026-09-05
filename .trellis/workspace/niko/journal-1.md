@@ -118,3 +118,24 @@ Completed 09-04-camera-live-preview: implemented pure Rust RTSP ingestor with Ex
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: 动态实时流布防工作台、证据中心与多格式算法包归档支持
+
+**Date**: 2026-09-05
+**Task**: 动态实时流布防工作台、证据中心与多格式算法包归档支持
+**Branch**: `dev`
+
+### Summary
+
+完成 LiveRulesStudio 动态实时流矢量布防工作台与等比归一化坐标计算；交付证据中心三重视图（违规告警与高清大图灯箱、行迹抓拍瀑布流、人脸/车牌识别对账左右对比）；升级算法包支持 .zip、.tar.gz 和 .tar 归档格式及沙箱自检；完成跨层代码精简重构与全链路质量门禁。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1a9ea15` | (see git log) |
+
+### Status
+
+[OK] **Completed**
