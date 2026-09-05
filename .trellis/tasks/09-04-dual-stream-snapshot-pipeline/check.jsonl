@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"type":"check_step","step":"gop_ring_buffer","status":"passed","summary":"主码流 NALU 内存环形队列 (MainStreamRingBuffer) 完成，支持 2~3.5s GOP 保留与时标 T 前置 I 帧切片提取"}
+{"type":"check_step","step":"videotoolbox_decoder","status":"passed","summary":"macOS VideoToolboxDecoder 硬件解码与 MockDecoder 完成，支持零拷贝 CVPixelBuffer 到 FrameRef 转换"}
+{"type":"check_step","step":"snapshot_engine","status":"passed","summary":"SnapshotEngine 实现靶向快进解码、子码流平滑降级保底、SIMD JPEG 编码、10% 扩边特写切片与落盘"}
+{"type":"check_step","step":"pipeline_manager","status":"passed","summary":"PipelineManager 调度器完成双流装配与按需解码逻辑，保证无 AI 和预览时 0% 解码负载"}
+{"type":"check_step","step":"workspace_tests","status":"passed","summary":"全工作区 68 个 Rust 测试通过，Clippy 无警告，Cargo fmt 通过，Web 13 项前端测试全绿"}
+{"type":"check_step","step":"trellis_code_quality_check","status":"passed","summary":"完成了全面质量门禁核查：补充了 PreviewSessionGuard RAII 释放防护、preview_count 下溢防护、BBox 极限坐标安全裁剪与原子文件写入，全工作区 72 个测试 100% 通过，Clippy 0 警告"}

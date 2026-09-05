@@ -18,6 +18,30 @@ pub struct LiveQuery {
     pub token: Option<String>,
 }
 
+/// 客户端预览会话 RAII 守护者，确保在任何断开、异常中止或被 Drop 场景下安全注销订阅并扣减按需预览计数
+struct PreviewSessionGuard {
+    stream_hub: std::sync::Arc<media::StreamHub>,
+    pipeline: std::sync::Arc<pipeline::PipelineManager>,
+    stream_key: String,
+    camera_id: String,
+    protocol: &'static str,
+}
+
+impl Drop for PreviewSessionGuard {
+    fn drop(&mut self) {
+        let hub = self.stream_hub.clone();
+        let pipe = self.pipeline.clone();
+        let key = self.stream_key.clone();
+        let cid = self.camera_id.clone();
+        let proto = self.protocol;
+        tokio::spawn(async move {
+            hub.unsubscribe(&key).await;
+            pipe.decrement_preview(&cid).await;
+            tracing::info!(camera_id = %cid, stream_key = %key, protocol = proto, "实时流客户端已断开，释放订阅与预览引用");
+        });
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/{camera_id}", get(handle_http_flv))
@@ -92,9 +116,15 @@ async fn handle_http_flv(
         };
 
     let stream_hub = state.stream_hub.clone();
+    let pipeline_mgr = state.pipeline.clone();
     let str_key = stream_key.as_str_key();
     let str_key_clone = str_key.clone();
     let mut shutdown_rx = state.shutdown_tx.subscribe();
+    let is_main_stream = stream_key.stream_type == StreamType::Main;
+    let cam_id_for_stream = camera.camera_id.clone();
+
+    // 活跃预览计数增加 (按需激活相关资源)
+    pipeline_mgr.increment_preview(&camera.camera_id).await;
 
     tracing::info!(
         camera_id = %camera.camera_id,
@@ -109,14 +139,22 @@ async fn handle_http_flv(
     };
 
     let stream = async_stream::stream! {
+        let _guard = PreviewSessionGuard {
+            stream_hub: stream_hub.clone(),
+            pipeline: pipeline_mgr.clone(),
+            stream_key: str_key_clone.clone(),
+            camera_id: cam_id_for_stream.clone(),
+            protocol: "HTTP-FLV",
+        };
+
         // ① 发送 13 字节 FLV Header
         yield Ok::<Bytes, std::convert::Infallible>(FlvMuxer::flv_header());
 
-        let mut pipeline = FlvStreamPipeline::new();
+        let mut flv_pipe = FlvStreamPipeline::new();
 
         // ② 尝试注入缓存中的 Sequence Header 与完整 GOP 关键帧序列
         if let Some(cache) = stream_hub.get_keyframe_cache(&str_key_clone).await {
-            let init_tags = pipeline.inject_cache(&cache, fallback_codec);
+            let init_tags = flv_pipe.inject_cache(&cache, fallback_codec);
             for tag in init_tags {
                 yield Ok(tag);
             }
@@ -138,7 +176,7 @@ async fn handle_http_flv(
                                 skipped,
                                 "HTTP-FLV 消费端处理落后，跳过残片帧并等待下一个关键帧重新对齐"
                             );
-                            pipeline.handle_lagged();
+                            flv_pipe.handle_lagged();
                             continue;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -146,14 +184,15 @@ async fn handle_http_flv(
                 }
             };
 
-            for tag in pipeline.process_packet(&pkt) {
+            // 若为主码流，同步推入内存 Ring Buffer 供告警瞬时靶向精准抽帧
+            if is_main_stream {
+                pipeline_mgr.push_main_packet(&cam_id_for_stream, pkt.clone()).await;
+            }
+
+            for tag in flv_pipe.process_packet(&pkt) {
                 yield Ok(tag);
             }
         }
-
-        // 客户端断开连接，自动注销订阅
-        stream_hub.unsubscribe(&str_key_clone).await;
-        tracing::info!(camera_id = %camera.camera_id, "HTTP-FLV 客户端已断开，释放流媒体订阅");
     };
 
     let body = axum::body::Body::from_stream(stream);
@@ -194,6 +233,7 @@ async fn handle_ws_flv(
         };
 
     let str_key = stream_key.as_str_key();
+    let is_main_stream = stream_key.stream_type == StreamType::Main;
 
     tracing::info!(
         camera_id = %camera.camera_id,
@@ -201,25 +241,33 @@ async fn handle_ws_flv(
         "启动 WS-FLV WebSocket 实时流通道"
     );
 
-    ws.on_upgrade(move |socket| serve_ws_flv(socket, state, str_key, camera, packet_rx))
+    ws.on_upgrade(move |socket| {
+        serve_ws_flv(socket, state, str_key, is_main_stream, camera, packet_rx)
+    })
 }
 
 async fn serve_ws_flv(
     mut socket: WebSocket,
     state: AppState,
     stream_key: String,
+    is_main_stream: bool,
     camera: db::entity::camera::Model,
     mut packet_rx: tokio::sync::broadcast::Receiver<std::sync::Arc<types::EncodedPacket>>,
 ) {
     let mut shutdown_rx = state.shutdown_tx.subscribe();
     let stream_hub = state.stream_hub.clone();
+    let pipeline_mgr = state.pipeline.clone();
 
-    // ① 发送 13 字节 FLV Header
-    let flv_header = FlvMuxer::flv_header();
-    if socket.send(Message::Binary(flv_header)).await.is_err() {
-        stream_hub.unsubscribe(&stream_key).await;
-        return;
-    }
+    // 增加预览客户端计数
+    pipeline_mgr.increment_preview(&camera.camera_id).await;
+
+    let _guard = PreviewSessionGuard {
+        stream_hub: stream_hub.clone(),
+        pipeline: pipeline_mgr.clone(),
+        stream_key: stream_key.clone(),
+        camera_id: camera.camera_id.clone(),
+        protocol: "WS-FLV",
+    };
 
     let fallback_codec = if camera.last_codec.to_lowercase() == "h265" {
         CodecType::H265
@@ -227,51 +275,66 @@ async fn serve_ws_flv(
         CodecType::H264
     };
 
-    let mut pipeline = FlvStreamPipeline::new();
+    let mut flv_pipe = FlvStreamPipeline::new();
 
-    // ② 尝试注入缓存中的 Sequence Header 与完整 GOP 序列
-    if let Some(cache) = stream_hub.get_keyframe_cache(&stream_key).await {
-        for tag in pipeline.inject_cache(&cache, fallback_codec) {
-            if socket.send(Message::Binary(tag)).await.is_err() {
-                stream_hub.unsubscribe(&stream_key).await;
-                return;
-            }
+    // ① 发送 13 字节 FLV Header 与缓存中的 Sequence Header / GOP 序列
+    let init_success = async {
+        if socket
+            .send(Message::Binary(FlvMuxer::flv_header()))
+            .await
+            .is_err()
+        {
+            return false;
         }
-    }
-
-    // ③ 实时消费并封装 NALU 为 FLV Video Tag 发送至 WebSocket
-    loop {
-        let pkt = tokio::select! {
-            _ = shutdown_rx.recv() => {
-                let _ = socket.send(Message::Close(None)).await;
-                break;
-            }
-            res = packet_rx.recv() => {
-                match res {
-                    Ok(p) => p,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!(
-                            stream_key = %stream_key,
-                            skipped,
-                            "WS-FLV 消费端处理落后，跳过残片帧并等待下一个关键帧重新对齐"
-                        );
-                        pipeline.handle_lagged();
-                        continue;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        if let Some(cache) = stream_hub.get_keyframe_cache(&stream_key).await {
+            for tag in flv_pipe.inject_cache(&cache, fallback_codec) {
+                if socket.send(Message::Binary(tag)).await.is_err() {
+                    return false;
                 }
             }
-        };
+        }
+        true
+    }
+    .await;
 
-        for tag in pipeline.process_packet(&pkt) {
-            if socket.send(Message::Binary(tag)).await.is_err() {
-                break;
+    // ② 初始序列发送成功后，实时消费并封装 NALU 为 FLV Video Tag 发送至 WebSocket
+    if init_success {
+        loop {
+            let pkt = tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
+                res = packet_rx.recv() => {
+                    match res {
+                        Ok(p) => p,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(
+                                stream_key = %stream_key,
+                                skipped,
+                                "WS-FLV 消费端处理落后，跳过残片帧并等待下一个关键帧重新对齐"
+                            );
+                            flv_pipe.handle_lagged();
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            };
+
+            if is_main_stream {
+                pipeline_mgr
+                    .push_main_packet(&camera.camera_id, pkt.clone())
+                    .await;
+            }
+
+            for tag in flv_pipe.process_packet(&pkt) {
+                if socket.send(Message::Binary(tag)).await.is_err() {
+                    break;
+                }
             }
         }
     }
-
-    stream_hub.unsubscribe(&stream_key).await;
-    tracing::info!(stream_key = %stream_key, "WS-FLV 客户端已断开，释放流媒体订阅");
 }
 
 #[cfg(test)]

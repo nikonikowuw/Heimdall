@@ -55,6 +55,57 @@ unsafe impl Send for FrameHandle {}
 // SAFETY: FrameHandle 在各线程只读访问时安全。
 unsafe impl Sync for FrameHandle {}
 
+#[cfg(target_os = "macos")]
+#[link(name = "CoreVideo", kind = "framework")]
+extern "C" {
+    fn CVPixelBufferRetain(pixel_buffer: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CVPixelBufferRelease(pixel_buffer: *mut std::ffi::c_void);
+}
+
+impl Clone for FrameHandle {
+    fn clone(&self) -> Self {
+        match self {
+            #[cfg(target_os = "linux")]
+            Self::DmaBuf { fd } => match fd.try_clone() {
+                Ok(new_fd) => Self::DmaBuf { fd: new_fd },
+                Err(e) => panic!("无法复制 DmaBuf 文件描述符: {e}"),
+            },
+            Self::DeviceMemory { ptr, size } => Self::DeviceMemory {
+                ptr: *ptr,
+                size: *size,
+            },
+            Self::ApplePixelBuffer { ptr } => {
+                #[cfg(target_os = "macos")]
+                // SAFETY: ptr 封装的是有效的 CVPixelBufferRef 指针，克隆句柄时增加引用计数以保持 RAII 对称
+                unsafe {
+                    CVPixelBufferRetain(ptr.as_ptr());
+                }
+                Self::ApplePixelBuffer { ptr: *ptr }
+            }
+            Self::Host(slice) => Self::Host(slice.clone()),
+        }
+    }
+}
+
+impl Drop for FrameHandle {
+    fn drop(&mut self) {
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::ApplePixelBuffer { ptr } => {
+                // SAFETY: ptr 封装的是有效 CVPixelBufferRef，在句柄析构时调用 CVPixelBufferRelease 归还引用
+                unsafe {
+                    CVPixelBufferRelease(ptr.as_ptr());
+                }
+            }
+            #[cfg(target_os = "linux")]
+            Self::DmaBuf { .. } => {
+                // OwnedFd 自身析构时安全关闭 fd
+            }
+            _ => {}
+        }
+    }
+}
+
 impl std::fmt::Debug for FrameHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -75,7 +126,7 @@ impl std::fmt::Debug for FrameHandle {
 }
 
 /// 跨线程/跨层流转的统一视频帧持有句柄
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FrameRef {
     pub camera_id: String,
     /// 13 位 UTC Unix 毫秒时间戳

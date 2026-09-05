@@ -12,6 +12,9 @@ pub enum PipelineError {
     #[error("几何规则格式非法: {reason}")]
     InvalidRule { reason: String },
 
+    #[error("快照抓拍失败: {0}")]
+    Snapshot(String),
+
     #[error("媒体层错误: {0}")]
     Media(#[from] media::MediaError),
 
@@ -28,6 +31,7 @@ impl PipelineError {
         match self {
             Self::PipelineNotFound { .. } => 30001,
             Self::InvalidRule { .. } => 30002,
+            Self::Snapshot(_) => 30003,
             Self::PipelineAlreadyExists { .. } => 30004,
             Self::Type(_) => 30005,
             Self::Infer(e) => e.error_code(),

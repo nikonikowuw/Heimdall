@@ -16,3 +16,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+image = { workspace = true }
+uuid = { workspace = true }
+bytes = { workspace = true }

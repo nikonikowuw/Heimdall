@@ -1,1 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/media-pipeline.md", "reason": "Zero-copy FrameRef, VideoToolbox / MPP hardware decoders, RingBuffer and PTS alignment"}
+{"file": ".trellis/spec/backend/concurrency-guidelines.md", "reason": "Bounded channels, blocking work outside tokio worker, decoder thread affinity"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust code quality, no unwrap, test coverage, clippy constraints"}
