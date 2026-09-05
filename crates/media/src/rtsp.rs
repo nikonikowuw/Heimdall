@@ -119,26 +119,212 @@ impl DigestAuthChallenge {
     }
 }
 
+/// 分解后的 RTSP URL 组件（支持强密码保留字符如 @, :, #, ? 等）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedRtspUrl {
+    pub scheme: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub host: String,
+    pub port: Option<u16>,
+    pub path_and_query: String,
+}
+
+impl ParsedRtspUrl {
+    fn format_userinfo(&self, mask_password: bool) -> String {
+        match (&self.username, &self.password) {
+            (Some(u), Some(p)) => {
+                let pass = if mask_password { "***" } else { p.as_str() };
+                format!("{u}:{pass}@")
+            }
+            (Some(u), None) => format!("{u}@"),
+            (None, Some(p)) => {
+                let pass = if mask_password { "***" } else { p.as_str() };
+                format!(":{pass}@")
+            }
+            (None, None) => String::new(),
+        }
+    }
+
+    /// 构造脱去账密后的纯净 url::Url，供 Retina 或底层标准客户端建立连接与握手
+    pub fn to_clean_url(&self) -> Result<url::Url, MediaError> {
+        let port_part = self.port.map(|p| format!(":{p}")).unwrap_or_default();
+        let path = if self.path_and_query.is_empty() {
+            "/"
+        } else {
+            &self.path_and_query
+        };
+        let url_str = format!("{}://{}{}{}", self.scheme, self.host, port_part, path);
+        url::Url::parse(&url_str).map_err(|e| MediaError::RtspConnect {
+            url: self.to_masked_string(),
+            reason: format!("纯净 URL 构造失败 ({url_str}): {e}"),
+        })
+    }
+
+    /// 构造脱敏后的字符串表示（密码隐藏为 ***）
+    pub fn to_masked_string(&self) -> String {
+        let port_part = self.port.map(|p| format!(":{p}")).unwrap_or_default();
+        let userinfo_part = self.format_userinfo(true);
+        format!(
+            "{}://{}{}{}{}",
+            self.scheme, userinfo_part, self.host, port_part, self.path_and_query
+        )
+    }
+
+    /// 构造规范化复用键（用于 StreamHub 连接复用与去重）
+    pub fn to_canonical_key(&self) -> String {
+        let port = self.port.unwrap_or(554);
+        let userinfo_part = self.format_userinfo(false);
+        let path = self.path_and_query.trim_end_matches('/');
+        let path = if path.is_empty() { "/" } else { path };
+        format!("rtsp://{}{}:{}{}", userinfo_part, self.host, port, path)
+    }
+}
+
+/// 工业级 RTSP 脏 URL 解析清洗器
+///
+/// 彻底攻克安防监控现场密码包含保留字符（如 `@`, `:`, `#`, `?`, `!` 等）导致常规 Url::parse 崩溃或截断的顽疾。
+/// 基于“主机名/IP 绝对不含 `@`”的不变性数学约束，利用逆向锚点定位切分 userinfo 与 host。
+pub fn parse_and_clean_rtsp_url(raw_url: &str) -> Result<ParsedRtspUrl, MediaError> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Err(MediaError::RtspConnect {
+            url: String::new(),
+            reason: "URL 不能为空".into(),
+        });
+    }
+
+    // 1. 提取 scheme (支持 rtsp:// 或 rtsps://，大小写不敏感)
+    let scheme_end = trimmed.find("://").ok_or_else(|| MediaError::RtspConnect {
+        url: trimmed.to_string(),
+        reason: "缺少协议头 (rtsp:// 或 rtsps://)".into(),
+    })?;
+
+    let scheme = trimmed[..scheme_end].to_ascii_lowercase();
+    if scheme != "rtsp" && scheme != "rtsps" {
+        return Err(MediaError::RtspConnect {
+            url: trimmed.to_string(),
+            reason: format!("不支持的协议类型: {scheme}"),
+        });
+    }
+
+    let rest = &trimmed[scheme_end + 3..];
+
+    // 2. 切分 authority (userinfo + host:port) 与 path_and_query
+    // authority 必定在首个 '/' 之前结束；若无 '/'，则在首个 '?' 或 '#' 之前结束
+    let (authority_part, path_and_query) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => match rest.find(['?', '#']) {
+            Some(idx) => (&rest[..idx], &rest[idx..]),
+            None => (rest, ""),
+        },
+    };
+
+    if authority_part.is_empty() {
+        return Err(MediaError::RtspConnect {
+            url: trimmed.to_string(),
+            reason: "URL 缺少主机地址".into(),
+        });
+    }
+
+    // 3. 寻找 authority 中最后一个 '@'
+    // 不变性约束：Host (IPv4、IPv6 或域名) 绝不会包含 '@'，因此 authority 中最后一个 '@' 必定是 userinfo 与 host 的分界点
+    let (userinfo_opt, host_port_part) = match authority_part.rfind('@') {
+        Some(at_idx) => {
+            let userinfo = &authority_part[..at_idx];
+            let host_port = &authority_part[at_idx + 1..];
+            (Some(userinfo), host_port)
+        }
+        None => (None, authority_part),
+    };
+
+    if host_port_part.is_empty() {
+        return Err(MediaError::RtspConnect {
+            url: trimmed.to_string(),
+            reason: "URL 缺少主机地址 (未在 '@' 后找到有效主机)".into(),
+        });
+    }
+
+    // 4. 解析 host 与 port (兼容 IPv6 [fe80::1]:554)
+    let (host, port) = if host_port_part.starts_with('[') {
+        if let Some(close_bracket) = host_port_part.find(']') {
+            let host = host_port_part[..=close_bracket].to_string();
+            let after_bracket = &host_port_part[close_bracket + 1..];
+            let port = if let Some(stripped) = after_bracket.strip_prefix(':') {
+                Some(
+                    stripped
+                        .parse::<u16>()
+                        .map_err(|e| MediaError::RtspConnect {
+                            url: trimmed.to_string(),
+                            reason: format!("IPv6 端口解析失败 ({stripped}): {e}"),
+                        })?,
+                )
+            } else {
+                None
+            };
+            (host, port)
+        } else {
+            return Err(MediaError::RtspConnect {
+                url: trimmed.to_string(),
+                reason: "IPv6 地址格式缺失闭合括号 ']'".into(),
+            });
+        }
+    } else if let Some(colon_idx) = host_port_part.rfind(':') {
+        let host = &host_port_part[..colon_idx];
+        let port_str = &host_port_part[colon_idx + 1..];
+        let port = port_str
+            .parse::<u16>()
+            .map_err(|e| MediaError::RtspConnect {
+                url: trimmed.to_string(),
+                reason: format!("端口解析失败 ({port_str}): {e}"),
+            })?;
+        (host.to_string(), Some(port))
+    } else {
+        (host_port_part.to_string(), None)
+    };
+
+    // 5. 解析 userinfo: 第一个 ':' 划分 username 和 password
+    let (username, password) = match userinfo_opt {
+        Some(userinfo) => match userinfo.find(':') {
+            Some(colon_idx) => {
+                let user = &userinfo[..colon_idx];
+                let pass = &userinfo[colon_idx + 1..];
+                (
+                    (!user.is_empty()).then(|| user.to_string()),
+                    Some(pass.to_string()),
+                )
+            }
+            None => ((!userinfo.is_empty()).then(|| userinfo.to_string()), None),
+        },
+        None => (None, None),
+    };
+
+    Ok(ParsedRtspUrl {
+        scheme,
+        username,
+        password,
+        host,
+        port,
+        path_and_query: path_and_query.to_string(),
+    })
+}
+
 /// 对 RTSP URL 中的敏感信息（用户名和密码）进行脱敏隐藏
 /// 例如：rtsp://admin:123456@192.168.1.100:554/live -> rtsp://admin:***@192.168.1.100:554/live
 pub fn mask_rtsp_url(raw_url: &str) -> String {
-    if let Ok(mut parsed) = url::Url::parse(raw_url) {
-        if parsed.password().is_some() {
-            let _ = parsed.set_password(Some("***"));
-        }
-        parsed.to_string()
-    } else {
-        // 若不是合法的 URL 格式，尝试模式匹配脱敏
-        if let Some(at_idx) = raw_url.rfind('@') {
-            if let Some(colon_idx) = raw_url[..at_idx].rfind(':') {
-                if let Some(proto_end) = raw_url.find("://") {
-                    if colon_idx > proto_end + 2 {
-                        return format!("{}***{}", &raw_url[..colon_idx + 1], &raw_url[at_idx..]);
-                    }
+    match parse_and_clean_rtsp_url(raw_url) {
+        Ok(parsed) => parsed.to_masked_string(),
+        Err(_) => {
+            // 容错兜底脱敏
+            if let Some(at_idx) = raw_url.rfind('@') {
+                let search_start = raw_url.find("://").map(|p| p + 3).unwrap_or(0);
+                if let Some(colon_offset) = raw_url[search_start..at_idx].find(':') {
+                    let colon_idx = search_start + colon_offset;
+                    return format!("{}***{}", &raw_url[..colon_idx + 1], &raw_url[at_idx..]);
                 }
             }
+            raw_url.to_string()
         }
-        raw_url.to_string()
     }
 }
 
@@ -1224,6 +1410,52 @@ mod tests {
             mask_rtsp_url("rtsp://user@192.168.1.100:554/live"),
             "rtsp://user@192.168.1.100:554/live"
         );
+        // 复杂保留字符（密码中含 @, :, #, ? 等）
+        assert_eq!(
+            mask_rtsp_url("rtsp://admin:p@ss:word#123@192.168.1.100:554/live"),
+            "rtsp://admin:***@192.168.1.100:554/live"
+        );
+    }
+
+    #[test]
+    fn test_parse_and_clean_rtsp_url_special_chars() {
+        // 1. 密码含 @ 与 :
+        let parsed = parse_and_clean_rtsp_url("rtsp://admin:p@ss:word@192.168.1.10:554/live/ch0")
+            .expect("should parse");
+        assert_eq!(parsed.scheme, "rtsp");
+        assert_eq!(parsed.username.as_deref(), Some("admin"));
+        assert_eq!(parsed.password.as_deref(), Some("p@ss:word"));
+        assert_eq!(parsed.host, "192.168.1.10");
+        assert_eq!(parsed.port, Some(554));
+        assert_eq!(parsed.path_and_query, "/live/ch0");
+        assert_eq!(
+            parsed.to_clean_url().expect("valid clean url").as_str(),
+            "rtsp://192.168.1.10:554/live/ch0"
+        );
+
+        // 2. 密码含 # 与 ?
+        let parsed =
+            parse_and_clean_rtsp_url("rtsp://root:pass#123?456@camera.local:554/stream?channel=1")
+                .expect("should parse");
+        assert_eq!(parsed.username.as_deref(), Some("root"));
+        assert_eq!(parsed.password.as_deref(), Some("pass#123?456"));
+        assert_eq!(parsed.host, "camera.local");
+        assert_eq!(parsed.path_and_query, "/stream?channel=1");
+
+        // 3. IPv6 格式
+        let parsed = parse_and_clean_rtsp_url("rtsp://admin:p@ss@[fe80::1]:554/live")
+            .expect("should parse ipv6");
+        assert_eq!(parsed.username.as_deref(), Some("admin"));
+        assert_eq!(parsed.password.as_deref(), Some("p@ss"));
+        assert_eq!(parsed.host, "[fe80::1]");
+        assert_eq!(parsed.port, Some(554));
+
+        // 4. Path 含 @ 与 :
+        let parsed = parse_and_clean_rtsp_url("rtsp://admin:123@192.168.1.10:554/live@ch1:sub")
+            .expect("should parse path with special chars");
+        assert_eq!(parsed.username.as_deref(), Some("admin"));
+        assert_eq!(parsed.password.as_deref(), Some("123"));
+        assert_eq!(parsed.path_and_query, "/live@ch1:sub");
     }
 
     #[test]

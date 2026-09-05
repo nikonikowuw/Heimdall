@@ -172,7 +172,7 @@ impl FlvMuxer {
         }
     }
 
-    /// 将单个 EncodedPacket 封装为 FLV Video Tag（内置起始码自动剥离与时间戳单调递增看门狗）
+    /// 将单个 EncodedPacket 封装为 FLV Video Tag（内置 Annex B 拆分、4 字节大端长度前缀与时间戳单调递增看门狗）
     pub fn packet_to_flv_tag_with_filter(
         pkt: &EncodedPacket,
         base_pts_ms: i64,
@@ -183,31 +183,48 @@ impl FlvMuxer {
         let rel_ts = raw_rel_ts.max(*last_timestamp_ms);
         *last_timestamp_ms = rel_ts;
 
-        let clean_payload = strip_nalu_start_code(&pkt.payload);
+        let nalus = crate::sps::split_annex_b_nalus(&pkt.payload);
+        if nalus.is_empty() {
+            return Bytes::new();
+        }
 
-        match pkt.codec {
+        let is_vcl = |nalu: &[u8]| match pkt.codec {
+            CodecType::H264 => !nalu.is_empty() && !matches!(nalu[0] & 0x1F, 7..=9),
+            CodecType::H265 => nalu.len() >= 2 && !(32..=35).contains(&((nalu[0] >> 1) & 0x3F)),
+        };
+
+        let vcl_nalus: Vec<&[u8]> = nalus.into_iter().filter(|n| is_vcl(n)).collect();
+        if vcl_nalus.is_empty() {
+            return Bytes::new();
+        }
+
+        let total_payload_len: usize = vcl_nalus.iter().map(|n| 4 + n.len()).sum();
+        let mut body = match pkt.codec {
             CodecType::H264 => {
-                let mut body = BytesMut::with_capacity(5 + 4 + clean_payload.len());
+                let mut b = BytesMut::with_capacity(5 + total_payload_len);
                 let frame_type = if pkt.is_keyframe { 0x17 } else { 0x27 };
-                body.put_u8(frame_type);
-                body.put_u8(0x01); // AVCPacketType = 1 (NALU)
-                body.put_slice(&[0x00, 0x00, 0x00]); // CompositionTime = 0
-                body.put_u32(clean_payload.len() as u32);
-                body.put_slice(clean_payload);
-                Self::wrap_tag(0x09, rel_ts, &body)
+                b.put_u8(frame_type);
+                b.put_u8(0x01); // AVCPacketType = 1 (NALU)
+                b.put_slice(&[0x00, 0x00, 0x00]); // CompositionTime = 0
+                b
             }
             CodecType::H265 => {
-                let mut body = BytesMut::with_capacity(5 + 3 + 4 + clean_payload.len());
+                let mut b = BytesMut::with_capacity(8 + total_payload_len);
                 // Enhanced FLV: IsExHeader(0x80) | FrameType(0x10 / 0x20) | PacketType(0x01 = CodedFrames)
                 let header_byte = 0x80 | (if pkt.is_keyframe { 0x10 } else { 0x20 }) | 0x01;
-                body.put_u8(header_byte);
-                body.put_slice(b"hvc1"); // FourCC
-                body.put_slice(&[0x00, 0x00, 0x00]); // CompositionTime = 0
-                body.put_u32(clean_payload.len() as u32);
-                body.put_slice(clean_payload);
-                Self::wrap_tag(0x09, rel_ts, &body)
+                b.put_u8(header_byte);
+                b.put_slice(b"hvc1"); // FourCC
+                b.put_slice(&[0x00, 0x00, 0x00]); // CompositionTime = 0
+                b
             }
+        };
+
+        for nalu in vcl_nalus {
+            body.put_u32(nalu.len() as u32);
+            body.put_slice(nalu);
         }
+
+        Self::wrap_tag(0x09, rel_ts, &body)
     }
 
     /// 将单个 EncodedPacket 封装为 FLV Video Tag
@@ -255,8 +272,10 @@ impl FlvStreamPipeline {
                     first_pts,
                     &mut self.last_flv_ts,
                 );
-                tags.push(tag);
-                self.frame_count += 1;
+                if !tag.is_empty() {
+                    tags.push(tag);
+                    self.frame_count += 1;
+                }
             }
             self.last_gop_pts = cache.gop_packets.last().map(|p| p.pts_ms).unwrap_or(0);
             self.has_first_keyframe = true;
@@ -278,18 +297,21 @@ impl FlvStreamPipeline {
         }
 
         let mut out_tags = Vec::new();
-        let clean = strip_nalu_start_code(&pkt.payload);
+        let nalus = crate::sps::split_annex_b_nalus(&pkt.payload);
+        if nalus.is_empty() {
+            return Vec::new();
+        }
 
         match pkt.codec {
             CodecType::H264 => {
-                if clean.is_empty() {
-                    return Vec::new();
-                }
-                let nal_type = clean[0] & 0x1F;
-                if nal_type == 7 {
-                    self.sps_buf = Some(Bytes::copy_from_slice(clean));
-                } else if nal_type == 8 {
-                    self.pps_buf = Some(Bytes::copy_from_slice(clean));
+                for nalu in &nalus {
+                    if !nalu.is_empty() {
+                        match nalu[0] & 0x1F {
+                            7 => self.sps_buf = Some(Bytes::copy_from_slice(nalu)),
+                            8 => self.pps_buf = Some(Bytes::copy_from_slice(nalu)),
+                            _ => {}
+                        }
+                    }
                 }
 
                 if !self.sent_sequence_header {
@@ -300,23 +322,17 @@ impl FlvStreamPipeline {
                         }
                     }
                 }
-
-                // SPS(7), PPS(8), AUD(9), SEI(6) 不作为单独视频 Tag 下发
-                if nal_type == 6 || nal_type == 7 || nal_type == 8 || nal_type == 9 {
-                    return out_tags;
-                }
             }
             CodecType::H265 => {
-                if clean.len() < 2 {
-                    return Vec::new();
-                }
-                let nal_type = (clean[0] >> 1) & 0x3F;
-                if nal_type == 32 {
-                    self.vps_buf = Some(Bytes::copy_from_slice(clean));
-                } else if nal_type == 33 {
-                    self.sps_buf = Some(Bytes::copy_from_slice(clean));
-                } else if nal_type == 34 {
-                    self.pps_buf = Some(Bytes::copy_from_slice(clean));
+                for nalu in &nalus {
+                    if nalu.len() >= 2 {
+                        match (nalu[0] >> 1) & 0x3F {
+                            32 => self.vps_buf = Some(Bytes::copy_from_slice(nalu)),
+                            33 => self.sps_buf = Some(Bytes::copy_from_slice(nalu)),
+                            34 => self.pps_buf = Some(Bytes::copy_from_slice(nalu)),
+                            _ => {}
+                        }
+                    }
                 }
 
                 if !self.sent_sequence_header {
@@ -328,11 +344,6 @@ impl FlvStreamPipeline {
                             self.sent_sequence_header = true;
                         }
                     }
-                }
-
-                // VPS(32), SPS(33), PPS(34), AUD(35), SEI(39, 40) 不作为单独视频 Tag 下发
-                if (32..=35).contains(&nal_type) || nal_type == 39 || nal_type == 40 {
-                    return out_tags;
                 }
             }
         }
@@ -351,10 +362,11 @@ impl FlvStreamPipeline {
         }
 
         let base_pts = *self.base_pts_ms.get_or_insert(pkt.pts_ms);
-        self.frame_count += 1;
-
         let tag = FlvMuxer::packet_to_flv_tag_with_filter(pkt, base_pts, &mut self.last_flv_ts);
-        out_tags.push(tag);
+        if !tag.is_empty() {
+            self.frame_count += 1;
+            out_tags.push(tag);
+        }
         out_tags
     }
 }
@@ -448,5 +460,40 @@ mod tests {
         };
         let live_tags = pipeline.process_packet(&new_pkt);
         assert_eq!(live_tags.len(), 1);
+    }
+
+    #[test]
+    fn test_flv_stream_pipeline_compound_annex_b_keyframe() {
+        let mut pipeline = FlvStreamPipeline::new();
+        // 模拟 Retina 输出的复合关键帧（包含 Annex B SPS + PPS + IDR）
+        let compound_payload = [
+            // SPS (Type 7)
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, // PPS (Type 8)
+            0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, // IDR (Type 5)
+            0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0xAA,
+        ];
+        let compound_pkt = EncodedPacket {
+            pts_ms: 1000,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::copy_from_slice(&compound_payload),
+        };
+
+        let tags = pipeline.process_packet(&compound_pkt);
+        // 应该先产生 Sequence Header Tag，随后紧跟 IDR Video Tag（不包含 SPS/PPS）
+        assert_eq!(tags.len(), 2);
+        assert!(pipeline.sent_sequence_header);
+        assert!(pipeline.has_first_keyframe);
+        assert_eq!(tags[0][0], 0x09); // Video tag
+        assert_eq!(tags[0][11], 0x17); // Keyframe + AVC
+        assert_eq!(tags[0][12], 0x00); // Sequence Header (AVCDecoderConfigurationRecord)
+
+        assert_eq!(tags[1][0], 0x09); // Video tag
+        assert_eq!(tags[1][11], 0x17); // Keyframe + AVC
+        assert_eq!(tags[1][12], 0x01); // AVCPacketType = 1 (NALU)
+                                       // 验证 IDR 载荷符合 AVCC 格式：4 字节长度 (3) + 3 字节 IDR 数据 [0x65, 0x88, 0xAA]
+                                       // 排除末尾 4 字节的 FLV PreviousTagSize
+        let body_slice = &tags[1][16..tags[1].len() - 4];
+        assert_eq!(body_slice, &[0x00, 0x00, 0x00, 0x03, 0x65, 0x88, 0xAA]);
     }
 }

@@ -1,11 +1,9 @@
 use base64::Engine;
-use bytes::BytesMut;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
 use crate::error::MediaError;
-use crate::rtsp::{mask_rtsp_url, read_rtsp_response, DigestAuthChallenge};
+use crate::retina_ingest::sanitize_rtsp_url_and_credentials;
+use crate::rtsp::mask_rtsp_url;
 use crate::sps::{parse_h264_sps, parse_h265_sps, SpsInfo};
 
 /// 视频流探活信息
@@ -49,168 +47,78 @@ impl StreamProber {
 
     async fn probe_internal(rtsp_url: &str) -> Result<StreamInfo, MediaError> {
         let masked_url = mask_rtsp_url(rtsp_url);
-        let parsed_url = url::Url::parse(rtsp_url).map_err(|e| MediaError::RtspConnect {
-            url: masked_url.clone(),
-            reason: format!("URL 格式不合法: {e}"),
-        })?;
+        let (clean_url, creds) = sanitize_rtsp_url_and_credentials(rtsp_url)?;
+        let session_options = retina::client::SessionOptions::default()
+            .user_agent("Heimdall/1.0".to_string())
+            .creds(creds);
 
-        let host = parsed_url
-            .host_str()
-            .ok_or_else(|| MediaError::RtspConnect {
-                url: masked_url.clone(),
-                reason: "缺少主机地址".into(),
-            })?;
-        let port = parsed_url.port().unwrap_or(554);
-        let addr = format!("{host}:{port}");
-
-        let mut stream = TcpStream::connect(&addr)
+        // 统一复用 Retina 进行 DESCRIBE 探活与 SDP 语法分析
+        let session = retina::client::Session::describe(clean_url, session_options)
             .await
             .map_err(|e| MediaError::RtspConnect {
                 url: masked_url.clone(),
-                reason: format!("TCP 连接失败 ({addr}): {e}"),
+                reason: format!("Retina 探活握手失败: {e}"),
             })?;
 
-        let username = parsed_url.username().to_string();
-        let password = parsed_url.password().unwrap_or("").to_string();
-        let has_auth = !username.is_empty();
-
-        let mut digest_auth: Option<DigestAuthChallenge> = None;
-
-        let get_auth_header =
-            |digest: &Option<DigestAuthChallenge>, method: &str, uri: &str| -> String {
-                if !has_auth {
-                    return String::new();
-                }
-                if let Some(ref d) = digest {
-                    d.build_auth_header(&username, &password, method, uri)
+        // 严格检索视频轨 (video track)
+        for stream in session.streams() {
+            if stream.media() == "video" {
+                let encoding = stream.encoding_name().to_lowercase();
+                let codec = if encoding.contains("h265") || encoding.contains("hevc") {
+                    "h265".to_string()
                 } else {
-                    let user_pass = format!("{username}:{password}");
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(user_pass);
-                    format!("Authorization: Basic {encoded}\r\n")
+                    "h264".to_string()
+                };
+
+                let mut fps = stream.framerate().map(|f| f as f64).unwrap_or(0.0);
+                let mut width = 0u32;
+                let mut height = 0u32;
+
+                // 1. 优先从 Retina 解析出的 VideoParameters 中读取分辨率
+                if let Some(retina::codec::ParametersRef::Video(v)) = stream.parameters() {
+                    let (w, h) = v.pixel_dimensions();
+                    width = w;
+                    height = h;
+                    if let Some((num, den)) = v.frame_rate() {
+                        if den > 0 {
+                            fps = num as f64 / den as f64;
+                        }
+                    }
                 }
-            };
 
-        let mut read_buf = BytesMut::with_capacity(8192);
+                // 2. 若 Retina 未能从 SDP 头中直接解析出尺寸，降级调用 parse_sdp 提取 sprop 参数集
+                if width == 0 || height == 0 {
+                    let sdp_str = String::from_utf8_lossy(session.sdp());
+                    if let Some(info) = Self::parse_sdp(&sdp_str) {
+                        width = info.width;
+                        height = info.height;
+                        if fps <= 0.0 {
+                            fps = info.fps;
+                        }
+                    }
+                }
 
-        // 1. 发送 OPTIONS 检查可达性
-        let mut cseq = 1;
-        let mut auth_hdr = get_auth_header(&digest_auth, "OPTIONS", rtsp_url);
-        let options_req = format!(
-            "OPTIONS {rtsp_url} RTSP/1.0\r\nCSeq: {}\r\n{}User-Agent: Heimdall/1.0\r\n\r\n",
-            cseq, auth_hdr
-        );
-        stream.write_all(options_req.as_bytes()).await?;
-        let resp = read_rtsp_response(&mut stream, &mut read_buf).await?;
-
-        if resp.contains("401 Unauthorized") {
-            if let Some(challenge) = DigestAuthChallenge::from_response(&resp) {
-                digest_auth = Some(challenge);
-                cseq += 1;
-                auth_hdr = get_auth_header(&digest_auth, "OPTIONS", rtsp_url);
-                let options_req = format!(
-                    "OPTIONS {rtsp_url} RTSP/1.0\r\nCSeq: {}\r\n{}User-Agent: Heimdall/1.0\r\n\r\n",
-                    cseq, auth_hdr
+                tracing::info!(
+                    url = %masked_url,
+                    codec = %codec,
+                    width,
+                    height,
+                    fps,
+                    "Retina 统一探活完成"
                 );
-                stream.write_all(options_req.as_bytes()).await?;
-                let resp = read_rtsp_response(&mut stream, &mut read_buf).await?;
-                if !resp.starts_with("RTSP/1.0 200") && !resp.contains("200 OK") {
-                    return Err(MediaError::RtspConnect {
-                        url: masked_url.clone(),
-                        reason: "RTSP Digest 鉴权失败 (401 Unauthorized)".into(),
-                    });
-                }
-            } else {
-                return Err(MediaError::RtspConnect {
-                    url: masked_url.clone(),
-                    reason: "RTSP 鉴权失败 (401 Unauthorized)".into(),
+
+                return Ok(StreamInfo {
+                    codec,
+                    width,
+                    height,
+                    fps,
                 });
             }
-        } else if !resp.starts_with("RTSP/1.0 200") && !resp.contains("200 OK") {
-            return Err(MediaError::RtspConnect {
-                url: masked_url.clone(),
-                reason: format!("OPTIONS 握手失败: {resp}"),
-            });
         }
 
-        // 2. 发送 DESCRIBE 请求拉取 SDP (利用流式读取防止跨包截断)
-        cseq += 1;
-        auth_hdr = get_auth_header(&digest_auth, "DESCRIBE", rtsp_url);
-        let describe_req = format!(
-            "DESCRIBE {rtsp_url} RTSP/1.0\r\nCSeq: {}\r\n{}Accept: application/sdp\r\nUser-Agent: Heimdall/1.0\r\n\r\n",
-            cseq, auth_hdr
-        );
-        stream.write_all(describe_req.as_bytes()).await?;
-        let mut sdp_resp = read_rtsp_response(&mut stream, &mut read_buf).await?;
-
-        if sdp_resp.contains("401 Unauthorized") {
-            if let Some(challenge) = DigestAuthChallenge::from_response(&sdp_resp) {
-                digest_auth = Some(challenge);
-                cseq += 1;
-                auth_hdr = get_auth_header(&digest_auth, "DESCRIBE", rtsp_url);
-                let describe_req = format!(
-                    "DESCRIBE {rtsp_url} RTSP/1.0\r\nCSeq: {}\r\n{}Accept: application/sdp\r\nUser-Agent: Heimdall/1.0\r\n\r\n",
-                    cseq, auth_hdr
-                );
-                stream.write_all(describe_req.as_bytes()).await?;
-                sdp_resp = read_rtsp_response(&mut stream, &mut read_buf).await?;
-            }
-        }
-
-        // 校验 DESCRIBE 响应状态码是否为 200 OK
-        if !sdp_resp.starts_with("RTSP/1.0 200") && !sdp_resp.contains("200 OK") {
-            tracing::warn!(
-                url = %masked_url,
-                resp = %sdp_resp.lines().next().unwrap_or(""),
-                "RTSP 探活 DESCRIBE 请求失败 (非 200 OK)"
-            );
-            return Err(MediaError::RtspConnect {
-                url: masked_url.clone(),
-                reason: format!(
-                    "DESCRIBE 握手失败: {}",
-                    sdp_resp.lines().next().unwrap_or("未知响应")
-                ),
-            });
-        }
-
-        // 严格校验 SDP 是否包含有效的视频轨道描述 (m=video)
-        if !sdp_resp.contains("m=video") {
-            tracing::warn!(url = %masked_url, "RTSP 探活未在响应中发现有效 SDP 视频描述 (缺少 m=video)");
-            return Err(MediaError::RtspConnect {
-                url: masked_url.clone(),
-                reason: "SDP 描述中缺少视频轨 (m=video)".into(),
-            });
-        }
-
-        if let Some(info) = Self::parse_sdp(&sdp_resp) {
-            tracing::info!(
-                url = %masked_url,
-                codec = %info.codec,
-                width = info.width,
-                height = info.height,
-                fps = info.fps,
-                "RTSP 探活成功 (已从 SDP 解析出 SPS 宽高)"
-            );
-            return Ok(info);
-        }
-
-        let is_h265 =
-            sdp_resp.to_uppercase().contains("H265") || sdp_resp.to_uppercase().contains("HEVC");
-        tracing::info!(
-            url = %masked_url,
-            is_h265 = is_h265,
-            "RTSP 探活成功 (SDP 包含有效视频轨，宽高参数待首帧解码确定)"
-        );
-
-        // 若从 SDP 中未能直接解析出 SPS，返回已知编码格式但宽高待定的状态 (0x0 @ 0fps)，杜绝伪造 1080P
-        Ok(StreamInfo {
-            codec: if is_h265 {
-                "h265".to_string()
-            } else {
-                "h264".to_string()
-            },
-            width: 0,
-            height: 0,
-            fps: 0.0,
+        Err(MediaError::RtspConnect {
+            url: masked_url,
+            reason: "SDP 描述中缺少视频轨 (m=video)".into(),
         })
     }
 

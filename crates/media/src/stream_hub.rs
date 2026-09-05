@@ -8,7 +8,8 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use types::{CodecType, EncodedPacket, TransportPolicy};
 
 use crate::error::MediaError;
-use crate::rtsp::RtspIngestor;
+use crate::retina_ingest::RetinaIngestor;
+use crate::rtsp::parse_and_clean_rtsp_url;
 
 /// 对 RTSP URL 进行规范化处理（用于跨设备去重与底层物理连接复用）
 pub fn canonicalize_rtsp_url(raw_url: &str) -> String {
@@ -16,18 +17,9 @@ pub fn canonicalize_rtsp_url(raw_url: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    if let Ok(mut parsed) = url::Url::parse(trimmed) {
-        let _ = parsed.set_scheme("rtsp");
-        if parsed.port().is_none() {
-            let _ = parsed.set_port(Some(554));
-        }
-        let path = parsed.path().to_string();
-        if path.len() > 1 && path.ends_with('/') {
-            parsed.set_path(path.trim_end_matches('/'));
-        }
-        parsed.to_string()
-    } else {
-        trimmed.trim_end_matches('/').to_string()
+    match parse_and_clean_rtsp_url(trimmed) {
+        Ok(parsed) => parsed.to_canonical_key(),
+        Err(_) => trimmed.trim_end_matches('/').to_string(),
     }
 }
 
@@ -347,7 +339,7 @@ impl StreamHub {
         {
             session.cancel_signal.store(false, Ordering::SeqCst);
             let _ = session.cancel_tx.send(false);
-            let ingestor = Arc::new(RtspIngestor::new(
+            let ingestor = Arc::new(RetinaIngestor::new(
                 session.camera_id.clone(),
                 session.rtsp_url.clone(),
                 session.transport_policy,
@@ -377,8 +369,8 @@ impl StreamHub {
                             match recv_res {
                                 Ok(pkt) => {
                                     last_pkt_time.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
-                                    let clean = crate::flv::strip_nalu_start_code(&pkt.payload);
-                                    if clean.is_empty() {
+                                    let nalus = crate::sps::split_annex_b_nalus(&pkt.payload);
+                                    if nalus.is_empty() {
                                         continue;
                                     }
                                     let mut cache = cache_arc.write().await;
@@ -388,29 +380,31 @@ impl StreamHub {
                                     if pkt.is_keyframe {
                                         cache.gop_packets.clear();
                                         cache.gop_packets.push(pkt.clone());
-                                        cache.last_keyframe = Some(Bytes::copy_from_slice(clean));
+                                        cache.last_keyframe = Some(pkt.payload.clone());
                                         cache.last_keyframe_pts = pkt.pts_ms;
                                     } else if !cache.gop_packets.is_empty() && cache.gop_packets.len() < 75 {
                                         cache.gop_packets.push(pkt.clone());
                                     }
 
-                                    if pkt.codec == CodecType::H265 {
-                                        if clean.len() >= 2 {
-                                            let nal_type = (clean[0] >> 1) & 0x3F;
-                                            if nal_type == 32 {
-                                                cache.vps = Some(Bytes::copy_from_slice(clean));
-                                            } else if nal_type == 33 {
-                                                cache.sps = Some(Bytes::copy_from_slice(clean));
-                                            } else if nal_type == 34 {
-                                                cache.pps = Some(Bytes::copy_from_slice(clean));
+                                    // 遍历数据包中可能复合包含的全部 NALU 单元，精准提取参数集
+                                    for nalu in nalus {
+                                        match pkt.codec {
+                                            CodecType::H265 if nalu.len() >= 2 => {
+                                                match (nalu[0] >> 1) & 0x3F {
+                                                    32 => cache.vps = Some(Bytes::copy_from_slice(nalu)),
+                                                    33 => cache.sps = Some(Bytes::copy_from_slice(nalu)),
+                                                    34 => cache.pps = Some(Bytes::copy_from_slice(nalu)),
+                                                    _ => {}
+                                                }
                                             }
-                                        }
-                                    } else {
-                                        let nal_type = clean[0] & 0x1F;
-                                        if nal_type == 7 {
-                                            cache.sps = Some(Bytes::copy_from_slice(clean));
-                                        } else if nal_type == 8 {
-                                            cache.pps = Some(Bytes::copy_from_slice(clean));
+                                            CodecType::H264 if !nalu.is_empty() => {
+                                                match nalu[0] & 0x1F {
+                                                    7 => cache.sps = Some(Bytes::copy_from_slice(nalu)),
+                                                    8 => cache.pps = Some(Bytes::copy_from_slice(nalu)),
+                                                    _ => {}
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
@@ -522,6 +516,42 @@ mod tests {
         assert_eq!(fetched.last_keyframe_pts, 1000);
     }
 
+    #[tokio::test]
+    async fn test_stream_hub_compound_annex_b_cache_extraction() {
+        let hub = StreamHub::new();
+        let session = hub
+            .get_or_create_session(
+                "cam-compound:main",
+                "rtsp://127.0.0.1:8554/live",
+                TransportPolicy::Tcp,
+            )
+            .await;
+
+        StreamHub::ensure_ingestor_started(&session);
+
+        let compound_payload = [
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, // SPS
+            0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, // PPS
+            0x00, 0x00, 0x00, 0x01, 0x65, 0x88, // IDR
+        ];
+        let pkt = Arc::new(EncodedPacket {
+            pts_ms: 1000,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::copy_from_slice(&compound_payload),
+        });
+
+        session.broadcast_tx.send(pkt).expect("send packet");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let cache = session.keyframe_cache.read().await;
+        assert_eq!(cache.codec, Some(CodecType::H264));
+        assert_eq!(cache.sps.as_deref(), Some(&[0x67, 0x42, 0x00, 0x1E][..]));
+        assert_eq!(cache.pps.as_deref(), Some(&[0x68, 0xCE][..]));
+        assert_eq!(cache.last_keyframe_pts, 1000);
+        assert_eq!(cache.gop_packets.len(), 1);
+    }
+
     #[test]
     fn test_canonicalize_rtsp_url() {
         // 缺省端口自动补齐 :554
@@ -543,6 +573,11 @@ mod tests {
         assert_eq!(
             canonicalize_rtsp_url("RTSP://192.168.1.50/live"),
             "rtsp://192.168.1.50:554/live"
+        );
+        // 复杂保留字符（密码中含 @, :, # 等）规范化
+        assert_eq!(
+            canonicalize_rtsp_url("rtsp://admin:p@ss:word#123@192.168.1.100/live/"),
+            "rtsp://admin:p@ss:word#123@192.168.1.100:554/live"
         );
     }
 

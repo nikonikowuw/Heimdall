@@ -11,6 +11,53 @@ pub struct SpsInfo {
     pub level_idc: u8,
 }
 
+/// 将字节切片中的 Annex B NALU 单元拆分（支持 0x00000001 与 0x000001 起始码）
+pub fn split_annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
+    let len = data.len();
+    if len < 3 {
+        return if data.is_empty() {
+            Vec::new()
+        } else {
+            vec![data]
+        };
+    }
+
+    let mut start_codes = Vec::new();
+    let mut i = 0;
+    while i < len - 2 {
+        if data[i] == 0 && data[i + 1] == 0 {
+            if i + 3 < len && data[i + 2] == 0 && data[i + 3] == 1 {
+                start_codes.push((i, i + 4));
+                i += 4;
+                continue;
+            } else if data[i + 2] == 1 {
+                start_codes.push((i, i + 3));
+                i += 3;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    if start_codes.is_empty() {
+        return vec![data];
+    }
+
+    let mut nalus = Vec::with_capacity(start_codes.len());
+    for (idx, &(_, payload_start)) in start_codes.iter().enumerate() {
+        let payload_end = if idx + 1 < start_codes.len() {
+            start_codes[idx + 1].0
+        } else {
+            len
+        };
+        if payload_start < payload_end {
+            nalus.push(&data[payload_start..payload_end]);
+        }
+    }
+
+    nalus
+}
+
 /// 移除 H.264 / H.265 NALU 中的防竞争字节 (0x00 0x00 0x03 -> 0x00 0x00)
 pub fn remove_emulation_prevention(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
@@ -454,5 +501,17 @@ mod tests {
         assert_eq!(res.width, 1920);
         assert_eq!(res.height, 1080);
         assert_eq!(res.profile_idc, 1); // Main Profile
+    }
+
+    #[test]
+    fn test_split_annex_b_nalus() {
+        let multi_nalu_data =
+            b"\x00\x00\x00\x01\x67sps_data\x00\x00\x01\x68pps_data\x00\x00\x00\x01\x65idr_data";
+        let nalus = split_annex_b_nalus(multi_nalu_data);
+
+        assert_eq!(nalus.len(), 3);
+        assert_eq!(nalus[0], b"\x67sps_data");
+        assert_eq!(nalus[1], b"\x68pps_data");
+        assert_eq!(nalus[2], b"\x65idr_data");
     }
 }

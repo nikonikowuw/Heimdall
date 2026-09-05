@@ -648,52 +648,7 @@ unsafe extern "C" fn decompression_callback(
     });
 }
 
-/// 将字节切片中的 Annex B NALU 单元拆分
-pub fn split_annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
-    let len = data.len();
-    if len < 3 {
-        return if data.is_empty() {
-            Vec::new()
-        } else {
-            vec![data]
-        };
-    }
-
-    let mut start_codes = Vec::new();
-    let mut i = 0;
-    while i < len - 2 {
-        if data[i] == 0 && data[i + 1] == 0 {
-            if i + 3 < len && data[i + 2] == 0 && data[i + 3] == 1 {
-                start_codes.push((i, i + 4));
-                i += 4;
-                continue;
-            } else if data[i + 2] == 1 {
-                start_codes.push((i, i + 3));
-                i += 3;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    if start_codes.is_empty() {
-        return vec![data];
-    }
-
-    let mut nalus = Vec::with_capacity(start_codes.len());
-    for (idx, &(_, payload_start)) in start_codes.iter().enumerate() {
-        let payload_end = if idx + 1 < start_codes.len() {
-            start_codes[idx + 1].0
-        } else {
-            len
-        };
-        if payload_start < payload_end {
-            nalus.push(&data[payload_start..payload_end]);
-        }
-    }
-
-    nalus
-}
+pub use crate::sps::split_annex_b_nalus;
 
 #[cfg(test)]
 mod tests {

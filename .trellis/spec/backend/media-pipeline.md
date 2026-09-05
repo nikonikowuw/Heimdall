@@ -105,22 +105,23 @@ pub enum FrameHandle {
 
 ---
 
-## RTSP 纯 Rust 解包与 H.264/H.265 (RFC 6184 / RFC 7798) 规范
+## 工业级 RTSP 接入内核 (Retina) 与 Annex B 直通规范
 
-为了保持极简与自包含单二进制交付，系统 RTSP Client 与 RTP 解包完全基于纯 Rust 实现：
+系统全面采用经过工业级考验的纯 Rust 异步库 `retina` (v0.4.20) 作为 RTSP/RTP 接入内核，彻底取代脆弱的手写状态机，实现开箱即用的真实安防摄像头容错与单二进制零 C 依赖交付：
 
-### 1. RTP 解包器矩阵
-
-| 编码类型 | RFC 标准 | 单包 (Single) | 聚合包 (AP) | 分片包 (FU) | 关键帧与参数集检测 |
-|---------|---------|--------------|------------|------------|-----------------|
-| **H.264** | **RFC 6184** | Type `1..=23` | STAP-A (Type `24`) | FU-A (Type `28`) | IDR (Type 5), SPS (Type 7), PPS (Type 8) |
-| **H.265 (HEVC)** | **RFC 7798** | Type `0..=47` | AP (Type `48`) | FU (Type `49`) | IRAP (`16..=21`, IDR/CRA/BLA), VPS (Type 32), SPS (Type 33), PPS (Type 34) |
-
-- **H.265 双字节头部与分片重组**：
-  - NAL Header 为 2 字节：`nal_unit_type = (payload[0] >> 1) & 0x3F`；
-  - FU (Type 49) 分片包：通过 `payload[2]` 中的 Start / End 位重组，Start 包提取原始 NAL Unit Type 并重建 2 字节原始 NAL Header（`byte0 = (payload[0] & 0x81) | ((fu_type & 0x3F) << 1)`, `byte1 = payload[1]`）。
-- **自适应调度器 (`StreamDepacketizer`)**：
-  - 在 RTSP DESCRIBE 阶段自动解析 SDP，若包含 `H265` 或 `HEVC`，自动挂载 `H265Depacketizer`，否则挂载 `H264Depacketizer`。
+### 1. 接入内核与 Annex B 零拷贝输出 (`RetinaIngestor`)
+- **零凭证 URL 约束**：`retina::client::Session` 严格禁止在 `Url` 内部包含用户名和密码。接入前必须通过 `sanitize_rtsp_url_and_credentials` 将凭证剥离为 `retina::client::Credentials` 显式注入 `SessionOptions`。
+- **Annex B 零拷贝输出**：
+  - 在 `SetupOptions` 中配置 `frame_format(FrameFormat::SIMPLE)`；
+  - 由 Retina 原生在解复用时注入 Annex B (`00 00 00 01`) 起始码和参数集（SPS/PPS/VPS）；
+  - 将 `VideoFrame::into_data()` 直接包装为 `Bytes` 存入 `types::EncodedPacket`，全链路无二次内存重拷贝。
+- **传输策略双轨映射**：
+  - `TransportPolicy::Tcp` / `Auto` ➔ `retina::client::Transport::Tcp(TcpTransportOptions::default())`；
+  - `TransportPolicy::Udp` ➔ `retina::client::Transport::Udp(UdpTransportOptions::default())`。
+- **单调时钟与异步取消安全**：
+  - 基于基准系统时钟结合 `frame.timestamp().elapsed_secs()` 换算 13 位 UTC Unix 毫秒时戳（`pts_ms`）；
+  - 内置单调递增看门狗过滤，杜绝安防摄像头时间戳回跳导致 FLV 播放器卡死；
+  - 结合 `tokio::select!` 与 `tokio::sync::watch::Receiver<bool>`，实现确定性的毫秒级停止响应。
 
 ### 2. 秒开关键帧与参数集缓存 (`KeyframeCache`)
 
@@ -128,6 +129,120 @@ pub enum FrameHandle {
   - **H.264**：缓存最近的 `SPS` (7)、`PPS` (8) 与 `IDR` 帧 (5)；
   - **H.265**：缓存最近的 `VPS` (32)、`SPS` (33)、`PPS` (34) 与 `IRAP` 帧 (16..21)；
 - 无论客户端何时接入，在握手建连第一时刻直接注入缓存参数集与最新关键帧，实现 **<100ms 极速秒开首帧**。
+
+---
+
+## Scenario: RTSP 脏 URL 逆向锚点清洗与凭证隔离规范
+
+### 1. Scope / Trigger
+- Trigger: 安防监控现场强密码普遍包含 `@`, `:`, `#`, `?`, `!`, `&` 等保留字符（如 `rtsp://admin:p@ss:word#123@192.168.1.10:554/live`）。标准 `url::Url::parse` 会将第一个 `@` 误认为 userinfo 终止符，导致 `InvalidPort` 崩溃、路径腰斩或在日志中泄露部分明文密码。需要建立工业级逆向锚点解析、凭据剥离与脱敏规范。
+
+### 2. Signatures
+- `crates/media/src/rtsp.rs`:
+  ```rust
+  pub struct ParsedRtspUrl {
+      pub scheme: String,
+      pub username: Option<String>,
+      pub password: Option<String>,
+      pub host: String,
+      pub port: Option<u16>,
+      pub path_and_query: String,
+  }
+
+  impl ParsedRtspUrl {
+      pub fn to_clean_url(&self) -> Result<url::Url, MediaError>;
+      pub fn to_masked_string(&self) -> String;
+      pub fn to_canonical_key(&self) -> String;
+  }
+
+  pub fn parse_and_clean_rtsp_url(raw_url: &str) -> Result<ParsedRtspUrl, MediaError>;
+  pub fn mask_rtsp_url(raw_url: &str) -> String;
+  ```
+- `crates/media/src/retina_ingest.rs`:
+  ```rust
+  pub fn sanitize_rtsp_url_and_credentials(
+      raw_url: &str,
+  ) -> Result<(url::Url, Option<retina::client::Credentials>), MediaError>;
+  ```
+- `crates/media/src/stream_hub.rs`:
+  ```rust
+  pub fn canonicalize_rtsp_url(raw_url: &str) -> String;
+  ```
+
+### 3. Contracts
+- `ParsedRtspUrl` 字段与约束：
+  - `scheme: String`：协议前缀，统一规范为小写 `"rtsp"` 或 `"rtsps"`；
+  - `username: Option<String>`：提取的原始用户名；若缺省则为 `None`；
+  - `password: Option<String>`：提取的原始密码明文（不含任何转义变形，完整保留 `@`, `:`, `#`, `?`）；
+  - `host: String`：主机名、IPv4 字符串或标准 IPv6 闭合形式（例如 `"[fe80::1]"`）；
+  - `port: Option<u16>`：端口号（缺省时为 `None`，规范化键中自动缺省补齐 554）；
+  - `path_and_query: String`：从第一个 `/` 开始的完整路径与参数串（若缺省则默认为空或 `"/"`）。
+- `to_clean_url(&self) -> Result<url::Url, MediaError>`：
+  - 产出的 `url::Url` **严格不得包含 username 与 password**，满足 Retina 原生约束并杜绝在 HTTP/RTSP 握手请求行中明文暴露凭证。
+- `to_masked_string(&self) -> String`：
+  - 产出安全脱敏字符串，密码替换为 `***`，用于全系统的错误追踪与日志打印。
+- `to_canonical_key(&self) -> String`：
+  - 产出标准复用 Key：补齐 554 端口、剥离末尾无意义斜杠，供 `StreamHub` 物理连接去重。
+
+### 4. Validation & Error Matrix
+| 触发条件 | 返回结果 / 错误类型 | 行为说明 |
+| :--- | :--- | :--- |
+| `raw_url.trim().is_empty()` | `MediaError::RtspConnect { reason: "URL 不能为空" }` | 拒绝空字符串 |
+| 缺少 `://` 或协议非 `rtsp`/`rtsps` | `MediaError::RtspConnect { reason: "缺少协议头" 或 "不支持的协议类型" }` | 协议白名单限制 |
+| 缺少 Host（例如 `rtsp:///path` 或 `@` 后无内容） | `MediaError::RtspConnect { reason: "URL 缺少主机地址" }` | 严防无效网络地址 |
+| IPv6 格式缺少闭合括号 `]` | `MediaError::RtspConnect { reason: "IPv6 地址格式缺失闭合括号 ']'" }` | 严格校验 IPv6 语法 |
+| 端口号非数字或数值超出 65535 | `MediaError::RtspConnect { reason: "端口解析失败" }` | 强校验合法端口范围 |
+| 密码包含 `@`, `:`, `#`, `?`, `!` 等保留字符 | **成功解析** (`Ok(ParsedRtspUrl)`) | 逆向锚点定位，提取出纯净密码与纯净 URL |
+
+### 5. Good/Base/Bad Cases
+- **Good (复杂强密码)**:
+  - 输入：`rtsp://admin:p@ss:word#123@192.168.1.10:554/live/ch0`
+  - 提取：`clean_url = "rtsp://192.168.1.10:554/live/ch0"`, `user = "admin"`, `pass = "p@ss:word#123"`
+  - 脱敏：`rtsp://admin:***@192.168.1.10:554/live/ch0`
+- **Base (标准 URL 与 IPv6)**:
+  - 输入：`rtsp://admin:123456@[fe80::1]:554/live`
+  - 提取：`clean_url = "rtsp://[fe80::1]:554/live"`, `host = "[fe80::1]"`, `port = 554`
+- **Bad (非法格式)**:
+  - 输入：`http://192.168.1.100/live` -> 拒绝非 RTSP 协议
+  - 输入：`rtsp://admin:pass@:554/live` -> 拒绝空主机名
+
+### 6. Tests Required
+- `test_parse_and_clean_rtsp_url_special_chars`：断言包含 `@`, `:`, `#`, `?` 及 IPv6、路径带 `@` 的 URL 正确提取组件；
+- `test_mask_rtsp_url`：断言复杂密码脱敏为 `***`，杜绝截断切片泄漏；
+- `test_sanitize_rtsp_url_with_reserved_characters`：断言纯净 URL 无凭证且 Credentials 还原真实密码；
+- `test_canonicalize_rtsp_url`：断言带特殊字符密码的 URL 在端口缺失、尾随斜杠下的复用一致性。
+
+### 7. Wrong vs Correct
+#### Wrong (直接依赖 Url::parse)
+```rust
+// ❌ 错误：直接依赖标准 Url::parse 解析包含特殊字符密码的原始 URL
+let mut parsed = url::Url::parse(raw_url)?; // 当密码含 '@' 时，第一个 '@' 被误判为 userinfo 终止符，导致 host/port 解析崩溃！
+let username = parsed.username().to_string();
+let password = parsed.password().unwrap_or("").to_string();
+```
+#### Correct (逆向锚点切分与凭据隔离)
+```rust
+// ✅ 正确：基于 Host 绝不可能包含 '@' 的数学不变性，逆向锁定分割边界
+let parsed = parse_and_clean_rtsp_url(raw_url)?;
+let clean_url = parsed.to_clean_url()?; // 彻底剥离凭证的纯净 Url
+let creds = match (parsed.username, parsed.password) {
+    (Some(username), Some(password)) => Some(Credentials { username, password }),
+    _ => None,
+};
+```
+
+---
+
+## 统一探活引擎与元数据自愈 (StreamProber)
+
+探活引擎与拉流引擎必须保持 100% 协议一致性：
+
+- **全面收敛至 Retina DESCRIBE**：废弃脆弱的手写 TCP 握手与 Digest 鉴权拼接，统一调用 `retina::client::Session::describe(clean_url, session_options)`；
+- **多级分辨率与帧率探测**：
+  1. **优先提取**：从 `stream.parameters() -> ParametersRef::Video` 获取标准 `pixel_dimensions()` 与 `frame_rate()`；
+  2. **降级兜底**：若参数集未就绪，通过 `session.sdp()` 原始文本调用 `parse_sdp` 提取 `sprop-parameter-sets` (H.264) 或 `sprop-sps` (H.265)；
+  3. **尺寸待定状态**：若 SDP 未显式提供 SPS，返回 `(0, 0, fps)` 待定状态，严禁硬编码伪造 1080P。
+- **离线与故障严谨门禁**：严格校验 `m=video` 视频轨与 200 OK 响应，若返回 401/404/500 或仅有音频轨，一律返回 `MediaError::RtspConnect`。
 
 ---
 

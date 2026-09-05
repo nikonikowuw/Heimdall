@@ -81,3 +81,29 @@ Completed 09-04-camera-live-preview: implemented pure Rust RTSP ingestor with Ex
 ### Next Steps
 
 - 启动子任务 09-04-c-abi-algo-sandbox 进行 C ABI 虚表映射与沙箱加载器开发
+
+## Session 4: 接入 Retina 工业级 RTSP 接入内核
+
+**Date**: 2026-09-05
+**Task**: 09-05-retina-rtsp-ingestor
+**Branch**: `dev`
+
+### Summary
+
+引入纯 Rust 工业级 RTSP 客户端库 `retina` (v0.4.20)，封装 `RetinaIngestor` 并打通 `StreamHub`，实现对真实安防摄像头非标 SDP 容错、TCP/UDP 传输策略支持与 Annex B 零拷贝直通。
+
+### Main Changes
+
+- 创建 Trellis 任务 `09-05-retina-rtsp-ingestor` 并完成 PRD、技术设计与实施步骤；
+- 在 `crates/media/Cargo.toml` 引入 `retina = "0.4.20"` 与 `futures = "0.3"`；
+- 实现 `crates/media/src/retina_ingest.rs`，包含 URL 凭据解耦、`TransportPolicy` 映射、H.264/H.265 自动感知、Annex B (`FrameFormat::SIMPLE`) 零拷贝封装、单调时间戳看门狗与 Tokio 异步取消支持；
+- 在 `crates/media/src/stream_hub.rs` 将拉流内核挂载为 `RetinaIngestor`；
+- 重构 `crates/media/src/probe.rs`，将 `StreamProber` 底层统一迁移至 `retina::client::Session::describe`，彻底移除手写 TCP/Digest 握手逻辑，保证探活状态与拉流推流 100% 协议行为一致；
+- 实现工业级逆向锚点 RTSP URL 解析与清洗器 `parse_and_clean_rtsp_url`，攻克账密中包含 `@`, `:`, `#`, `?`, `!` 等保留字符导致常规 `Url::parse` 崩溃/截断的深水炸弹 Bug；
+- 在 `sanitize_rtsp_url_and_credentials`、`mask_rtsp_url` 和 `canonicalize_rtsp_url` 中全链路接入逆向锚点解析清洗，彻底打通特殊密码下的拉流、探活、去重与日志安全脱敏；
+- 新增针对 URL 凭证清洗、特殊保留字符密码提取与传输策略映射的单元测试；
+- 全库 77 项单元测试及 clippy 门禁 100% 通过。
+
+### Status
+
+[OK] **Completed**

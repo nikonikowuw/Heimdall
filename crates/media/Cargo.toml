@@ -20,3 +20,5 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 image = { workspace = true }
 md-5 = "0.10"
+retina = "0.4.20"
+futures = "0.3"
