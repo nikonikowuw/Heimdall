@@ -124,6 +124,14 @@ mod tests {
             localize_api_message(20004, "原消息", Locale::ZhCn),
             "摄像头探活超时"
         );
+        assert_eq!(
+            localize_api_message(20011, "原消息", Locale::ZhCn),
+            "媒体流传输静默超时"
+        );
+        assert_eq!(
+            localize_api_message(20011, "原消息", Locale::En),
+            "Media stream inactivity timeout"
+        );
 
         // Task & Infer 30000 段
         assert_eq!(

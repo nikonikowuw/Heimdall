@@ -24,6 +24,9 @@ pub enum MediaError {
     #[error("媒体探测超时 (超过 {0:?})")]
     ProbeTimeout(std::time::Duration),
 
+    #[error("媒体流静默超时 (超过 {0:?} 未收到数据包)")]
+    InactivityTimeout(std::time::Duration),
+
     #[error("流会话未找到: {0}")]
     SessionNotFound(String),
 
@@ -48,6 +51,7 @@ impl MediaError {
             Self::SessionNotFound(_) => 20008,
             Self::Frame(_) => 20009,
             Self::Io(_) => 20010,
+            Self::InactivityTimeout(_) => 20011,
         }
     }
 }

@@ -21,7 +21,10 @@ pub use error::MediaError;
 pub use flv::{FlvMuxer, FlvStreamPipeline};
 pub use image_convert::{fast_nv12_to_rgb_image, frame_to_rgb_image};
 pub use probe::{StreamInfo, StreamProber};
-pub use retina_ingest::{sanitize_rtsp_url_and_credentials, RetinaIngestor};
+pub use retina_ingest::{
+    sanitize_rtsp_url_and_credentials, RetinaIngestor, DEFAULT_HANDSHAKE_TIMEOUT,
+    DEFAULT_STREAM_INACTIVITY_TIMEOUT,
+};
 pub use ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
 pub use rtsp::{mask_rtsp_url, RtspIngestor};
 pub use sps::{parse_h264_sps, parse_h265_sps, split_annex_b_nalus, SpsInfo};

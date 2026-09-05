@@ -61,6 +61,12 @@ pub const STATIC_MESSAGES: &[StaticMessage] = &[
         zh_tw: "網路與系統 IO 錯誤",
         en: "Network and system IO error",
     },
+    StaticMessage {
+        code: 20011,
+        zh_cn: "媒体流传输静默超时",
+        zh_tw: "媒體串流傳輸靜默超時",
+        en: "Media stream inactivity timeout",
+    },
 ];
 
 pub fn translate_camera(code: u32, _original_msg: &str, locale: Locale) -> Option<String> {
