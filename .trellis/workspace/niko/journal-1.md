@@ -199,3 +199,24 @@ Completed 09-04-camera-live-preview: implemented pure Rust RTSP ingestor with Ex
 ### Next Steps
 
 - 推进 Linux 异构 VPU 解码器扩展任务实施：实现 Rockchip MPP 与华为昇腾 DVPP 解码器扩展
+
+
+## Session 7: 实现子码流驱动泵与专用常驻推理线程架构
+
+**Date**: 2026-09-05
+**Task**: 实现子码流驱动泵与专用常驻推理线程架构
+**Branch**: `dev`
+
+### Summary
+
+构建专用常驻推理线程（InferenceWorker）与子码流驱动泵（SubStreamAnalysisPump），打通视频解码至规则引擎与靶向高清抓拍的全链路闭环，并实现 GOP 语义感知防花屏队列及无锁单槽 Drop-Oldest 背压防护
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `19a1e45` | (see git log) |
+
+### Status
+
+[OK] **Completed**
