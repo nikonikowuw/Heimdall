@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <!-- 上护盾弧刃渐变 -->
+    <linearGradient id="a2TopBlade" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="50%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <!-- 下护盾弧刃渐变 -->
+    <linearGradient id="a2BottomBlade" x1="100%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="50%" stop-color="#0369A1"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+    <!-- 核心天眼高亮 -->
+    <radialGradient id="a2EyeCore" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="35%" stop-color="#00F0FF"/>
+      <stop offset="75%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0A0E1A"/>
+    </radialGradient>
+    <filter id="a2Glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- 1. 上护盾流体几何弧刃 (雕刻出天眼的上眼睑与守望者天际线) -->
+  <path d="M 64 256
+           C 64 150, 150 64, 256 64
+           C 362 64, 448 150, 448 256
+           C 400 216, 336 192, 256 192
+           C 176 192, 112 216, 64 256 Z" 
+        fill="url(#a2TopBlade)"/>
+
+  <!-- 2. 下护盾流体几何弧刃 (对向交叠，雕刻出下眼睑与地平线基座) -->
+  <path d="M 448 256
+           C 448 362, 362 448, 256 448
+           C 150 448, 64 362, 64 256
+           C 112 296, 176 320, 256 320
+           C 336 320, 400 296, 448 256 Z" 
+        fill="url(#a2BottomBlade)"/>
+
+  <!-- 3. 中央负空间雕刻出的百眼天眼 (Argus Focus Singularity) -->
+  <g transform="translate(256, 256)">
+    <!-- 极简镜头光圈外环 -->
+    <circle cx="0" cy="0" r="56" stroke="#00F0FF" stroke-width="4.5" fill="#060913" filter="url(#a2Glow)"/>
+    
+    <!-- 核心能量瞳孔 (纯粹、通透、高聚能) -->
+    <circle cx="0" cy="0" r="36" fill="url(#a2EyeCore)"/>
+    <circle cx="0" cy="0" r="14" fill="#FFFFFF"/>
+
+    <!-- 4 个极简微十字定位刻度 (超细，绝不喧宾夺主) -->
+    <line x1="-76" y1="0" x2="-62" y2="0" stroke="#00F0FF" stroke-width="3" stroke-linecap="round"/>
+    <line x1="62" y1="0" x2="76" y2="0" stroke="#00F0FF" stroke-width="3" stroke-linecap="round"/>
+    <line x1="0" y1="-76" x2="0" y2="-62" stroke="#00F0FF" stroke-width="3" stroke-linecap="round"/>
+    <line x1="0" y1="62" x2="0" y2="76" stroke="#00F0FF" stroke-width="3" stroke-linecap="round"/>
+  </g>
+</svg>

@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <!-- 精工金属青蓝渐变 -->
+    <linearGradient id="a1Blade1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="a1Blade2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+    <linearGradient id="a1Center" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="35%" stop-color="#00F0FF"/>
+      <stop offset="70%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0B132B"/>
+    </linearGradient>
+    <radialGradient id="a1CenterGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="25%" stop-color="#00F0FF"/>
+      <stop offset="60%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#060913"/>
+    </radialGradient>
+    <filter id="a1Glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- 外层精密六边形刻度定位底衬 -->
+  <polygon points="256,28 453,142 453,370 256,484 59,370 59,142" 
+           stroke="#1E293B" stroke-width="3" fill="#070B14"/>
+  <polygon points="256,44 439,150 439,362 256,468 73,362 73,150" 
+           stroke="#00F0FF" stroke-width="1.5" stroke-dasharray="12 8" opacity="0.45"/>
+
+  <!-- 6 片精确咬合的光学折面光圈叶片 (纯粹几何多边形，无弯曲凌乱弧线) -->
+  <g transform="translate(256, 256)">
+    <!-- 叶片 1 -->
+    <polygon points="0,-180 156,-90 60,-35 -40,-69" fill="url(#a1Blade1)" opacity="0.95"/>
+    <line x1="0" y1="-180" x2="60" y2="-35" stroke="#00F0FF" stroke-width="2"/>
+
+    <!-- 叶片 2 (旋转 60度) -->
+    <g transform="rotate(60)">
+      <polygon points="0,-180 156,-90 60,-35 -40,-69" fill="url(#a1Blade2)" opacity="0.9"/>
+      <line x1="0" y1="-180" x2="60" y2="-35" stroke="#00F0FF" stroke-width="2"/>
+    </g>
+
+    <!-- 叶片 3 (旋转 120度) -->
+    <g transform="rotate(120)">
+      <polygon points="0,-180 156,-90 60,-35 -40,-69" fill="url(#a1Blade1)" opacity="0.95"/>
+      <line x1="0" y1="-180" x2="60" y2="-35" stroke="#00F0FF" stroke-width="2"/>
+    </g>
+
+    <!-- 叶片 4 (旋转 180度) -->
+    <g transform="rotate(180)">
+      <polygon points="0,-180 156,-90 60,-35 -40,-69" fill="url(#a1Blade2)" opacity="0.9"/>
+      <line x1="0" y1="-180" x2="60" y2="-35" stroke="#00F0FF" stroke-width="2"/>
+    </g>
+
+    <!-- 叶片 5 (旋转 240度) -->
+    <g transform="rotate(240)">
+      <polygon points="0,-180 156,-90 60,-35 -40,-69" fill="url(#a1Blade1)" opacity="0.95"/>
+      <line x1="0" y1="-180" x2="60" y2="-35" stroke="#00F0FF" stroke-width="2"/>
+    </g>
+
+    <!-- 叶片 6 (旋转 300度) -->
+    <g transform="rotate(300)">
+      <polygon points="0,-180 156,-90 60,-35 -40,-69" fill="url(#a1Blade2)" opacity="0.9"/>
+      <line x1="0" y1="-180" x2="60" y2="-35" stroke="#00F0FF" stroke-width="2"/>
+    </g>
+
+    <!-- 中心天眼：六边形孔径与深邃瞳孔 -->
+    <polygon points="0,-69 60,-35 60,35 0,69 -60,35 -60,-35" 
+             fill="#050811" stroke="#00F0FF" stroke-width="3.5" filter="url(#a1Glow)"/>
+
+    <!-- 瞳孔核心凝聚极亮点 -->
+    <circle cx="0" cy="0" r="28" fill="url(#a1CenterGlow)"/>
+    <circle cx="0" cy="0" r="10" fill="#FFFFFF"/>
+  </g>
+</svg>

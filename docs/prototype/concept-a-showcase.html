@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Argus / Heimdall - 方案 A 深度重构设计评审</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@600;700;800&family=Unbounded:wght@600;700;800&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Unbounded"', '"Space Grotesk"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+            sans: ['"Inter"', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #06090F;
+      color: #F8FAFC;
+      font-family: 'Inter', sans-serif;
+    }
+    .light-preview body {
+      background-color: #F8FAFC;
+      color: #0F172A;
+    }
+    .bg-grid {
+      background-size: 32px 32px;
+      background-image: 
+        linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-grid pb-24">
+
+  <!-- 顶部导航 -->
+  <header class="sticky top-0 z-50 backdrop-blur-md bg-[#06090F]/85 border-b border-slate-800">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+          <i data-lucide="aperture" class="w-4 h-4"></i>
+        </div>
+        <div>
+          <span class="font-display font-bold text-sm tracking-wider text-white">ARGUS / HEIMDALL</span>
+          <span class="text-xs text-cyan-400 ml-2 font-mono px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40">CONCEPT A REDESIGN</span>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <button onclick="toggleTheme()" class="text-xs font-mono px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center space-x-1.5 transition">
+          <i data-lucide="sun-moon" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span id="themeBtnText">切换白底模式</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 pt-10 space-y-16">
+
+    <!-- 标题区 -->
+    <div class="space-y-4">
+      <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-mono">
+        <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+        <span>拒绝元素堆砌 · 回归顶级几何与工业美学</span>
+      </div>
+      <h1 class="text-3xl lg:text-4xl font-display font-extrabold tracking-tight text-white">
+        方案 A 深度重构：3 款完全不同气质的现代天眼
+      </h1>
+      <p class="text-slate-400 text-base max-w-3xl leading-relaxed">
+        彻底剥除廉价游戏 HUD 虚线与杂乱刻度，以纯粹的负空间剪影、精密几何多边形与现代算力隐喻重新雕琢。请横向对比 3 款设计，挑出最符合系统气质的那一个。
+      </p>
+    </div>
+
+    <!-- 1. 三款主标横向大图对比 -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+      
+      <!-- Option A-1 -->
+      <div class="rounded-2xl border border-slate-800 bg-[#0A0E1A] p-6 flex flex-col items-center justify-between hover:border-cyan-500/50 transition group shadow-xl">
+        <div class="w-full flex justify-between items-center mb-4">
+          <span class="text-xs font-mono px-2 py-0.5 rounded bg-sky-950 text-sky-400 border border-sky-800/40">OPTION A-1</span>
+          <span class="text-xs text-slate-500 font-mono">六棱精工光圈</span>
+        </div>
+
+        <div class="w-56 h-56 flex items-center justify-center p-2 relative my-4">
+          <img src="./assets/logo-a1-prismatic.svg" class="w-full h-full drop-shadow-[0_10px_25px_rgba(0,240,255,0.15)] group-hover:scale-105 transition duration-300" alt="A-1">
+        </div>
+
+        <div class="w-full space-y-2 mt-4 pt-4 border-t border-slate-800/80">
+          <h3 class="text-base font-bold text-white font-display">晶体精工光圈 (Prismatic Shutter)</h3>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            <strong>灵感：</strong>Leica 德国精工镜头与半导体晶圆。6 片严格多边形几何咬合刀片，中央自然收束为深邃六边形瞳孔。
+          </p>
+          <div class="text-[11px] text-cyan-400 font-mono">特质：秩序感、精密机械、工匠精神</div>
+        </div>
+      </div>
+
+      <!-- Option A-2 (强烈推荐) -->
+      <div class="rounded-2xl border-2 border-cyan-500/60 bg-[#0A0E1A] p-6 flex flex-col items-center justify-between hover:border-cyan-400 transition group shadow-2xl relative">
+        <div class="absolute -top-3 right-6 px-2.5 py-0.5 rounded-full bg-cyan-500 text-slate-950 text-[10px] font-mono font-bold uppercase tracking-wider shadow-lg">
+          RECOMMENDED
+        </div>
+
+        <div class="w-full flex justify-between items-center mb-4">
+          <span class="text-xs font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/40">OPTION A-2</span>
+          <span class="text-xs text-cyan-400 font-mono">极简负空间天眼</span>
+        </div>
+
+        <div class="w-56 h-56 flex items-center justify-center p-2 relative my-4">
+          <img src="./assets/logo-a2-sentinel.svg" class="w-full h-full drop-shadow-[0_15px_30px_rgba(0,240,255,0.25)] group-hover:scale-105 transition duration-300" alt="A-2">
+        </div>
+
+        <div class="w-full space-y-2 mt-4 pt-4 border-t border-slate-800/80">
+          <h3 class="text-base font-bold text-white font-display">负空间守望者 (Negative Sentinel)</h3>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            <strong>灵感：</strong>Linear / Supabase 现代顶流基建。两道极具张力的几何防护弧刃对向交汇，以极简负空间雕刻出天眼之眸。
+          </p>
+          <div class="text-[11px] text-cyan-400 font-mono">特质：先锋高级、标志性极强、16px极限穿透</div>
+        </div>
+      </div>
+
+      <!-- Option A-3 -->
+      <div class="rounded-2xl border border-slate-800 bg-[#0A0E1A] p-6 flex flex-col items-center justify-between hover:border-cyan-500/50 transition group shadow-xl">
+        <div class="w-full flex justify-between items-center mb-4">
+          <span class="text-xs font-mono px-2 py-0.5 rounded bg-blue-950 text-blue-400 border border-blue-800/40">OPTION A-3</span>
+          <span class="text-xs text-slate-500 font-mono">四方视界快门</span>
+        </div>
+
+        <div class="w-56 h-56 flex items-center justify-center p-2 relative my-4">
+          <img src="./assets/logo-a3-quad.svg" class="w-full h-full drop-shadow-[0_10px_25px_rgba(0,240,255,0.15)] group-hover:scale-105 transition duration-300" alt="A-3">
+        </div>
+
+        <div class="w-full space-y-2 mt-4 pt-4 border-t border-slate-800/80">
+          <h3 class="text-base font-bold text-white font-display">四方视界快门 (Vision Quad)</h3>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            <strong>灵感：</strong>电影级四叶遮光斗 + AI 目标检测方框（BBox）。4 个斜切切面聚焦中心视窗，天然具备锁定感。
+          </p>
+          <div class="text-[11px] text-cyan-400 font-mono">特质：建筑体量感、稳重威严、安防视觉</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 2. Favicon 真实 16px 标签页并排横评 -->
+    <div class="space-y-6">
+      <div class="border-b border-slate-800 pb-3">
+        <h2 class="text-xl font-display font-bold text-white">真实 Chrome 浏览器标签页微缩横评 (16×16 px)</h2>
+        <p class="text-xs text-slate-400 mt-1 font-mono">检验在最严苛的 16px 尺度下，哪一个图形辨识度最高、最不模糊</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        <!-- A-1 标签页 -->
+        <div class="rounded-xl bg-[#1E222B] border border-slate-700/60 p-3 shadow-lg">
+          <div class="text-[11px] font-mono text-slate-400 mb-2">A-1 六棱光圈在标签栏：</div>
+          <div class="h-9 px-3 bg-[#2B303C] rounded-t-lg flex items-center space-x-2 border-t border-sky-500/50">
+            <div class="w-4 h-4 rounded-[3px] bg-[#070B14] flex items-center justify-center p-0.5 shrink-0 border border-slate-700">
+              <img src="./assets/favicon-a1.svg" class="w-full h-full" alt="Favicon A1">
+            </div>
+            <span class="text-xs text-slate-200 font-medium truncate">Argus · Prismatic</span>
+          </div>
+        </div>
+
+        <!-- A-2 标签页 -->
+        <div class="rounded-xl bg-[#1E222B] border-2 border-cyan-500/60 p-3 shadow-lg relative">
+          <div class="text-[11px] font-mono text-cyan-400 mb-2">A-2 负空间天眼在标签栏 (超强反差)：</div>
+          <div class="h-9 px-3 bg-[#2B303C] rounded-t-lg flex items-center space-x-2 border-t border-cyan-400 shadow-md">
+            <div class="w-4 h-4 rounded-[3px] bg-[#060913] flex items-center justify-center p-0.5 shrink-0 border border-slate-700">
+              <img src="./assets/favicon-a2.svg" class="w-full h-full" alt="Favicon A2">
+            </div>
+            <span class="text-xs text-slate-100 font-semibold truncate">Argus · Sentinel</span>
+          </div>
+        </div>
+
+        <!-- A-3 标签页 -->
+        <div class="rounded-xl bg-[#1E222B] border border-slate-700/60 p-3 shadow-lg">
+          <div class="text-[11px] font-mono text-slate-400 mb-2">A-3 四方快门在标签栏：</div>
+          <div class="h-9 px-3 bg-[#2B303C] rounded-t-lg flex items-center space-x-2 border-t border-blue-500/50">
+            <div class="w-4 h-4 rounded-[3px] bg-[#060913] flex items-center justify-center p-0.5 shrink-0 border border-slate-700">
+              <img src="./assets/favicon-a3.svg" class="w-full h-full" alt="Favicon A3">
+            </div>
+            <span class="text-xs text-slate-200 font-medium truncate">Argus · Vision Quad</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 3. 控制台顶栏真实呈现 -->
+    <div class="space-y-4">
+      <div class="border-b border-slate-800 pb-3">
+        <h2 class="text-xl font-display font-bold text-white">控制台 Header 顶栏模拟</h2>
+        <p class="text-xs text-slate-400 mt-1 font-mono">观察作为软件左上角品牌识别标时的整体协调性</p>
+      </div>
+
+      <div class="rounded-xl border border-slate-800 bg-[#080C14] overflow-hidden p-4 space-y-4">
+        
+        <!-- Navbar with A-2 -->
+        <div class="h-14 px-4 bg-[#0B0F19] rounded-lg border border-slate-800 flex items-center justify-between">
+          <div class="flex items-center space-x-3">
+            <img src="./assets/logo-a2-sentinel.svg" class="h-7 w-7" alt="A2">
+            <div class="flex flex-col">
+              <span class="font-display font-extrabold text-sm tracking-wider text-white">ARGUS</span>
+              <span class="font-mono text-[8px] text-cyan-400 tracking-widest -mt-0.5">EDGE VISION GATEWAY</span>
+            </div>
+          </div>
+
+          <div class="flex items-center space-x-4 text-xs font-mono text-slate-400">
+            <span class="text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">LIVE MONITOR</span>
+            <span>DEVICES</span>
+            <span>RULES</span>
+            <span>EVIDENCE</span>
+          </div>
+
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span class="text-[11px] font-mono text-slate-400">ANE READY</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    lucide.createIcons();
+
+    let isLight = false;
+    function toggleTheme() {
+      isLight = !isLight;
+      const html = document.documentElement;
+      const btn = document.getElementById('themeBtnText');
+      if (isLight) {
+        html.classList.remove('dark');
+        document.body.style.backgroundColor = '#F8FAFC';
+        document.body.style.color = '#0F172A';
+        btn.innerText = '切换深色模式';
+      } else {
+        html.classList.add('dark');
+        document.body.style.backgroundColor = '#06090F';
+        document.body.style.color = '#F8FAFC';
+        btn.innerText = '切换白底模式';
+      }
+    }
+  </script>
+</body>
+</html>

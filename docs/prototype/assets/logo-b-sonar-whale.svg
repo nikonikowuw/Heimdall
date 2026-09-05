@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <!-- 深海极光渐变 (主鲸身) -->
+    <linearGradient id="whaleBodyGrad" x1="15%" y1="10%" x2="85%" y2="90%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="35%" stop-color="#0284C7"/>
+      <stop offset="70%" stop-color="#0369A1"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+
+    <!-- 腹部亮色与流线高光 -->
+    <linearGradient id="whaleBellyGrad" x1="30%" y1="0%" x2="70%" y2="100%">
+      <stop offset="0%" stop-color="#E0F2FE" stop-opacity="0.95"/>
+      <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#0284C7" stop-opacity="0.2"/>
+    </linearGradient>
+
+    <!-- 电光青光晕 (声呐与瞳孔) -->
+    <linearGradient id="sonarGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+
+    <!-- 核心瞳孔径向高光 -->
+    <radialGradient id="irisLight" cx="45%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="30%" stop-color="#00F0FF"/>
+      <stop offset="70%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0B1329"/>
+    </radialGradient>
+
+    <!-- 柔和发光阴影滤镜 -->
+    <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#00F0FF" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <!-- 1. 鲸身阴影与流体剪影 (带科技倒角与饱满曲线) -->
+  <g filter="url(#softShadow)">
+    <!-- 鲸鱼主躯干 (背部、圆润头部、下颌与尾柄) -->
+    <path d="M 370 230 
+             C 385 248, 385 275, 360 295
+             C 330 320, 275 325, 220 315
+             C 170 305, 125 285, 80 292
+             C 70 294, 60 286, 68 276
+             C 85 255, 115 240, 140 232
+             C 185 218, 240 205, 295 205
+             C 335 205, 355 215, 370 230 Z" 
+          fill="url(#whaleBodyGrad)"/>
+
+    <!-- 背鳍 (科技折面感，象征边缘计算算力塔) -->
+    <path d="M 235 206
+             C 248 175, 272 152, 285 148
+             C 288 147, 290 151, 286 158
+             C 276 178, 272 195, 270 206 Z" 
+          fill="#38BDF8" opacity="0.95"/>
+
+    <!-- 优美的分叉双尾鳍 -->
+    <!-- 上尾鳍 -->
+    <path d="M 76 284 
+             C 52 260, 32 238, 18 240
+             C 14 241, 16 250, 24 258
+             C 42 276, 58 288, 70 290 Z" 
+          fill="#0284C7"/>
+    <!-- 下尾鳍 -->
+    <path d="M 72 292 
+             C 50 310, 30 330, 16 326
+             C 12 325, 14 316, 22 308
+             C 38 294, 56 290, 68 290 Z" 
+          fill="#0369A1"/>
+
+    <!-- 下腹部流线与腹鳍 (浅色高光，赋予立体感与速度感) -->
+    <path d="M 360 295
+             C 325 320, 270 325, 215 315
+             C 180 308, 150 296, 125 288
+             C 155 286, 195 292, 235 296
+             C 285 300, 330 290, 360 295 Z" 
+          fill="url(#whaleBellyGrad)"/>
+    
+    <!-- 胸鳍 (向外优雅舒展) -->
+    <path d="M 270 318
+             C 260 348, 238 375, 218 388
+             C 214 391, 212 386, 215 380
+             C 226 355, 245 330, 260 318 Z" 
+          fill="#0284C7" opacity="0.85"/>
+  </g>
+
+  <!-- 2. 腹部条纹装饰线 (安防与流媒体数据总线节律) -->
+  <path d="M 230 302 C 245 304, 265 304, 285 300" stroke="#00F0FF" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <path d="M 250 310 C 265 312, 280 311, 295 306" stroke="#00F0FF" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+
+  <!-- 3. 核心天眼：光圈与智能十字准星 (Aperture Iris & Target Crosshair) -->
+  <g transform="translate(328, 246)">
+    <!-- 光圈外环 (科技刻度) -->
+    <circle cx="0" cy="0" r="28" fill="#070D1B" stroke="#00F0FF" stroke-width="3" filter="url(#neonGlow)"/>
+    
+    <!-- 镜头刻度多边形 / 快门叶片感 -->
+    <circle cx="0" cy="0" r="22" stroke="#38BDF8" stroke-width="1.5" stroke-dasharray="4 6" opacity="0.8"/>
+
+    <!-- 发光虹膜 -->
+    <circle cx="0" cy="0" r="15" fill="url(#irisLight)"/>
+
+    <!-- 瞳孔中心超能白核 -->
+    <circle cx="0" cy="0" r="5.5" fill="#FFFFFF"/>
+
+    <!-- 目标检测瞄准准星 (Crosshair ticks) -->
+    <line x1="-34" y1="0" x2="-24" y2="0" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="24" y1="0" x2="34" y2="0" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="0" y1="-34" x2="0" y2="-24" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="0" y1="24" x2="0" y2="34" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="round"/>
+
+    <!-- 越界警戒小橙点 (Alert indicator) -->
+    <circle cx="20" cy="-20" r="3.5" fill="#F59E0B" filter="url(#neonGlow)"/>
+  </g>
+
+  <!-- 4. 声呐与雷达视场波纹 (Sonar Echo & Streaming Wavefront) -->
+  <!-- 第 1 道声呐波 -->
+  <path d="M 395 205 C 418 230, 418 262, 395 287" 
+        stroke="url(#sonarGlow)" stroke-width="4.5" stroke-linecap="round" opacity="0.95" filter="url(#neonGlow)"/>
+  <!-- 第 2 道声呐波 (距离递进，逐渐展开) -->
+  <path d="M 425 185 C 458 220, 458 272, 425 307" 
+        stroke="url(#sonarGlow)" stroke-width="4" stroke-linecap="round" stroke-dasharray="16 8" opacity="0.75"/>
+  <!-- 第 3 道声呐波 (广角感知视场) -->
+  <path d="M 455 165 C 498 210, 498 282, 455 327" 
+        stroke="url(#sonarGlow)" stroke-width="3" stroke-linecap="round" opacity="0.45"/>
+
+  <!-- 5. 顶部呼吸喷气：转化为发散的边缘节点光点 (Edge Nodes) -->
+  <circle cx="308" cy="180" r="3" fill="#00F0FF" opacity="0.8"/>
+  <circle cx="320" cy="162" r="2" fill="#38BDF8" opacity="0.6"/>
+  <circle cx="334" cy="148" r="1.5" fill="#FFFFFF" opacity="0.5"/>
+</svg>

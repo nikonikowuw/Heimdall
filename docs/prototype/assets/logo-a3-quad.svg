@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <!-- 模块 1 渐变 (左上) -->
+    <linearGradient id="a3Grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <!-- 模块 2 渐变 (右上) -->
+    <linearGradient id="a3Grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+    <!-- 模块 3 渐变 (右下) -->
+    <linearGradient id="a3Grad3" x1="100%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <!-- 模块 4 渐变 (左下) -->
+    <linearGradient id="a3Grad4" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#0C4A6E"/>
+    </linearGradient>
+    <!-- 核心光斑 -->
+    <radialGradient id="a3CoreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="40%" stop-color="#00F0FF"/>
+      <stop offset="80%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#080D1A"/>
+    </radialGradient>
+    <filter id="a3Glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- 4 个斜切快门构件 (四方联动，收缩形成方形孔径与 BBox 视觉特征) -->
+  <g transform="translate(256, 256)">
+    <!-- 构件 1：左上方 -->
+    <polygon points="-190,-190 -30,-190 -70,-70 -190,-30" fill="url(#a3Grad1)"/>
+    
+    <!-- 构件 2：右上方 (顺时针旋转 90度) -->
+    <polygon points="190,-190 190,-30 70,-70 30,-190" fill="url(#a3Grad2)"/>
+
+    <!-- 构件 3：右下方 (顺时针旋转 180度) -->
+    <polygon points="190,190 30,190 70,70 190,30" fill="url(#a3Grad3)"/>
+
+    <!-- 构件 4：左下方 (顺时针旋转 270度) -->
+    <polygon points="-190,190 -190,30 -70,70 -30,190" fill="url(#a3Grad4)"/>
+
+    <!-- 构件之间的微细间隙分割线 (机械切削感) -->
+    <line x1="-190" y1="-30" x2="-70" y2="-70" stroke="#060913" stroke-width="5"/>
+    <line x1="30" y1="-190" x2="70" y2="-70" stroke="#060913" stroke-width="5"/>
+    <line x1="190" y1="30" x2="70" y2="70" stroke="#060913" stroke-width="5"/>
+    <line x1="-30" y1="190" x2="-70" y2="70" stroke="#060913" stroke-width="5"/>
+
+    <!-- 中心锁定视窗 (菱形 / 倾斜方框聚焦) -->
+    <polygon points="0,-56 56,0 0,56 -56,0" fill="#060913" stroke="#00F0FF" stroke-width="3" filter="url(#a3Glow)"/>
+    
+    <!-- 核心天眼光斑 -->
+    <circle cx="0" cy="0" r="28" fill="url(#a3CoreGlow)"/>
+    <circle cx="0" cy="0" r="10" fill="#FFFFFF"/>
+  </g>
+</svg>

@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 64" fill="none">
+  <defs>
+    <linearGradient id="hWhaleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="50%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0B1329"/>
+    </linearGradient>
+    <linearGradient id="hSonar" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#CBD5E1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- === 左侧图标区 (64x64 视界) === -->
+  <g transform="translate(2, 0)">
+    <!-- 鲸身 -->
+    <path d="M 46 28 C 49 32, 48 37, 42 40 C 35 43, 27 43, 20 41 C 14 39, 9 36, 6 37 C 8 32, 12 30, 16 29 C 23 27, 32 25, 39 25 C 43 25, 45 27, 46 28 Z" 
+          fill="url(#hWhaleGrad)"/>
+    <!-- 背鳍 -->
+    <path d="M 29 25 C 31 19, 35 16, 37 15 C 36 19, 35 23, 34 25 Z" fill="#38BDF8"/>
+    <!-- 尾鳍 -->
+    <path d="M 7 37 C 4 34, 2 32, 1 33 C 2 36, 4 38, 6 39 Z" fill="#0284C7"/>
+    <path d="M 7 38 C 4 41, 2 43, 1 42 C 3 40, 5 39, 7 39 Z" fill="#0369A1"/>
+
+    <!-- 核心天眼：光圈与十字准星 -->
+    <circle cx="40" cy="31" r="7.5" fill="#070D1B" stroke="#00F0FF" stroke-width="2.2"/>
+    <circle cx="40" cy="31" r="3.2" fill="#00F0FF"/>
+    <circle cx="40" cy="31" r="1.2" fill="#FFFFFF"/>
+    <!-- 瞄准准星刻度 -->
+    <line x1="30" y1="31" x2="33" y2="31" stroke="#00F0FF" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="47" y1="31" x2="50" y2="31" stroke="#00F0FF" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="40" y1="21" x2="40" y2="24" stroke="#00F0FF" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="40" y1="38" x2="40" y2="41" stroke="#00F0FF" stroke-width="1.5" stroke-linecap="round"/>
+
+    <!-- 前方声呐波 -->
+    <path d="M 50 24 C 54 28, 54 34, 50 38" stroke="url(#hSonar)" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M 56 20 C 61 26, 61 36, 56 42" stroke="url(#hSonar)" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 3" opacity="0.8"/>
+  </g>
+
+  <!-- === 中间分割装饰微线 === -->
+  <line x1="72" y1="18" x2="72" y2="46" stroke="#334155" stroke-width="1"/>
+
+  <!-- === 右侧品牌标与副标 === -->
+  <g transform="translate(84, 0)">
+    <!-- 主标题：ARGUS (或 HEIMDALL) -->
+    <text x="0" y="32" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" 
+          font-size="20" font-weight="800" letter-spacing="3" fill="url(#titleGrad)">
+      ARGUS
+    </text>
+    
+    <!-- 副标题：边缘 AI 视频网关 -->
+    <text x="0" y="47" font-family="'JetBrains Mono', 'Space Mono', monospace" 
+          font-size="8.5" font-weight="600" letter-spacing="1.8" fill="#00F0FF" opacity="0.85">
+      EDGE AI VIDEO GATEWAY
+    </text>
+
+    <!-- 在线状态指示器 -->
+    <circle cx="196" cy="27" r="3" fill="#10B981"/>
+    <text x="204" y="30" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="600" fill="#10B981" letter-spacing="1">
+      ONLINE
+    </text>
+  </g>
+</svg>

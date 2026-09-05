@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Argus / Heimdall - Logo & Favicon 方案 A 设计评审看板</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@600;700;800&family=Unbounded:wght@600;700;800&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Unbounded"', '"Space Grotesk"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+            sans: ['"Inter"', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              cyan: '#00F0FF',
+              blue: '#0284C7',
+              deep: '#0A0E1A',
+              card: '#111827',
+              border: '#1E293B',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #06090F;
+      color: #F8FAFC;
+      font-family: 'Inter', sans-serif;
+    }
+    
+    /* 光圈旋转微动效 */
+    @keyframes aperture-spin-slow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    @keyframes radar-pulse {
+      0%, 100% { opacity: 0.9; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(1.02); }
+    }
+    .anim-spin-slow {
+      animation: aperture-spin-slow 36s linear infinite;
+      transform-origin: 256px 256px;
+    }
+    .anim-radar {
+      animation: radar-pulse 3s ease-in-out infinite;
+      transform-origin: 256px 256px;
+    }
+    .paused * {
+      animation: none !important;
+    }
+
+    /* 网格背景 */
+    .bg-grid {
+      background-size: 32px 32px;
+      background-image: 
+        linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-grid pb-24">
+
+  <!-- 顶部导航条 -->
+  <header class="sticky top-0 z-50 backdrop-blur-md bg-[#06090F]/85 border-b border-brand-border">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+          <i data-lucide="aperture" class="w-4 h-4"></i>
+        </div>
+        <div>
+          <span class="font-display font-bold text-sm tracking-wider text-white">ARGUS / HEIMDALL</span>
+          <span class="text-xs text-cyan-400 ml-2 font-mono px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40">BRAND CONCEPT A (FINAL)</span>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <button id="toggleAnimBtn" onclick="toggleAnimation()" class="text-xs font-mono px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center space-x-1.5 transition">
+          <i data-lucide="activity" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span id="animStatusText">暂停动效</span>
+        </button>
+        <a href="#matrix" class="text-xs font-mono px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold transition">
+          Favicon 16px 实景
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 pt-10 space-y-16">
+
+    <!-- 方案设计概述 -->
+    <div class="space-y-4">
+      <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-mono">
+        <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+        <span>正式定选：方案 A『Argus 全视光圈眼』(The All-Seeing Aperture)</span>
+      </div>
+      <h1 class="text-3xl lg:text-4xl font-display font-extrabold tracking-tight text-white">
+        工业级边缘机器视觉全息守望者
+      </h1>
+      <p class="text-slate-400 text-base max-w-3xl leading-relaxed">
+        百眼巨人 Argus 的警惕守望与现代机器视觉镜头光圈（Aperture）融为一体。四周由 <strong class="text-cyan-300">AI 目标检测边框（BBox Corner Brackets）</strong> 锚定，内部由 <strong class="text-cyan-300">6 片精密快门刀片</strong> 与 <strong class="text-cyan-300">十字对焦准星</strong> 聚焦核心天眼。
+      </p>
+    </div>
+
+    <!-- 1. 主视觉展示区 (Hero Showcase) -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+      <!-- 主视觉 Logo 容器 -->
+      <div class="lg:col-span-7 bg-[#0A0E1A] border border-brand-border rounded-2xl p-8 relative overflow-hidden shadow-2xl flex flex-col items-center justify-center min-h-[460px]">
+        <!-- 放射光晕背景 -->
+        <div class="absolute w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute w-64 h-64 bg-blue-600/10 rounded-full blur-2xl pointer-events-none -bottom-10 -right-10"></div>
+
+        <!-- 矢量渲染核心图 (方案 A) -->
+        <div id="heroLogoWrapper" class="w-80 h-80 relative z-10">
+          <svg viewBox="0 0 512 512" class="w-full h-full drop-shadow-[0_20px_35px_rgba(0,240,255,0.25)]" fill="none">
+            <defs>
+              <linearGradient id="apertureRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#00F0FF"/>
+                <stop offset="50%" stop-color="#0284C7"/>
+                <stop offset="100%" stop-color="#1D4ED8"/>
+              </linearGradient>
+              <linearGradient id="bladeGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.9"/>
+                <stop offset="100%" stop-color="#0369A1" stop-opacity="0.2"/>
+              </linearGradient>
+              <linearGradient id="bladeGrad2" x1="100%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.8"/>
+                <stop offset="100%" stop-color="#075985" stop-opacity="0.2"/>
+              </linearGradient>
+              <radialGradient id="irisCoreGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#FFFFFF"/>
+                <stop offset="25%" stop-color="#00F0FF"/>
+                <stop offset="65%" stop-color="#0284C7"/>
+                <stop offset="100%" stop-color="#070D1A"/>
+              </radialGradient>
+              <radialGradient id="lensReflect" cx="35%" cy="30%" r="70%">
+                <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.3"/>
+                <stop offset="50%" stop-color="#0B1329" stop-opacity="0.8"/>
+                <stop offset="100%" stop-color="#030712" stop-opacity="0.95"/>
+              </radialGradient>
+            </defs>
+
+            <!-- 1. 目标检测边界框角标 (AI BBox Corner Brackets) -->
+            <g stroke="#00F0FF" stroke-width="4" stroke-linecap="round" opacity="0.9">
+              <path d="M 64 128 L 64 64 L 128 64"/>
+              <path d="M 384 64 L 448 64 L 448 128"/>
+              <path d="M 448 384 L 448 448 L 384 448"/>
+              <path d="M 128 448 L 64 448 L 64 384"/>
+            </g>
+
+            <!-- 2. 外围环形刻度与雷达天线测距环 -->
+            <circle cx="256" cy="256" r="186" stroke="#1E293B" stroke-width="2"/>
+            <g class="anim-radar">
+              <circle cx="256" cy="256" r="186" stroke="url(#apertureRingGrad)" stroke-width="3" stroke-dasharray="16 12"/>
+            </g>
+            <!-- 4 个主坐标刻度卡槽 -->
+            <line x1="256" y1="56" x2="256" y2="76" stroke="#00F0FF" stroke-width="4" stroke-linecap="round"/>
+            <line x1="256" y1="436" x2="256" y2="456" stroke="#00F0FF" stroke-width="4" stroke-linecap="round"/>
+            <line x1="56" y1="256" x2="76" y2="256" stroke="#00F0FF" stroke-width="4" stroke-linecap="round"/>
+            <line x1="436" y1="256" x2="456" y2="256" stroke="#00F0FF" stroke-width="4" stroke-linecap="round"/>
+
+            <!-- 主光圈基座外环 -->
+            <circle cx="256" cy="256" r="162" fill="url(#lensReflect)" stroke="url(#apertureRingGrad)" stroke-width="5"/>
+
+            <!-- 3. 机械光圈叶片群 (6-Blade Assembly) -->
+            <g class="anim-spin-slow">
+              <g transform="translate(256, 256)">
+                <path d="M 0 -162 C 65 -162, 125 -125, 148 -68 L 52 -30 C 35 -58, 5 -75, -28 -72 Z" fill="url(#bladeGrad1)" stroke="#00F0FF" stroke-width="1.5"/>
+                <g transform="rotate(60)">
+                  <path d="M 0 -162 C 65 -162, 125 -125, 148 -68 L 52 -30 C 35 -58, 5 -75, -28 -72 Z" fill="url(#bladeGrad2)" stroke="#00F0FF" stroke-width="1.5"/>
+                </g>
+                <g transform="rotate(120)">
+                  <path d="M 0 -162 C 65 -162, 125 -125, 148 -68 L 52 -30 C 35 -58, 5 -75, -28 -72 Z" fill="url(#bladeGrad1)" stroke="#00F0FF" stroke-width="1.5"/>
+                </g>
+                <g transform="rotate(180)">
+                  <path d="M 0 -162 C 65 -162, 125 -125, 148 -68 L 52 -30 C 35 -58, 5 -75, -28 -72 Z" fill="url(#bladeGrad2)" stroke="#00F0FF" stroke-width="1.5"/>
+                </g>
+                <g transform="rotate(240)">
+                  <path d="M 0 -162 C 65 -162, 125 -125, 148 -68 L 52 -30 C 35 -58, 5 -75, -28 -72 Z" fill="url(#bladeGrad1)" stroke="#00F0FF" stroke-width="1.5"/>
+                </g>
+                <g transform="rotate(300)">
+                  <path d="M 0 -162 C 65 -162, 125 -125, 148 -68 L 52 -30 C 35 -58, 5 -75, -28 -72 Z" fill="url(#bladeGrad2)" stroke="#00F0FF" stroke-width="1.5"/>
+                </g>
+              </g>
+            </g>
+
+            <!-- 4. 核心瞳孔与十字瞄准准星 -->
+            <g transform="translate(256, 256)">
+              <circle cx="0" cy="0" r="76" fill="#060A14" stroke="#00F0FF" stroke-width="3"/>
+              <circle cx="0" cy="0" r="62" stroke="#38BDF8" stroke-width="2" stroke-dasharray="6 8" opacity="0.75"/>
+              <circle cx="0" cy="0" r="42" fill="url(#irisCoreGlow)"/>
+              <circle cx="0" cy="0" r="14" fill="#FFFFFF"/>
+              <circle cx="0" cy="0" r="6" fill="#00F0FF"/>
+
+              <!-- 十字准星 -->
+              <line x1="-96" y1="0" x2="-56" y2="0" stroke="#00F0FF" stroke-width="3.5" stroke-linecap="round"/>
+              <line x1="56" y1="0" x2="96" y2="0" stroke="#00F0FF" stroke-width="3.5" stroke-linecap="round"/>
+              <line x1="0" y1="-96" x2="0" y2="-56" stroke="#00F0FF" stroke-width="3.5" stroke-linecap="round"/>
+              <line x1="0" y1="56" x2="0" y2="96" stroke="#00F0FF" stroke-width="3.5" stroke-linecap="round"/>
+
+              <!-- 越界警戒琥珀点 -->
+              <circle cx="58" cy="-58" r="8" fill="#F59E0B"/>
+              <circle cx="58" cy="-58" r="4" fill="#FEF3C7"/>
+            </g>
+          </svg>
+        </div>
+
+        <div class="text-center mt-6 z-10">
+          <div class="font-display font-extrabold text-2xl tracking-widest text-white">ARGUS</div>
+          <div class="font-mono text-xs text-cyan-400 font-semibold tracking-widest mt-1">ALL-SEEING VISION ENGINE</div>
+        </div>
+      </div>
+
+      <!-- 方案 A 符号深度解析 -->
+      <div class="lg:col-span-5 space-y-4">
+        <h3 class="text-sm font-mono text-slate-400 uppercase tracking-wider flex items-center space-x-2">
+          <i data-lucide="layers" class="w-4 h-4 text-cyan-400"></i>
+          <span>方案 A 视觉语言体系</span>
+        </h3>
+
+        <div class="space-y-3">
+          <!-- 元素 1: AI BBox 角标 -->
+          <div class="p-4 rounded-xl bg-brand-card border border-brand-border hover:border-cyan-500/40 transition">
+            <div class="flex items-start space-x-3">
+              <div class="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+                <i data-lucide="scan" class="w-5 h-5"></i>
+              </div>
+              <div>
+                <h4 class="text-sm font-bold text-white flex items-center">
+                  目标检测边界框角标 (BBox Brackets)
+                  <span class="ml-2 text-[10px] font-mono text-cyan-400 bg-cyan-950 px-1.5 py-0.5 rounded border border-cyan-800/40">AI 属性</span>
+                </h4>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+                  四个角落的 <code>[ ]</code> L 型边角标记，直观传达计算机视觉目标检测（Object Detection）的工业认知。
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 元素 2: 机械快门光圈 -->
+          <div class="p-4 rounded-xl bg-brand-card border border-brand-border hover:border-cyan-500/40 transition">
+            <div class="flex items-start space-x-3">
+              <div class="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
+                <i data-lucide="aperture" class="w-5 h-5"></i>
+              </div>
+              <div>
+                <h4 class="text-sm font-bold text-white">6 片几何光圈叶片 (Aperture Iris)</h4>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+                  顺时针交错旋转的 6 片机械刀片，象征视频镜头进光量控制、多码流（主码流/子码流）接入与聚焦分析。
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 元素 3: 十字对焦与警戒点 -->
+          <div class="p-4 rounded-xl bg-brand-card border border-brand-border hover:border-cyan-500/40 transition">
+            <div class="flex items-start space-x-3">
+              <div class="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                <i data-lucide="crosshair" class="w-5 h-5"></i>
+              </div>
+              <div>
+                <h4 class="text-sm font-bold text-white">十字瞄准准星与告警锚点 (Crosshair & Alert)</h4>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+                  中心超聚能白核贯穿准星刻度，右上角点缀一颗琥珀金警报指示灯，代表精准捕获越界与区域入侵瞬间。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Favicon 真实场景微缩矩阵 (Favicon Sandbox) -->
+    <div id="matrix" class="space-y-6">
+      <div class="flex items-center justify-between border-b border-brand-border pb-4">
+        <div>
+          <h2 class="text-xl font-display font-bold text-white">方案 A Favicon 极限微尺度真实拟真</h2>
+          <p class="text-xs text-slate-400 mt-1 font-mono">验证在 16px 浏览器标签页中的极端锐度与高反差表现</p>
+        </div>
+        <span class="text-xs font-mono text-cyan-400 bg-cyan-950 px-2.5 py-1 rounded border border-cyan-800/40">ULTRA HIGH CONTRAST</span>
+      </div>
+
+      <!-- 真实 Chrome 浏览器标签栏拟真 -->
+      <div class="space-y-3">
+        <div class="text-xs font-mono text-slate-400 flex items-center space-x-1.5">
+          <i data-lucide="globe" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span>macOS Chrome 标签页实景 (16×16 px Favicon 真实体验)</span>
+        </div>
+
+        <div class="rounded-xl bg-[#1E222B] border border-slate-700/60 p-2 shadow-xl max-w-2xl">
+          <!-- 模拟标签头 -->
+          <div class="flex items-center space-x-2">
+            <!-- 激活态标签页 (Argus 方案 A) -->
+            <div class="h-9 px-3.5 bg-[#2B303C] rounded-t-lg flex items-center space-x-2.5 border-t border-cyan-500/50 shadow-md">
+              <!-- 真实的 16x16 Favicon A -->
+              <div class="w-4 h-4 rounded-[3px] bg-[#0A0E17] flex items-center justify-center p-0.5 shrink-0 border border-slate-700">
+                <img src="./assets/favicon-a.svg" class="w-full h-full" alt="16px Favicon A">
+              </div>
+              <span class="text-xs text-slate-200 font-medium truncate max-w-[150px]">Argus · All-Seeing Eye</span>
+              <i data-lucide="x" class="w-3 h-3 text-slate-400 hover:text-white cursor-pointer ml-1"></i>
+            </div>
+
+            <!-- 次要标签页 -->
+            <div class="h-9 px-3 rounded-t-lg flex items-center space-x-2 text-slate-400 hover:bg-[#252934] transition cursor-pointer">
+              <div class="w-4 h-4 rounded-[3px] bg-slate-700 flex items-center justify-center text-[10px] text-slate-300">G</div>
+              <span class="text-xs truncate max-w-[120px]">GitHub - Heimdall</span>
+              <i data-lucide="x" class="w-3 h-3 text-slate-500"></i>
+            </div>
+            
+            <button class="w-6 h-6 rounded-full hover:bg-slate-700 text-slate-400 flex items-center justify-center text-xs">+</button>
+          </div>
+
+          <!-- 模拟地址栏 -->
+          <div class="bg-[#2B303C] rounded-lg h-8 px-3 flex items-center justify-between text-xs text-slate-300">
+            <div class="flex items-center space-x-2">
+              <i data-lucide="lock" class="w-3 h-3 text-emerald-400"></i>
+              <span class="text-slate-400">http://192.168.1.100:8000/live</span>
+            </div>
+            <span class="text-[10px] font-mono text-cyan-400">200ms FLV</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 多尺度对比展示格 -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
+        <!-- 16px 极限标签页 -->
+        <div class="p-4 rounded-xl bg-brand-card border border-brand-border flex flex-col items-center justify-center text-center space-y-3">
+          <div class="w-12 h-12 rounded-lg bg-[#06090F] border border-slate-800 flex items-center justify-center">
+            <img src="./assets/favicon-a.svg" class="w-4 h-4" alt="16px">
+          </div>
+          <div>
+            <div class="text-xs font-mono font-bold text-white">16 × 16 px</div>
+            <div class="text-[11px] text-slate-400 mt-0.5">浏览器标签页极值</div>
+          </div>
+        </div>
+
+        <!-- 32px Retina 屏幕 -->
+        <div class="p-4 rounded-xl bg-brand-card border border-brand-border flex flex-col items-center justify-center text-center space-y-3">
+          <div class="w-14 h-14 rounded-lg bg-[#06090F] border border-slate-800 flex items-center justify-center">
+            <img src="./assets/favicon-a.svg" class="w-8 h-8" alt="32px">
+          </div>
+          <div>
+            <div class="text-xs font-mono font-bold text-white">32 × 32 px</div>
+            <div class="text-[11px] text-slate-400 mt-0.5">Retina 高分屏书签</div>
+          </div>
+        </div>
+
+        <!-- 64px 快捷方式 -->
+        <div class="p-4 rounded-xl bg-brand-card border border-brand-border flex flex-col items-center justify-center text-center space-y-3">
+          <div class="w-20 h-20 rounded-xl bg-[#06090F] border border-slate-800 flex items-center justify-center">
+            <img src="./assets/favicon-a.svg" class="w-16 h-16" alt="64px">
+          </div>
+          <div>
+            <div class="text-xs font-mono font-bold text-white">64 × 64 px</div>
+            <div class="text-[11px] text-slate-400 mt-0.5">macOS Launchpad / PWA</div>
+          </div>
+        </div>
+
+        <!-- 128px 桌面应用图标 -->
+        <div class="p-4 rounded-xl bg-brand-card border border-brand-border flex flex-col items-center justify-center text-center space-y-3">
+          <div class="w-24 h-24 rounded-2xl bg-[#06090F] border border-slate-800 flex items-center justify-center shadow-lg">
+            <img src="./assets/favicon-a.svg" class="w-20 h-20" alt="128px">
+          </div>
+          <div>
+            <div class="text-xs font-mono font-bold text-white">128 × 128 px</div>
+            <div class="text-[11px] text-slate-400 mt-0.5">Tauri 桌面安装包图标</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. 控制台 Header 实际应用拟真 -->
+    <div class="space-y-4">
+      <div class="border-b border-brand-border pb-3">
+        <h2 class="text-xl font-display font-bold text-white">系统控制台导航栏实景 (Navbar Simulation)</h2>
+        <p class="text-xs text-slate-400 mt-1 font-mono">方案 A 横版 Logo (Icon + Wordmark) 在深色控制台顶栏中的视觉表现</p>
+      </div>
+
+      <div class="rounded-xl border border-brand-border bg-[#0B0F19] overflow-hidden shadow-2xl">
+        <!-- 模拟真实导航顶栏 -->
+        <div class="h-16 px-6 bg-[#080C14] border-b border-brand-border flex items-center justify-between">
+          <!-- 左侧品牌区 -->
+          <div class="flex items-center space-x-6">
+            <img src="./assets/logo-horizontal-a.svg" class="h-10 w-auto" alt="Argus Header Logo A">
+            
+            <!-- 导航菜单 -->
+            <nav class="hidden md:flex items-center space-x-1 pl-4 border-l border-slate-800">
+              <a href="#" class="px-3 py-1.5 rounded-lg text-xs font-medium text-cyan-400 bg-cyan-950/40 border border-cyan-800/50 flex items-center space-x-1.5">
+                <i data-lucide="tv" class="w-3.5 h-3.5"></i>
+                <span>监控大屏</span>
+              </a>
+              <a href="#" class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 flex items-center space-x-1.5">
+                <i data-lucide="camera" class="w-3.5 h-3.5"></i>
+                <span>设备管理</span>
+              </a>
+              <a href="#" class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 flex items-center space-x-1.5">
+                <i data-lucide="crosshair" class="w-3.5 h-3.5"></i>
+                <span>实时流布防</span>
+              </a>
+              <a href="#" class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 flex items-center space-x-1.5">
+                <i data-lucide="shield-alert" class="w-3.5 h-3.5"></i>
+                <span>证据中心</span>
+              </a>
+            </nav>
+          </div>
+
+          <!-- 右侧状态区 -->
+          <div class="flex items-center space-x-4">
+            <div class="flex items-center space-x-2 text-xs font-mono text-slate-400 bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span>Apple Silicon ANE: 14.2ms</span>
+            </div>
+            <div class="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300">
+              <i data-lucide="user" class="w-4 h-4"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- 模拟内容占位区 -->
+        <div class="p-8 text-center bg-[#070A11]/60">
+          <p class="text-xs font-mono text-slate-500">
+            [控制台视口: 方案 A 的硬朗工业感与安防视频监控、深色卡片以及动态 SVG 布防规则完美契合]
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. 多重质感与外壳打样测试 (Material & Theme Matrix) -->
+    <div class="space-y-4">
+      <div class="border-b border-brand-border pb-3">
+        <h2 class="text-xl font-display font-bold text-white">多重质感与硬件机箱丝印测试</h2>
+        <p class="text-xs text-slate-400 mt-1 font-mono">方案 A 在暗色监控大屏、浅色审计报表打印、以及铝合金工控机外壳激光雕刻的表现</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- 1. 虚空极黑 (Cyber Void) -->
+        <div class="p-6 rounded-2xl bg-[#06090F] border border-slate-800 space-y-3">
+          <div class="text-xs font-mono text-cyan-400 uppercase tracking-wider">01. 虚空极黑 (Cyber Dark)</div>
+          <div class="h-36 rounded-xl bg-[#090D17] border border-cyan-900/30 flex items-center justify-center p-4">
+            <img src="./assets/logo-horizontal-a.svg" class="h-10 w-auto" alt="Cyber Dark A">
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            默认暗黑工业控制台，光圈锐利聚焦，安防专业气质拉满。
+          </p>
+        </div>
+
+        <!-- 2. 白纸明亮浅色 (Clean Light Mode) -->
+        <div class="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+          <div class="text-xs font-mono text-slate-300 uppercase tracking-wider">02. 浅色模式 / 报告打印</div>
+          <div class="h-36 rounded-xl bg-white border border-slate-200 flex items-center justify-center p-4">
+            <div class="flex items-center space-x-3">
+              <div class="w-10 h-10 rounded-lg bg-sky-50 border border-sky-200 flex items-center justify-center">
+                <img src="./assets/favicon-a.svg" class="w-8 h-8" alt="Light A">
+              </div>
+              <div>
+                <div class="font-display font-extrabold text-base text-slate-900 tracking-wider">ARGUS</div>
+                <div class="font-mono text-[9px] text-sky-600 font-semibold tracking-widest">ALL-SEEING VISION</div>
+              </div>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            适用于导出的安全告警证据 PDF 报告、正式文书与白底文档。
+          </p>
+        </div>
+
+        <!-- 3. 铝合金机箱外壳激光镭雕 (Laser Engraving) -->
+        <div class="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+          <div class="text-xs font-mono text-slate-400 uppercase tracking-wider">03. 硬件外壳金属镭雕 (CNC / Laser)</div>
+          <div class="h-36 rounded-xl bg-gradient-to-br from-slate-700 via-slate-800 to-slate-900 border border-slate-600 flex items-center justify-center p-4 shadow-inner">
+            <div class="flex items-center space-x-3 opacity-80 filter drop-shadow-[0_1px_1px_rgba(255,255,255,0.2)]">
+              <div class="w-10 h-10 rounded-lg bg-slate-800/80 border border-slate-500/60 flex items-center justify-center">
+                <svg viewBox="0 0 64 64" class="w-7 h-7" fill="none">
+                  <g stroke="#E2E8F0" stroke-width="1.8" stroke-linecap="round">
+                    <path d="M 8 16 L 8 8 L 16 8"/>
+                    <path d="M 48 8 L 56 8 L 56 16"/>
+                    <path d="M 56 48 L 56 56 L 48 56"/>
+                    <path d="M 16 56 L 8 56 L 8 48"/>
+                  </g>
+                  <circle cx="32" cy="32" r="21" stroke="#94A3B8" stroke-width="2.5"/>
+                  <circle cx="32" cy="32" r="7" fill="#E2E8F0"/>
+                  <line x1="21" y1="32" x2="25" y2="32" stroke="#E2E8F0" stroke-width="2"/>
+                  <line x1="39" y1="32" x2="43" y2="32" stroke="#E2E8F0" stroke-width="2"/>
+                  <line x1="32" y1="21" x2="32" y2="25" stroke="#E2E8F0" stroke-width="2"/>
+                  <line x1="32" y1="39" x2="32" y2="43" stroke="#E2E8F0" stroke-width="2"/>
+                </svg>
+              </div>
+              <div>
+                <div class="font-display font-extrabold text-base text-slate-200 tracking-wider">ARGUS</div>
+                <div class="font-mono text-[8.5px] text-slate-400 font-bold tracking-widest">EDGE AI UNIT</div>
+              </div>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            方案 A 的纯几何线条在激光雕刻机上具有极佳的可加工性，工业质感拔群。
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    lucide.createIcons();
+
+    let isAnimActive = true;
+    function toggleAnimation() {
+      isAnimActive = !isAnimActive;
+      const hero = document.getElementById('heroLogoWrapper');
+      const statusText = document.getElementById('animStatusText');
+      if (isAnimActive) {
+        hero.classList.remove('paused');
+        statusText.innerText = '暂停动效';
+      } else {
+        hero.classList.add('paused');
+        statusText.innerText = '开启光圈';
+      }
+    }
+  </script>
+</body>
+</html>

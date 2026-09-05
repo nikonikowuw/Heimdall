@@ -1,0 +1,1855 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark overflow-x-hidden w-full h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#030408">
+  <meta name="description" content="Argus / Heimdall 边缘一体化智能视频分析系统 - 动态实时流多任务布防工坊原型">
+  <title>动态实时流多任务布防工坊 (Live Multi-Task Studio) - Argus Prototype</title>
+
+  <!-- Tailwind CSS & Lucide 图标库 (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- 字体资源 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Space+Mono:wght@400;700&family=Unbounded:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Unbounded"', '"Space Grotesk"', 'sans-serif'],
+            art: ['"Unbounded"', 'sans-serif'],
+            tech: ['"Space Grotesk"', 'sans-serif'],
+            sans: ['"Inter"', 'sans-serif'],
+            data: ['"Space Mono"', 'monospace'],
+          },
+          colors: {
+            cyan: {
+              400: '#00f2fe',
+              500: '#0284c7',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    :root {
+      --bg-page: #04060b;
+      --bg-surface: #0a0e17;
+      --bg-card: rgba(13, 18, 30, 0.7);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(0, 242, 254, 0.4);
+      --accent: #00f2fe;
+      --accent-glow: rgba(0, 242, 254, 0.25);
+      --emerald-glow: rgba(16, 185, 129, 0.25);
+      --rose-glow: rgba(244, 63, 94, 0.25);
+      color-scheme: dark;
+    }
+
+    body {
+      background-color: var(--bg-page);
+      color: #f1f5f9;
+      font-family: 'Inter', sans-serif;
+      user-select: none;
+    }
+
+    .tnum {
+      font-feature-settings: "tnum" 1, "zero" 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .glass-panel {
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border-subtle);
+    }
+
+    ::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 242, 254, 0.5);
+    }
+
+    @keyframes alarmPulse {
+      0% {
+        stroke-width: 2.5;
+        filter: drop-shadow(0 0 4px var(--accent));
+      }
+      50% {
+        stroke-width: 5;
+        filter: drop-shadow(0 0 16px var(--accent)) drop-shadow(0 0 30px #f43f5e);
+      }
+      100% {
+        stroke-width: 2.5;
+        filter: drop-shadow(0 0 4px var(--accent));
+      }
+    }
+
+    .animate-alarm-pulse {
+      animation: alarmPulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes marchDash {
+      to {
+        stroke-dashoffset: -32;
+      }
+    }
+    .marching-ants {
+      stroke-dasharray: 6 6;
+      animation: marchDash 1.4s linear infinite;
+    }
+
+    .floating-capsule {
+      box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.12);
+    }
+  </style>
+</head>
+
+<body class="h-screen w-screen flex flex-col overflow-hidden text-slate-200">
+
+  <!-- ==================== 顶部导航与状态条 (STUDIO HEADER) ==================== -->
+  <header class="h-14 border-b border-white/10 bg-[#070a12]/90 backdrop-blur-md px-4 flex items-center justify-between z-30 flex-shrink-0">
+    <!-- 左侧：品牌 Logo 与多任务层级面包屑 -->
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <img src="assets/logo-horizontal-b.svg" alt="Argus" class="h-7 w-auto object-contain cursor-pointer" onclick="location.reload()">
+        <span class="h-4 w-[1px] bg-white/20"></span>
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs font-semibold tracking-wide text-white font-tech">STUDIO</span>
+          <span class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-cyan-400/10 text-cyan-400 border border-cyan-400/20">一摄多任务架构 V1.1</span>
+        </div>
+      </div>
+
+      <!-- 当前摄像头与任务联动指示 (Breadcrumb) -->
+      <div class="hidden lg:flex items-center gap-2 bg-black/40 border border-white/10 rounded-full px-3 py-1 text-xs text-slate-300">
+        <span class="flex items-center gap-1.5">
+          <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]"></span>
+          <span id="headerCamName" class="font-medium text-white">CAM-01 园区东门主干道</span>
+        </span>
+        <span class="text-white/20">➔</span>
+        <span class="flex items-center gap-1 text-cyan-300 font-medium">
+          <i data-lucide="cpu" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span id="headerTaskName">任务 #1: 周界入侵与越界防区</span>
+        </span>
+        <span class="text-white/20">|</span>
+        <span id="headerAlgoBadge" class="font-mono text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">YOLO26n-v1</span>
+        <span class="text-white/20">|</span>
+        <span class="text-[11px] text-emerald-400 font-data">延时 218ms</span>
+      </div>
+    </div>
+
+    <!-- 中间：告警触发通知 -->
+    <div id="liveAlertBadge" class="hidden items-center gap-2 px-3 py-1 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded-full text-xs font-medium animate-pulse">
+      <i data-lucide="bell-ring" class="w-3.5 h-3.5 text-rose-400 animate-bounce"></i>
+      <span id="alertMsgText">规则触发展开中...</span>
+    </div>
+
+    <!-- 右侧动作按钮 -->
+    <div class="flex items-center gap-2">
+      <!-- 幽灵参考层开关 (Ghost Layer): 查看该摄像头其他任务的规则防区 -->
+      <button id="btnToggleGhost" class="h-8 px-2.5 flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 text-xs text-slate-300 hover:text-white hover:bg-white/10 transition-colors" title="显示/隐藏该摄像头其他任务的半透明参考防区">
+        <i data-lucide="ghost" class="w-3.5 h-3.5 text-indigo-400"></i>
+        <span class="hidden md:inline">跨任务幽灵参考</span>
+      </button>
+
+      <!-- 撤销 / 重做 -->
+      <div class="flex items-center rounded-lg border border-white/10 bg-white/5 p-0.5">
+        <button id="btnUndo" class="h-7 w-7 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30" title="撤销 (Ctrl+Z)" disabled>
+          <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+        </button>
+        <button id="btnRedo" class="h-7 w-7 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-30" title="重做 (Ctrl+Y)" disabled>
+          <i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+
+      <!-- 辅助网格切换 -->
+      <button id="btnToggleGrid" class="h-8 px-2.5 flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 text-xs text-slate-300 hover:text-white hover:bg-white/10" title="对齐参考网格">
+        <i data-lucide="grid" class="w-3.5 h-3.5 text-cyan-400"></i>
+        <span class="hidden md:inline">网格</span>
+      </button>
+
+      <!-- 模拟目标穿行动画 -->
+      <button id="btnToggleSim" class="h-8 px-2.5 flex items-center gap-1.5 rounded-lg border border-cyan-400/30 bg-cyan-400/10 text-xs text-cyan-300 hover:bg-cyan-400/20" title="切换模拟目标穿行/实时测试">
+        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-cyan-400"></i>
+        <span class="hidden md:inline">碰撞模拟</span>
+      </button>
+
+      <!-- 规则 JSON 导出 -->
+      <button id="btnViewJson" class="h-8 px-2.5 flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 text-xs text-slate-300 hover:text-white hover:bg-white/10" title="查看当前任务 DetectionRule[] 规范结构">
+        <i data-lucide="code-xml" class="w-3.5 h-3.5 text-slate-400"></i>
+        <span class="hidden sm:inline">任务 JSON</span>
+      </button>
+
+      <!-- 一键应用并保存此任务布防 -->
+      <button id="btnSaveTaskRules" class="h-8 px-3.5 flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-cyan-400 text-black font-semibold text-xs shadow-[0_0_15px_rgba(0,242,254,0.4)] hover:brightness-110 active:scale-95 transition-all">
+        <i data-lucide="save" class="w-3.5 h-3.5"></i>
+        <span>保存当前任务布防</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ==================== 核心主体 (三栏) ==================== -->
+  <div class="flex-1 flex overflow-hidden">
+
+    <!-- ----------------- 左侧：摄像头通道与多任务树 (CAMERA -> MULTI-TASK TREE) ----------------- -->
+    <aside class="w-80 border-r border-white/10 bg-[#070a12]/80 backdrop-blur-md flex flex-col flex-shrink-0 text-xs">
+      <div class="p-3 border-b border-white/10 flex items-center justify-between">
+        <div class="flex items-center gap-1.5 font-semibold text-white">
+          <i data-lucide="network" class="w-4 h-4 text-cyan-400"></i>
+          <span>通道与 AI 分析任务树</span>
+        </div>
+        <span class="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+          一摄多任务
+        </span>
+      </div>
+
+      <!-- 快速搜索 -->
+      <div class="p-2.5 pb-1.5">
+        <div class="relative">
+          <i data-lucide="search" class="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-500"></i>
+          <input id="treeSearch" type="text" placeholder="搜索设备或任务名称..." class="w-full bg-black/40 border border-white/10 rounded-lg pl-8 pr-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400/60 transition-colors">
+        </div>
+      </div>
+
+      <!-- 树形结构容器 (Cameras -> Tasks) -->
+      <div id="cameraTaskTree" class="flex-1 overflow-y-auto p-2.5 space-y-3">
+        <!-- 摄像头 1 (CAM-01) -->
+        <div class="camera-node rounded-xl border border-white/10 bg-white/[0.02] p-2 transition-all">
+          <!-- 摄像头信息头 -->
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-white/5">
+            <div class="flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+              <span class="font-semibold text-white text-xs">CAM-01 园区东门主干道</span>
+            </div>
+            <button class="btn-add-task px-1.5 py-0.5 rounded bg-cyan-400/10 hover:bg-cyan-400/20 text-cyan-300 font-mono text-[10px] flex items-center gap-1 border border-cyan-400/30" data-cam-id="cam-01" title="在该摄像头上新建 AI 分析任务">
+              <i data-lucide="plus" class="w-3 h-3"></i>
+              <span>新建任务</span>
+            </button>
+          </div>
+
+          <!-- 该摄像头下的任务列表 -->
+          <div class="space-y-1.5 pl-1.5">
+            <!-- Task 1 (Selected) -->
+            <div data-task-id="task-01-perimeter" class="task-node p-2 rounded-lg border border-cyan-400/50 bg-cyan-400/10 cursor-pointer transition-all">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5 font-medium text-white">
+                  <i data-lucide="shield-alert" class="w-3.5 h-3.5 text-cyan-400"></i>
+                  <span>周界入侵与越界防区</span>
+                </div>
+                <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" title="运行中 (desired_enabled: true)"></span>
+              </div>
+              <div class="mt-1 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                <span class="text-slate-300 bg-white/10 px-1 py-0.2 rounded">算法: YOLO26n-v1</span>
+                <span class="text-cyan-400">3 条规则</span>
+              </div>
+            </div>
+
+            <!-- Task 2 (Face capture) -->
+            <div data-task-id="task-01-face" class="task-node p-2 rounded-lg border border-white/5 bg-white/[0.02] hover:bg-white/5 hover:border-white/20 cursor-pointer transition-all">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5 font-medium text-slate-300">
+                  <i data-lucide="smile" class="w-3.5 h-3.5 text-amber-400"></i>
+                  <span>东门道闸人脸抓拍对账</span>
+                </div>
+                <span class="h-2 w-2 rounded-full bg-slate-500" title="已待机 (已暂停)"></span>
+              </div>
+              <div class="mt-1 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                <span class="bg-white/5 px-1 py-0.2 rounded">算法: FacePro-Retina</span>
+                <span>1 条特写 ROI</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 摄像头 2 (CAM-02) -->
+        <div class="camera-node rounded-xl border border-white/5 bg-white/[0.01] p-2 transition-all">
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-white/5">
+            <div class="flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+              <span class="font-semibold text-slate-300 text-xs">CAM-02 车辆道闸出入口</span>
+            </div>
+            <button class="btn-add-task px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 font-mono text-[10px] flex items-center gap-1 border border-white/10" data-cam-id="cam-02">
+              <i data-lucide="plus" class="w-3 h-3"></i>
+              <span>新建任务</span>
+            </button>
+          </div>
+          <div class="space-y-1.5 pl-1.5">
+            <div data-task-id="task-02-plate" class="task-node p-2 rounded-lg border border-white/5 bg-white/[0.02] hover:bg-white/5 hover:border-white/20 cursor-pointer transition-all">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5 font-medium text-slate-300">
+                  <i data-lucide="credit-card" class="w-3.5 h-3.5 text-emerald-400"></i>
+                  <span>出入车辆车牌自动识别</span>
+                </div>
+                <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+              </div>
+              <div class="mt-1 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                <span class="bg-white/5 px-1 py-0.2 rounded">算法: LPR-Ultra</span>
+                <span>2 条规则</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部高能效共享说明 -->
+      <div class="p-3 border-t border-white/10 bg-black/40 text-[11px] space-y-1 text-slate-400">
+        <div class="flex items-center gap-1.5 text-cyan-400 font-medium">
+          <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+          <span>底座共享与算力隔离机制</span>
+        </div>
+        <p class="text-[10px] text-slate-500 leading-normal">
+          同一个摄像头不论挂载多少个 AI 任务，底层仅拉取硬解一次子码流（640×360），通过 FrameRef 原生显存句柄零拷贝广播至各个任务 Worker，杜绝显存重复开销！
+        </p>
+      </div>
+    </aside>
+
+    <!-- ----------------- 中央：画板舞台 (STAGE VIEWPORT) ----------------- -->
+    <main class="flex-1 flex flex-col relative bg-[#04060b] overflow-hidden">
+
+      <!-- 悬浮胶囊工具栏 (Floating Island Toolbar) -->
+      <div class="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 p-1 bg-[#0a0e1a]/85 backdrop-blur-xl border border-white/15 rounded-full floating-capsule">
+        <button id="toolSelect" class="tool-btn px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white transition-all bg-white/10 text-white shadow-sm" title="选择与编辑模式 (V)">
+          <i data-lucide="mouse-pointer-2" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span>选择</span>
+          <span class="text-[9px] opacity-40 font-mono">V</span>
+        </button>
+
+        <span class="h-4 w-[1px] bg-white/15 mx-0.5"></span>
+
+        <button id="toolRoi" class="tool-btn px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white transition-all" title="绘制入侵防区多边形 (R)">
+          <i data-lucide="hexagon" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span>入侵 ROI</span>
+          <span class="text-[9px] opacity-40 font-mono">R</span>
+        </button>
+
+        <button id="toolLine" class="tool-btn px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white transition-all" title="绘制越界绊线 (L)">
+          <i data-lucide="slash" class="w-3.5 h-3.5 text-emerald-400"></i>
+          <span>绊线 Line</span>
+          <span class="text-[9px] opacity-40 font-mono">L</span>
+        </button>
+
+        <button id="toolMask" class="tool-btn px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white transition-all" title="绘制误报屏蔽遮罩 (M)">
+          <i data-lucide="shield-alert" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span>遮罩 Mask</span>
+          <span class="text-[9px] opacity-40 font-mono">M</span>
+        </button>
+
+        <button id="toolPrecrop" class="tool-btn px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white transition-all" title="绘制硬件预裁剪特写框 (C)">
+          <i data-lucide="crop" class="w-3.5 h-3.5 text-amber-400"></i>
+          <span>预裁剪 ROI</span>
+          <span class="text-[9px] opacity-40 font-mono">C</span>
+        </button>
+
+        <span class="h-4 w-[1px] bg-white/15 mx-0.5"></span>
+
+        <button id="btnSnap" class="p-1.5 rounded-full text-cyan-400 hover:bg-white/10" title="顶点自动磁吸吸附">
+          <i data-lucide="magnet" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- 画板容器 (16:9 画幅锁定居中) -->
+      <div class="flex-1 flex items-center justify-center p-6 overflow-hidden">
+        <div id="viewportContainer" class="relative w-full max-w-[1280px] aspect-video bg-[#030408] rounded-xl overflow-hidden border border-white/15 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] select-none">
+          
+          <!-- 1. 底层模拟视频流 Canvas (模拟监控现场) -->
+          <canvas id="videoCanvas" class="absolute inset-0 w-full h-full object-cover z-0"></canvas>
+
+          <!-- 2. 辅助参考网格 -->
+          <div id="gridOverlay" class="absolute inset-0 pointer-events-none z-1 hidden bg-[radial-gradient(#ffffff0a_1px,transparent_1px)] [background-size:24px_24px]"></div>
+
+          <!-- 3. 矢量交互 SVG 图层 -->
+          <svg id="stageSvg" class="absolute inset-0 w-full h-full z-10 cursor-crosshair overflow-visible">
+            <defs>
+              <pattern id="hatch-pattern" width="12" height="12" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+                <line x1="0" y1="0" x2="0" y2="12" stroke="rgba(255, 255, 255, 0.25)" stroke-width="2.5" />
+              </pattern>
+
+              <!-- 幽灵图层参考斜纹 (Ghost Layer Pattern) -->
+              <pattern id="ghost-pattern" width="10" height="10" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse">
+                <line x1="0" y1="0" x2="0" y2="10" stroke="rgba(99, 102, 241, 0.2)" stroke-width="1.5" />
+              </pattern>
+
+              <filter id="glow-cyan" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+
+            <!-- 幽灵参考层 (呈现同摄像头其他任务的规则防区，带 20% 透明度和虚线，防止打架) -->
+            <g id="ghostRulesLayer" class="pointer-events-none transition-opacity duration-300"></g>
+
+            <!-- 当前任务已固化的规则图形层 -->
+            <g id="rulesLayer"></g>
+
+            <!-- 正在绘制中的橡皮筋辅助线组 -->
+            <g id="drawingLayer"></g>
+
+            <!-- 磁吸点提示 -->
+            <g id="crosshairLayer" class="pointer-events-none">
+              <circle id="snapIndicator" cx="0" cy="0" r="8" fill="none" stroke="#facc15" stroke-width="2" class="hidden animate-ping"></circle>
+            </g>
+          </svg>
+
+          <!-- 4. 视频 OSD 水印 -->
+          <div class="absolute bottom-3 left-3 z-15 pointer-events-none flex items-center gap-2 font-mono text-[11px] text-white/70 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded">
+            <span class="text-emerald-400 font-bold">● REC</span>
+            <span id="osdTimestamp">2026-09-04 14:32:08.412</span>
+            <span id="osdCamChannel">CAM01_SUB (640x360@25)</span>
+          </div>
+
+          <!-- 5. 幽灵层激活提示标签 -->
+          <div id="ghostLayerBadge" class="hidden absolute top-3 right-3 z-15 pointer-events-none bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 text-[10px] font-mono px-2 py-1 rounded-md backdrop-blur-md flex items-center gap-1.5">
+            <i data-lucide="ghost" class="w-3.5 h-3.5 text-indigo-400 animate-pulse"></i>
+            <span>跨任务幽灵参考层已开启 (预览其他任务防区)</span>
+          </div>
+
+          <!-- 6. 浮动提示气泡 -->
+          <div id="drawBubble" class="hidden absolute pointer-events-none z-20 bg-black/80 text-white text-[11px] font-medium px-2 py-0.5 rounded shadow-lg border border-white/20 transform -translate-x-1/2 -translate-y-8">
+            点击继续，靠近起点吸附闭合 (Enter 闭合)
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 视界底部状态指示条 -->
+      <footer class="h-9 border-t border-white/10 bg-[#070a12]/90 backdrop-blur-md px-4 flex items-center justify-between text-[11px] font-mono text-slate-400 z-20 flex-shrink-0">
+        <div class="flex items-center gap-4">
+          <span class="flex items-center gap-1">
+            <span class="text-slate-500">归一化坐标:</span>
+            <span id="coordDisplay" class="text-cyan-400 font-bold">X: 0.0000 | Y: 0.0000</span>
+          </span>
+          <span class="text-white/10">|</span>
+          <span class="flex items-center gap-1">
+            <span class="text-slate-500">当前任务:</span>
+            <span id="currentTaskLabel" class="text-white">周界入侵与越界防区</span>
+          </span>
+          <span class="text-white/10">|</span>
+          <span class="flex items-center gap-1">
+            <span class="text-slate-500">本任务规则数:</span>
+            <span id="rulesCountLabel" class="text-emerald-400 font-bold">3</span>
+          </span>
+        </div>
+
+        <div class="hidden md:flex items-center gap-3 text-slate-500 text-[10px]">
+          <span><kbd class="px-1 py-0.5 rounded bg-white/10 text-slate-300 font-data">V</kbd> 选择</span>
+          <span><kbd class="px-1 py-0.5 rounded bg-white/10 text-slate-300 font-data">R</kbd> 入侵</span>
+          <span><kbd class="px-1 py-0.5 rounded bg-white/10 text-slate-300 font-data">L</kbd> 绊线</span>
+          <span><kbd class="px-1 py-0.5 rounded bg-white/10 text-slate-300 font-data">M</kbd> 遮罩</span>
+          <span><kbd class="px-1 py-0.5 rounded bg-white/10 text-slate-300 font-data">Enter</kbd> 闭合</span>
+          <span><kbd class="px-1 py-0.5 rounded bg-white/10 text-slate-300 font-data">Esc</kbd> 取消</span>
+          <span><kbd class="px-1 py-0.5 rounded bg-white/10 text-slate-300 font-data">Del</kbd> 删除</span>
+        </div>
+      </footer>
+    </main>
+
+    <!-- ----------------- 右侧：本任务规则图层与属性检查器 ----------------- -->
+    <aside class="w-80 border-l border-white/10 bg-[#070a12]/80 backdrop-blur-md flex flex-col flex-shrink-0 text-xs">
+      
+      <!-- 任务配置总览卡片 -->
+      <div class="p-3 border-b border-white/10 bg-black/20 space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="font-semibold text-white flex items-center gap-1.5">
+            <i data-lucide="settings-2" class="w-3.5 h-3.5 text-cyan-400"></i>
+            <span>当前分析任务配置</span>
+          </span>
+          <div class="flex items-center gap-1">
+            <span id="taskStatusDot" class="h-2 w-2 rounded-full bg-emerald-400"></span>
+            <span id="taskStatusText" class="text-[10px] text-emerald-400 font-mono">运行中</span>
+          </div>
+        </div>
+
+        <div class="space-y-1 text-[11px]">
+          <div class="flex justify-between text-slate-400">
+            <span>任务标识 ID:</span>
+            <span id="taskDetailId" class="font-mono text-slate-300">task-01-perimeter</span>
+          </div>
+          <div class="flex justify-between text-slate-400">
+            <span>绑定算法模型:</span>
+            <span id="taskDetailAlgo" class="text-cyan-400 font-medium">YOLO26n-v1 (周界)</span>
+          </div>
+          <div class="flex justify-between text-slate-400">
+            <span>推理流策略:</span>
+            <span class="text-emerald-400 font-mono">子码流 (640×360)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 规则图层列表 -->
+      <div class="p-2.5 border-b border-white/10 flex items-center justify-between">
+        <div class="flex items-center gap-1.5 font-semibold text-white">
+          <i data-lucide="layers" class="w-4 h-4 text-cyan-400"></i>
+          <span>任务布防规则图层</span>
+        </div>
+        <span id="inspectorRuleCountBadge" class="px-1.5 py-0.2 rounded-full bg-white/10 font-mono text-[10px] text-cyan-300">3 项</span>
+      </div>
+
+      <div class="flex-1 overflow-y-auto p-2.5 space-y-2 border-b border-white/10 max-h-48">
+        <div id="emptyLayerTip" class="py-6 text-center text-slate-500 hidden">
+          <i data-lucide="shapes" class="w-6 h-6 mx-auto mb-1 opacity-40"></i>
+          <p>当前任务暂无规则</p>
+          <p class="text-[10px] opacity-60">点击顶部工具栏在画面上绘制</p>
+        </div>
+        <div id="ruleLayerList" class="space-y-1.5"></div>
+      </div>
+
+      <!-- 选中规则的属性检查器 -->
+      <div id="propertyInspector" class="flex-1 overflow-y-auto p-3 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="font-semibold text-white flex items-center gap-1">
+            <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5 text-cyan-400"></i>
+            <span>几何规则属性</span>
+          </span>
+          <span id="selectedRuleRoleBadge" class="px-1.5 py-0.2 rounded font-mono text-[9px] bg-cyan-400/20 text-cyan-300 border border-cyan-400/30 uppercase">
+            ROI 入侵
+          </span>
+        </div>
+
+        <div id="noSelectionTip" class="py-6 text-center text-slate-500 text-[11px]">
+          请在画布或图层列表中选中一个规则
+        </div>
+
+        <div id="selectionForm" class="space-y-2.5 hidden">
+          <!-- 规则名称 -->
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">规则名称</label>
+            <input id="propName" type="text" class="w-full bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-400">
+          </div>
+
+          <!-- 响应目标类型 -->
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">响应目标类别 (多选)</label>
+            <div class="grid grid-cols-2 gap-1.5">
+              <label class="flex items-center gap-1.5 p-1 rounded bg-white/5 border border-white/5 cursor-pointer hover:bg-white/10">
+                <input type="checkbox" value="person" class="prop-target-chk accent-cyan-400 rounded">
+                <span class="text-[11px] text-slate-300">👤 行人</span>
+              </label>
+              <label class="flex items-center gap-1.5 p-1 rounded bg-white/5 border border-white/5 cursor-pointer hover:bg-white/10">
+                <input type="checkbox" value="car" class="prop-target-chk accent-cyan-400 rounded">
+                <span class="text-[11px] text-slate-300">🚗 机动车</span>
+              </label>
+              <label class="flex items-center gap-1.5 p-1 rounded bg-white/5 border border-white/5 cursor-pointer hover:bg-white/10">
+                <input type="checkbox" value="bicycle" class="prop-target-chk accent-cyan-400 rounded">
+                <span class="text-[11px] text-slate-300">🛵 非机动车</span>
+              </label>
+              <label class="flex items-center gap-1.5 p-1 rounded bg-white/5 border border-white/5 cursor-pointer hover:bg-white/10">
+                <input type="checkbox" value="face" class="prop-target-chk accent-cyan-400 rounded">
+                <span class="text-[11px] text-slate-300">😄 人脸特写</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 绊线方向 -->
+          <div id="propLineDirGroup" class="hidden">
+            <label class="block text-[11px] text-slate-400 mb-1">跨线判定方向</label>
+            <div class="grid grid-cols-3 gap-1 rounded-lg bg-black/40 p-1 border border-white/10 text-[10px]">
+              <button type="button" data-dir="both" class="line-dir-btn py-1 rounded text-center transition-all bg-cyan-500 text-black font-semibold">
+                双向 ⇄
+              </button>
+              <button type="button" data-dir="a_to_b" class="line-dir-btn py-1 rounded text-center text-slate-400 hover:text-white transition-all">
+                正向 A➔B
+              </button>
+              <button type="button" data-dir="b_to_a" class="line-dir-btn py-1 rounded text-center text-slate-400 hover:text-white transition-all">
+                反向 B➔A
+              </button>
+            </div>
+          </div>
+
+          <!-- 5秒防重复冷却 -->
+          <div>
+            <div class="flex justify-between items-center text-[11px] text-slate-400 mb-0.5">
+              <span>防刷屏冷却窗口</span>
+              <span id="propCooldownVal" class="font-mono text-cyan-400 font-bold">5 秒</span>
+            </div>
+            <input id="propCooldownSlider" type="range" min="1" max="30" value="5" class="w-full accent-cyan-400">
+            <div class="flex justify-between text-[9px] text-slate-500 font-mono">
+              <span>1s</span>
+              <span>5s (推荐)</span>
+              <span>30s</span>
+            </div>
+          </div>
+
+          <!-- 高清抓拍联动 -->
+          <label class="flex items-center justify-between p-1.5 rounded bg-white/5 border border-white/5">
+            <span class="text-[11px] text-slate-300">主码流 4K 原图与特写抓拍</span>
+            <input type="checkbox" id="propSnapshot" checked class="accent-emerald-400 rounded">
+          </label>
+
+          <!-- 删除当前规则 -->
+          <button id="btnDeleteSelectedRule" type="button" class="w-full mt-1 py-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+            <span>删除此规则图层</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ==================== 规范 JSON 抽屉 ==================== -->
+  <div id="jsonModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="w-full max-w-2xl bg-[#090e1a] border border-white/20 rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+      <div class="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+        <div class="flex items-center gap-2 font-semibold text-white">
+          <i data-lucide="code" class="w-4 h-4 text-cyan-400"></i>
+          <span>当前任务 DetectionRule[] 规范 JSON</span>
+        </div>
+        <button id="btnCloseJson" class="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="p-4 flex-1 overflow-y-auto bg-black/60">
+        <pre id="jsonPreviewContent" class="font-mono text-xs text-cyan-300 leading-relaxed overflow-x-auto select-text"></pre>
+      </div>
+
+      <div class="px-4 py-3 border-t border-white/10 flex justify-between items-center bg-[#070a12]">
+        <span class="text-[11px] text-slate-400">符合 Rust 契约: { task_id, camera_id, algorithm_id, rules_json }</span>
+        <div class="flex gap-2">
+          <button id="btnCopyJson" class="px-3 py-1.5 rounded-lg border border-white/15 bg-white/5 text-xs text-white hover:bg-white/10 flex items-center gap-1.5">
+            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+            <span>复制 JSON</span>
+          </button>
+          <button id="btnCloseJson2" class="px-3 py-1.5 rounded-lg bg-cyan-400 text-black font-semibold text-xs hover:brightness-110">
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 提示 -->
+  <div id="toast" class="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 bg-black/85 border border-cyan-400/40 text-white text-xs px-4 py-2 rounded-full shadow-[0_0_20px_rgba(0,242,254,0.3)] pointer-events-none transition-all duration-300 opacity-0 transform translate-y-2 flex items-center gap-2">
+    <i data-lucide="info" class="w-3.5 h-3.5 text-cyan-400"></i>
+    <span id="toastText">提示内容</span>
+  </div>
+
+  <!-- ==================== 多任务交互逻辑脚本 (VANILLA JS) ==================== -->
+  <script>
+    // ----------------------------------------------------
+    // 1. 多任务数据模型 (One Camera -> Multiple Tasks)
+    // ----------------------------------------------------
+    const camerasData = [
+      {
+        id: 'cam-01',
+        name: 'CAM-01 园区东门主干道',
+        resolution: '720P',
+        fps: 25,
+        status: 'healthy',
+        rtsp: 'rtsp://192.168.1.101:554/live',
+        tasks: [
+          {
+            taskId: 'task-01-perimeter',
+            name: '周界入侵与越界防区',
+            algorithmId: 'YOLO26n-v1',
+            algorithmName: 'YOLO26n 通用周界感知',
+            desiredEnabled: true,
+            rules: [
+              {
+                id: 'rule_1',
+                name: '东门非机动车道入侵检测',
+                role: 'roi',
+                color: '#00f2fe',
+                visible: true,
+                points: [
+                  { x: 0.15, y: 0.45 },
+                  { x: 0.48, y: 0.46 },
+                  { x: 0.52, y: 0.88 },
+                  { x: 0.12, y: 0.85 },
+                ],
+                targetLabels: ['person', 'bicycle'],
+                cooldownSeconds: 5,
+                snapshotHighRes: true,
+              },
+              {
+                id: 'rule_2',
+                name: '主干道单向越界绊线',
+                role: 'line',
+                color: '#10b981',
+                visible: true,
+                lineDirection: 'a_to_b',
+                points: [
+                  { x: 0.60, y: 0.50 },
+                  { x: 0.90, y: 0.75 },
+                ],
+                targetLabels: ['car', 'person'],
+                cooldownSeconds: 5,
+                snapshotHighRes: true,
+              },
+              {
+                id: 'rule_3',
+                name: '右上方树枝摇晃误报遮罩',
+                role: 'mask',
+                color: '#94a3b8',
+                visible: true,
+                points: [
+                  { x: 0.72, y: 0.08 },
+                  { x: 0.95, y: 0.09 },
+                  { x: 0.92, y: 0.35 },
+                  { x: 0.70, y: 0.32 },
+                ],
+                targetLabels: ['person', 'car'],
+                cooldownSeconds: 5,
+                snapshotHighRes: false,
+              }
+            ]
+          },
+          {
+            taskId: 'task-01-face',
+            name: '东门道闸人脸抓拍对账',
+            algorithmId: 'FacePro-Retina',
+            algorithmName: 'FacePro 门禁人脸感知',
+            desiredEnabled: false,
+            rules: [
+              {
+                id: 'rule_face_1',
+                name: '道闸入口人脸增强特写区',
+                role: 'precrop',
+                color: '#f59e0b',
+                visible: true,
+                points: [
+                  { x: 0.28, y: 0.30 },
+                  { x: 0.45, y: 0.30 },
+                  { x: 0.45, y: 0.65 },
+                  { x: 0.28, y: 0.65 },
+                ],
+                targetLabels: ['face'],
+                cooldownSeconds: 3,
+                snapshotHighRes: true,
+              }
+            ]
+          }
+        ]
+      },
+      {
+        id: 'cam-02',
+        name: 'CAM-02 车辆道闸出入口',
+        resolution: '1080P',
+        fps: 25,
+        status: 'healthy',
+        rtsp: 'rtsp://192.168.1.102:554/ch1',
+        tasks: [
+          {
+            taskId: 'task-02-plate',
+            name: '出入车辆车牌自动识别',
+            algorithmId: 'LPR-Ultra',
+            algorithmName: 'LPR 车牌道闸感知',
+            desiredEnabled: true,
+            rules: [
+              {
+                id: 'rule_plate_1',
+                name: '道闸入口特写识别框',
+                role: 'precrop',
+                color: '#10b981',
+                visible: true,
+                points: [
+                  { x: 0.20, y: 0.40 },
+                  { x: 0.55, y: 0.40 },
+                  { x: 0.55, y: 0.85 },
+                  { x: 0.20, y: 0.85 },
+                ],
+                targetLabels: ['car'],
+                cooldownSeconds: 5,
+                snapshotHighRes: true,
+              }
+            ]
+          }
+        ]
+      }
+    ];
+
+    // 当前活跃选中的摄像头与任务
+    let currentCameraId = 'cam-01';
+    let currentTaskId = 'task-01-perimeter';
+    let ghostLayerEnabled = false; // 幽灵层开关
+
+    let currentTool = 'select'; // 'select' | 'roi' | 'line' | 'mask' | 'precrop'
+    let snapEnabled = true;
+    let showGrid = false;
+    let simMode = true;
+
+    let selectedRuleId = 'rule_1';
+    let activeDrawingPoints = [];
+    let isDrawing = false;
+    let draggingVertex = null;
+
+    // 获取当前活跃任务
+    function getCurrentTask() {
+      const cam = camerasData.find(c => c.id === currentCameraId);
+      if (!cam) return null;
+      return cam.tasks.find(t => t.taskId === currentTaskId) || cam.tasks[0];
+    }
+
+    function getCurrentRules() {
+      const task = getCurrentTask();
+      return task ? task.rules : [];
+    }
+
+    // 历史栈 (针对当前任务)
+    const historyStack = [];
+    let redoStack = [];
+
+    function pushHistory() {
+      const task = getCurrentTask();
+      if (!task) return;
+      historyStack.push(JSON.stringify(task.rules));
+      if (historyStack.length > 20) historyStack.shift();
+      redoStack = [];
+      updateUndoRedoButtons();
+    }
+
+    function updateUndoRedoButtons() {
+      document.getElementById('btnUndo').disabled = historyStack.length === 0;
+      document.getElementById('btnRedo').disabled = redoStack.length === 0;
+    }
+
+    // ----------------------------------------------------
+    // 2. DOM 元素
+    // ----------------------------------------------------
+    const viewportContainer = document.getElementById('viewportContainer');
+    const stageSvg = document.getElementById('stageSvg');
+    const rulesLayer = document.getElementById('rulesLayer');
+    const ghostRulesLayer = document.getElementById('ghostRulesLayer');
+    const drawingLayer = document.getElementById('drawingLayer');
+    const snapIndicator = document.getElementById('snapIndicator');
+    const coordDisplay = document.getElementById('coordDisplay');
+    const drawBubble = document.getElementById('drawBubble');
+    const ruleLayerList = document.getElementById('ruleLayerList');
+    const emptyLayerTip = document.getElementById('emptyLayerTip');
+    const currentTaskLabel = document.getElementById('currentTaskLabel');
+    const rulesCountLabel = document.getElementById('rulesCountLabel');
+    const inspectorRuleCountBadge = document.getElementById('inspectorRuleCountBadge');
+
+    // 属性面板
+    const noSelectionTip = document.getElementById('noSelectionTip');
+    const selectionForm = document.getElementById('selectionForm');
+    const selectedRuleRoleBadge = document.getElementById('selectedRuleRoleBadge');
+    const propName = document.getElementById('propName');
+    const propLineDirGroup = document.getElementById('propLineDirGroup');
+    const propCooldownSlider = document.getElementById('propCooldownSlider');
+    const propCooldownVal = document.getElementById('propCooldownVal');
+    const propSnapshot = document.getElementById('propSnapshot');
+
+    // ----------------------------------------------------
+    // 3. 物理像素与归一化双向转换
+    // ----------------------------------------------------
+    function getSvgRect() {
+      return stageSvg.getBoundingClientRect();
+    }
+
+    function toNormalized(clientX, clientY) {
+      const rect = getSvgRect();
+      const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+      return { x: Number(x.toFixed(4)), y: Number(y.toFixed(4)) };
+    }
+
+    function toPhysical(normPoint) {
+      const rect = getSvgRect();
+      return {
+        x: normPoint.x * rect.width,
+        y: normPoint.y * rect.height
+      };
+    }
+
+    // ----------------------------------------------------
+    // 4. SVG 渲染管线 (当前任务规则 + 幽灵参考层)
+    // ----------------------------------------------------
+    function renderSvg() {
+      const currentTask = getCurrentTask();
+      if (!currentTask) return;
+      const rules = currentTask.rules;
+
+      rulesLayer.innerHTML = '';
+      ghostRulesLayer.innerHTML = '';
+
+      // A. 渲染幽灵参考层 (同摄像头的其他任务规则)
+      if (ghostLayerEnabled) {
+        const cam = camerasData.find(c => c.id === currentCameraId);
+        if (cam) {
+          const otherTasks = cam.tasks.filter(t => t.taskId !== currentTaskId);
+          otherTasks.forEach(otherTask => {
+            otherTask.rules.forEach(ghostRule => {
+              if (ghostRule.points.length < 2) return;
+              const physPoints = ghostRule.points.map(toPhysical);
+              const pointsAttr = physPoints.map(p => `${p.x},${p.y}`).join(' ');
+
+              const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+              g.setAttribute('opacity', '0.28');
+
+              if (ghostRule.role === 'line') {
+                const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+                polyline.setAttribute('points', pointsAttr);
+                polyline.setAttribute('stroke', '#a5b4fc');
+                polyline.setAttribute('stroke-width', '2');
+                polyline.setAttribute('stroke-dasharray', '4 4');
+                polyline.setAttribute('fill', 'none');
+                g.appendChild(polyline);
+              } else {
+                const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                polygon.setAttribute('points', pointsAttr);
+                polygon.setAttribute('stroke', '#a5b4fc');
+                polygon.setAttribute('stroke-width', '1.5');
+                polygon.setAttribute('stroke-dasharray', '5 4');
+                polygon.setAttribute('fill', 'rgba(165, 180, 252, 0.08)');
+                g.appendChild(polygon);
+              }
+
+              // 幽灵标签水印
+              if (physPoints.length > 0) {
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', `${physPoints[0].x + 4}`);
+                text.setAttribute('y', `${physPoints[0].y + 12}`);
+                text.setAttribute('font-size', '9');
+                text.setAttribute('fill', '#a5b4fc');
+                text.textContent = `[${otherTask.name}] ${ghostRule.name}`;
+                g.appendChild(text);
+              }
+
+              ghostRulesLayer.appendChild(g);
+            });
+          });
+        }
+      }
+
+      // B. 渲染当前正在编辑的任务规则
+      rules.forEach(rule => {
+        if (!rule.visible || rule.points.length < 2) return;
+
+        const isSelected = rule.id === selectedRuleId;
+        const physPoints = rule.points.map(toPhysical);
+        const pointsAttr = physPoints.map(p => `${p.x},${p.y}`).join(' ');
+
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('data-rule-id', rule.id);
+        g.setAttribute('class', 'rule-group cursor-pointer');
+
+        if (rule.role === 'line') {
+          const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+          polyline.setAttribute('points', pointsAttr);
+          polyline.setAttribute('stroke', rule.color || '#10b981');
+          polyline.setAttribute('stroke-width', isSelected ? '3.5' : '2.5');
+          polyline.setAttribute('stroke-linecap', 'round');
+          polyline.setAttribute('stroke-linejoin', 'round');
+          polyline.setAttribute('fill', 'none');
+          if (isSelected) polyline.setAttribute('filter', 'url(#glow-cyan)');
+          g.appendChild(polyline);
+
+          if (physPoints.length >= 2) {
+            const p1 = physPoints[0];
+            const p2 = physPoints[1];
+            const midX = (p1.x + p2.x) / 2;
+            const midY = (p1.y + p2.y) / 2;
+            const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180 / Math.PI;
+
+            const arrowG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            arrowG.setAttribute('transform', `translate(${midX}, ${midY}) rotate(${angle})`);
+
+            const dirCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            dirCircle.setAttribute('r', '11');
+            dirCircle.setAttribute('fill', '#070a12');
+            dirCircle.setAttribute('stroke', rule.color || '#10b981');
+            dirCircle.setAttribute('stroke-width', '1.8');
+            arrowG.appendChild(dirCircle);
+
+            const arrowText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            arrowText.setAttribute('text-anchor', 'middle');
+            arrowText.setAttribute('dominant-baseline', 'central');
+            arrowText.setAttribute('font-size', '10');
+            arrowText.setAttribute('font-weight', 'bold');
+            arrowText.setAttribute('fill', rule.color || '#10b981');
+
+            const dir = rule.lineDirection || 'both';
+            arrowText.textContent = dir === 'both' ? '⇄' : (dir === 'a_to_b' ? '➔' : '⬅');
+            arrowG.appendChild(arrowText);
+
+            arrowG.addEventListener('click', (e) => {
+              e.stopPropagation();
+              pushHistory();
+              if (rule.lineDirection === 'both') rule.lineDirection = 'a_to_b';
+              else if (rule.lineDirection === 'a_to_b') rule.lineDirection = 'b_to_a';
+              else rule.lineDirection = 'both';
+              renderSvg();
+              updateInspector();
+              showToast(`跨线方向已切换: ${rule.lineDirection === 'both' ? '双向' : (rule.lineDirection === 'a_to_b' ? '正向 A➔B' : '反向 B➔A')}`);
+            });
+
+            g.appendChild(arrowG);
+          }
+        } else {
+          const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          polygon.setAttribute('points', pointsAttr);
+
+          if (rule.role === 'mask') {
+            polygon.setAttribute('fill', 'url(#hatch-pattern)');
+            polygon.setAttribute('stroke', rule.color || '#94a3b8');
+            polygon.setAttribute('stroke-width', isSelected ? '3' : '1.8');
+            polygon.setAttribute('stroke-dasharray', '5 4');
+          } else if (rule.role === 'precrop') {
+            polygon.setAttribute('fill', 'rgba(245, 158, 11, 0.15)');
+            polygon.setAttribute('stroke', '#f59e0b');
+            polygon.setAttribute('stroke-width', isSelected ? '3' : '2');
+            polygon.setAttribute('class', 'marching-ants');
+          } else {
+            polygon.setAttribute('fill', isSelected ? 'rgba(0, 242, 254, 0.22)' : 'rgba(0, 242, 254, 0.12)');
+            polygon.setAttribute('stroke', rule.color || '#00f2fe');
+            polygon.setAttribute('stroke-width', isSelected ? '3' : '1.8');
+            if (isSelected) polygon.setAttribute('filter', 'url(#glow-cyan)');
+          }
+          g.appendChild(polygon);
+
+          if (physPoints.length > 0) {
+            const minX = Math.min(...physPoints.map(p => p.x));
+            const minY = Math.min(...physPoints.map(p => p.y));
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', `${minX + 8}`);
+            text.setAttribute('y', `${minY + 16}`);
+            text.setAttribute('font-size', '10');
+            text.setAttribute('font-family', 'Space Grotesk, sans-serif');
+            text.setAttribute('fill', rule.color || '#00f2fe');
+            text.setAttribute('font-weight', '600');
+            text.textContent = rule.name;
+            g.appendChild(text);
+          }
+        }
+
+        // 顶点手柄 (选中的规则渲染)
+        if (isSelected) {
+          physPoints.forEach((p, idx) => {
+            const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            handle.setAttribute('cx', p.x);
+            handle.setAttribute('cy', p.y);
+            handle.setAttribute('r', '5.5');
+            handle.setAttribute('fill', '#ffffff');
+            handle.setAttribute('stroke', rule.color || '#00f2fe');
+            handle.setAttribute('stroke-width', '2');
+            handle.setAttribute('class', 'cursor-move hover:scale-125 transition-transform');
+
+            handle.addEventListener('mousedown', (e) => {
+              e.stopPropagation();
+              draggingVertex = { ruleId: rule.id, index: idx };
+            });
+
+            g.appendChild(handle);
+          });
+        }
+
+        g.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (currentTool === 'select') {
+            selectedRuleId = rule.id;
+            renderSvg();
+            renderLayerList();
+            updateInspector();
+          }
+        });
+
+        rulesLayer.appendChild(g);
+      });
+
+      // 更新状态指示
+      rulesCountLabel.textContent = rules.length;
+      inspectorRuleCountBadge.textContent = `${rules.length} 项`;
+    }
+
+    // ----------------------------------------------------
+    // 5. 绘制事件交互
+    // ----------------------------------------------------
+    stageSvg.addEventListener('mousemove', (e) => {
+      const norm = toNormalized(e.clientX, e.clientY);
+      coordDisplay.textContent = `X: ${norm.x.toFixed(4)} | Y: ${norm.y.toFixed(4)}`;
+
+      const rect = getSvgRect();
+      const currentPhys = { x: norm.x * rect.width, y: norm.y * rect.height };
+
+      if (draggingVertex) {
+        const rules = getCurrentRules();
+        const rule = rules.find(r => r.id === draggingVertex.ruleId);
+        if (rule) {
+          rule.points[draggingVertex.index] = norm;
+          renderSvg();
+        }
+        return;
+      }
+
+      if (isDrawing && activeDrawingPoints.length > 0) {
+        drawingLayer.innerHTML = '';
+        const lastP = activeDrawingPoints[activeDrawingPoints.length - 1];
+
+        let targetPoint = currentPhys;
+        if (snapEnabled && activeDrawingPoints.length >= 2) {
+          const firstP = activeDrawingPoints[0];
+          const dist = Math.hypot(firstP.x - currentPhys.x, firstP.y - currentPhys.y);
+          if (dist < 18) {
+            targetPoint = firstP;
+            snapIndicator.setAttribute('cx', firstP.x);
+            snapIndicator.setAttribute('cy', firstP.y);
+            snapIndicator.classList.remove('hidden');
+          } else {
+            snapIndicator.classList.add('hidden');
+          }
+        }
+
+        const ptsAttr = activeDrawingPoints.map(p => `${p.x},${p.y}`).join(' ');
+        const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        polyline.setAttribute('points', ptsAttr);
+        polyline.setAttribute('stroke', '#00f2fe');
+        polyline.setAttribute('stroke-width', '2');
+        polyline.setAttribute('fill', 'none');
+        drawingLayer.appendChild(polyline);
+
+        const rubberLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        rubberLine.setAttribute('x1', lastP.x);
+        rubberLine.setAttribute('y1', lastP.y);
+        rubberLine.setAttribute('x2', targetPoint.x);
+        rubberLine.setAttribute('y2', targetPoint.y);
+        rubberLine.setAttribute('stroke', '#00f2fe');
+        rubberLine.setAttribute('stroke-width', '2');
+        rubberLine.setAttribute('stroke-dasharray', '4 4');
+        drawingLayer.appendChild(rubberLine);
+
+        drawBubble.style.left = `${currentPhys.x}px`;
+        drawBubble.style.top = `${currentPhys.y}px`;
+        drawBubble.classList.remove('hidden');
+      }
+    });
+
+    stageSvg.addEventListener('click', (e) => {
+      if (currentTool === 'select') return;
+
+      const norm = toNormalized(e.clientX, e.clientY);
+      const rect = getSvgRect();
+      const physPoint = { x: norm.x * rect.width, y: norm.y * rect.height };
+
+      if (!isDrawing) {
+        pushHistory();
+        isDrawing = true;
+        activeDrawingPoints = [physPoint];
+        return;
+      }
+
+      if (activeDrawingPoints.length >= 2) {
+        const firstP = activeDrawingPoints[0];
+        const dist = Math.hypot(firstP.x - physPoint.x, firstP.y - physPoint.y);
+        if (dist < 18) {
+          finishDrawing(true);
+          return;
+        }
+      }
+
+      activeDrawingPoints.push(physPoint);
+
+      if (currentTool === 'line' && activeDrawingPoints.length >= 2) {
+        finishDrawing(false);
+      }
+    });
+
+    stageSvg.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (isDrawing && activeDrawingPoints.length >= 3) {
+        finishDrawing(true);
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (draggingVertex) {
+        pushHistory();
+        draggingVertex = null;
+      }
+    });
+
+    function finishDrawing(isClosed) {
+      const task = getCurrentTask();
+      if (!task || activeDrawingPoints.length < 2) {
+        cancelDrawing();
+        return;
+      }
+
+      const rect = getSvgRect();
+      const normPoints = activeDrawingPoints.map(p => ({
+        x: Number((p.x / rect.width).toFixed(4)),
+        y: Number((p.y / rect.height).toFixed(4))
+      }));
+
+      const role = currentTool === 'line' ? 'line' : (currentTool === 'mask' ? 'mask' : (currentTool === 'precrop' ? 'precrop' : 'roi'));
+      const defaultName = role === 'roi' ? `区域入侵防区 #${task.rules.length + 1}` :
+                         (role === 'line' ? `绊线检测 #${task.rules.length + 1}` :
+                         (role === 'mask' ? `误报遮罩 #${task.rules.length + 1}` : `特写预裁剪 #${task.rules.length + 1}`));
+
+      const newRule = {
+        id: `rule_${Date.now()}`,
+        name: defaultName,
+        role: role,
+        color: role === 'line' ? '#10b981' : (role === 'mask' ? '#94a3b8' : (role === 'precrop' ? '#f59e0b' : '#00f2fe')),
+        visible: true,
+        points: normPoints,
+        lineDirection: role === 'line' ? 'both' : undefined,
+        targetLabels: ['person', 'car'],
+        cooldownSeconds: 5,
+        snapshotHighRes: true,
+      };
+
+      task.rules.push(newRule);
+      selectedRuleId = newRule.id;
+
+      cancelDrawing();
+      renderSvg();
+      renderLayerList();
+      updateInspector();
+      showToast(`已在当前任务 [${task.name}] 中添加: ${defaultName}`);
+      setTool('select');
+    }
+
+    function cancelDrawing() {
+      isDrawing = false;
+      activeDrawingPoints = [];
+      drawingLayer.innerHTML = '';
+      snapIndicator.classList.add('hidden');
+      drawBubble.classList.add('hidden');
+    }
+
+    // ----------------------------------------------------
+    // 6. 任务与图层列表交互
+    // ----------------------------------------------------
+    function renderTree() {
+      const treeContainer = document.getElementById('cameraTaskTree');
+      treeContainer.innerHTML = '';
+
+      camerasData.forEach(cam => {
+        const isCurrentCam = cam.id === currentCameraId;
+        const camBox = document.createElement('div');
+        camBox.className = `camera-node rounded-xl border p-2 transition-all ${
+          isCurrentCam ? 'border-white/15 bg-white/[0.03]' : 'border-white/5 bg-white/[0.01]'
+        }`;
+
+        camBox.innerHTML = `
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-white/5">
+            <div class="flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full ${cam.status === 'healthy' ? 'bg-emerald-400' : 'bg-rose-500'}"></span>
+              <span class="font-semibold text-white text-xs">${cam.name}</span>
+            </div>
+            <button class="btn-add-task px-1.5 py-0.5 rounded bg-cyan-400/10 hover:bg-cyan-400/20 text-cyan-300 font-mono text-[10px] flex items-center gap-1 border border-cyan-400/30" data-cam-id="${cam.id}">
+              <i data-lucide="plus" class="w-3 h-3"></i>
+              <span>新建任务</span>
+            </button>
+          </div>
+          <div class="task-items-box space-y-1.5 pl-1.5"></div>
+        `;
+
+        const taskItemsBox = camBox.querySelector('.task-items-box');
+
+        cam.tasks.forEach(task => {
+          const isCurrentTask = isCurrentCam && task.taskId === currentTaskId;
+          const taskNode = document.createElement('div');
+          taskNode.className = `task-node p-2 rounded-lg border cursor-pointer transition-all ${
+            isCurrentTask
+              ? 'border-cyan-400/60 bg-cyan-400/10 text-white shadow-sm'
+              : 'border-white/5 bg-white/[0.02] hover:bg-white/5 text-slate-300 hover:border-white/20'
+          }`;
+
+          const icon = task.algorithmId.includes('Face') ? 'smile' : (task.algorithmId.includes('LPR') ? 'credit-card' : 'shield-alert');
+
+          taskNode.innerHTML = `
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-1.5 font-medium">
+                <i data-lucide="${icon}" class="w-3.5 h-3.5 ${isCurrentTask ? 'text-cyan-400' : 'text-slate-400'}"></i>
+                <span class="truncate">${task.name}</span>
+              </div>
+              <span class="h-2 w-2 rounded-full ${task.desiredEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}" title="${task.desiredEnabled ? '运行中' : '已暂停'}"></span>
+            </div>
+            <div class="mt-1 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+              <span class="bg-white/10 px-1 py-0.2 rounded">${task.algorithmId}</span>
+              <span class="${isCurrentTask ? 'text-cyan-400' : 'text-slate-400'}">${task.rules.length} 条规则</span>
+            </div>
+          `;
+
+          taskNode.addEventListener('click', () => {
+            switchTask(cam.id, task.taskId);
+          });
+
+          taskItemsBox.appendChild(taskNode);
+        });
+
+        // 新建任务按钮事件
+        camBox.querySelector('.btn-add-task').addEventListener('click', (e) => {
+          e.stopPropagation();
+          const taskName = prompt('请输入新 AI 分析任务名称:', `新智能防区 #${cam.tasks.length + 1}`);
+          if (taskName) {
+            const newTaskId = `task-${Date.now()}`;
+            cam.tasks.push({
+              taskId: newTaskId,
+              name: taskName,
+              algorithmId: 'YOLO26n-v1',
+              algorithmName: 'YOLO26n 通用感知',
+              desiredEnabled: true,
+              rules: []
+            });
+            switchTask(cam.id, newTaskId);
+            showToast(`已在 [${cam.name}] 上创建新任务: ${taskName}`);
+          }
+        });
+
+        treeContainer.appendChild(camBox);
+      });
+
+      lucide.createIcons();
+    }
+
+    // 切换当前编辑的任务
+    function switchTask(camId, taskId) {
+      currentCameraId = camId;
+      currentTaskId = taskId;
+
+      const cam = camerasData.find(c => c.id === camId);
+      const task = cam ? cam.tasks.find(t => t.taskId === taskId) : null;
+      if (!task) return;
+
+      selectedRuleId = task.rules.length > 0 ? task.rules[0].id : null;
+
+      // 更新顶部 Breadcrumb
+      document.getElementById('headerCamName').textContent = cam.name;
+      document.getElementById('headerTaskName').textContent = task.name;
+      document.getElementById('headerAlgoBadge').textContent = task.algorithmId;
+      document.getElementById('osdCamChannel').textContent = `${cam.id.toUpperCase()}_SUB (640x360@${cam.fps})`;
+
+      // 更新右侧任务详情卡片
+      document.getElementById('taskDetailId').textContent = task.taskId;
+      document.getElementById('taskDetailAlgo').textContent = task.algorithmName;
+      document.getElementById('taskStatusDot').className = `h-2 w-2 rounded-full ${task.desiredEnabled ? 'bg-emerald-400' : 'bg-slate-500'}`;
+      document.getElementById('taskStatusText').textContent = task.desiredEnabled ? '运行中' : '已暂停';
+      document.getElementById('currentTaskLabel').textContent = task.name;
+
+      cancelDrawing();
+      renderTree();
+      renderSvg();
+      renderLayerList();
+      updateInspector();
+      showToast(`已切换至任务: ${task.name}`);
+    }
+
+    function renderLayerList() {
+      const rules = getCurrentRules();
+      ruleLayerList.innerHTML = '';
+      emptyLayerTip.style.display = rules.length === 0 ? 'block' : 'none';
+
+      rules.forEach(rule => {
+        const isSelected = rule.id === selectedRuleId;
+        const item = document.createElement('div');
+        item.className = `p-2 rounded-lg border flex items-center justify-between transition-all cursor-pointer ${
+          isSelected
+            ? 'border-cyan-400 bg-cyan-400/10 text-white shadow-sm'
+            : 'border-white/5 bg-white/[0.02] hover:bg-white/5 text-slate-300'
+        }`;
+
+        const roleIcon = rule.role === 'roi' ? 'hexagon' : (rule.role === 'line' ? 'slash' : (rule.role === 'mask' ? 'shield-alert' : 'crop'));
+
+        item.innerHTML = `
+          <div class="flex items-center gap-2 overflow-hidden">
+            <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background-color: ${rule.color}"></span>
+            <i data-lucide="${roleIcon}" class="w-3.5 h-3.5 text-slate-400 flex-shrink-0"></i>
+            <span class="truncate font-medium">${rule.name}</span>
+          </div>
+          <div class="flex items-center gap-1.5 flex-shrink-0">
+            <button class="btn-toggle-eye p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white">
+              <i data-lucide="${rule.visible ? 'eye' : 'eye-off'}" class="w-3.5 h-3.5"></i>
+            </button>
+            <button class="btn-del-rule p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400">
+              <i data-lucide="trash" class="w-3.5 h-3.5"></i>
+            </button>
+          </div>
+        `;
+
+        item.addEventListener('click', () => {
+          selectedRuleId = rule.id;
+          renderSvg();
+          renderLayerList();
+          updateInspector();
+        });
+
+        item.querySelector('.btn-toggle-eye').addEventListener('click', (e) => {
+          e.stopPropagation();
+          rule.visible = !rule.visible;
+          renderSvg();
+          renderLayerList();
+        });
+
+        item.querySelector('.btn-del-rule').addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteRule(rule.id);
+        });
+
+        ruleLayerList.appendChild(item);
+      });
+
+      lucide.createIcons();
+    }
+
+    function updateInspector() {
+      const rules = getCurrentRules();
+      const rule = rules.find(r => r.id === selectedRuleId);
+      if (!rule) {
+        noSelectionTip.classList.remove('hidden');
+        selectionForm.classList.add('hidden');
+        return;
+      }
+
+      noSelectionTip.classList.add('hidden');
+      selectionForm.classList.remove('hidden');
+
+      propName.value = rule.name;
+      selectedRuleRoleBadge.textContent = rule.role === 'roi' ? 'ROI 区域入侵' :
+                                          (rule.role === 'line' ? 'Line 绊线越界' :
+                                          (rule.role === 'mask' ? 'Mask 干扰遮罩' : 'Pre-crop 特写裁剪'));
+
+      if (rule.role === 'line') {
+        propLineDirGroup.classList.remove('hidden');
+        document.querySelectorAll('.line-dir-btn').forEach(btn => {
+          const dir = btn.getAttribute('data-dir');
+          if (dir === (rule.lineDirection || 'both')) {
+            btn.className = 'line-dir-btn py-1 rounded text-center transition-all bg-cyan-500 text-black font-semibold';
+          } else {
+            btn.className = 'line-dir-btn py-1 rounded text-center text-slate-400 hover:text-white transition-all';
+          }
+        });
+      } else {
+        propLineDirGroup.classList.add('hidden');
+      }
+
+      document.querySelectorAll('.prop-target-chk').forEach(chk => {
+        chk.checked = rule.targetLabels?.includes(chk.value) ?? true;
+      });
+
+      propCooldownSlider.value = rule.cooldownSeconds || 5;
+      propCooldownVal.textContent = `${rule.cooldownSeconds || 5} 秒`;
+      propSnapshot.checked = rule.snapshotHighRes !== false;
+    }
+
+    function deleteRule(id) {
+      const task = getCurrentTask();
+      if (!task) return;
+      pushHistory();
+      task.rules = task.rules.filter(r => r.id !== id);
+      if (selectedRuleId === id) {
+        selectedRuleId = task.rules.length > 0 ? task.rules[0].id : null;
+      }
+      renderSvg();
+      renderLayerList();
+      updateInspector();
+      renderTree();
+      showToast('规则已删除');
+    }
+
+    propName.addEventListener('input', (e) => {
+      const rules = getCurrentRules();
+      const rule = rules.find(r => r.id === selectedRuleId);
+      if (rule) {
+        rule.name = e.target.value;
+        renderSvg();
+        renderLayerList();
+      }
+    });
+
+    propCooldownSlider.addEventListener('input', (e) => {
+      const val = Number(e.target.value);
+      propCooldownVal.textContent = `${val} 秒`;
+      const rules = getCurrentRules();
+      const rule = rules.find(r => r.id === selectedRuleId);
+      if (rule) rule.cooldownSeconds = val;
+    });
+
+    document.querySelectorAll('.prop-target-chk').forEach(chk => {
+      chk.addEventListener('change', () => {
+        const rules = getCurrentRules();
+        const rule = rules.find(r => r.id === selectedRuleId);
+        if (rule) {
+          const checked = Array.from(document.querySelectorAll('.prop-target-chk:checked')).map(c => c.value);
+          rule.targetLabels = checked;
+        }
+      });
+    });
+
+    document.querySelectorAll('.line-dir-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const dir = btn.getAttribute('data-dir');
+        const rules = getCurrentRules();
+        const rule = rules.find(r => r.id === selectedRuleId);
+        if (rule) {
+          pushHistory();
+          rule.lineDirection = dir;
+          updateInspector();
+          renderSvg();
+        }
+      });
+    });
+
+    document.getElementById('btnDeleteSelectedRule').addEventListener('click', () => {
+      if (selectedRuleId) deleteRule(selectedRuleId);
+    });
+
+    // ----------------------------------------------------
+    // 7. 工具模式切换与幽灵层切换
+    // ----------------------------------------------------
+    function setTool(tool) {
+      currentTool = tool;
+      cancelDrawing();
+
+      document.querySelectorAll('.tool-btn').forEach(btn => {
+        btn.classList.remove('bg-white/10', 'text-white', 'shadow-sm');
+      });
+
+      const activeBtn = {
+        select: document.getElementById('toolSelect'),
+        roi: document.getElementById('toolRoi'),
+        line: document.getElementById('toolLine'),
+        mask: document.getElementById('toolMask'),
+        precrop: document.getElementById('toolPrecrop')
+      }[tool];
+
+      if (activeBtn) {
+        activeBtn.classList.add('bg-white/10', 'text-white', 'shadow-sm');
+      }
+    }
+
+    document.getElementById('toolSelect').addEventListener('click', () => setTool('select'));
+    document.getElementById('toolRoi').addEventListener('click', () => setTool('roi'));
+    document.getElementById('toolLine').addEventListener('click', () => setTool('line'));
+    document.getElementById('toolMask').addEventListener('click', () => setTool('mask'));
+    document.getElementById('toolPrecrop').addEventListener('click', () => setTool('precrop'));
+
+    // 幽灵层开关
+    document.getElementById('btnToggleGhost').addEventListener('click', () => {
+      ghostLayerEnabled = !ghostLayerEnabled;
+      document.getElementById('btnToggleGhost').classList.toggle('border-indigo-400', ghostLayerEnabled);
+      document.getElementById('btnToggleGhost').classList.toggle('bg-indigo-500/20', ghostLayerEnabled);
+      document.getElementById('ghostLayerBadge').classList.toggle('hidden', !ghostLayerEnabled);
+      renderSvg();
+      showToast(`跨任务幽灵参考层已${ghostLayerEnabled ? '开启' : '隐藏'}`);
+    });
+
+    // 磁吸开关
+    document.getElementById('btnSnap').addEventListener('click', (e) => {
+      snapEnabled = !snapEnabled;
+      e.currentTarget.classList.toggle('text-cyan-400', snapEnabled);
+      e.currentTarget.classList.toggle('text-slate-500', !snapEnabled);
+      showToast(`顶点磁吸已${snapEnabled ? '开启' : '关闭'}`);
+    });
+
+    // 网格
+    document.getElementById('btnToggleGrid').addEventListener('click', () => {
+      showGrid = !showGrid;
+      document.getElementById('gridOverlay').classList.toggle('hidden', !showGrid);
+      document.getElementById('btnToggleGrid').classList.toggle('border-cyan-400', showGrid);
+      document.getElementById('btnToggleGrid').classList.toggle('text-cyan-400', showGrid);
+    });
+
+    // 模拟开关
+    document.getElementById('btnToggleSim').addEventListener('click', () => {
+      simMode = !simMode;
+      document.getElementById('btnToggleSim').classList.toggle('bg-cyan-400/20', simMode);
+      showToast(`目标穿行模拟已${simMode ? '恢复' : '暂停'}`);
+    });
+
+    // 撤销/重做
+    document.getElementById('btnUndo').addEventListener('click', () => {
+      const task = getCurrentTask();
+      if (historyStack.length > 0 && task) {
+        redoStack.push(JSON.stringify(task.rules));
+        task.rules = JSON.parse(historyStack.pop());
+        renderSvg();
+        renderLayerList();
+        updateInspector();
+        updateUndoRedoButtons();
+        showToast('已撤销');
+      }
+    });
+
+    document.getElementById('btnRedo').addEventListener('click', () => {
+      const task = getCurrentTask();
+      if (redoStack.length > 0 && task) {
+        historyStack.push(JSON.stringify(task.rules));
+        task.rules = JSON.parse(redoStack.pop());
+        renderSvg();
+        renderLayerList();
+        updateInspector();
+        updateUndoRedoButtons();
+        showToast('已重做');
+      }
+    });
+
+    // 快捷键
+    window.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      if (e.key === 'v' || e.key === 'V') setTool('select');
+      else if (e.key === 'r' || e.key === 'R') setTool('roi');
+      else if (e.key === 'l' || e.key === 'L') setTool('line');
+      else if (e.key === 'm' || e.key === 'M') setTool('mask');
+      else if (e.key === 'c' || e.key === 'C') setTool('precrop');
+      else if (e.key === 'Escape') cancelDrawing();
+      else if (e.key === 'Enter') {
+        if (isDrawing) finishDrawing(true);
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedRuleId) deleteRule(selectedRuleId);
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        if (e.shiftKey) document.getElementById('btnRedo').click();
+        else document.getElementById('btnUndo').click();
+      }
+    });
+
+    // ----------------------------------------------------
+    // 8. 规范 JSON 与任务保存
+    // ----------------------------------------------------
+    function getStandardTaskJson() {
+      const task = getCurrentTask();
+      if (!task) return '{}';
+
+      const payload = {
+        taskId: task.taskId,
+        cameraId: currentCameraId,
+        algorithmId: task.algorithmId,
+        rules: task.rules.map(r => ({
+          role: r.role,
+          lineDirection: r.role === 'line' ? (r.lineDirection || 'both') : undefined,
+          points: r.points.map(p => ({
+            x: Number(p.x.toFixed(4)),
+            y: Number(p.y.toFixed(4))
+          }))
+        }))
+      };
+      return JSON.stringify(payload, null, 2);
+    }
+
+    document.getElementById('btnViewJson').addEventListener('click', () => {
+      document.getElementById('jsonPreviewContent').textContent = getStandardTaskJson();
+      document.getElementById('jsonModal').classList.remove('hidden');
+    });
+
+    document.getElementById('btnCloseJson').addEventListener('click', () => {
+      document.getElementById('jsonModal').classList.add('hidden');
+    });
+    document.getElementById('btnCloseJson2').addEventListener('click', () => {
+      document.getElementById('jsonModal').classList.add('hidden');
+    });
+
+    document.getElementById('btnCopyJson').addEventListener('click', () => {
+      navigator.clipboard.writeText(getStandardTaskJson()).then(() => {
+        showToast('任务标准 JSON 已复制到剪贴板！');
+      });
+    });
+
+    document.getElementById('btnSaveTaskRules').addEventListener('click', () => {
+      const task = getCurrentTask();
+      showToast(`✅ [${task.name}] 布防策略已保存！底层管线已热更新生效。`);
+    });
+
+    // ----------------------------------------------------
+    // 9. 模拟动画渲染 (路口视频画面)
+    // ----------------------------------------------------
+    const canvas = document.getElementById('videoCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const agents = [
+      { id: 1, type: 'person', label: '行人 #104', x: 0.18, y: 0.35, vx: 0.0018, vy: 0.0022, width: 0.035, height: 0.07, trajectory: [] },
+      { id: 2, type: 'car', label: '机动车 #89', x: 0.70, y: 0.40, vx: -0.0025, vy: 0.0035, width: 0.07, height: 0.09, trajectory: [] },
+      { id: 3, type: 'bicycle', label: '单车 #32', x: 0.08, y: 0.80, vx: 0.0032, vy: -0.0015, width: 0.04, height: 0.06, trajectory: [] }
+    ];
+
+    function resizeCanvas() {
+      const rect = viewportContainer.getBoundingClientRect();
+      canvas.width = rect.width * window.devicePixelRatio;
+      canvas.height = rect.height * window.devicePixelRatio;
+      renderSvg();
+    }
+    window.addEventListener('resize', resizeCanvas);
+    setTimeout(resizeCanvas, 50);
+
+    let lastAlertTime = 0;
+
+    function renderSimulationFrame() {
+      if (!canvas.width || !canvas.height) {
+        requestAnimationFrame(renderSimulationFrame);
+        return;
+      }
+
+      ctx.save();
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      const w = canvas.width / window.devicePixelRatio;
+      const h = canvas.height / window.devicePixelRatio;
+
+      // 绘制路口底图
+      ctx.fillStyle = '#060911';
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.fillStyle = '#0d1322';
+      ctx.beginPath();
+      ctx.moveTo(w * 0.1, h);
+      ctx.lineTo(w * 0.45, h * 0.2);
+      ctx.lineTo(w * 0.75, h * 0.2);
+      ctx.lineTo(w * 0.95, h);
+      ctx.fill();
+
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.setLineDash([12, 10]);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(w * 0.55, h);
+      ctx.lineTo(w * 0.60, h * 0.2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+      ctx.lineWidth = 4;
+      for (let i = 0; i < 7; i++) {
+        const y = h * (0.65 + i * 0.035);
+        ctx.beginPath();
+        ctx.moveTo(w * 0.28, y);
+        ctx.lineTo(w * 0.72, y);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = '#09101c';
+      ctx.fillRect(0, 0, w * 0.25, h * 0.35);
+      ctx.fillRect(w * 0.75, 0, w * 0.25, h * 0.35);
+
+      if (simMode) {
+        const rules = getCurrentRules();
+        agents.forEach(agent => {
+          agent.x += agent.vx;
+          agent.y += agent.vy;
+
+          if (agent.x > 0.95 || agent.x < 0.05) agent.vx *= -1;
+          if (agent.y > 0.92 || agent.y < 0.15) agent.vy *= -1;
+
+          agent.trajectory.push({ x: agent.x, y: agent.y });
+          if (agent.trajectory.length > 25) agent.trajectory.shift();
+
+          const physX = agent.x * w;
+          const physY = agent.y * h;
+          const physW = agent.width * w;
+          const physH = agent.height * h;
+
+          if (agent.trajectory.length > 2) {
+            ctx.strokeStyle = 'rgba(0, 242, 254, 0.35)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            agent.trajectory.forEach((p, idx) => {
+              const px = p.x * w;
+              const py = p.y * h;
+              if (idx === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            });
+            ctx.stroke();
+          }
+
+          ctx.strokeStyle = 'rgba(0, 242, 254, 0.8)';
+          ctx.lineWidth = 1.8;
+          ctx.strokeRect(physX - physW / 2, physY - physH / 2, physW, physH);
+
+          ctx.fillStyle = 'rgba(0, 242, 254, 0.85)';
+          ctx.fillRect(physX - physW / 2, physY - physH / 2 - 14, physW + 10, 14);
+          ctx.fillStyle = '#000';
+          ctx.font = '9px Space Mono, monospace';
+          ctx.fillText(agent.label, physX - physW / 2 + 2, physY - physH / 2 - 3);
+
+          rules.forEach(rule => {
+            if (!rule.visible || rule.role === 'mask') return;
+            const bottomX = agent.x;
+            const bottomY = agent.y + agent.height / 2;
+
+            if (rule.role === 'roi' && isPointInPolygon({ x: bottomX, y: bottomY }, rule.points)) {
+              triggerRuleAlarm(rule, agent);
+            }
+          });
+        });
+      }
+
+      ctx.restore();
+
+      const now = new Date();
+      document.getElementById('osdTimestamp').textContent = now.toISOString().replace('T', ' ').slice(0, 23);
+
+      requestAnimationFrame(renderSimulationFrame);
+    }
+
+    function isPointInPolygon(point, vs) {
+      let inside = false;
+      for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+        const xi = vs[i].x, yi = vs[i].y;
+        const xj = vs[j].x, yj = vs[j].y;
+        const intersect = ((yi > point.y) !== (yj > point.y)) &&
+            (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+
+    function triggerRuleAlarm(rule, agent) {
+      const now = Date.now();
+      if (now - lastAlertTime < 2500) return;
+      lastAlertTime = now;
+
+      const task = getCurrentTask();
+      const alertBadge = document.getElementById('liveAlertBadge');
+      const alertMsg = document.getElementById('alertMsgText');
+      alertMsg.textContent = `🚨 [${task ? task.name : '任务'} / ${rule.name}] 触发: ${agent.label} 越界入侵！`;
+      alertBadge.classList.remove('hidden');
+      alertBadge.classList.add('flex');
+
+      const ruleEl = document.querySelector(`[data-rule-id="${rule.id}"] polygon, [data-rule-id="${rule.id}"] polyline`);
+      if (ruleEl) {
+        ruleEl.classList.add('animate-alarm-pulse');
+        setTimeout(() => ruleEl.classList.remove('animate-alarm-pulse'), 3000);
+      }
+
+      setTimeout(() => {
+        alertBadge.classList.add('hidden');
+        alertBadge.classList.remove('flex');
+      }, 4000);
+    }
+
+    let toastTimer = null;
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      const toastText = document.getElementById('toastText');
+      toastText.textContent = msg;
+      toast.classList.remove('opacity-0', 'translate-y-2');
+      toast.classList.add('opacity-100', 'translate-y-0');
+
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.classList.remove('opacity-100', 'translate-y-0');
+        toast.classList.add('opacity-0', 'translate-y-2');
+      }, 2500);
+    }
+
+    // 初始化
+    window.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      renderTree();
+      renderSvg();
+      renderLayerList();
+      updateInspector();
+      updateUndoRedoButtons();
+      requestAnimationFrame(renderSimulationFrame);
+    });
+  </script>
+</body>
+</html>
