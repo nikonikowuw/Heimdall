@@ -160,3 +160,42 @@ Completed 09-04-camera-live-preview: implemented pure Rust RTSP ingestor with Ex
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: 设备管理解耦、任务全生命周期管理与矢量布防工程化重构
+
+**Date**: 2026-09-05
+**Task**: 设备管理解耦、任务全生命周期管理与矢量布防工程化重构
+**Branch**: `dev`
+
+### Summary
+
+完成设备管理（CamerasPage）与 AI 任务编排的独立解耦；后端交付 DELETE /api/v1/tasks/{camera_id} 接口与 TaskRepo 级联清理；LiveRulesStudio 彻底模块化拆解；接入 Framer Motion 工业级物理缓动与中英繁全量国际化。
+
+### Main Changes
+
+- 拆分并交付独立设备管理页 CamerasPage 与 CameraModal/DeleteCameraModal 模态框
+- 后端实现 DELETE /api/v1/tasks/{camera_id} 与 TaskRepo::delete_by_camera_id，打通任务全链路销毁与审计日志落库
+- LiveRulesStudio 深度解耦为 AlgoSandboxDrawer、AlgoSettingsSidebar、RuleInspectorSidebar、CreateTaskModal、DeleteTaskModal 等模块
+- 接入 motionTokens 物理缓动体系，全面清理 Emoji 字符，补全中英繁全量国际化
+- 初始化 Linux 边缘异构 VPU 解码器扩展（Rockchip MPP / 华为昇腾 DVPP）架构设计与规划工件
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1e1983e` | (see git log) |
+| `43a9889` | (see git log) |
+
+### Testing
+
+- [OK] Rust 后端 workspace 108 项测试全绿，Clippy 0 警告
+- [OK] Web 前端 25 项测试全绿，Prettier、ESLint、TypeScript 类型检查与生产构建 100% 通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进 Linux 异构 VPU 解码器扩展任务实施：实现 Rockchip MPP 与华为昇腾 DVPP 解码器扩展
