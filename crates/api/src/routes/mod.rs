@@ -19,6 +19,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .nest("/tasks", task::router())
         .nest("/alarms", alarm::router())
         .nest("/evidence", evidence::router())
+        .nest("/algorithms", algo::router())
         .nest("/algo", algo::router())
         .nest("/logs/operations", oplog::router())
         .nest("/ws/events", ws::router())

@@ -1,30 +1,22 @@
 import React from 'react'
-import { AlertCircle, CheckCircle2, Cpu, ShieldCheck, Upload, X } from 'lucide-react'
+import { Cpu, ExternalLink, ShieldCheck, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { motionTokens } from '@/lib/motionTokens'
-import type { AlgoManifest, SandboxCheckResult } from '@/types'
+import type { AlgoManifest } from '@/types'
 
 export interface AlgoSandboxDrawerProps {
   isOpen: boolean
   algo: AlgoManifest | null
   onClose: () => void
-  onUploadPackageFile: (e: React.ChangeEvent<HTMLInputElement>) => void
-  isUploadingPkg: boolean
-  onRunSandboxTest: () => void
-  isVerifyingSandbox: boolean
-  sandboxResult: SandboxCheckResult | null
+  onNavigateToAlgorithms?: () => void
 }
 
 export function AlgoSandboxDrawer({
   isOpen,
   algo,
   onClose,
-  onUploadPackageFile,
-  isUploadingPkg,
-  onRunSandboxTest,
-  isVerifyingSandbox,
-  sandboxResult,
+  onNavigateToAlgorithms,
 }: AlgoSandboxDrawerProps): React.ReactElement {
   const { t } = useTranslation('task')
 
@@ -109,92 +101,32 @@ export function AlgoSandboxDrawer({
               </div>
             </div>
 
-            {/* 上传算法包归档 */}
-            <div className="space-y-2 border-t border-[var(--border)] pt-3">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]">
-                  <Upload className="h-4 w-4 text-[var(--accent)]" />
-                  <span>{t('actions.uploadPackage')}</span>
+            {/* 一级算法仓库解耦提示与导航入口 */}
+            <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4 text-xs">
+              <div className="flex items-center gap-2 font-semibold text-[var(--text-primary)]">
+                <ShieldCheck className="h-4 w-4 text-emerald-500" />
+                <span>
+                  {t('algoDrawer.managementTitle', { defaultValue: '算法资产与版本管理' })}
                 </span>
               </div>
-              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)] transition-all hover:border-[var(--accent)] hover:text-[var(--accent)]">
-                <input
-                  type="file"
-                  accept=".zip,.tar,.tar.gz,.tgz"
-                  className="hidden"
-                  onChange={onUploadPackageFile}
-                  disabled={isUploadingPkg}
-                />
-                <Upload className="h-4 w-4" />
-                <span>{isUploadingPkg ? t('actions.uploading') : t('actions.uploadPackage')}</span>
-              </label>
-            </div>
-
-            {/* 七步沙箱安全自检互动区 */}
-            <div className="space-y-3 border-t border-[var(--border)] pt-3">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1 text-xs font-semibold text-[var(--text-primary)]">
-                  <ShieldCheck className="h-4 w-4 text-emerald-500" />
-                  <span>{t('sandbox.title')}</span>
-                </span>
+              <p className="mt-2 text-[11px] leading-relaxed text-[var(--text-muted)]">
+                {t('algoDrawer.managementDesc', {
+                  defaultValue:
+                    '当前摄像头已绑定此算法模型进行常驻子码流推理。如需上传新算法包归档、热切换模型版本或卸载资产，请通过控制台左侧导航前往「算法仓库」。',
+                })}
+              </p>
+              {onNavigateToAlgorithms && (
                 <button
                   type="button"
-                  onClick={onRunSandboxTest}
-                  disabled={isVerifyingSandbox}
-                  className="text-xs font-semibold text-[var(--accent)] hover:underline disabled:opacity-50"
+                  onClick={() => {
+                    onClose()
+                    onNavigateToAlgorithms()
+                  }}
+                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--accent)] py-2 text-xs font-semibold text-white shadow-xs transition-opacity hover:opacity-90"
                 >
-                  {isVerifyingSandbox ? t('actions.verifyingSandbox') : t('actions.executeSandbox')}
+                  <span>{t('algoDrawer.goToRepo', { defaultValue: '前往算法仓库' })}</span>
+                  <ExternalLink className="h-3.5 w-3.5" />
                 </button>
-              </div>
-
-              {sandboxResult ? (
-                <div className="space-y-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium">{t('sandbox.status')}</span>
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 font-mono text-xs font-bold ${
-                        sandboxResult.passed
-                          ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500'
-                          : 'border border-rose-500/30 bg-rose-500/15 text-rose-500'
-                      }`}
-                    >
-                      {sandboxResult.passed
-                        ? t('sandbox.allPassed')
-                        : t('sandbox.interrupted', { passed: sandboxResult.stepsPassed })}
-                    </span>
-                  </div>
-
-                  <div className="space-y-1.5 pt-1">
-                    {sandboxResult.steps.map((step, idx) => {
-                      const isStepOk = idx < sandboxResult.stepsPassed
-                      return (
-                        <div
-                          key={idx}
-                          className="flex items-center gap-2 text-xs text-[var(--text-muted)]"
-                        >
-                          {isStepOk ? (
-                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-                          ) : (
-                            <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-500" />
-                          )}
-                          <span
-                            className={isStepOk ? 'text-[var(--text-secondary)]' : 'text-rose-400'}
-                          >
-                            {step}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-
-                  {sandboxResult.errorMessage && (
-                    <p className="mt-1 border-t border-[var(--border)] pt-1 font-mono text-xs text-rose-500">
-                      {sandboxResult.errorMessage}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-[var(--text-muted)]">{t('sandbox.tip')}</p>
               )}
             </div>
 

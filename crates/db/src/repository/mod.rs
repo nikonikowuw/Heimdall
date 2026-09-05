@@ -1,5 +1,7 @@
 pub mod admin_user;
 pub mod alarm;
+pub mod algorithm;
+pub mod algorithm_instance;
 pub mod camera;
 pub mod capture;
 pub mod gallery;
@@ -10,6 +12,8 @@ pub mod task;
 
 pub use admin_user::AdminUserRepo;
 pub use alarm::AlarmRepo;
+pub use algorithm::{AlgorithmRepo, AlgorithmStats, UpsertAlgorithmParams, UpsertVersionParams};
+pub use algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, UpdateInstanceParams};
 pub use camera::CameraRepo;
 pub use capture::CaptureRepo;
 pub use gallery::GalleryRepo;

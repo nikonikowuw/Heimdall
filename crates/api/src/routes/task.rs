@@ -1,15 +1,92 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use db::TaskRepo;
+use db::{AlgorithmInstanceRepo, CreateInstanceParams, OplogRepo, TaskRepo, UpdateInstanceParams};
 use types::{DetectionRule, MotionGateConfig};
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
 use crate::state::AppState;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListInstancesQuery {
+    pub camera_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlgorithmInstanceDto {
+    pub id: i64,
+    pub instance_id: String,
+    pub camera_id: String,
+    pub algorithm_id: String,
+    pub analysis_fps: i32,
+    pub params: serde_json::Value,
+    pub rules: serde_json::Value,
+    pub motion_gate: serde_json::Value,
+    pub enabled: bool,
+    pub actual_status: i32,
+    pub status_message: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl From<db::entity::algorithm_instance::Model> for AlgorithmInstanceDto {
+    fn from(m: db::entity::algorithm_instance::Model) -> Self {
+        let params = serde_json::from_str(&m.params_json).unwrap_or_else(|_| serde_json::json!({}));
+        let rules = serde_json::from_str(&m.rules_json).unwrap_or_else(|_| serde_json::json!([]));
+        let motion_gate =
+            serde_json::from_str(&m.motion_gate_json).unwrap_or_else(|_| serde_json::json!({}));
+
+        Self {
+            id: m.id,
+            instance_id: m.instance_id,
+            camera_id: m.camera_id,
+            algorithm_id: m.algorithm_id,
+            analysis_fps: m.analysis_fps,
+            params,
+            rules,
+            motion_gate,
+            enabled: m.enabled,
+            actual_status: m.actual_status,
+            status_message: m.status_message,
+            created_at: m.created_at.timestamp_millis(),
+            updated_at: m.updated_at.timestamp_millis(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInstanceRequest {
+    pub camera_id: String,
+    pub algorithm_id: String,
+    pub analysis_fps: Option<i32>,
+    pub params: Option<serde_json::Value>,
+    pub rules: Option<serde_json::Value>,
+    pub motion_gate: Option<serde_json::Value>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInstanceRequest {
+    pub analysis_fps: Option<i32>,
+    pub params: Option<serde_json::Value>,
+    pub rules: Option<serde_json::Value>,
+    pub motion_gate: Option<serde_json::Value>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetInstanceEnabledRequest {
+    pub enabled: bool,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,10 +139,21 @@ impl From<db::entity::task::Model> for TaskSummaryDto {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/", get(list_tasks)).route(
-        "/{camera_id}",
-        get(get_task).put(update_task).delete(delete_task),
-    )
+    Router::new()
+        .route("/", get(list_tasks))
+        .route("/instances", get(list_instances).post(create_instance))
+        .route(
+            "/instances/{instance_id}",
+            axum::routing::put(update_instance).delete(delete_instance),
+        )
+        .route(
+            "/instances/{instance_id}/enabled",
+            axum::routing::put(set_instance_enabled),
+        )
+        .route(
+            "/{camera_id}",
+            get(get_task).put(update_task).delete(delete_task),
+        )
 }
 
 async fn list_tasks(
@@ -200,6 +288,182 @@ async fn delete_task(
     .await;
 
     Ok(ApiResponse::success(()))
+}
+
+// -------------------------------------------------------------
+// 算法实例路由处理函数
+// -------------------------------------------------------------
+
+async fn list_instances(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(query): Query<ListInstancesQuery>,
+) -> Result<ApiResponse<Vec<AlgorithmInstanceDto>>, ApiError> {
+    let list = if let Some(cid) = query.camera_id {
+        AlgorithmInstanceRepo::list_by_camera_id(&state.db, &cid).await?
+    } else {
+        AlgorithmInstanceRepo::list_all(&state.db).await?
+    };
+
+    let dtos = list.into_iter().map(AlgorithmInstanceDto::from).collect();
+    Ok(ApiResponse::success(dtos))
+}
+
+async fn create_instance(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<CreateInstanceRequest>,
+) -> Result<ApiResponse<AlgorithmInstanceDto>, ApiError> {
+    let instance_id = uuid::Uuid::new_v4().to_string();
+    let params_json = req
+        .params
+        .as_ref()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "{}".into());
+    let rules_json = req
+        .rules
+        .as_ref()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "[]".into());
+    let motion_gate_json = req
+        .motion_gate
+        .as_ref()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "{}".into());
+    let enabled = req.enabled.unwrap_or(false);
+    let fps = req.analysis_fps.unwrap_or(0);
+
+    let created = AlgorithmInstanceRepo::create(
+        &state.db,
+        CreateInstanceParams {
+            instance_id: instance_id.clone(),
+            camera_id: req.camera_id.clone(),
+            algorithm_id: req.algorithm_id.clone(),
+            analysis_fps: fps,
+            params_json,
+            rules_json,
+            motion_gate_json,
+            enabled,
+        },
+    )
+    .await?;
+
+    let audit_body = serde_json::json!({
+        "instanceId": instance_id,
+        "cameraId": req.camera_id,
+        "algorithmId": req.algorithm_id,
+    });
+    let _ = OplogRepo::record(
+        &state.db,
+        &user.username,
+        "task_instance",
+        "create",
+        "POST",
+        "/api/v1/tasks/instances",
+        "",
+        &audit_body.to_string(),
+        200,
+        0,
+        "",
+        "",
+    )
+    .await;
+
+    Ok(ApiResponse::success(AlgorithmInstanceDto::from(created)))
+}
+
+async fn update_instance(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(instance_id): Path<String>,
+    Json(req): Json<UpdateInstanceRequest>,
+) -> Result<ApiResponse<AlgorithmInstanceDto>, ApiError> {
+    let updated = AlgorithmInstanceRepo::update(
+        &state.db,
+        &instance_id,
+        UpdateInstanceParams {
+            analysis_fps: req.analysis_fps,
+            params_json: req.params.map(|v| v.to_string()),
+            rules_json: req.rules.map(|v| v.to_string()),
+            motion_gate_json: req.motion_gate.map(|v| v.to_string()),
+            enabled: req.enabled,
+        },
+    )
+    .await?;
+
+    let _ = OplogRepo::record(
+        &state.db,
+        &user.username,
+        "task_instance",
+        "update",
+        "PUT",
+        &format!("/api/v1/tasks/instances/{instance_id}"),
+        "",
+        "",
+        200,
+        0,
+        "",
+        "",
+    )
+    .await;
+
+    Ok(ApiResponse::success(AlgorithmInstanceDto::from(updated)))
+}
+
+async fn set_instance_enabled(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(instance_id): Path<String>,
+    Json(req): Json<SetInstanceEnabledRequest>,
+) -> Result<ApiResponse<Option<()>>, ApiError> {
+    AlgorithmInstanceRepo::set_enabled(&state.db, &instance_id, req.enabled).await?;
+
+    let _ = OplogRepo::record(
+        &state.db,
+        &user.username,
+        "task_instance",
+        if req.enabled { "enable" } else { "disable" },
+        "PUT",
+        &format!("/api/v1/tasks/instances/{instance_id}/enabled"),
+        "",
+        &serde_json::json!({ "enabled": req.enabled }).to_string(),
+        200,
+        0,
+        "",
+        "",
+    )
+    .await;
+
+    Ok(ApiResponse::success(None))
+}
+
+async fn delete_instance(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(instance_id): Path<String>,
+) -> Result<ApiResponse<Option<()>>, ApiError> {
+    let rows = AlgorithmInstanceRepo::delete(&state.db, &instance_id).await?;
+    if rows == 0 {
+        return Err(ApiError::NotFound(format!("算法实例未找到: {instance_id}")));
+    }
+
+    let _ = OplogRepo::record(
+        &state.db,
+        &user.username,
+        "task_instance",
+        "delete",
+        "DELETE",
+        &format!("/api/v1/tasks/instances/{instance_id}"),
+        "",
+        "",
+        200,
+        0,
+        "",
+        "",
+    )
+    .await;
+
+    Ok(ApiResponse::success(None))
 }
 
 #[cfg(test)]

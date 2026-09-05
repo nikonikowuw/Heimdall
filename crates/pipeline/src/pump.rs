@@ -126,6 +126,7 @@ pub struct SubStreamAnalysisPump {
     infer_handle: Option<tokio::task::JoinHandle<()>>,
     managed_worker: Option<infer::InferenceWorker>,
     metrics: Arc<PumpMetrics>,
+    worker_holder: Arc<tokio::sync::RwLock<InferenceWorkerHandle>>,
 }
 
 impl std::fmt::Debug for SubStreamAnalysisPump {
@@ -229,6 +230,8 @@ impl SubStreamAnalysisPump {
             notify: tokio::sync::Notify::new(),
         });
         let infer_slot = sampling_slot.clone();
+        let worker_holder = Arc::new(tokio::sync::RwLock::new(worker));
+        let infer_worker_holder = worker_holder.clone();
 
         // 协程 1: 专用解码主循环（维持参考帧链完整，快速轮转，决不被推理阻塞）
         let decode_handle = tokio::spawn(async move {
@@ -333,7 +336,8 @@ impl SubStreamAnalysisPump {
                         let maybe_frame = infer_slot.frame.lock().ok().and_then(|mut g| g.take());
                         if let Some(frame) = maybe_frame {
                             let timestamp = frame.timestamp;
-                            match worker.submit(frame).await {
+                            let current_worker = infer_worker_holder.read().await.clone();
+                            match current_worker.submit(frame).await {
                                 Ok(detections) => {
                                     infer_metrics.frames_inferred.fetch_add(1, Ordering::Relaxed);
 
@@ -399,7 +403,14 @@ impl SubStreamAnalysisPump {
             infer_handle: Some(infer_handle),
             managed_worker,
             metrics,
+            worker_holder,
         }
+    }
+
+    /// 在两帧间隙原子替换推理 Worker 句柄（单进程优雅热重载，不断流、不重启解码器）
+    pub async fn replace_worker(&self, new_worker: InferenceWorkerHandle) {
+        let mut guard = self.worker_holder.write().await;
+        *guard = new_worker;
     }
 
     /// 停止驱动泵并等待任务终止与工作线程资源回收

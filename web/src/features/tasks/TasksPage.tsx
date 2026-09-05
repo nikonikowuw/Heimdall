@@ -12,11 +12,13 @@ import { TaskCameraCard } from './components/TaskCameraCard'
 
 export interface TasksPageProps {
   onNavigateToCameras?: () => void
+  onNavigateToAlgorithms?: () => void
   initialConfigCameraId?: string | null
 }
 
 export function TasksPage({
   onNavigateToCameras,
+  onNavigateToAlgorithms,
   initialConfigCameraId,
 }: TasksPageProps): React.ReactElement {
   const { t } = useTranslation('task')
@@ -127,6 +129,7 @@ export function TasksPage({
               setSelectedCameraForConfig(null)
               loadData()
             }}
+            onNavigateToAlgorithms={onNavigateToAlgorithms}
           />
         </motion.div>
       ) : (

@@ -478,6 +478,39 @@ impl PipelineManager {
             .unwrap_or(false)
     }
 
+    /// 原子热替换指定摄像头的推理 Worker 句柄 (不断流、零中断)
+    pub async fn replace_pump_worker(
+        &self,
+        camera_id: &str,
+        new_worker: infer::InferenceWorkerHandle,
+    ) -> Result<(), PipelineError> {
+        let pumps = self.pumps.read().await;
+        if let Some(pump) = pumps.get(camera_id) {
+            pump.replace_worker(new_worker).await;
+            tracing::info!(camera_id = %camera_id, "已在两帧间隙原子完成子码流推理 Worker 优雅热重载");
+            Ok(())
+        } else {
+            Err(PipelineError::PipelineNotFound {
+                camera_id: camera_id.to_string(),
+            })
+        }
+    }
+
+    /// 全局热重载：将所有正在运行的驱动泵原子热替换为新的推理 Worker 句柄
+    pub async fn reload_algorithm_on_pumps(
+        &self,
+        new_worker_handle: infer::InferenceWorkerHandle,
+    ) -> usize {
+        let pumps = self.pumps.read().await;
+        let mut count = 0;
+        for (cam_id, pump) in pumps.iter() {
+            pump.replace_worker(new_worker_handle.clone()).await;
+            tracing::info!(camera_id = %cam_id, "已在两帧间隙热切换推理 Worker");
+            count += 1;
+        }
+        count
+    }
+
     /// 获取某路摄像头的驱动泵运行指标
     pub async fn get_analysis_pump_metrics(&self, camera_id: &str) -> Option<Arc<PumpMetrics>> {
         let pumps = self.pumps.read().await;

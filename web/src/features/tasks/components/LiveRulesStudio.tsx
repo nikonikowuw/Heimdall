@@ -14,14 +14,13 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LivePlayer } from '@/features/live/components/LivePlayer'
-import { algoApi, taskApi } from '@/lib/api'
+import { algorithmApi, instanceApi, taskApi } from '@/lib/api'
 import type {
   AlgoManifest,
   Camera,
   DetectionLineDirection,
   DetectionPoint,
   DetectionRuleRole,
-  SandboxCheckResult,
   TaskConfigDto,
 } from '@/types'
 import { AlgoSandboxDrawer } from './AlgoSandboxDrawer'
@@ -29,7 +28,6 @@ import { AlgoSettingsSidebar } from './AlgoSettingsSidebar'
 import { RuleInspectorSidebar } from './RuleInspectorSidebar'
 import {
   DEFAULT_ALGO_PACKAGES,
-  DEFAULT_SANDBOX_STEPS,
   ExtendedRule,
   getDefaultRuleName,
   getInitialRuleColor,
@@ -44,9 +42,14 @@ import {
 export interface LiveRulesStudioProps {
   camera: Camera
   onBack?: () => void
+  onNavigateToAlgorithms?: () => void
 }
 
-export function LiveRulesStudio({ camera, onBack }: LiveRulesStudioProps): React.ReactElement {
+export function LiveRulesStudio({
+  camera,
+  onBack,
+  onNavigateToAlgorithms,
+}: LiveRulesStudioProps): React.ReactElement {
   const { t } = useTranslation('task')
   const [taskConfig, setTaskConfig] = useState<TaskConfigDto | null>(null)
   const [rules, setRules] = useState<ExtendedRule[]>([])
@@ -59,9 +62,6 @@ export function LiveRulesStudio({ camera, onBack }: LiveRulesStudioProps): React
   const [availableAlgos, setAvailableAlgos] = useState<AlgoManifest[]>([])
   const [isAlgoDrawerOpen, setIsAlgoDrawerOpen] = useState(false)
   const [selectedAlgoForConfig, setSelectedAlgoForConfig] = useState<AlgoManifest | null>(null)
-  const [sandboxResult, setSandboxResult] = useState<SandboxCheckResult | null>(null)
-  const [isVerifyingSandbox, setIsVerifyingSandbox] = useState(false)
-  const [isUploadingPkg, setIsUploadingPkg] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveToast, setSaveToast] = useState<string | null>(null)
 
@@ -101,31 +101,57 @@ export function LiveRulesStudio({ camera, onBack }: LiveRulesStudioProps): React
 
   const stageRef = useRef<HTMLDivElement>(null)
 
-  // 加载该摄像头的挂载算法包列表
+  // 加载系统已入库/激活的算法列表与当前摄像头的算法实例
   useEffect(() => {
     let isMounted = true
-    algoApi
-      .listPackages()
-      .then((pkgs) => {
-        if (!isMounted) return
-        const list = pkgs.length > 0 ? pkgs : DEFAULT_ALGO_PACKAGES
-        setAvailableAlgos(list)
-        if (!list.some((p) => p.algorithmId === selectedAlgoId)) {
-          setSelectedAlgoId(list[0].algorithmId)
-          if (list[0].classes && list[0].classes.length > 0) {
-            setGlobalTargetClasses(list[0].classes.slice(0, 3))
+    Promise.all([
+      algorithmApi.list().catch(() => ({ items: [], total: 0 })),
+      instanceApi.list(camera.cameraId).catch(() => []),
+    ]).then(([algoRes, instances]) => {
+      if (!isMounted) return
+      let list: AlgoManifest[] = []
+      if (algoRes.items.length > 0) {
+        list = algoRes.items.map((item) => {
+          const actVer = item.versions.find((v) => v.isActive) || item.versions[0]
+          return {
+            algorithmId: item.algorithmId,
+            name: item.name,
+            version: item.activeVersion || (actVer ? actVer.version : '1.0.0'),
+            description: item.description,
+            algorithmType: item.algorithmType,
+            category: item.algorithmType || 'detection',
+            supportedPlatforms: actVer ? [actVer.platformId] : ['macos-arm64'],
+            alarmTypeId: item.alarmTypeId,
+            author: item.isBuiltin ? 'System' : 'Custom',
+            classes: ['person', 'car', 'bicycle', 'motorcycle'],
           }
+        })
+      } else {
+        list = DEFAULT_ALGO_PACKAGES
+      }
+
+      setAvailableAlgos(list)
+
+      if (instances.length > 0) {
+        const activeInst = instances.find((i) => i.enabled) || instances[0]
+        if (list.some((p) => p.algorithmId === activeInst.algorithmId)) {
+          setSelectedAlgoId(activeInst.algorithmId)
         }
-      })
-      .catch(() => {
-        if (!isMounted) return
-        setAvailableAlgos(DEFAULT_ALGO_PACKAGES)
-      })
+      } else if (list.length > 0) {
+        setSelectedAlgoId((prev) => {
+          if (list.some((p) => p.algorithmId === prev)) return prev
+          return list[0].algorithmId
+        })
+        if (list[0].classes && list[0].classes.length > 0) {
+          setGlobalTargetClasses(list[0].classes.slice(0, 3))
+        }
+      }
+    })
 
     return () => {
       isMounted = false
     }
-  }, [selectedAlgoId])
+  }, [camera.cameraId])
 
   // 加载选定摄像头的任务布防配置
   useEffect(() => {
@@ -498,6 +524,32 @@ export function LiveRulesStudio({ camera, onBack }: LiveRulesStudioProps): React
       }
 
       await taskApi.updateTask(camera.cameraId, payloadDto)
+
+      // 同步维护摄像头算法实例 (单摄像头多算法并发模型)
+      try {
+        const instances = await instanceApi.list(camera.cameraId)
+        const currentInst = instances.find((i) => i.algorithmId === selectedAlgoId)
+        if (currentInst) {
+          await instanceApi.update(currentInst.instanceId, {
+            enabled: isArmed,
+            params: { confidenceThreshold, targetClasses: globalTargetClasses },
+            rules: payloadDto.rules,
+            motionGate: payloadDto.motionGate,
+          })
+        } else {
+          await instanceApi.create({
+            cameraId: camera.cameraId,
+            algorithmId: selectedAlgoId,
+            enabled: isArmed,
+            params: { confidenceThreshold, targetClasses: globalTargetClasses },
+            rules: payloadDto.rules,
+            motionGate: payloadDto.motionGate,
+          })
+        }
+      } catch {
+        // 实例同步容错，不阻断任务主流程
+      }
+
       setSaveToast(t('footer.saveSuccess'))
       setTimeout(() => setSaveToast(null), 3000)
     } catch (err) {
@@ -522,54 +574,6 @@ export function LiveRulesStudio({ camera, onBack }: LiveRulesStudioProps): React
     }
     setRules((prev) => [...prev, cloned])
     setSelectedRuleId(cloned.id)
-  }
-
-  const handleRunSandboxTest = async () => {
-    setIsVerifyingSandbox(true)
-    setSandboxResult(null)
-    try {
-      const res = await algoApi.verifyPackage()
-      setSandboxResult(res)
-    } catch (err) {
-      setSandboxResult({
-        passed: false,
-        stepsTotal: 7,
-        stepsPassed: 3,
-        steps: DEFAULT_SANDBOX_STEPS,
-        errorMessage: err instanceof Error ? err.message : String(err),
-      })
-    } finally {
-      setIsVerifyingSandbox(false)
-    }
-  }
-
-  const handleUploadPackageFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setIsUploadingPkg(true)
-    try {
-      const res = await algoApi.uploadPackage(file)
-      setSandboxResult(res)
-      if (res.passed && res.manifest) {
-        setAvailableAlgos((prev) => [
-          res.manifest!,
-          ...prev.filter((p) => p.algorithmId !== res.manifest!.algorithmId),
-        ])
-        setSelectedAlgoForConfig(res.manifest)
-        setSaveToast(t('sandbox.uploadSuccess'))
-      }
-    } catch (err) {
-      setSandboxResult({
-        passed: false,
-        stepsTotal: 7,
-        stepsPassed: 0,
-        steps: DEFAULT_SANDBOX_STEPS,
-        errorMessage: err instanceof Error ? err.message : String(err),
-      })
-    } finally {
-      setIsUploadingPkg(false)
-      e.target.value = ''
-    }
   }
 
   const handleUpdateRule = (ruleId: string, partial: Partial<ExtendedRule>) => {
@@ -1241,16 +1245,12 @@ export function LiveRulesStudio({ camera, onBack }: LiveRulesStudioProps): React
         />
       </div>
 
-      {/* 算法参数配置与沙箱自检抽屉 */}
+      {/* 算法模型与运行元信息抽屉 */}
       <AlgoSandboxDrawer
         isOpen={isAlgoDrawerOpen}
         algo={selectedAlgoForConfig}
         onClose={() => setIsAlgoDrawerOpen(false)}
-        onUploadPackageFile={handleUploadPackageFile}
-        isUploadingPkg={isUploadingPkg}
-        onRunSandboxTest={handleRunSandboxTest}
-        isVerifyingSandbox={isVerifyingSandbox}
-        sandboxResult={sandboxResult}
+        onNavigateToAlgorithms={onNavigateToAlgorithms}
       />
     </div>
   )

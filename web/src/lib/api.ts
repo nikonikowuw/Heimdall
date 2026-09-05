@@ -5,20 +5,28 @@ import type {
   AlarmRecord,
   AlarmStatus,
   AlgoManifest,
+  AlgorithmInstanceDto,
+  AlgorithmItem,
+  AlgorithmStats,
+  AlgorithmVersionItem,
   ApiResponse,
   Camera,
   CaptureRecord,
   ChangePasswordRequest,
+  CreateAlgorithmInstanceRequest,
   CreateCameraRequest,
   InitStatusResponse,
   InitializeRequest,
   LoginRequest,
   LoginResponse,
+  PaginatedAlgorithms,
   RecognitionRecord,
   SandboxCheckResult,
   TaskConfigDto,
   TaskSummaryDto,
+  UpdateAlgorithmInstanceRequest,
   UpdateCameraRequest,
+  UploadAlgorithmResponse,
 } from '../types'
 
 export class ApiError extends Error {
@@ -181,7 +189,7 @@ export const authApi = {
   },
 }
 
-function toQueryString(params?: Record<string, string | number | undefined>): string {
+function toQueryString(params?: Record<string, string | number | boolean | undefined>): string {
   if (!params) return ''
   const searchParams = new URLSearchParams()
   for (const [key, val] of Object.entries(params)) {
@@ -277,6 +285,23 @@ export const evidenceApi = {
   },
 }
 
+function uploadFormData<T>(endpoint: string, file: File): Promise<T> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const token = useAuthStore.getState().token
+  return fetch(`${BASE_URL}${endpoint}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  }).then(async (res) => {
+    const data = await res.json()
+    if (!res.ok || data.code !== 0) {
+      throw new Error(data.message || 'Upload failed')
+    }
+    return data.data
+  })
+}
+
 export const algoApi = {
   listPackages(): Promise<AlgoManifest[]> {
     return api.get<AlgoManifest[]>('/algo/packages')
@@ -287,23 +312,75 @@ export const algoApi = {
   },
 
   uploadPackage(file: File): Promise<SandboxCheckResult> {
-    const formData = new FormData()
-    formData.append('file', file)
-    const token = useAuthStore.getState().token
-    return fetch(`${BASE_URL}/algo/upload`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: formData,
-    }).then(async (res) => {
-      const data = await res.json()
-      if (!res.ok || data.code !== 0) {
-        throw new Error(data.message || 'Failed to upload algorithm package')
-      }
-      return data.data
-    })
+    return uploadFormData<SandboxCheckResult>('/algo/upload', file)
   },
 
   scanPackages(): Promise<number> {
     return api.post<number>('/algo/scan', {})
+  },
+}
+
+export const algorithmApi = {
+  list(params?: {
+    page?: number
+    pageSize?: number
+    keyword?: string
+    algorithmType?: string
+    isBuiltin?: boolean
+  }): Promise<PaginatedAlgorithms> {
+    const qs = toQueryString(params)
+    return api.get<PaginatedAlgorithms>(`/algorithms${qs}`)
+  },
+
+  getStats(): Promise<AlgorithmStats> {
+    return api.get<AlgorithmStats>('/algorithms/stats')
+  },
+
+  getById(id: number | string): Promise<AlgorithmItem> {
+    return api.get<AlgorithmItem>(`/algorithms/${encodeURIComponent(id)}`)
+  },
+
+  listVersions(id: number | string): Promise<AlgorithmVersionItem[]> {
+    return api.get<AlgorithmVersionItem[]>(`/algorithms/${encodeURIComponent(id)}/versions`)
+  },
+
+  uploadPackage(file: File): Promise<UploadAlgorithmResponse> {
+    return uploadFormData<UploadAlgorithmResponse>('/algorithms/upload', file)
+  },
+
+  activateVersion(id: number | string, version: string): Promise<void> {
+    return api.put<void>(
+      `/algorithms/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/activate`,
+      {},
+    )
+  },
+
+  uninstallVersion(id: number | string, version: string): Promise<void> {
+    return api.delete<void>(
+      `/algorithms/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}`,
+    )
+  },
+}
+
+export const instanceApi = {
+  list(cameraId?: string): Promise<AlgorithmInstanceDto[]> {
+    const qs = toQueryString({ cameraId })
+    return api.get<AlgorithmInstanceDto[]>(`/tasks/instances${qs}`)
+  },
+
+  create(data: CreateAlgorithmInstanceRequest): Promise<AlgorithmInstanceDto> {
+    return api.post<AlgorithmInstanceDto>('/tasks/instances', data)
+  },
+
+  update(instanceId: string, data: UpdateAlgorithmInstanceRequest): Promise<AlgorithmInstanceDto> {
+    return api.put<AlgorithmInstanceDto>(`/tasks/instances/${encodeURIComponent(instanceId)}`, data)
+  },
+
+  setEnabled(instanceId: string, enabled: boolean): Promise<void> {
+    return api.put<void>(`/tasks/instances/${encodeURIComponent(instanceId)}/enabled`, { enabled })
+  },
+
+  delete(instanceId: string): Promise<void> {
+    return api.delete<void>(`/tasks/instances/${encodeURIComponent(instanceId)}`)
   },
 }

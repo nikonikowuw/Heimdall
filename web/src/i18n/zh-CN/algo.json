@@ -1,0 +1,90 @@
+{
+  "title": "算法仓库",
+  "subtitle": "边缘端异构算力与深度学习算法资产中心",
+  "stats": {
+    "totalAlgorithms": "算法总数",
+    "activeVersions": "活跃生效版本",
+    "builtinModels": "系统内置模型",
+    "customModels": "自定义上传包",
+    "platformArch": "宿主推理架构"
+  },
+  "filter": {
+    "searchPlaceholder": "按算法 ID 或名称搜索...",
+    "typeAll": "全部算法类型",
+    "typeDetection": "目标检测",
+    "typeFace": "人脸识别",
+    "typePlate": "车牌识别",
+    "originAll": "全部来源",
+    "originBuiltin": "系统内置",
+    "originCustom": "自定义上传",
+    "refresh": "刷新列表"
+  },
+  "actions": {
+    "uploadPackage": "上传算法包",
+    "manageVersions": "版本管理",
+    "viewSchema": "配置参数规范",
+    "activate": "设为当前生效",
+    "active": "生效中",
+    "uninstall": "安全卸载",
+    "cancel": "取消",
+    "close": "关闭",
+    "confirm": "确定"
+  },
+  "card": {
+    "builtinTag": "系统内置",
+    "customTag": "用户资产",
+    "activeVersion": "当前生效",
+    "noDescription": "暂无算法描述信息",
+    "supportedPlatforms": "适配架构",
+    "totalVersions": "个可用版本"
+  },
+  "drawer": {
+    "title": "版本管理",
+    "description": "管理此算法在宿主设备上的多版本二进制模型资产，支持实时零中断热切换与安全卸载。",
+    "versionList": "已登记版本",
+    "versionCount": "{{count}} 个版本",
+    "platform": "运行平台",
+    "size": "包体积",
+    "fpsTiers": "推荐帧率档位",
+    "emptyTiers": "默认自适应 (无固定档位)",
+    "builtinProtected": "内置版本受写保护，不支持卸载",
+    "confirmUninstallTitle": "安全卸载确认",
+    "confirmUninstallDesc": "确定要卸载版本 {{version}} 吗？该操作将从磁盘中彻底物理清除对应模型文件。",
+    "uninstallSuccess": "算法版本卸载成功",
+    "activateSuccess": "算法版本热切换成功",
+    "activateFailed": "激活版本失败",
+    "uninstallFailed": "卸载版本失败",
+    "inUseError": "该算法当前正在被启用的摄像头任务调用，无法卸载"
+  },
+  "upload": {
+    "title": "上传算法包",
+    "subtitle": "支持 .tar.gz (.tgz)、.tar 与 .zip 格式，自动执行七步安全沙箱物理自检",
+    "dragTip": "拖拽算法归档包至此，或点击选择文件",
+    "fileHint": "最大推荐 500MB，需包含 manifest.json 与 C ABI 动态库",
+    "testingTitle": "七步物理沙箱自测流转中...",
+    "passedTitle": "沙箱安全自测全项通过",
+    "failedTitle": "沙箱自测未通过，包已被拦截",
+    "step1": "1. 路径防穿透与目录结构检查",
+    "step2": "2. SHA256 完整性与安全指纹校验",
+    "step3": "3. 解析 Manifest 与平台拓扑匹配",
+    "step4": "4. Config Schema 参数格式校验",
+    "step5": "5. 派生隔离子进程与超时守护",
+    "step6": "6. 算法库 C ABI 导出符号核对",
+    "step7": "7. 真实前向推理自测与内存复核",
+    "uploadSuccess": "算法包上传并加载成功",
+    "reupload": "重新上传"
+  },
+  "schema": {
+    "title": "参数配置规范",
+    "subtitle": "该算法支持的动态参数 JSON Schema 定义",
+    "noProperties": "该算法无额外自定义配置参数",
+    "propertyName": "参数字段",
+    "type": "类型",
+    "default": "默认值",
+    "description": "参数说明",
+    "rawJson": "查看原始 Schema JSON",
+    "tableView": "表格视图",
+    "copyJson": "复制 JSON",
+    "copied": "已复制"
+  }
+}

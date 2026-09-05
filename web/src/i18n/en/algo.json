@@ -1,0 +1,90 @@
+{
+  "title": "Algorithm Warehouse",
+  "subtitle": "Edge Heterogeneous Compute & Deep Learning Model Asset Hub",
+  "stats": {
+    "totalAlgorithms": "Total Algorithms",
+    "activeVersions": "Active Versions",
+    "builtinModels": "Built-in Models",
+    "customModels": "Custom Models",
+    "platformArch": "Host Runtime Architecture"
+  },
+  "filter": {
+    "searchPlaceholder": "Search by algorithm ID or name...",
+    "typeAll": "All Types",
+    "typeDetection": "Object Detection",
+    "typeFace": "Face Recognition",
+    "typePlate": "Plate Recognition",
+    "originAll": "All Sources",
+    "originBuiltin": "Built-in",
+    "originCustom": "Custom",
+    "refresh": "Refresh"
+  },
+  "actions": {
+    "uploadPackage": "Upload Package",
+    "manageVersions": "Manage Versions",
+    "viewSchema": "View Config Schema",
+    "activate": "Set as Active",
+    "active": "Active",
+    "uninstall": "Uninstall",
+    "cancel": "Cancel",
+    "close": "Close",
+    "confirm": "Confirm"
+  },
+  "card": {
+    "builtinTag": "Built-in",
+    "customTag": "Custom",
+    "activeVersion": "Active Version",
+    "noDescription": "No description available",
+    "supportedPlatforms": "Platforms",
+    "totalVersions": "versions available"
+  },
+  "drawer": {
+    "title": "Version Management",
+    "description": "Manage multi-version binary model assets on the edge device with zero-downtime hot swapping and safe uninstallation.",
+    "versionList": "Registered Versions",
+    "versionCount": "{{count}} versions",
+    "platform": "Platform",
+    "size": "Package Size",
+    "fpsTiers": "FPS Profiles",
+    "emptyTiers": "Adaptive (no fixed tiers)",
+    "builtinProtected": "Built-in packages are write-protected and cannot be uninstalled",
+    "confirmUninstallTitle": "Confirm Uninstallation",
+    "confirmUninstallDesc": "Are you sure you want to uninstall version {{version}}? This will permanently delete binary model files from disk.",
+    "uninstallSuccess": "Algorithm version uninstalled successfully",
+    "activateSuccess": "Algorithm version activated successfully",
+    "activateFailed": "Failed to activate version",
+    "uninstallFailed": "Failed to uninstall version",
+    "inUseError": "Algorithm is currently used by active camera tasks and cannot be uninstalled"
+  },
+  "upload": {
+    "title": "Upload Algorithm Package",
+    "subtitle": "Supports .tar.gz (.tgz), .tar and .zip formats with 7-step physical sandbox validation",
+    "dragTip": "Drag algorithm archive here, or click to browse",
+    "fileHint": "Max recommended size 500MB, must contain manifest.json and C ABI shared library",
+    "testingTitle": "Running 7-Step Physical Sandbox Verification...",
+    "passedTitle": "All Sandbox Tests Passed",
+    "failedTitle": "Sandbox Verification Failed, Package Intercepted",
+    "step1": "1. Anti-traversal & Directory Structure Check",
+    "step2": "2. SHA256 Integrity & Security Fingerprint",
+    "step3": "3. Manifest Parsing & Platform Topology Match",
+    "step4": "4. Config Schema Format Validation",
+    "step5": "5. Forked Isolated Subprocess & Watchdog Timeout",
+    "step6": "6. C ABI Exported Symbols Verification",
+    "step7": "7. Live Forward Inference Self-Test & Memory Audit",
+    "uploadSuccess": "Algorithm package uploaded and hot-loaded successfully",
+    "reupload": "Upload Another Package"
+  },
+  "schema": {
+    "title": "Parameter Configuration Schema",
+    "subtitle": "Dynamic JSON Schema specification for model parameters",
+    "noProperties": "No custom parameters specified for this model",
+    "propertyName": "Property",
+    "type": "Type",
+    "default": "Default",
+    "description": "Description",
+    "rawJson": "View Raw JSON Schema",
+    "tableView": "Table View",
+    "copyJson": "Copy JSON",
+    "copied": "Copied"
+  }
+}

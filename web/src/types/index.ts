@@ -243,6 +243,99 @@ export interface TaskConfigDto {
   motionGate?: MotionGateConfig
 }
 
+export interface AlgorithmVersionItem {
+  id: number
+  algorithmId: string
+  version: string
+  platformId: string
+  minAdapterVersion: string
+  packageRoot: string
+  fpsTiers: { fps: number; units: number }[]
+  configSchema: Record<string, unknown>
+  manifestRaw: Record<string, unknown>
+  packageSizeBytes: number
+  isActive: boolean
+  isBuiltin: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AlgorithmItem {
+  id: number
+  algorithmId: string
+  name: string
+  algorithmType: string
+  alarmTypeId: string
+  activeVersion: string
+  description: string
+  isBuiltin: boolean
+  createdAt: number
+  updatedAt: number
+  versions: AlgorithmVersionItem[]
+}
+
+export interface AlgorithmStats {
+  totalAlgorithms: number
+  totalActiveVersions: number
+  builtinAlgorithms: number
+  customAlgorithms: number
+}
+
+export interface PaginatedAlgorithms {
+  items: AlgorithmItem[]
+  total: number
+}
+
+export interface UploadAlgorithmResponse {
+  passed: boolean
+  stepsTotal: number
+  stepsPassed: number
+  steps: string[]
+  errorMessage?: string
+  version?: {
+    algorithmId: string
+    version: string
+    platformId: string
+    packageRoot: string
+    isActive: boolean
+  }
+  manifest?: Record<string, unknown>
+}
+
+export interface AlgorithmInstanceDto {
+  id: number
+  instanceId: string
+  cameraId: string
+  algorithmId: string
+  analysisFps: number
+  params: Record<string, unknown>
+  rules: DetectionRule[]
+  motionGate: MotionGateConfig
+  enabled: boolean
+  actualStatus: number
+  statusMessage: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CreateAlgorithmInstanceRequest {
+  cameraId: string
+  algorithmId: string
+  analysisFps?: number
+  params?: Record<string, unknown>
+  rules?: DetectionRule[]
+  motionGate?: MotionGateConfig
+  enabled?: boolean
+}
+
+export interface UpdateAlgorithmInstanceRequest {
+  analysisFps?: number
+  params?: Record<string, unknown>
+  rules?: DetectionRule[]
+  motionGate?: MotionGateConfig
+  enabled?: boolean
+}
+
 export interface OperationLog {
   id: number
   username: string

@@ -65,6 +65,15 @@ impl IntoResponse for ApiError {
             Self::Media(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
             Self::Infer(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
             Self::Pipeline(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
+            Self::Db(db::DbError::BuiltinAlgoProtected(m)) => {
+                (StatusCode::FORBIDDEN, 40301, m.clone())
+            }
+            Self::Db(db::DbError::AlgoInUse(m)) => (StatusCode::CONFLICT, 40901, m.clone()),
+            Self::Db(db::DbError::NotFound { entity, key }) => (
+                StatusCode::NOT_FOUND,
+                40401,
+                format!("未找到记录: {entity} (key={key})"),
+            ),
             Self::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, 50001, e.to_string()),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, 50000, m.clone()),
         };

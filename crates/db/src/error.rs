@@ -24,4 +24,19 @@ pub enum DbError {
 
     #[error("数据库迁移错误: {0}")]
     Migration(String),
+
+    #[error("算法包正在使用中: {0}")]
+    AlgoInUse(String),
+
+    #[error("系统内置算法包受保护，禁止删除: {0}")]
+    BuiltinAlgoProtected(String),
+}
+
+impl From<sea_orm::TransactionError<DbError>> for DbError {
+    fn from(err: sea_orm::TransactionError<DbError>) -> Self {
+        match err {
+            sea_orm::TransactionError::Connection(e) => DbError::Query(e),
+            sea_orm::TransactionError::Transaction(e) => e,
+        }
+    }
 }

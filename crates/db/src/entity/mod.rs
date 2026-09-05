@@ -1,5 +1,8 @@
 pub mod admin_user;
 pub mod alarm;
+pub mod algorithm;
+pub mod algorithm_instance;
+pub mod algorithm_version;
 pub mod camera;
 pub mod capture;
 pub mod gallery;

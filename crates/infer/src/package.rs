@@ -340,6 +340,61 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
     Ok(detections)
 }
 
+/// 计算目录下所有文件的总字节大小
+pub fn compute_dir_size(path: &Path) -> i64 {
+    let mut total = 0i64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Ok(meta) = p.metadata() {
+                    total += meta.len() as i64;
+                }
+            } else if p.is_dir() {
+                total += compute_dir_size(&p);
+            }
+        }
+    }
+    total
+}
+
+/// 发现指定搜索路径下的所有潜在算法包目录（必须包含 manifest.json，自动执行规范化去重）
+pub fn discover_package_dirs(search_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for base in search_dirs {
+        if !base.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    if p.join(ALGO_MANIFEST_FILENAME).is_file() {
+                        let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
+                        if seen.insert(canonical) {
+                            results.push(p);
+                        }
+                    } else if let Ok(sub_entries) = std::fs::read_dir(&p) {
+                        for sub_entry in sub_entries.flatten() {
+                            let sub_p = sub_entry.path();
+                            if sub_p.is_dir() && sub_p.join(ALGO_MANIFEST_FILENAME).is_file() {
+                                let canonical =
+                                    sub_p.canonicalize().unwrap_or_else(|_| sub_p.clone());
+                                if seen.insert(canonical) {
+                                    results.push(sub_p);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
 /// 全局可用算法包注册表
 #[derive(Debug, Default)]
 pub struct AlgoRegistry {
@@ -419,5 +474,28 @@ impl AlgoRegistry {
     pub async fn list(&self) -> Vec<AlgoManifest> {
         let map = self.packages.read().await;
         map.values().map(|p| p.manifest().clone()).collect()
+    }
+
+    /// 从目录加载并直接注册到注册表中
+    pub async fn load_and_register(
+        &self,
+        package_dir: &Path,
+        use_subprocess: bool,
+    ) -> Result<Arc<AlgoPackage>, InferError> {
+        let pkg = Arc::new(AlgoPackage::load_and_verify(package_dir, use_subprocess)?);
+        self.register(pkg.clone()).await;
+        Ok(pkg)
+    }
+
+    /// 注销指定算法包
+    pub async fn unregister(&self, algorithm_id: &str) -> Option<Arc<AlgoPackage>> {
+        let mut map = self.packages.write().await;
+        map.remove(algorithm_id)
+    }
+
+    /// 检查是否已包含指定算法包
+    pub async fn contains(&self, algorithm_id: &str) -> bool {
+        let map = self.packages.read().await;
+        map.contains_key(algorithm_id)
     }
 }

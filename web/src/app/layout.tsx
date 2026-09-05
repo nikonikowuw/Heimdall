@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import {
   AlertCircle,
+  Cpu,
   FileText,
   KeyRound,
   Layers,
@@ -15,6 +16,7 @@ import { useTranslation } from 'react-i18next'
 import { ChangePasswordModal } from '../components/ChangePasswordModal'
 import { LocaleDropdown } from '../components/LocaleDropdown'
 import { AlarmsPage } from '../features/alarms/AlarmsPage'
+import { AlgorithmsPage } from '../features/algorithms'
 import { LoginPage } from '../features/auth'
 import { CamerasPage } from '../features/cameras'
 import { LivePage } from '../features/live/LivePage'
@@ -24,7 +26,7 @@ import { useTheme } from '../hooks/use-theme'
 import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
-export type NavTab = 'live' | 'cameras' | 'tasks' | 'alarms' | 'oplog'
+export type NavTab = 'live' | 'cameras' | 'tasks' | 'algorithms' | 'alarms' | 'oplog'
 
 export const Layout: React.FC = () => {
   const { t } = useTranslation(['common', 'auth'])
@@ -93,6 +95,17 @@ export const Layout: React.FC = () => {
               }`}
             >
               <Sliders className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => setCurrentTab('algorithms')}
+              title={t('nav.algorithms', { defaultValue: '算法仓库' })}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
+                currentTab === 'algorithms'
+                  ? 'bg-[var(--accent)] text-white'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
+              }`}
+            >
+              <Cpu className="h-5 w-5" />
             </button>
             <button
               onClick={() => setCurrentTab('alarms')}
@@ -168,8 +181,10 @@ export const Layout: React.FC = () => {
           <TasksPage
             initialConfigCameraId={targetTaskCameraId}
             onNavigateToCameras={() => setCurrentTab('cameras')}
+            onNavigateToAlgorithms={() => setCurrentTab('algorithms')}
           />
         )}
+        {currentTab === 'algorithms' && <AlgorithmsPage />}
         {currentTab === 'alarms' && <AlarmsPage />}
         {currentTab === 'oplog' && <OplogPage />}
       </main>

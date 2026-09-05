@@ -9,7 +9,11 @@ pub use connection::init_db;
 pub use error::DbError;
 pub use migration::{init_test_db, reset_database, run_migrations, run_migrations_on_seaorm};
 pub use repository::{
-    camera::ProbeUpdateParams, AdminUserRepo, AlarmRepo, CameraRepo, CaptureRepo, GalleryRepo,
-    OplogRepo, RecognitionRepo, SystemConfigRepo, TaskRepo,
+    algorithm::{AlgorithmRepo, AlgorithmStats, UpsertAlgorithmParams, UpsertVersionParams},
+    algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, UpdateInstanceParams},
+    camera::ProbeUpdateParams,
+    AdminUserRepo, AlarmRepo, CameraRepo, CaptureRepo, GalleryRepo, OplogRepo, RecognitionRepo,
+    SystemConfigRepo, TaskRepo,
 };
 pub use schema::create_tables_if_not_exist;
+pub use sea_orm::{self, DatabaseConnection};

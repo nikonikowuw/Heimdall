@@ -3,6 +3,7 @@
     "live": "Live View",
     "cameras": "Devices",
     "tasks": "Tasks & Rules",
+    "algorithms": "Algorithm Warehouse",
     "alarms": "Alerts Hub",
     "oplog": "Audit Logs"
   },
