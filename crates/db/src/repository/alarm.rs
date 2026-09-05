@@ -16,9 +16,30 @@ impl AlarmRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
+        Self::list_filtered(db, camera_id, None, None, None, limit, offset).await
+    }
+
+    pub async fn list_filtered(
+        db: &DatabaseConnection,
+        camera_id: Option<&str>,
+        status: Option<&str>,
+        start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Vec<Model>, DbError> {
         let mut query = Entity::find().order_by_desc(Column::OccurredAt);
         if let Some(cid) = camera_id {
             query = query.filter(Column::CameraId.eq(cid));
+        }
+        if let Some(st) = status {
+            query = query.filter(Column::Status.eq(st));
+        }
+        if let Some(start) = start_time {
+            query = query.filter(Column::OccurredAt.gte(start));
+        }
+        if let Some(end) = end_time {
+            query = query.filter(Column::OccurredAt.lte(end));
         }
         query
             .limit(limit)
@@ -26,6 +47,25 @@ impl AlarmRepo {
             .all(db)
             .await
             .map_err(DbError::from)
+    }
+
+    pub async fn update_status(
+        db: &DatabaseConnection,
+        id: i64,
+        status: &str,
+    ) -> Result<Model, DbError> {
+        let model = Entity::find_by_id(id)
+            .one(db)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "alarm_records",
+                key: id.to_string(),
+            })?;
+
+        let mut active: ActiveModel = model.into();
+        active.status = sea_orm::Set(status.to_string());
+        active.handled_at = sea_orm::Set(Some(chrono::Utc::now()));
+        active.update(db).await.map_err(DbError::from)
     }
 
     pub async fn insert(

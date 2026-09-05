@@ -1,11 +1,107 @@
 {
-  "title": "Camera Ingestion & AI Pipeline Setup",
+  "title": "Camera Ingestion & AI Task Rules",
   "addCamera": "Add Camera",
-  "camerasSection": "Cameras & Pipelines",
+  "camerasSection": "Cameras & Pipeline",
   "ruleConfigTitle": "Spatial Geometry Rules (ROI / Mask / Line)",
-  "ruleConfigDesc": "Use your mouse on the video frame to draw intrusion polygons or tripwire lines",
-  "drawRoi": "Draw ROI Region",
-  "drawLine": "Draw Tripwire Line",
-  "canvasPlaceholder": "Interactive Video Canvas",
-  "saveRules": "Save Rules"
+  "ruleConfigDesc": "Draw polygons for intrusion areas or tripwire lines on the video background",
+  "drawRoi": "Draw ROI",
+  "drawLine": "Draw Line",
+  "canvasPlaceholder": "Interactive Rule Canvas",
+  "saveRules": "Save Rules",
+  "actions": {
+    "enterStudio": "Open Vector Rules Studio",
+    "configureRules": "Configure Rules",
+    "uploadPackage": "Upload Package (.zip / .tar.gz)",
+    "uploading": "Uploading & Verifying...",
+    "executeSandbox": "Run Sandbox Self-Test",
+    "verifyingSandbox": "Verifying in Sandbox..."
+  },
+  "stats": {
+    "summary": "{{total}} Channels · {{armed}} Armed"
+  },
+  "status": {
+    "armed": "Armed",
+    "disarmed": "Disarmed"
+  },
+  "empty": {
+    "noCameras": "No Camera Channels Connected",
+    "addCameraHint": "Please navigate to Camera Management to add an RTSP stream"
+  },
+  "card": {
+    "rtspDirect": "RTSP Stream:",
+    "geometryRules": "Geometry Rules:",
+    "rulesCount": "{{count}} Active Rules",
+    "motionGate": "Motion Gating:",
+    "motionGateEco": "Enabled (Eco Standby)",
+    "motionGateAlways": "Always Active"
+  },
+  "sandbox": {
+    "title": "7-Step Sandbox Self-Test",
+    "status": "Sandbox Status:",
+    "allPassed": "7/7 All Passed (HOT READY)",
+    "interrupted": "{{passed}}/7 Interrupted",
+    "tip": "Click button above to trigger 7-step security verification in an isolated subprocess (Path, SHA256, ABI, and forward inference).",
+    "uploadSuccess": "Algorithm package uploaded, validated, and hot-loaded successfully!"
+  },
+  "studio": {
+    "backToChannels": "Back to Channels",
+    "armed": "ARMED",
+    "unarmed": "UNARMED",
+    "masterArm": "Master Arm Switch",
+    "masterArmDesc": "Standby at 0% hardware decode when disarmed",
+    "allCameras": "All Channels",
+    "rtspPassthrough": "Direct",
+    "mountedAlgos": "Mounted Algos",
+    "verified": "Verified",
+    "configParams": "Config",
+    "snapshotPolicy": "Dual-Stream Snapshot Policy",
+    "policy4k": "Capture 4K Full Frame on Hit",
+    "policy4kDesc": "Rapid GOP Decode",
+    "policyCrop": "BBox Crop with 10% Padding",
+    "policyCropDesc": "SIMD JPEG",
+    "policyFallback": "Seamless Sub-Stream Fallback",
+    "policyFallbackDesc": "100% Reliable"
+  },
+  "tools": {
+    "select": "Select",
+    "roi": "Intrusion ROI",
+    "line": "Tripwire Line",
+    "mask": "Shield Mask",
+    "precrop": "Pre-crop ROI",
+    "snap": "Auto Snap to Vertices",
+    "closePolygon": "Close (Enter)",
+    "selectVideoPrompt": "Select a camera to view live stream"
+  },
+  "footer": {
+    "rulesCount": "Active Rules",
+    "items": "items",
+    "shortcuts": "Shortcuts",
+    "save": "Save Rules",
+    "saving": "Saving...",
+    "saveSuccess": "Rules successfully synchronized and applied!"
+  },
+  "layers": {
+    "title": "Rule Layers",
+    "empty": "No Rules Defined",
+    "emptyTip": "Use the tools above to draw zones"
+  },
+  "inspector": {
+    "title": "Property Inspector",
+    "emptyTip": "Select a rule in the canvas or layers list to configure",
+    "ruleName": "Rule Name",
+    "boundAlgo": "⚡ Bound Algorithm",
+    "lineDirection": "Crossing Direction",
+    "dirBoth": "Bidirectional ⇄",
+    "dirAtoB": "Forward A➔B",
+    "dirBtoA": "Reverse B➔A",
+    "clone": "Clone Zone",
+    "delete": "Delete Zone"
+  },
+  "algoDrawer": {
+    "id": "Algorithm ID",
+    "version": "Version & Author",
+    "platforms": "Supported Platforms",
+    "classes": "Class Filter",
+    "done": "Done"
+  }
 }

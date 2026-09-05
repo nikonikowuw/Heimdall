@@ -8,15 +8,40 @@ import {
   MonitorPlay,
   Plus,
   Radio,
+  ShieldAlert,
   Sparkles,
   User,
+  X,
   Zap,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cameraApi } from '@/lib/api'
+import { cameraApi, evidenceApi } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 import type { Camera, ProbeStatus } from '@/types'
 import { LivePlayer } from './components/LivePlayer'
+
+function playAlarmChime() {
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(880, ctx.currentTime)
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3)
+    gain.gain.setValueAtTime(0.15, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start()
+    osc.stop(ctx.currentTime + 0.3)
+  } catch {
+    // 忽略未交互前的 AudioContext 限制
+  }
+}
 
 function getCameraHealthRank(status?: string): number {
   switch (status?.toLowerCase()) {
@@ -97,7 +122,79 @@ function getResolutionBadge(cam: Camera) {
   return '--'
 }
 
-export function LivePage() {
+interface LiveAlarmToast {
+  id: string
+  cameraId: string
+  targetLabel: string
+  ruleType: string
+  severity: string
+  cropImageRelPath?: string
+  imageRelPath?: string
+}
+
+interface LiveAlarmToastItemProps {
+  alarm: LiveAlarmToast
+  onClose: () => void
+  onNavigateToAlarms?: () => void
+}
+
+function LiveAlarmToastItem({
+  alarm,
+  onClose,
+  onNavigateToAlarms,
+}: LiveAlarmToastItemProps): React.ReactElement {
+  const { t } = useTranslation('alarm')
+  const ruleTypeLabel =
+    alarm.ruleType === 'line' ? t('types.lineCrossing') : t('types.regionIntrusion')
+
+  return (
+    <div className="animate-in fade-in slide-in-from-top-4 fixed top-6 right-6 z-50 flex items-center gap-3 rounded-2xl border border-rose-500/50 bg-black/90 p-3.5 text-white shadow-2xl backdrop-blur-md duration-300">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/20 text-rose-500">
+        <ShieldAlert className="h-5 w-5" />
+      </div>
+      {alarm.cropImageRelPath && (
+        <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-white/20 bg-black">
+          <img
+            src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
+            alt="Thumb"
+            className="h-full w-full object-cover"
+          />
+        </div>
+      )}
+      <div className="space-y-0.5 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold text-rose-400 uppercase">{ruleTypeLabel}</span>
+          <span className="font-mono text-[10px] text-slate-400">{alarm.cameraId}</span>
+        </div>
+        <p className="font-medium text-slate-200">
+          {t('toast.ruleTriggered', { target: alarm.targetLabel })}
+        </p>
+      </div>
+      <div className="ml-2 flex items-center gap-1.5">
+        {onNavigateToAlarms && (
+          <button
+            onClick={() => {
+              onClose()
+              onNavigateToAlarms()
+            }}
+            className="rounded-lg bg-rose-500 px-2.5 py-1 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90"
+          >
+            {t('toast.viewEvidence')}
+          </button>
+        )}
+        <button onClick={onClose} className="p-1 text-slate-400 transition-colors hover:text-white">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export interface LivePageProps {
+  onNavigateToAlarms?: () => void
+}
+
+export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.ReactElement {
   const { t } = useTranslation('camera')
 
   const [cameras, setCameras] = useState<Camera[]>([])
@@ -109,6 +206,13 @@ export function LivePage() {
   const [modalMainUrl, setModalMainUrl] = useState<string>('')
   const [modalSubUrl, setModalSubUrl] = useState<string>('')
   const [subCandidates, setSubCandidates] = useState<import('@/types').SubStreamCandidate[]>([])
+  const [activeAlarm, setActiveAlarm] = useState<LiveAlarmToast | null>(null)
+
+  useEffect(() => {
+    if (!activeAlarm) return
+    const timer = setTimeout(() => setActiveAlarm(null), 6000)
+    return () => clearTimeout(timer)
+  }, [activeAlarm])
 
   // 加载摄像头列表 (健康状态优先排序)
   useEffect(() => {
@@ -182,6 +286,29 @@ export function LivePage() {
                 return sortCamerasByHealth(next)
               })
             }
+
+            if (event.topic === 'alarm.triggered' && event.payload) {
+              const p = event.payload as {
+                id?: number
+                eventId?: string
+                cameraId?: string
+                targetLabel?: string
+                ruleType?: string
+                severity?: string
+                cropImageRelPath?: string
+                imageRelPath?: string
+              }
+              playAlarmChime()
+              setActiveAlarm({
+                id: p.eventId || String(p.id || Date.now()),
+                cameraId: p.cameraId || 'CAM-01',
+                targetLabel: p.targetLabel || 'Target',
+                ruleType: p.ruleType || 'intrusion',
+                severity: p.severity || 'warning',
+                cropImageRelPath: p.cropImageRelPath,
+                imageRelPath: p.imageRelPath,
+              })
+            }
           } catch {
             // ignore non-JSON or unrelated messages
           }
@@ -211,7 +338,16 @@ export function LivePage() {
   const heroCamera = cameras.find((c) => c.cameraId === selectedHeroId)
 
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className="relative flex h-full flex-col gap-3">
+      {/* 实时告警低噪稀疏弹窗浮层 */}
+      {activeAlarm && (
+        <LiveAlarmToastItem
+          alarm={activeAlarm}
+          onClose={() => setActiveAlarm(null)}
+          onNavigateToAlarms={onNavigateToAlarms}
+        />
+      )}
+
       {/* 顶部智能监控控制台 HUD 工具栏 */}
       <div className="frosted-glass flex items-center justify-between rounded-xl px-4 py-2.5">
         <div className="flex items-center gap-3">

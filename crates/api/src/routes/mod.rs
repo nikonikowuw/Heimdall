@@ -3,8 +3,10 @@ use axum::Router;
 use crate::state::AppState;
 
 pub mod alarm;
+pub mod algo;
 pub mod auth;
 pub mod camera;
+pub mod evidence;
 pub mod live;
 pub mod oplog;
 pub mod task;
@@ -16,6 +18,8 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .nest("/cameras", camera::router())
         .nest("/tasks", task::router())
         .nest("/alarms", alarm::router())
+        .nest("/evidence", evidence::router())
+        .nest("/algo", algo::router())
         .nest("/logs/operations", oplog::router())
         .nest("/ws/events", ws::router())
         .route_layer(axum::middleware::from_fn_with_state(
@@ -26,5 +30,6 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
     Router::new()
         .nest("/auth", auth::router())
         .nest("/live", live::router())
+        .nest("/evidence/image", evidence::image_router())
         .merge(protected)
 }

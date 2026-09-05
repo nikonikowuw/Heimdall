@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
+use infer::package::AlgoRegistry;
 use media::StreamHub;
 use pipeline::PipelineManager;
 use sea_orm::DatabaseConnection;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub pipeline: Arc<PipelineManager>,
     pub stream_hub: Arc<StreamHub>,
+    pub algo_registry: Arc<AlgoRegistry>,
     pub event_broadcaster: broadcast::Sender<WsBroadcastEvent>,
     pub jwt_secret: Arc<RwLock<Vec<u8>>>,
     pub token_invalid_before: Arc<AtomicI64>,
@@ -32,6 +34,7 @@ impl AppState {
         let (event_broadcaster, _) = broadcast::channel(1024);
         let (shutdown_tx, _) = broadcast::channel(16);
         let stream_hub = Arc::new(StreamHub::new());
+        let algo_registry = Arc::new(AlgoRegistry::new());
         let jwt_secret = match std::env::var("ARGUS_JWT_SECRET") {
             Ok(secret) if !secret.trim().is_empty() => secret.into_bytes(),
             _ => {
@@ -48,6 +51,7 @@ impl AppState {
             db,
             pipeline,
             stream_hub,
+            algo_registry,
             event_broadcaster,
             jwt_secret: Arc::new(RwLock::new(jwt_secret)),
             token_invalid_before: Arc::new(AtomicI64::new(0)),

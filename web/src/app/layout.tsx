@@ -141,7 +141,7 @@ export const Layout: React.FC = () => {
 
       {/* 主工作视口 */}
       <main className="flex flex-1 flex-col overflow-hidden p-4">
-        {currentTab === 'live' && <LivePage />}
+        {currentTab === 'live' && <LivePage onNavigateToAlarms={() => setCurrentTab('alarms')} />}
         {currentTab === 'tasks' && <TasksPage />}
         {currentTab === 'alarms' && <AlarmsPage />}
         {currentTab === 'oplog' && <OplogPage />}

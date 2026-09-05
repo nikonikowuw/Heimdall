@@ -2,17 +2,88 @@
   "title": "实时与历史告警中心",
   "searchPlaceholder": "搜索事件ID / 目标类别...",
   "columns": {
+    "thumbnail": "缩略证据",
     "eventId": "事件 ID",
     "camera": "摄像头",
     "alarmType": "告警类型",
     "targetLabel": "目标类别",
     "confidence": "置信度",
+    "ruleType": "布防规则",
+    "severity": "严重等级",
+    "status": "处理状态",
     "occurredAt": "触发时间",
-    "evidence": "证据快照"
+    "evidence": "证据快照",
+    "actions": "操作"
   },
   "types": {
     "lineCrossing": "绊线越界 (Line)",
     "regionIntrusion": "区域入侵 (ROI)"
   },
-  "viewImage": "查看图片"
+  "viewImage": "查看图片",
+  "tabs": {
+    "alarms": "违规告警 (Alarms)",
+    "captures": "行迹抓拍 (Captures)",
+    "recognition": "识别对账 (Recognition)"
+  },
+  "views": {
+    "cards": "卡片视图",
+    "table": "表格视图"
+  },
+  "pagination": {
+    "prev": "上一页",
+    "next": "下一页",
+    "page": "第 {{current}} 页",
+    "total": "共 {{total}} 条"
+  },
+  "statusFilter": {
+    "all": "全部状态 (All Status)",
+    "unprocessed": "待处理 (Unprocessed)",
+    "processed": "已核验 (Processed)"
+  },
+  "timeFilter": {
+    "start": "开始时间",
+    "end": "结束时间",
+    "clear": "清空时间"
+  },
+  "filter": {
+    "allCameras": "全部通道 (All Cameras)",
+    "allTargets": "全部目标类别 (All Classes)",
+    "person": "人员 (Person)",
+    "car": "机动车 (Vehicle)",
+    "bicycle": "非机动车 (Bicycle)",
+    "refresh": "刷新"
+  },
+  "empty": {
+    "alarms": "暂无违规告警记录",
+    "alarmsDesc": "当前通道规则布防正常，未检测到违规越界或入侵",
+    "captures": "暂无抓拍记录",
+    "recognitions": "暂无识别对账记录",
+    "recognitionsDesc": "底库特征对账比对结果将在此展示"
+  },
+  "card": {
+    "noImage": "暂无原图",
+    "target": "目标",
+    "confidence": "置信度",
+    "viewHd": "查看高清",
+    "siteCrop": "现场抓拍特写",
+    "match": "MATCH",
+    "similarity": "特征相似度",
+    "registeredPhoto": "底库样本",
+    "markProcessed": "标记处理",
+    "processed": "已核验"
+  },
+  "modal": {
+    "fullImage": "全景超清大图",
+    "cropImage": "BBox 目标特写抠图 (10% 扩边)",
+    "noImage": "全景原图不存在",
+    "timestamp": "时间戳",
+    "trackId": "Track ID",
+    "channel": "通道",
+    "qualityScore": "质量评分",
+    "time": "时间"
+  },
+  "toast": {
+    "ruleTriggered": "检测到 {{target}} 触发规则",
+    "viewEvidence": "查看证据"
+  }
 }

@@ -32,6 +32,9 @@ uuid = { workspace = true }
 sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1.0"
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

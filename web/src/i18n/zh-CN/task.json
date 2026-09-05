@@ -7,5 +7,101 @@
   "drawRoi": "画 ROI 区域",
   "drawLine": "画绊线 Line",
   "canvasPlaceholder": "视频帧交互布防画板",
-  "saveRules": "保存布防规则"
+  "saveRules": "保存布防规则",
+  "actions": {
+    "enterStudio": "进入动态矢量布防工作台",
+    "configureRules": "配置矢量规则",
+    "uploadPackage": "上传算法包 (.zip / .tar.gz)",
+    "uploading": "正在上传并验证...",
+    "executeSandbox": "执行沙箱自测",
+    "verifyingSandbox": "正在沙箱自测..."
+  },
+  "stats": {
+    "summary": "{{total}} 路视频源 · {{armed}} 路已开启 AI 布防"
+  },
+  "status": {
+    "armed": "已布防",
+    "disarmed": "已撤防"
+  },
+  "empty": {
+    "noCameras": "暂无接入摄像头通道",
+    "addCameraHint": "请前往通道管理页面添加 RTSP 视频流"
+  },
+  "card": {
+    "rtspDirect": "RTSP 直通流:",
+    "geometryRules": "布防几何规则:",
+    "rulesCount": "{{count}} 项有效规则",
+    "motionGate": "运动检测门控:",
+    "motionGateEco": "开启 (节能待机)",
+    "motionGateAlways": "常驻推理"
+  },
+  "sandbox": {
+    "title": "七步沙箱安全自检",
+    "status": "沙箱检验状态:",
+    "allPassed": "7/7 全部通过 (HOT READY)",
+    "interrupted": "{{passed}}/7 验证中断",
+    "tip": "点击上方按钮触发隔离子进程对该算法包执行 7 步安全自检（结构、SHA256、ABI 符号与前向推理自测）。",
+    "uploadSuccess": "算法包上传并通过 7 步沙箱自检，已成功热加载！"
+  },
+  "studio": {
+    "backToChannels": "返回通道",
+    "armed": "已布防 (ARMED)",
+    "unarmed": "已撤防 (UNARMED)",
+    "masterArm": "通道布防总闸",
+    "masterArmDesc": "撤防后进入 0% 硬件解码待机",
+    "allCameras": "全部通道",
+    "rtspPassthrough": "直通",
+    "mountedAlgos": "并发算法栈",
+    "verified": "个已验证",
+    "configParams": "参数配置",
+    "snapshotPolicy": "双流联动快拍策略",
+    "policy4k": "命中规则抓拍 4K 原图",
+    "policy4kDesc": "GOP 快速解码",
+    "policyCrop": "BBox 特写 10% 扩边抠图",
+    "policyCropDesc": "SIMD JPEG",
+    "policyFallback": "主码流异常时平滑降级",
+    "policyFallbackDesc": "100% 保底"
+  },
+  "tools": {
+    "select": "选择",
+    "roi": "入侵 ROI",
+    "line": "绊线 Line",
+    "mask": "遮罩 Mask",
+    "precrop": "特写 ROI",
+    "snap": "顶点自动磁吸吸附",
+    "closePolygon": "闭合 (Enter)",
+    "selectVideoPrompt": "请选择摄像头接入实时流"
+  },
+  "footer": {
+    "rulesCount": "已布防规则",
+    "items": "项",
+    "shortcuts": "快捷键",
+    "save": "保存布防规则",
+    "saving": "正在保存...",
+    "saveSuccess": "布防规则已成功同步并生效！"
+  },
+  "layers": {
+    "title": "布防规则图层",
+    "empty": "暂无布防规则",
+    "emptyTip": "请在左侧或上方选择工具绘制"
+  },
+  "inspector": {
+    "title": "属性检查器",
+    "emptyTip": "在画布或图层列表中选中一个规则进行配置",
+    "ruleName": "规则名称",
+    "boundAlgo": "⚡ 绑定执行算法",
+    "lineDirection": "跨线判定方向",
+    "dirBoth": "双向 ⇄",
+    "dirAtoB": "正向 A➔B",
+    "dirBtoA": "反向 B➔A",
+    "clone": "克隆防区",
+    "delete": "删除防区"
+  },
+  "algoDrawer": {
+    "id": "算法标识",
+    "version": "版本与作者",
+    "platforms": "支持平台",
+    "classes": "目标类别过滤",
+    "done": "完成"
+  }
 }

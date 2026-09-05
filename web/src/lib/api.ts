@@ -2,14 +2,21 @@ import i18n from '../i18n'
 import { useAuthStore } from '../stores/auth'
 import type {
   AdminUserDto,
+  AlarmRecord,
+  AlgoManifest,
   ApiResponse,
   Camera,
+  CaptureRecord,
   ChangePasswordRequest,
   CreateCameraRequest,
   InitStatusResponse,
   InitializeRequest,
   LoginRequest,
   LoginResponse,
+  RecognitionRecord,
+  SandboxCheckResult,
+  TaskConfigDto,
+  TaskSummaryDto,
   UpdateCameraRequest,
 } from '../types'
 
@@ -159,5 +166,128 @@ export const authApi = {
 
   logout(): Promise<void> {
     return request<void>('/auth/logout', { method: 'POST' })
+  },
+}
+
+function toQueryString(params?: Record<string, string | number | undefined>): string {
+  if (!params) return ''
+  const searchParams = new URLSearchParams()
+  for (const [key, val] of Object.entries(params)) {
+    if (val !== undefined && val !== null && val !== '') {
+      searchParams.set(key, String(val))
+    }
+  }
+  const str = searchParams.toString()
+  return str ? `?${str}` : ''
+}
+
+export const taskApi = {
+  getTask(cameraId: string): Promise<TaskConfigDto> {
+    return api.get<TaskConfigDto>(`/tasks/${encodeURIComponent(cameraId)}`)
+  },
+
+  updateTask(cameraId: string, data: TaskConfigDto): Promise<TaskConfigDto> {
+    return api.put<TaskConfigDto>(`/tasks/${encodeURIComponent(cameraId)}`, data)
+  },
+
+  list(): Promise<TaskSummaryDto[]> {
+    return api.get<TaskSummaryDto[]>('/tasks')
+  },
+}
+
+export const alarmApi = {
+  list(params?: {
+    cameraId?: string
+    status?: string
+    startTime?: number
+    endTime?: number
+    limit?: number
+    offset?: number
+  }): Promise<AlarmRecord[]> {
+    const qs = toQueryString({
+      camera_id: params?.cameraId,
+      status: params?.status,
+      start_time: params?.startTime,
+      end_time: params?.endTime,
+      limit: params?.limit,
+      offset: params?.offset,
+    })
+    return api.get<AlarmRecord[]>(`/alarms${qs}`)
+  },
+
+  updateStatus(id: number, status: string): Promise<AlarmRecord> {
+    return api.put<AlarmRecord>(`/alarms/${id}/status`, { status })
+  },
+}
+
+export const evidenceApi = {
+  listCaptures(params?: {
+    cameraId?: string
+    targetLabel?: string
+    startTime?: number
+    endTime?: number
+    limit?: number
+    offset?: number
+  }): Promise<CaptureRecord[]> {
+    const qs = toQueryString({
+      camera_id: params?.cameraId,
+      target_label: params?.targetLabel,
+      start_time: params?.startTime,
+      end_time: params?.endTime,
+      limit: params?.limit,
+      offset: params?.offset,
+    })
+    return api.get<CaptureRecord[]>(`/evidence/captures${qs}`)
+  },
+
+  listRecognitions(params?: {
+    cameraId?: string
+    limit?: number
+    offset?: number
+  }): Promise<RecognitionRecord[]> {
+    const qs = toQueryString({
+      camera_id: params?.cameraId,
+      limit: params?.limit,
+      offset: params?.offset,
+    })
+    return api.get<RecognitionRecord[]>(`/evidence/recognitions${qs}`)
+  },
+
+  getImageUrl(relPath: string): string {
+    if (!relPath) return ''
+    const token = useAuthStore.getState().token
+    const q = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `${BASE_URL}/evidence/image/${relPath}${q}`
+  },
+}
+
+export const algoApi = {
+  listPackages(): Promise<AlgoManifest[]> {
+    return api.get<AlgoManifest[]>('/algo/packages')
+  },
+
+  verifyPackage(packagePath?: string): Promise<SandboxCheckResult> {
+    return api.post<SandboxCheckResult>('/algo/verify', { packagePath })
+  },
+
+  uploadPackage(file: File): Promise<SandboxCheckResult> {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = useAuthStore.getState().token
+    return fetch(`${BASE_URL}/algo/upload`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    }).then(async (res) => {
+      const data = await res.json()
+      if (!res.ok || data.code !== 0) {
+        throw new Error(data.message || 'Failed to upload algorithm package')
+      }
+      return data.data
+    })
+  },
+
+  scanPackages(): Promise<number> {
+    return api.post<number>('/algo/scan', {})
   },
 }

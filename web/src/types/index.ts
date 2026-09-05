@@ -135,14 +135,101 @@ export interface AlarmRecord {
   eventId: string
   cameraId: string
   alarmTypeId: string
-  occurredAt: string
+  occurredAt: number
   targetLabel: string
   confidence: number
   trackId: number
   bboxJson: string
   imageId: string
   imageRelPath: string
-  createdAt: string
+  cropImageId?: string
+  cropImageRelPath?: string
+  ruleType?: string
+  severity?: string
+  status: string
+  handledAt?: number | null
+  createdAt: number
+}
+
+export interface CaptureRecord {
+  id: number
+  captureId: string
+  cameraId: string
+  trackId: number
+  targetLabel: string
+  confidence: number
+  qualityScore: number
+  bboxJson: string
+  imageId: string
+  imageRelPath: string
+  cropImageId: string
+  cropImageRelPath: string
+  capturedAt: number
+  createdAt: number
+}
+
+export interface RecognitionRecord {
+  id: number
+  recognitionId: string
+  cameraId: string
+  galleryId: string
+  subjectId: string
+  subjectName: string
+  similarity: number
+  fieldCropPath: string
+  registeredPhotoPath: string
+  recognizedAt: number
+  createdAt: number
+}
+
+export interface AlgoManifest {
+  algorithmId: string
+  name: string
+  version: string
+  author: string
+  description: string
+  category: string
+  supportedPlatforms: string[]
+  classes: string[]
+  license?: string
+}
+
+export interface SandboxCheckResult {
+  passed: boolean
+  stepsTotal: number
+  stepsPassed: number
+  steps: string[]
+  errorMessage?: string
+  manifest?: AlgoManifest
+}
+
+export interface MotionGateConfig {
+  enabled: boolean
+  threshold?: number
+  contourArea?: number
+  keepaliveIntervalMs?: number
+}
+
+export interface TaskSummaryDto {
+  id: number
+  cameraId: string
+  name: string
+  desiredEnabled: boolean
+  actualStatus: number
+  rulesCount: number
+  motionGateEnabled: boolean
+  rules: DetectionRule[]
+  motionGate?: MotionGateConfig
+  createdAt: number
+  updatedAt: number
+}
+
+export interface TaskConfigDto {
+  cameraId: string
+  name: string
+  desiredEnabled: boolean
+  rules: DetectionRule[]
+  motionGate?: MotionGateConfig
 }
 
 export interface OperationLog {

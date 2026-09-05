@@ -16,9 +16,30 @@ impl CaptureRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
+        Self::list_filtered(db, camera_id, None, None, None, limit, offset).await
+    }
+
+    pub async fn list_filtered(
+        db: &DatabaseConnection,
+        camera_id: Option<&str>,
+        target_label: Option<&str>,
+        start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Vec<Model>, DbError> {
         let mut query = Entity::find().order_by_desc(Column::CapturedAt);
         if let Some(cid) = camera_id {
             query = query.filter(Column::CameraId.eq(cid));
+        }
+        if let Some(lbl) = target_label {
+            query = query.filter(Column::TargetLabel.eq(lbl));
+        }
+        if let Some(start) = start_time {
+            query = query.filter(Column::CapturedAt.gte(start));
+        }
+        if let Some(end) = end_time {
+            query = query.filter(Column::CapturedAt.lte(end));
         }
         query
             .limit(limit)

@@ -1,18 +1,89 @@
 {
-  "title": "Real-Time & Historical Alerts Hub",
-  "searchPlaceholder": "Search Event ID / Target Label...",
+  "title": "Real-time & Historical Alarm Center",
+  "searchPlaceholder": "Search event ID / target class...",
   "columns": {
+    "thumbnail": "Evidence",
     "eventId": "Event ID",
     "camera": "Camera",
     "alarmType": "Alarm Type",
-    "targetLabel": "Target",
+    "targetLabel": "Target Class",
     "confidence": "Confidence",
-    "occurredAt": "Timestamp",
-    "evidence": "Evidence"
+    "ruleType": "Rule Type",
+    "severity": "Severity",
+    "status": "Status",
+    "occurredAt": "Triggered At",
+    "evidence": "Evidence Snapshot",
+    "actions": "Actions"
   },
   "types": {
-    "lineCrossing": "Line Crossing",
-    "regionIntrusion": "Region Intrusion"
+    "lineCrossing": "Tripwire Crossing (Line)",
+    "regionIntrusion": "Region Intrusion (ROI)"
   },
-  "viewImage": "View Snapshot"
+  "viewImage": "View Image",
+  "tabs": {
+    "alarms": "Violations (Alarms)",
+    "captures": "Track Captures",
+    "recognition": "Face/Plate Match"
+  },
+  "views": {
+    "cards": "Card View",
+    "table": "Table View"
+  },
+  "pagination": {
+    "prev": "Previous",
+    "next": "Next",
+    "page": "Page {{current}}",
+    "total": "Total {{total}}"
+  },
+  "statusFilter": {
+    "all": "All Status",
+    "unprocessed": "Unprocessed",
+    "processed": "Processed"
+  },
+  "timeFilter": {
+    "start": "Start Time",
+    "end": "End Time",
+    "clear": "Clear"
+  },
+  "filter": {
+    "allCameras": "All Channels",
+    "allTargets": "All Target Classes",
+    "person": "Person",
+    "car": "Vehicle",
+    "bicycle": "Bicycle",
+    "refresh": "Refresh"
+  },
+  "empty": {
+    "alarms": "No alarm records found",
+    "alarmsDesc": "Channel rules are active and normal; no violations detected",
+    "captures": "No capture records",
+    "recognitions": "No recognition records",
+    "recognitionsDesc": "Gallery matching results will appear here"
+  },
+  "card": {
+    "noImage": "No Image",
+    "target": "Target",
+    "confidence": "Confidence",
+    "viewHd": "View HD",
+    "siteCrop": "Site Crop",
+    "match": "MATCH",
+    "similarity": "Similarity",
+    "registeredPhoto": "Gallery Photo",
+    "markProcessed": "Process",
+    "processed": "Resolved"
+  },
+  "modal": {
+    "fullImage": "4K/1080P Full Frame",
+    "cropImage": "BBox Crop (10% Padding)",
+    "noImage": "Full image not found",
+    "timestamp": "Timestamp",
+    "trackId": "Track ID",
+    "channel": "Channel",
+    "qualityScore": "Quality",
+    "time": "Time"
+  },
+  "toast": {
+    "ruleTriggered": "Detected {{target}} triggering rule",
+    "viewEvidence": "View Evidence"
+  }
 }

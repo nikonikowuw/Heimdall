@@ -23,6 +23,8 @@ pub struct Model {
     pub crop_image_rel_path: String,
     pub rule_type: String,
     pub severity: String,
+    pub status: String,
+    pub handled_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
 }
 

@@ -1,18 +1,89 @@
 {
-  "title": "即時與歷史告警中心",
+  "title": "實時與歷史告警中心",
   "searchPlaceholder": "搜尋事件ID / 目標類別...",
   "columns": {
+    "thumbnail": "縮略證據",
     "eventId": "事件 ID",
-    "camera": "攝影機",
+    "camera": "攝像機",
     "alarmType": "告警類型",
     "targetLabel": "目標類別",
     "confidence": "置信度",
+    "ruleType": "布防規則",
+    "severity": "嚴重等級",
+    "status": "處理狀態",
     "occurredAt": "觸發時間",
-    "evidence": "證據快照"
+    "evidence": "證據快照",
+    "actions": "操作"
   },
   "types": {
     "lineCrossing": "絆線越界 (Line)",
     "regionIntrusion": "區域入侵 (ROI)"
   },
-  "viewImage": "檢視圖片"
+  "viewImage": "查看圖片",
+  "tabs": {
+    "alarms": "違規告警 (Alarms)",
+    "captures": "行跡抓拍 (Captures)",
+    "recognition": "識別對賬 (Recognition)"
+  },
+  "views": {
+    "cards": "卡片視圖",
+    "table": "表格視圖"
+  },
+  "pagination": {
+    "prev": "上一頁",
+    "next": "下一頁",
+    "page": "第 {{current}} 頁",
+    "total": "共 {{total}} 條"
+  },
+  "statusFilter": {
+    "all": "全部狀態 (All Status)",
+    "unprocessed": "待處理 (Unprocessed)",
+    "processed": "已核驗 (Processed)"
+  },
+  "timeFilter": {
+    "start": "開始時間",
+    "end": "結束時間",
+    "clear": "清空時間"
+  },
+  "filter": {
+    "allCameras": "全部通道 (All Cameras)",
+    "allTargets": "全部目標類別 (All Classes)",
+    "person": "人員 (Person)",
+    "car": "機動車 (Vehicle)",
+    "bicycle": "非機動車 (Bicycle)",
+    "refresh": "刷新"
+  },
+  "empty": {
+    "alarms": "暫無違規告警記錄",
+    "alarmsDesc": "當前通道規則布防正常，未檢測到違規越界或入侵",
+    "captures": "暫無抓拍記錄",
+    "recognitions": "暫無識別對賬記錄",
+    "recognitionsDesc": "底庫特徵對賬比對結果將在此展示"
+  },
+  "card": {
+    "noImage": "暫無原圖",
+    "target": "目標",
+    "confidence": "置信度",
+    "viewHd": "查看高清",
+    "siteCrop": "現場抓拍特寫",
+    "match": "MATCH",
+    "similarity": "特徵相似度",
+    "registeredPhoto": "底庫樣本",
+    "markProcessed": "標記處理",
+    "processed": "已核驗"
+  },
+  "modal": {
+    "fullImage": "全景超清大圖",
+    "cropImage": "BBox 目標特寫摳圖 (10% 擴邊)",
+    "noImage": "全景原圖不存在",
+    "timestamp": "時間戳",
+    "trackId": "Track ID",
+    "channel": "通道",
+    "qualityScore": "質量評分",
+    "time": "時間"
+  },
+  "toast": {
+    "ruleTriggered": "偵測到 {{target}} 觸發規則",
+    "viewEvidence": "查看證據"
+  }
 }

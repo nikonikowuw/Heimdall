@@ -1,11 +1,107 @@
 {
-  "title": "攝影機接入與 AI 任務布防",
-  "addCamera": "新增攝影機",
-  "camerasSection": "攝影機與分析管線",
+  "title": "攝像機接入與 AI 任務布防",
+  "addCamera": "添加攝像機",
+  "camerasSection": "攝像機與分析管線",
   "ruleConfigTitle": "空間幾何規則配置 (ROI / Mask / Line)",
-  "ruleConfigDesc": "在視訊背景上使用滑鼠勾選多邊形感興趣區或跨越絆線",
+  "ruleConfigDesc": "在視頻背景上使用滑鼠勾選多邊形感興趣區或跨越絆線",
   "drawRoi": "畫 ROI 區域",
   "drawLine": "畫絆線 Line",
-  "canvasPlaceholder": "視訊畫格互動布防畫板",
-  "saveRules": "儲存布防規則"
+  "canvasPlaceholder": "視頻幀交互布防畫板",
+  "saveRules": "保存布防規則",
+  "actions": {
+    "enterStudio": "進入動態矢量布防工作台",
+    "configureRules": "配置矢量規則",
+    "uploadPackage": "上傳演算法包 (.zip / .tar.gz)",
+    "uploading": "正在上傳並驗證...",
+    "executeSandbox": "執行沙箱自測",
+    "verifyingSandbox": "正在沙箱自測..."
+  },
+  "stats": {
+    "summary": "{{total}} 路視頻源 · {{armed}} 路已開啟 AI 布防"
+  },
+  "status": {
+    "armed": "已布防",
+    "disarmed": "已撤防"
+  },
+  "empty": {
+    "noCameras": "暫無接入攝像機通道",
+    "addCameraHint": "請前往通道管理頁面添加 RTSP 視頻流"
+  },
+  "card": {
+    "rtspDirect": "RTSP 直通流:",
+    "geometryRules": "布防幾何規則:",
+    "rulesCount": "{{count}} 項有效規則",
+    "motionGate": "運動檢測門控:",
+    "motionGateEco": "開啟 (節能待機)",
+    "motionGateAlways": "常駐推理"
+  },
+  "sandbox": {
+    "title": "七步沙箱安全自檢",
+    "status": "沙箱檢驗狀態:",
+    "allPassed": "7/7 全部通過 (HOT READY)",
+    "interrupted": "{{passed}}/7 驗證中斷",
+    "tip": "點擊上方按鈕觸發隔離子進程對該演算法包執行 7 步安全自檢（結構、SHA256、ABI 符號與前向推理自測）。",
+    "uploadSuccess": "演算法包上傳並通過 7 步沙箱自檢，已成功熱載入！"
+  },
+  "studio": {
+    "backToChannels": "返回通道",
+    "armed": "已布防 (ARMED)",
+    "unarmed": "已撤防 (UNARMED)",
+    "masterArm": "通道布防總閘",
+    "masterArmDesc": "撤防後進入 0% 硬體解碼待機",
+    "allCameras": "全部通道",
+    "rtspPassthrough": "直通",
+    "mountedAlgos": "並發演算法棧",
+    "verified": "個已驗證",
+    "configParams": "參數配置",
+    "snapshotPolicy": "雙流聯動快拍策略",
+    "policy4k": "命中規則抓拍 4K 原圖",
+    "policy4kDesc": "GOP 快速解碼",
+    "policyCrop": "BBox 特寫 10% 擴邊摳圖",
+    "policyCropDesc": "SIMD JPEG",
+    "policyFallback": "主碼流異常時平滑降級",
+    "policyFallbackDesc": "100% 保底"
+  },
+  "tools": {
+    "select": "選擇",
+    "roi": "入侵 ROI",
+    "line": "絆線 Line",
+    "mask": "遮罩 Mask",
+    "precrop": "特寫 ROI",
+    "snap": "頂點自動磁吸吸附",
+    "closePolygon": "閉合 (Enter)",
+    "selectVideoPrompt": "請選擇攝像機接入實時流"
+  },
+  "footer": {
+    "rulesCount": "已布防規則",
+    "items": "項",
+    "shortcuts": "快捷鍵",
+    "save": "保存布防規則",
+    "saving": "正在保存...",
+    "saveSuccess": "布防規則已成功同步並生效！"
+  },
+  "layers": {
+    "title": "布防規則圖層",
+    "empty": "暫無布防規則",
+    "emptyTip": "請在左側或上方選擇工具繪製"
+  },
+  "inspector": {
+    "title": "屬性檢查器",
+    "emptyTip": "在畫布或圖層列表中選中一個規則進行配置",
+    "ruleName": "規則名稱",
+    "boundAlgo": "⚡ 綁定執行演算法",
+    "lineDirection": "跨線判定方向",
+    "dirBoth": "雙向 ⇄",
+    "dirAtoB": "正向 A➔B",
+    "dirBtoA": "反向 B➔A",
+    "clone": "克隆防區",
+    "delete": "刪除防區"
+  },
+  "algoDrawer": {
+    "id": "演算法標識",
+    "version": "版本與作者",
+    "platforms": "支持平台",
+    "classes": "目標類別過濾",
+    "done": "完成"
+  }
 }

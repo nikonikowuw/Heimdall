@@ -93,6 +93,28 @@ async fn main() -> Result<()> {
     // 启动后台静默待机摄像头定时巡检与防抖三态调度器 (30s 周期)
     Arc::new(state.clone()).start_periodic_probe_worker(std::time::Duration::from_secs(30));
 
+    // 扫描并沙箱自检加载本地算法包 (algo-packages/{platform})
+    let algo_dir = std::path::Path::new("algo-packages");
+    if algo_dir.is_dir() {
+        let current_platform = infer::current_platform_id();
+        match state.algo_registry.scan_and_register(algo_dir, true).await {
+            Ok(count) => {
+                tracing::info!(
+                    platform = current_platform,
+                    count,
+                    "本地算法包扫描与沙箱自检完成"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    platform = current_platform,
+                    error = %err,
+                    "扫描本地算法包失败"
+                );
+            }
+        }
+    }
+
     let is_init = state
         .is_initialized
         .load(std::sync::atomic::Ordering::Relaxed);

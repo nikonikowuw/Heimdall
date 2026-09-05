@@ -38,22 +38,27 @@ impl DetectionPoint {
 
 /// 任务级空间几何布防规则
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DetectionRule {
     pub role: DetectionRuleRole,
-    #[serde(default)]
+    #[serde(default, alias = "line_direction")]
     pub line_direction: DetectionLineDirection,
     pub points: Vec<DetectionPoint>,
 }
 
 /// 运动门控配置参数
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MotionGateConfig {
     pub enabled: bool,
     #[serde(default = "default_threshold")]
     pub threshold: u32,
     #[serde(default = "default_contour_area")]
     pub contour_area: u32,
-    #[serde(default = "default_keepalive_interval_ms")]
+    #[serde(
+        default = "default_keepalive_interval_ms",
+        alias = "keepalive_interval_ms"
+    )]
     pub keepalive_interval_ms: u64,
 }
 

@@ -115,6 +115,11 @@ impl PipelineManager {
         }
     }
 
+    /// 获取快照抓拍引擎句柄
+    pub fn snapshot_engine(&self) -> &SnapshotEngine {
+        &self.snapshot_engine
+    }
+
     /// 注册或获取某路摄像头的分析管线上下文
     pub async fn get_or_create_context(&self, camera_id: &str) -> Arc<CameraPipelineContext> {
         let mut pipelines = self.pipelines.write().await;
