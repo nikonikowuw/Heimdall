@@ -11,6 +11,7 @@ pub mod rtsp;
 pub mod sps;
 pub mod stream_hub;
 pub mod sub_stream;
+pub mod webcodecs;
 
 pub use buffer_pool::BufferPoolStats;
 pub use decoder::VideoDecoder;
@@ -30,3 +31,7 @@ pub use rtsp::{mask_rtsp_url, RtspIngestor};
 pub use sps::{parse_h264_sps, parse_h265_sps, split_annex_b_nalus, SpsInfo};
 pub use stream_hub::{CameraStreamSession, KeyframeCache, StreamHub};
 pub use sub_stream::{deduce_primary_sub_stream, deduce_sub_stream, SubStreamCandidate};
+pub use webcodecs::{
+    pack_webcodecs_frame, unpack_webcodecs_frame, WebCodecsFrameHeader, WEBCODECS_FRAME_HEADER_LEN,
+    WEBCODECS_PROTOCOL_VERSION,
+};

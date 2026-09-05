@@ -122,8 +122,93 @@ describe('API Client', () => {
     expect(list[0].cameraId).toBe('cam-01')
   })
 
+  it('cameraApi.create should send POST request with camera payload', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: {
+          id: 2,
+          cameraId: 'cam-02',
+          name: 'North Yard',
+          rtspUrl: 'rtsp://10.0.0.2:554/live',
+        },
+        timestamp: 1747584000000,
+      }),
+    })
+
+    const created = await cameraApi.create({
+      name: 'North Yard',
+      rtspUrl: 'rtsp://10.0.0.2:554/live',
+    })
+    expect(created.cameraId).toBe('cam-02')
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/cameras',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'North Yard',
+          rtspUrl: 'rtsp://10.0.0.2:554/live',
+        }),
+      }),
+    )
+  })
+
+  it('cameraApi.update should send PUT request with encoded cameraId', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: {
+          id: 1,
+          cameraId: 'cam/01',
+          name: 'Updated Cam',
+          rtspUrl: 'rtsp://10.0.0.1:554/live2',
+        },
+        timestamp: 1747584000000,
+      }),
+    })
+
+    const updated = await cameraApi.update('cam/01', { name: 'Updated Cam' })
+    expect(updated.name).toBe('Updated Cam')
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/cameras/cam%2F01',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ name: 'Updated Cam' }),
+      }),
+    )
+  })
+
+  it('cameraApi.delete should send DELETE request with encoded cameraId', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: null,
+        timestamp: 1747584000000,
+      }),
+    })
+
+    await cameraApi.delete('cam/01')
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/cameras/cam%2F01',
+      expect.objectContaining({
+        method: 'DELETE',
+      }),
+    )
+  })
+
   it('cameraApi.getLiveStreamUrl should build correct HTTP-FLV stream URL', () => {
     const url = cameraApi.getLiveStreamUrl('cam-01', 'main')
     expect(url).toContain('/api/v1/live/cam-01.flv?stream=main')
+  })
+
+  it('cameraApi.getWebCodecsWsUrl should build correct WebSocket WebCodecs URL', () => {
+    const url = cameraApi.getWebCodecsWsUrl('cam-01', 'sub')
+    expect(url).toContain('/api/v1/live/cam-01/webcodecs?stream=sub')
   })
 })

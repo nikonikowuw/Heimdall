@@ -97,7 +97,7 @@ export const cameraApi = {
   },
 
   get(id: string): Promise<Camera> {
-    return api.get<Camera>(`/cameras/${id}`)
+    return api.get<Camera>(`/cameras/${encodeURIComponent(id)}`)
   },
 
   create(data: CreateCameraRequest): Promise<Camera> {
@@ -105,16 +105,16 @@ export const cameraApi = {
   },
 
   update(id: string, data: UpdateCameraRequest): Promise<Camera> {
-    return api.put<Camera>(`/cameras/${id}`, data)
+    return api.put<Camera>(`/cameras/${encodeURIComponent(id)}`, data)
   },
 
   delete(id: string): Promise<void> {
-    return api.delete<void>(`/cameras/${id}`)
+    return api.delete<void>(`/cameras/${encodeURIComponent(id)}`)
   },
 
   probe(id: string): Promise<{ codec: string; width: number; height: number; fps: number }> {
     return api.post<{ codec: string; width: number; height: number; fps: number }>(
-      `/cameras/${id}/probe`,
+      `/cameras/${encodeURIComponent(id)}/probe`,
     )
   },
 
@@ -131,6 +131,17 @@ export const cameraApi = {
       return new URL(path, window.location.origin).href
     }
     return path
+  },
+
+  getWebCodecsWsUrl(cameraId: string, stream: 'main' | 'sub' = 'main'): string {
+    const token = useAuthStore.getState().token || ''
+    const isSsl = typeof window !== 'undefined' && window.location?.protocol === 'https:'
+    const protocol = isSsl ? 'wss:' : 'ws:'
+    const host =
+      typeof window !== 'undefined' && window.location?.host
+        ? window.location.host
+        : 'localhost:8080'
+    return `${protocol}//${host}${BASE_URL}/live/${encodeURIComponent(cameraId)}/webcodecs?stream=${stream}&token=${encodeURIComponent(token)}`
   },
 }
 

@@ -16,6 +16,7 @@ import {
 import mpegts from 'mpegts.js'
 import { useTranslation } from 'react-i18next'
 import { cameraApi } from '@/lib/api'
+import { isWebCodecsSupported, WebCodecsPlayer } from '@/lib/webcodecs'
 import { useAuthStore } from '@/stores/auth'
 import type { CameraTelemetry, TrackedBBox } from '@/types'
 
@@ -71,6 +72,7 @@ export function LivePlayer({
   const streamType = stream || (isHero ? 'main' : 'sub')
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  const videoCanvasRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const trackedObjectsRef = useRef<TrackedBBox[]>(trackedObjects)
   trackedObjectsRef.current = trackedObjects
@@ -78,6 +80,7 @@ export function LivePlayer({
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(
     isPaused ? 'paused' : 'connecting',
   )
+  const [activeProtocol, setActiveProtocol] = useState<'webcodecs' | 'flv'>('flv')
   const [latencyMs, setLatencyMs] = useState<number>(128)
   const [retryKey, setRetryKey] = useState<number>(0)
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -92,11 +95,30 @@ export function LivePlayer({
     }
 
     let isCancelled = false
-    let player: mpegts.Player | null = null
+    let flvPlayer: mpegts.Player | null = null
+    let wcPlayer: WebCodecsPlayer | null = null
     const videoEl = videoRef.current
+    const videoCanvas = videoCanvasRef.current
 
-    function startPlayer() {
-      if (!videoEl || !cameraId) return
+    function scheduleRetry() {
+      if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current)
+      autoRetryTimerRef.current = setTimeout(() => {
+        if (!isCancelled) {
+          setRetryKey((k) => k + 1)
+        }
+      }, 3000)
+    }
+
+    const handlePlaying = () => {
+      if (!isCancelled) {
+        setConnectionStatus('connected')
+        setLatencyMs(Math.floor(100 + Math.random() * 40))
+      }
+    }
+
+    function startFlvPlayer() {
+      if (isCancelled || !videoEl || !cameraId) return
+      setActiveProtocol('flv')
       setConnectionStatus('connecting')
 
       const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType)
@@ -109,7 +131,7 @@ export function LivePlayer({
       mpegts.LoggingControl.enableAll = false
 
       try {
-        player = mpegts.createPlayer(
+        flvPlayer = mpegts.createPlayer(
           {
             type: 'flv',
             isLive: true,
@@ -129,25 +151,25 @@ export function LivePlayer({
           },
         )
 
-        player.attachMediaElement(videoEl)
-        player.load()
+        flvPlayer.attachMediaElement(videoEl)
+        flvPlayer.load()
 
-        const playPromise = player.play()
+        const playPromise = flvPlayer.play()
         if (playPromise && typeof playPromise.catch === 'function') {
           playPromise.catch(() => {
             // Autoplay might be blocked or deferred
           })
         }
 
-        player.on(mpegts.Events.MEDIA_INFO, () => {
+        flvPlayer.on(mpegts.Events.MEDIA_INFO, () => {
           handlePlaying()
         })
 
-        player.on(mpegts.Events.METADATA_ARRIVED, () => {
+        flvPlayer.on(mpegts.Events.METADATA_ARRIVED, () => {
           handlePlaying()
         })
 
-        player.on(
+        flvPlayer.on(
           mpegts.Events.STATISTICS_INFO,
           (stat: { speed?: number; decodedFrames?: number; droppedFrames?: number }) => {
             if ((stat.speed ?? 0) > 0 || (stat.decodedFrames ?? 0) > 0) {
@@ -156,7 +178,7 @@ export function LivePlayer({
           },
         )
 
-        player.on(mpegts.Events.ERROR, (_type: string, detail: string, info: unknown) => {
+        flvPlayer.on(mpegts.Events.ERROR, (_type: string, detail: string, info: unknown) => {
           const httpCode = (info as { code?: number })?.code
           if (detail === 'HttpStatusCodeInvalid' && httpCode === 401) {
             useAuthStore.getState().logout()
@@ -164,12 +186,7 @@ export function LivePlayer({
           }
           if (!isCancelled) {
             setConnectionStatus('reconnecting')
-            if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current)
-            autoRetryTimerRef.current = setTimeout(() => {
-              if (!isCancelled) {
-                setRetryKey((k) => k + 1)
-              }
-            }, 3000)
+            scheduleRetry()
           }
         })
       } catch {
@@ -179,11 +196,49 @@ export function LivePlayer({
       }
     }
 
-    const handlePlaying = () => {
-      if (!isCancelled) {
-        setConnectionStatus('connected')
-        setLatencyMs(Math.floor(100 + Math.random() * 40))
+    async function startPlayer() {
+      if (!cameraId) return
+      setConnectionStatus('connecting')
+
+      // ① 优先嗅探 WebCodecs 硬件加速支持 (超低延迟 100~200ms)
+      const canWebCodecs =
+        (await isWebCodecsSupported('h265')) || (await isWebCodecsSupported('h264'))
+
+      if (canWebCodecs && videoCanvas && !isCancelled) {
+        try {
+          const wsUrl = cameraApi.getWebCodecsWsUrl(cameraId, streamType)
+          wcPlayer = new WebCodecsPlayer({
+            wsUrl,
+            canvas: videoCanvas,
+            onPlaying: (lat) => {
+              if (isCancelled) return
+              setActiveProtocol('webcodecs')
+              setConnectionStatus('connected')
+              setLatencyMs(lat)
+            },
+            onError: () => {
+              if (isCancelled) return
+              // 若 WebCodecs 连接或解码出现异常，平滑降级至 FLV (mpegts.js)
+              if (wcPlayer) {
+                wcPlayer.destroy()
+                wcPlayer = null
+              }
+              startFlvPlayer()
+            },
+            onClose: () => {
+              if (isCancelled) return
+              setConnectionStatus('reconnecting')
+              scheduleRetry()
+            },
+          })
+          return
+        } catch {
+          // 初始化失败，直接执行 FLV 降级
+        }
       }
+
+      // ② 若浏览器未支持 WebCodecs，降级至 FLV (MSE)
+      startFlvPlayer()
     }
 
     const handleVideoEvent = (e: Event) => {
@@ -223,16 +278,20 @@ export function LivePlayer({
         videoEl.removeEventListener('waiting', handleVideoEvent)
         videoEl.removeEventListener('stalled', handleVideoEvent)
       }
-      if (player) {
+      if (wcPlayer) {
+        wcPlayer.destroy()
+        wcPlayer = null
+      }
+      if (flvPlayer) {
         try {
-          player.pause()
-          player.unload()
-          player.detachMediaElement()
-          player.destroy()
+          flvPlayer.pause()
+          flvPlayer.unload()
+          flvPlayer.detachMediaElement()
+          flvPlayer.destroy()
         } catch {
           // ignore teardown errors
         }
-        player = null
+        flvPlayer = null
       }
       if (videoEl) {
         try {
@@ -322,8 +381,24 @@ export function LivePlayer({
     <div
       className={`relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] ${className}`}
     >
-      {/* 底层硬件解码视频渲染层 */}
-      <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />
+      {/* 底层 WebCodecs 零拷贝低延迟渲染画布 */}
+      <canvas
+        ref={videoCanvasRef}
+        className={`h-full w-full object-contain ${
+          activeProtocol === 'webcodecs' && connectionStatus === 'connected' ? 'block' : 'hidden'
+        }`}
+      />
+
+      {/* 底层硬件解码视频渲染层 (FLV / MSE 兼容通道) */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className={`h-full w-full object-contain ${
+          activeProtocol === 'flv' || connectionStatus !== 'connected' ? 'block' : 'hidden'
+        }`}
+      />
 
       {/* 顶层透明 Canvas 2D 识别框图层 */}
       <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" />
@@ -396,6 +471,16 @@ export function LivePlayer({
           </span>
           <span className="text-white/40">|</span>
           <span className="text-cyan-300">{latencyMs}ms</span>
+          <span className="text-white/40">|</span>
+          <span
+            className={`rounded px-1.5 py-0.2 text-[9px] font-bold tracking-wider ${
+              activeProtocol === 'webcodecs'
+                ? 'bg-cyan-500/25 text-cyan-300'
+                : 'bg-emerald-500/25 text-emerald-300'
+            }`}
+          >
+            {activeProtocol === 'webcodecs' ? 'WebCodecs' : 'FLV'}
+          </span>
           {isHero && (
             <>
               <span className="text-white/40">|</span>

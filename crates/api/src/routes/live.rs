@@ -16,6 +16,7 @@ use crate::state::AppState;
 pub struct LiveQuery {
     pub stream: Option<String>, // "main" | "sub"
     pub token: Option<String>,
+    pub format: Option<String>, // "flv" | "webcodecs"
 }
 
 /// 客户端预览会话 RAII 守护者，确保在任何断开、异常中止或被 Drop 场景下安全注销订阅并扣减按需预览计数
@@ -46,7 +47,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/{camera_id}", get(handle_http_flv))
         .route("/{camera_id}/flv", get(handle_http_flv))
-        .route("/{camera_id}/ws", get(handle_ws_flv))
+        .route("/{camera_id}/ws", get(handle_ws_live))
+        .route("/{camera_id}/webcodecs", get(handle_ws_webcodecs))
 }
 
 /// 辅助函数：根据请求参数解析摄像头并订阅目标码流
@@ -218,6 +220,21 @@ async fn handle_http_flv(
     (StatusCode::OK, resp_headers, body).into_response()
 }
 
+/// 处理 WebSocket 实时流拉取 (按 query.format 路由至 WS-FLV 或 WS-WebCodecs)
+async fn handle_ws_live(
+    state: State<AppState>,
+    user: AuthUser,
+    path: Path<String>,
+    query: Query<LiveQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if query.format.as_deref() == Some("webcodecs") {
+        handle_ws_webcodecs(state, user, path, query, ws).await
+    } else {
+        handle_ws_flv(state, user, path, query, ws).await
+    }
+}
+
 /// 处理 WS-FLV (WebSocket-FLV) 实时流拉取
 async fn handle_ws_flv(
     State(state): State<AppState>,
@@ -337,6 +354,123 @@ async fn serve_ws_flv(
     }
 }
 
+/// 处理 WS-WebCodecs 实时流拉取 (WebSocket 直送 12 字节二进制帧头原始 NALU，供前端 WebCodecs 零拷贝低延时渲染)
+async fn handle_ws_webcodecs(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path(camera_id): Path<String>,
+    Query(query): Query<LiveQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let (camera, stream_key, packet_rx) =
+        match resolve_camera_and_subscribe(&state, &camera_id, query.stream.as_deref()).await {
+            Ok(res) => res,
+            Err(status) => return status.into_response(),
+        };
+
+    let str_key = stream_key.as_str_key();
+    let is_main_stream = stream_key.stream_type == StreamType::Main;
+
+    tracing::info!(
+        camera_id = %camera.camera_id,
+        stream_key = %str_key,
+        "启动 WS-WebCodecs 超低延时二进制推流通道"
+    );
+
+    ws.on_upgrade(move |socket| {
+        serve_ws_webcodecs(socket, state, str_key, is_main_stream, camera, packet_rx)
+    })
+}
+
+async fn serve_ws_webcodecs(
+    mut socket: WebSocket,
+    state: AppState,
+    stream_key: String,
+    is_main_stream: bool,
+    camera: db::entity::camera::Model,
+    mut packet_rx: tokio::sync::broadcast::Receiver<std::sync::Arc<types::EncodedPacket>>,
+) {
+    let mut shutdown_rx = state.shutdown_tx.subscribe();
+    let stream_hub = state.stream_hub.clone();
+    let pipeline_mgr = state.pipeline.clone();
+
+    // 增加预览客户端计数
+    pipeline_mgr.increment_preview(&camera.camera_id).await;
+
+    let _guard = PreviewSessionGuard {
+        stream_hub: stream_hub.clone(),
+        pipeline: pipeline_mgr.clone(),
+        stream_key: stream_key.clone(),
+        camera_id: camera.camera_id.clone(),
+        protocol: "WS-WebCodecs",
+    };
+
+    // ① 初始秒开：若缓存中有首包与当前 GOP，立即按 WebCodecs 二进制帧格式发送关键帧与完整 GOP 序列
+    let init_success = async {
+        if let Some(cache) = stream_hub.get_keyframe_cache(&stream_key).await {
+            for pkt in &cache.gop_packets {
+                let bin = media::pack_webcodecs_frame(pkt);
+                if socket.send(Message::Binary(bin)).await.is_err() {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    .await;
+
+    if !init_success {
+        return;
+    }
+
+    let mut awaiting_keyframe_after_lag = false;
+
+    // ② 实时消费并封装 NALU 为 12 字节二进制帧格式推送至 WebSocket
+    loop {
+        let pkt = tokio::select! {
+            _ = shutdown_rx.recv() => {
+                let _ = socket.send(Message::Close(None)).await;
+                break;
+            }
+            res = packet_rx.recv() => {
+                match res {
+                    Ok(p) => p,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            stream_key = %stream_key,
+                            skipped,
+                            "WebCodecs 消费端网络积压，主动丢弃后续 P 帧并等待下一个关键帧重新对齐"
+                        );
+                        awaiting_keyframe_after_lag = true;
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        };
+
+        // 若网络发生积压丢包，主动丢弃非关键帧直到收到完整关键帧
+        if awaiting_keyframe_after_lag {
+            if pkt.is_keyframe {
+                awaiting_keyframe_after_lag = false;
+            } else {
+                continue;
+            }
+        }
+
+        if is_main_stream {
+            pipeline_mgr
+                .push_main_packet(&camera.camera_id, pkt.clone())
+                .await;
+        }
+
+        let bin = media::pack_webcodecs_frame(&pkt);
+        if socket.send(Message::Binary(bin)).await.is_err() {
+            break;
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -358,5 +492,21 @@ mod tests {
         let mut pipeline = FlvStreamPipeline::new();
         pipeline.handle_lagged();
         assert!(!pipeline.has_first_keyframe);
+    }
+
+    #[test]
+    fn test_webcodecs_framing_codec_and_flags() {
+        let packet = types::EncodedPacket {
+            pts_ms: 1000,
+            is_keyframe: true,
+            codec: CodecType::H265,
+            payload: Bytes::from_static(b"\x00\x00\x00\x01\x40\x01"),
+        };
+        let frame = media::pack_webcodecs_frame(&packet);
+        let (header, payload) = media::unpack_webcodecs_frame(&frame).unwrap();
+        assert_eq!(header.codec, CodecType::H265);
+        assert!(header.is_keyframe);
+        assert_eq!(header.pts_ms, 1000);
+        assert_eq!(payload, b"\x00\x00\x00\x01\x40\x01");
     }
 }
