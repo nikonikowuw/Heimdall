@@ -1,11 +1,8 @@
 pub mod admin_user;
 pub mod alarm;
 pub mod camera;
+pub mod capture;
+pub mod gallery;
 pub mod oplog;
+pub mod recognition;
 pub mod task;
-
-pub use admin_user::Entity as AdminUserEntity;
-pub use alarm::Entity as AlarmEntity;
-pub use camera::Entity as CameraEntity;
-pub use oplog::Entity as OplogEntity;
-pub use task::Entity as TaskEntity;

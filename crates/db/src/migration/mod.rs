@@ -56,16 +56,62 @@ pub fn reset_database(db_path: &Path) -> Result<(), DbError> {
 
 /// 在已有 SeaORM 连接（如内存数据库 :memory:）上按顺序应用所有嵌入式迁移
 pub async fn run_migrations_on_seaorm(db: &DatabaseConnection) -> Result<(), DbError> {
+    // 确保 refinery_schema_history 迁移记录表存在
+    db.execute(Statement::from_string(
+        sea_orm::DatabaseBackend::Sqlite,
+        r#"
+        CREATE TABLE IF NOT EXISTS refinery_schema_history (
+            version INTEGER PRIMARY KEY,
+            name TEXT,
+            applied_on TEXT,
+            checksum TEXT
+        );
+        "#
+        .to_string(),
+    ))
+    .await?;
+
     let runner = migrations::runner();
-    for migration in runner.get_migrations() {
-        if let Some(sql) = migration.sql() {
-            // SQLite 支持在单个批处理中执行多条 DDL 语句
-            db.execute(Statement::from_string(
-                sea_orm::DatabaseBackend::Sqlite,
-                sql.to_string(),
-            ))
-            .await?;
+    let mut migrations = runner.get_migrations().to_vec();
+    migrations.sort_by_key(|m| m.version());
+
+    for migration in migrations {
+        let version = migration.version() as i64;
+        let check_stmt = Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            format!("SELECT COUNT(*) FROM refinery_schema_history WHERE version = {version};"),
+        );
+        let query_res = db.query_one(check_stmt).await?;
+        let count: i64 = query_res
+            .and_then(|row| row.try_get_by_index(0).ok())
+            .unwrap_or(0);
+
+        if count > 0 {
+            continue; // 已应用过该版本，幂等跳过
         }
+
+        if let Some(sql) = migration.sql() {
+            // 将批处理按分号拆分为单个 SQL 语句依次执行，任何执行错误立即 fail-fast 返回
+            for stmt in sql.split(';') {
+                let trimmed = stmt.trim();
+                if !trimmed.is_empty() {
+                    db.execute(Statement::from_string(
+                        sea_orm::DatabaseBackend::Sqlite,
+                        trimmed.to_string(),
+                    ))
+                    .await?;
+                }
+            }
+        }
+
+        let name = migration.name();
+        let record_stmt = Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            format!(
+                "INSERT INTO refinery_schema_history (version, name, applied_on, checksum) VALUES ({version}, '{name}', CURRENT_TIMESTAMP, '');"
+            ),
+        );
+        db.execute(record_stmt).await?;
     }
     Ok(())
 }

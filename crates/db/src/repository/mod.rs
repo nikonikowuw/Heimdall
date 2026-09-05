@@ -1,13 +1,19 @@
 pub mod admin_user;
 pub mod alarm;
 pub mod camera;
+pub mod capture;
+pub mod gallery;
 pub mod oplog;
+pub mod recognition;
 pub mod system_config;
 pub mod task;
 
 pub use admin_user::AdminUserRepo;
 pub use alarm::AlarmRepo;
 pub use camera::CameraRepo;
+pub use capture::CaptureRepo;
+pub use gallery::GalleryRepo;
 pub use oplog::OplogRepo;
+pub use recognition::RecognitionRepo;
 pub use system_config::SystemConfigRepo;
 pub use task::TaskRepo;

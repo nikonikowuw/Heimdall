@@ -59,3 +59,4 @@ libloading = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 sha2 = "0.10"
 static_assertions = "1.1"
+libc = "0.2"

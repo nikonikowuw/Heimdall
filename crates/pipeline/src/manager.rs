@@ -7,10 +7,16 @@ use tokio::sync::RwLock as TokioRwLock;
 
 use media::decoder::VideoDecoder;
 use media::ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
-use types::{AnalysisTask, BoundingBox, Camera, EncodedPacket, FrameRef};
+use types::{
+    AnalysisTask, BoundingBox, Camera, Detection, DetectionRule, EncodedPacket, FrameRef,
+    TrackedObject,
+};
 
 use crate::error::PipelineError;
+use crate::roi::RoiAffineMapper;
+use crate::rules::{RuleEvaluator, TriggeredAlarm};
 use crate::snapshot::{SnapshotEngine, SnapshotResult};
+use crate::tracker::SimpleTracker;
 
 /// 单路摄像头管线运行时上下文
 pub struct CameraPipelineContext {
@@ -25,6 +31,14 @@ pub struct CameraPipelineContext {
     pub preview_count: AtomicUsize,
     /// 主码流专用的按需快拍解码器实例 (惰性分配)
     pub snapshot_decoder: TokioMutex<Option<Box<dyn VideoDecoder + Send>>>,
+    /// 纯 Rust 航迹关联跟踪器
+    pub tracker: TokioMutex<SimpleTracker>,
+    /// 局部特写预裁剪仿射变换映射器
+    pub roi_mapper: TokioRwLock<RoiAffineMapper>,
+    /// 任务级空间几何规则
+    pub rules: TokioRwLock<Vec<DetectionRule>>,
+    /// 统一空间几何规则引擎
+    pub rule_evaluator: RuleEvaluator,
 }
 
 impl std::fmt::Debug for CameraPipelineContext {
@@ -47,6 +61,10 @@ impl CameraPipelineContext {
             ai_active: AtomicBool::new(false),
             preview_count: AtomicUsize::new(0),
             snapshot_decoder: TokioMutex::new(None),
+            tracker: TokioMutex::new(SimpleTracker::new()),
+            roi_mapper: TokioRwLock::new(RoiAffineMapper::identity()),
+            rules: TokioRwLock::new(Vec::new()),
+            rule_evaluator: RuleEvaluator::new(),
         }
     }
 
@@ -219,6 +237,7 @@ impl PipelineManager {
         camera: &Camera,
         task: AnalysisTask,
     ) -> Result<(), PipelineError> {
+        let rules = task.rules.clone();
         let mut tasks = self.tasks.write().await;
         tasks.insert(camera.camera_id.clone(), task);
 
@@ -235,6 +254,10 @@ impl PipelineManager {
 
         // 按需拉起硬件解码器实例
         let ctx = self.get_or_create_context(&camera.camera_id).await;
+
+        // 同步任务定义的空间几何布防规则至管线上下文
+        *ctx.rules.write().await = rules;
+
         let mut dec_guard = ctx.snapshot_decoder.lock().await;
         if dec_guard.is_none() {
             *dec_guard = Some(media::create_decoder(&camera.camera_id, codec));
@@ -243,6 +266,58 @@ impl PipelineManager {
 
         tracing::info!(camera_id = %camera.camera_id, "分析管线任务已启动/更新");
         Ok(())
+    }
+
+    /// 配置摄像头的局部特写 Pre-crop ROI 映射区域
+    pub async fn set_camera_roi(&self, camera_id: &str, roi: Option<BoundingBox>) {
+        let ctx = self.get_or_create_context(camera_id).await;
+        let mut mapper = ctx.roi_mapper.write().await;
+        *mapper = RoiAffineMapper::new(roi);
+        tracing::info!(camera_id = %camera_id, ?roi, "已配置摄像头局部 Pre-crop ROI 映射");
+    }
+
+    /// 配置摄像头的空间几何布防规则集合
+    pub async fn set_camera_rules(&self, camera_id: &str, rules: Vec<DetectionRule>) {
+        let ctx = self.get_or_create_context(camera_id).await;
+        let mut r = ctx.rules.write().await;
+        *r = rules;
+        tracing::info!(camera_id = %camera_id, count = r.len(), "已更新摄像头空间几何布防规则");
+    }
+
+    /// 统一处理算法推理输出的检测结果：
+    /// 1. 执行 Pre-crop ROI 线性仿射坐标还原（将局部归一化 [0,1] 映射至全景大图 [0,1]）；
+    /// 2. 纯 Rust 航迹关联跟踪器更新（维护连续全局 TrackID 与历史移动轨迹）；
+    /// 3. 统一几何规则引擎判定（Mask 区域静默过滤、ROI 入侵、绊线越界及 5 秒防重复报警冷却）；
+    /// 4. 返回当前活跃 TrackedObject 与触发的 TriggeredAlarm 集合。
+    pub async fn process_detections(
+        &self,
+        camera_id: &str,
+        detections: Vec<Detection>,
+        timestamp_ms: i64,
+    ) -> (Vec<TrackedObject>, Vec<TriggeredAlarm>) {
+        let ctx = self.get_or_create_context(camera_id).await;
+
+        // 1. 局部仿射映射至全景坐标系
+        let mapper = *ctx.roi_mapper.read().await;
+        let global_detections: Vec<Detection> = detections
+            .into_iter()
+            .map(|mut det| {
+                det.bbox = mapper.map_bbox(&det.bbox);
+                det
+            })
+            .collect();
+
+        // 2. 航迹关联更新
+        let mut tracker = ctx.tracker.lock().await;
+        let tracked_objects = tracker.update(global_detections);
+
+        // 3. 几何规则评估与 5 秒告警防刷屏冷却
+        let rules = ctx.rules.read().await;
+        let alarms =
+            ctx.rule_evaluator
+                .evaluate(&rules, &tracked_objects, &mut tracker, timestamp_ms, 5000);
+
+        (tracked_objects, alarms)
     }
 
     /// 停止某路摄像头的分析任务
@@ -395,6 +470,68 @@ mod tests {
         manager.stop_task(cam_id).await.expect("停止任务应成功");
         assert!(!ctx.ai_active.load(Ordering::Relaxed));
         assert!(ctx.snapshot_decoder.lock().await.is_none());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_manager_tracking_and_rules_evaluation() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("test_eval_{}", uuid::Uuid::new_v4().simple()));
+        let manager = PipelineManager::with_evidence_dir(&temp_dir);
+        let cam_id = "cam_eval_001";
+
+        // 配置 Pre-crop ROI (右半区域 [0.5, 0.0, 1.0, 1.0])
+        manager
+            .set_camera_roi(cam_id, Some(BoundingBox::new(0.5, 0.0, 1.0, 1.0)))
+            .await;
+
+        // 配置入侵布防规则
+        manager
+            .set_camera_rules(
+                cam_id,
+                vec![types::DetectionRule {
+                    role: types::DetectionRuleRole::Roi,
+                    line_direction: types::DetectionLineDirection::Both,
+                    points: vec![
+                        types::DetectionPoint::new(0.5, 0.0),
+                        types::DetectionPoint::new(1.0, 0.0),
+                        types::DetectionPoint::new(1.0, 1.0),
+                        types::DetectionPoint::new(0.5, 1.0),
+                    ],
+                }],
+            )
+            .await;
+
+        // 模拟算法输出局部检测框 [0.2, 0.2, 0.4, 0.4]
+        // 经仿射变换后映射为全景坐标: x1 = 0.5 + 0.2*0.5 = 0.6, y1 = 0.2, x2 = 0.7, y2 = 0.4
+        let local_det1 = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            bbox: BoundingBox::new(0.2, 0.2, 0.4, 0.4),
+        }];
+
+        let (tracked1, alarms1) = manager.process_detections(cam_id, local_det1, 1000).await;
+        assert_eq!(tracked1.len(), 1);
+        assert_eq!(alarms1.len(), 1, "侵入全景布防区必须触发报警");
+        let tid = tracked1[0].track_id;
+
+        // 验证全景坐标映射正确性
+        assert!((tracked1[0].bbox.x1 - 0.6).abs() < 1e-4);
+
+        // 第 2 帧微移，测试航迹 ID 连续性与 5 秒防刷屏冷却
+        let local_det2 = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.96,
+            bbox: BoundingBox::new(0.21, 0.21, 0.41, 0.41),
+        }];
+
+        let (tracked2, alarms2) = manager.process_detections(cam_id, local_det2, 2000).await;
+        assert_eq!(tracked2.len(), 1);
+        assert_eq!(tracked2[0].track_id, tid, "Track ID 必须在帧间保持连续");
+        assert_eq!(alarms2.len(), 0, "5 秒防刷屏冷却期内不应重复报警");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

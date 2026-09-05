@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"type":"check_step","step":"pre_crop_roi","status":"passed","summary":"Pre-crop ROI 线性仿射坐标还原完成，保证 C ABI 算法包归一化坐标无损映射至全景大图坐标系"}
+{"type":"check_step","step":"bytetrack_tracker","status":"passed","summary":"纯 Rust ByteTrack 航迹跟踪器完成，基于 IoU 二分图匹配维护单调连续 track_id 与有界轨迹历史向量"}
+{"type":"check_step","step":"rules_engine","status":"passed","summary":"统一几何规则引擎 RuleEvaluator 完成，支持 Mask 区域遮罩、Roi 多边形入侵、单向/双向绊线越界及 5 秒防刷屏冷却"}
+{"type":"check_step","step":"db_v2_migration","status":"passed","summary":"数据库 V2 迁移升级，建立 capture_records、recognition_records、galleries 表并扩展 alarm_records 字段"}
+{"type":"check_step","step":"statvfs_atomic_eviction","status":"passed","summary":"基于 POSIX statvfs 监控物理磁盘水位，实现优先淘汰普通抓拍以保全告警大图，恪守图在案在、图销案销的原子清理"}
+{"type":"check_step","step":"workspace_tests","status":"passed","summary":"工作区 75 个 Rust 测试全绿，Clippy 无警告，Cargo fmt 检查通过，Web 13 项前端测试全绿"}

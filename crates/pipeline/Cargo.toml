@@ -19,3 +19,8 @@ async-trait = { workspace = true }
 image = { workspace = true }
 uuid = { workspace = true }
 bytes = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+db = { workspace = true }
+sea-orm = { workspace = true }

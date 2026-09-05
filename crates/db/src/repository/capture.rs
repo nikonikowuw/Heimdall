@@ -3,20 +3,20 @@ use sea_orm::{
     QuerySelect,
 };
 
-use crate::entity::alarm::{ActiveModel, Column, Entity, Model};
+use crate::entity::capture::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
 
 #[derive(Debug)]
-pub struct AlarmRepo;
+pub struct CaptureRepo;
 
-impl AlarmRepo {
+impl CaptureRepo {
     pub async fn list_recent(
         db: &DatabaseConnection,
         camera_id: Option<&str>,
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        let mut query = Entity::find().order_by_desc(Column::OccurredAt);
+        let mut query = Entity::find().order_by_desc(Column::CapturedAt);
         if let Some(cid) = camera_id {
             query = query.filter(Column::CameraId.eq(cid));
         }
@@ -35,23 +35,12 @@ impl AlarmRepo {
         active_model.insert(db).await.map_err(DbError::from)
     }
 
-    pub async fn delete_by_event_id(
-        db: &DatabaseConnection,
-        event_id: &str,
-    ) -> Result<u64, DbError> {
-        let res = Entity::delete_many()
-            .filter(Column::EventId.eq(event_id))
-            .exec(db)
-            .await?;
-        Ok(res.rows_affected)
-    }
-
     pub async fn find_oldest_batch(
         db: &DatabaseConnection,
         limit: u64,
     ) -> Result<Vec<Model>, DbError> {
         Entity::find()
-            .order_by_asc(Column::OccurredAt)
+            .order_by_asc(Column::CapturedAt)
             .limit(limit)
             .all(db)
             .await
@@ -64,6 +53,17 @@ impl AlarmRepo {
         }
         let res = Entity::delete_many()
             .filter(Column::Id.is_in(ids.to_vec()))
+            .exec(db)
+            .await?;
+        Ok(res.rows_affected)
+    }
+
+    pub async fn delete_by_capture_id(
+        db: &DatabaseConnection,
+        capture_id: &str,
+    ) -> Result<u64, DbError> {
+        let res = Entity::delete_many()
+            .filter(Column::CaptureId.eq(capture_id))
             .exec(db)
             .await?;
         Ok(res.rows_affected)

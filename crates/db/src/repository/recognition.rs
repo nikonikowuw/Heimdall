@@ -3,20 +3,20 @@ use sea_orm::{
     QuerySelect,
 };
 
-use crate::entity::alarm::{ActiveModel, Column, Entity, Model};
+use crate::entity::recognition::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
 
 #[derive(Debug)]
-pub struct AlarmRepo;
+pub struct RecognitionRepo;
 
-impl AlarmRepo {
+impl RecognitionRepo {
     pub async fn list_recent(
         db: &DatabaseConnection,
         camera_id: Option<&str>,
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        let mut query = Entity::find().order_by_desc(Column::OccurredAt);
+        let mut query = Entity::find().order_by_desc(Column::RecognizedAt);
         if let Some(cid) = camera_id {
             query = query.filter(Column::CameraId.eq(cid));
         }
@@ -35,23 +35,12 @@ impl AlarmRepo {
         active_model.insert(db).await.map_err(DbError::from)
     }
 
-    pub async fn delete_by_event_id(
-        db: &DatabaseConnection,
-        event_id: &str,
-    ) -> Result<u64, DbError> {
-        let res = Entity::delete_many()
-            .filter(Column::EventId.eq(event_id))
-            .exec(db)
-            .await?;
-        Ok(res.rows_affected)
-    }
-
     pub async fn find_oldest_batch(
         db: &DatabaseConnection,
         limit: u64,
     ) -> Result<Vec<Model>, DbError> {
         Entity::find()
-            .order_by_asc(Column::OccurredAt)
+            .order_by_asc(Column::RecognizedAt)
             .limit(limit)
             .all(db)
             .await
