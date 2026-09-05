@@ -173,16 +173,11 @@ impl FlvMuxer {
     }
 
     /// 将单个 EncodedPacket 封装为 FLV Video Tag（内置 Annex B 拆分、4 字节大端长度前缀与时间戳单调递增看门狗）
-    pub fn packet_to_flv_tag_with_filter(
-        pkt: &EncodedPacket,
-        base_pts_ms: i64,
-        last_timestamp_ms: &mut u32,
-    ) -> Bytes {
-        let raw_rel_ts = (pkt.pts_ms.saturating_sub(base_pts_ms)).max(0) as u32;
-        // 时间戳单调递增看门狗：防止网络抖动或摄像头时间戳回跳导致 MSE SourceBuffer 卡死
-        let rel_ts = raw_rel_ts.max(*last_timestamp_ms);
-        *last_timestamp_ms = rel_ts;
-
+    /// 将单个 EncodedPacket 按照指定的 DTS 与 CTS 封装为 FLV Video Tag
+    ///
+    /// - `dts_ms`: FLV Tag Header 记录的解码时间戳（单调递增）
+    /// - `cts_ms`: FLV Video Header 记录的合成时间偏移（CTS = PTS - DTS，必须 >= 0）
+    pub fn packet_to_flv_tag_with_dts_cts(pkt: &EncodedPacket, dts_ms: u32, cts_ms: u32) -> Bytes {
         let nalus = crate::sps::split_annex_b_nalus(&pkt.payload);
         if nalus.is_empty() {
             return Bytes::new();
@@ -205,7 +200,10 @@ impl FlvMuxer {
                 let frame_type = if pkt.is_keyframe { 0x17 } else { 0x27 };
                 b.put_u8(frame_type);
                 b.put_u8(0x01); // AVCPacketType = 1 (NALU)
-                b.put_slice(&[0x00, 0x00, 0x00]); // CompositionTime = 0
+                                // 3 字节大端序 CompositionTime
+                b.put_u8(((cts_ms >> 16) & 0xFF) as u8);
+                b.put_u8(((cts_ms >> 8) & 0xFF) as u8);
+                b.put_u8((cts_ms & 0xFF) as u8);
                 b
             }
             CodecType::H265 => {
@@ -214,7 +212,10 @@ impl FlvMuxer {
                 let header_byte = 0x80 | (if pkt.is_keyframe { 0x10 } else { 0x20 }) | 0x01;
                 b.put_u8(header_byte);
                 b.put_slice(b"hvc1"); // FourCC
-                b.put_slice(&[0x00, 0x00, 0x00]); // CompositionTime = 0
+                                      // 3 字节大端序 CompositionTime
+                b.put_u8(((cts_ms >> 16) & 0xFF) as u8);
+                b.put_u8(((cts_ms >> 8) & 0xFF) as u8);
+                b.put_u8((cts_ms & 0xFF) as u8);
                 b
             }
         };
@@ -224,7 +225,19 @@ impl FlvMuxer {
             body.put_slice(nalu);
         }
 
-        Self::wrap_tag(0x09, rel_ts, &body)
+        Self::wrap_tag(0x09, dts_ms, &body)
+    }
+
+    /// 将单个 EncodedPacket 封装为 FLV Video Tag (单调滤波兜底接口，CTS 默认 0)
+    pub fn packet_to_flv_tag_with_filter(
+        pkt: &EncodedPacket,
+        base_pts_ms: i64,
+        last_timestamp_ms: &mut u32,
+    ) -> Bytes {
+        let raw_rel_ts = (pkt.pts_ms.saturating_sub(base_pts_ms)).max(0) as u32;
+        let rel_ts = raw_rel_ts.max(*last_timestamp_ms);
+        *last_timestamp_ms = rel_ts;
+        Self::packet_to_flv_tag_with_dts_cts(pkt, rel_ts, 0)
     }
 
     /// 将单个 EncodedPacket 封装为 FLV Video Tag
@@ -234,7 +247,114 @@ impl FlvMuxer {
     }
 }
 
-/// FLV 实时流生成管道状态机（统一封装 Sequence Header、GOP 注入、参数集解析与时间戳单调滤波）
+/// B 帧时序感知与自适应时间戳矫正管理器
+///
+/// 攻克摄像头开启 B 帧（如 H.264 High Profile / H.265 Main Profile）导致
+/// PTS 乱序到达、CompositionTime 缺失引发的浏览器画面倒退与抽搐问题。
+/// 具备零延迟双模自愈能力：无 B 帧时 0ms 延迟直通，有 B 帧时自适应平滑推导严格单调 DTS 与非负 CTS。
+#[derive(Debug, Clone)]
+pub struct BFrameTimeManager {
+    /// 是否已确认为包含 B 帧的时序
+    pub has_b_frames: bool,
+    /// 观察到的最大输入相对 PTS (毫秒)
+    pub max_input_rel_pts: u32,
+    /// 上一次输出的 DTS (毫秒)
+    pub last_dts: u32,
+    /// 是否已完成第一帧初始化
+    pub initialized: bool,
+    /// 估算的平均帧间隔 (默认 40ms 对应 25fps)
+    pub estimated_interval: u32,
+    /// 上一次输入的原始 PTS
+    pub prev_raw_pts: Option<i64>,
+    /// CTS 延迟补偿量 (确保 target_pts >= DTS)
+    pub cts_delay: u32,
+}
+
+impl Default for BFrameTimeManager {
+    fn default() -> Self {
+        Self {
+            has_b_frames: false,
+            max_input_rel_pts: 0,
+            last_dts: 0,
+            initialized: false,
+            estimated_interval: 40,
+            prev_raw_pts: None,
+            cts_delay: 0,
+        }
+    }
+}
+
+impl BFrameTimeManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 重置状态（如发生 Lagged 跳帧或流重连）
+    pub fn reset(&mut self) {
+        self.max_input_rel_pts = 0;
+        self.last_dts = 0;
+        self.initialized = false;
+        self.prev_raw_pts = None;
+        // 保留 has_b_frames 与 cts_delay，避免重连后重新经历 B 帧探测过渡期
+    }
+
+    /// 计算当前帧的 (dts_ms, cts_ms)
+    pub fn calculate_dts_cts(&mut self, pkt_pts_ms: i64, base_pts_ms: i64) -> (u32, u32) {
+        let rel_pts = (pkt_pts_ms.saturating_sub(base_pts_ms)).max(0) as u32;
+
+        // 1. 动态自适应估算平均帧间隔 (FPS 自适应)
+        if let Some(prev) = self.prev_raw_pts {
+            let diff = (pkt_pts_ms - prev).abs();
+            if (15..=120).contains(&diff) {
+                self.estimated_interval =
+                    ((self.estimated_interval * 3 + diff as u32) / 4).clamp(15, 100);
+            }
+        }
+        self.prev_raw_pts = Some(pkt_pts_ms);
+
+        // 2. 检测是否存在 B 帧时序回跳 (当前帧相对 PTS 小于历史观察到的最大相对 PTS)
+        if self.initialized && rel_pts < self.max_input_rel_pts {
+            let backward = self.max_input_rel_pts - rel_pts;
+            if backward > 0 && backward <= 1000 {
+                self.has_b_frames = true;
+                // 维持稳定的 CTS 时延偏置 (通常为 200ms，足以覆盖 2~3 个 B 帧回跳且不破坏相对时序)
+                self.cts_delay = self.cts_delay.max(200).max(backward * 2);
+            }
+        }
+        if rel_pts > self.max_input_rel_pts {
+            self.max_input_rel_pts = rel_pts;
+        }
+
+        // 3. 计算 DTS 与 CTS
+        if !self.initialized {
+            self.initialized = true;
+            self.last_dts = 0;
+            (0, 0)
+        } else if !self.has_b_frames {
+            // 直通模式 (无 B 帧)：DTS 严格单调递增紧跟 PTS，CTS = 0
+            let dts = rel_pts.max(self.last_dts);
+            self.last_dts = dts;
+            (dts, 0)
+        } else {
+            // 自适应 B 帧模式：推导单调严格递增 DTS，并计算非负 CTS
+            let mut dts = self.last_dts + self.estimated_interval;
+            if dts <= self.last_dts {
+                dts = self.last_dts + 1;
+            }
+
+            let target_pts = rel_pts + self.cts_delay;
+            if dts > target_pts {
+                dts = target_pts;
+            }
+
+            self.last_dts = dts;
+            let cts = target_pts.saturating_sub(dts);
+            (dts, cts)
+        }
+    }
+}
+
+/// FLV 实时流生成管道状态机（统一封装 Sequence Header、GOP 注入、参数集解析与 B 帧自适应时序矫正）
 #[derive(Debug, Default)]
 pub struct FlvStreamPipeline {
     pub sent_sequence_header: bool,
@@ -246,6 +366,7 @@ pub struct FlvStreamPipeline {
     pub pps_buf: Option<Bytes>,
     pub vps_buf: Option<Bytes>,
     pub frame_count: u64,
+    pub bframe_mgr: BFrameTimeManager,
 }
 
 impl FlvStreamPipeline {
@@ -267,14 +388,12 @@ impl FlvStreamPipeline {
             let first_pts = cache.gop_packets[0].pts_ms;
             self.base_pts_ms = Some(first_pts);
             for gop_pkt in &cache.gop_packets {
-                let tag = FlvMuxer::packet_to_flv_tag_with_filter(
-                    gop_pkt,
-                    first_pts,
-                    &mut self.last_flv_ts,
-                );
+                let (dts, cts) = self.bframe_mgr.calculate_dts_cts(gop_pkt.pts_ms, first_pts);
+                let tag = FlvMuxer::packet_to_flv_tag_with_dts_cts(gop_pkt, dts, cts);
                 if !tag.is_empty() {
                     tags.push(tag);
                     self.frame_count += 1;
+                    self.last_flv_ts = dts;
                 }
             }
             self.last_gop_pts = cache.gop_packets.last().map(|p| p.pts_ms).unwrap_or(0);
@@ -287,6 +406,7 @@ impl FlvStreamPipeline {
     /// 处理消费端 Lagged 事件（重置关键帧对齐标记）
     pub fn handle_lagged(&mut self) {
         self.has_first_keyframe = false;
+        self.bframe_mgr.reset();
     }
 
     /// 处理实时收到的单个 EncodedPacket，返回待下发的 FLV Tags（可能包含 Sequence Header + 视频帧 Tag）
@@ -362,9 +482,11 @@ impl FlvStreamPipeline {
         }
 
         let base_pts = *self.base_pts_ms.get_or_insert(pkt.pts_ms);
-        let tag = FlvMuxer::packet_to_flv_tag_with_filter(pkt, base_pts, &mut self.last_flv_ts);
+        let (dts, cts) = self.bframe_mgr.calculate_dts_cts(pkt.pts_ms, base_pts);
+        let tag = FlvMuxer::packet_to_flv_tag_with_dts_cts(pkt, dts, cts);
         if !tag.is_empty() {
             self.frame_count += 1;
+            self.last_flv_ts = dts;
             out_tags.push(tag);
         }
         out_tags
@@ -495,5 +617,101 @@ mod tests {
                                        // 排除末尾 4 字节的 FLV PreviousTagSize
         let body_slice = &tags[1][16..tags[1].len() - 4];
         assert_eq!(body_slice, &[0x00, 0x00, 0x00, 0x03, 0x65, 0x88, 0xAA]);
+    }
+
+    #[test]
+    fn test_bframe_time_manager_without_b_frames() {
+        let mut mgr = BFrameTimeManager::new();
+        let base_pts = 1000;
+        let p0 = mgr.calculate_dts_cts(1000, base_pts);
+        let p1 = mgr.calculate_dts_cts(1040, base_pts);
+        let p2 = mgr.calculate_dts_cts(1080, base_pts);
+
+        assert!(!mgr.has_b_frames);
+        assert_eq!(p0, (0, 0));
+        assert_eq!(p1, (40, 0));
+        assert_eq!(p2, (80, 0));
+    }
+
+    #[test]
+    fn test_bframe_time_manager_with_b_frames() {
+        let mut mgr = BFrameTimeManager::new();
+        let base_pts = 1000;
+        // 模拟 25fps 下 IBBPBBP 结构到达顺序 (解码/网络到达顺序)
+        // I0(0ms), P3(120ms), B1(40ms), B2(80ms), P6(240ms), B4(160ms), B5(200ms)
+        let stream = vec![
+            1000, // I0
+            1120, // P3 (提前到达)
+            1040, // B1 (回跳)
+            1080, // B2
+            1240, // P6
+            1160, // B4
+            1200, // B5
+        ];
+
+        let results: Vec<(u32, u32)> = stream
+            .into_iter()
+            .map(|pts| mgr.calculate_dts_cts(pts, base_pts))
+            .collect();
+
+        assert!(mgr.has_b_frames, "应该自适应检测到 B 帧存在");
+
+        // 验证 DTS 严格单调递增
+        for i in 1..results.len() {
+            assert!(
+                results[i].0 > results[i - 1].0,
+                "DTS 必须严格单调递增: dts[{}]={} <= dts[{}]={}",
+                i,
+                results[i].0,
+                i - 1,
+                results[i - 1].0
+            );
+        }
+
+        // 验证 CTS 全部非负
+        for (i, &(_, cts)) in results.iter().enumerate() {
+            assert!(cts < 1000, "CTS 偏移在合理范围内 [{}]", i);
+        }
+
+        // 验证进入稳态后 (Packet 4, 5, 6)，显示时间 PTS = DTS + CTS 的播放顺序
+        let p6_pts = results[4].0 + results[4].1;
+        let b4_pts = results[5].0 + results[5].1;
+        let b5_pts = results[6].0 + results[6].1;
+
+        assert!(
+            b4_pts < b5_pts && b5_pts < p6_pts,
+            "播放顺序应精准恢复为人眼期望的 B4({}) -> B5({}) -> P6({})",
+            b4_pts,
+            b5_pts,
+            p6_pts
+        );
+    }
+
+    #[test]
+    fn test_flv_video_tag_with_composition_time() {
+        let pkt = EncodedPacket {
+            pts_ms: 1120,
+            is_keyframe: false,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x01]),
+        };
+
+        // 指定 DTS = 40ms, CTS = 80ms
+        let tag = FlvMuxer::packet_to_flv_tag_with_dts_cts(&pkt, 40, 80);
+        assert_eq!(tag[0], 0x09); // Video tag
+                                  // Tag Header DTS 时间戳 (3 字节)
+        assert_eq!(tag[4], 0x00);
+        assert_eq!(tag[5], 0x00);
+        assert_eq!(tag[6], 40);
+
+        // Video Tag Header:
+        // byte 11: FrameType (0x27)
+        // byte 12: AVCPacketType (0x01)
+        // byte 13..15: CompositionTime (80ms -> 0x00, 0x00, 0x50)
+        assert_eq!(tag[11], 0x27);
+        assert_eq!(tag[12], 0x01);
+        assert_eq!(tag[13], 0x00);
+        assert_eq!(tag[14], 0x00);
+        assert_eq!(tag[15], 0x50); // 80 in hex
     }
 }

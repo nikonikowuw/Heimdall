@@ -139,3 +139,24 @@ Completed 09-04-camera-live-preview: implemented pure Rust RTSP ingestor with Ex
 ### Status
 
 [OK] **Completed**
+
+## Session 6: 攻克 B 帧时序颠倒与自适应时间戳重铸优化
+
+**Date**: 2026-09-05
+**Task**: B 帧时序与 CompositionTime 自适应纠偏优化
+**Branch**: `dev`
+
+### Summary
+
+针对真实安防摄像头开启 B 帧（High Profile / Main Profile）导致 PTS 乱序到达、浏览器画面倒退与抽搐的顽疾，在 `crates/media/src/flv.rs` 实现了 `BFrameTimeManager` 自适应时间戳重铸与 CompositionTime 自动生成引擎，实现 0 用户配置下的端到端无感自愈播放。
+
+### Main Changes
+
+- 在 `crates/media/src/flv.rs` 实现 `BFrameTimeManager`，支持自动帧间隔探测与 B 帧乱序回跳感知；
+- 在 `FlvMuxer` 增加 `packet_to_flv_tag_with_dts_cts`，将 `CompositionTime` (CTS = PTS - DTS) 精准编码为 3 字节写入 H.264 与 H.265 (Enhanced FLV) Video Tag Body；
+- 采用自适应双模机制：无 B 帧流保持 0ms 额外延迟极速直通；一旦检测到 B 帧，自适应平滑推导严格单调递增的 DTS 并注入稳定时延偏置，彻底消除负 CTS 与时间戳回跳；
+- 新增单元测试 `test_bframe_time_manager_without_b_frames`、`test_bframe_time_manager_with_b_frames` 与 `test_flv_video_tag_with_composition_time`，全库 90 项单元测试及 clippy 全绿通过。
+
+### Status
+
+[OK] **Completed**
