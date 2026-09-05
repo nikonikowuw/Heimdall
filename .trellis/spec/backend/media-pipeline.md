@@ -308,6 +308,31 @@ pub trait VideoDecoder: Send {
 
 ---
 
+## 工业级边缘温控与热安全闭环规范 (Thermal Safety Engine)
+
+嵌入式边缘异构平台（如 Rockchip RK3588、华为昇腾 Ascend 310B / Atlas 200I/500 等无风扇被动散热设备）在长时间高并发推理场景下，极易发生结温迅速攀升。若仅靠内核物理节流（CPU Throttling）或无闭环的跳帧，无法阻断热失控。
+
+系统必须遵循以下热安全闭环准则：
+
+1. **多 Thermal Zone 热点感知**：
+   - 自动探测并监控系统所有 thermal zones（CPU、GPU、NPU、SoC、DDR），温控决策基于**最高热点结温 (Peak / Hotspot Temperature)** 驱动。
+2. **硬件平台散热档案配置化**：
+   - 严禁硬编码统一温度阈值；支持针对 RK3588、Ascend 310B、Atlas 500 提供差异化策略配置文件（如 RK3588 无风扇通常 80℃ 预警 / 90℃ 临界，Ascend 310B 通常 75℃ 预警 / 83℃ 临界）。
+3. **传感器故障保守安全模式 (Conservative Mode)**：
+   - **严禁在温度采样失败（sysfs 不可读或探头故障）时盲目假设 Normal**；
+   - 采样连续失败时自动进入 `ThermalLevel::Conservative` 模式，强制执行 50% 保护性降载、暂停新任务准入，并上报设备维护告警。
+4. **防抖 (Debouncing) 与迟滞 (Hysteresis) 机制**：
+   - **升温防抖**：必须连续 $N$ 次采样超温方可触发升级，过滤单点偶发温度尖峰毛刺；
+   - **迟滞回退**：降温恢复必须低于 `Threshold - Hysteresis_Delta`（例如 4.0℃~5.0℃），并满足连续平稳降温冷却观察期，杜绝阈值线附近剧烈冷热循环。
+5. **全闭环控制矩阵 (Action Plan)**：
+   - `Normal`：全速处理，允许新任务；
+   - `Warning`：50% 阶梯跳帧，产生设备预警；
+   - `Critical`：75% 应急削峰，**阻断新任务准入**；
+   - `Emergency`：**切断非关键辅码流，停止高负载常规推理**，全力防止硬件热关机；
+   - `Conservative`：50% 保守限流，阻断新任务，上报传感器维护告警。
+
+---
+
 ## 异构硬件解码器工作线程优雅停机与超时隔离规范 (Graceful Shutdown & Join Timeout)
 
 Linux 系统工程与嵌入式多媒体管线中，单纯依赖 `drop(sender)` + `blocking_recv() -> None` + `thread.join()` 是**致命的无界阻塞缺陷**。若工作线程恰好进入底层驱动 FFI（如 `mpp_decode_put_packet`、`mpp_decode_get_frame`、`aclvdecSendFrame`、`aclrtProcessReport`）而硬件因内核态挂死未返回，主析构线程将永久死等，导致整个守护进程在摄像头注销、重构或停机时挂死（Hang）。

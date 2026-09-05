@@ -21,7 +21,9 @@ pub use snapshot::{SnapshotCaptureMode, SnapshotConfig, SnapshotEngine, Snapshot
 pub use storage_cleaner::{
     get_disk_free_ratio, EvictionReport, EvictionStore, StorageCleaner, StorageCleanerConfig,
 };
-pub use thermal::{ThermalGuard, ThermalLevel};
+pub use thermal::{
+    ThermalActionPlan, ThermalGuard, ThermalLevel, ThermalPolicyConfig, ThermalZoneInfo,
+};
 pub use tracker::SimpleTracker;
 
 /// 统一证据存储默认根目录
