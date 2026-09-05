@@ -1,2 +1,22 @@
 cognitive-complexity-threshold = 25
 too-many-lines-threshold = 500
+
+doc-valid-idents = [
+    "CANN",
+    "DVPP",
+    "MPP",
+    "RGA",
+    "RKNN",
+    "VPU",
+    "NPU",
+    "DMA",
+    "NALU",
+    "RTSP",
+    "RTP",
+    "SPS",
+    "PPS",
+    "VPS",
+    "IOSurface",
+    "CVPixelBuffer",
+    "AscendCL",
+]

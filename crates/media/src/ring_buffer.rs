@@ -60,11 +60,11 @@ impl MainStreamRingBuffer {
             return None;
         }
 
-        // 1. 查找最接近目标时间戳的包索引
+        // 1. 查找最接近目标时间戳的包索引 (使用 saturating 算术防止极端时间戳溢出)
         let target_idx = queue
             .iter()
             .enumerate()
-            .min_by_key(|(_, pkt)| (pkt.pts_ms - target_pts_ms).abs())
+            .min_by_key(|(_, pkt)| pkt.pts_ms.saturating_sub(target_pts_ms).saturating_abs())
             .map(|(idx, _)| idx)?;
 
         // 2. 从 target_idx 向前倒序寻找最近的关键帧 (I-Frame)
@@ -84,7 +84,7 @@ impl MainStreamRingBuffer {
         let target_idx = queue
             .iter()
             .enumerate()
-            .min_by_key(|(_, pkt)| (pkt.pts_ms - target_pts_ms).abs())
+            .min_by_key(|(_, pkt)| pkt.pts_ms.saturating_sub(target_pts_ms).saturating_abs())
             .map(|(idx, _)| idx)?;
 
         let keyframe_idx = (0..=target_idx).rev().find(|&idx| queue[idx].is_keyframe)?;
@@ -155,9 +155,14 @@ impl MainStreamRingBuffer {
         // 当超出时间跨度或达到包上限，并且队列里至少有两个关键帧时，可以安全丢弃老关键帧及其之前的包
         while queue.len() > 1 && keyframe_count >= 2 {
             let oldest_pts = queue.front().map(|p| p.pts_ms).unwrap_or(0);
-            let duration = newest_pts - oldest_pts;
+            let duration = newest_pts.saturating_sub(oldest_pts);
+            // 工业级时钟防护：若检测到时标严重倒退 (PTS 回绕或 NTP 跳回 > 1s)，或者超出最大缓存时长/包上限
+            let clock_regressed = oldest_pts > newest_pts + 1000;
 
-            if duration > self.config.max_duration_ms || queue.len() > self.config.max_packets {
+            if duration > self.config.max_duration_ms
+                || queue.len() > self.config.max_packets
+                || clock_regressed
+            {
                 if let Some(removed) = queue.pop_front() {
                     if removed.is_keyframe {
                         keyframe_count = keyframe_count.saturating_sub(1);
@@ -166,6 +171,14 @@ impl MainStreamRingBuffer {
             } else {
                 break;
             }
+        }
+
+        // 极端异常码流防爆硬兜底 (Hard OOM Protection):
+        // 若摄像头异常导致连续数百包未发送 I 帧 (keyframe_count < 2)，且队列长度超出 max_packets 的 2 倍，
+        // 强制执行队首丢包，保全进程物理内存不被异常码流打爆
+        let hard_limit = self.config.max_packets.saturating_mul(2).max(64);
+        while queue.len() > hard_limit {
+            queue.pop_front();
         }
     }
 }
@@ -253,5 +266,49 @@ mod tests {
         // 查找 2060 对应的关键帧 -> 2000
         let kf2 = rb.find_prior_keyframe(2060).expect("should find kf2");
         assert_eq!(kf2.pts_ms, 2000);
+    }
+
+    #[test]
+    fn test_ring_buffer_abnormal_stream_hard_prune() {
+        let rb = MainStreamRingBuffer::new(RingBufferConfig {
+            max_duration_ms: 3000,
+            max_packets: 10,
+        });
+
+        // 推入 1 个 I 帧，随后连续推入 50 个非关键帧 (模拟摄像机误配置超大 GOP 或只发 P 帧)
+        rb.push(make_packet(1000, true));
+        for i in 1..=50 {
+            rb.push(make_packet(1000 + i * 40, false));
+        }
+
+        // hard_limit = max(10 * 2, 64) = 64
+        assert!(
+            rb.len() <= 64,
+            "队列必须受硬上限截断保护，实际长度: {}",
+            rb.len()
+        );
+    }
+
+    #[test]
+    fn test_ring_buffer_ntp_backwards_step_resilience() {
+        let rb = MainStreamRingBuffer::new(RingBufferConfig {
+            max_duration_ms: 3000,
+            max_packets: 10,
+        });
+
+        // 模拟原本正常的时间戳
+        rb.push(make_packet(50000, true));
+        rb.push(make_packet(50040, false));
+
+        // 模拟网络恢复后 NTP 发生回跳 (时钟倒退 20 秒至 30000)
+        rb.push(make_packet(30000, true));
+        rb.push(make_packet(30040, false));
+
+        // 验证时钟严重倒退时旧帧被修剪，不会 panic 或无限膨胀
+        assert!(rb.len() <= 10);
+        let kf = rb
+            .find_prior_keyframe(30040)
+            .expect("应能索引到新时标的关键帧");
+        assert_eq!(kf.pts_ms, 30000);
     }
 }

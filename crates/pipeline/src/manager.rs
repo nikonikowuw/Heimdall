@@ -88,12 +88,20 @@ impl CameraPipelineContext {
     }
 }
 
+/// 默认全局允许的最大并发硬件抓拍解码器会话数 (针对 RK3588 / 昇腾 310B VPU 规格)
+pub const DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS: usize = 4;
+
+/// 全局抓拍解码借调超时阈值 (毫秒)
+pub const DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS: u64 = 100;
+
 /// 全局多路视频分析与快照管线调度控制器
 #[derive(Debug)]
 pub struct PipelineManager {
     tasks: Arc<TokioRwLock<HashMap<String, AnalysisTask>>>,
     pipelines: Arc<TokioRwLock<HashMap<String, Arc<CameraPipelineContext>>>>,
     snapshot_engine: Arc<SnapshotEngine>,
+    snapshot_semaphore: Arc<tokio::sync::Semaphore>,
+    permit_timeout_ms: u64,
 }
 
 impl Default for PipelineManager {
@@ -108,11 +116,7 @@ impl PipelineManager {
     }
 
     pub fn with_evidence_dir(dir: impl Into<PathBuf>) -> Self {
-        Self {
-            tasks: Arc::new(TokioRwLock::new(HashMap::new())),
-            pipelines: Arc::new(TokioRwLock::new(HashMap::new())),
-            snapshot_engine: Arc::new(SnapshotEngine::new(dir)),
-        }
+        Self::with_evidence_dir_and_snapshot_config(dir, SnapshotConfig::default())
     }
 
     /// 使用自定义证据存储路径与快照抓拍配置构建管线管理器
@@ -120,10 +124,29 @@ impl PipelineManager {
         dir: impl Into<PathBuf>,
         config: SnapshotConfig,
     ) -> Self {
+        Self::with_all_options(
+            dir,
+            config,
+            DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS,
+            DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,
+        )
+    }
+
+    /// 全功能参数构造管线管理器 (支持自定义并发 VPU 通道上限与超时阈值)
+    pub fn with_all_options(
+        dir: impl Into<PathBuf>,
+        config: SnapshotConfig,
+        max_concurrent_decoders: usize,
+        permit_timeout_ms: u64,
+    ) -> Self {
         Self {
             tasks: Arc::new(TokioRwLock::new(HashMap::new())),
             pipelines: Arc::new(TokioRwLock::new(HashMap::new())),
             snapshot_engine: Arc::new(SnapshotEngine::with_config(dir, config)),
+            snapshot_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                max_concurrent_decoders.max(1),
+            )),
+            permit_timeout_ms,
         }
     }
 
@@ -211,7 +234,7 @@ impl PipelineManager {
         })
     }
 
-    /// 触发靶向快拍抽帧与证据图片落地 (细粒度锁隔离与后台异步落盘)
+    /// 触发靶向快拍抽帧与证据图片落地 (全局有界 VPU 通道配额与细粒度锁隔离)
     pub async fn trigger_snapshot(
         &self,
         camera_id: &str,
@@ -221,26 +244,57 @@ impl PipelineManager {
         let ctx = self.get_or_create_context(camera_id).await;
         let fallback_frame = ctx.sub_stream_fallback.read().await.clone();
 
-        // 仅在解码阶段持有解码器互斥锁，解码完成立刻释放
-        let (frame_to_process, is_fallback) = {
-            let mut decoder_guard = ctx.snapshot_decoder.lock().await;
-            if decoder_guard.is_none() && !ctx.ring_buffer.is_empty() {
-                let codec = ctx
-                    .ring_buffer
-                    .latest_codec()
-                    .unwrap_or(types::CodecType::H264);
-                *decoder_guard = Some(media::create_decoder(camera_id, codec));
-            }
+        // 工业级全局 VPU 抓拍通道配额管控：
+        // 尝试在限时内获取全局 VPU 硬解信号量许可，若瞬时并发告警超限或排队超时，
+        // 自动无缝降级使用子码流当前帧，彻底防止瞬时并发告警打爆硬件 VPU 通道上限！
+        let permit_res = tokio::time::timeout(
+            std::time::Duration::from_millis(self.permit_timeout_ms),
+            self.snapshot_semaphore.acquire(),
+        )
+        .await;
 
-            self.snapshot_engine
-                .decode_frame(
-                    camera_id,
-                    target_pts_ms,
-                    Some(&ctx.ring_buffer),
-                    fallback_frame.as_ref(),
-                    decoder_guard.as_deref_mut(),
-                )
-                .await?
+        let (frame_to_process, is_fallback) = match permit_res {
+            Ok(Ok(permit)) => {
+                // 成功获得硬件解码配额通道，仅在解码阶段持有解码器互斥锁，解码完成立刻释放
+                let res = {
+                    let mut decoder_guard = ctx.snapshot_decoder.lock().await;
+                    if decoder_guard.is_none() && !ctx.ring_buffer.is_empty() {
+                        let codec = ctx
+                            .ring_buffer
+                            .latest_codec()
+                            .unwrap_or(types::CodecType::H264);
+                        *decoder_guard = Some(media::create_decoder(camera_id, codec));
+                    }
+
+                    self.snapshot_engine
+                        .decode_frame(
+                            camera_id,
+                            target_pts_ms,
+                            Some(&ctx.ring_buffer),
+                            fallback_frame.as_ref(),
+                            decoder_guard.as_deref_mut(),
+                        )
+                        .await?
+                };
+                drop(permit); // 解码完成后显式归还配额
+                res
+            }
+            _ => {
+                // 配额满载或获取超时，自适应降级复用子码流帧
+                if let Some(fallback) = fallback_frame {
+                    tracing::warn!(
+                        camera_id = %camera_id,
+                        target_pts = target_pts_ms,
+                        timeout_ms = self.permit_timeout_ms,
+                        "全局 VPU 硬件抓拍解码配额满载或等待超时，自适应无缝降级复用子码流解码帧"
+                    );
+                    (fallback, true)
+                } else {
+                    return Err(PipelineError::Snapshot(format!(
+                        "全局 VPU 抓拍通道配额耗尽且子码流无有效备用帧 ({camera_id})"
+                    )));
+                }
+            }
         };
 
         // 将色彩转换、抠图裁切与 JPEG 写盘卸载至专用 blocking 线程池
@@ -551,6 +605,52 @@ mod tests {
         assert_eq!(tracked2[0].track_id, tid, "Track ID 必须在帧间保持连续");
         assert_eq!(alarms2.len(), 0, "5 秒防刷屏冷却期内不应重复报警");
 
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_vpu_concurrency_limiter_and_graceful_fallback() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("test_vpu_limit_{}", uuid::Uuid::new_v4().simple()));
+        // 配置全局仅允许 1 个并发硬件抓拍通道，借调超时 10ms
+        let manager =
+            PipelineManager::with_all_options(&temp_dir, SnapshotConfig::default(), 1, 10);
+        let cam_id = "cam_vpu_limit_test";
+
+        // 占满唯一的全局信号量配额
+        let held_permit = manager
+            .snapshot_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("获取测试许可应成功");
+
+        // 提供子码流备用帧 (640x360)
+        let fallback_nv12 = vec![128u8; (640 * 360 * 3 / 2) as usize].into();
+        let fallback_frame = FrameRef::new(
+            cam_id.to_string(),
+            1000,
+            640,
+            360,
+            types::StrideInfo::new(640, 360),
+            types::PixelFormat::Nv12,
+            types::FrameHandle::Host(fallback_nv12),
+        );
+        manager
+            .update_sub_stream_frame(cam_id, fallback_frame)
+            .await;
+
+        // 触发抓拍：因配额已被占满且超过 10ms，自动自适应降级复用子码流，杜绝崩溃或死锁
+        let snapshot = manager
+            .trigger_snapshot(cam_id, 1000, None)
+            .await
+            .expect("配额超限自适应降级抓拍应成功");
+
+        assert!(snapshot.is_fallback_sub_stream);
+        assert_eq!(snapshot.width, 640);
+        assert_eq!(snapshot.height, 360);
+
+        drop(held_permit);
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

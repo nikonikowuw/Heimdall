@@ -34,11 +34,19 @@ impl StrideInfo {
 /// 平台原生硬件内存句柄封装
 pub enum FrameHandle {
     #[cfg(target_os = "linux")]
-    DmaBuf { fd: std::os::fd::OwnedFd },
+    DmaBuf {
+        /// 使用 Arc 共享内核文件描述符，彻底消除高频克隆时的 dup 失败与 Panic 风险
+        fd: Arc<std::os::fd::OwnedFd>,
+        /// 缓冲区池租约 — 持有期间底层 CMA 物理页不被 VPU 缓冲区组回收复用。
+        /// None 仅用于测试或非池化场景。
+        _lease: Option<Arc<dyn Send + Sync>>,
+    },
     /// 设备内存地址（如 Ascend DVPP 显存指针，保持 types 纯净不引入平台专有库）
     DeviceMemory {
         ptr: std::ptr::NonNull<std::ffi::c_void>,
         size: usize,
+        /// 显存池租约 — 最后一个 Arc 引用析构时归还显存至预分配池
+        _lease: Arc<dyn Send + Sync>,
     },
     /// Apple CVPixelBuffer 原生指针封装
     ApplePixelBuffer {
@@ -66,13 +74,14 @@ impl Clone for FrameHandle {
     fn clone(&self) -> Self {
         match self {
             #[cfg(target_os = "linux")]
-            Self::DmaBuf { fd } => match fd.try_clone() {
-                Ok(new_fd) => Self::DmaBuf { fd: new_fd },
-                Err(e) => panic!("无法复制 DmaBuf 文件描述符: {e}"),
+            Self::DmaBuf { fd, _lease } => Self::DmaBuf {
+                fd: Arc::clone(fd),
+                _lease: _lease.clone(),
             },
-            Self::DeviceMemory { ptr, size } => Self::DeviceMemory {
+            Self::DeviceMemory { ptr, size, _lease } => Self::DeviceMemory {
                 ptr: *ptr,
                 size: *size,
+                _lease: Arc::clone(_lease),
             },
             Self::ApplePixelBuffer { ptr } => {
                 #[cfg(target_os = "macos")]
@@ -110,8 +119,8 @@ impl std::fmt::Debug for FrameHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             #[cfg(target_os = "linux")]
-            Self::DmaBuf { fd } => f.debug_struct("DmaBuf").field("fd", fd).finish(),
-            Self::DeviceMemory { ptr, size } => f
+            Self::DmaBuf { fd, .. } => f.debug_struct("DmaBuf").field("fd", fd.as_ref()).finish(),
+            Self::DeviceMemory { ptr, size, .. } => f
                 .debug_struct("DeviceMemory")
                 .field("ptr", ptr)
                 .field("size", size)
@@ -162,5 +171,58 @@ impl FrameRef {
     /// 获取底层平台原生句柄引用
     pub fn handle(&self) -> &FrameHandle {
         &self.handle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct TestLease {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for TestLease {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn test_device_memory_lease_drop() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let lease: Arc<dyn Send + Sync> = Arc::new(TestLease {
+            dropped: dropped.clone(),
+        });
+
+        let dummy_ptr = std::ptr::NonNull::dangling();
+        let handle = FrameHandle::DeviceMemory {
+            ptr: dummy_ptr,
+            size: 1024,
+            _lease: lease,
+        };
+
+        let cloned = handle.clone();
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        drop(handle);
+        assert!(
+            !dropped.load(Ordering::SeqCst),
+            "原句柄 drop 后克隆副本仍应持有租约"
+        );
+
+        drop(cloned);
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "所有句柄副本 drop 后租约必须触发释放"
+        );
+    }
+
+    #[test]
+    fn test_stride_info() {
+        let stride = StrideInfo::new(1920, 1088);
+        assert_eq!(stride.hor_stride, 1920);
+        assert_eq!(stride.ver_stride, 1088);
     }
 }

@@ -20,6 +20,7 @@ image = { workspace = true }
 uuid = { workspace = true }
 bytes = { workspace = true }
 libc = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 db = { workspace = true }

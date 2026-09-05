@@ -5,21 +5,28 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod config;
+
 #[derive(Parser, Debug)]
 #[command(name = "argus")]
 #[command(about = "Argus / Heimdall 边缘端一体化 AI 视频分析系统", version)]
 struct Args {
-    /// 数据库 SQLite 文件路径
-    #[arg(short, long, default_value = "argus.db")]
-    db: String,
+    /// 配置文件路径 (可选，默认依次查找 config.toml 或 config.json)
+    #[arg(short, long)]
+    config: Option<String>,
 
-    /// Web 控制台与 API 监听端口
-    #[arg(short, long, default_value_t = 8000)]
-    port: u16,
+    /// 数据库 SQLite 文件路径 (覆盖配置文件)
+    #[arg(short, long)]
+    db: Option<String>,
 
-    /// 监听地址
-    #[arg(long, default_value = "0.0.0.0")]
-    host: String,
+    /// Web 控制台与 API 监听端口 (覆盖配置文件)
+    #[arg(short, long)]
+    port: Option<u16>,
+
+    /// 监听地址 (覆盖配置文件)
+    #[arg(long)]
+    host: Option<String>,
+
     /// 开发调试模式：启动前重置并重建本地数据库
     #[arg(short = 'r', long, default_value_t = false)]
     reset_db: bool,
@@ -31,28 +38,48 @@ async fn main() -> Result<()> {
     let raw_args: Vec<String> = std::env::args().collect();
     handle_verify_algo_subprocess(&raw_args);
 
-    // 1. 初始化结构化日志
+    let args = Args::parse();
+
+    // 1. 加载系统配置 (环境变量 > .env > config.toml > 内置默认值)
+    let mut cfg = config::load_config(args.config.as_deref()).context("加载系统配置失败")?;
+
+    // CLI 显式参数覆盖配置文件
+    if let Some(db) = args.db {
+        cfg.database.path = db;
+    }
+    if let Some(port) = args.port {
+        cfg.server.port = port;
+    }
+    if let Some(host) = args.host {
+        cfg.server.host = host;
+    }
+
+    // 2. 初始化结构化日志
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.logging.filter.clone());
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,api=debug,media=debug,pipeline=debug".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let args = Args::parse();
+    // 提升进程文件描述符上限 (防止高并发多媒体流与 DMA-BUF fd 耗尽)
+    raise_fd_limit();
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        port = args.port,
-        host = %args.host,
-        db_path = %args.db,
+        port = cfg.server.port,
+        host = %cfg.server.host,
+        db_path = %cfg.database.path,
+        max_concurrent_decoders = cfg.pipeline.max_concurrent_decoders,
+        permit_timeout_ms = cfg.pipeline.permit_timeout_ms,
+        max_burst_timeout_ms = cfg.pipeline.max_burst_timeout_ms,
         reset_db = args.reset_db,
         "正在启动 Argus 单进程服务..."
     );
 
-    // 2. 执行版本化数据库迁移 (Refinery) 并建立 SeaORM 连接池 (SQLite WAL 模式)
-    let db_path = std::path::Path::new(&args.db);
+    // 3. 执行版本化数据库迁移 (Refinery) 并建立 SeaORM 连接池 (SQLite WAL 模式)
+    let db_path = std::path::Path::new(&cfg.database.path);
     if args.reset_db {
         tracing::warn!(
             db_path = %db_path.display(),
@@ -63,16 +90,28 @@ async fn main() -> Result<()> {
         db::run_migrations(db_path).context("执行数据库版本迁移失败")?;
     }
 
-    let db_conn = db::init_db(&args.db)
+    let db_conn = db::init_db(&cfg.database.path)
         .await
         .context("初始化 SQLite 数据库失败")?;
     tracing::info!("SQLite 数据库版本迁移与连接池初始化完成 (WAL 模式)");
 
-    // 3. 初始化视频分析管线调度器
-    let pipeline_mgr = Arc::new(pipeline::PipelineManager::new());
-    tracing::info!("核心视频分析管线调度器初始化完成");
+    // 4. 初始化视频分析管线调度器 (注入配置参数与全局 VPU 通道池)
+    let snapshot_cfg = pipeline::SnapshotConfig {
+        phase_diff_threshold_ms: cfg.pipeline.phase_diff_threshold_ms,
+        max_burst_packets: cfg.pipeline.max_burst_packets,
+        max_burst_timeout_ms: cfg.pipeline.max_burst_timeout_ms,
+        capture_mode: cfg.pipeline.capture_mode,
+    };
 
-    // 4. 检查双轨初始化状态与环境变量
+    let pipeline_mgr = Arc::new(pipeline::PipelineManager::with_all_options(
+        cfg.storage.evidence_dir,
+        snapshot_cfg,
+        cfg.pipeline.max_concurrent_decoders,
+        cfg.pipeline.permit_timeout_ms,
+    ));
+    tracing::info!("核心视频分析管线调度器初始化完成 (全局 VPU 通道池就绪)");
+
+    // 5. 检查双轨初始化状态与环境变量
     let env_password = std::env::var("ARGUS_ADMIN_PASSWORD").ok();
     if let Some(pwd) = env_password {
         let pwd = pwd.trim();
@@ -129,7 +168,7 @@ async fn main() -> Result<()> {
     let state_shutdown = state.clone();
     let app = api::create_app(state);
 
-    let addr: SocketAddr = format!("{}:{}", args.host, args.port)
+    let addr: SocketAddr = format!("{}:{}", cfg.server.host, cfg.server.port)
         .parse()
         .context("无效的监听地址或端口")?;
 
@@ -219,5 +258,42 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => tracing::info!("接收到 Ctrl+C 中断信号，准备退出..."),
         _ = terminate => tracing::info!("接收到 SIGTERM 终止信号，准备退出..."),
+    }
+}
+
+/// 自动提升进程打开文件描述符上限 (RLIMIT_NOFILE)
+/// 针对高并发 RTSP 连接与多媒体 DMA-BUF fd 密集操作，消除 EMFILE 异常风险
+fn raise_fd_limit() {
+    #[cfg(unix)]
+    {
+        // SAFETY: 调用标准 POSIX getrlimit / setrlimit 查询并设置进程文件描述符限制
+        unsafe {
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
+                let old_cur = rlim.rlim_cur;
+                // 目标设定为 65535 或硬上限
+                let target = 65535.min(rlim.rlim_max);
+                if target > rlim.rlim_cur {
+                    rlim.rlim_cur = target;
+                    if libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) == 0 {
+                        tracing::info!(
+                            old_limit = old_cur,
+                            new_limit = target,
+                            hard_limit = rlim.rlim_max,
+                            "已成功提升进程最大文件描述符上限 (RLIMIT_NOFILE)"
+                        );
+                        return;
+                    }
+                }
+                tracing::debug!(
+                    cur_limit = old_cur,
+                    hard_limit = rlim.rlim_max,
+                    "当前进程文件描述符限制 (RLIMIT_NOFILE)"
+                );
+            }
+        }
     }
 }

@@ -149,6 +149,7 @@ async fn test_large_gop_fast_mode_within_threshold() {
     let config = SnapshotConfig {
         phase_diff_threshold_ms: 500,
         max_burst_packets: 30,
+        max_burst_timeout_ms: 80,
         capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
@@ -212,6 +213,7 @@ async fn test_large_gop_sub_stream_reuse_on_large_gap() {
     let config = SnapshotConfig {
         phase_diff_threshold_ms: 500,
         max_burst_packets: 30,
+        max_burst_timeout_ms: 80,
         capture_mode: SnapshotCaptureMode::SubStreamOnLargeGap,
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
@@ -277,6 +279,7 @@ async fn test_large_gop_adaptive_burst_decode() {
     let config = SnapshotConfig {
         phase_diff_threshold_ms: 500,
         max_burst_packets: 30,
+        max_burst_timeout_ms: 80,
         capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
@@ -340,6 +343,7 @@ async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
     let config = SnapshotConfig {
         phase_diff_threshold_ms: 500,
         max_burst_packets: 15,
+        max_burst_timeout_ms: 80,
         capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
@@ -386,6 +390,70 @@ async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
         .expect("抓拍应平滑回退成功");
 
     // 包数超限，自动平滑复用子码流真实检测帧，防止 VPU 争抢阻塞
+    assert!(snapshot.is_fallback_sub_stream);
+    assert_eq!(snapshot.width, 640);
+    assert_eq!(snapshot.height, 360);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_large_gop_burst_timeout_budget_fuse() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_large_gop_fuse_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    // 配置极其严苛的追帧耗时预算 (0ms 立即超时熔断)
+    let config = SnapshotConfig {
+        phase_diff_threshold_ms: 500,
+        max_burst_packets: 30,
+        max_burst_timeout_ms: 0,
+        capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+    };
+    let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
+    let cam_id = "cam_large_gop_fuse";
+
+    let ctx = manager.get_or_create_context(cam_id).await;
+    {
+        let mut decoder_guard = ctx.snapshot_decoder.lock().await;
+        *decoder_guard = Some(Box::new(MockDecoder::new(
+            cam_id,
+            CodecType::H264,
+            1920,
+            1080,
+        )));
+    }
+
+    // 模拟大 GOP (偏差 600ms >= 500ms)
+    manager
+        .push_main_packet(cam_id, make_packet(1000, true))
+        .await;
+    for pts in (1040..=1600).step_by(40) {
+        manager
+            .push_main_packet(cam_id, make_packet(pts, false))
+            .await;
+    }
+
+    let fallback_nv12 = vec![128u8; (640 * 360 * 3 / 2) as usize].into();
+    let fallback_frame = FrameRef::new(
+        cam_id.to_string(),
+        1600,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(fallback_nv12),
+    );
+    manager
+        .update_sub_stream_frame(cam_id, fallback_frame)
+        .await;
+
+    let snapshot = manager
+        .trigger_snapshot(cam_id, 1600, None)
+        .await
+        .expect("熔断抓拍应成功");
+
+    // 触发延时熔断，直接优雅回退至子码流当前帧
     assert!(snapshot.is_fallback_sub_stream);
     assert_eq!(snapshot.width, 640);
     assert_eq!(snapshot.height, 360);

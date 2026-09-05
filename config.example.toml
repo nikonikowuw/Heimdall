@@ -1,0 +1,67 @@
+# ==============================================================================
+# Argus / Heimdall 边缘端一体化 AI 视频分析系统配置文件
+#
+# 优先级说明：
+# 命令行显式参数 / 环境变量 (ARGUS_*) > 本地 .env 文件 > config.toml > 代码内置默认值
+# 环境变量层级映射示例：
+#   ARGUS_SERVER__PORT=8000
+#   ARGUS_PIPELINE__MAX_CONCURRENT_DECODERS=4
+#   ARGUS_PIPELINE__MAX_BURST_TIMEOUT_MS=80
+# ==============================================================================
+
+[server]
+# Web 控制台与 REST / WebSocket API 监听地址
+host = "0.0.0.0"
+# 监听端口
+port = 8000
+
+[database]
+# SQLite 数据库文件存储路径
+path = "argus.db"
+# 数据库最大并发连接数 (SQLite 推荐 4)
+max_connections = 4
+
+[storage]
+# 证据图片 (全景大图与 10% 扩边特写抠图) 物理存储根目录
+evidence_dir = "var/data/evidence"
+
+[pipeline]
+# 全局最大并发硬件抓拍解码器通道数
+# 芯片配置建议：RK3588 (4~6), RK3568 (1~2), 昇腾 310B (6~8), x86/Mac (4)
+max_concurrent_decoders = 4
+
+# 抓拍通道信号量借调等待超时 (毫秒)
+# 当并发告警超过配额且等待超时，系统自适应降级复用子码流帧，杜绝延迟堆积
+permit_timeout_ms = 100
+
+# 极速单帧硬解 vs 前向追帧硬解的时间戳相位差阈值 (毫秒，默认 500ms)
+phase_diff_threshold_ms = 500
+
+# 前向追帧允许硬解的最大压缩包数量 (默认 30 包，约 1.2s GOP，防大 GOP 连续解码)
+max_burst_packets = 30
+
+# 前向追帧硬实时最大延时预算 (毫秒)
+# 超过此时间立即自适应熔断截断解码并回退子码流，将告警响应锁定在 < 100ms
+max_burst_timeout_ms = 80
+
+# 证据抓拍模式:
+#   - "adaptive_dual_mode": 智能自适应双模 (偏差 < 500ms 极速单帧硬解，偏差大追帧，超限降级子码流)
+#   - "sub_stream_on_large_gap": 偏差大时直接复用子码流当时检测命中的真实帧 (0 额外硬解开销)
+#   - "burst_decode_only": 强制全量前向硬解追帧
+capture_mode = "adaptive_dual_mode"
+
+[media]
+# RTSP 建立单步握手超时 (毫秒)
+handshake_timeout_ms = 5000
+
+# RTSP 码流静默无报文看门狗超时 (毫秒，判定网络断线或摄像头死机)
+inactivity_timeout_ms = 6000
+
+# 主流环形内存缓冲区容量 (毫秒，用于抓拍索引历史前置关键帧)
+ring_buffer_duration_ms = 4000
+
+[logging]
+# 默认日志输出级别: "trace" | "debug" | "info" | "warn" | "error"
+level = "info"
+# 模块级结构化日志过滤指令 (可用环境变量 RUST_LOG 覆盖)
+filter = "info,api=debug,media=debug,pipeline=debug"

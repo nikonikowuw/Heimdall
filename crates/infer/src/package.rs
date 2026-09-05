@@ -208,7 +208,7 @@ impl InferenceBackend for AlgoInstance {
                 desc.pixel_format = AV_PIX_NV12;
             }
             #[cfg(target_os = "linux")]
-            FrameHandle::DmaBuf { fd } => {
+            FrameHandle::DmaBuf { fd, .. } => {
                 use std::os::fd::AsRawFd;
                 desc.opaque = fd.as_raw_fd() as usize as *mut c_void;
                 desc.opaque_kind = AV_OPAQUE_DMABUF;

@@ -31,7 +31,8 @@ pub struct SnapshotResult {
 }
 
 /// 证据快照抓拍策略模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SnapshotCaptureMode {
     /// 智能自适应双模（默认推荐）：
     /// - 相位偏差 < 500ms：极速单帧硬解最近 I 帧（1080P/4K 高清且延时 < 5ms）；
@@ -56,6 +57,8 @@ pub struct SnapshotConfig {
     pub phase_diff_threshold_ms: i64,
     /// 前向追帧硬解的最大允许包数量（默认 30 包，约 1.2s GOP）
     pub max_burst_packets: usize,
+    /// 前向追帧硬解的最大允许耗时预算（毫秒，默认 80ms，防止大 GOP 霸占硬件 VPU）
+    pub max_burst_timeout_ms: u64,
     /// 抓拍策略模式
     pub capture_mode: SnapshotCaptureMode,
 }
@@ -65,6 +68,7 @@ impl Default for SnapshotConfig {
         Self {
             phase_diff_threshold_ms: 500,
             max_burst_packets: 30,
+            max_burst_timeout_ms: 80,
             capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
         }
     }
@@ -168,11 +172,36 @@ impl SnapshotEngine {
                                     packet_count,
                                     "大 GOP 精准追帧模式：从 I 帧开始快速前向硬解 (Burst Decode) 至告警点"
                                 );
+                                let burst_start = std::time::Instant::now();
+                                let mut timed_out = false;
                                 for pkt in gop {
+                                    if burst_start.elapsed().as_millis() as u64
+                                        >= config.max_burst_timeout_ms
+                                    {
+                                        tracing::warn!(
+                                            camera_id = %camera_id,
+                                            elapsed_ms = burst_start.elapsed().as_millis(),
+                                            timeout_budget_ms = config.max_burst_timeout_ms,
+                                            "大 GOP 前向追解达到硬实时耗时预算，自适应熔断截断解码"
+                                        );
+                                        timed_out = true;
+                                        break;
+                                    }
                                     if let Ok(Some(frame)) =
                                         decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
                                     {
                                         decoded_frame = Some(frame);
+                                    }
+                                }
+                                if timed_out {
+                                    // 工业级加固：超时熔断时显式刷新解码器内部残留帧并排空未决状态，防止 VPU 状态污染
+                                    let _ = decoder.flush().await;
+                                    if let Some(fallback) = sub_stream_fallback {
+                                        tracing::info!(
+                                            camera_id = %camera_id,
+                                            "追帧解码超时熔断，已排空解码器并优雅回退至子码流当前帧"
+                                        );
+                                        return Ok((fallback.clone(), true));
                                     }
                                 }
                             } else if let Some(fallback) = sub_stream_fallback {
@@ -197,12 +226,29 @@ impl SnapshotEngine {
                                     packet_count,
                                     "子码流未就绪，尽力而为前向硬解"
                                 );
+                                let burst_start = std::time::Instant::now();
+                                let mut timed_out = false;
                                 for pkt in gop {
+                                    if burst_start.elapsed().as_millis() as u64
+                                        >= config.max_burst_timeout_ms
+                                    {
+                                        tracing::warn!(
+                                            camera_id = %camera_id,
+                                            elapsed_ms = burst_start.elapsed().as_millis(),
+                                            timeout_budget_ms = config.max_burst_timeout_ms,
+                                            "尽力而为前向硬解达到硬实时耗时预算，自适应熔断"
+                                        );
+                                        timed_out = true;
+                                        break;
+                                    }
                                     if let Ok(Some(frame)) =
                                         decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
                                     {
                                         decoded_frame = Some(frame);
                                     }
+                                }
+                                if timed_out {
+                                    let _ = decoder.flush().await;
                                 }
                             }
                         }
@@ -251,12 +297,29 @@ impl SnapshotEngine {
                                 packet_count,
                                 "强制执行全量前向硬解追帧 (Burst Decode)"
                             );
+                            let burst_start = std::time::Instant::now();
+                            let mut timed_out = false;
                             for pkt in gop {
+                                if burst_start.elapsed().as_millis() as u64
+                                    >= config.max_burst_timeout_ms
+                                {
+                                    tracing::warn!(
+                                        camera_id = %camera_id,
+                                        elapsed_ms = burst_start.elapsed().as_millis(),
+                                        timeout_budget_ms = config.max_burst_timeout_ms,
+                                        "强制追帧模式达到硬实时耗时预算，自适应熔断"
+                                    );
+                                    timed_out = true;
+                                    break;
+                                }
                                 if let Ok(Some(frame)) =
                                     decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
                                 {
                                     decoded_frame = Some(frame);
                                 }
+                            }
+                            if timed_out {
+                                let _ = decoder.flush().await;
                             }
                         }
                     }
@@ -352,6 +415,24 @@ pub(crate) fn encode_and_save_snapshot(
     base_evidence_dir: &std::path::Path,
     is_fallback: bool,
 ) -> Result<SnapshotResult, PipelineError> {
+    // 0. 物理存储空间硬断路器 (Storage Circuit Breaker)
+    // 写入前做轻量级 statvfs 预检：若磁盘物理剩余空间低于 5% 临界红线，立即拒绝落盘，保全 SQLite WAL 日志与核心系统生命线
+    if let Ok(free_ratio) = crate::storage_cleaner::get_disk_free_ratio(base_evidence_dir) {
+        const CRITICAL_FREE_RATIO: f64 = 0.05;
+        if free_ratio < CRITICAL_FREE_RATIO {
+            tracing::error!(
+                camera_id = %camera_id,
+                free_ratio = %format!("{:.2}%", free_ratio * 100.0),
+                threshold = %format!("{:.2}%", CRITICAL_FREE_RATIO * 100.0),
+                "磁盘空间极度匮乏已触碰 5% 临界红线，触发写盘断路器，拒绝写入快照以保全系统数据库"
+            );
+            return Err(PipelineError::Snapshot(format!(
+                "磁盘空间不足 ({:.2}% < 5.00%)，触发写盘断路保护",
+                free_ratio * 100.0
+            )));
+        }
+    }
+
     // 1. 调用 media 层统一定点数快速图像色彩转换
     let rgb_img = media::frame_to_rgb_image(&frame)
         .map_err(|e| PipelineError::Snapshot(format!("提取视频帧 RGB 图像失败: {e}")))?;
@@ -440,14 +521,40 @@ fn encode_jpeg(img: &RgbImage, quality: u8) -> Result<Vec<u8>, PipelineError> {
 }
 
 /// 原子化文件写入：通过写入同目录临时文件后重命名保证写入原子性
+///
+/// 工业级加固：当检测到存储分区被硬件只读挂载 (Read-Only Filesystem) 或无权写入时，
+/// 启动工业级应急容灾转存至系统内存盘 (tmpfs) 保全关键告警证据。
 fn atomic_write_file(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     let tmp_path = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4().simple()));
-    fs::write(&tmp_path, data)?;
-    if let Err(e) = fs::rename(&tmp_path, path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(e);
+    match fs::write(&tmp_path, data) {
+        Ok(_) => {
+            if let Err(e) = fs::rename(&tmp_path, path) {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(e);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            #[cfg(unix)]
+            let is_rofs = e.raw_os_error() == Some(libc::EROFS);
+            #[cfg(not(unix))]
+            let is_rofs = false;
+
+            if is_rofs || e.kind() == std::io::ErrorKind::PermissionDenied {
+                tracing::error!(
+                    path = %path.display(),
+                    error = %e,
+                    "磁盘存储硬件发生故障变为只读 (EROFS)，启动应急转存至系统内存盘 (/tmp)"
+                );
+                let emergency_dir = std::env::temp_dir().join("emergency_evidence");
+                let _ = fs::create_dir_all(&emergency_dir);
+                let fallback_path = emergency_dir.join(path.file_name().unwrap_or_default());
+                fs::write(&fallback_path, data)?;
+                return Ok(());
+            }
+            Err(e)
+        }
     }
-    Ok(())
 }
 
 /// 根据 BoundingBox 扩边裁剪 (具备边界自适应与极值防越界防护)
