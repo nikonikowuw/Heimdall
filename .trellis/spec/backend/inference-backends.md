@@ -154,6 +154,19 @@ NMS、坐标还原、置信度过滤这类后处理是**平台无关**的，放�
 
 ---
 
+## CoreML / Apple Silicon 专项优化与陷阱
+
+在 Apple Silicon (macOS arm64) 下使用 CoreML 原生推理时，必须严格遵守以下契约（完整实现见 `algo-sdk-guidelines.md` 第 9 节）：
+
+- **`MLComputeUnits` 枚举映射绝对契约**：
+  Apple 原生枚举定义中：`MLComputeUnitsCPUOnly = 0`，`MLComputeUnitsCPUAndGPU = 1`，`MLComputeUnitsAll = 2`。必须显式配置为 `2`（或使用 `MLComputeUnitsAll` 常量），严禁传 `0`，否则会强制 CoreML 降级为 CPU 软件模拟，导致推理延迟从 ~2.5ms 骤升至 10ms+！
+- **Objective-C Runtime 选择器热路径预缓存**：
+  严禁在推理热路径调用 `objc_getClass` 与 `sel_registerName`（每帧 17 次字符串哈希与分配）。必须在模型加载初始化阶段一次性预缓存至常驻句柄。
+- **Accelerate 框架 Float16 SIMD 向量化转换**：
+  CoreML 输出的 Float16 半精度张量必须直接调用 Accelerate 框架的 `vImageConvert_Planar16FtoPlanarF` 硬件 NEON 指令进行批量反量化，禁止在 Rust 中写 CPU 标量位移循环。
+
+---
+
 ## 禁止事项
 
 - ❌ `infer` 之外出现平台 `#[cfg]`

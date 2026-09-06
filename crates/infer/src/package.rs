@@ -416,40 +416,52 @@ impl AlgoRegistry {
     ) -> Result<usize, InferError> {
         let mut count = 0;
         let cur_platform = crate::sandbox::current_platform_id();
-        let target_dir = base_dir.join(cur_platform);
-
-        if !target_dir.is_dir() {
-            tracing::warn!(
-                target_dir = %target_dir.display(),
-                "当前平台专属算法包目录不存在"
-            );
-            return Ok(0);
+        let mut target_dirs = vec![base_dir.join(cur_platform)];
+        if cur_platform.contains("macos") {
+            target_dirs.push(base_dir.join("macos-arm64"));
+            target_dirs.push(base_dir.join("macos").join("arm64"));
         }
 
-        let entries = std::fs::read_dir(&target_dir).map_err(|e| InferError::Execution {
-            reason: format!("扫描目录失败: {e}"),
-        })?;
+        let mut seen_canonical = std::collections::HashSet::new();
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() && path.join(ALGO_MANIFEST_FILENAME).is_file() {
-                match AlgoPackage::load_and_verify(&path, use_subprocess) {
-                    Ok(pkg) => {
-                        let id = pkg.manifest().algorithm_id.clone();
-                        tracing::info!(
-                            algorithm_id = %id,
-                            version = %pkg.manifest().version,
-                            "成功热注册可用算法包"
-                        );
-                        self.register(Arc::new(pkg)).await;
-                        count += 1;
+        for target_dir in target_dirs {
+            if !target_dir.is_dir() {
+                continue;
+            }
+
+            let entries = match std::fs::read_dir(&target_dir) {
+                Ok(e) => e,
+                Err(err) => {
+                    tracing::warn!(target_dir = %target_dir.display(), "扫描目录失败: {err}");
+                    continue;
+                }
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join(ALGO_MANIFEST_FILENAME).is_file() {
+                    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    if !seen_canonical.insert(canonical) {
+                        continue;
                     }
-                    Err(e) => {
-                        tracing::error!(
-                            path = %path.display(),
-                            error = %e,
-                            "算法包沙箱校验失败，跳过加载"
-                        );
+                    match AlgoPackage::load_and_verify(&path, use_subprocess) {
+                        Ok(pkg) => {
+                            let id = pkg.manifest().algorithm_id.clone();
+                            tracing::info!(
+                                algorithm_id = %id,
+                                version = %pkg.manifest().version,
+                                "成功热注册可用算法包"
+                            );
+                            self.register(Arc::new(pkg)).await;
+                            count += 1;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                path = %path.display(),
+                                error = %e,
+                                "算法包沙箱校验失败，跳过加载"
+                            );
+                        }
                     }
                 }
             }

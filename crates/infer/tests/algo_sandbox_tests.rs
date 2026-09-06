@@ -54,6 +54,28 @@ fn test_sandbox_real_package_in_process_self_test() {
 }
 
 #[test]
+fn test_sandbox_rust_yolo26n_package_in_process_self_test() {
+    let Some(pkg_path) = resolve_path("algo-packages/macos/arm64/general_detection")
+        .or_else(|| resolve_path("algo-packages/macos/arm64/yolo26n"))
+    else {
+        return;
+    };
+
+    // 运行重构后的纯 Rust yolo26n 算法包七步沙箱自检
+    let res = AlgoSandbox::validate_package(&pkg_path, false);
+    assert!(
+        res.is_ok(),
+        "Rust yolo26n 算法包沙箱校验失败: {:?}",
+        res.err()
+    );
+
+    let manifest = res.expect("算法包应当成功解出 manifest");
+    assert_eq!(manifest.algorithm_id, "general_detection");
+    assert_eq!(manifest.version, "1.0.0");
+    assert_eq!(manifest.algorithm_type, "object_detection");
+}
+
+#[test]
 fn test_sandbox_subprocess_self_test() {
     let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
         return;

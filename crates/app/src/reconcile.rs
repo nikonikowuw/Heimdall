@@ -27,9 +27,10 @@ pub async fn reconcile_and_seed_algorithms(
         PathBuf::from("var/packages"),
     ];
 
-    // 特别兼容 macOS arm64 历史简写
+    // 特别兼容 macOS arm64 历史简写与分级路径
     if cur_plat.contains("macos") {
         search_dirs.push(base_algo_dir.join("macos-arm64"));
+        search_dirs.push(base_algo_dir.join("macos").join("arm64"));
     }
 
     let candidate_dirs = infer::discover_package_dirs(&search_dirs);

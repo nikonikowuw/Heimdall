@@ -9,6 +9,7 @@ members = [
     "crates/pipeline",
     "crates/api",
     "crates/app",
+    "algo-packages/macos/arm64/general_detection",
 ]
 
 [workspace.package]
