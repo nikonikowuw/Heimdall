@@ -262,3 +262,24 @@ Completed 09-04-camera-live-preview: implemented pure Rust RTSP ingestor with Ex
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: Fix configurable algorithm package upload limits
+
+**Date**: 2026-09-06
+**Task**: Fix configurable algorithm package upload limits
+**Branch**: `dev`
+
+### Summary
+
+Fixed configurable algorithm package upload limits end to end: centralized and validated MB configuration with both environment variable forms, scoped large request bodies to upload routes, streamed multipart data to temporary files with bounded processing concurrency and cancellation-safe cleanup, improved frontend plain-text upload error handling, and added regression coverage. Verified Rust workspace tests, Clippy, formatting, Web lint, typecheck, tests, and build.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `21b1f8eecb7537b920e1b15a1087f8e353dd2aa2` | (see git log) |
+
+### Status
+
+[OK] **Completed**
