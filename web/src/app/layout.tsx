@@ -54,7 +54,7 @@ export const Layout: React.FC = () => {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-primary)] font-sans antialiased">
       {/* 左侧紧凑工具导航栏 */}
-      <aside className="frosted-glass flex w-16 flex-col items-center justify-between border-r border-[var(--border)] py-4">
+      <aside className="frosted-glass relative z-30 flex w-16 flex-col items-center justify-between border-r border-[var(--border)] py-4">
         <div className="flex flex-col items-center gap-6">
           {/* Logo 标志 */}
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-white shadow-md">

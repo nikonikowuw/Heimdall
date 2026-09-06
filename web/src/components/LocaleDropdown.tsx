@@ -105,7 +105,7 @@ export const LocaleDropdown: React.FC<LocaleDropdownProps> = ({
       {open && (
         <div
           role="listbox"
-          className={`lens-glass animate-in fade-in zoom-in-95 absolute z-50 min-w-[130px] overflow-hidden rounded-2xl border border-[var(--border)] p-1.5 shadow-2xl backdrop-blur-2xl transition-all duration-200 ${getDropdownPosClasses()}`}
+          className={`lens-glass locale-dropdown-panel animate-in fade-in zoom-in-95 absolute z-50 min-w-[130px] overflow-hidden rounded-2xl border border-[var(--border)] p-1.5 shadow-2xl backdrop-blur-2xl transition-all duration-200 ${getDropdownPosClasses()}`}
         >
           <div className="flex flex-col gap-0.5">
             {SUPPORTED_LOCALES.map((loc) => {
