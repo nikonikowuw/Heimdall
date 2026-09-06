@@ -42,11 +42,12 @@ __pycache__/
 *.py[cod]
 
 # Runtime data and generated logs
-/data/
+data/
+var/
 *.log
 *.db
 *.db-shm
 *.db-wal
-
+config.toml
 # Temporary files
 *.tmp

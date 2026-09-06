@@ -344,6 +344,23 @@ WARMUP=5
   2. **内存稳定性**：压测周期内进程驻留内存 (RSS) 必须保持平稳，验证 CVPixelBuffer、DMA-BUF 租约与 Objective-C `AutoreleasePool` 的成对释放，严禁内存或句柄泄漏；
   3. **吞吐衰减判定**：观察是否存在因 NPU/CPU 发热过大导致的严重降频（Thermal Throttling）。压测结束必须完整输出总帧数、总时长、平均 FPS 与单帧平均延迟。
 
+### 8.7 算法包分发与上传体积弹性配置 (Configurable Max Package Size)
+由于边缘端算法包覆盖轻量检测模型（几十 MB）到多模态大模型/视觉语言模型（数百 MB 乃至数 GB），系统**严禁硬编码限制上传体积**，必须提供分层级可配置机制：
+
+1. **默认工业级上限**：代码内置默认值为 **1024 MB (1 GB)**；
+2. **配置文件设定 (`config.toml`)**：
+   ```toml
+   [server]
+   host = "0.0.0.0"
+   port = 8000
+   # 算法包单文件上传上限 (MB)，可按需扩展至 2048、4096 等
+   max_package_size_mb = 1024
+   ```
+3. **环境变量无缝覆盖**：
+   - 支持 `ARGUS_SERVER__MAX_PACKAGE_SIZE_MB=2048`
+   - 支持快捷变量 `ARGUS_MAX_PACKAGE_SIZE_MB=2048`
+4. **友好超限防御提示**：当上传包体超出设定阈值时，网关拦截并返回包含当前限制值与配置调整指南的友好提示，杜绝抛出底层原始断流异常。
+
 ---
 
 ## 9. Apple Silicon CoreML 原生极速推理工程陷阱与加速指南

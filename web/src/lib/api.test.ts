@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { authApi, cameraApi, taskApi, ApiError } from './api'
+import { authApi, algorithmApi, cameraApi, taskApi, ApiError } from './api'
 import { useAuthStore } from '../stores/auth'
 
 describe('API Client', () => {
@@ -47,6 +47,17 @@ describe('API Client', () => {
     const res = await authApi.login({ username: 'admin', password: 'password123' })
     expect(res.accessToken).toBe('jwt-token-xyz')
     expect(res.username).toBe('admin')
+  })
+
+  it('upload should preserve plain-text gateway errors', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 413,
+      statusText: 'Payload Too Large',
+      text: async () => 'gateway rejected upload',
+    })
+
+    const file = new Blob(['payload'], { type: 'application/gzip' }) as File
+    await expect(algorithmApi.uploadPackage(file)).rejects.toThrow('gateway rejected upload')
   })
 
   it('401 response should trigger local logout', async () => {

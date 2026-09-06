@@ -294,30 +294,19 @@ function uploadFormData<T>(endpoint: string, file: File): Promise<T> {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
   }).then(async (res) => {
-    const data = await res.json()
+    const raw = await res.text().catch(() => '')
+    let data: { code: number; message?: string; data: T }
+    try {
+      // 网络响应只在 API 边界解析一次，避免先 json() 后 text() 消费同一个 body。
+      data = JSON.parse(raw) as { code: number; message?: string; data: T }
+    } catch {
+      throw new Error(raw || `Upload failed with status ${res.status} (${res.statusText})`)
+    }
     if (!res.ok || data.code !== 0) {
       throw new Error(data.message || 'Upload failed')
     }
     return data.data
   })
-}
-
-export const algoApi = {
-  listPackages(): Promise<AlgoManifest[]> {
-    return api.get<AlgoManifest[]>('/algo/packages')
-  },
-
-  verifyPackage(packagePath?: string): Promise<SandboxCheckResult> {
-    return api.post<SandboxCheckResult>('/algo/verify', { packagePath })
-  },
-
-  uploadPackage(file: File): Promise<SandboxCheckResult> {
-    return uploadFormData<SandboxCheckResult>('/algo/upload', file)
-  },
-
-  scanPackages(): Promise<number> {
-    return api.post<number>('/algo/scan', {})
-  },
 }
 
 export const algorithmApi = {

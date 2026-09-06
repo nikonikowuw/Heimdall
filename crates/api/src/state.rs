@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, RwLock};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Semaphore};
 
 use infer::package::AlgoRegistry;
 use media::StreamHub;
@@ -15,6 +15,11 @@ pub struct WsBroadcastEvent {
     pub timestamp: i64,
 }
 
+/// 算法包上传默认最大上限 (1024MB 即 1GB)
+pub const DEFAULT_MAX_PACKAGE_SIZE_BYTES: usize = 1024 * 1024 * 1024;
+/// 算法包沙箱处理固定为单路并发，避免多个大包同时占满内存与 CPU。
+pub const DEFAULT_MAX_CONCURRENT_ALGORITHM_UPLOADS: usize = 1;
+
 /// Axum 共享应用状态句柄
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -27,10 +32,20 @@ pub struct AppState {
     pub token_invalid_before: Arc<AtomicI64>,
     pub is_initialized: Arc<AtomicBool>,
     pub shutdown_tx: broadcast::Sender<()>,
+    pub max_upload_size_bytes: usize,
+    pub algorithm_upload_semaphore: Arc<Semaphore>,
 }
 
 impl AppState {
     pub fn new(db: DatabaseConnection, pipeline: Arc<PipelineManager>) -> Self {
+        Self::new_with_limit(db, pipeline, DEFAULT_MAX_PACKAGE_SIZE_BYTES)
+    }
+
+    pub fn new_with_limit(
+        db: DatabaseConnection,
+        pipeline: Arc<PipelineManager>,
+        max_upload_size_bytes: usize,
+    ) -> Self {
         let (event_broadcaster, _) = broadcast::channel(1024);
         let (shutdown_tx, _) = broadcast::channel(16);
         let stream_hub = Arc::new(StreamHub::new());
@@ -57,6 +72,10 @@ impl AppState {
             token_invalid_before: Arc::new(AtomicI64::new(0)),
             is_initialized: Arc::new(AtomicBool::new(false)),
             shutdown_tx,
+            max_upload_size_bytes,
+            algorithm_upload_semaphore: Arc::new(Semaphore::new(
+                DEFAULT_MAX_CONCURRENT_ALGORITHM_UPLOADS,
+            )),
         }
     }
 

@@ -30,6 +30,27 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// 算法包单文件上传大小上限 (单位: MB，默认 1024MB 即 1GB，支持超大模型包)
+    #[serde(default = "default_max_package_size_mb")]
+    pub max_package_size_mb: usize,
+}
+
+impl ServerConfig {
+    pub fn max_package_size_bytes(&self) -> Result<usize, config::ConfigError> {
+        if self.max_package_size_mb == 0 {
+            return Err(config::ConfigError::Message(
+                "server.max_package_size_mb 必须大于 0".to_string(),
+            ));
+        }
+
+        self.max_package_size_mb
+            .checked_mul(BYTES_PER_MEGABYTE)
+            .ok_or_else(|| {
+                config::ConfigError::Message(
+                    "server.max_package_size_mb 超出当前平台可表示的字节上限".to_string(),
+                )
+            })
+    }
 }
 
 impl Default for ServerConfig {
@@ -37,6 +58,7 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            max_package_size_mb: default_max_package_size_mb(),
         }
     }
 }
@@ -163,12 +185,18 @@ impl Default for LoggingConfig {
 // 默认值生成函数
 // ============================================================================
 
+const BYTES_PER_MEGABYTE: usize = 1024 * 1024;
+
 fn default_host() -> String {
     "0.0.0.0".to_string()
 }
 
 fn default_port() -> u16 {
     8000
+}
+
+fn default_max_package_size_mb() -> usize {
+    1024
 }
 
 fn default_db_path() -> String {
@@ -255,7 +283,29 @@ pub fn load_config(custom_path: Option<&str>) -> Result<AppConfig, config::Confi
     );
 
     let cfg = builder.build()?;
-    cfg.try_deserialize()
+    let mut app_config: AppConfig = cfg.try_deserialize()?;
+
+    // 兼容历史快捷变量，但让嵌套变量保持更明确的优先级。
+    if std::env::var_os("ARGUS_SERVER__MAX_PACKAGE_SIZE_MB").is_none() {
+        match std::env::var("ARGUS_MAX_PACKAGE_SIZE_MB") {
+            Ok(raw) => {
+                app_config.server.max_package_size_mb = raw.parse::<usize>().map_err(|_| {
+                    config::ConfigError::Message(
+                        "ARGUS_MAX_PACKAGE_SIZE_MB 必须是有效的正整数 MB 值".to_string(),
+                    )
+                })?;
+            }
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(config::ConfigError::Message(
+                    "ARGUS_MAX_PACKAGE_SIZE_MB 必须是 UTF-8 文本".to_string(),
+                ));
+            }
+        }
+    }
+
+    app_config.server.max_package_size_bytes()?;
+    Ok(app_config)
 }
 
 #[cfg(test)]
@@ -267,6 +317,7 @@ mod tests {
         let cfg = AppConfig::default();
         assert_eq!(cfg.server.host, "0.0.0.0");
         assert_eq!(cfg.server.port, 8000);
+        assert_eq!(cfg.server.max_package_size_mb, 1024);
         assert_eq!(cfg.database.path, "argus.db");
         assert_eq!(
             cfg.pipeline.max_concurrent_decoders,
@@ -285,6 +336,7 @@ mod tests {
 [server]
 host = "127.0.0.1"
 port = 9000
+max_package_size_mb = 2048
 
 [pipeline]
 max_concurrent_decoders = 8
@@ -304,6 +356,7 @@ capture_mode = "sub_stream_on_large_gap"
         let cfg: AppConfig = config.try_deserialize().expect("配置反序列化应成功");
         assert_eq!(cfg.server.host, "127.0.0.1");
         assert_eq!(cfg.server.port, 9000);
+        assert_eq!(cfg.server.max_package_size_mb, 2048);
         assert_eq!(cfg.pipeline.max_concurrent_decoders, 8);
         assert_eq!(cfg.pipeline.permit_timeout_ms, 250);
         assert_eq!(cfg.pipeline.max_burst_timeout_ms, 120);
@@ -322,15 +375,38 @@ capture_mode = "sub_stream_on_large_gap"
         std::env::set_var("ARGUS_SERVER__PORT", "9999");
         std::env::set_var("ARGUS_PIPELINE__MAX_CONCURRENT_DECODERS", "12");
         std::env::set_var("ARGUS_PIPELINE__MAX_BURST_TIMEOUT_MS", "65");
+        std::env::set_var("ARGUS_MAX_PACKAGE_SIZE_MB", "2048");
 
         let cfg = load_config(None).expect("带环境变量的配置加载应成功");
         assert_eq!(cfg.server.port, 9999);
+        assert_eq!(cfg.server.max_package_size_mb, 2048);
         assert_eq!(cfg.pipeline.max_concurrent_decoders, 12);
         assert_eq!(cfg.pipeline.max_burst_timeout_ms, 65);
 
+        std::env::set_var("ARGUS_SERVER__MAX_PACKAGE_SIZE_MB", "3072");
+        let canonical_cfg = load_config(None).expect("嵌套环境变量配置加载应成功");
+        assert_eq!(canonical_cfg.server.max_package_size_mb, 3072);
+
         // 清理环境变量防影响其他测试
         std::env::remove_var("ARGUS_SERVER__PORT");
+        std::env::remove_var("ARGUS_SERVER__MAX_PACKAGE_SIZE_MB");
         std::env::remove_var("ARGUS_PIPELINE__MAX_CONCURRENT_DECODERS");
         std::env::remove_var("ARGUS_PIPELINE__MAX_BURST_TIMEOUT_MS");
+        std::env::remove_var("ARGUS_MAX_PACKAGE_SIZE_MB");
+    }
+
+    #[test]
+    fn test_package_size_rejects_invalid_values() {
+        let zero = ServerConfig {
+            max_package_size_mb: 0,
+            ..ServerConfig::default()
+        };
+        assert!(zero.max_package_size_bytes().is_err());
+
+        let overflow = ServerConfig {
+            max_package_size_mb: usize::MAX,
+            ..ServerConfig::default()
+        };
+        assert!(overflow.max_package_size_bytes().is_err());
     }
 }

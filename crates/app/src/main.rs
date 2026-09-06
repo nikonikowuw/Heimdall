@@ -71,6 +71,7 @@ async fn main() -> Result<()> {
         version = env!("CARGO_PKG_VERSION"),
         port = cfg.server.port,
         host = %cfg.server.host,
+        max_package_size_mb = cfg.server.max_package_size_mb,
         db_path = %cfg.database.path,
         max_concurrent_decoders = cfg.pipeline.max_concurrent_decoders,
         permit_timeout_ms = cfg.pipeline.permit_timeout_ms,
@@ -127,7 +128,11 @@ async fn main() -> Result<()> {
     }
 
     // 5. 组装 API 共享状态与路由器并同步初始化与撤销时间戳
-    let state = api::AppState::new(db_conn, pipeline_mgr);
+    let max_upload_size_bytes = cfg
+        .server
+        .max_package_size_bytes()
+        .context("算法包上传大小配置无效")?;
+    let state = api::AppState::new_with_limit(db_conn, pipeline_mgr, max_upload_size_bytes);
     state.sync_auth_state().await;
 
     // 启动后台静默待机摄像头定时巡检与防抖三态调度器 (30s 周期)

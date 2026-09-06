@@ -194,3 +194,117 @@ async fn test_algorithms_and_instances_api_endpoints() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn test_upload_package_exceeds_default_2mb_limit() {
+    let (app, _state, token) = setup_test_app().await;
+
+    // 构造大于 Axum 默认 2MB 限制的上传包 (3MB)
+    let boundary = "---------------------------974767299852498929531610575";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"large_test.tar.gz\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: application/gzip\r\n\r\n");
+    body.resize(body.len() + 3 * 1024 * 1024, 0x1f); // 3MB 伪数据
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let req = Request::builder()
+        .uri("/api/v1/algorithms/upload")
+        .method("POST")
+        .header("Authorization", format!("Bearer {token}"))
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(val["code"], 0);
+    assert_eq!(val["data"]["passed"], false);
+    assert!(val["data"]["errorMessage"].is_string());
+}
+
+#[tokio::test]
+async fn test_upload_package_exceeds_configured_custom_limit() {
+    let db = db::init_test_db().await.unwrap();
+    let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
+    // 显式将配置上限收紧为 1MB
+    let state = api::AppState::new_with_limit(db, pipeline, 1024 * 1024);
+    state.sync_auth_state().await;
+
+    let password_hash = api::crypto::hash_password_async("adminPassword123".to_string()).await;
+    db::AdminUserRepo::create_admin(&state.db, "admin", &password_hash)
+        .await
+        .unwrap();
+    state
+        .is_initialized
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let claims = types::AuthClaims {
+        sub: "admin".to_string(),
+        iat: chrono::Utc::now().timestamp_millis(),
+        exp: chrono::Utc::now().timestamp_millis() + 86400000,
+    };
+    let token = api::crypto::generate_jwt(&claims, &state.get_jwt_secret()).unwrap();
+
+    let app = api::create_app(state.clone());
+
+    // 自定义上传上限不应扩大普通 JSON API 的默认 2MiB body limit。
+    let oversized_password = "a".repeat(1_500_000);
+    let req = Request::builder()
+        .uri("/api/v1/auth/login")
+        .method("POST")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "username": "unknown",
+                "password": oversized_password,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 构造 2MB 上传流，超过 1MB 配置上限
+    let boundary = "---------------------------974767299852498929531610575";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"too_large.tar.gz\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: application/gzip\r\n\r\n");
+    body.resize(body.len() + 2 * 1024 * 1024, 0x1f);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let req = Request::builder()
+        .uri("/api/v1/algorithms/upload")
+        .method("POST")
+        .header("Authorization", format!("Bearer {token}"))
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let msg = val["message"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("超出系统配置的最大限制") || msg.contains("max_package_size_mb"),
+        "超限时应返回包含配置指南的友好提示: {msg}"
+    );
+}

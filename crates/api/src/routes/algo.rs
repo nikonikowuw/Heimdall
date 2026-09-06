@@ -1,14 +1,17 @@
 use std::path::{Path, PathBuf};
 
+use axum::extract::multipart::{Field, MultipartError};
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{Multipart, Path as AxumPath, Query, State};
 use axum::routing::{delete, get, post, put};
-use axum::{Json, Router};
+use axum::Router;
 use db::{AlgorithmRepo, AlgorithmStats, OplogRepo, UpsertAlgorithmParams, UpsertVersionParams};
 use infer::{
     compute_dir_size, current_platform_id, AlgoManifest, AlgoSandbox, InferError,
-    ALGO_MANIFEST_FILENAME, DEFAULT_ALGO_PACKAGES_DIR,
+    ALGO_MANIFEST_FILENAME,
 };
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
@@ -135,12 +138,6 @@ pub struct SandboxCheckResultDto {
     pub manifest: Option<AlgoManifest>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VerifyPackageRequest {
-    pub package_path: Option<String>,
-}
-
 fn get_standard_steps() -> Vec<String> {
     vec![
         "1. 路径防穿透与目录结构检查".to_string(),
@@ -164,19 +161,18 @@ fn parse_failed_step_index(err: &InferError) -> usize {
     3
 }
 
-pub fn router() -> Router<AppState> {
+pub fn router(upload_limit_bytes: usize) -> Router<AppState> {
     Router::new()
         .route("/", get(list_algorithms))
         .route("/stats", get(get_stats))
-        .route("/upload", post(upload_package))
+        .route(
+            "/upload",
+            post(upload_package).layer(DefaultBodyLimit::max(upload_limit_bytes)),
+        )
         .route("/{id}", get(get_algorithm))
         .route("/{id}/versions", get(list_versions))
         .route("/{id}/versions/{version}/activate", put(activate_version))
         .route("/{id}/versions/{version}", delete(uninstall_version))
-        // 兼容已有端点
-        .route("/packages", get(legacy_list_packages))
-        .route("/verify", post(verify_package))
-        .route("/scan", post(scan_packages))
 }
 
 /// 解析 ID 参数：可能是数字主键，也可能是字符串 algorithm_id
@@ -298,10 +294,31 @@ impl Drop for TempDirGuard {
     }
 }
 
+/// 临时上传文件守卫，持有任务结束、取消或异常时由 Drop 清理。
+struct TempFileGuard {
+    path: PathBuf,
+}
+
+impl TempFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// 同步执行归档解压、沙箱进程驱动、文件复制与资源配置提取 (供 spawn_blocking 调度)
 pub fn process_uploaded_package_archive_sync(
-    archive_bytes: Vec<u8>,
-    upload_filename: Option<String>,
+    archive_path: &Path,
+    upload_filename: Option<&str>,
 ) -> Result<ProcessedUploadResult, Box<ProcessedUploadError>> {
     let temp_dir =
         std::env::temp_dir().join(format!("argus_pkg_{}", uuid::Uuid::new_v4().simple()));
@@ -315,7 +332,7 @@ pub fn process_uploaded_package_archive_sync(
     let _temp_guard = TempDirGuard(temp_dir.clone());
 
     let src_pkg_dir =
-        match extract_archive_package(&archive_bytes, upload_filename.as_deref(), &temp_dir) {
+        match extract_archive_package_from_file(archive_path, upload_filename, &temp_dir) {
             Ok(dir) => dir,
             Err(err) => {
                 return Err(Box::new(ProcessedUploadError {
@@ -412,46 +429,145 @@ pub fn process_uploaded_package_archive_sync(
     })
 }
 
+const BYTES_PER_MEGABYTE: usize = 1024 * 1024;
+
+fn is_multipart_limit_exceeded(error: &MultipartError) -> bool {
+    if error.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+        return true;
+    }
+
+    let mut text = error.to_string();
+    use std::error::Error;
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(" -> ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+
+    text.contains("limit")
+        || text.contains("PayloadTooLarge")
+        || text.contains("length limit exceeded")
+        || text.contains("request body exceeded")
+}
+
+fn upload_size_limit_error(max_bytes: usize) -> ApiError {
+    let max_mb = max_bytes.div_ceil(BYTES_PER_MEGABYTE);
+    ApiError::BadRequest(format!(
+        "算法包文件体积超出系统配置的最大限制 ({} MB)，可在配置文件中调大 max_package_size_mb",
+        max_mb
+    ))
+}
+
+fn map_multipart_error(error: MultipartError, operation: &str, max_bytes: usize) -> ApiError {
+    if is_multipart_limit_exceeded(&error) {
+        upload_size_limit_error(max_bytes)
+    } else {
+        ApiError::BadRequest(format!("{operation}: {error}"))
+    }
+}
+
+async fn write_upload_field_to_temp_file(
+    mut field: Field<'_>,
+    max_bytes: usize,
+) -> Result<TempFileGuard, ApiError> {
+    let path = std::env::temp_dir().join(format!(
+        "argus_upload_{}.part",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let guard = TempFileGuard::new(path);
+    let write_path = guard.path().to_path_buf();
+
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&write_path)
+            .await
+            .map_err(|error| ApiError::Internal(format!("创建算法包临时文件失败: {error}")))?;
+        let mut total_bytes = 0usize;
+
+        while let Some(chunk) = field
+            .chunk()
+            .await
+            .map_err(|error| map_multipart_error(error, "读取文件流失败", max_bytes))?
+        {
+            total_bytes = total_bytes
+                .checked_add(chunk.len())
+                .ok_or_else(|| upload_size_limit_error(max_bytes))?;
+            if total_bytes > max_bytes {
+                return Err(upload_size_limit_error(max_bytes));
+            }
+
+            file.write_all(&chunk)
+                .await
+                .map_err(|error| ApiError::Internal(format!("写入算法包临时文件失败: {error}")))?;
+        }
+
+        file.flush()
+            .await
+            .map_err(|error| ApiError::Internal(format!("刷新算法包临时文件失败: {error}")))?;
+
+        if total_bytes == 0 {
+            return Err(ApiError::BadRequest("未找到有效的算法包文件流".to_string()));
+        }
+
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => Ok(guard),
+        Err(error) => {
+            drop(guard);
+            Err(error)
+        }
+    }
+}
+
 /// 上传 .tar.gz / .zip / .tar 算法包并在物理沙箱中自检、落盘至 var/packages、入库并热加载
 async fn upload_package(
     State(state): State<AppState>,
     user: AuthUser,
     mut multipart: Multipart,
 ) -> Result<ApiResponse<SandboxCheckResultDto>, ApiError> {
-    let steps = get_standard_steps();
-    let mut archive_bytes: Option<Vec<u8>> = None;
-    let mut upload_filename: Option<String> = None;
-
-    while let Some(field) = multipart
-        .next_field()
+    let _upload_permit = state
+        .algorithm_upload_semaphore
+        .clone()
+        .acquire_owned()
         .await
-        .map_err(|e| ApiError::BadRequest(format!("解析上传表单失败: {e}")))?
-    {
+        .map_err(|_| ApiError::Internal("算法包上传并发控制器已关闭".to_string()))?;
+    let steps = get_standard_steps();
+    let mut upload_filename: Option<String> = None;
+    let mut upload_guard: Option<TempFileGuard> = None;
+
+    while let Some(field) = multipart.next_field().await.map_err(|error| {
+        map_multipart_error(error, "解析上传表单失败", state.max_upload_size_bytes)
+    })? {
         let name = field.name().unwrap_or_default().to_string();
         if name == "file" || name == "package" {
-            if let Some(fname) = field.file_name() {
-                upload_filename = Some(fname.to_string());
+            if let Some(filename) = field.file_name() {
+                upload_filename = Some(filename.to_string());
             }
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| ApiError::BadRequest(format!("读取文件流失败: {e}")))?;
-            archive_bytes = Some(data.to_vec());
+            upload_guard =
+                Some(write_upload_field_to_temp_file(field, state.max_upload_size_bytes).await?);
             break;
         }
     }
 
-    let bytes = match archive_bytes {
-        Some(b) if !b.is_empty() => b,
-        _ => return Err(ApiError::BadRequest("未找到有效的算法包文件流".to_string())),
+    let upload_guard = match upload_guard {
+        Some(guard) => guard,
+        None => return Err(ApiError::BadRequest("未找到有效的算法包文件流".to_string())),
     };
-
-    // 核心 CPU 密集工作通过 spawn_blocking 卸载出 Tokio Worker 线程
+    let process_path = upload_guard.path().to_path_buf();
     let process_res = tokio::task::spawn_blocking(move || {
-        process_uploaded_package_archive_sync(bytes, upload_filename)
+        let _upload_guard = upload_guard;
+        process_uploaded_package_archive_sync(&process_path, upload_filename.as_deref())
     })
-    .await
-    .map_err(|e| ApiError::Internal(format!("执行沙箱解包自检任务异常: {e}")))?;
+    .await;
+
+    let process_res = process_res
+        .map_err(|error| ApiError::Internal(format!("执行沙箱解包自检任务异常: {error}")))?;
 
     let processed = match process_res {
         Ok(res) => res,
@@ -711,76 +827,6 @@ async fn uninstall_version(
 }
 
 // ---------------------------------
-// 历史兼容端点
-// ---------------------------------
-
-async fn legacy_list_packages(
-    State(state): State<AppState>,
-) -> Result<ApiResponse<Vec<AlgoManifest>>, ApiError> {
-    let list = state.algo_registry.list().await;
-    Ok(ApiResponse::success(list))
-}
-
-async fn verify_package(
-    State(_state): State<AppState>,
-    Json(req): Json<VerifyPackageRequest>,
-) -> Result<ApiResponse<SandboxCheckResultDto>, ApiError> {
-    let steps = get_standard_steps();
-
-    let path_str = req.package_path.unwrap_or_else(|| {
-        let cur = current_platform_id();
-        format!("algo-packages/{cur}/general_detection")
-    });
-
-    let p = PathBuf::from(&path_str);
-    if !p.is_dir() {
-        return Ok(ApiResponse::success(SandboxCheckResultDto {
-            passed: false,
-            steps_total: 7,
-            steps_passed: 0,
-            steps,
-            error_message: Some(format!("算法包目录不存在: {path_str}")),
-            version: None,
-            manifest: None,
-        }));
-    }
-
-    match AlgoSandbox::validate_package(&p, false) {
-        Ok(manifest) => Ok(ApiResponse::success(SandboxCheckResultDto {
-            passed: true,
-            steps_total: 7,
-            steps_passed: 7,
-            steps,
-            error_message: None,
-            version: None,
-            manifest: Some(manifest),
-        })),
-        Err(e) => {
-            let failed_idx = parse_failed_step_index(&e);
-            Ok(ApiResponse::success(SandboxCheckResultDto {
-                passed: false,
-                steps_total: 7,
-                steps_passed: failed_idx,
-                steps,
-                error_message: Some(e.to_string()),
-                version: None,
-                manifest: None,
-            }))
-        }
-    }
-}
-
-async fn scan_packages(State(state): State<AppState>) -> Result<ApiResponse<usize>, ApiError> {
-    let base = Path::new(DEFAULT_ALGO_PACKAGES_DIR);
-    let count = state
-        .algo_registry
-        .scan_and_register(base, false)
-        .await
-        .unwrap_or(0);
-    Ok(ApiResponse::success(count))
-}
-
-// ---------------------------------
 // 归档解压与文件复制工具函数
 // ---------------------------------
 
@@ -816,31 +862,42 @@ fn detect_archive_format(bytes: &[u8], filename: Option<&str>) -> Result<Archive
     Err("不支持的归档格式，仅支持 .zip、.tar.gz (.tgz) 与 .tar 格式".to_string())
 }
 
-fn extract_archive_package(
-    bytes: &[u8],
+fn extract_archive_package_from_file(
+    archive_path: &Path,
     filename: Option<&str>,
     dest_dir: &Path,
 ) -> Result<PathBuf, String> {
-    let format = detect_archive_format(bytes, filename)?;
+    let mut header_file = std::fs::File::open(archive_path)
+        .map_err(|e| format!("打开上传归档失败 {}: {e}", archive_path.display()))?;
+    let mut header = [0u8; 512];
+    let header_len = std::io::Read::read(&mut header_file, &mut header)
+        .map_err(|e| format!("读取上传归档头失败: {e}"))?;
+    let format = detect_archive_format(&header[..header_len], filename)?;
+
     match format {
-        ArchiveFormat::Zip => extract_zip(bytes, dest_dir)?,
+        ArchiveFormat::Zip => {
+            let file =
+                std::fs::File::open(archive_path).map_err(|e| format!("打开 ZIP 归档失败: {e}"))?;
+            extract_zip(file, dest_dir)?;
+        }
         ArchiveFormat::TarGz => {
-            let cursor = std::io::Cursor::new(bytes);
-            let gz = flate2::read::GzDecoder::new(cursor);
+            let file = std::fs::File::open(archive_path)
+                .map_err(|e| format!("打开 GZIP 归档失败: {e}"))?;
+            let gz = flate2::read::GzDecoder::new(file);
             extract_tar(gz, dest_dir)?;
         }
         ArchiveFormat::Tar => {
-            let cursor = std::io::Cursor::new(bytes);
-            extract_tar(cursor, dest_dir)?;
+            let file =
+                std::fs::File::open(archive_path).map_err(|e| format!("打开 TAR 归档失败: {e}"))?;
+            extract_tar(file, dest_dir)?;
         }
     }
 
     find_extracted_package_root(dest_dir)
 }
 
-fn extract_zip(bytes: &[u8], dest_dir: &Path) -> Result<(), String> {
-    let cursor = std::io::Cursor::new(bytes);
-    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| format!("解析 ZIP 文件失败: {e}"))?;
+fn extract_zip<R: std::io::Read + std::io::Seek>(reader: R, dest_dir: &Path) -> Result<(), String> {
+    let mut zip = zip::ZipArchive::new(reader).map_err(|e| format!("解析 ZIP 文件失败: {e}"))?;
 
     for i in 0..zip.len() {
         let mut file = zip
@@ -1050,8 +1107,11 @@ mod tests {
             tar_builder.finish().unwrap();
         }
         let gz_bytes = gz_encoder.finish().unwrap();
+        let archive_path = temp.join("input.tar.gz");
+        std::fs::write(&archive_path, gz_bytes).unwrap();
 
-        let extracted_dir = extract_archive_package(&gz_bytes, Some("test.tar.gz"), &temp).unwrap();
+        let extracted_dir =
+            extract_archive_package_from_file(&archive_path, Some("test.tar.gz"), &temp).unwrap();
         assert!(extracted_dir.join("manifest.json").is_file());
 
         let _ = std::fs::remove_dir_all(&temp);
@@ -1076,7 +1136,10 @@ mod tests {
             tar_builder.finish().unwrap();
         }
 
-        let extracted_dir = extract_archive_package(&tar_bytes, Some("test.tar"), &temp).unwrap();
+        let archive_path = temp.join("input.tar");
+        std::fs::write(&archive_path, &tar_bytes).unwrap();
+        let extracted_dir =
+            extract_archive_package_from_file(&archive_path, Some("test.tar"), &temp).unwrap();
         assert!(extracted_dir.join("manifest.json").is_file());
 
         let _ = std::fs::remove_dir_all(&temp);
