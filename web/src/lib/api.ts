@@ -4,7 +4,6 @@ import type {
   AdminUserDto,
   AlarmRecord,
   AlarmStatus,
-  AlgoManifest,
   AlgorithmInstanceDto,
   AlgorithmItem,
   AlgorithmStats,
@@ -21,7 +20,6 @@ import type {
   LoginResponse,
   PaginatedAlgorithms,
   RecognitionRecord,
-  SandboxCheckResult,
   TaskConfigDto,
   TaskSummaryDto,
   UpdateAlgorithmInstanceRequest,
@@ -180,8 +178,8 @@ export const authApi = {
     })
   },
 
-  getMe(): Promise<AdminUserDto> {
-    return request<AdminUserDto>('/auth/me', { method: 'GET' })
+  getMe(signal?: AbortSignal): Promise<AdminUserDto> {
+    return request<AdminUserDto>('/auth/me', { method: 'GET', signal })
   },
 
   logout(): Promise<void> {

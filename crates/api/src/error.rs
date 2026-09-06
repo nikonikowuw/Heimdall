@@ -48,6 +48,43 @@ pub enum ApiError {
 
     #[error("内部服务器错误: {0}")]
     Internal(String),
+
+    // ─── 系统设置 51xxx ───
+    #[error("网卡不存在: {0}")]
+    NetworkInterfaceNotFound(String),
+
+    #[error("网卡不支持修改: {0}")]
+    NetworkInterfaceReadOnly(String),
+
+    #[error("已有进行中的网络操作")]
+    NetworkPendingOperation,
+
+    #[error("网络操作超时: {0}")]
+    NetworkOperationTimeout(String),
+
+    #[error("网络操作已过期，需重新提交")]
+    NetworkOperationExpired,
+
+    #[error("网络配置无效: {0}")]
+    NetworkInvalid(String),
+
+    #[error("网络服务执行失败: {0}")]
+    NetworkFailed(String),
+
+    #[error("存储配置校验失败: {0}")]
+    StorageConfig(String),
+
+    #[error("时间配置校验失败: {0}")]
+    TimeConfig(String),
+
+    #[error("时间差超过一年")]
+    TimeDeltaTooLarge,
+
+    #[error("NTP 服务执行失败: {0}")]
+    TimeSyncFailed(String),
+
+    #[error("系统信息读取失败: {0}")]
+    SystemInfo(String),
 }
 
 impl IntoResponse for ApiError {
@@ -76,6 +113,18 @@ impl IntoResponse for ApiError {
             ),
             Self::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, 50001, e.to_string()),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, 50000, m.clone()),
+            Self::NetworkInterfaceNotFound(m) => (StatusCode::NOT_FOUND, 51007, m.clone()),
+            Self::NetworkInterfaceReadOnly(m) => (StatusCode::BAD_REQUEST, 51005, m.clone()),
+            Self::NetworkPendingOperation => (StatusCode::CONFLICT, 51006, self.to_string()),
+            Self::NetworkOperationTimeout(m) => (StatusCode::REQUEST_TIMEOUT, 51009, m.clone()),
+            Self::NetworkOperationExpired => (StatusCode::CONFLICT, 51010, self.to_string()),
+            Self::NetworkInvalid(m) => (StatusCode::BAD_REQUEST, 51001, m.clone()),
+            Self::NetworkFailed(m) => (StatusCode::INTERNAL_SERVER_ERROR, 51008, m.clone()),
+            Self::StorageConfig(m) => (StatusCode::BAD_REQUEST, 51100, m.clone()),
+            Self::TimeConfig(m) => (StatusCode::BAD_REQUEST, 51200, m.clone()),
+            Self::TimeDeltaTooLarge => (StatusCode::BAD_REQUEST, 51201, self.to_string()),
+            Self::TimeSyncFailed(m) => (StatusCode::INTERNAL_SERVER_ERROR, 51202, m.clone()),
+            Self::SystemInfo(m) => (StatusCode::INTERNAL_SERVER_ERROR, 51300, m.clone()),
         };
 
         if status.is_server_error() {

@@ -1,13 +1,13 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import {
   AlertCircle,
   Cpu,
   FileText,
-  KeyRound,
   Layers,
   LogOut,
   Monitor,
   Moon,
+  Settings,
   Sliders,
   Sun,
   Video,
@@ -21,14 +21,24 @@ import { LoginPage } from '../features/auth'
 import { CamerasPage } from '../features/cameras'
 import { LivePage } from '../features/live/LivePage'
 import { OplogPage } from '../features/oplog/OplogPage'
+import { SettingsPage } from '../features/system'
 import { TasksPage } from '../features/tasks/TasksPage'
 import { useTheme } from '../hooks/use-theme'
 import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
-export type NavTab = 'live' | 'cameras' | 'tasks' | 'algorithms' | 'alarms' | 'oplog'
+export type NavTab = 'live' | 'cameras' | 'tasks' | 'algorithms' | 'alarms' | 'oplog' | 'system'
 
-export const Layout: React.FC = () => {
+const NAV_ITEMS: { tab: NavTab; icon: typeof Monitor; labelKey: string }[] = [
+  { tab: 'live', icon: Monitor, labelKey: 'nav.live' },
+  { tab: 'cameras', icon: Video, labelKey: 'nav.cameras' },
+  { tab: 'tasks', icon: Sliders, labelKey: 'nav.tasks' },
+  { tab: 'algorithms', icon: Cpu, labelKey: 'nav.algorithms' },
+  { tab: 'alarms', icon: AlertCircle, labelKey: 'nav.alarms' },
+  { tab: 'oplog', icon: FileText, labelKey: 'nav.oplog' },
+]
+
+export function Layout() {
   const { t } = useTranslation(['common', 'auth'])
   const { isAuthenticated, logout, username } = useAuthStore()
   const [currentTab, setCurrentTab] = useState<NavTab>('live')
@@ -54,112 +64,54 @@ export const Layout: React.FC = () => {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-primary)] font-sans antialiased">
       {/* 左侧紧凑工具导航栏 */}
-      <aside className="frosted-glass relative z-30 flex w-16 flex-col items-center justify-between border-r border-[var(--border)] py-4">
-        <div className="flex flex-col items-center gap-6">
+      <aside className="frosted-glass relative z-30 flex w-16 flex-col items-center justify-between py-4">
+        <div className="flex flex-col items-center gap-5">
           {/* Logo 标志 */}
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-white shadow-md">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-white shadow-[var(--accent)]/25 shadow-lg">
             <Layers className="h-5 w-5" />
           </div>
 
           {/* 导航菜单 */}
-          <nav className="flex flex-col gap-3">
-            <button
-              onClick={() => setCurrentTab('live')}
-              title={t('nav.live')}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
-                currentTab === 'live'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
-              }`}
-            >
-              <Monitor className="h-5 w-5" />
-            </button>
-            <button
-              onClick={() => setCurrentTab('cameras')}
-              title={t('nav.cameras', { defaultValue: '设备管理' })}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
-                currentTab === 'cameras'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
-              }`}
-            >
-              <Video className="h-5 w-5" />
-            </button>
-            <button
-              onClick={() => setCurrentTab('tasks')}
-              title={t('nav.tasks')}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
-                currentTab === 'tasks'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
-              }`}
-            >
-              <Sliders className="h-5 w-5" />
-            </button>
-            <button
-              onClick={() => setCurrentTab('algorithms')}
-              title={t('nav.algorithms', { defaultValue: '算法仓库' })}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
-                currentTab === 'algorithms'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
-              }`}
-            >
-              <Cpu className="h-5 w-5" />
-            </button>
-            <button
-              onClick={() => setCurrentTab('alarms')}
-              title={t('nav.alarms')}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
-                currentTab === 'alarms'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
-              }`}
-            >
-              <AlertCircle className="h-5 w-5" />
-            </button>
-            <button
-              onClick={() => setCurrentTab('oplog')}
-              title={t('nav.oplog')}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
-                currentTab === 'oplog'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
-              }`}
-            >
-              <FileText className="h-5 w-5" />
-            </button>
+          <nav className="flex flex-col gap-1.5">
+            {NAV_ITEMS.map(({ tab, icon: Icon, labelKey }) => (
+              <button
+                key={tab}
+                onClick={() => setCurrentTab(tab)}
+                title={t(labelKey, { defaultValue: tab })}
+                className={`nav-btn ${currentTab === tab ? 'active' : ''}`}
+              >
+                <Icon className="h-5 w-5" />
+              </button>
+            ))}
           </nav>
         </div>
 
-        {/* 底部控制区：多语言自由下拉选择 + 主题切换 + 退出登录 */}
-        <div className="flex flex-col items-center gap-3">
+        {/* 底部控制区 */}
+        <div className="flex flex-col items-center gap-2">
           <LocaleDropdown variant="icon" placement="right-bottom" />
 
           <button
             onClick={toggleTheme}
             title={isDark ? t('theme.toLight') : t('theme.toDark')}
-            className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)]"
+            className="nav-btn"
           >
-            {isDark ? (
-              <Sun className="h-5 w-5 text-amber-400" />
-            ) : (
-              <Moon className="h-5 w-5 text-[var(--text-secondary)]" />
-            )}
+            {isDark ? <Sun className="h-5 w-5 text-amber-400" /> : <Moon className="h-5 w-5" />}
           </button>
 
+          <div className="my-1 h-px w-5 bg-[var(--border)]" />
+
           <button
-            onClick={() => setIsPasswordModalOpen(true)}
-            title={t('auth:changePasswordTooltip', { username: username || 'admin' })}
-            className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)]"
+            onClick={() => setCurrentTab('system')}
+            title={t('nav.system', { defaultValue: '系统设置' })}
+            className={`nav-btn ${currentTab === 'system' ? 'active' : ''}`}
           >
-            <KeyRound className="h-5 w-5" />
+            <Settings className="h-5 w-5" />
           </button>
 
           <button
             onClick={handleLogout}
             title={t('auth:logoutTooltip', { username: username || 'admin' })}
-            className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--destructive)] transition-colors hover:bg-rose-500/10"
+            className="nav-btn text-[var(--destructive)] hover:bg-rose-500/10 hover:text-[var(--destructive)]"
           >
             <LogOut className="h-5 w-5" />
           </button>
@@ -167,7 +119,7 @@ export const Layout: React.FC = () => {
       </aside>
 
       {/* 主工作视口 */}
-      <main className="flex flex-1 flex-col overflow-hidden p-4">
+      <main className="content-ambient flex flex-1 flex-col overflow-hidden p-4">
         {currentTab === 'live' && <LivePage onNavigateToAlarms={() => setCurrentTab('alarms')} />}
         {currentTab === 'cameras' && (
           <CamerasPage
@@ -187,8 +139,10 @@ export const Layout: React.FC = () => {
         {currentTab === 'algorithms' && <AlgorithmsPage />}
         {currentTab === 'alarms' && <AlarmsPage />}
         {currentTab === 'oplog' && <OplogPage />}
+        {currentTab === 'system' && (
+          <SettingsPage onOpenPasswordModal={() => setIsPasswordModalOpen(true)} />
+        )}
       </main>
-
       {/* 修改密码模态框 */}
       <ChangePasswordModal
         isOpen={isPasswordModalOpen}

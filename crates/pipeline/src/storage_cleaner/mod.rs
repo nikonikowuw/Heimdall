@@ -28,6 +28,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::RwLock;
 
 use crate::error::PipelineError;
 
@@ -75,6 +76,46 @@ pub trait EvictionStore: Send + Sync {
     /// 按主键 ID 批量彻底删除违规告警记录 (两阶段提交第三阶段)
     async fn delete_alarms(&self, ids: &[i64]) -> Result<u64, PipelineError>;
 
+    /// 查询最老的识别图记录: (记录ID, 特写图相对路径)
+    async fn find_oldest_recognitions(
+        &self,
+        _limit: u64,
+    ) -> Result<Vec<(i64, String)>, PipelineError> {
+        Ok(Vec::new())
+    }
+
+    /// 按主键 ID 批量删除识别图记录
+    async fn delete_recognitions(&self, _ids: &[i64]) -> Result<u64, PipelineError> {
+        Ok(0)
+    }
+
+    /// 查询早于指定时间戳的普通抓拍记录: (记录ID, 全景图相对路径, 特写图相对路径)
+    async fn find_captures_before(
+        &self,
+        _before: chrono::DateTime<chrono::Utc>,
+        _limit: u64,
+    ) -> Result<Vec<(i64, String, String)>, PipelineError> {
+        Ok(Vec::new())
+    }
+
+    /// 查询早于指定时间戳的识别图记录: (记录ID, 特写图相对路径)
+    async fn find_recognitions_before(
+        &self,
+        _before: chrono::DateTime<chrono::Utc>,
+        _limit: u64,
+    ) -> Result<Vec<(i64, String)>, PipelineError> {
+        Ok(Vec::new())
+    }
+
+    /// 查询早于指定时间戳的违规告警记录: (记录ID, 全景图相对路径, 特写图相对路径)
+    async fn find_alarms_before(
+        &self,
+        _before: chrono::DateTime<chrono::Utc>,
+        _limit: u64,
+    ) -> Result<Vec<(i64, String, String)>, PipelineError> {
+        Ok(Vec::new())
+    }
+
     /// 查询当前数据库中所有活跃引用的图片相对路径集合 (用于全局孤儿扫描对账)
     async fn find_all_active_image_paths(&self) -> Result<HashSet<String>, PipelineError> {
         Ok(HashSet::new())
@@ -87,6 +128,7 @@ pub struct EvictionReport {
     pub free_ratio_before: f64,
     pub free_ratio_after: f64,
     pub captures_deleted: u64,
+    pub recognitions_deleted: u64,
     pub alarms_deleted: u64,
     pub quarantined_files: u64,
     pub missing_files: u64,
@@ -121,9 +163,42 @@ pub struct StorageCleanerConfig {
     pub critical_inode_free_ratio: f64,
     /// 单次清理巡检允许执行的最大连续淘汰子轮次（防止外部文件占满时死循环，默认 50 轮）
     pub max_drain_iterations: u32,
+    /// 告警图保留天数 (0 表示不限，默认 30 天)
+    pub alarm_retention_days: u32,
+    /// 告警图配额 (MB, 0 表示不限)
+    pub alarm_quota_mb: u64,
+    /// 识别图保留天数 (0 表示不限，默认 14 天)
+    pub recognition_retention_days: u32,
+    /// 识别图配额 (MB, 0 表示不限)
+    pub recognition_quota_mb: u64,
+    /// 抓拍图保留天数 (0 表示不限，默认 7 天)
+    pub capture_retention_days: u32,
+    /// 抓拍图配额 (MB, 0 表示不限)
+    pub capture_quota_mb: u64,
+    /// 循环覆盖策略 (默认循环覆盖)
+    pub overwrite_mode: types::system::OverwriteMode,
+    /// 是否开启自动清理
+    pub auto_cleanup_enabled: bool,
 }
 
 impl StorageCleanerConfig {
+    /// 从外部 System StorageConfig 同步配置
+    pub fn apply_storage_config(&mut self, cfg: &types::system::StorageConfig) {
+        self.min_free_ratio = cfg.min_free_ratio;
+        self.target_free_ratio = cfg.target_free_ratio;
+        self.emergency_free_ratio = cfg.emergency_free_ratio;
+        self.critical_free_ratio = cfg.critical_free_ratio;
+        self.batch_delete_size = cfg.batch_delete_size as u64;
+        self.alarm_retention_days = cfg.alarm_retention_days;
+        self.alarm_quota_mb = cfg.alarm_quota_mb;
+        self.recognition_retention_days = cfg.recognition_retention_days;
+        self.recognition_quota_mb = cfg.recognition_quota_mb;
+        self.capture_retention_days = cfg.capture_retention_days;
+        self.capture_quota_mb = cfg.capture_quota_mb;
+        self.overwrite_mode = cfg.overwrite_mode.clone();
+        self.auto_cleanup_enabled = cfg.auto_cleanup_enabled;
+    }
+
     /// 快捷设置统一最小触发水位 (自动推导 target_free_ratio 回滞水位)
     pub fn with_min_free_ratio(mut self, min_ratio: f64) -> Self {
         self.min_free_ratio = min_ratio;
@@ -155,17 +230,32 @@ impl Default for StorageCleanerConfig {
             min_inode_free_ratio: 0.10,
             critical_inode_free_ratio: 0.02,
             max_drain_iterations: 50,
+            alarm_retention_days: 30,
+            alarm_quota_mb: 0,
+            recognition_retention_days: 14,
+            recognition_quota_mb: 0,
+            capture_retention_days: 7,
+            capture_quota_mb: 0,
+            overwrite_mode: types::system::OverwriteMode::Overwrite,
+            auto_cleanup_enabled: true,
         }
     }
 }
 
 /// 工业级存储淘汰与自愈清理器
-#[derive(Debug)]
 pub struct StorageCleaner {
-    config: StorageCleanerConfig,
+    config: Arc<RwLock<StorageCleanerConfig>>,
     metrics: Arc<EvictionMetrics>,
     dispatcher: UnlinkDispatcher,
     _worker_handle: tokio::task::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for StorageCleaner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageCleaner")
+            .field("metrics", &self.metrics)
+            .finish()
+    }
 }
 
 impl StorageCleaner {
@@ -174,16 +264,26 @@ impl StorageCleaner {
         let (dispatcher, worker_handle) = UnlinkDispatcher::start(Arc::clone(&metrics));
 
         Self {
-            config,
+            config: Arc::new(RwLock::new(config)),
             metrics,
             dispatcher,
             _worker_handle: worker_handle,
         }
     }
 
-    /// 获取配置引用
-    pub fn config(&self) -> &StorageCleanerConfig {
-        &self.config
+    /// 运行时更新配置（用户保存设置后调用）
+    pub async fn update_config(&self, new_config: StorageCleanerConfig) {
+        *self.config.write().await = new_config;
+    }
+
+    /// 获取当前配置的克隆
+    pub async fn get_config(&self) -> StorageCleanerConfig {
+        self.config.read().await.clone()
+    }
+
+    /// 尝试获取配置快照（同步，非阻塞，用于同步上下文中的只读访问）
+    pub fn try_config(&self) -> Option<StorageCleanerConfig> {
+        self.config.try_read().ok().map(|g| g.clone())
     }
 
     /// 获取指标原子引用
@@ -198,35 +298,39 @@ impl StorageCleaner {
 
     /// 获取当前文件系统的物理状态
     pub fn current_fs_stat(&self) -> Result<FsStorageStat, std::io::Error> {
-        stat_fs(&self.config.evidence_dir)
+        let config = self.try_config().unwrap_or_default();
+        stat_fs(&config.evidence_dir)
     }
 
     /// 评估当前存储健康等级与写入放行决策
     pub fn evaluate_storage_health(&self) -> Result<StorageDecision, std::io::Error> {
         let stat = self.current_fs_stat()?;
-        Ok(StorageCircuitBreaker::evaluate(
-            &stat,
-            &self.config.thresholds(),
-        ))
+        let config = self.try_config().unwrap_or_default();
+        Ok(StorageCircuitBreaker::evaluate(&stat, &config.thresholds()))
     }
 
     /// 检查当前文件系统是否低于回蓄安全低水位（空间或 Inode）
     #[inline]
-    fn is_below_target(&self, stat: &FsStorageStat, target_ratio: f64) -> bool {
+    fn is_below_target(
+        stat: &FsStorageStat,
+        config: &StorageCleanerConfig,
+        target_ratio: f64,
+    ) -> bool {
         stat.free_ratio < target_ratio
-            || stat.inode_free_ratio < (self.config.min_inode_free_ratio * 1.5)
+            || stat.inode_free_ratio < (config.min_inode_free_ratio * 1.5)
     }
 
     /// 启动时扫描并清空墓碑隔离区 (.tombstone/)，实现掉电与崩溃后的自动空间回收
     pub fn sweep_tombstones(&self) -> Result<u64, PipelineError> {
-        let count = sweep_tombstones_sync(&self.config.evidence_dir)?;
+        let config = self.try_config().unwrap_or_default();
+        let count = sweep_tombstones_sync(&config.evidence_dir)?;
         if count > 0 {
             self.metrics
                 .tombstone_reclaimed_total
                 .fetch_add(count, Ordering::Relaxed);
             tracing::info!(
                 count,
-                tombstone_dir = %self.config.evidence_dir.join(TOMBSTONE_DIR_NAME).display(),
+                tombstone_dir = %config.evidence_dir.join(TOMBSTONE_DIR_NAME).display(),
                 "系统自愈：启动时已自动扫描并回收历史遗留墓碑文件"
             );
         }
@@ -247,14 +351,13 @@ impl StorageCleaner {
             .clean_cycles_total
             .fetch_add(1, Ordering::Relaxed);
 
-        let mut stat = stat_fs(&self.config.evidence_dir)
+        let config = self.config.read().await.clone();
+
+        let mut stat = stat_fs(&config.evidence_dir)
             .map_err(|e| PipelineError::Snapshot(format!("读取文件系统状态失败: {e}")))?;
 
-        let target_ratio = self
-            .config
-            .target_free_ratio
-            .max(self.config.min_free_ratio);
-        let decision = StorageCircuitBreaker::evaluate(&stat, &self.config.thresholds());
+        let target_ratio = config.target_free_ratio.max(config.min_free_ratio);
+        let decision = StorageCircuitBreaker::evaluate(&stat, &config.thresholds());
 
         if !decision.should_evict {
             return Ok(None);
@@ -272,24 +375,93 @@ impl StorageCleaner {
         );
 
         let mut total_captures_deleted = 0;
+        let mut total_recognitions_deleted = 0;
         let mut total_alarms_deleted = 0;
         let mut total_quarantined_files = 0;
         let mut total_missing_files = 0;
         let mut drain_iterations = 0;
 
-        // 【核心连续排空循环】
+        // 【阶段 1: 按类型保留天数淘汰 (Retention Policy)】
+        let now = chrono::Utc::now();
+        if config.capture_retention_days > 0 {
+            let cutoff = now - chrono::Duration::days(config.capture_retention_days as i64);
+            if let Ok(expired_caps) = store
+                .find_captures_before(cutoff, config.batch_delete_size)
+                .await
+            {
+                if !expired_caps.is_empty() {
+                    let cap_ids: Vec<i64> = expired_caps.iter().map(|(id, _, _)| *id).collect();
+                    let (quarantined, missing) =
+                        Self::quarantine_record_files(&config, &expired_caps, &self.metrics);
+                    total_quarantined_files += quarantined.len() as u64;
+                    total_missing_files += missing;
+                    if let Ok(deleted) = store.delete_captures(&cap_ids).await {
+                        total_captures_deleted += deleted;
+                    }
+                    self.dispatcher.dispatch_batch(quarantined).await;
+                }
+            }
+        }
+        if config.recognition_retention_days > 0 {
+            let cutoff = now - chrono::Duration::days(config.recognition_retention_days as i64);
+            if let Ok(expired_recs) = store
+                .find_recognitions_before(cutoff, config.batch_delete_size)
+                .await
+            {
+                if !expired_recs.is_empty() {
+                    let rec_ids: Vec<i64> = expired_recs.iter().map(|(id, _)| *id).collect();
+                    let (quarantined, missing) =
+                        Self::quarantine_single_file_records(&config, &expired_recs, &self.metrics);
+                    total_quarantined_files += quarantined.len() as u64;
+                    total_missing_files += missing;
+                    if let Ok(deleted) = store.delete_recognitions(&rec_ids).await {
+                        total_recognitions_deleted += deleted;
+                    }
+                    self.dispatcher.dispatch_batch(quarantined).await;
+                }
+            }
+        }
+        if config.alarm_retention_days > 0 {
+            let cutoff = now - chrono::Duration::days(config.alarm_retention_days as i64);
+            if let Ok(expired_alarms) = store
+                .find_alarms_before(cutoff, config.batch_delete_size)
+                .await
+            {
+                if !expired_alarms.is_empty() {
+                    let alarm_ids: Vec<i64> = expired_alarms.iter().map(|(id, _, _)| *id).collect();
+                    let (quarantined, missing) =
+                        Self::quarantine_record_files(&config, &expired_alarms, &self.metrics);
+                    total_quarantined_files += quarantined.len() as u64;
+                    total_missing_files += missing;
+                    if let Ok(deleted) = store.delete_alarms(&alarm_ids).await {
+                        total_alarms_deleted += deleted;
+                    }
+                    self.dispatcher.dispatch_batch(quarantined).await;
+                }
+            }
+        }
+
+        if total_captures_deleted > 0 || total_recognitions_deleted > 0 || total_alarms_deleted > 0
+        {
+            self.flush_pending_unlinks().await;
+            if let Ok(new_stat) = stat_fs(&config.evidence_dir) {
+                stat = new_stat;
+            }
+        }
+
+        // 【阶段 2: 核心连续排空循环 (Continuous Drain Loop)】
         // 持续批量淘汰，直到物理剩余空间和 Inode 均回蓄至安全目标低水位 (target_free_ratio)，
         // 或者无数据可删，或者达到单轮迭代保护上限 (max_drain_iterations)
-        while self.is_below_target(&stat, target_ratio)
-            && drain_iterations < self.config.max_drain_iterations
+        while Self::is_below_target(&stat, &config, target_ratio)
+            && drain_iterations < config.max_drain_iterations
         {
             drain_iterations += 1;
             self.metrics
                 .drain_iterations_total
                 .fetch_add(1, Ordering::Relaxed);
 
-            let is_emergency = stat.free_ratio < self.config.emergency_free_ratio
-                || stat.inode_free_ratio < (self.config.critical_inode_free_ratio * 2.0);
+            let is_emergency = stat.free_ratio < config.emergency_free_ratio
+                || stat.inode_free_ratio < (config.critical_inode_free_ratio * 2.0);
 
             if is_emergency {
                 self.metrics
@@ -299,9 +471,9 @@ impl StorageCleaner {
 
             // 紧急状态下动态加倍批次大小以加速排空
             let current_batch_size = if is_emergency {
-                self.config.batch_delete_size.saturating_mul(2)
+                config.batch_delete_size.saturating_mul(2)
             } else {
-                self.config.batch_delete_size
+                config.batch_delete_size
             };
 
             // 1. 优先淘汰抓拍记录 (Captures)
@@ -314,7 +486,8 @@ impl StorageCleaner {
                 let _ = store.mark_captures_deleting(&cap_ids).await?;
 
                 // Phase 2: 将物理文件原子重命名至墓碑隔离区
-                let (quarantined_paths, missing) = self.quarantine_record_files(&oldest_caps);
+                let (quarantined_paths, missing) =
+                    Self::quarantine_record_files(&config, &oldest_caps, &self.metrics);
                 total_quarantined_files += quarantined_paths.len() as u64;
                 total_missing_files += missing;
 
@@ -324,49 +497,71 @@ impl StorageCleaner {
 
                 // Phase 4: 异步 Unlink 批量释放物理磁盘
                 self.dispatcher.dispatch_batch(quarantined_paths).await;
-            } else if is_emergency {
-                // 2. 普通抓拍已空，且处于紧急严重水位 (< 8%) 时，才谨慎淘汰历史告警 (Alarms)
-                let oldest_alarms = store.find_oldest_alarms(current_batch_size).await?;
-
-                if !oldest_alarms.is_empty() {
-                    let alarm_ids: Vec<i64> = oldest_alarms.iter().map(|(id, _, _)| *id).collect();
-
-                    // Phase 1: DB 预标记
-                    let _ = store.mark_alarms_deleting(&alarm_ids).await?;
-
-                    // Phase 2: 隔离
-                    let (quarantined_paths, missing) = self.quarantine_record_files(&oldest_alarms);
+            } else {
+                // 2. 抓拍已空，淘汰识别记录 (Recognitions)
+                let oldest_recs = store.find_oldest_recognitions(current_batch_size).await?;
+                if !oldest_recs.is_empty() {
+                    let rec_ids: Vec<i64> = oldest_recs.iter().map(|(id, _)| *id).collect();
+                    let (quarantined_paths, missing) =
+                        Self::quarantine_single_file_records(&config, &oldest_recs, &self.metrics);
                     total_quarantined_files += quarantined_paths.len() as u64;
                     total_missing_files += missing;
-
-                    // Phase 3: DB 提交删除
-                    let deleted = store.delete_alarms(&alarm_ids).await?;
-                    total_alarms_deleted += deleted;
-
-                    // Phase 4: 异步 Unlink
+                    let deleted = store.delete_recognitions(&rec_ids).await?;
+                    total_recognitions_deleted += deleted;
                     self.dispatcher.dispatch_batch(quarantined_paths).await;
+                } else if is_emergency {
+                    // 3. 抓拍与识别均已空，且处于紧急严重水位 (< 8%) 时
+                    if config.overwrite_mode == types::system::OverwriteMode::Stop {
+                        tracing::warn!(
+                            free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
+                            "存储覆盖模式为 Stop (写满停止)，保全核心告警凭据，终止淘汰循环"
+                        );
+                        break;
+                    }
+                    let oldest_alarms = store.find_oldest_alarms(current_batch_size).await?;
+
+                    if !oldest_alarms.is_empty() {
+                        let alarm_ids: Vec<i64> =
+                            oldest_alarms.iter().map(|(id, _, _)| *id).collect();
+
+                        // Phase 1: DB 预标记
+                        let _ = store.mark_alarms_deleting(&alarm_ids).await?;
+
+                        // Phase 2: 隔离
+                        let (quarantined_paths, missing) =
+                            Self::quarantine_record_files(&config, &oldest_alarms, &self.metrics);
+                        total_quarantined_files += quarantined_paths.len() as u64;
+                        total_missing_files += missing;
+
+                        // Phase 3: DB 提交删除
+                        let deleted = store.delete_alarms(&alarm_ids).await?;
+                        total_alarms_deleted += deleted;
+
+                        // Phase 4: 异步 Unlink
+                        self.dispatcher.dispatch_batch(quarantined_paths).await;
+                    } else {
+                        tracing::warn!(
+                            free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
+                            "数据库中抓拍、识别与告警记录均已排空，自适应退出排空循环"
+                        );
+                        break;
+                    }
                 } else {
-                    tracing::warn!(
+                    // 普通抓拍与识别已全部淘汰完毕，当前未触碰紧急生死线，保全核心违规告警大图！
+                    tracing::info!(
                         free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
-                        "数据库中抓拍与告警记录均已排空，自适应退出排空循环"
+                        emergency_threshold = %format!("{:.2}%", config.emergency_free_ratio * 100.0),
+                        "普通抓拍与识别已排空；当前未触碰紧急红线，保全核心告警凭据，退出排空循环"
                     );
                     break;
                 }
-            } else {
-                // 普通抓拍已全部淘汰完毕，当前未触碰紧急生死线，保全核心违规告警大图！
-                tracing::info!(
-                    free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
-                    emergency_threshold = %format!("{:.2}%", self.config.emergency_free_ratio * 100.0),
-                    "普通抓拍已排空；当前未触碰紧急红线，保全核心告警凭据，退出排空循环"
-                );
-                break;
             }
 
             // 同步等待当前批次物理 unlink 完毕，以获得准确的文件系统反馈
             self.flush_pending_unlinks().await;
 
             // 重新刷新采样物理状态
-            if let Ok(new_stat) = stat_fs(&self.config.evidence_dir) {
+            if let Ok(new_stat) = stat_fs(&config.evidence_dir) {
                 stat = new_stat;
             } else {
                 break;
@@ -387,6 +582,7 @@ impl StorageCleaner {
             before = %format!("{:.2}%", free_ratio_before * 100.0),
             after = %format!("{:.2}%", free_ratio_after * 100.0),
             captures = total_captures_deleted,
+            recognitions = total_recognitions_deleted,
             alarms = total_alarms_deleted,
             quarantined = total_quarantined_files,
             missing = total_missing_files,
@@ -397,6 +593,7 @@ impl StorageCleaner {
             free_ratio_before,
             free_ratio_after,
             captures_deleted: total_captures_deleted,
+            recognitions_deleted: total_recognitions_deleted,
             alarms_deleted: total_alarms_deleted,
             quarantined_files: total_quarantined_files,
             missing_files: total_missing_files,
@@ -417,7 +614,10 @@ impl StorageCleaner {
 
         let cap_ids: Vec<i64> = oldest_caps.iter().map(|(id, _, _)| *id).collect();
         let _ = store.mark_captures_deleting(&cap_ids).await?;
-        let (quarantined_paths, _) = self.quarantine_record_files(&oldest_caps);
+        let config = self.config.read().await;
+        let (quarantined_paths, _) =
+            Self::quarantine_record_files(&config, &oldest_caps, &self.metrics);
+        drop(config);
         let deleted = store.delete_captures(&cap_ids).await?;
         self.dispatcher.dispatch_batch(quarantined_paths).await;
 
@@ -428,37 +628,67 @@ impl StorageCleaner {
         Ok(deleted)
     }
 
-    /// 将记录集合关联的文件批量原子隔离至墓碑目录
-    fn quarantine_record_files(&self, records: &[(i64, String, String)]) -> (Vec<PathBuf>, u64) {
+    /// 统一将一组相对路径批量原子隔离至墓碑目录
+    fn quarantine_paths<'a>(
+        evidence_dir: &std::path::Path,
+        paths: impl IntoIterator<Item = &'a str>,
+        metrics: &EvictionMetrics,
+    ) -> (Vec<PathBuf>, u64) {
         let mut quarantined_paths = Vec::new();
         let mut missing_count = 0;
 
-        for (_id, full_rel, crop_rel) in records {
-            for rel in [full_rel, crop_rel] {
-                if rel.is_empty() {
-                    continue;
+        for rel in paths {
+            if rel.is_empty() {
+                continue;
+            }
+            match quarantine_file(evidence_dir, rel) {
+                Ok(Some(tombstone_path)) => {
+                    quarantined_paths.push(tombstone_path);
                 }
-                match quarantine_file(&self.config.evidence_dir, rel) {
-                    Ok(Some(tombstone_path)) => {
-                        quarantined_paths.push(tombstone_path);
-                    }
-                    Ok(None) => {
-                        missing_count += 1;
-                        self.metrics
-                            .missing_files_detected_total
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            rel_path = %rel,
-                            error = %e,
-                            "物理文件移入墓碑隔离区遇到异常，跳过该文件继续推进"
-                        );
-                    }
+                Ok(None) => {
+                    missing_count += 1;
+                    metrics
+                        .missing_files_detected_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        rel_path = %rel,
+                        error = %e,
+                        "物理文件移入墓碑隔离区遇到异常，跳过该文件继续推进"
+                    );
                 }
             }
         }
         (quarantined_paths, missing_count)
+    }
+
+    /// 将记录集合关联的文件批量原子隔离至墓碑目录
+    fn quarantine_record_files(
+        config: &StorageCleanerConfig,
+        records: &[(i64, String, String)],
+        metrics: &EvictionMetrics,
+    ) -> (Vec<PathBuf>, u64) {
+        Self::quarantine_paths(
+            &config.evidence_dir,
+            records
+                .iter()
+                .flat_map(|(_, full, crop)| [full.as_str(), crop.as_str()]),
+            metrics,
+        )
+    }
+
+    /// 将单文件路径记录集合（如人脸/目标识别抓拍切片）批量原子隔离至墓碑目录
+    fn quarantine_single_file_records(
+        config: &StorageCleanerConfig,
+        records: &[(i64, String)],
+        metrics: &EvictionMetrics,
+    ) -> (Vec<PathBuf>, u64) {
+        Self::quarantine_paths(
+            &config.evidence_dir,
+            records.iter().map(|(_, rel)| rel.as_str()),
+            metrics,
+        )
     }
 
     /// 全局孤儿文件与缺失凭据对账自愈扫描 (Reconciliation Loop)
@@ -467,7 +697,10 @@ impl StorageCleaner {
         store: &S,
     ) -> Result<ReconciliationReport, PipelineError> {
         let active_paths = store.find_all_active_image_paths().await?;
-        let root = &self.config.evidence_dir;
+        let root = {
+            let config = self.config.read().await;
+            config.evidence_dir.clone()
+        };
         if !root.exists() {
             return Ok(ReconciliationReport {
                 total_scanned_files: 0,
@@ -479,7 +712,7 @@ impl StorageCleaner {
         let mut scanned = 0;
         let mut orphan_paths = Vec::new();
 
-        self.collect_disk_files(root, root, &mut scanned, &mut orphan_paths, &active_paths)?;
+        self.collect_disk_files(&root, &root, &mut scanned, &mut orphan_paths, &active_paths)?;
 
         let orphan_count = orphan_paths.len() as u64;
         if orphan_count > 0 {
@@ -491,7 +724,7 @@ impl StorageCleaner {
                 self.metrics
                     .orphan_files_detected_total
                     .fetch_add(1, Ordering::Relaxed);
-                if let Ok(Some(tombstone_p)) = quarantine_file(root, &rel_path) {
+                if let Ok(Some(tombstone_p)) = quarantine_file(&root, &rel_path) {
                     self.dispatcher.dispatch(tombstone_p).await;
                 }
             }
@@ -499,7 +732,7 @@ impl StorageCleaner {
 
         let mut missing_records = 0;
         for db_rel in &active_paths {
-            if let Ok(safe_p) = resolve_and_verify_evidence_path(root, db_rel) {
+            if let Ok(safe_p) = resolve_and_verify_evidence_path(&root, db_rel) {
                 if !safe_p.is_file() {
                     missing_records += 1;
                     self.metrics
@@ -578,6 +811,7 @@ impl StorageCleaner {
                             before = %format!("{:.2}%", report.free_ratio_before * 100.0),
                             after = %format!("{:.2}%", report.free_ratio_after * 100.0),
                             captures = report.captures_deleted,
+                            recognitions = report.recognitions_deleted,
                             alarms = report.alarms_deleted,
                             quarantined = report.quarantined_files,
                             missing = report.missing_files,
@@ -600,6 +834,72 @@ impl StorageCleaner {
                 };
             }
         })
+    }
+
+    /// 获取当前磁盘状态（只读运行状态）
+    pub async fn get_storage_status(&self) -> Result<types::StorageStatus, PipelineError> {
+        let stat = self
+            .current_fs_stat()
+            .map_err(|e| PipelineError::Snapshot(format!("读取磁盘状态失败: {e}")))?;
+        let health = self
+            .evaluate_storage_health()
+            .map_err(|e| PipelineError::Snapshot(format!("评估健康状态失败: {e}")))?;
+
+        let total_gb = stat.total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        let available_gb = stat.available_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        let used_gb = total_gb - available_gb;
+        let usage_percent = if stat.total_bytes > 0 {
+            (used_gb / total_gb) * 100.0
+        } else {
+            0.0
+        };
+
+        Ok(types::StorageStatus {
+            total_gb: (total_gb * 10.0).round() / 10.0,
+            used_gb: (used_gb * 10.0).round() / 10.0,
+            available_gb: (available_gb * 10.0).round() / 10.0,
+            usage_percent: (usage_percent * 10.0).round() / 10.0,
+            health_level: match health.level {
+                StorageHealthLevel::Normal => types::StorageHealthLevel::Normal,
+                StorageHealthLevel::Evicting => types::StorageHealthLevel::Evicting,
+                StorageHealthLevel::Emergency => types::StorageHealthLevel::Emergency,
+                StorageHealthLevel::Critical => types::StorageHealthLevel::Critical,
+            },
+            alarm_count: 0,
+            alarm_size_mb: 0.0,
+            recognition_count: 0,
+            recognition_size_mb: 0.0,
+            capture_count: 0,
+            capture_size_mb: 0.0,
+        })
+    }
+
+    /// 手动触发一次清理
+    pub async fn trigger_cleanup<S: EvictionStore>(
+        &self,
+        store: &S,
+    ) -> Result<types::EvictionReport, PipelineError> {
+        let start = std::time::Instant::now();
+        let pipeline_report = self.clean_if_needed(store).await?;
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if let Some(report) = pipeline_report {
+            Ok(types::EvictionReport {
+                deleted_count: (report.captures_deleted
+                    + report.recognitions_deleted
+                    + report.alarms_deleted) as u32,
+                freed_mb: ((report.free_ratio_after - report.free_ratio_before) * 100.0 * 10.0)
+                    .round()
+                    / 10.0,
+                duration_ms,
+            })
+        } else {
+            Ok(types::EvictionReport {
+                deleted_count: 0,
+                freed_mb: 0.0,
+                duration_ms,
+            })
+        }
     }
 }
 
@@ -737,6 +1037,7 @@ mod tests {
             critical_inode_free_ratio: 0.02,
             batch_delete_size: 2, // 批次为 2
             max_drain_iterations: 10,
+            ..Default::default()
         });
 
         let report = cleaner
@@ -845,6 +1146,7 @@ mod tests {
             critical_inode_free_ratio: 0.02,
             batch_delete_size: 10,
             max_drain_iterations: 10,
+            ..Default::default()
         });
 
         let swept = cleaner.sweep_tombstones().unwrap();

@@ -1,4 +1,7 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
+};
 
 use crate::entity::camera::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
@@ -71,6 +74,20 @@ impl CameraRepo {
             .exec(db)
             .await?;
         Ok(res.rows_affected)
+    }
+
+    pub async fn count_all(db: &DatabaseConnection) -> Result<u64, DbError> {
+        let count = Entity::find().count(db).await.map_err(DbError::from)?;
+        Ok(count)
+    }
+
+    pub async fn count_healthy(db: &DatabaseConnection) -> Result<u64, DbError> {
+        let count = Entity::find()
+            .filter(Column::LastProbeStatus.eq("healthy"))
+            .count(db)
+            .await
+            .map_err(DbError::from)?;
+        Ok(count)
     }
 
     pub async fn update_probe_status(

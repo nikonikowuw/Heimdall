@@ -105,6 +105,7 @@ async fn main() -> Result<()> {
         capture_mode: cfg.pipeline.capture_mode,
     };
 
+    let evidence_dir = cfg.storage.evidence_dir.clone();
     let pipeline_mgr = Arc::new(pipeline::PipelineManager::with_all_options(
         cfg.storage.evidence_dir,
         snapshot_cfg,
@@ -132,8 +133,40 @@ async fn main() -> Result<()> {
         .server
         .max_package_size_bytes()
         .context("算法包上传大小配置无效")?;
-    let state = api::AppState::new_with_limit(db_conn, pipeline_mgr, max_upload_size_bytes);
+    let state = api::AppState::new_with_limit(db_conn, pipeline_mgr, max_upload_size_bytes)
+        .with_storage_cleaner(evidence_dir);
     state.sync_auth_state().await;
+
+    // 同步加载数据库中持久化的存储保留与水位配置至运行时 StorageCleaner
+    if let Some(cleaner) = state.storage_cleaner.as_ref() {
+        if let Ok(Some(json_str)) = db::SystemConfigRepo::get(&state.db, "storage_config").await {
+            if let Ok(saved_cfg) = serde_json::from_str::<types::StorageConfig>(&json_str) {
+                let mut runtime_cfg = cleaner.get_config().await;
+                runtime_cfg.min_free_ratio = saved_cfg.min_free_ratio;
+                runtime_cfg.target_free_ratio = saved_cfg.target_free_ratio;
+                runtime_cfg.emergency_free_ratio = saved_cfg.emergency_free_ratio;
+                runtime_cfg.critical_free_ratio = saved_cfg.critical_free_ratio;
+                runtime_cfg.batch_delete_size = saved_cfg.batch_delete_size as u64;
+                runtime_cfg.alarm_retention_days = saved_cfg.alarm_retention_days;
+                runtime_cfg.alarm_quota_mb = saved_cfg.alarm_quota_mb;
+                runtime_cfg.recognition_retention_days = saved_cfg.recognition_retention_days;
+                runtime_cfg.recognition_quota_mb = saved_cfg.recognition_quota_mb;
+                runtime_cfg.capture_retention_days = saved_cfg.capture_retention_days;
+                runtime_cfg.capture_quota_mb = saved_cfg.capture_quota_mb;
+                runtime_cfg.overwrite_mode = saved_cfg.overwrite_mode;
+                runtime_cfg.auto_cleanup_enabled = saved_cfg.auto_cleanup_enabled;
+                cleaner.update_config(runtime_cfg).await;
+                tracing::info!("已从系统配置成功加载历史存储保留与自适应水位参数");
+            }
+        }
+
+        // 启动常驻后台存储水位自适应巡检与过期凭据清理任务 (300s 周期)
+        let store = Arc::new(api::DbEvictionStoreAdapter(state.db.clone()));
+        cleaner
+            .clone()
+            .start_periodic_worker(store, std::time::Duration::from_secs(300));
+        tracing::info!("后台存储水位与证据生命周期自适应巡检工作线程已启动 (300s 周期)");
+    }
 
     // 启动后台静默待机摄像头定时巡检与防抖三态调度器 (30s 周期)
     Arc::new(state.clone()).start_periodic_probe_worker(std::time::Duration::from_secs(30));

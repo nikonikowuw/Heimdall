@@ -34,6 +34,7 @@ pub struct AppState {
     pub shutdown_tx: broadcast::Sender<()>,
     pub max_upload_size_bytes: usize,
     pub algorithm_upload_semaphore: Arc<Semaphore>,
+    pub storage_cleaner: Option<Arc<pipeline::storage_cleaner::StorageCleaner>>,
 }
 
 impl AppState {
@@ -76,7 +77,19 @@ impl AppState {
             algorithm_upload_semaphore: Arc::new(Semaphore::new(
                 DEFAULT_MAX_CONCURRENT_ALGORITHM_UPLOADS,
             )),
+            storage_cleaner: None,
         }
+    }
+
+    /// 为 API 状态装配使用指定 evidence 目录的存储清理器。
+    pub fn with_storage_cleaner(mut self, evidence_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.storage_cleaner = Some(Arc::new(pipeline::storage_cleaner::StorageCleaner::new(
+            pipeline::storage_cleaner::StorageCleanerConfig {
+                evidence_dir: evidence_dir.into(),
+                ..Default::default()
+            },
+        )));
+        self
     }
 
     /// 触发全局服务停机广播通知

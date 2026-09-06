@@ -9,6 +9,7 @@ pub mod camera;
 pub mod evidence;
 pub mod live;
 pub mod oplog;
+pub mod system;
 pub mod task;
 pub mod ws;
 
@@ -21,6 +22,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .nest("/evidence", evidence::router())
         .nest("/algorithms", algo::router(state.max_upload_size_bytes))
         .nest("/logs/operations", oplog::router())
+        .nest("/system", system::router())
         .nest("/ws/events", ws::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

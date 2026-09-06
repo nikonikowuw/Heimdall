@@ -128,6 +128,190 @@ print_stdout = "deny"                 # 一律用 tracing
 
 ---
 
+## 场景：系统存储状态端点的运行时装配与 DTO 契约
+
+### 1. Scope / Trigger
+
+- 触发条件：新增或修改 `/api/v1/system/storage/*`，或在 `AppState` 中引入存储运行时句柄。
+- 适用边界：`app` 负责按运行配置装配 `StorageCleaner`，`api` 负责调用它并返回共享 DTO；不在 handler 中临时创建清理器。
+
+### 2. Signatures
+
+- `AppState::with_storage_cleaner(evidence_dir) -> AppState`
+- `GET /api/v1/system/storage/status -> ApiResponse<types::StorageStatus>`
+- `StorageCleaner::get_storage_status() -> Result<types::StorageStatus, PipelineError>`
+
+### 3. Contracts
+
+- 应用启动时必须使用与 `PipelineManager` 相同的 `storage.evidence_dir` 装配 `StorageCleaner`。
+- `StorageStatus`、`StorageConfig`、`EvictionReport` 及系统设置网络/时间 DTO 使用 `#[serde(rename_all = "camelCase")]`；例如 `total_gb` 在线上必须为 `totalGb`。
+- 成功响应保持 `{ code: 0, message: "success", data: T, timestamp }`；磁盘状态读取失败返回系统错误，不伪造成功数据。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+| --- | --- |
+| 生产状态未装配 `StorageCleaner` | HTTP 500，错误码 `51300`，记录可定位日志 |
+| `statvfs` 读取失败 | HTTP 500，错误码 `51300` |
+| cleaner 已装配且文件系统可读 | HTTP 200，`data.totalGb` 等 camelCase 字段存在 |
+
+### 5. Good/Base/Bad Cases
+
+- Good：启动阶段注入配置目录，handler 只读取句柄并返回共享 DTO。
+- Base：测试使用临时目录和 `AppState::with_storage_cleaner`，不依赖真实证据文件。
+- Bad：仅在 `AppState` 增加 `Option<StorageCleaner>`，却不在生产入口赋值；或直接序列化 Rust snake_case 字段。
+
+### 6. Tests Required
+
+- 使用 `axum::body` 与 `tower::ServiceExt::oneshot` 请求 `/storage/status`。
+- 断言 HTTP 200、`code == 0`、`data.totalGb > 0`，并覆盖错误状态的映射。
+- app 启动装配必须传入配置的 evidence 目录，避免状态查询和实际写盘路径漂移。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let state = AppState::new_with_limit(db, pipeline, max_upload_size);
+// storage_cleaner 仍为 None，/storage/status 返回 500
+```
+
+#### Correct
+
+```rust
+let state = AppState::new_with_limit(db, pipeline, max_upload_size)
+    .with_storage_cleaner(cfg.storage.evidence_dir.clone());
+```
+
+---
+
+## 场景：跨平台系统指标采样与时间单位
+
+### 1. Scope / Trigger
+
+- 触发条件：新增或修改 `/api/v1/system/overview` 的 CPU 使用率、运行时间或平台系统 API。
+- 适用边界：平台采样实现留在 `api::system_info`，handler 只负责异步调度和 DTO 映射；前端 `uptimeSeconds` 只按秒格式化。
+
+### 2. Signatures
+
+- `read_system_info() -> SystemInfoRaw`
+- `read_cpu_usage() -> CpuInfo`
+- `read_uptime() -> f64`，返回运行时长秒数，不是 Unix 时间戳
+
+### 3. Contracts
+
+- `cpuUsagePercent` 必须是 `[0, 100]` 的百分比，而不是 load average 或累计 tick。
+- macOS 使用 `PROCESSOR_CPU_LOAD_INFO` flavor `2` 读取 user/system/idle/nice tick；flavor `1` 是 `PROCESSOR_BASIC_INFO`，禁止混用。
+- macOS `kern.boottime` 必须按完整 `libc::timeval` 读取，再用 `now - bootTime` 计算秒数；sysctl 失败时返回 `0`，不得把当前 Unix 时间戳当作运行时间。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+| --- | --- |
+| CPU tick 两次采样有效 | 按 delta 计算并 clamp 到 `0..=100` |
+| Mach 采样失败或 tick 布局不完整 | 返回 `0` CPU 使用率，不阻塞系统概览接口 |
+| `kern.boottime` 读取成功 | 返回非负运行秒数 |
+| `kern.boottime` 读取失败 | 返回 `0` 运行秒数，不返回 epoch 秒数 |
+
+### 5. Good/Base/Bad Cases
+
+- Good：使用平台原生累计 tick，两次采样取差值；使用完整 `timeval` 读取启动秒数。
+- Base：CPU 采样失败时降级为 0，但保持接口可用并保证数值范围正确。
+- Bad：把 `PROCESSOR_BASIC_INFO` 当 CPU load；只给 `kern.boottime` 分配 8 字节；直接把 Unix 当前时间作为 uptime 返回。
+
+### 6. Tests Required
+
+- macOS 测试断言 CPU tick 两次采样单调增加，且使用率为有限的 `0..=100` 数值。
+- macOS 测试断言 `kern.boottime` 成功读取，运行时间小于当前 Unix 秒数。
+- 跨平台测试断言 `SystemInfoRaw` 的 CPU 使用率和运行时间非负且有限。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+const PROCESSOR_CPU_LOAD_INFO: processor_flavor_t = 1;
+let mut boot_secs: i64 = 0;
+let size = size_of::<i64>();
+```
+
+#### Correct
+
+```rust
+const PROCESSOR_CPU_LOAD_INFO: processor_flavor_t = 2;
+let mut boot_time: libc::timeval = unsafe { std::mem::zeroed() };
+let mut size = size_of::<libc::timeval>();
+```
+
+---
+
+## 场景：macOS 网卡枚举与只读网络配置
+
+### 1. Scope / Trigger
+
+- 触发条件：新增或修改 `/api/v1/system/network/interfaces`，或新增 macOS 网络平台适配。
+- 适用边界：macOS 使用 `ifconfig -a` 获取接口事实状态，使用 `networksetup` 补充硬件类型和 Network Service 配置；当前版本只读，不复用 Linux 的 `nmcli`/`networkctl` 修改逻辑。
+
+### 2. Signatures
+
+- `NetworkService::list_interfaces() -> Result<Vec<NetworkInterface>, ApiError>`
+- `list_interfaces_macos() -> Result<Vec<NetworkInterface>, ApiError>`
+- `GET /api/v1/system/network/interfaces -> ApiResponse<NetworkInterfacesResponse>`
+
+### 3. Contracts
+
+- macOS 至少返回 `lo0` 以及 `ifconfig -a` 能枚举到的其它接口；不能因没有 `nmcli`/`networkctl` 而返回空数组。
+- `ifconfig` 负责 `name`、flags、MAC 和 IPv4；`networksetup` 可用时补充 Wi-Fi/以太网类型、DHCP/静态方式、网关和 DNS。
+- macOS DTO 的 `manager` 使用现有 `unmanaged` 枚举，`canModifyIp`、`canSetDhcp`、`canSetStatic` 必须为 `false`，并给出只读原因。
+- 外部命令必须经 `spawn_blocking` 执行；`networksetup` 补充命令失败时保留 `ifconfig` 的基础网卡数据，不伪造空列表。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+| --- | --- |
+| `ifconfig -a` 成功 | 返回接口列表，至少包含 loopback |
+| `networksetup` 成功 | 补充硬件端口、服务、DHCP、网关和 DNS 信息 |
+| `networksetup` 不可用或单项查询失败 | 保留 MAC/状态/IPv4 等基础信息，配置字段按缺失处理 |
+| `ifconfig -a` 执行失败 | 返回网络服务错误，不返回误导性的成功空列表 |
+| macOS 尝试 PUT 修改网卡 | 返回只读错误，不执行 `nmcli` 或 `networkctl` |
+
+### 5. Good/Base/Bad Cases
+
+- Good：以 `ifconfig` 的当前状态为准，以 `networksetup` 的服务配置补充 DHCP、Router 和 DNS。
+- Base：虚拟接口没有硬件端口映射时标记为 `virtual`；没有 IPv4 时 `ipv4` 为 `null`。
+- Bad：macOS 直接检测 Linux 管理器并在未找到时返回 `Vec::new()`；或把 `ifconfig` 的当前地址误标成可在线修改的 NetworkManager 配置。
+
+### 6. Tests Required
+
+- 纯解析测试覆盖 `ifconfig` flags、MAC、IPv4/netmask、active/inactive 状态。
+- 纯解析测试覆盖 `networksetup` hardware port 与 service-to-device 映射。
+- macOS 主机测试调用系统枚举并断言至少存在 `lo0`。
+- Linux 现有 `nmcli`/`networkd` 路径必须继续通过 workspace 编译和测试。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let manager = detect_network_manager();
+match manager {
+    NetworkManager::Networkmanager => list_interfaces_nm().await,
+    NetworkManager::SystemdNetworkd => list_interfaces_networkd().await,
+    _ => Ok(Vec::new()),
+}
+```
+
+#### Correct
+
+```rust
+#[cfg(target_os = "macos")]
+{
+    list_interfaces_macos().await
+}
+```
+
+---
+
 ## 待验证事项
 
 - [ ] CI 环境能否覆盖三个平台的交叉编译检查（至少 `cargo check`）

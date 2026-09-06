@@ -1,6 +1,6 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 
 use crate::entity::capture::{ActiveModel, Column, Entity, Model};
@@ -88,5 +88,35 @@ impl CaptureRepo {
             .exec(db)
             .await?;
         Ok(res.rows_affected)
+    }
+
+    pub async fn count_all(db: &DatabaseConnection) -> Result<u64, DbError> {
+        Entity::find().count(db).await.map_err(DbError::from)
+    }
+
+    pub async fn find_before(
+        db: &DatabaseConnection,
+        before: chrono::DateTime<chrono::Utc>,
+        limit: u64,
+    ) -> Result<Vec<Model>, DbError> {
+        Entity::find()
+            .filter(Column::CapturedAt.lt(before))
+            .order_by_asc(Column::CapturedAt)
+            .limit(limit)
+            .all(db)
+            .await
+            .map_err(DbError::from)
+    }
+
+    pub async fn count_since(
+        db: &DatabaseConnection,
+        since: chrono::NaiveDateTime,
+    ) -> Result<u64, DbError> {
+        let count = Entity::find()
+            .filter(Column::CapturedAt.gte(since))
+            .count(db)
+            .await
+            .map_err(DbError::from)?;
+        Ok(count)
     }
 }

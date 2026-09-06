@@ -1,6 +1,6 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 
 use crate::entity::recognition::{ActiveModel, Column, Entity, Model};
@@ -33,6 +33,24 @@ impl RecognitionRepo {
         active_model: ActiveModel,
     ) -> Result<Model, DbError> {
         active_model.insert(db).await.map_err(DbError::from)
+    }
+
+    pub async fn count_all(db: &DatabaseConnection) -> Result<u64, DbError> {
+        Entity::find().count(db).await.map_err(DbError::from)
+    }
+
+    pub async fn find_before(
+        db: &DatabaseConnection,
+        before: chrono::DateTime<chrono::Utc>,
+        limit: u64,
+    ) -> Result<Vec<Model>, DbError> {
+        Entity::find()
+            .filter(Column::RecognizedAt.lt(before))
+            .order_by_asc(Column::RecognizedAt)
+            .limit(limit)
+            .all(db)
+            .await
+            .map_err(DbError::from)
     }
 
     pub async fn find_oldest_batch(

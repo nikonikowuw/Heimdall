@@ -27,6 +27,7 @@ tracing = { workspace = true }
 rust-embed = { workspace = true }
 chrono = { workspace = true }
 sea-orm = { workspace = true }
+async-trait = { workspace = true }
 mime_guess = { workspace = true }
 uuid = { workspace = true }
 sha2 = "0.10"
@@ -35,6 +36,7 @@ base64 = "0.22"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1.0"
+libc = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

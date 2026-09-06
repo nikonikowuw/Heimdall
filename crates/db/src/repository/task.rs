@@ -1,4 +1,7 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
+};
 
 use crate::entity::task::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
@@ -64,6 +67,15 @@ impl TaskRepo {
             .exec(db)
             .await?;
         Ok(res.rows_affected)
+    }
+
+    pub async fn count_running(db: &DatabaseConnection) -> Result<u64, DbError> {
+        let count = Entity::find()
+            .filter(Column::ActualStatus.eq(types::TaskStatus::Running as i32))
+            .count(db)
+            .await
+            .map_err(DbError::from)?;
+        Ok(count)
     }
 }
 
