@@ -3,11 +3,10 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use db::{AlgorithmInstanceRepo, CreateInstanceParams, OplogRepo, TaskRepo, UpdateInstanceParams};
+use db::{AlgorithmInstanceRepo, CreateInstanceParams, TaskRepo, UpdateInstanceParams};
 use types::{DetectionRule, MotionGateConfig};
 
 use crate::error::ApiError;
-use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
 use crate::state::AppState;
 
@@ -158,7 +157,6 @@ pub fn router() -> Router<AppState> {
 
 async fn list_tasks(
     State(state): State<AppState>,
-    _user: AuthUser,
 ) -> Result<ApiResponse<Vec<TaskSummaryDto>>, ApiError> {
     let list = TaskRepo::list_all(&state.db).await?;
     let dtos = list.into_iter().map(TaskSummaryDto::from).collect();
@@ -167,7 +165,6 @@ async fn list_tasks(
 
 async fn get_task(
     State(state): State<AppState>,
-    _user: AuthUser,
     Path(camera_id): Path<String>,
 ) -> Result<ApiResponse<TaskConfigDto>, ApiError> {
     if let Some(task) = TaskRepo::find_by_camera_id(&state.db, &camera_id).await? {
@@ -196,7 +193,6 @@ async fn get_task(
 
 async fn update_task(
     State(state): State<AppState>,
-    user: AuthUser,
     Path(camera_id): Path<String>,
     Json(dto): Json<TaskConfigDto>,
 ) -> Result<ApiResponse<TaskConfigDto>, ApiError> {
@@ -225,24 +221,6 @@ async fn update_task(
         .set_ai_active(&camera_id, dto.desired_enabled)
         .await;
 
-    // 记录操作审计日志
-    let req_json = serde_json::to_string(&dto).unwrap_or_default();
-    let _ = db::OplogRepo::record(
-        &state.db,
-        &user.username,
-        "task",
-        "update_rules",
-        "PUT",
-        &format!("/api/v1/tasks/{camera_id}"),
-        "",
-        &req_json,
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     Ok(ApiResponse::success(TaskConfigDto {
         camera_id: saved.camera_id,
         name: saved.name,
@@ -254,7 +232,6 @@ async fn update_task(
 
 async fn delete_task(
     State(state): State<AppState>,
-    user: AuthUser,
     Path(camera_id): Path<String>,
 ) -> Result<ApiResponse<()>, ApiError> {
     let rows = TaskRepo::delete_by_camera_id(&state.db, &camera_id).await?;
@@ -270,23 +247,6 @@ async fn delete_task(
         .await;
     state.pipeline.set_ai_active(&camera_id, false).await;
 
-    // 记录审计日志
-    let _ = db::OplogRepo::record(
-        &state.db,
-        &user.username,
-        "task",
-        "delete",
-        "DELETE",
-        &format!("/api/v1/tasks/{camera_id}"),
-        "",
-        "",
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     Ok(ApiResponse::success(()))
 }
 
@@ -296,7 +256,6 @@ async fn delete_task(
 
 async fn list_instances(
     State(state): State<AppState>,
-    _user: AuthUser,
     Query(query): Query<ListInstancesQuery>,
 ) -> Result<ApiResponse<Vec<AlgorithmInstanceDto>>, ApiError> {
     let list = if let Some(cid) = query.camera_id {
@@ -311,7 +270,6 @@ async fn list_instances(
 
 async fn create_instance(
     State(state): State<AppState>,
-    user: AuthUser,
     Json(req): Json<CreateInstanceRequest>,
 ) -> Result<ApiResponse<AlgorithmInstanceDto>, ApiError> {
     let instance_id = uuid::Uuid::new_v4().to_string();
@@ -348,33 +306,11 @@ async fn create_instance(
     )
     .await?;
 
-    let audit_body = serde_json::json!({
-        "instanceId": instance_id,
-        "cameraId": req.camera_id,
-        "algorithmId": req.algorithm_id,
-    });
-    let _ = OplogRepo::record(
-        &state.db,
-        &user.username,
-        "task_instance",
-        "create",
-        "POST",
-        "/api/v1/tasks/instances",
-        "",
-        &audit_body.to_string(),
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     Ok(ApiResponse::success(AlgorithmInstanceDto::from(created)))
 }
 
 async fn update_instance(
     State(state): State<AppState>,
-    user: AuthUser,
     Path(instance_id): Path<String>,
     Json(req): Json<UpdateInstanceRequest>,
 ) -> Result<ApiResponse<AlgorithmInstanceDto>, ApiError> {
@@ -391,77 +327,27 @@ async fn update_instance(
     )
     .await?;
 
-    let _ = OplogRepo::record(
-        &state.db,
-        &user.username,
-        "task_instance",
-        "update",
-        "PUT",
-        &format!("/api/v1/tasks/instances/{instance_id}"),
-        "",
-        "",
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     Ok(ApiResponse::success(AlgorithmInstanceDto::from(updated)))
 }
 
 async fn set_instance_enabled(
     State(state): State<AppState>,
-    user: AuthUser,
     Path(instance_id): Path<String>,
     Json(req): Json<SetInstanceEnabledRequest>,
 ) -> Result<ApiResponse<Option<()>>, ApiError> {
     AlgorithmInstanceRepo::set_enabled(&state.db, &instance_id, req.enabled).await?;
-
-    let _ = OplogRepo::record(
-        &state.db,
-        &user.username,
-        "task_instance",
-        if req.enabled { "enable" } else { "disable" },
-        "PUT",
-        &format!("/api/v1/tasks/instances/{instance_id}/enabled"),
-        "",
-        &serde_json::json!({ "enabled": req.enabled }).to_string(),
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
 
     Ok(ApiResponse::success(None))
 }
 
 async fn delete_instance(
     State(state): State<AppState>,
-    user: AuthUser,
     Path(instance_id): Path<String>,
 ) -> Result<ApiResponse<Option<()>>, ApiError> {
     let rows = AlgorithmInstanceRepo::delete(&state.db, &instance_id).await?;
     if rows == 0 {
         return Err(ApiError::NotFound(format!("算法实例未找到: {instance_id}")));
     }
-
-    let _ = OplogRepo::record(
-        &state.db,
-        &user.username,
-        "task_instance",
-        "delete",
-        "DELETE",
-        &format!("/api/v1/tasks/instances/{instance_id}"),
-        "",
-        "",
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
 
     Ok(ApiResponse::success(None))
 }

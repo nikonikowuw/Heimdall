@@ -230,10 +230,13 @@ async fn main() -> Result<()> {
     };
 
     // 5. 启动 HTTP / WebSocket 服务并监听优雅停机信号
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_fut)
-        .await
-        .context("HTTP 服务运行发生异常")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_fut)
+    .await
+    .context("HTTP 服务运行发生异常")?;
 
     tracing::info!("Argus 服务已安全优雅停机");
     Ok(())

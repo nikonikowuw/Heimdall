@@ -1,6 +1,35 @@
 {
   "title": "系統寫入操作安全審計日誌",
+  "subtitle": "受保護介面活動",
   "refreshStream": "重新整理審計流",
+  "filterModule": "模組",
+  "modules": {
+    "all": "全部模組",
+    "auth": "認證",
+    "camera": "攝影機",
+    "task": "任務",
+    "task_instance": "任務實例",
+    "algorithm": "演算法",
+    "alarm": "告警",
+    "evidence": "證據",
+    "system": "系統"
+  },
+  "status": {
+    "success": "{{code}} 成功",
+    "clientError": "{{code}} 用戶端錯誤",
+    "serverError": "{{code}} 伺服器錯誤",
+    "other": "{{code}}"
+  },
+  "loading": "正在載入審計日誌",
+  "empty": "暫無符合條件的審計記錄",
+  "unknown": "未知",
+  "unknownError": "未知錯誤",
+  "durationValue": "{{value}} 毫秒",
+  "loadError": "載入審計日誌失敗：{{error}}",
+  "retry": "重試",
+  "loadMore": "載入更多",
+  "loadingMore": "正在載入",
+  "noMore": "已顯示全部記錄",
   "columns": {
     "username": "操作人",
     "module": "模組",

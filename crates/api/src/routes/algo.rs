@@ -5,7 +5,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::extract::{Multipart, Path as AxumPath, Query, State};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
-use db::{AlgorithmRepo, AlgorithmStats, OplogRepo, UpsertAlgorithmParams, UpsertVersionParams};
+use db::{AlgorithmRepo, AlgorithmStats, UpsertAlgorithmParams, UpsertVersionParams};
 use infer::{
     compute_dir_size, current_platform_id, AlgoManifest, AlgoSandbox, InferError,
     ALGO_MANIFEST_FILENAME,
@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::ApiError;
-use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
 use crate::state::AppState;
 
@@ -194,7 +193,6 @@ async fn resolve_algorithm_id(
 /// 分页查询算法列表（包含版本树）
 async fn list_algorithms(
     State(state): State<AppState>,
-    _user: AuthUser,
     Query(q): Query<ListAlgorithmsQuery>,
 ) -> Result<ApiResponse<PaginatedAlgorithmsDto>, ApiError> {
     let page = q.page.unwrap_or(1);
@@ -223,10 +221,7 @@ async fn list_algorithms(
 }
 
 /// 获取全局算法与算力统计指标
-async fn get_stats(
-    State(state): State<AppState>,
-    _user: AuthUser,
-) -> Result<ApiResponse<AlgorithmStats>, ApiError> {
+async fn get_stats(State(state): State<AppState>) -> Result<ApiResponse<AlgorithmStats>, ApiError> {
     let stats = AlgorithmRepo::stats(&state.db).await?;
     Ok(ApiResponse::success(stats))
 }
@@ -234,7 +229,6 @@ async fn get_stats(
 /// 查询单个算法详情
 async fn get_algorithm(
     State(state): State<AppState>,
-    _user: AuthUser,
     AxumPath(id): AxumPath<String>,
 ) -> Result<ApiResponse<AlgorithmItemDto>, ApiError> {
     let aid = resolve_algorithm_id(&state.db, &id).await?;
@@ -251,7 +245,6 @@ async fn get_algorithm(
 /// 查询指定算法的版本列表
 async fn list_versions(
     State(state): State<AppState>,
-    _user: AuthUser,
     AxumPath(id): AxumPath<String>,
 ) -> Result<ApiResponse<Vec<AlgorithmVersionItemDto>>, ApiError> {
     let aid = resolve_algorithm_id(&state.db, &id).await?;
@@ -528,7 +521,6 @@ async fn write_upload_field_to_temp_file(
 /// 上传 .tar.gz / .zip / .tar 算法包并在物理沙箱中自检、落盘至 var/packages、入库并热加载
 async fn upload_package(
     State(state): State<AppState>,
-    user: AuthUser,
     mut multipart: Multipart,
 ) -> Result<ApiResponse<SandboxCheckResultDto>, ApiError> {
     let _upload_permit = state
@@ -654,29 +646,6 @@ async fn upload_package(
         }
     }
 
-    // 记录审计日志
-    let _ = OplogRepo::record(
-        &state.db,
-        &user.username,
-        "algorithm",
-        "upload",
-        "POST",
-        "/api/v1/algorithms/upload",
-        "",
-        &serde_json::json!({
-            "algorithmId": validated_manifest.algorithm_id,
-            "version": validated_manifest.version,
-            "platform": validated_manifest.platform_id,
-            "packageRoot": target_dir_str,
-        })
-        .to_string(),
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     Ok(ApiResponse::success(SandboxCheckResultDto {
         passed: true,
         steps_total: 7,
@@ -697,7 +666,6 @@ async fn upload_package(
 /// 激活指定版本 (支持多平台并联动管线单进程优雅热重载)
 async fn activate_version(
     State(state): State<AppState>,
-    user: AuthUser,
     AxumPath((id, version)): AxumPath<(String, String)>,
 ) -> Result<ApiResponse<Option<()>>, ApiError> {
     let aid = resolve_algorithm_id(&state.db, &id).await?;
@@ -736,31 +704,12 @@ async fn activate_version(
         }
     }
 
-    // 审计日志
-    let _ = OplogRepo::record(
-        &state.db,
-        &user.username,
-        "algorithm",
-        "activate",
-        "PUT",
-        &format!("/api/v1/algorithms/{aid}/versions/{version}/activate"),
-        "",
-        &serde_json::json!({ "activatedVersion": version, "platform": ver_model.platform_id })
-            .to_string(),
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     Ok(ApiResponse::success(None))
 }
 
 /// 安全卸载指定版本 (防孤儿文件与路径逃逸保护)
 async fn uninstall_version(
     State(state): State<AppState>,
-    user: AuthUser,
     AxumPath((id, version)): AxumPath<(String, String)>,
 ) -> Result<ApiResponse<Option<()>>, ApiError> {
     let aid = resolve_algorithm_id(&state.db, &id).await?;
@@ -805,23 +754,6 @@ async fn uninstall_version(
         // 该算法已被彻底删除
         state.algo_registry.unregister(&aid).await;
     }
-
-    // 审计日志
-    let _ = OplogRepo::record(
-        &state.db,
-        &user.username,
-        "algorithm",
-        "uninstall",
-        "DELETE",
-        &format!("/api/v1/algorithms/{aid}/versions/{version}"),
-        "",
-        &serde_json::json!({ "uninstalledVersion": version }).to_string(),
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
 
     Ok(ApiResponse::success(None))
 }

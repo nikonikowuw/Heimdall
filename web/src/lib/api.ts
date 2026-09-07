@@ -18,6 +18,7 @@ import type {
   InitializeRequest,
   LoginRequest,
   LoginResponse,
+  OperationLog,
   PaginatedAlgorithms,
   RecognitionRecord,
   TaskConfigDto,
@@ -199,6 +200,15 @@ function toQueryString(params?: Record<string, string | number | boolean | undef
   return str ? `?${str}` : ''
 }
 
+export const oplogApi = {
+  list(
+    params?: { module?: string; limit?: number; offset?: number },
+    signal?: AbortSignal,
+  ): Promise<OperationLog[]> {
+    const qs = toQueryString(params)
+    return request<OperationLog[]>(`/logs/operations${qs}`, { method: 'GET', signal })
+  },
+}
 export const taskApi = {
   getTask(cameraId: string): Promise<TaskConfigDto> {
     return api.get<TaskConfigDto>(`/tasks/${encodeURIComponent(cameraId)}`)

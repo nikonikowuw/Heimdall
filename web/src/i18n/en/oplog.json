@@ -1,6 +1,35 @@
 {
   "title": "System Write Operation Security Audit Logs",
-  "refreshStream": "Refresh Stream",
+  "subtitle": "Protected interface activity",
+  "refreshStream": "Refresh audit log",
+  "filterModule": "Module",
+  "modules": {
+    "all": "All modules",
+    "auth": "Authentication",
+    "camera": "Camera",
+    "task": "Task",
+    "task_instance": "Task instance",
+    "algorithm": "Algorithm",
+    "alarm": "Alarm",
+    "evidence": "Evidence",
+    "system": "System"
+  },
+  "status": {
+    "success": "{{code}} success",
+    "clientError": "{{code}} client error",
+    "serverError": "{{code}} server error",
+    "other": "{{code}}"
+  },
+  "loading": "Loading audit logs",
+  "empty": "No audit records match the current filter",
+  "unknown": "Unknown",
+  "unknownError": "Unknown error",
+  "durationValue": "{{value}} ms",
+  "loadError": "Failed to load audit logs: {{error}}",
+  "retry": "Retry",
+  "loadMore": "Load more",
+  "loadingMore": "Loading",
+  "noMore": "All records are displayed",
   "columns": {
     "username": "Operator",
     "module": "Module",

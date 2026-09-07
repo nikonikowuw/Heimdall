@@ -349,5 +349,5 @@ export interface OperationLog {
   durationMs: number
   ip: string
   userAgent: string
-  createdAt: string
+  createdAt: number
 }

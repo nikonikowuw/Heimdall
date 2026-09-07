@@ -427,6 +427,82 @@ async fn create_task(
 }
 ```
 
+### 操作审计中间件
+
+#### 1. Scope / Trigger
+
+受保护 REST 路由的写请求（`POST`、`PUT`、`PATCH`、`DELETE`）由 `AuditLogLayer` 统一记录；`auth` 的初始化、登录、改密和登出保留手工记录，因为其请求体需要脱敏。审计层只负责协议元数据和异步投递，不承载业务判定。
+
+#### 2. Signatures
+
+```rust
+pub fn AuditLogLayer::new(db: DatabaseConnection) -> Self;
+pub fn AuditLogLayer::log_reads(self, enabled: bool) -> Self;
+pub async fn OplogRepo::record(
+    db: &DatabaseConnection,
+    username: &str,
+    module: &str,
+    action: &str,
+    method: &str,
+    path: &str,
+    query: &str,
+    body: &str,
+    status_code: i32,
+    duration_ms: i64,
+    ip: &str,
+    user_agent: &str,
+) -> Result<Model, DbError>;
+```
+
+HTTP 查询接口保持现有兼容签名：`GET /api/v1/logs/operations?module=<module>&limit=<n>&offset=<n>`。
+
+#### 3. Contracts
+
+- 审计字段包括 `username`、`module`、`action`、`method`、完整 `path`、`query`、截断后的 `body`、`statusCode`、`durationMs`、`ip`、`userAgent` 和 UTC 毫秒 `createdAt`。
+- body 最多保留 2048 个 UTF-8 字符；multipart 和 octet-stream 上传不保存原始二进制内容。
+- IP 解析优先级固定为 `X-Forwarded-For` 首地址、`X-Real-IP`、`ConnectInfo<SocketAddr>`、`unknown`；生产 server 必须使用 `into_make_service_with_connect_info`。
+- 中间件从 `OriginalUri` 读取嵌套路由的完整 path/query，不能直接把被 `nest` 剥离后的 `Request::uri()` 当作审计路径。
+- 默认只记录写请求；日志写入通过 `tokio::spawn` 异步执行，失败只记录 debug 日志，不改变业务响应。
+- `logs/operations` 响应仍为 `data: OperationLogDto[]`，DTO 使用 `camelCase`，以兼容现有前端消费者。该旧接口暂保留有界 `offset` 分页；新建高频日志接口应遵循本文件的 cursor 规则。
+
+#### 4. Validation & Error Matrix
+
+| 输入/状态 | 处理 |
+| --- | --- |
+| 缺少 `limit` | 默认 20 |
+| `limit` 大于 100 | 钳制为 100 |
+| `limit=0` | 钳制为 1 |
+| 缺少 `module` | 查询全部模块 |
+| 审计数据库写入失败 | 不阻塞、不改写原响应，debug 记录失败原因 |
+| 非法 query 类型 | 由 Axum extractor 转为统一 4xx 响应 |
+
+#### 5. Good / Base / Bad Cases
+
+- Good：受保护的 `PUT /api/v1/alarms/{id}/status` 记录真实用户、完整路径、状态码、耗时和客户端地址。
+- Base：无代理头但 server 注入了 `ConnectInfo` 时记录 socket peer；没有任何地址上下文时记录 `unknown`。
+- Bad：在 handler 中重复调用通用 `OplogRepo::record()`，或在嵌套路由 middleware 中直接使用被剥离的 `Request::uri()`。
+
+#### 6. Tests Required
+
+- IP 解析优先级：`X-Forwarded-For`、`X-Real-IP`、`ConnectInfo`、fallback。
+- 嵌套路由使用 `OriginalUri` 保留 `/api/v1/...` 完整路径和 query。
+- body tee 不改变下游响应/请求消费，并限制为 2048 UTF-8 字符。
+- module/action 路径推断覆盖 camera、task、task instance、algorithm 和 alarm 写接口。
+- DTO 序列化断言 `statusCode`、`durationMs`、`createdAt` 等 camelCase 字段。
+- 前端 API client 断言 module、offset、limit 和 abort signal 透传。
+
+#### 7. Wrong vs Correct
+
+```rust
+// Wrong: Router::nest 会先剥离前缀，日志可能只得到 "/" 或 "/cameras"。
+let path = request.uri().path();
+
+// Correct: OriginalUri 保留客户端请求的完整 URI。
+let uri = request.extensions().get::<OriginalUri>()
+    .map(|original| &original.0)
+    .unwrap_or_else(|| request.uri());
+```
+
 ### 分页策略与响应
 
 系统严格区分两类分页策略：

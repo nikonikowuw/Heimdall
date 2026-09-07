@@ -22,6 +22,10 @@ impl FromRequestParts<AppState> for AuthUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        if let Some(user) = parts.extensions.get::<AuthUser>() {
+            return Ok(user.clone());
+        }
+
         let auth_header = parts
             .headers
             .get(axum::http::header::AUTHORIZATION)
@@ -71,6 +75,8 @@ pub async fn require_auth(
 
     // 将解析出的 AuthUser 存入 request extensions，便于下游直接获取
     let mut req = Request::from_parts(parts, body);
+    req.extensions_mut()
+        .insert(super::audit::AuditUser(auth_user.username.clone()));
     req.extensions_mut().insert(auth_user);
 
     Ok(next.run(req).await)

@@ -1,0 +1,10 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend package index with pre-dev checklist"}
+{"file": ".trellis/spec/backend/api-guidelines.md", "reason": "API route conventions and error handling patterns"}
+{"file": ".trellis/spec/backend/concurrency-guidelines.md", "reason": "Async concurrency patterns for middleware and DB writes"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database interaction patterns and repository conventions"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Error handling patterns"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend package index"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "React component patterns"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "TypeScript type safety conventions"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data flow patterns"}

@@ -1,5 +1,6 @@
 use axum::Router;
 
+use crate::middleware::AuditLogLayer;
 use crate::state::AppState;
 
 pub mod alarm;
@@ -24,6 +25,8 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .nest("/logs/operations", oplog::router())
         .nest("/system", system::router())
         .nest("/ws/events", ws::router())
+        // route_layer 的最后一层在最外侧执行：认证通过后进入审计层，再到 handler。
+        .route_layer(AuditLogLayer::new(state.db.clone()))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::require_auth,

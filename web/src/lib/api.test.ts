@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { authApi, algorithmApi, cameraApi, taskApi, ApiError } from './api'
+import { authApi, algorithmApi, cameraApi, taskApi, oplogApi, ApiError } from './api'
 import { useAuthStore } from '../stores/auth'
 
 describe('API Client', () => {
@@ -97,6 +97,27 @@ describe('API Client', () => {
           'Accept-Language': expect.any(String),
         }),
       }),
+    )
+  })
+
+  it('oplogApi.list should pass module pagination and abort signal', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: [],
+        timestamp: 1747584000000,
+      }),
+    })
+    const controller = new AbortController()
+
+    await expect(
+      oplogApi.list({ module: 'camera', limit: 50, offset: 100 }, controller.signal),
+    ).resolves.toEqual([])
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/logs/operations?module=camera&limit=50&offset=100',
+      expect.objectContaining({ method: 'GET', signal: controller.signal }),
     )
   })
 

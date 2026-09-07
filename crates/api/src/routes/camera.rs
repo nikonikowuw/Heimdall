@@ -7,7 +7,6 @@ use sea_orm::Set;
 use types::{Camera, CreateCameraRequest, ProbeResult, UpdateCameraRequest};
 
 use crate::error::ApiError;
-use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
 use crate::state::AppState;
 
@@ -102,10 +101,7 @@ fn spawn_probe_and_broadcast(state: AppState, camera_id: String, rtsp_url: Strin
 }
 
 /// 获取所有摄像头视频源列表
-async fn list_cameras(
-    State(state): State<AppState>,
-    _user: AuthUser,
-) -> Result<ApiResponse<Vec<Camera>>, ApiError> {
+async fn list_cameras(State(state): State<AppState>) -> Result<ApiResponse<Vec<Camera>>, ApiError> {
     let list = db::CameraRepo::list_all(&state.db).await?;
     let dtos = list.into_iter().map(model_to_camera_dto).collect();
     Ok(ApiResponse::success(dtos))
@@ -115,7 +111,6 @@ async fn list_cameras(
 async fn get_camera(
     State(state): State<AppState>,
     Path(camera_id): Path<String>,
-    _user: AuthUser,
 ) -> Result<ApiResponse<Camera>, ApiError> {
     let camera = db::CameraRepo::find_by_camera_id(&state.db, &camera_id)
         .await?
@@ -126,7 +121,6 @@ async fn get_camera(
 /// 新增摄像头视频源并异步触发首次探活
 async fn create_camera(
     State(state): State<AppState>,
-    user: AuthUser,
     Json(req): Json<CreateCameraRequest>,
 ) -> Result<ApiResponse<Camera>, ApiError> {
     let name = req.name.trim();
@@ -149,8 +143,6 @@ async fn create_camera(
         Some(ref s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => media::deduce_primary_sub_stream(rtsp_url).unwrap_or_default(),
     };
-
-    let req_json = serde_json::to_string(&req).unwrap_or_default();
 
     let active_model = db::entity::camera::ActiveModel {
         camera_id: Set(camera_id.clone()),
@@ -176,23 +168,6 @@ async fn create_camera(
 
     let inserted = db::CameraRepo::insert(&state.db, active_model).await?;
 
-    // 记录审计日志
-    let _ = db::OplogRepo::record(
-        &state.db,
-        &user.username,
-        "camera",
-        "create",
-        "POST",
-        "/api/v1/cameras",
-        "",
-        &req_json,
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     // 异步触发一次轻量探活
     spawn_probe_and_broadcast(state.clone(), camera_id, rtsp_url.to_string());
 
@@ -202,7 +177,6 @@ async fn create_camera(
 /// 修改摄像头基础配置
 async fn update_camera(
     State(state): State<AppState>,
-    user: AuthUser,
     Path(camera_id): Path<String>,
     Json(req): Json<UpdateCameraRequest>,
 ) -> Result<ApiResponse<Camera>, ApiError> {
@@ -210,7 +184,6 @@ async fn update_camera(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("摄像头未找到: {camera_id}")))?;
 
-    let req_json = serde_json::to_string(&req).unwrap_or_default();
     let mut active: db::entity::camera::ActiveModel = camera.into();
     let mut rtsp_url_changed = false;
     let mut new_url = String::new();
@@ -247,23 +220,6 @@ async fn update_camera(
         .await
         .map_err(db::DbError::from)?;
 
-    // 记录审计日志
-    let _ = db::OplogRepo::record(
-        &state.db,
-        &user.username,
-        "camera",
-        "update",
-        "PUT",
-        &format!("/api/v1/cameras/{camera_id}"),
-        "",
-        &req_json,
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     // 若 RTSP 地址变更，移除旧流会话并异步重新探活
     if rtsp_url_changed {
         state.stream_hub.remove_session(&camera_id).await;
@@ -276,7 +232,6 @@ async fn update_camera(
 /// 删除摄像头视频源
 async fn delete_camera(
     State(state): State<AppState>,
-    user: AuthUser,
     Path(camera_id): Path<String>,
 ) -> Result<ApiResponse<()>, ApiError> {
     let rows = db::CameraRepo::delete_by_camera_id(&state.db, &camera_id).await?;
@@ -293,30 +248,12 @@ async fn delete_camera(
         .await;
     state.pipeline.set_ai_active(&camera_id, false).await;
 
-    // 记录审计日志
-    let _ = db::OplogRepo::record(
-        &state.db,
-        &user.username,
-        "camera",
-        "delete",
-        "DELETE",
-        &format!("/api/v1/cameras/{camera_id}"),
-        "",
-        "",
-        200,
-        0,
-        "",
-        "",
-    )
-    .await;
-
     Ok(ApiResponse::success(()))
 }
 
 /// 手动触发单次探活
 async fn probe_camera_manual(
     State(state): State<AppState>,
-    _user: AuthUser,
     Path(camera_id): Path<String>,
 ) -> Result<ApiResponse<ProbeResult>, ApiError> {
     let camera = db::CameraRepo::find_by_camera_id(&state.db, &camera_id)
@@ -539,16 +476,30 @@ mod tests {
         assert_eq!(update_res["data"]["name"], "East Gate Camera Updated");
         assert_eq!(update_res["data"]["remark"], "Updated remark");
 
-        // 5. 校验审计日志中已记录 create 与 update 操作
-        let logs = db::OplogRepo::list_recent(&state.db, Some("camera"), 10, 0)
-            .await
-            .unwrap();
+        // 5. 校验审计日志中已记录 create 与 update 操作。
+        // 审计写入在 middleware 中异步执行，只等待有限时间避免测试依赖调度时序。
+        let mut logs = Vec::new();
+        for _ in 0..100 {
+            logs = db::OplogRepo::list_recent(&state.db, Some("camera"), 10, 0)
+                .await
+                .unwrap();
+            let has_create = logs
+                .iter()
+                .any(|log| log.action == "create" && log.module == "camera");
+            let has_update = logs
+                .iter()
+                .any(|log| log.action == "update" && log.module == "camera");
+            if has_create && has_update {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
         assert!(logs
             .iter()
-            .any(|l| l.action == "create" && l.module == "camera"));
+            .any(|log| log.action == "create" && log.module == "camera"));
         assert!(logs
             .iter()
-            .any(|l| l.action == "update" && l.module == "camera"));
+            .any(|log| log.action == "update" && log.module == "camera"));
 
         // 6. 删除摄像头
         let req = Request::builder()

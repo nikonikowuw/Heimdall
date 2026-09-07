@@ -8,7 +8,6 @@ use types::{AlarmSeverity, AlarmStatus, TOPIC_ALARM_STATUS_CHANGED};
 use db::AlarmRepo;
 
 use crate::error::ApiError;
-use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
 use crate::state::{AppState, WsBroadcastEvent};
 
@@ -110,7 +109,6 @@ async fn list_alarms(
 
 async fn update_alarm_status(
     State(state): State<AppState>,
-    _user: AuthUser,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateAlarmStatusRequest>,
 ) -> Result<ApiResponse<AlarmDto>, ApiError> {

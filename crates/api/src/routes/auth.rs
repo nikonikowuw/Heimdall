@@ -1,13 +1,15 @@
 use std::sync::atomic::Ordering;
 
-use axum::extract::State;
+use axum::extract::{Json, State};
+use axum::http::{Extensions, HeaderMap};
 use axum::routing::{get, post, put};
-use axum::{Json, Router};
+use axum::Router;
 
 use crate::crypto::{
     generate_jwt, hash_password_async, mask_sensitive_json, verify_password_async,
 };
 use crate::error::ApiError;
+use crate::middleware::audit::{extract_client_ip, extract_user_agent};
 use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
 use crate::state::AppState;
@@ -41,6 +43,13 @@ fn issue_token(username: &str, secret: &[u8]) -> Result<(String, i64), ApiError>
     Ok((access_token, expires_at))
 }
 
+fn request_metadata(headers: &HeaderMap, extensions: &Extensions) -> (String, String) {
+    (
+        extract_client_ip(headers, extensions),
+        extract_user_agent(headers),
+    )
+}
+
 /// 查询系统初始化状态
 async fn get_init_status(
     State(state): State<AppState>,
@@ -52,8 +61,11 @@ async fn get_init_status(
 /// 开箱首次初始化管理员账号与密码
 async fn initialize(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    extensions: Extensions,
     Json(req): Json<InitializeRequest>,
 ) -> Result<ApiResponse<LoginResponse>, ApiError> {
+    let start = std::time::Instant::now();
     if state.is_initialized.load(Ordering::Relaxed)
         || db::AdminUserRepo::is_initialized(&state.db).await?
     {
@@ -82,6 +94,7 @@ async fn initialize(
     // 记录开箱初始化审计日志（密码脱敏）
     let mut body_json = serde_json::to_value(&req).unwrap_or_default();
     mask_sensitive_json(&mut body_json);
+    let (client_ip, user_agent) = request_metadata(&headers, &extensions);
     let _ = db::OplogRepo::record(
         &state.db,
         username,
@@ -92,9 +105,9 @@ async fn initialize(
         "",
         &body_json.to_string(),
         200,
-        0,
-        "",
-        "",
+        start.elapsed().as_millis() as i64,
+        &client_ip,
+        &user_agent,
     )
     .await;
 
@@ -108,8 +121,11 @@ async fn initialize(
 /// 管理员登录
 async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    extensions: Extensions,
     Json(req): Json<LoginRequest>,
 ) -> Result<ApiResponse<LoginResponse>, ApiError> {
+    let start = std::time::Instant::now();
     if !state.is_initialized.load(Ordering::Relaxed) {
         return Err(ApiError::InvalidCredentials);
     }
@@ -129,6 +145,7 @@ async fn login(
     // 记录登录审计日志（密码脱敏）
     let mut body_json = serde_json::to_value(&req).unwrap_or_default();
     mask_sensitive_json(&mut body_json);
+    let (client_ip, user_agent) = request_metadata(&headers, &extensions);
     let _ = db::OplogRepo::record(
         &state.db,
         &user.username,
@@ -139,9 +156,9 @@ async fn login(
         "",
         &body_json.to_string(),
         200,
-        0,
-        "",
-        "",
+        start.elapsed().as_millis() as i64,
+        &client_ip,
+        &user_agent,
     )
     .await;
 
@@ -156,8 +173,11 @@ async fn login(
 async fn change_password(
     auth: AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    extensions: Extensions,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<ApiResponse<AdminUserDto>, ApiError> {
+    let start = std::time::Instant::now();
     if req.new_password.len() < 6 {
         return Err(ApiError::WeakPassword(
             "新密码长度不能少于 6 位".to_string(),
@@ -181,6 +201,7 @@ async fn change_password(
     // 记录改密审计日志（新旧密码均必须严格脱敏为 ******）
     let mut body_json = serde_json::to_value(&req).unwrap_or_default();
     mask_sensitive_json(&mut body_json);
+    let (client_ip, user_agent) = request_metadata(&headers, &extensions);
     let _ = db::OplogRepo::record(
         &state.db,
         &auth.username,
@@ -191,9 +212,9 @@ async fn change_password(
         "",
         &body_json.to_string(),
         200,
-        0,
-        "",
-        "",
+        start.elapsed().as_millis() as i64,
+        &client_ip,
+        &user_agent,
     )
     .await;
 
@@ -224,12 +245,16 @@ async fn get_me(
 async fn logout(
     auth: AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    extensions: Extensions,
 ) -> Result<ApiResponse<()>, ApiError> {
+    let start = std::time::Instant::now();
     let now_ms = chrono::Utc::now().timestamp_millis();
     db::AdminUserRepo::invalidate_tokens(&state.db, &auth.username, now_ms).await?;
     state.token_invalid_before.store(now_ms, Ordering::Relaxed);
 
     // 记录登出审计日志
+    let (client_ip, user_agent) = request_metadata(&headers, &extensions);
     let _ = db::OplogRepo::record(
         &state.db,
         &auth.username,
@@ -240,9 +265,9 @@ async fn logout(
         "",
         "",
         200,
-        0,
-        "",
-        "",
+        start.elapsed().as_millis() as i64,
+        &client_ip,
+        &user_agent,
     )
     .await;
 

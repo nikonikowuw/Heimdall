@@ -1,6 +1,35 @@
 {
   "title": "系统写操作安全审计日志",
+  "subtitle": "受保护接口活动",
   "refreshStream": "刷新审计流",
+  "filterModule": "模块",
+  "modules": {
+    "all": "全部模块",
+    "auth": "认证",
+    "camera": "摄像头",
+    "task": "任务",
+    "task_instance": "任务实例",
+    "algorithm": "算法",
+    "alarm": "告警",
+    "evidence": "证据",
+    "system": "系统"
+  },
+  "status": {
+    "success": "{{code}} 成功",
+    "clientError": "{{code}} 客户端错误",
+    "serverError": "{{code}} 服务端错误",
+    "other": "{{code}}"
+  },
+  "loading": "正在加载审计日志",
+  "empty": "暂无符合条件的审计记录",
+  "unknown": "未知",
+  "unknownError": "未知错误",
+  "durationValue": "{{value}} 毫秒",
+  "loadError": "加载审计日志失败：{{error}}",
+  "retry": "重试",
+  "loadMore": "加载更多",
+  "loadingMore": "正在加载",
+  "noMore": "已显示全部记录",
   "columns": {
     "username": "操作人",
     "module": "模块",
