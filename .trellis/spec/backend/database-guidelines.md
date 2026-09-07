@@ -1,232 +1,80 @@
-# 数据库规范
+# 数据库规范 (Database Guidelines)
 
-> SeaORM + SQLite。核心原则：**SQLite 跑在 eMMC/SD 卡上，写入策略比查询优化更要紧。**
-
-> ⚠️ **状态：立项约定（尚未经代码验证）**
-> 首批 entity 与 migration 落地后需回填真实表结构与查询示例，并删除本提示。
+> 基于 SeaORM + SQLite + Refinery。
+> 核心原则：**SQLite 运行在嵌入式 eMMC/SD 存储介质上，写入保护与生命周期策略比查询更重要**。
 
 ---
 
-## 为什么是 SQLite
+## 1. 连接池与必备 PRAGMA 契约
 
-Argus 的数据是单设备本地数据：事件元数据、摄像头配置、录像片段索引。没有多写入者、没有跨节点。SQLite 免运维、零额外进程、内存占用可忽略 —— 这在边缘设备上是决定性的。
-
-**代价与应对**：写并发受限（全库级写锁）。因此必须开 WAL，且写入必须批量化。
-
----
-
-## 连接配置
-
-在 `db` 中统一建立连接池，其它 crate 不自己开连接：
+连接池与连接参数必须在 `crates/db` 中统一构建，其他 crate 仅持有共享连接句柄：
 
 ```rust
 // crates/db/src/lib.rs
 let mut opt = ConnectOptions::new(format!("sqlite://{}?mode=rwc", path.display()));
-opt.max_connections(4)          // SQLite 写是串行的，池子大了没用
+opt.max_connections(4)          // SQLite 写是串行的，边缘端小连接池足以满足需求
    .min_connections(1)
-   .sqlx_logging(false);        // 帧路径附近的 SQL 日志会刷屏
+   .sqlx_logging(false);        // 避免逐帧路径产生海量 SQL 日志刷屏
 let db = Database::connect(opt).await?;
 ```
 
-启动后必须执行的 PRAGMA：
+启动初始化连接时**必须显式执行以下 PRAGMA**（缺一不可）：
 
-| PRAGMA | 值 | 理由 |
-|--------|-----|------|
-| `journal_mode` | `WAL` | 读写不互斥，事件写入不阻塞 API 查询 |
-| `synchronous` | `NORMAL` | WAL 模式下足够安全，避免每次提交都 fsync 磨损存储 |
-| `busy_timeout` | `5000` | 写锁竞争时等待而非立即报错 |
-| `foreign_keys` | `ON` | SQLite 默认关闭，必须显式打开 |
-
-**规则**：这些 PRAGMA 写在连接初始化代码里，不依赖外部配置。漏掉 WAL 是 SQLite 项目最常见的性能事故。
+| PRAGMA | 取值 | 硬性理由 |
+|--------|------|---------|
+| `journal_mode` | `WAL` | **核心生命线**：读写互不阻塞，事件写入不锁死 API 查询 |
+| `synchronous` | `NORMAL` | WAL 模式下安全且减少 fsync 调用，大幅减轻 eMMC 擦写磨损 |
+| `busy_timeout` | `5000` | 写锁争用时等待 5000ms 而非立即报 DatabaseLocked 错误 |
+| `foreign_keys` | `ON` | SQLite 默认关闭外键约束，必须显式激活保证级联一致性 |
 
 ---
 
-## Entity 与 Migration
+## 2. 数据库迁移规范 (Refinery)
 
-使用 **Refinery** 管理数据库迁移。Refinery 是 Rust 原生的数据库迁移工具，支持 SQLite，使用单向前向 SQL 迁移文件（`V{version}__{description}.sql`）。
-
-```
-crates/db/
-├── src/
-│   ├── lib.rs
-│   ├── entity/          # SeaORM entity，一张表一个文件
-│   │   ├── mod.rs
-│   │   ├── camera.rs            # 摄像头设备
-│   │   ├── task.rs              # 分析任务（关联摄像头与算法配置）
-│   │   ├── algorithm.rs         # 已安装的算法包元数据
-│   │   ├── alarm_record.rs      # 告警事件记录
-│   │   ├── capture.rs           # 通用目标抓拍记录
-│   │   ├── face_observation.rs  # 人脸识别通行观测
-│   │   ├── plate_observation.rs # 车牌识别通行观测
-│   │   ├── user.rs              # 单管理员凭据（admin，存储密码哈希）
-│   │   ├── system_config.rs     # 系统配置（网络、对外 API Key、抓拍存储配额）
-│   │   └── operation_log.rs     # 关键操作日志（重启、改密、升级）
-│   ├── repository/      # 查询与持久化函数，按领域分文件
-│   │   ├── mod.rs
-│   │   ├── camera.rs
-│   │   ├── alarm.rs
-│   │   └── system.rs
-│   └── migration/
-│       ├── mod.rs
-│       ├── migrations/          # Refinery 单向前向 SQL 迁移文件
-│       │   ├── V1__init_schema.sql
-│       │   └── V2__add_event_score.sql
-│       └── seed.rs             # 初始数据播种
-```
-
-### 迁移文件规范（Refinery）
-
-Refinery 遵循 `V{version}__{description}.sql` 命名规范（单向前向演进，回滚通过编写新的前向迁移实现）：
-
-```
-V1__init_schema.sql           # 初始全量 schema
-V2__add_event_score.sql       # 增量字段变更
-```
-
-- **版本号**：整数，严格单调递增（`V1`、`V2`、...），双下划线 `__` 分隔版本号和描述
-- **描述**：snake_case 英文动词短语，描述本次变更意图
-- **事务与 DDL**：SQLite 在事务内执行 DDL，变更具备原子性；若需要回滚，编写新的前向迁移（如 `V3__revert_event_score.sql`）
-
-示例：
-
-```sql
--- V1__init_schema.sql
-CREATE TABLE IF NOT EXISTS camera (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    rtsp_url TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at INTEGER NOT NULL,  -- UTC Unix 毫秒时间戳 (i64)
-    updated_at INTEGER NOT NULL   -- UTC Unix 毫秒时间戳 (i64)
-);
-
-CREATE TABLE IF NOT EXISTS alarm_record (
-    event_id TEXT PRIMARY KEY,
-    camera_id TEXT NOT NULL REFERENCES camera(id),
-    alarm_type_id TEXT NOT NULL,
-    timestamp INTEGER NOT NULL,   -- UTC Unix 毫秒时间戳 (i64)
-    confidence REAL,
-    image_rel_path TEXT,
-    created_at INTEGER NOT NULL   -- UTC Unix 毫秒时间戳 (i64)
-);
-
-CREATE INDEX IF NOT EXISTS idx_alarm_camera_ts ON alarm_record (camera_id, timestamp);
-```
-
-### 迁移执行规则
-
-| 规则 | 说明 |
-|------|------|
-| **只增不改（前向演进）** | 已合并的迁移文件永不修改，需要变更或回滚均添加新的递增版本号文件 |
-| **启动时自动执行** | 应用启动时按版本号递增自动执行未运行的迁移（Refinery 自动追踪） |
-| **版本追踪** | Refinery 自动在 SQLite 中维护 `refinery_schema_history` 表 |
-| **禁止运行时手动执行** | 不提供未经受控的运行时手动 DDL 执行，统一由启动流程托管 |
-
-### 集成方式
-
-在应用启动时，优先使用轻量 `rusqlite::Connection` 执行嵌入式迁移，完成后交由 SeaORM 连接池接管：
-
-```rust
-// crates/db/src/migration/mod.rs
-use refinery::embed_migrations;
-use std::path::Path;
-
-embed_migrations!("src/migration/migrations");
-
-pub fn run_migrations(db_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let mut conn = rusqlite::Connection::open(db_path)?;
-    // 执行嵌入的迁移
-    migrations::runner().run(&mut conn)?;
-    Ok(())
-}
-```
-
-- 迁移文件通过 `embed_migrations!` 宏编译进二进制，无需运行时读取外部文件系统
-- 启动时在初始化 SeaORM 连接池前执行 `run_migrations`
-- 若迁移失败，应用立即 panic/退出并输出错误日志，严禁在损坏或不一致的 schema 上运行
-
-### Seed 播种
-
-初始数据通过独立的 `seed.rs` 模块在首次启动时播种：
-
-- 检查 `user` 表是否为空，为空则创建默认管理员（`admin`），密码哈希后存储
-- 检查 `system_config` 表是否为空，为空则插入默认配置
-- Seed 逻辑**不走 migration 文件**，而是应用层逻辑（因为 Seed 可能依赖业务代码）
+使用 **Refinery** 执行单向前向 SQL 迁移管理：
+- **命名规范**：`crates/db/src/migration/migrations/V{version}__{description}.sql`（如 `V1__init_schema.sql`、`V2__add_event_score.sql`）；
+- **版本号递增**：版本号为单调递增正整数，双下划线 `__` 分隔，描述使用 snake_case 英文短语；
+- **单向只增不改**：已合并的迁移文件永不篡改；若需修复或回滚，编写新的前向递增版本迁移（如 `V3__revert_xxx.sql`）；
+- **嵌入编译与启动托管**：使用 `embed_migrations!` 宏将 SQL 文件直接编译进主二进制，应用启动时在初始化 SeaORM 前优先执行 `run_migrations`，迁移失败立即 panic 退出，杜绝在脏版本库上运行。
 
 ---
 
-## 表设计约定
+## 3. 表设计核心契约
 
-| 约定 | 规则 | 说明 |
-|------|------|------|
-| 表名 | 单数 snake_case：`camera`、`alarm_record`、`user` | 避免复数混乱 |
-| 主键 | 一律 `id` | 事件类用 `TEXT` 存引擎生成的唯一 `event_id`（天然幂等去重）；配置类用 `INTEGER` 自增 |
-| 时间戳 | 存 **UTC Unix 毫秒 `INTEGER`** | 后端只存 UTC，不存储时区信息。SQLite 无原生时间类型，以毫秒整数排序、比较最快，前端按用户时区显示 |
-| 相对图片路径 | 存 **相对路径 `TEXT`** | 统一存相对于数据根目录的路径（如 `var/images/...`），**严禁存绝对路径**，便于数据目录迁移 |
-| 布尔 | `INTEGER` 0/1 | SQLite 无 BOOL |
-| 外键 | `<表名>_id`，例如 `camera_id` | 逻辑外键建立复合索引 |
-| 可空 | 默认 NOT NULL | 只有语义上真可能为空才写 Option / NULL |
-
-**时间戳规则是硬性的**：整个系统内部时间统一为 Unix 毫秒整数，只在 API 边界和 UI 上转成人类可读格式。混用会导致排序和范围查询出错。
+| 规范项 | 约定 | 说明 |
+|-------|------|------|
+| **表名** | 单数 snake_case（如 `camera`, `alarm_record`, `user`） | 统一单数形式 |
+| **主键** | 字段名统一为 `id` | 事件表使用全局唯一 `event_id: TEXT`（天然幂等）；配置类使用整型自增 |
+| **时间戳铁律** | **13 位 UTC Unix 毫秒 `INTEGER` (`i64`)** | 严禁存储字符串、日期对象或秒级时间戳，后端只存 UTC |
+| **相对图片路径** | `TEXT` 相对路径（如 `var/images/...`） | **严禁存绝对路径**，确保数据目录整体迁移或挂载时不损坏引用 |
+| **布尔类型** | `INTEGER` 0 或 1 | SQLite 无原生布尔类型 |
+| **严禁大对象** | **严禁在数据库中存储 BLOB 图片或视频** | 抓拍图片与视频切片一律存文件系统，数据库仅持有相对路径指针 |
 
 ---
 
-## 写入必须批量化
+## 4. 批量写入与级联淘汰保护
 
-事件写入在帧路径附近，一条一个事务会把 eMMC 写穿：
-
-```rust
-// ❌ 每个事件一个事务
-for ev in events { ev.into_active_model().insert(db).await?; }
-
-// ✅ 批量插入，一个事务
-Event::insert_many(events.into_iter().map(|e| e.into_active_model()))
-    .exec(db)
-    .await?;
-```
-
-约定：
-
-- 事件写入走**缓冲 + 定时/定量刷盘**（例如攒满 32 条或 1 秒到期就提交）。
-- 缓冲区**必须有上界**，满了要丢弃最旧的并计数告警，不能无限增长。
-- 快照/录像等大文件写文件系统，数据库里只存路径，**绝不把二进制塞进 BLOB**。
+- **批量插入契约**：告警事件等高频写入必须通过通道缓冲并**攒批批量提交**（如 32 条或 1 秒到期），严禁每产生一个事件启动一次单事务写盘；
+- **有界缓冲防御**：事件写入通道必须设固定上限，满载时主动丢弃最旧数据并记录告警，严禁无界内存累积；
+- **原子级联淘汰（图在案在，图销案销）**：
+  - 存储清理任务在删除数据库历史记录时，**必须在单一事务中同步销毁物理磁盘上的图片/录像文件**，彻底杜绝孤儿文件；
+  - 配合 `auto_vacuum = INCREMENTAL`，定期执行 `PRAGMA incremental_vacuum` 释放被删除的页面空间，防止数据库文件只增不减。
 
 ---
 
-## 保留策略是必需功能，不是可选项
+## 5. 查询与分层边界
 
-设备存储有限，没有清理逻辑就是几天后必然写满：
-
-- 事件表按天数或条数上限自动清理，清理任务定期运行。
-- 删除数据库记录时**必须同时删除对应的快照/录像文件**，否则文件系统会残留孤儿文件。
-- 清理后周期性执行 `PRAGMA incremental_vacuum`（配合 `auto_vacuum = INCREMENTAL`），否则数据库文件只增不减。
-
-**规则**：任何新增的"会持续增长的表"，在同一个 PR 里必须带上它的保留策略。
+- **Repository 封装**：所有 SQL 查询必须收敛在 `crates/db/src/repository/` 中，**`api` 层与 `pipeline` 层严禁直接依赖 `sea-orm` 查询 DSL**；
+- **有界查询铁律**：列表查询**一律强制带 `limit` 限制**，严禁发起无界全表扫描；
+- **高频复合索引**：时间范围查询的字段必须建立联合索引（如 `CREATE INDEX idx_alarm_cam_ts ON alarm_record (camera_id, timestamp)`）。
 
 ---
 
-## 查询规范
+## 6. 禁止事项 (Iron Rules)
 
-- 查询函数集中在 `repository/`，**handler 里不写 SeaORM 查询链**。
-- 列表接口一律分页，**禁止无 `limit` 的全表查询**。
-- 时间范围查询的字段必须有索引（事件表按 `(camera_id, ts)` 建复合索引）。
-- 用 SeaORM 的类型化查询，避免 `raw_sql`；确需 raw SQL 时写在 repository 里并附注释说明为什么。
-
----
-
-## 禁止事项
-
-- ❌ 在 `api` 或 `pipeline` 里直接依赖 `sea-orm`
-- ❌ 修改已合并的 migration 文件
-- ❌ 时间戳存字符串
-- ❌ 二进制数据存 BLOB
-- ❌ 无上界的写入缓冲
-- ❌ 忘记开 WAL
-
----
-
-## 待验证事项
-
-- [ ] 事件表预计写入速率，据此定刷盘批量与间隔
-- [ ] 是否需要单独的时序表存运动检测原始数据，还是只存判定后的事件
-- [ ] 保留策略的触发方式：定时任务 vs 每次写入后检查
+- ❌ 在 `api` 或 `pipeline` 层直接编写 `sea-orm` 查询代码
+- ❌ 修改已合并入库的已发布 migration SQL 文件
+- ❌ 在数据库中将时间戳存为字符串或秒级数字
+- ❌ 在数据库中用 `BLOB` 存储抓拍原图或视频切片
+- ❌ 忘记开启 `journal_mode = WAL` 导致读写锁死
+- ❌ 在高频流式数据上执行无 `limit` 的全表 `select`
