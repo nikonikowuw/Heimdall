@@ -1,8 +1,11 @@
 //! 通用目标检测算法插件实现 (GeneralDetector)
 
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
 use algo_sdk::cv::platforms::apple::AppleCvEngine;
+#[cfg(target_os = "macos")]
 use algo_sdk::cv::CvEngine;
 use algo_sdk::emitter::ResultEmitter;
 use algo_sdk::error::AlgoError;
@@ -10,9 +13,12 @@ use algo_sdk::frame::SafeFrame;
 use algo_sdk::plugin::{AlgoPlugin, InitContext};
 
 use crate::config::{ClassMask, InstanceConfig};
+#[cfg(target_os = "macos")]
 use crate::coreml::CoreMlRunner;
+#[cfg(target_os = "macos")]
 use crate::postprocess::parse_and_unmap_detections;
 
+#[cfg(target_os = "macos")]
 #[derive(Debug)]
 pub struct GeneralDetector {
     pub runner: Arc<CoreMlRunner>,
@@ -20,9 +26,17 @@ pub struct GeneralDetector {
     pub mask: ClassMask,
 }
 
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug)]
+pub struct GeneralDetector {
+    pub config: InstanceConfig,
+    pub mask: ClassMask,
+}
+
 impl AlgoPlugin for GeneralDetector {
     type Config = InstanceConfig;
 
+    #[cfg(target_os = "macos")]
     fn init(ctx: &InitContext<'_>, config: Self::Config) -> Result<Self, AlgoError> {
         let runner = CoreMlRunner::load_model(ctx.package_root)?;
         let mask = ClassMask::from_classes(&config.target_classes);
@@ -34,6 +48,13 @@ impl AlgoPlugin for GeneralDetector {
         })
     }
 
+    #[cfg(not(target_os = "macos"))]
+    fn init(_ctx: &InitContext<'_>, config: Self::Config) -> Result<Self, AlgoError> {
+        let mask = ClassMask::from_classes(&config.target_classes);
+        Ok(Self { config, mask })
+    }
+
+    #[cfg(target_os = "macos")]
     fn process(
         &mut self,
         frame: SafeFrame<'_>,
@@ -60,6 +81,17 @@ impl AlgoPlugin for GeneralDetector {
         emitter.emit_detections(&boxes)?;
 
         Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn process(
+        &mut self,
+        _frame: SafeFrame<'_>,
+        _emitter: &mut ResultEmitter<'_>,
+    ) -> Result<(), AlgoError> {
+        Err(AlgoError::Internal {
+            reason: "macOS CoreML 检测插件仅支持在 macOS 平台上运行".to_string(),
+        })
     }
 
     fn flush(&mut self, _emitter: &mut ResultEmitter<'_>) -> Result<(), AlgoError> {

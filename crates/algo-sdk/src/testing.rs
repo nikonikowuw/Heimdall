@@ -101,7 +101,7 @@ fn allocate_real_dma_buf(data: &[u8]) -> Result<std::os::fd::OwnedFd, AlgoError>
         .ok_or(AlgoError::OutOfMemory)?;
     let mut allocation = DmaHeapAllocationData {
         len: alloc_len as u64,
-        fd: -1,
+        fd: 0,
         fd_flags: (libc::O_RDWR | libc::O_CLOEXEC) as u32,
         heap_flags: 0,
     };

@@ -1,0 +1,35 @@
+{
+  "manifest_version": 1,
+  "algorithm_id": "general_detection",
+  "version": "1.0.0",
+  "name": "General Object Detection (RK3576)",
+  "description": "Built-in general object detection model powered by RKNN on Rockchip RK3576 with customizable target class filtering",
+  "algorithm_type": "object_detection",
+  "alarm_type_id": "object_detect",
+  "platform_id": "linux-rknn",
+  "min_adapter_version": "1.0.0",
+  "runtime_constraints": {
+    "target_soc": "rk3576"
+  },
+  "resource_profile": {
+    "min_free_memory_mb": 128,
+    "fps_tiers": [
+      {
+        "fps": 5,
+        "units": 50
+      },
+      {
+        "fps": 15,
+        "units": 120
+      },
+      {
+        "fps": 30,
+        "units": 250
+      }
+    ]
+  },
+  "self_test": {
+    "timeout_ms": 10000,
+    "input_mode": "test_image"
+  }
+}

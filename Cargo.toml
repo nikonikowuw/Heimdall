@@ -10,6 +10,7 @@ members = [
     "crates/api",
     "crates/app",
     "algo-packages/macos/arm64/general_detection",
+    "algo-packages/rknn/rk3576/general_detection",
 ]
 
 [workspace.package]

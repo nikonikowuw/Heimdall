@@ -418,7 +418,7 @@ pub(crate) fn allocate_dma_buf(heap_fd: c_int, size: usize) -> std::io::Result<O
     let mut allocation = DmaHeapAllocationData {
         len: u64::try_from(alloc_len)
             .map_err(|_| std::io::Error::from_raw_os_error(libc::EOVERFLOW))?,
-        fd: -1,
+        fd: 0,
         fd_flags: (libc::O_RDWR | libc::O_CLOEXEC) as u32,
         heap_flags: 0,
     };

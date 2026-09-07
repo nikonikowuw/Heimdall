@@ -19,6 +19,7 @@ Desktop.ini
 # Rust workspace
 /target/
 build/
+deploy/
 # Cargo.lock is intentionally tracked: Argus is an application.
 
 # Native and C/C++ build output

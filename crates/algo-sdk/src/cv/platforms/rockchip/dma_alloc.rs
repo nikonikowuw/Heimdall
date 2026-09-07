@@ -82,7 +82,7 @@ impl DmaAllocator {
 }
 
 fn heap_allowed(core: RgaCore, dma32: bool) -> bool {
-    !matches!(core, RgaCore::Auto | RgaCore::Rga2) || dma32
+    !matches!(core, RgaCore::Rga2) || dma32
 }
 fn allocate_from_heap(path: &Path, size: usize) -> std::io::Result<OwnedFd> {
     let heap = OpenOptions::new().read(true).write(true).open(path)?;

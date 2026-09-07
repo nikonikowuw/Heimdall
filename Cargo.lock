@@ -1084,6 +1084,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "general-detection-rknn"
+version = "1.0.0"
+dependencies = [
+ "algo-sdk",
+ "image",
+ "libc",
+ "libloading",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -415,7 +415,7 @@ impl CvEngine for CpuCvEngine {
             .map(|bytes| bytes as usize)
             .ok_or(AlgoError::OutOfMemory)?;
         let mut canvas = vec![0u8; total_bytes];
-        for pixel in canvas.chunks_exact_mut(3) {
+        for pixel in canvas.as_chunks_mut::<3>().0 {
             pixel[0] = fill_color[0];
             pixel[1] = fill_color[1];
             pixel[2] = fill_color[2];
@@ -492,7 +492,7 @@ mod tests {
         let w = 100u32;
         let h = 50u32;
         let mut pixels = vec![0u8; (w * h * 3) as usize];
-        for chunk in pixels.chunks_exact_mut(3) {
+        for chunk in pixels.as_chunks_mut::<3>().0 {
             chunk[0] = 255;
         }
 
@@ -569,7 +569,7 @@ mod tests {
             .expect("I420 resize 应成功");
         let rgb = buffer.as_host_bytes().expect("I420 应产生 Host RGB");
         assert_eq!(rgb.len(), width as usize * height as usize * 3);
-        for pixel in rgb.chunks_exact(3) {
+        for pixel in rgb.as_chunks::<3>().0 {
             assert!((pixel[0] as i16 - pixel[1] as i16).abs() <= 1);
             assert!((pixel[1] as i16 - pixel[2] as i16).abs() <= 1);
             assert!((pixel[0] as i16 - 130).abs() <= 2);

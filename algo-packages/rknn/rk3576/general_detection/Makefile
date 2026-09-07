@@ -1,27 +1,27 @@
 .PHONY: all build test run benchmark stress package clean
 
-TARGET_LIB = lib/libgeneral_detection.dylib
+TARGET_LIB = lib/libgeneral_detection.so
 WORKSPACE_ROOT = ../../../..
 DURATION ?= 30
 
 all: build
 
 build:
-	cargo build -p general-detection --release
+	cargo build -p general-detection-rknn --release
 	@mkdir -p lib
-	@cp $(WORKSPACE_ROOT)/target/release/libgeneral_detection_coreml.dylib $(TARGET_LIB)
+	@cp $(WORKSPACE_ROOT)/target/release/libgeneral_detection.so $(TARGET_LIB)
 
 test:
-	cargo test -p general-detection
+	cargo test -p general-detection-rknn -- --nocapture
 
 run: build
-	cargo run -p general-detection --release --bin run_local
+	cargo run -p general-detection-rknn --release --bin run_local
 
 benchmark: build
-	cargo run -p general-detection --release --bin run_local -- --benchmark
+	cargo run -p general-detection-rknn --release --bin run_local -- --benchmark
 
 stress: build
-	cargo run -p general-detection --release --bin run_local -- --stress $(DURATION)
+	cargo run -p general-detection-rknn --release --bin run_local -- --stress $(DURATION)
 
 package: build
 	@rm -f general_detection.tar.gz
@@ -42,5 +42,5 @@ package: build
 		lib
 
 clean:
-	cargo clean -p general-detection
-	rm -rf lib/*.dylib general_detection.tar.gz result.jpg
+	cargo clean -p general-detection-rknn
+	rm -rf lib/*.so general_detection.tar.gz result.jpg

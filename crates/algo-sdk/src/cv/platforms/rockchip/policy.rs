@@ -174,7 +174,7 @@ impl RgaPolicy {
     }
 
     pub(crate) fn validate_dma_allocation(self, dma32: bool) -> Result<(), AlgoError> {
-        if matches!(self.core, RgaCore::Auto | RgaCore::Rga2) && !dma32 {
+        if matches!(self.core, RgaCore::Rga2) && !dma32 {
             return Err(AlgoError::Preprocess {
                 reason: format!(
                     "RGA2 requires a DMA32 heap below 4GB (maximum physical address 0x{RGA2_MAX_PHYS_ADDR:x})"

@@ -39,6 +39,9 @@ fn test_sandbox_rejects_nonexistent_path() {
 
 #[test]
 fn test_sandbox_real_package_in_process_self_test() {
+    if infer::sandbox::current_platform_id() != "macos-arm64" {
+        return;
+    }
     let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
         return;
     };
@@ -55,6 +58,9 @@ fn test_sandbox_real_package_in_process_self_test() {
 
 #[test]
 fn test_sandbox_rust_yolo26n_package_in_process_self_test() {
+    if infer::sandbox::current_platform_id() != "macos-arm64" {
+        return;
+    }
     let Some(pkg_path) = resolve_path("algo-packages/macos/arm64/general_detection")
         .or_else(|| resolve_path("algo-packages/macos/arm64/yolo26n"))
     else {
@@ -77,6 +83,9 @@ fn test_sandbox_rust_yolo26n_package_in_process_self_test() {
 
 #[test]
 fn test_sandbox_subprocess_self_test() {
+    if infer::sandbox::current_platform_id() != "macos-arm64" {
+        return;
+    }
     let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
         return;
     };
@@ -95,6 +104,9 @@ fn test_sandbox_subprocess_self_test() {
 
 #[tokio::test]
 async fn test_algo_package_load_and_registry_lifecycle() {
+    if infer::sandbox::current_platform_id() != "macos-arm64" {
+        return;
+    }
     let Some(base_dir) = resolve_path("algo-packages") else {
         return;
     };
@@ -129,6 +141,9 @@ async fn test_algo_package_load_and_registry_lifecycle() {
 
 #[tokio::test]
 async fn test_algo_instance_detect_with_real_frame() {
+    if infer::sandbox::current_platform_id() != "macos-arm64" {
+        return;
+    }
     let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
         return;
     };
@@ -204,4 +219,51 @@ fn test_sha256_computation() {
 
     let hash = infer::sandbox::compute_file_sha256(&manifest_path).expect("计算 SHA256 失败");
     assert_eq!(hash.len(), 64);
+}
+
+#[test]
+fn test_rknn_rk3576_package_structure_and_sandbox_guards() {
+    let Some(pkg_path) = resolve_path("algo-packages/rknn/rk3576/general_detection") else {
+        return;
+    };
+
+    // 检查基础文件存在性
+    assert!(pkg_path.join("manifest.json").is_file());
+    assert!(pkg_path.join("config.schema.json").is_file());
+    assert!(pkg_path.join("testimage.jpg").is_file());
+    assert!(pkg_path.join("model/yolov8n-640x384-rk3576.rknn").is_file());
+    assert!(pkg_path.join("lib/libgeneral_detection.so").is_file());
+
+    // 解析 manifest
+    let manifest_str =
+        std::fs::read_to_string(pkg_path.join("manifest.json")).expect("读取 manifest 失败");
+    let manifest: infer::sandbox::AlgoManifest =
+        serde_json::from_str(&manifest_str).expect("解析 manifest 失败");
+    assert_eq!(manifest.algorithm_id, "general_detection");
+    assert_eq!(manifest.version, "1.0.0");
+    assert_eq!(manifest.platform_id, "linux-rknn");
+    assert_eq!(normalize_platform_id(&manifest.platform_id), "linux-rknn");
+
+    // 查找动态库入口
+    let entry = infer::sandbox::find_entry_library(&pkg_path, &manifest.algorithm_id)
+        .expect("查找动态库失败");
+    assert!(entry.ends_with("libgeneral_detection.so"));
+
+    // 沙箱平台防护测试：在非 rknn 宿主环境上执行校验时，应精准拦截平台不匹配错误
+    let res = AlgoSandbox::validate_package(&pkg_path, false);
+    if infer::sandbox::current_platform_id() != "linux-rknn" {
+        assert!(res.is_err());
+        let err_msg = format!("{:?}", res.err());
+        assert!(
+            err_msg.contains("平台架构不匹配"),
+            "错误信息应包含平台不匹配提示: {}",
+            err_msg
+        );
+    } else {
+        assert!(
+            res.is_ok(),
+            "Sandbox validation on linux-rknn failed: {:?}",
+            res.err()
+        );
+    }
 }

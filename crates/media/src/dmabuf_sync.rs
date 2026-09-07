@@ -326,7 +326,14 @@ mod tests {
 
     #[test]
     fn test_raii_guard_lifecycle() {
-        let guard = DmaBufSyncGuard::acquire(999, DmaBufSyncDirection::Read);
+        #[cfg(target_os = "linux")]
+        let file = std::fs::File::open("/dev/null").expect("open /dev/null failed");
+        #[cfg(target_os = "linux")]
+        let test_fd = std::os::fd::AsRawFd::as_raw_fd(&file);
+        #[cfg(not(target_os = "linux"))]
+        let test_fd = 999;
+
+        let guard = DmaBufSyncGuard::acquire(test_fd, DmaBufSyncDirection::Read);
         assert!(guard.is_ok());
         drop(guard);
     }

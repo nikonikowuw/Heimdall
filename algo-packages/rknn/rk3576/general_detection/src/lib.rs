@@ -1,12 +1,11 @@
-//! macOS Apple Silicon CoreML yolo26n 通用目标检测算法插件
+//! Rockchip RK3576 RKNN 通用目标检测算法插件
 //!
-//! 基于 `crates/algo-sdk` 规范构建，提供 C ABI 导出、Apple 统一显存零拷贝硬件加速与 ANE 推理。
+//! 基于 `crates/algo-sdk` 规范构建，提供 C ABI 导出、Rockchip RGA 硬件零拷贝预处理与 NPU 推理接入。
 
 pub mod config;
-#[cfg(target_os = "macos")]
-pub mod coreml;
 pub mod plugin;
 pub mod postprocess;
+pub mod rknn;
 
 use algo_sdk::export_algo;
 use algo_sdk::plugin::AlgoPlugin;
