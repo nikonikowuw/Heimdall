@@ -2,7 +2,7 @@
 
 ## 1. 目标与核心定位
 
-为 **Argus 边缘智能多媒体分析生态** 打造完全独立、轻量、高能效的纯 Rust 算法包开发套件（`crates/algo-sdk`）。
+为 **Heimdall 边缘智能多媒体分析生态** 打造完全独立、轻量、高能效的纯 Rust 算法包开发套件（`crates/algo-sdk`）。
 
 ### 1.1 问题陈述
 
@@ -41,7 +41,7 @@ fn process(&mut self, frame: SafeFrame<'_>, emitter: &mut ResultEmitter<'_>) -> 
 4. **向量化后处理 (`fast_math`)** — 纯 Rust IoU / NMS / 坐标反算，消灭跨算法包的代码重复
 5. **结果发射器 (`ResultEmitter`)** — 一键 `emit_detections`，自动格式化为宿主可消费的告警 JSON + 全景大图抓拍请求
 6. **一行声明宏 (`export_algo!`)** — 自动展开 C ABI 虚函数表 + Panic 隔离 + 错误缓存
-7. **绝对独立自包含** — `algo-sdk` 零依赖 Argus 业务 crate，算法工程师在独立仓库中 `cargo test` 即可闭环
+7. **绝对独立自包含** — `algo-sdk` 零依赖 Heimdall 业务 crate，算法工程师在独立仓库中 `cargo test` 即可闭环
 
 ---
 
@@ -49,7 +49,7 @@ fn process(&mut self, frame: SafeFrame<'_>, emitter: &mut ResultEmitter<'_>) -> 
 
 ### 2.1 C ABI 规范映射 (`c_abi`)
 
-- 1:1 严格对齐 Argus C ABI 布局（64 位平台 8 字节对齐）
+- 1:1 严格对齐 Heimdall C ABI 布局（64 位平台 8 字节对齐）
 - 核心结构体：`AvAlgoAbi`, `AvFrameDesc`, `AvAlgoInstanceArgs`, `AvAlgoResult`, `AvAlgoImageReq`, `AvImageOps`, `AvFrameCaps`, `AvRule` 等
 - **归属决策**：`algo-sdk/src/c_abi.rs` 为权威定义。宿主 `infer` 侧当前的 `c_abi/types.rs` 保持不动（本期不强制迁移），但两侧必须通过 CI `size_of`/`offset_of` 断言测试保证零漂移。未来可抽为独立 `algo-abi` crate 作为单一来源。
 
@@ -101,7 +101,7 @@ fn process(&mut self, frame: SafeFrame<'_>, emitter: &mut ResultEmitter<'_>) -> 
 
 - `DetectionBox` — 归一化检测框 + 类别 + 置信度
 - `ResultEmitter<'a>` — 持有 C 回调函数指针的安全包装
-  - `emit_detections(&[DetectionBox])` — 自动序列化为 Argus 标准告警 JSON + 全景大图抓拍请求
+  - `emit_detections(&[DetectionBox])` — 自动序列化为 Heimdall 标准告警 JSON + 全景大图抓拍请求
   - `emit_self_test(count)` — 自检模式合格报告
 
 ### 2.8 插件 Trait 与导出宏 (`plugin` & `macros`)

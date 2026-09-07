@@ -83,7 +83,7 @@ expect(screen.getAllByRole("button", { name: /事件/ })).toHaveLength(3)
 
 ---
 
-## 性能检查项（Argus 特有）
+## 性能检查项（Heimdall 特有）
 
 实时预览页面同时跑 8 路视频 + 持续事件推送，性能问题是功能问题。
 
@@ -99,7 +99,7 @@ expect(screen.getAllByRole("button", { name: /事件/ })).toHaveLength(3)
 - [ ] `backdrop-filter` blur 在 8 路视频同时渲染时无帧率下降
 - [ ] 主题切换在 300ms 内完成，无闪烁
 
-见 [component-guidelines.md](./component-guidelines.md#重渲染控制argus-特有) 和 [state-management.md](./state-management.md)。
+见 [component-guidelines.md](./component-guidelines.md#重渲染控制heimdall-特有) 和 [state-management.md](./state-management.md)。
 
 ---
 

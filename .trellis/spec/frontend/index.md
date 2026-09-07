@@ -1,6 +1,6 @@
 # 前端开发规范
 
-> Argus Web UI：Vite + React + TypeScript + Zustand + Tailwind CSS v4 + Three.js + shadcn/ui + react-i18next。
+> Heimdall Web UI：Vite + React + TypeScript + Zustand + Tailwind CSS v4 + Three.js + shadcn/ui + react-i18next。
 > 双主题：亮色 Clean-Room Minimal Industrial + 暗色 Dark Industrial。
 > 语言：简体中文 / 繁体中文 / English。
 > 纯客户端 SPA，构建产物由 Rust 后端提供。
@@ -44,7 +44,7 @@
 
 ---
 
-## Argus 前端的四条铁律
+## Heimdall 前端的四条铁律
 
 1. **订阅粒度要细** —— Zustand 选择器返回原始值。订阅整个 store 会让一条事件推送触发全页重渲染。见 [状态管理](./state-management.md)。
 2. **播放器要隔离** —— 视频组件必须 `memo` 且 props 稳定。重渲染可能导致播放中断。见 [组件规范](./component-guidelines.md)。

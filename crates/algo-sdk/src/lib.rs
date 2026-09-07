@@ -1,4 +1,4 @@
-//! Argus / Heimdall 独立 Rust 算法包开发套件 (`algo-sdk`)
+//! Heimdall 独立 Rust 算法包开发套件 (`algo-sdk`)
 //!
 //! 提供纯 Rust 编写算法插件的轻量 SDK，零依赖主工程业务 crate，支持在独立仓库闭环开发与测试。
 

@@ -14,7 +14,7 @@
 - 数据库存 X，服务层转成 Y，中间丢了信息
 - 多个层各自实现了同一套逻辑，行为不一致
 
-Argus 的层特别多 —— C++ SDK、Rust 各 crate、HTTP/WS、TypeScript 前端，中间还跨了语言和进程边界。**跨语言的边界编译器帮不上忙**，只能靠约定和测试。
+Heimdall 的层特别多 —— C++ SDK、Rust 各 crate、HTTP/WS、TypeScript 前端，中间还跨了语言和进程边界。**跨语言的边界编译器帮不上忙**，只能靠约定和测试。
 
 ---
 
@@ -60,13 +60,13 @@ Argus 的层特别多 —— C++ SDK、Rust 各 crate、HTTP/WS、TypeScript 前
 
 **差**：不确认就假设时间格式
 
-**好**：在边界上做显式转换。Argus 的约定是：**系统内部统一 Unix 毫秒整数**，只在 UI 展示时转人类可读格式。见 [../backend/database-guidelines.md](../backend/database-guidelines.md)。
+**好**：在边界上做显式转换。Heimdall 的约定是：**系统内部统一 Unix 毫秒整数**，只在 UI 展示时转人类可读格式。见 [../backend/database-guidelines.md](../backend/database-guidelines.md)。
 
 ### 错误 2：校验分散在多层
 
 **差**：同一件事在多个层各校验一遍
 
-**好**：在入口处校验一次。Argus 的入口是 HTTP handler 边界和配置加载 —— 过了这两处，内部就当数据是可信的。
+**好**：在入口处校验一次。Heimdall 的入口是 HTTP handler 边界和配置加载 —— 过了这两处，内部就当数据是可信的。
 
 ### 错误 3：抽象泄漏
 
@@ -122,7 +122,7 @@ onEvent(msg.payload)
 
 ---
 
-## 新增事件类型时（Argus 特有）
+## 新增事件类型时（Heimdall 特有）
 
 一个事件从产生到显示要穿过全部层：
 
@@ -171,7 +171,7 @@ Rust ↔ C++ 之间同样没有保护，且后果更严重（是 UB 而不是白
 
 ---
 
-## 坐标系是 Argus 最危险的跨层契约
+## 坐标系是 Heimdall 最危险的跨层契约
 
 一个检测框的坐标要经过：
 

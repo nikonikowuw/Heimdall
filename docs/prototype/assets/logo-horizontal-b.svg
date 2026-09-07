@@ -46,10 +46,10 @@
 
   <!-- === 右侧品牌标与副标 === -->
   <g transform="translate(84, 0)">
-    <!-- 主标题：ARGUS (或 HEIMDALL) -->
+    <!-- 主标题：HEIMDALL -->
     <text x="0" y="32" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" 
           font-size="20" font-weight="800" letter-spacing="3" fill="url(#titleGrad)">
-      ARGUS
+      HEIMDALL
     </text>
     
     <!-- 副标题：边缘 AI 视频网关 -->

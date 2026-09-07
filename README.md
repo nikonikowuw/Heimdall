@@ -82,7 +82,7 @@ Heimdall/
 │   ├── infer/                      # 推理引擎抽象与 C ABI 算法沙箱热加载
 │   ├── pipeline/                   # 分析管线编排 (几何规则, ByteTrack, 双流抓拍, 淘汰机制)
 │   ├── api/                        # Axum HTTP RESTful & WebSocket 接口服务与静态资源内嵌
-│   └── app/                        # 宿主装配入口 (单二进制构建目标: argus)
+│   └── app/                        # 宿主装配入口 (单二进制构建目标: heimdall)
 ├── web/                            # 现代化边缘监控前端控制台 (React 19 + TypeScript + Vite)
 │   ├── src/
 │   │   ├── features/

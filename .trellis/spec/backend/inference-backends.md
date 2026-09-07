@@ -1,6 +1,6 @@
 # 推理后端规范
 
-> Argus 要在 Apple Silicon、Ascend、Rockchip 三套完全不同的 NPU SDK 上跑同一套业务逻辑。**平台差异全部收敛在本 crate 内**，上层代码不感知。
+> Heimdall 要在 Apple Silicon、Ascend、Rockchip 三套完全不同的 NPU SDK 上跑同一套业务逻辑。**平台差异全部收敛在本 crate 内**，上层代码不感知。
 
 > ⚠️ **状态：立项约定（尚未经代码验证）**
 > trait 签名是设计草案，首批后端实现落地后必须回填真实签名与示例，并删除本提示。

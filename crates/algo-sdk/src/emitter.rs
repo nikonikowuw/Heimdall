@@ -1,6 +1,6 @@
 //! 算法检测结果发射器 (ResultEmitter)
 //!
-//! 负责将算法计算出的目标框序列化为 Argus 契约 JSON，
+//! 负责将算法计算出的目标框序列化为 Heimdall 契约 JSON，
 //! 挂载全景大图/特写抓拍请求，并安全回调宿主 `on_result`。
 
 use std::ffi::{c_void, CStr, CString};

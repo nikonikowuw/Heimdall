@@ -14,7 +14,7 @@ crates/infer/src/backends/rknn.rs   ← ③ 安全层：实现 InferenceBackend 
 crates/infer/src/backends/rknn/ffi.rs ← ② unsafe 绑定层：唯一允许 unsafe、裸指针与 Send 实现的地方
               │
               ▼
-native/rknn/include/argus_rknn.h    ← ① 极薄平台 C 垫片（< 300 行）：纯 C ABI 符号导出与硬件直通
+native/rknn/include/heimdall_rknn.h    ← ① 极薄平台 C 垫片（< 300 行）：纯 C ABI 符号导出与硬件直通
 ```
 
 - **Unsafe 边界隔离铁律**：`unsafe` 只允许收敛于各 backend/media 的 `ffi.rs` 或 sys-crate 调用边界。上层业务代码（`pipeline` / `api`）**严禁出现任何 `unsafe`**；
@@ -48,7 +48,7 @@ C/C++ 与 Rust 跨界交互**严格受限于稳定 C ABI**：
 use std::ffi::CString;
 
 pub(super) struct Session {
-    raw: *mut ArgusRknnSession,
+    raw: *mut HeimdallRknnSession,
 }
 
 // SAFETY: RKNN session 内部无跨线程共享状态，但同一 session 不可并发调用，
@@ -62,7 +62,7 @@ impl Session {
             .map_err(|_| BackendError::InvalidPath)?;
         let mut raw = std::ptr::null_mut();
         // SAFETY: c_path 在调用期间保持存活；raw 指向有效的栈内存指针
-        let code = unsafe { argus_rknn_create(c_path.as_ptr(), &mut raw) };
+        let code = unsafe { heimdall_rknn_create(c_path.as_ptr(), &mut raw) };
         check(code, "rknn_create")?;
         Ok(Self { raw })
     }
@@ -72,7 +72,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         if !self.raw.is_null() {
             // SAFETY: self.raw 由 create 产出且未被二次释放；Drop 只执行一次
-            unsafe { argus_rknn_destroy(self.raw) };
+            unsafe { heimdall_rknn_destroy(self.raw) };
         }
     }
 }

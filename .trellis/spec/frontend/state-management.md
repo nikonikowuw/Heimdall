@@ -50,7 +50,7 @@ export const useUiStore = create<UiState>()((set) => ({
 
 ## 选择器：订阅粒度决定性能
 
-这条在 Argus 上尤其重要 —— 实时预览页有 8 路播放器同时挂载。
+这条在 Heimdall 上尤其重要 —— 实时预览页有 8 路播放器同时挂载。
 
 ```ts
 // ❌ 订阅整个 store：任何字段变化都让这个组件重渲染

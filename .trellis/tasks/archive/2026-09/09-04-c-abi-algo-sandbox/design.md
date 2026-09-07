@@ -118,7 +118,7 @@ assert_eq!(std::mem::size_of::<av_algo_instance_args>(), 96);
          │
   ┌──────▼─────────────────────────────────────────────────────────────┐
   │ 🚨 物理子进程沙箱隔离执行 (Subprocess Worker Sandbox)              │
-  │ (通过单二进制自调用: ./argus __verify-algo <pkg_dir> 隔离执行)     │
+  │ (通过单二进制自调用: ./heimdall __verify-algo <pkg_dir> 隔离执行)     │
   │                                                                    │
   │ 5. dlopen 与符号寻址 (libloading 动态加载, 寻址 "av_algo_get_abi") │
   │ 6. 虚表尺寸与版本断言 (abi.size == 96, api_version == 1)           │

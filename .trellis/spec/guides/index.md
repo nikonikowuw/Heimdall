@@ -8,12 +8,12 @@
 
 | 指南 | 用途 | 什么时候读 |
 |------|------|-----------|
-| [架构概览](./architecture-overview.md) | Argus 的系统构成、crate 拓扑、数据流、平台矩阵 | **写任何代码前** |
+| [架构概览](./architecture-overview.md) | Heimdall 的系统构成、crate 拓扑、数据流、平台矩阵 | **写任何代码前** |
 | [边缘资源约束](./edge-constraints-guide.md) | 内存、算力、存储、阻塞的硬约束思考清单 | 新增功能、评估开销时 |
 | [代码复用思考指南](./code-reuse-thinking-guide.md) | 识别重复模式，避免重复实现与跨语言常量漂移 | 发现自己在写似曾相识的代码时 |
 | [跨层思考指南](./cross-layer-thinking-guide.md) | 梳理跨层数据流，尤其是跨语言边界 | 功能横跨多层时 |
 
-后两份原为 Trellis 预填的通用指南，已翻译并替换为 Argus 的实际场景（原文中 Trellis 工具自身的开发案例与三段重复内容已删除）。
+后两份原为 Trellis 预填的通用指南，已翻译并替换为 Heimdall 的实际场景（原文中 Trellis 工具自身的开发案例与三段重复内容已删除）。
 
 ---
 
@@ -66,7 +66,7 @@
 rg "要改的值" .
 ```
 
-Argus 里尤其重要的几类值：模型输入尺寸、类别表、时间戳单位、通道容量、API 字段名。
+Heimdall 里尤其重要的几类值：模型输入尺寸、类别表、时间戳单位、通道容量、API 字段名。
 这些值往往同时出现在 Rust、C++、TypeScript 和 `manifest.toml` 里，改一处漏三处是常态。
 
 ---

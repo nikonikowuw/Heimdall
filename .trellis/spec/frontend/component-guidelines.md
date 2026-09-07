@@ -34,7 +34,7 @@ export function AlarmCard({ alarm, selected = false, onSelect }: AlarmCardProps)
 
 ---
 
-## 2. 边缘监控重渲染隔离铁律 (Argus Invariants)
+## 2. 边缘监控重渲染隔离铁律 (Heimdall Invariants)
 
 多路视频（如 8 路）并发运行时，任何全局不当状态更新都会导致播放器撕裂或严重丢帧：
 

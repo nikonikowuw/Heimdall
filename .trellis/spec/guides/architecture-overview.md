@@ -1,16 +1,16 @@
-# Argus 架构概览
+# Heimdall 架构概览
 
 > 所有 spec 文件的锚点。写任何代码前先读这一份，确认你要动的东西属于哪一层。
 
 > ⚠️ **状态：立项约定（尚未经代码验证）**
-> Argus 仓库当前无产品代码。本文件是基于既定技术栈的前瞻性约定，而非从现有代码提取的事实。
+> Heimdall 仓库当前无产品代码。本文件是基于既定技术栈的前瞻性约定，而非从现有代码提取的事实。
 > 首批代码落地后，必须回填真实文件路径与示例，并删除本提示。
 
 ---
 
 ## 系统定位
 
-Argus 是**面向边缘计算场景的高性能 AI 视频分析与管理系统**。接入多路摄像头，在设备本地完成硬解码、目标检测与事件判定，实现高并发拉流、毫秒级本地告警、快照与抓拍证据落盘，并通过现代化轻量 Web 控制台进行实时监控、算法布防与配置管理。
+Heimdall 是**面向边缘计算场景的高性能 AI 视频分析与管理系统**。接入多路摄像头，在设备本地完成硬解码、目标检测与事件判定，实现高并发拉流、毫秒级本地告警、快照与抓拍证据落盘，并通过现代化轻量 Web 控制台进行实时监控、算法布防与配置管理。
 
 关键含义（会渗透到每一条规范里）：
 
@@ -22,7 +22,7 @@ Argus 是**面向边缘计算场景的高性能 AI 视频分析与管理系统**
     - 跨平台推理引擎：跨平台回退使用 **`ort`** (ONNX Runtime)、苹果生态使用 **`coreml-rs`** / `objc2`、瑞芯微 (RKNN) 与华为昇腾 (AscendCL) 采用专用微型硬件胶合垫片（`native/`）对接底层驱动。
   - **极薄平台硬件垫片（Minimal Platform Shims）**：C/C++ 严格退守到底层微型胶合垫片（百行级别驱动包装），仅在需要穿透平台底层专有零拷贝总线（如 Rockchip 的 `MPP -> RGA -> RKNN` DMA-BUF 共享）时作为极薄 FFI 存在，上层完全面向统一的 Rust Trait 编程。
 - **极致的单二进制自包含交付（All-in-One Binary）**：
-  - 前端 React SPA 产物通过 `rust-embed` 直接编译进二进制，整个系统运行时只需一个可执行文件 `argus`，单工具链 `cargo build` 极速交付。
+  - 前端 React SPA 产物通过 `rust-embed` 直接编译进二进制，整个系统运行时只需一个可执行文件 `heimdall`，单工具链 `cargo build` 极速交付。
 - **算力和内存是硬约束**，不是优化项。设计时先问"这一路 1080p@15fps 要占多少内存"。
 - **帧数据不能拷贝**。解码输出到推理输入之间必须走平台原生的零拷贝路径（通过 `FrameRef` 持有 DMA-BUF fd 或 `CVPixelBuffer` 原生句柄）。
 - **设备无人值守长期运行**。内存泄漏、句柄泄漏、存储写满都是致命故障，Rust 所有权机制与 RAII 从根源杜绝悬垂指针与资源泄露。
@@ -72,7 +72,7 @@ Argus 是**面向边缘计算场景的高性能 AI 视频分析与管理系统**
 Monorepo，Cargo workspace 为主体核心，外加极薄硬件垫片、模型定义与 React 前端：
 
 ```
-argus/
+heimdall/
 ├── Cargo.toml                 # Cargo workspace root，统一锁定生态依赖版本
 ├── crates/
 │   ├── types/                 # 领域核心类型（Camera、Task、Detection、FrameRef）、通用枚举
@@ -81,7 +81,7 @@ argus/
 │   ├── infer/                 # 推理后端 trait (ort, coreml-rs, native 平台硬件后端)
 │   ├── pipeline/              # 纯 Rust 业务管线：抽帧 → 门控 → ROI规则 → 推理调度 → NMS/ByteTrack
 │   ├── api/                   # Axum router / handler / DTO / WebSocket / rust-embed 静态前端
-│   └── app/                   # 单二进制主入口：统一启动、配置热重载、信号优雅关停（最终输出二进制 argus）
+│   └── app/                   # 单二进制主入口：统一启动、配置热重载、信号优雅关停（最终输出二进制 heimdall）
 ├── native/                    # 极薄平台硬件胶合（仅在开源 crate 无法覆盖硬件零拷贝时使用）
 │   ├── rknn/                  # MPP / RGA / RKNN DMA-BUF 微型胶合
 │   └── ascend/                # DVPP / AIPP 微型胶合

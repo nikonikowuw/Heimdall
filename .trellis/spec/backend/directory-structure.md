@@ -3,14 +3,14 @@
 > Rust workspace 与 C++ 侧的代码归属规则。新建文件前先确认它该落在哪个 crate。
 
 > ⚠️ **状态：立项约定（尚未经代码验证）**
-> Argus 仓库当前无产品代码。首批 crate 落地后需回填真实路径与模块示例，并删除本提示。
+> Heimdall 仓库当前无产品代码。首批 crate 落地后需回填真实路径与模块示例，并删除本提示。
 
 ---
 
 ## Workspace 布局
 
 ```
-argus/
+heimdall/
 ├── Cargo.toml              # [workspace] + [workspace.dependencies] 统一版本
 ├── rustfmt.toml
 ├── clippy.toml
@@ -26,7 +26,7 @@ argus/
 │   ├── infer/              # 推理后端 trait 抽象 (ort, coreml-rs, native 平台硬件后端)
 │   ├── pipeline/           # 纯 Rust 核心管线：抽帧 → 门控 → ROI规则 → 推理调度 → NMS/ByteTrack
 │   ├── api/                # Axum router、handler、DTO、WebSocket、rust-embed 内嵌前端
-│   └── app/                # 单二进制主入口：统一装配启动、配置加载、优雅退出（二进制名 argus）
+│   └── app/                # 单二进制主入口：统一装配启动、配置加载、优雅退出（二进制名 heimdall）
 ├── native/                 # 极薄底层硬件垫片（仅在开源 crate 无法直接覆盖专有驱动时启用）
 │   ├── rknn/               # MPP / RGA / RKNN DMA-BUF 极薄胶合（< 300 行 C）
 │   └── ascend/             # DVPP / AIPP 极薄胶合
@@ -106,10 +106,10 @@ crates/infer/
 ```
 native/
 ├── rknn/
-│   ├── include/argus_rknn.h  # 极薄 C 接口头文件（声明 DMA-BUF 零拷贝直通）
+│   ├── include/heimdall_rknn.h  # 极薄 C 接口头文件（声明 DMA-BUF 零拷贝直通）
 │   └── src/session.c         # < 300 行，直接调用 rknn_init / rknn_inputs_set
 └── ascend/
-    ├── include/argus_ascend.h
+    ├── include/heimdall_ascend.h
     └── src/session.c
 ```
 

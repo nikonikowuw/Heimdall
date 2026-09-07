@@ -3,7 +3,7 @@ name = "algo-sdk"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Argus / Heimdall 独立 Rust 算法包开发套件"
+description = "Heimdall 独立 Rust 算法包开发套件"
 
 [dependencies]
 serde = { workspace = true }

@@ -197,7 +197,7 @@ export const LoginPage: React.FC = () => {
             </div>
             <div className="flex flex-col">
               <span className="font-display text-sm font-black tracking-wider text-slate-900 uppercase dark:text-white">
-                Argus
+                Heimdall
               </span>
               <span className="font-mono text-[9px] tracking-widest text-slate-400 uppercase dark:text-slate-500">
                 Edge AI Telemetry
@@ -488,7 +488,7 @@ export const LoginPage: React.FC = () => {
                     {t('status')}
                   </span>
                 </div>
-                <span>© 2026 Argus</span>
+                <span>© 2026 Heimdall</span>
               </div>
             </div>
           </aside>

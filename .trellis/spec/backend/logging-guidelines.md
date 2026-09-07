@@ -11,7 +11,7 @@
 - **职责边界**：订阅器与 Appender 的构建收敛于 `crates/app`，其他 crate 仅调用 `tracing` 宏，严禁触碰订阅器。
 - **环境变量控制**：
   - `ARGUS_LOG_MODE=dev|prod`：开发模式输出 pretty 彩色终端，不写文件；生产模式输出 compact 单行并在后台滚动写入文件。
-  - `RUST_LOG=模块=级别`：细粒度模块过滤（如 `RUST_LOG=argus::pipeline=debug,info`）。
+  - `RUST_LOG=模块=级别`：细粒度模块过滤（如 `RUST_LOG=pipeline=debug,info`）。
 
 ---
 
@@ -59,7 +59,7 @@
 
 ## 5. 存储、轮转与保留策略 (生产模式)
 
-- **路径与命名**：`data/logs/argus.log`（历史文件滚动为 `argus.log.1` ... `argus.log.5`）。
+- **路径与命名**：`data/logs/heimdall.log`（历史文件滚动为 `heimdall.log.1` ... `heimdall.log.5`）。
 - **硬性配额约束**：
   - 单文件上限 **10 MB**，最多保留 **5 个** 历史文件；
   - 日志最长保留 **30 天**，全目录硬顶上限 **100 MB**（超过由后台 worker 清理最旧文件）；
@@ -73,7 +73,7 @@
   - 响应遵循标准根信封，`data` 包含 `logs: LogItem[]` 与 `hasMore: bool`。
   - 日志数据不入 SQLite（防止并发锁争用），由后端按内存时间索引直接读取文件并做游标分页。
 - **导出接口**：`GET /api/v1/logs/export?fromMs=<ms>&toMs=<ms>&level=<lvl>`
-  - 导出纯文本文件 `argus-logs-<timestamp>.txt`。
+  - 导出纯文本文件 `heimdall-logs-<timestamp>.txt`。
 - **前端查看性能契约**：必须采用虚拟滚动（如 `react-window`），内存保留上限 1000 条，WebSocket 推送限流（≤10 条/秒）。
 
 ---

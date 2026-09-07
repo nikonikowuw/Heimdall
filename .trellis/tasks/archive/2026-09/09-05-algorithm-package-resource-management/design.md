@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_algo_instances_algo ON algorithm_instances(algori
 
 ### 3.1 启动自愈对齐 (Boot Reconciliation Flow)
 ```
-[Argus 启动]
+[Heimdall 启动]
       │
       ▼
 读取当前芯片架构 platform = current_platform_id() (如 macos-arm64-coreml, rknn-rk3588)

@@ -9,8 +9,8 @@ mod config;
 mod reconcile;
 
 #[derive(Parser, Debug)]
-#[command(name = "argus")]
-#[command(about = "Argus / Heimdall 边缘端一体化 AI 视频分析系统", version)]
+#[command(name = "heimdall")]
+#[command(about = "Heimdall 边缘端一体化 AI 视频分析系统", version)]
 struct Args {
     /// 配置文件路径 (可选，默认依次查找 config.toml 或 config.json)
     #[arg(short, long)]
@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
         permit_timeout_ms = cfg.pipeline.permit_timeout_ms,
         max_burst_timeout_ms = cfg.pipeline.max_burst_timeout_ms,
         reset_db = args.reset_db,
-        "正在启动 Argus 单进程服务..."
+        "正在启动 Heimdall 单进程服务..."
     );
 
     // 3. 执行版本化数据库迁移 (Refinery) 并建立 SeaORM 连接池 (SQLite WAL 模式)
@@ -210,7 +210,7 @@ async fn main() -> Result<()> {
         .await
         .context("绑定监听端口失败")?;
 
-    tracing::info!("Argus Web 控制台与 API 服务已就绪: http://{}", addr);
+    tracing::info!("Heimdall Web 控制台与 API 服务已就绪: http://{}", addr);
 
     let shutdown_fut = async move {
         shutdown_signal().await;
@@ -241,7 +241,7 @@ async fn main() -> Result<()> {
     .await
     .context("HTTP 服务运行发生异常")?;
 
-    tracing::info!("Argus 服务已安全优雅停机");
+    tracing::info!("Heimdall 服务已安全优雅停机");
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 # 架构重构对比与技术选型分析报告 (competitors / rewrite analysis)
 
-本文档对比分析原 `/Users/zhang/dev/go/argus` 系统与新架构 `Argus (Rust All-in-One)` 的技术指标、架构开销与演进优势。
+本文档对比分析原 `/Users/zhang/dev/go/argus` 系统与新架构 `Heimdall (Rust All-in-One)` 的技术指标、架构开销与演进优势。
 
 ---
 
@@ -8,7 +8,7 @@
 
 | 评估维度 | 原架构 (Go 1.26 + C++20 + Vue 3) | 新架构 (纯 Rust + React 19 单二进制) | 演进收益 / 架构红利 |
 |---|---|---|---|
-| **进程模型** | **多进程混合架构**<br>- Go API 服务<br>- C++20 引擎服务<br>- Nginx 外部代理反代 | **单进程全自包含架构**<br>- 统一一个可执行二进制 `argus`<br>- 内置 HTTP/WS/WebRTC<br>- 内嵌前端静态页面 | **极简运维与交付**：<br>彻底消灭微服务治理与跨进程监控，边缘现场直接单二进制启动，支持 systemd 极简守护。 |
+| **进程模型** | **多进程混合架构**<br>- Go API 服务<br>- C++20 引擎服务<br>- Nginx 外部代理反代 | **单进程全自包含架构**<br>- 统一一个可执行二进制 `heimdall`<br>- 内置 HTTP/WS/WebRTC<br>- 内嵌前端静态页面 | **极简运维与交付**：<br>彻底消灭微服务治理与跨进程监控，边缘现场直接单二进制启动，支持 systemd 极简守护。 |
 | **通信与数据流转** | **跨进程 IPC / Protobuf**<br>- 抓拍图写磁盘再通过 API 读取<br>- 视频解码后跨进程共享内存/网络端口传输 | **进程内 Channel / 内存直通**<br>- Tokio MPSC / Broadcast 有界无锁管道<br>- 统一内存零拷贝共享 | **零延迟数据直达**：<br>免去跨进程序列化/反序列化与系统调用上下文切换开销。 |
 | **硬件视频解码** | **FFmpeg 软解为主 / 外部动态库**<br>- C++ 依赖重型多媒体库与 ZLMediaKit<br>- 软解 CPU 占用高 | **VideoToolbox 原生硬件解码 (Apple Silicon)**<br>- 纯 Rust 抽象绑定<br>- 解码直出原生 `CVPixelBuffer` | **CPU 负载骤降**：<br>1080P 视频解码由专用 VPU/Secure Media Engine 承担，CPU 占用降至 5%~10% 以下。 |
 | **AI 推理引擎** | **动态 C ABI 插件 (dlopen)**<br>- 每个算法包单独编译 `.so`/`.dylib`<br>- 容易产生 ABI 漂移与段错误 | **统一 `infer` 模块 + 官方 Core ML 绑定**<br>- 编译期生命周期与类型安全验证<br>- ANE 硬件加速直通 | **极致稳定性**：<br>Rust 类型系统与 RAII 杜绝内存越界、野指针与动态库版本冲突。 |

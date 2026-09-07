@@ -20,7 +20,7 @@ Desktop.ini
 /target/
 build/
 deploy/
-# Cargo.lock is intentionally tracked: Argus is an application.
+# Cargo.lock is intentionally tracked: Heimdall is an application.
 
 # Native and C/C++ build output
 out/

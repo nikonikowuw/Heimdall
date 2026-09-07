@@ -1,4 +1,4 @@
-# Argus / Heimdall 边缘端一体化 AI 视频分析系统 产品需求文档 (PRD)
+# Heimdall 边缘端一体化 AI 视频分析系统 产品需求文档 (PRD)
 
 | 文档版本 | 修订时间 | 架构负责人 | 评审状态 | 目标形态 |
 |---|---|---|---|---|
@@ -19,7 +19,7 @@
 
 | 术语 / 缩写 | 英文全称 | 说明 |
 |---|---|---|
-| **All-in-One Binary** | 单一可执行文件 | 系统构建产物为一个独立的单二进制程序（`argus`），无需外挂动态运行时、无 Python/Node/Go 依赖，前端构建产物通过 `rust-embed` 直接编译内嵌。 |
+| **All-in-One Binary** | 单一可执行文件 | 系统构建产物为一个独立的单二进制程序（`heimdall`），无需外挂动态运行时、无 Python/Node/Go 依赖，前端构建产物通过 `rust-embed` 直接编译内嵌。 |
 | **Enhanced FLV** | Enhanced RTMP/FLV (v1.0.1) | 扩展版 FLV 容器标准，支持 FourCC `hvc1`（H.265/HEVC）与 `avc1`（H.264）的原生封装，通过 HTTP-FLV / WS-FLV 分块传输，延迟在 200~400ms 级别。 |
 | **MSE** | Media Source Extensions | 浏览器 W3C 标准多媒体扩展接口，前端借助 `mpegts.js` 将接收到的 FLV 分块流直接解封装并交由浏览器/显卡底层硬件解码播放。 |
 | **C ABI Algorithm Package** | C ABI 算法包 | 遵循标准 C ABI 虚拟函数表（`av_algo_abi`）封装的动态库（`.dylib` / `.so`），由独立目录资产管理（`algo-packages/{platform_id}/{algo_id}`），支持热插拔与沙箱自测。 |
@@ -45,7 +45,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│                    Argus / Heimdall (Rust All-in-One Binary)                     │
+│                        Heimdall (Rust All-in-One Binary)                         │
 │                                                                                  │
 │  ┌────────────────────────┐  ┌────────────────────────────────────────────────┐  │
 │  │  Embedded Web Console  │  │          High-Performance Rust Core            │  │
@@ -94,7 +94,7 @@
 - **灾备密码重置（CLI Disaster Recovery）**：
   若现场运维遗忘管理员密码，严禁通过删除数据库的方式处理。系统提供命令行工具：
   ```bash
-  ./argus reset-admin --password <new_password>
+  ./heimdall reset-admin --password <new_password>
   ```
   在本地直接更新管理员哈希凭据，保障数据资产绝对安全。
 - **JWT 状态管理**：基于 HS256 JWT 签发 24 小时访问令牌，并在 SQLite `system_configs` 维护撤销时间戳，支持管理员一键令所有活跃令牌失效。
@@ -195,7 +195,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           Argus 业务证据中心 (Evidence Center)                   │
+│                          Heimdall 业务证据中心 (Evidence Center)                 │
 ├─────────────────────────┬─────────────────────────────┬─────────────────────────┤
 │  📸 抓拍记录 (Captures)  │   🚨 违规告警 (Alarms)       │  👤 识别对账 (Recognitions)│
 ├─────────────────────────┼─────────────────────────────┼─────────────────────────┤

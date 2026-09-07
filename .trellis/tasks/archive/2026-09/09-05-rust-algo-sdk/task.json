@@ -1,7 +1,7 @@
 {
   "id": "rust-algo-sdk",
   "name": "rust-algo-sdk",
-  "title": "Rust 算法包开发套件 (argus-algo-sdk) 架构与实现",
+  "title": "Rust 算法包开发套件 (heimdall-algo-sdk) 架构与实现",
   "description": "提供纯 Rust 编写算法插件的轻量 SDK，包含 C ABI 导出宏 (export_algo!)、硬件帧安全视图 (SafeFrame)、HAL 硬件抽象层 (CvBuffer/CvEngine SPI)、共享模型权重与核心调度 (SharedWeights/Core)、向量化后处理 (NMS/IoU/unmap_box) 与结果发射器 (ResultEmitter)。零依赖主工程业务 crate，算法工程师在独立仓库中即可完成全平台开发与测试。",
   "status": "completed",
   "dev_type": "backend",

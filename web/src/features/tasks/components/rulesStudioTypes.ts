@@ -32,7 +32,7 @@ export const DEFAULT_ALGO_PACKAGES: AlgoManifest[] = [
     algorithmId: 'general_detection',
     name: '通用人体与车辆检测器',
     version: '1.0.0',
-    author: 'Argus AI Team',
+    author: 'Heimdall AI Team',
     description: '高能效实时多类目标检测，适配 ANE/NPU 零拷贝管线',
     category: 'detection',
     supportedPlatforms: ['macos-arm64', 'linux-rknn'],

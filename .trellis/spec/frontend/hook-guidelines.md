@@ -58,7 +58,7 @@ export function useToggle(initial = false): [boolean, () => void] {
 
 ## 清理是必须的
 
-Argus 前端有大量长连接和定时器（WebSocket、播放器、状态轮询）。忘记清理会在页面切换时泄漏，长时间运行的看板会越来越卡。
+Heimdall 前端有大量长连接和定时器（WebSocket、播放器、状态轮询）。忘记清理会在页面切换时泄漏，长时间运行的看板会越来越卡。
 
 ```ts
 export function useEventStream(cameraId: string | null) {
@@ -97,7 +97,7 @@ export function useEventStream(cameraId: string | null) {
 
 ---
 
-## 常见 Argus hook 清单（预期）
+## 常见 Heimdall hook 清单（预期）
 
 落地时按需实现，命名先约定好，避免同一件事出现两个名字：
 

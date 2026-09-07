@@ -1,6 +1,6 @@
 # 后端开发规范
 
-> Argus 后端 = Rust workspace + 三个平台的 C++ SDK 胶合层。
+> Heimdall 后端 = Rust workspace + 三个平台的 C++ SDK 胶合层。
 
 > ⚠️ **状态：立项约定（尚未经代码验证）**
 > 本目录全部文件基于立项技术栈编写，尚未经真实代码验证。每份文件末尾列有「待验证事项」，
@@ -32,7 +32,7 @@
 
 ---
 
-## Argus 后端的五条铁律
+## Heimdall 后端的五条铁律
 
 这五条是本项目区别于普通 Rust 后端的地方，违反任何一条都是 bug 而非风格问题：
 
@@ -66,7 +66,7 @@
 ### config.example.toml 示例
 
 ```toml
-# Argus 配置文件
+# Heimdall 配置文件
 # 复制为 config.toml 并根据环境修改
 
 [server]
@@ -74,7 +74,7 @@ host = "0.0.0.0"        # 监听地址
 port = 8080              # 监听端口
 
 [database]
-path = "data/argus.db"   # SQLite 数据库路径
+path = "data/heimdall.db"   # SQLite 数据库路径
 max_connections = 4      # 连接池大小（SQLite 写是串行的，够用就行）
 
 [storage]
@@ -157,7 +157,7 @@ pub struct LoggingConfig {
 // 默认值函数
 fn default_host() -> String { "0.0.0.0".to_string() }
 fn default_port() -> u16 { 8080 }
-fn default_db_path() -> PathBuf { "data/argus.db".into() }
+fn default_db_path() -> PathBuf { "data/heimdall.db".into() }
 fn default_data_dir() -> PathBuf { "data".into() }
 fn default_max_connections() -> u32 { 4 }
 fn default_log_level() -> String { "info".to_string() }
