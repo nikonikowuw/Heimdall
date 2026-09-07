@@ -1,0 +1,34 @@
+# ============================================================================
+# Heimdall Cargo 构建配置
+# ============================================================================
+#
+# 交叉编译链接器定义。各 target 的 linker 仅在 `cargo build --target <triple>`
+# 时生效，不影响本机默认构建。
+#
+# 前置条件：
+#   rustup target add aarch64-unknown-linux-gnu
+#   brew install aarch64-unknown-linux-gnu-gcc   # 或 cargo install cargo-zigbuild + brew install zig
+#
+# 快速验证：
+#   cargo zigbuild -p argus --release --target aarch64-unknown-linux-gnu
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Rockchip RK3576 / RK3588 / RK3568 等 ARM64 Linux 目标
+# ---------------------------------------------------------------------------
+[target.aarch64-unknown-linux-gnu]
+# cargo-zigbuild: 通过 zig 提供完整 Linux 交叉编译工具链，零额外配置
+# 安装: cargo install cargo-zigbuild && brew install zig
+linker = "cargo-zigbuild"
+
+# ---------------------------------------------------------------------------
+# 华为昇腾 ARM64 Linux 目标（复用同一 target，feature 区分）
+# ---------------------------------------------------------------------------
+# [target.aarch64-unknown-linux-gnu]
+# linker = "aarch64-linux-gnu-gcc"    # CANN SDK 工具链自带
+
+# ---------------------------------------------------------------------------
+# 通用 ARM64 musl（静态链接，适用于极简容器/嵌入式）
+# ---------------------------------------------------------------------------
+# [target.aarch64-unknown-linux-musl]
+# linker = "aarch64-linux-musl-gcc"

@@ -50,5 +50,6 @@ var/
 *.db-shm
 *.db-wal
 config.toml
+!.cargo/config.toml
 # Temporary files
 *.tmp
