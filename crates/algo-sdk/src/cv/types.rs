@@ -1,9 +1,11 @@
 //! 图像预处理类型与像素格式定义
 
+use serde::{Deserialize, Serialize};
+
 use crate::c_abi::*;
 
 /// 像素格式枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PixelFormat {
     Nv12,
     Bgra,

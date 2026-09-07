@@ -18,8 +18,6 @@ pub use types::{LetterboxLayout, PixelFormat, PreprocessMode};
 use crate::c_abi::AvImageOps;
 use crate::error::AlgoError;
 use crate::frame::SafeFrame;
-#[cfg(not(target_os = "macos"))]
-use platforms::cpu::CpuCvEngine;
 
 /// 由一个插件实例独占的预处理引擎引用。
 pub type SharedCvEngine = Arc<dyn CvEngine>;
@@ -34,13 +32,17 @@ static DEFAULT_ENGINE: OnceLock<SharedCvEngine> = OnceLock::new();
 fn default_engine() -> SharedCvEngine {
     DEFAULT_ENGINE
         .get_or_init(|| {
+            #[cfg(all(target_os = "linux", feature = "rga"))]
+            {
+                Arc::new(platforms::rockchip::RgaCvEngine::new())
+            }
             #[cfg(target_os = "macos")]
             {
                 Arc::new(platforms::apple::AppleCvEngine::new())
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "rga"))))]
             {
-                Arc::new(CpuCvEngine::new())
+                Arc::new(platforms::cpu::CpuCvEngine::new())
             }
         })
         .clone()

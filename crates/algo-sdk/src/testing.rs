@@ -38,9 +38,10 @@ extern "C" {
     fn CVPixelBufferRelease(pixel_buffer: *mut c_void);
 }
 
+#[cfg(all(target_os = "macos", feature = "testing-hardware"))]
 const K_CVPIXEL_FORMAT_NV12: u32 = 0x34323076; // '420v'
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "testing-hardware"))]
 #[repr(C)]
 struct DmaHeapAllocationData {
     len: u64,
@@ -49,25 +50,25 @@ struct DmaHeapAllocationData {
     heap_flags: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "testing-hardware"))]
 const DMA_HEAP_IOCTL_ALLOC: libc::c_ulong = 0xc018_4800;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "testing-hardware"))]
 #[repr(C)]
 struct DmaBufSync {
     flags: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "testing-hardware"))]
 const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "testing-hardware"))]
 const DMA_BUF_SYNC_WRITE: u64 = 2;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "testing-hardware"))]
 const DMA_BUF_SYNC_START: u64 = 0;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "testing-hardware"))]
 const DMA_BUF_SYNC_END: u64 = 4;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "testing-hardware"))]
 fn allocate_real_dma_buf(data: &[u8]) -> Result<std::os::fd::OwnedFd, AlgoError> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
@@ -170,6 +171,7 @@ fn allocate_real_dma_buf(data: &[u8]) -> Result<std::os::fd::OwnedFd, AlgoError>
 
     // SAFETY: mapped 覆盖 alloc_len 字节，data 只复制其实际长度。
     if !data.is_empty() {
+        // SAFETY: mapped is a valid writable DMA-BUF mapping and data fits in the allocation.
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), mapped.cast::<u8>(), data.len());
         }
@@ -272,7 +274,7 @@ enum MockStorage {
     Host(Vec<u8>),
     #[cfg(target_os = "macos")]
     ApplePixelBuffer(*mut c_void),
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "testing-hardware"))]
     DmaBuf(std::os::fd::OwnedFd),
 }
 
@@ -652,7 +654,7 @@ impl MockFrameBuilder {
                     desc.memory_type = AV_MEM_PLATFORM_SURFACE;
                     desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", feature = "testing-hardware"))]
                 MockStorage::DmaBuf(fd) => {
                     use std::os::fd::AsRawFd;
                     desc.opaque = fd.as_raw_fd() as usize as *mut c_void;
@@ -745,12 +747,10 @@ impl MockFrameBuilder {
             }
         }
 
+        desc.opaque = raw_bytes.as_ptr() as *mut c_void;
         let storage = MockStorage::Host(raw_bytes);
         desc.opaque_kind = AV_OPAQUE_NONE;
         desc.memory_type = AV_MEM_HOST;
-        if let MockStorage::Host(ref bytes) = storage {
-            desc.opaque = bytes.as_ptr() as *mut c_void;
-        }
 
         MockFrame {
             desc,

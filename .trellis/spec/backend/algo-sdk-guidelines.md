@@ -114,7 +114,14 @@ Offset | Field           | Type       | Value / Constraint
 - **零分配序列化**：通过 `BoxesSerializer` 直接流式写入字节向量并在末尾补充 `\0` NUL 字节，避免中途为每个对象分配堆内存与中间字符串。
 - **抓拍请求挂载**：`ResultEmitter` 在发射告警时，默认自动请求主码流全景大图抓拍 (`image_type = 0`)，特写抓拍 (`image_type = 1`) 必须带 10% 扩边框。
 
-### 3.3 Panic 绝对隔离屏障
+### 3.4 Rockchip RGA 硬件加速与显存池契约
+- **动态库隔离与线程安全**：Linux 平台运行时动态加载 `librga.so` / `librga.so.2`，不产生链接期强绑定。因底层驱动线程安全限制，所有进入 `librga` 的 API 调用必须由内部互斥锁序列化保护。
+- **预热句柄复用与陈旧句柄防御**：`RgaBufferPool` 在初始化时分配 DMA-BUF 并单次调用 `importbuffer_fd` 绑定 `rga_buffer_handle_t`；后续租借归还仅复用 handle 与 `wrapbuffer_handle_t`，严禁每帧频繁 import/release 造成 IOMMU 映射震荡与内核锁争用。输入源 DMA-BUF 由 `RgaHandleGuard` 执行基于单帧同步生命周期的 RAII 保护，处理完成后立即调用 `releasebuffer_handle`，坚决避免跨帧非受控缓存导致内核 fd 轮转复用时命中陈旧句柄（Stale Handle）；输出端缓冲区则由受控 `RgaBufferPool` 统一预热并复用长期句柄。
+- **多输出规格安全硬顶**：单个 `RgaCvEngine` 实例最多缓存 16 个不同输出分辨率几何规格的 `RgaBufferPool`，超限时主动拒绝，杜绝异常动态分辨率打爆物理显存。
+- **纯设备路径防御**：输入 DMA-BUF 必须为无 format modifier (`modifier == 0`) 的线性连续帧；NV12 必须满足 `stride[0] == stride[1]`；I420 必须满足 `stride[0] == 2 * stride[1] == 2 * stride[2]`；单平面的最大扫描行步长硬限制为 32,768 (`RGA_MAX_STRIDE`)。非法排布直接返回 `AlgoError::IncompatibleFrame`，严禁在 DMA-BUF 路径悄悄执行 CPU 软解或 readback 伪装为硬件加速。
+- **DMA-BUF 堆选取安全**：Linux dma_heap 分配优先尝试 `/dev/dma_heap/system-dma32`（规避 RGA2 4GB 寻址限制）与 `/dev/dma_heap/system`；对于 `Auto` 与 `Rga2` 调度策略，直接前置过滤非 DMA32 堆，防止非法物理地址进入硬件加速器。分配失败时记录包含候选路径与系统 errno 的详细告警日志。
+
+### 3.5 Panic 绝对隔离屏障
 - `export_algo!` 导出的所有 FFI 函数入口（`init` / `destroy` / `create_instance` / `process`）必须通过 `std::panic::catch_unwind` 隔离。
 - 严禁任何 Rust panic unwind 逃逸到宿主 C ABI 栈，发生 panic 时记录错误并向宿主返回 `AV_STATUS_ERR_PANIC` (-5) 或 `AV_STATUS_ERR_INTERNAL` (-1)。
 
@@ -136,6 +143,16 @@ Offset | Field           | Type       | Value / Constraint
 ---
 
 ## 5. Good/Base/Bad Cases
+
+### Good Case: Rockchip RGA 硬件零拷贝预处理 (Linux + rga)
+```rust
+// DMA-BUF -> DMA-BUF (RGB888)，全链路位于 Linux DMA-BUF 显存池，零 CPU 拷贝
+// 使用预热句柄池 (RgaBufferPool) 消除每帧 importbuffer_fd 的 IOMMU 映射开销
+let engine = RgaCvEngine::new();
+let (buffer, mode) = engine.letterbox(&safe_frame, 640, 640, [114, 114, 114])?;
+let dma_fd = buffer.as_dma_buf().ok_or(AlgoError::Preprocess { reason: "无 DMA-BUF".into() })?;
+// 下游直接交付 RKNN NPU 零拷贝输入；buffer 析构时自动通过 RAII 归还池槽位，不释放 RGA handle
+```
 
 ### Good Case: Apple vImage 硬件零拷贝预处理
 ```rust

@@ -8,6 +8,7 @@ use crate::c_abi::*;
 use crate::error::AlgoError;
 
 /// YUV -> RGB 转换参数，由帧的矩阵与范围元数据决定。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct YuvConversion {
     pub y_offset: f32,
