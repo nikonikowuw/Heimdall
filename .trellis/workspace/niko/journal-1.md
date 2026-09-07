@@ -338,3 +338,37 @@ Fixed configurable algorithm package upload limits end to end: centralized and v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: 工业级网络服务配置
+
+**Date**: 2026-09-07
+**Task**: 工业级网络服务配置
+**Branch**: `dev`
+
+### Summary
+
+构建工业级边缘网络服务架构：实现防失联看门狗（Commit-Confirm 60s 倒计时回滚）、掉电安全原子快照冷启动自愈、RFC 5227 地址冲突检测（ARP Probe）、多网口策略路由与自动跃点分配；前端支持试用倒计时横幅、冲突拦截弹窗与多网卡路由管理，全量门禁通过。
+
+### Main Changes
+
+- 实现 Commit-Confirm 事务与独立 60s 看门狗，超时未确认自动执行物理级原子回滚与冷启动自愈
+- 实现基于 Raw Socket 的 RFC 5227 地址冲突检测（ARP Probe）及变更后的 Gratuitous ARP 广播
+- 支持多网卡策略路由与度量值动态指派（管理网口 100，从属网口 500），杜绝网关冲突与路由漂移
+- 模块化重构 NetworkService 并新增 ICMP Ping / DNS 诊断端点与 51000 系列系统错误码多语言国际化
+- 前端构建试用倒计时横幅、地址冲突告警拦截 Modal 与网卡度量值配置，完整覆盖全生命周期交互
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7a38510` | (see git log) |
+
+### Testing
+
+- [OK] cargo test --workspace & cargo clippy --all-targets -- -D warnings & cargo fmt --all -- --check 通过
+- [OK] web pnpm format / lint / typecheck / test / build 全量门禁通过
+
+### Status
+
+[OK] **Completed**
