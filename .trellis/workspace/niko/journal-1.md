@@ -304,3 +304,37 @@ Fixed configurable algorithm package upload limits end to end: centralized and v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: Axum 审计日志中间件统一拦截改造
+
+**Date**: 2026-09-07
+**Task**: Axum 审计日志中间件统一拦截改造
+**Branch**: `dev`
+
+### Summary
+
+统一将写操作审计日志下沉至 Axum 中间件层（AuditLogLayer / AuditLogService），自动提取真实客户端 IP、推导审计模块与动作、安全截断请求载荷；移除各路由手工侵入式埋点；前端操作日志页面接入真实接口与分页，全量门禁通过。
+
+### Main Changes
+
+- 实现 AuditLogLayer / AuditLogService 统一拦截 POST/PUT/PATCH/DELETE 等受保护写操作并异步记录审计日志
+- 精准提取 X-Forwarded-For、X-Real-IP 及 SocketAddr 客户端 IP，并按路径前缀推导模块与动作
+- 安全捕获并截断请求载荷（上限 2048 字符），自动旁路 multipart 二进制大文件流
+- 清理各领域路由手工 OplogRepo 调用，并在 AuthUser 提取器中支持 Extensions 注入优化
+- 前端操作日志页面接入 live API，支持模块筛选、偏移分页、日志去重与国际化错误降级
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `55c5b48` | (see git log) |
+
+### Testing
+
+- [OK] cargo test --workspace & cargo clippy --all-targets -- -D warnings & cargo fmt --all -- --check 通过
+- [OK] web pnpm format / lint / typecheck / test / build 全量门禁通过
+
+### Status
+
+[OK] **Completed**
