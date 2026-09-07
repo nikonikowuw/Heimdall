@@ -393,3 +393,24 @@ Fixed configurable algorithm package upload limits end to end: centralized and v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: RK3576 RKNN 通用目标检测算法包开发与硬件压测
+
+**Date**: 2026-09-07
+**Task**: RK3576 RKNN 通用目标检测算法包开发与硬件压测
+**Branch**: `dev`
+
+### Summary
+
+完成基于 RK3576 平台的通用目标检测算法包（YOLOv8n）开发，打通 RGA 硬件预处理与 RKNN 双核 NPU 并行推理，实现 C ABI 插件封装与全流程硬件压测验证。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9b92700` | (see git log) |
+
+### Status
+
+[OK] **Completed**
