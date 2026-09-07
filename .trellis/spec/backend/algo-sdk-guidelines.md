@@ -119,7 +119,7 @@ Offset | Field           | Type       | Value / Constraint
 - **预热句柄复用与陈旧句柄防御**：`RgaBufferPool` 在初始化时分配 DMA-BUF 并单次调用 `importbuffer_fd` 绑定 `rga_buffer_handle_t`；后续租借归还仅复用 handle 与 `wrapbuffer_handle_t`，严禁每帧频繁 import/release 造成 IOMMU 映射震荡与内核锁争用。输入源 DMA-BUF 由 `RgaHandleGuard` 执行基于单帧同步生命周期的 RAII 保护，处理完成后立即调用 `releasebuffer_handle`，坚决避免跨帧非受控缓存导致内核 fd 轮转复用时命中陈旧句柄（Stale Handle）；输出端缓冲区则由受控 `RgaBufferPool` 统一预热并复用长期句柄。
 - **多输出规格安全硬顶**：单个 `RgaCvEngine` 实例最多缓存 16 个不同输出分辨率几何规格的 `RgaBufferPool`，超限时主动拒绝，杜绝异常动态分辨率打爆物理显存。
 - **纯设备路径防御**：输入 DMA-BUF 必须为无 format modifier (`modifier == 0`) 的线性连续帧；NV12 必须满足 `stride[0] == stride[1]`；I420 必须满足 `stride[0] == 2 * stride[1] == 2 * stride[2]`；单平面的最大扫描行步长硬限制为 32,768 (`RGA_MAX_STRIDE`)。非法排布直接返回 `AlgoError::IncompatibleFrame`，严禁在 DMA-BUF 路径悄悄执行 CPU 软解或 readback 伪装为硬件加速。
-- **DMA-BUF 堆选取安全**：Linux dma_heap 分配优先尝试 `/dev/dma_heap/system-dma32`（规避 RGA2 4GB 寻址限制）与 `/dev/dma_heap/system`；对于 `Auto` 与 `Rga2` 调度策略，直接前置过滤非 DMA32 堆，防止非法物理地址进入硬件加速器。分配失败时记录包含候选路径与系统 errno 的详细告警日志。
+- **DMA-BUF 堆选取安全**：Linux dma_heap 分配优先尝试 `/dev/dma_heap/system-dma32`（规避 RGA2 4GB 寻址限制）与 `/dev/dma_heap/system`；仅当显式指定 `Rga2` 核心调度策略时前置强制要求 DMA32 堆（物理地址不超过 4GB），而在 `Auto` 或 `Rga3` 策略下允许使用 `/dev/dma_heap/system` 64 位物理地址堆，防止在仅支持 64 位 system 堆的现代平台（如 RK3576/RK3588）发生误拦截。分配失败时记录包含候选路径与系统 errno 的详细告警日志。
 
 ### 3.5 Panic 绝对隔离屏障
 - `export_algo!` 导出的所有 FFI 函数入口（`init` / `destroy` / `create_instance` / `process`）必须通过 `std::panic::catch_unwind` 隔离。
@@ -465,4 +465,155 @@ if ret != 0 {
     return Err(AlgoError::Internal { reason: format!("vImageConvert 失败: {ret}") });
 }
 ```
+
+---
+
+## 10. Rockchip RKNN (RK3576 / RK3588) 原生极速推理工程陷阱与加速指南
+
+在 Rockchip NPU (如 RK3576 / RK3588) 下实现极致 RKNN 推理吞吐与全链路零拷贝，必须严格遵守以下底层硬件约束与驱动规范：
+
+### 10.1 Scope / Trigger
+- 开发或接入基于 Rockchip 芯片平台（RK3568 / RK3576 / RK3588）的 RKNN 原生算法包；
+- 优化 NPU 多核调度拓扑（如 RK3576 双核 / RK3588 三核）、硬件张量绑定或后处理 DFL 解码流水线；
+- 调试底层 DMA-BUF 零拷贝输入、虚拟内存长期缓存与驱动显存泄露问题。
+
+### 10.2 Signatures
+```rust
+// 动态加载 librknnrt.so 导出的核心 C ABI 函数签名
+pub type RknnContext = u64;
+
+type RknnInitFn = unsafe extern "C" fn(ctx: *mut RknnContext, model: *mut c_void, size: u32, flag: u32, extend: *mut c_void) -> c_int;
+type RknnDestroyFn = unsafe extern "C" fn(ctx: RknnContext) -> c_int;
+type RknnQueryFn = unsafe extern "C" fn(ctx: RknnContext, cmd: c_int, info: *mut c_void, size: u32) -> c_int;
+type RknnInputsSetFn = unsafe extern "C" fn(ctx: RknnContext, n_inputs: u32, inputs: *mut RknnInput) -> c_int;
+type RknnRunFn = unsafe extern "C" fn(ctx: RknnContext, extend: *mut c_void) -> c_int;
+type RknnOutputsGetFn = unsafe extern "C" fn(ctx: RknnContext, n_outputs: u32, outputs: *mut RknnOutput, extend: *mut c_void) -> c_int;
+type RknnOutputsReleaseFn = unsafe extern "C" fn(ctx: RknnContext, n_outputs: u32, outputs: *mut RknnOutput) -> c_int;
+type RknnSetCoreMaskFn = unsafe extern "C" fn(ctx: RknnContext, core_mask: c_int) -> c_int;
+type RknnCreateMemFromFdFn = unsafe extern "C" fn(ctx: RknnContext, fd: i32, virt_addr: *mut c_void, size: u32, offset: i32) -> *mut RknnTensorMem;
+type RknnDestroyMemFn = unsafe extern "C" fn(ctx: RknnContext, mem: *mut RknnTensorMem) -> c_int;
+type RknnSetIoMemFn = unsafe extern "C" fn(ctx: RknnContext, mem: *mut RknnTensorMem, attr: *mut RknnTensorAttr) -> c_int;
+
+// RAII 显存守卫：杜绝驱动级内存泄露
+pub struct RknnOutputsGuard<'a> {
+    runtime: &'a Arc<RknnRuntime>,
+    ctx: RknnContext,
+    pub outputs: Vec<RknnOutput>,
+}
+```
+
+### 10.3 Contracts
+
+#### 1. 多核 NPU 掩码调度契约
+```rust
+pub const RKNN_NPU_CORE_AUTO: c_int = 0;
+pub const RKNN_NPU_CORE_0: c_int = 1;
+pub const RKNN_NPU_CORE_1: c_int = 2;
+pub const RKNN_NPU_CORE_2: c_int = 4;
+pub const RKNN_NPU_CORE_0_1: c_int = 3;       // RK3576 双核全开（单帧 ~8.4ms）
+pub const RKNN_NPU_CORE_0_1_2: c_int = 7;     // RK3588 三核全开
+```
+- 模型初始化后必须立即通过 `rknn_set_core_mask` 显式设置掩码。默认 `AUTO (0)` 仅被调度至单核（~15.2ms），严重浪费算力；
+- `rknn_set_core_mask` 动态符号必须使用 `Option<fn>` 防御性探测，若旧版本驱动不存在该符号，仅记录 warning，不阻断运行。
+
+#### 2. DMA-BUF 映射与虚拟内存长期缓存契约 (`dma_mem_cache`)
+- **virt_addr 非空约束**：Rockchip Linux 驱动中，`rknn_create_mem_from_fd` 要求 `virt_addr` 不可为 NULL，必须传入进程空间内 `mmap` 的有效可读写虚拟地址，否则触发内核段错误；
+- **消除锁竞争**：严禁每帧频繁调用 `libc::mmap` 与 `libc::munmap`（会导致高频 `mmap_lock` 锁竞争）。必须通过 `HashMap<i32, DmaMemEntry>` 缓存 DMA-BUF fd 对应的 `virt_addr`，生命周期与上游显存池对齐；
+- **物理通路双模**：默认复用缓存的 `virt_addr` 并通过 `rknn_inputs_set` 注入内核态 MMU 硬件通路（~8.4ms）；预留 `USE_RKNN_ZERO_COPY_IO_MEM` 支持显式切换至 `rknn_create_mem_from_fd` 零拷贝总线。
+
+#### 3. 6 分支 INT8 DFL 原生解码契约
+- YOLOv8/YOLO11 导出的 6 分支 INT8 模型（3 个尺度 × [box_int8, cls_int8]），必须保持 `want_float = 0`，以避免驱动在 CPU 侧执行开销极大的全局浮点反量化（耗时 >10ms）；
+- **类别置信度前置剪枝**：遍历分类分支 INT8 数据时，先校验 `(raw_cls - zp) * scale >= conf_thresh`。低于阈值的网格直接跳过，仅对通过网格执行 16-bin Softmax DFL 坐标还原，将后处理耗时压降至 **1.60ms** 以内。
+
+### 10.4 Validation & Error Matrix
+
+| 输入条件 / 场景 | 校验位置 | 产生的错误 / 状态 | 处理动作 |
+|----------------|---------|-----------------|---------|
+| 模型文件不存在 | `RknnSession::new_hardware` | `AlgoError::Internal("RKNN 模型文件不存在")` | 拒绝初始化，并列出路径 |
+| 无法加载 `librknnrt.so` | `RknnRuntime::load` | `AlgoError::Internal("未能在系统路径找到...")` | 提示搜索候选路径与系统 errno |
+| `rknn_init` 返回负数 | `RknnSession::new_hardware` | `AlgoError::Internal("rknn_init 失败: ret")` | 终止加载，防止未初始化句柄逃逸 |
+| `mmap` DMA-BUF 失败 | `infer_with_dma_buf` | `AlgoError::Internal("mmap DMA-BUF 失败")` | 抛出 OS 错误描述，不进入推理 |
+| `rknn_run` 硬件报错 | `infer_with_dma_buf` | `AlgoError::Internal("rknn_run 推理失败")` | 释放输出 guard，记录状态码 |
+| `rknn_outputs_get` 失败 | `get_hardware_outputs` | `AlgoError::Internal("rknn_outputs_get 失败")` | 拦截错误，避免解引用野指针 |
+
+### 10.5 Good/Base/Bad Cases
+
+#### Good Case: 双核 NPU + DMA-BUF 虚拟内存缓存 + INT8 原生 DFL
+```rust
+// 1. 初始化时激活双核
+if let Some(set_mask) = runtime.rknn_set_core_mask {
+    unsafe { set_mask(ctx, RKNN_NPU_CORE_0_1) };
+}
+// 2. 复用长期缓存映射的 virt_addr，避免逐帧 mmap
+let virt_addr = dma_mem_cache.entry(dma_fd).or_insert_with(|| ...).virt_addr;
+// 3. want_float = 0，原生 INT8 6 分支进入快速剪枝与 DFL Softmax
+let outputs_guard = RknnOutputsGuard::new(runtime, ctx, outputs);
+let boxes = decode_yolov8_int8_outputs(&outputs_guard, &output_attrs, conf_thresh, iou_thresh)?;
+```
+
+#### Base Case: 开发机无 NPU 时的测试回退 (Fallback)
+```rust
+// 检测到缺失 librknnrt.so 或硬件节点不可用时，优雅进入 Fallback 模式
+let session = RknnSession::new_fallback(&model_path)?;
+// 返回自洽的测试张量，供端到端逻辑跑通，不 Panic
+```
+
+#### Bad Case: 强制浮点反量化且逐帧 mmap/munmap
+```rust
+// ❌ 错误：逐帧 mmap/munmap 引发页表锁竞争
+let virt_addr = unsafe { libc::mmap(null_mut(), size, PROT_READ, MAP_SHARED, fd, 0) };
+// ❌ 错误：want_float = 1 强制驱动在 CPU 逐元素浮点转换
+let mut out = RknnOutput { want_float: 1, ..Default::default() };
+// ❌ 错误：未调用 rknn_outputs_release 导致驱动句柄泄露
+let ret = unsafe { (runtime.rknn_outputs_get)(ctx, 1, &mut out, null_mut()) };
+unsafe { libc::munmap(virt_addr, size) };
+```
+
+### 10.6 Tests Required (with Assertion Points)
+1. **ABI 虚表与导出断言** (`tests/algo_sandbox_tests.rs`)：
+   - 断言动态库加载后导出 `av_plugin_get_vtable`
+   - 断言 `vtable.api_version == AV_ALGO_API_VERSION`
+   - 断言 `vtable.size == size_of::<AvPluginVTable>()`
+2. **RAII 释放机制与内存泄露压测** (`make stress`)：
+   - 运行 30s 持续满载推理，监控 RSS 内存与文件描述符数量，断言无单调增长；
+3. **DFL 数学计算与置信度过滤** (`src/postprocess.rs`)：
+   - 验证 Softmax 权重分布在极端值下的数值稳定性；
+   - 验证低于阈值的特征点被 100% 拦截，不产生虚假 Bounding Box。
+
+### 10.7 Wrong vs Correct
+
+#### 10.7.1 RKNN 输出生命周期释放
+
+##### ❌ Wrong (依赖裸指针且在错误路径直接 return 造成泄露)
+```rust
+let ret = unsafe { (runtime.rknn_outputs_get)(ctx, n_out, outputs.as_mut_ptr(), null_mut()) };
+if ret != 0 { return Err(...); }
+let res = do_postprocess(&outputs)?; // 👈 若此处抛出 Err，outputs 永远得不到 release！
+unsafe { (runtime.rknn_outputs_release)(ctx, n_out, outputs.as_mut_ptr()) };
+```
+
+##### ✅ Correct (通过 RAII 结构体自动托管)
+```rust
+pub struct RknnOutputsGuard<'a> {
+    runtime: &'a Arc<RknnRuntime>,
+    ctx: RknnContext,
+    pub outputs: Vec<RknnOutput>,
+}
+
+impl<'a> Drop for RknnOutputsGuard<'a> {
+    fn drop(&mut self) {
+        if !self.outputs.is_empty() {
+            unsafe {
+                (self.runtime.rknn_outputs_release)(
+                    self.ctx,
+                    self.outputs.len() as u32,
+                    self.outputs.as_mut_ptr(),
+                );
+            }
+        }
+    }
+}
+// 使用 guard 后，即使后续函数 panic 或提前返回 Err，也能在 drop 时被安全回收
+```
+
 

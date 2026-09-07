@@ -167,6 +167,23 @@ NMS、坐标还原、置信度过滤这类后处理是**平台无关**的，放�
 
 ---
 
+## Rockchip RKNN 专项优化与工程实践
+
+在 Rockchip (RK3576 / RK3588) Linux 下使用 RKNN 原生推理时，必须严格遵守以下契约（完整实现见 `algo-sdk-guidelines.md` 第 10 节）：
+
+- **NPU 多核调度掩码强制激活**：
+  RK3576 (双核) 必须显式配置 `RKNN_NPU_CORE_0_1` (掩码 3)，RK3588 (三核) 建议配置 `RKNN_NPU_CORE_0_1_2` (掩码 7)。严禁留空使用单核 AUTO 调度（单核推理 ~15.2ms vs 双核 ~8.4ms）。
+- **零拷贝 DMA-BUF 虚拟内存常驻缓存**：
+  `rknn_create_mem_from_fd` 在 Rockchip BSP 下要求必须传入有效映射的 `virt_addr`。必须通过常驻 `HashMap<fd, DmaMemEntry>` 缓存用户态 `mmap` 地址，禁止在逐帧推理热路径中频繁调用 `libc::mmap` / `libc::munmap` 引发内核 `mmap_lock` 锁竞争。
+- **6 分支 INT8 DFL 原生解码与分支剪枝**：
+  保持 `want_float = 0` 获取原生 INT8 特征图，避免驱动在 CPU 端进行耗时 ~10ms+ 的浮点反量化。通过类别置信度前置剪枝，只对有效网格执行 16-bin Softmax DFL 坐标还原，将后处理耗时压降至 1.60ms 内。
+- **`rknn_outputs_release` RAII 生命周期托管**：
+  使用 `RknnOutputsGuard` 封装 `RknnOutput`，确保即使后处理中途抛出 `AlgoError` 或捕获 Panic，驱动级显存与锁资源也能安全释放。
+- **RGA 堆分配兼容性**：
+  仅在显式指定 `RgaCore::Rga2` 时强制校验 DMA32 堆（4GB 物理地址限制）；在 `Auto` 或 `Rga3` 策略下（如 RK3576/RK3588），允许从 `/dev/dma_heap/system` 64 位物理地址堆分配。
+
+---
+
 ## 禁止事项
 
 - ❌ `infer` 之外出现平台 `#[cfg]`
@@ -181,5 +198,5 @@ NMS、坐标还原、置信度过滤这类后处理是**平台无关**的，放�
 
 - [ ] `FrameRef` 的确切定义（各平台 buffer 句柄如何统一表达）
 - [ ] `RawOutput` 是否需要支持多输出头（分割/姿态模型）
-- [ ] RKNN context 是否真的不可跨线程（影响 `LoadedModel: Send` 的正确性）
+- [x] RKNN context 是否真的不可跨线程：已验证单个 `RknnContext` 非线程安全，不可并发调用；必须绑定在专用推理线程内使用；跨线程扩展需使用独立 context 或多进程实例。
 - [ ] 三平台量化后的精度差异范围，据此定一致性测试阈值
