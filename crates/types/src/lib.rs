@@ -26,7 +26,8 @@ pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
 pub use oplog::OperationLog;
 pub use system::{
     EvictionReport, ForceSyncResponse, InterfaceCapabilities, IpConfig, IpMethod,
-    NetworkChangeOperation, NetworkInterface, NetworkInterfaceState, NetworkInterfaceType,
+    NetworkChangeOperation, NetworkDiagnosticRequest, NetworkDiagnosticResult,
+    NetworkDiagnosticType, NetworkInterface, NetworkInterfaceState, NetworkInterfaceType,
     NetworkInterfacesResponse, NetworkManager, NetworkUpdateResult, OperationConfirmResult,
     OperationStatus, OverwriteMode, SetTimeResponse, StorageConfig, StorageHealthLevel,
     StorageStatus, SystemOverview, TimeConfig, TimeStatus,

@@ -12,6 +12,8 @@ import type {
   TimeConfig,
   TimeStatus,
   IpConfig,
+  NetworkDiagnosticRequest,
+  NetworkDiagnosticResult,
   ForceSyncResponse,
   SetTimeResponse,
 } from '../types/system'
@@ -58,6 +60,9 @@ export const systemApi = {
 
   cancelNetworkChange: (id: string) =>
     post<OperationConfirmResult>(`/system/network/changes/${encodeURIComponent(id)}/cancel`),
+
+  diagnoseNetwork: (req: NetworkDiagnosticRequest) =>
+    post<NetworkDiagnosticResult>('/system/network/diagnose', req),
 
   // ─── 存储与保留策略 ───
 

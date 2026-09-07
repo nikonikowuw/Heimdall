@@ -188,6 +188,12 @@ pub struct NetworkInterface {
     #[serde(rename = "type")]
     pub interface_type: NetworkInterfaceType,
     pub state: NetworkInterfaceState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplex: Option<String>,
     pub mac: String,
     pub manager: NetworkManager,
     pub ipv4: Option<IpConfig>,
@@ -222,7 +228,7 @@ pub enum NetworkManager {
     Unmanaged,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IpConfig {
     pub method: IpMethod,
@@ -230,13 +236,16 @@ pub struct IpConfig {
     pub prefix: Option<u32>,
     pub gateway: Option<String>,
     pub dns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum IpMethod {
     Dhcp,
     Static,
+    #[default]
     None,
 }
 
@@ -292,4 +301,29 @@ pub enum OperationStatus {
 pub struct OperationConfirmResult {
     pub status: OperationStatus,
     pub confirmed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkDiagnosticRequest {
+    pub target: String,
+    pub diagnostic_type: NetworkDiagnosticType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkDiagnosticType {
+    Ping,
+    Dns,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkDiagnosticResult {
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<f64>,
+    pub message: String,
 }

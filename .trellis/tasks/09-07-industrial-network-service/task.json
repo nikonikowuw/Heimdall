@@ -1,0 +1,31 @@
+{
+  "id": "industrial-network-service",
+  "name": "industrial-network-service",
+  "title": "工业级网络服务配置",
+  "description": "建立工业级边缘网络服务：支持防失联看门狗与事务回滚（Commit-Confirm）、RFC 5227 地址冲突检测（ARP Probe）、双网口策略路由与内外网物理隔离、掉电安全原子写入与鲁棒底层解析。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "niko",
+  "assignee": "niko",
+  "createdAt": "2026-09-07",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "crates/api/src/network_service.rs",
+    "crates/api/src/routes/system.rs",
+    "crates/types/src/system.rs",
+    "web/src/features/system/NetworkSettings.tsx"
+  ],
+  "notes": "",
+  "meta": {}
+}

@@ -181,6 +181,7 @@ fn read_device_model() -> String {
         .or_else(|_| fs::read_to_string("/sys/devices/virtual/dmi/id/board_name"))
         .or_else(|_| fs::read_to_string("/sys/devices/virtual/dmi/id/product_name"))
         .map(|s| s.trim_matches('\0').trim().to_string())
+        .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Unknown".to_string())
 }

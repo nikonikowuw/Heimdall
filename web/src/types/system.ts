@@ -93,6 +93,9 @@ export interface NetworkInterface {
   name: string
   type: 'ethernet' | 'wifi' | 'loopback' | 'virtual'
   state: 'up' | 'down' | 'unknown'
+  carrier?: boolean | null
+  speed?: number | null
+  duplex?: 'full' | 'half' | null
   mac: string
   manager: 'networkmanager' | 'systemd-networkd' | 'netplan' | 'ifupdown' | 'connman' | 'unmanaged'
   ipv4: IpConfig | null
@@ -105,6 +108,7 @@ export interface IpConfig {
   prefix: number | null
   gateway: string | null
   dns: string[]
+  metric?: number | null
 }
 
 export interface InterfaceCapabilities {
@@ -141,4 +145,16 @@ export type OperationStatus = 'pending_confirm' | 'confirmed' | 'restoring' | 'r
 export interface OperationConfirmResult {
   status: OperationStatus
   confirmedAt: number | null
+}
+
+export interface NetworkDiagnosticRequest {
+  target: string
+  diagnosticType: 'ping' | 'dns'
+  interface?: string | null
+}
+
+export interface NetworkDiagnosticResult {
+  success: boolean
+  latencyMs?: number | null
+  message: string
 }

@@ -68,6 +68,12 @@ pub enum ApiError {
     #[error("网络配置无效: {0}")]
     NetworkInvalid(String),
 
+    #[error("检测到静态 IP 冲突: {0}")]
+    NetworkIpConflict(String),
+
+    #[error("网关不可达或配置冲突: {0}")]
+    NetworkGatewayUnreachable(String),
+
     #[error("网络服务执行失败: {0}")]
     NetworkFailed(String),
 
@@ -118,6 +124,8 @@ impl IntoResponse for ApiError {
             Self::NetworkPendingOperation => (StatusCode::CONFLICT, 51006, self.to_string()),
             Self::NetworkOperationTimeout(m) => (StatusCode::REQUEST_TIMEOUT, 51009, m.clone()),
             Self::NetworkOperationExpired => (StatusCode::CONFLICT, 51010, self.to_string()),
+            Self::NetworkIpConflict(m) => (StatusCode::CONFLICT, 51011, m.clone()),
+            Self::NetworkGatewayUnreachable(m) => (StatusCode::BAD_REQUEST, 51012, m.clone()),
             Self::NetworkInvalid(m) => (StatusCode::BAD_REQUEST, 51001, m.clone()),
             Self::NetworkFailed(m) => (StatusCode::INTERNAL_SERVER_ERROR, 51008, m.clone()),
             Self::StorageConfig(m) => (StatusCode::BAD_REQUEST, 51100, m.clone()),
@@ -166,5 +174,9 @@ mod tests {
         let api_err = ApiError::from(pipeline_err);
         let resp = api_err.into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let conflict_err = ApiError::NetworkIpConflict("192.168.1.100".to_string());
+        let resp = conflict_err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 }

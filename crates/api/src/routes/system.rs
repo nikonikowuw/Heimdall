@@ -129,26 +129,35 @@ pub async fn update_network_interface(
 pub async fn get_pending_network_change(
     State(_state): State<AppState>,
 ) -> Result<ApiResponse<Option<types::NetworkChangeOperation>>, ApiError> {
-    // 首版：管理接口变更操作暂不实现
-    Ok(ApiResponse::success(None))
+    let op = crate::network_service::NetworkService::get_pending_operation().await?;
+    Ok(ApiResponse::success(op))
 }
 
 /// `POST /api/v1/system/network/changes/:id/confirm`
 pub async fn confirm_network_change(
     State(_state): State<AppState>,
-    axum::extract::Path(_id): axum::extract::Path<String>,
+    axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<ApiResponse<types::OperationConfirmResult>, ApiError> {
-    // 首版：管理接口变更确认暂不实现
-    Err(ApiError::NetworkFailed("管理接口变更确认暂未实现".into()))
+    let result = crate::network_service::NetworkService::confirm_operation(&id).await?;
+    Ok(ApiResponse::success(result))
 }
 
 /// `POST /api/v1/system/network/changes/:id/cancel`
 pub async fn cancel_network_change(
     State(_state): State<AppState>,
-    axum::extract::Path(_id): axum::extract::Path<String>,
+    axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<ApiResponse<types::OperationConfirmResult>, ApiError> {
-    // 首版：管理接口变更取消暂不实现
-    Err(ApiError::NetworkFailed("管理接口变更取消暂未实现".into()))
+    let result = crate::network_service::NetworkService::cancel_operation(&id).await?;
+    Ok(ApiResponse::success(result))
+}
+
+/// `POST /api/v1/system/network/diagnose`
+pub async fn diagnose_network(
+    State(_state): State<AppState>,
+    axum::Json(req): axum::Json<types::NetworkDiagnosticRequest>,
+) -> Result<ApiResponse<types::NetworkDiagnosticResult>, ApiError> {
+    let result = crate::network_service::NetworkService::diagnose(&req).await?;
+    Ok(ApiResponse::success(result))
 }
 
 // ─── 存储与保留策略 ───
@@ -455,6 +464,7 @@ pub fn router() -> axum::Router<AppState> {
             "/network/changes/{id}/cancel",
             axum::routing::post(cancel_network_change),
         )
+        .route("/network/diagnose", axum::routing::post(diagnose_network))
         // 存储与保留策略
         .route("/storage/status", axum::routing::get(get_storage_status))
         .route(

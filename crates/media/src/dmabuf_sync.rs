@@ -5,10 +5,11 @@
 //! 2. 操作定序与硬件栅障 (Operation Ordering)：基于 `poll(POLLIN)` 验证 Producer 完成写栅障；
 //! 3. 显式 Fence 同步 (Explicit Sync)：导出与导入 `sync_file` 文件描述符。
 
+#[cfg(not(target_os = "linux"))]
 use std::os::raw::c_int;
 
 #[cfg(target_os = "linux")]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 
 use crate::error::MediaError;
 

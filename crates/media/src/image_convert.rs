@@ -151,6 +151,10 @@ pub fn snapshot_readback_to_rgb_image(frame: &FrameRef) -> Result<RgbImage, Medi
         FrameHandle::ApplePixelBuffer { ptr } => {
             convert_cvpixelbuffer_to_rgb(ptr.as_ptr(), width, height)
         }
+        #[cfg(not(target_os = "macos"))]
+        FrameHandle::ApplePixelBuffer { .. } => Err(MediaError::Decode {
+            reason: "ApplePixelBuffer 仅支持 macOS".into(),
+        }),
         #[cfg(target_os = "linux")]
         FrameHandle::DmaBuf { fd, .. } => {
             convert_dmabuf_to_rgb(fd.as_ref(), width, height, frame.stride)
@@ -850,6 +854,27 @@ mod tests {
         assert_eq!(rgb.width(), 32);
         assert_eq!(rgb.height(), 32);
         assert_eq!(rgb.get_pixel(0, 0).0, [200, 200, 200]);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn test_apple_pixelbuffer_rejected_on_non_macos() {
+        let frame = FrameRef::new(
+            "cam_non_macos_test".into(),
+            1741100000000,
+            1,
+            1,
+            StrideInfo::new(1, 1),
+            PixelFormat::Nv12,
+            FrameHandle::ApplePixelBuffer {
+                ptr: std::ptr::NonNull::dangling(),
+            },
+        );
+
+        assert!(matches!(
+            frame_to_rgb_image(&frame),
+            Err(MediaError::Decode { reason }) if reason == "ApplePixelBuffer 仅支持 macOS"
+        ));
     }
 
     #[cfg(target_os = "macos")]

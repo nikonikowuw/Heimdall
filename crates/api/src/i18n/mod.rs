@@ -2,6 +2,7 @@ pub mod alarm;
 pub mod auth;
 pub mod camera;
 pub mod common;
+pub mod system;
 pub mod task;
 
 /// 支持的语言区域枚举
@@ -68,6 +69,7 @@ pub fn localize_api_message(code: u32, original_msg: &str, locale: Locale) -> St
         20000..=29999 => camera::translate_camera(code, original_msg, locale),
         30000..=39999 => task::translate_task(code, original_msg, locale),
         40002..=49999 => alarm::translate_alarm(code, original_msg, locale),
+        51000..=51999 => system::translate_system(code, original_msg, locale),
         _ => common::translate_common(code, original_msg, locale),
     };
 
@@ -189,6 +191,20 @@ mod tests {
         assert_eq!(
             localize_api_message(40002, "原消息", Locale::En),
             "Alarm record not found"
+        );
+
+        // System 51000 段
+        assert_eq!(
+            localize_api_message(51011, "原消息: 192.168.1.100", Locale::En),
+            "Static IP conflict detected: 192.168.1.100"
+        );
+        assert_eq!(
+            localize_api_message(51011, "原消息", Locale::ZhTw),
+            "檢測到靜態 IP 衝突"
+        );
+        assert_eq!(
+            localize_api_message(51006, "原消息", Locale::ZhCn),
+            "已有进行中的网络变更操作"
         );
     }
 }

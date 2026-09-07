@@ -179,7 +179,7 @@ pub fn detect_emmc_health() -> Option<EmmcHealthInfo> {
 
             if let Ok(content) = std::fs::read_to_string(&life_time_path) {
                 // 内容通常为 "0x01 0x02" 或 "0x01 0x01"
-                let parts: Vec<&str> = content.trim().split_whitespace().collect();
+                let parts: Vec<&str> = content.split_whitespace().collect();
                 if parts.len() >= 2 {
                     if let (Ok(a), Ok(b)) = (
                         u8::from_str_radix(parts[0].trim_start_matches("0x"), 16),

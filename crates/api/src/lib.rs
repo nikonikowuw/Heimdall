@@ -11,6 +11,7 @@ pub mod system_info;
 pub mod time_service;
 
 pub use error::ApiError;
+pub use network_service::NetworkService;
 pub use response::ApiResponse;
 pub use routes::system::DbEvictionStoreAdapter;
 pub use state::{AppState, WsBroadcastEvent};

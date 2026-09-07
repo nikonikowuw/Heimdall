@@ -1,11 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Wifi, WifiOff, Shield, Pencil, Check, X } from 'lucide-react'
+import { Wifi, WifiOff, Shield, Pencil, Check, X, Cable } from 'lucide-react'
 import { systemApi } from '../../lib/system-api'
 import { RefreshButton } from '../../components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { NetworkTrialBanner } from './components/NetworkTrialBanner'
+import { NetworkConflictModal } from './components/NetworkConflictModal'
+import { useNetworkTrial } from './hooks/use-network-trial'
 import type { NetworkInterface, IpConfig } from '../../types/system'
+
+const DEFAULT_IPV4_DRAFT: IpConfig = {
+  method: 'dhcp',
+  address: null,
+  prefix: null,
+  gateway: null,
+  dns: [],
+  metric: null,
+}
 
 export function NetworkSettings(): React.ReactElement {
   const { t } = useTranslation('system')
@@ -19,12 +31,26 @@ export function NetworkSettings(): React.ReactElement {
   const [showConfirm, setShowConfirm] = useState(false)
   const [pendingIface, setPendingIface] = useState<string | null>(null)
 
+  // 冲突告警弹窗状态
+  const [conflictModalOpen, setConflictModalOpen] = useState(false)
+  const [conflictIp, setConflictIp] = useState('')
+  const [conflictMac, setConflictMac] = useState<string | null>(null)
+
+  const {
+    pendingOp,
+    syncPendingOp,
+    trialError,
+    confirmTrial,
+    cancelTrial,
+  } = useNetworkTrial({ onReload: () => loadData() })
+
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
       const result = await systemApi.getNetworkInterfaces()
       setInterfaces(result.interfaces)
+      syncPendingOp(result.pendingOperation)
     } catch (err) {
       setError(
         err instanceof Error ? err.message : t('loadFailed', { defaultValue: 'Failed to load' }),
@@ -32,7 +58,7 @@ export function NetworkSettings(): React.ReactElement {
     } finally {
       setLoading(false)
     }
-  }, [t])
+  }, [syncPendingOp, t])
 
   useEffect(() => {
     loadData()
@@ -40,7 +66,7 @@ export function NetworkSettings(): React.ReactElement {
 
   const startEditing = (iface: NetworkInterface) => {
     setEditingIface(iface.name)
-    setDraft(iface.ipv4 || { method: 'dhcp', address: null, prefix: null, gateway: null, dns: [] })
+    setDraft(iface.ipv4 || DEFAULT_IPV4_DRAFT)
     setSaveError(null)
   }
 
@@ -64,19 +90,29 @@ export function NetworkSettings(): React.ReactElement {
     try {
       setSaving(true)
       setSaveError(null)
-      await systemApi.updateNetworkInterface(name, {
+      const res = await systemApi.updateNetworkInterface(name, {
         method: config.method,
         address: config.address || undefined,
         prefix: config.prefix || undefined,
         gateway: config.gateway || undefined,
         dns: config.dns.length > 0 ? config.dns : undefined,
+        metric: config.metric ?? undefined,
       })
       cancelEditing()
+      if (res.operation) {
+        syncPendingOp(res.operation)
+      }
       await loadData()
     } catch (err) {
-      setSaveError(
-        err instanceof Error ? err.message : t('saveFailed', { defaultValue: 'Failed to save' }),
-      )
+      const msg =
+        err instanceof Error ? err.message : t('saveFailed', { defaultValue: 'Failed to save' })
+      if (msg.includes('占用') || msg.includes('冲突') || msg.includes('51011')) {
+        const macMatch = msg.match(/\[?([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5})\]?/)
+        setConflictIp(config.address || '')
+        setConflictMac(macMatch ? macMatch[1] : null)
+        setConflictModalOpen(true)
+      }
+      setSaveError(msg)
     } finally {
       setSaving(false)
     }
@@ -95,13 +131,24 @@ export function NetworkSettings(): React.ReactElement {
             {t('network.title', { defaultValue: '网络/服务' })}
           </h2>
           <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-            {t('network.subtitle', { defaultValue: '管理设备网络接口与 IP 配置' })}
+            {t('network.subtitle', { defaultValue: '管理工业边缘网络接口与 IP 配置' })}
           </p>
         </div>
         <RefreshButton onClick={() => loadData()} loading={loading} />
       </div>
 
-      {error && <ErrorBanner message={error} onRetry={() => loadData()} />}
+      {/* 试运行防失联全屏横幅 */}
+      {pendingOp && pendingOp.status === 'pending_confirm' && (
+        <NetworkTrialBanner
+          operation={pendingOp}
+          onConfirm={confirmTrial}
+          onCancel={cancelTrial}
+        />
+      )}
+
+      {(error || trialError) && (
+        <ErrorBanner message={error || trialError!} onRetry={() => loadData()} />
+      )}
 
       <SettingsSection title={t('network.interfaces', { defaultValue: '网卡列表' })}>
         {loading && interfaces.length === 0 ? (
@@ -128,12 +175,12 @@ export function NetworkSettings(): React.ReactElement {
 
       <ConfirmDialog
         open={showConfirm}
-        title={t('network.confirmTitle', { defaultValue: '修改管理网卡 IP' })}
+        title={t('network.confirmTitle', { defaultValue: '修改管理网卡 IP（开启试运行安全保护）' })}
         message={t('network.confirmMessage', {
           defaultValue:
-            '修改管理网卡 IP 将导致当前连接立即中断。请确认新 IP 在本地子网中可达，修改生效后请使用新 IP 重新登录 Web 控制台。',
+            '您正在修改承载 Web 控制台的管理网卡。系统将开启 60 秒试运行模式并启动看门狗保护。若修改后无法连接新 IP，系统将在倒计时结束后无条件自动回滚至原配置，杜绝设备失联。',
         })}
-        confirmLabel={t('network.confirmApply', { defaultValue: '确认并应用' })}
+        confirmLabel={t('network.confirmApply', { defaultValue: '开启试运行并应用' })}
         variant="warning"
         onConfirm={handleConfirmManagement}
         onCancel={() => {
@@ -141,8 +188,27 @@ export function NetworkSettings(): React.ReactElement {
           setPendingIface(null)
         }}
       />
+
+      <NetworkConflictModal
+        open={conflictModalOpen}
+        onClose={() => setConflictModalOpen(false)}
+        conflictIp={conflictIp}
+        conflictMac={conflictMac}
+      />
     </div>
   )
+}
+
+interface NetworkCardProps {
+  iface: NetworkInterface
+  isEditing: boolean
+  draft: IpConfig | null
+  saving: boolean
+  saveError: string | null
+  onStartEdit: () => void
+  onCancelEdit: () => void
+  onSave: () => void
+  onDraftChange: (config: IpConfig) => void
 }
 
 function NetworkCard({
@@ -155,17 +221,7 @@ function NetworkCard({
   onCancelEdit,
   onSave,
   onDraftChange,
-}: {
-  iface: NetworkInterface
-  isEditing: boolean
-  draft: IpConfig | null
-  saving: boolean
-  saveError: string | null
-  onStartEdit: () => void
-  onCancelEdit: () => void
-  onSave: () => void
-  onDraftChange: (config: IpConfig) => void
-}): React.ReactElement {
+}: NetworkCardProps): React.ReactElement {
   const { t } = useTranslation('system')
   const isUp = iface.state === 'up'
   const isMgmt = iface.capabilities.isManagementInterface
@@ -193,7 +249,7 @@ function NetworkCard({
             )}
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="font-mono text-[15px] font-semibold text-[var(--text-primary)]">
                 {iface.name}
               </span>
@@ -204,6 +260,27 @@ function NetworkCard({
                 <span className="flex items-center gap-1 rounded-md bg-[var(--accent-amber)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-amber)]">
                   <Shield className="h-3 w-3" />
                   {t('network.management', { defaultValue: '管理网卡' })}
+                </span>
+              )}
+              {/* 物理载波状态 */}
+              {iface.carrier !== undefined && iface.carrier !== null && (
+                <span
+                  className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ${
+                    iface.carrier
+                      ? 'bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
+                      : 'bg-[var(--text-muted)]/10 text-[var(--text-muted)]'
+                  }`}
+                >
+                  <Cable className="h-3 w-3" />
+                  {iface.carrier
+                    ? t('network.carrierUp', { defaultValue: '网线已插' })
+                    : t('network.carrierDown', { defaultValue: '网线未插' })}
+                </span>
+              )}
+              {/* 协商速率 */}
+              {iface.speed && (
+                <span className="rounded-md bg-[var(--bg-secondary)] px-2 py-0.5 font-mono text-[11px] text-[var(--text-muted)]">
+                  {iface.speed} Mbps {iface.duplex ? `(${iface.duplex})` : ''}
                 </span>
               )}
             </div>
@@ -254,6 +331,12 @@ function NetworkCard({
                   {t('network.gateway', { defaultValue: '网关' })}
                 </span>
                 <span className="font-mono text-[var(--text-primary)]">{iface.ipv4.gateway}</span>
+              </div>
+            )}
+            {iface.ipv4.metric !== undefined && iface.ipv4.metric !== null && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[var(--text-muted)]">Metric</span>
+                <span className="font-mono text-[var(--text-primary)]">{iface.ipv4.metric}</span>
               </div>
             )}
             {iface.ipv4.dns.length > 0 && (
@@ -322,13 +405,28 @@ function NetworkCard({
                   mono
                 />
               </div>
-              <FieldInput
-                label={t('network.gateway', { defaultValue: '网关' })}
-                value={draft.gateway || ''}
-                onChange={(v) => onDraftChange({ ...draft, gateway: v })}
-                placeholder="192.168.1.1"
-                mono
-              />
+              <div className="grid grid-cols-[1fr_100px] gap-3">
+                <FieldInput
+                  label={t('network.gateway', { defaultValue: '网关 (从网卡可留空)' })}
+                  value={draft.gateway || ''}
+                  onChange={(v) => onDraftChange({ ...draft, gateway: v })}
+                  placeholder="192.168.1.1"
+                  mono
+                />
+                <FieldInput
+                  label="Metric"
+                  type="number"
+                  value={draft.metric ?? ''}
+                  onChange={(v) =>
+                    onDraftChange({
+                      ...draft,
+                      metric: v === '' ? null : Number(v),
+                    })
+                  }
+                  placeholder={isMgmt ? '100' : '500'}
+                  mono
+                />
+              </div>
               <FieldInput
                 label="DNS"
                 value={draft.dns.join(', ')}
@@ -372,7 +470,7 @@ function NetworkCard({
               ) : (
                 <Check className="h-3.5 w-3.5" />
               )}
-              {t('save', { defaultValue: '保存' })}
+              {t('save', { defaultValue: '保存并应用' })}
             </button>
           </div>
         </div>

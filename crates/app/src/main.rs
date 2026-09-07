@@ -171,6 +171,9 @@ async fn main() -> Result<()> {
     // 启动后台静默待机摄像头定时巡检与防抖三态调度器 (30s 周期)
     Arc::new(state.clone()).start_periodic_probe_worker(std::time::Duration::from_secs(30));
 
+    // 执行网络服务冷启动防失联自愈检查（恢复意外断电或重启前未确认的网卡快照）
+    api::NetworkService::recover_pending_snapshots_on_startup().await;
+
     // 执行冷启动自愈对齐与活跃算法包装载
     match reconcile::reconcile_and_seed_algorithms(&state.db, &state.algo_registry).await {
         Ok((seeded, loaded)) => {
