@@ -1,0 +1,33 @@
+{
+  "id": "task-algo-binding-pump-scheduling",
+  "name": "task-algo-binding-pump-scheduling",
+  "title": "任务算法包绑定与分析驱动泵启动调度",
+  "description": "以统一任务数据契约、按摄像头运行时生命周期、Task API 编排、冷启动恢复、定向算法热替换和前端状态回显为 6 个子任务，完成任务配置到分析驱动泵的跨层闭环。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": "cross-layer-runtime-orchestration",
+  "package": null,
+  "priority": "P2",
+  "creator": "niko",
+  "assignee": "niko",
+  "createdAt": "2026-09-08",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-08-task-algo-binding-contract",
+    "09-08-task-runtime-lifecycle-coordinator",
+    "09-08-task-api-pipeline-orchestration",
+    "09-08-task-cold-start-task-recovery",
+    "09-08-task-targeted-algorithm-hot-reload",
+    "09-08-task-frontend-task-algorithm-status"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
