@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec entry point — Quality Check section for verification"}
+{"file": ".trellis/spec/backend/api-guidelines.md", "reason": "API 层编码规范：验证重构后路由组织与 handler 签名合规"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量规范：代码风格、命名、模块可见性"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "目录结构规范：验证新模块归属正确"}
+{"file": ".trellis/spec/guides/architecture-overview.md", "reason": "架构全局视图：验证 crate 依赖方向未被破坏"}

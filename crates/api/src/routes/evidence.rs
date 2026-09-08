@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
@@ -156,9 +156,31 @@ async fn list_recognitions(
 async fn serve_evidence_image(
     State(state): State<AppState>,
     _user: AuthUser,
+    headers: HeaderMap,
     Path(path): Path<String>,
 ) -> Result<Response, StatusCode> {
     let clean_path = path.trim_start_matches('/').trim_start_matches('\\');
+    let camera_id = clean_path.split(['/', '\\']).next().unwrap_or("unknown");
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+        })
+        .unwrap_or("unknown");
+
+    tracing::info!(
+        camera_id = %camera_id,
+        user = %_user.username,
+        client_ip = %client_ip,
+        path = %clean_path,
+        "证据图片访问"
+    );
 
     // 严防路径穿越与空路径
     if clean_path.is_empty() || clean_path.contains("..") {

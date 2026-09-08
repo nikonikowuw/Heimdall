@@ -10,7 +10,7 @@ async fn setup_test_app() -> (axum::Router, api::AppState, String) {
     let db = db::init_test_db().await.unwrap();
     let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
     let state = api::AppState::new(db, pipeline);
-    state.sync_auth_state().await;
+    api::sync_auth_state(&state).await;
 
     let password_hash = api::crypto::hash_password_async("adminPassword123".to_string()).await;
     db::AdminUserRepo::create_admin(&state.db, "admin", &password_hash)
@@ -238,7 +238,7 @@ async fn test_upload_package_exceeds_configured_custom_limit() {
     let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
     // 显式将配置上限收紧为 1MB
     let state = api::AppState::new_with_limit(db, pipeline, 1024 * 1024);
-    state.sync_auth_state().await;
+    api::sync_auth_state(&state).await;
 
     let password_hash = api::crypto::hash_password_async("adminPassword123".to_string()).await;
     db::AdminUserRepo::create_admin(&state.db, "admin", &password_hash)

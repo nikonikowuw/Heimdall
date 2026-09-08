@@ -3,6 +3,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::state::AppState;
 
@@ -33,7 +34,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                             }
                         }
                     }
-                    Err(_) => break,
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "WebSocket 事件广播消费落后，丢弃过旧事件");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => break,
                 }
             }
         }

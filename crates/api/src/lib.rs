@@ -1,3 +1,5 @@
+pub mod algo;
+pub mod camera_probe;
 pub mod crypto;
 pub mod error;
 pub mod i18n;
@@ -11,9 +13,11 @@ pub mod static_files;
 pub mod system_info;
 pub mod time_service;
 
+pub use camera_probe::CameraProbeService;
 pub use error::ApiError;
 pub use network_service::NetworkService;
 pub use response::ApiResponse;
+pub use routes::auth::sync_auth_state;
 pub use routes::system::DbEvictionStoreAdapter;
 pub use state::{AppState, WsBroadcastEvent};
 

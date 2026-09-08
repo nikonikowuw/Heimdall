@@ -365,7 +365,7 @@ mod tests {
         let db = db::init_test_db().await.unwrap();
         let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
         let state = AppState::new(db, pipeline);
-        state.sync_auth_state().await;
+        crate::sync_auth_state(&state).await;
 
         let password_hash =
             crate::crypto::hash_password_async("adminPassword123".to_string()).await;

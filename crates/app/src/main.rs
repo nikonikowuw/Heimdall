@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
         .context("算法包上传大小配置无效")?;
     let state = api::AppState::new_with_limit(db_conn, pipeline_mgr, max_upload_size_bytes)
         .with_storage_cleaner(evidence_dir);
-    state.sync_auth_state().await;
+    api::sync_auth_state(&state).await;
 
     // 同步加载数据库中持久化的存储保留与水位配置至运行时 StorageCleaner
     if let Some(cleaner) = state.storage_cleaner.as_ref() {
@@ -169,7 +169,8 @@ async fn main() -> Result<()> {
     }
 
     // 启动后台静默待机摄像头定时巡检与防抖三态调度器 (30s 周期)
-    Arc::new(state.clone()).start_periodic_probe_worker(std::time::Duration::from_secs(30));
+    let probe_svc = Arc::new(api::CameraProbeService::from_state(&state));
+    probe_svc.start_periodic_probe_worker(std::time::Duration::from_secs(30));
 
     // 执行网络服务冷启动防失联自愈检查（恢复意外断电或重启前未确认的网卡快照）
     api::NetworkService::recover_pending_snapshots_on_startup().await;

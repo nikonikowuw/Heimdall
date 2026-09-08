@@ -28,6 +28,40 @@ pub fn router() -> Router<AppState> {
         .route("/logout", post(logout))
 }
 
+/// 启动时从数据库同步初始化状态、失效时间戳以及持久化 JWT Secret
+pub async fn sync_auth_state(state: &AppState) {
+    // 同步并持久化 JWT Secret（如果未通过环境变量注入）
+    if std::env::var("ARGUS_JWT_SECRET")
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
+        if let Ok(persisted_secret) =
+            db::SystemConfigRepo::get_or_set_with(&state.db, "jwt_secret", || {
+                let u1 = uuid::Uuid::new_v4();
+                let u2 = uuid::Uuid::new_v4();
+                format!("{u1}{u2}")
+            })
+            .await
+        {
+            if let Ok(mut guard) = state.jwt_secret.write() {
+                *guard = persisted_secret.into_bytes();
+            }
+        }
+    }
+
+    if let Ok(count) = db::AdminUserRepo::count(&state.db).await {
+        let initialized = count > 0;
+        state.is_initialized.store(initialized, Ordering::Relaxed);
+        if initialized {
+            if let Ok(Some(first_admin)) = db::AdminUserRepo::get_first_admin(&state.db).await {
+                state
+                    .token_invalid_before
+                    .store(first_admin.token_invalid_before, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 /// 统一签发 HS256 JWT Token 辅助函数
 fn issue_token(username: &str, secret: &[u8]) -> Result<(String, i64), ApiError> {
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -286,7 +320,7 @@ mod tests {
         let db = db::init_test_db().await.unwrap();
         let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
         let state = AppState::new(db, pipeline);
-        state.sync_auth_state().await;
+        crate::sync_auth_state(&state).await;
         let app = crate::create_app(state.clone());
         (app, state)
     }
@@ -586,7 +620,7 @@ mod tests {
         // 17. 验证持久化密钥保持一致性
         let secret1 = state.get_jwt_secret();
         let state2 = AppState::new(state.db.clone(), state.pipeline.clone());
-        state2.sync_auth_state().await;
+        crate::sync_auth_state(&state2).await;
         let secret2 = state2.get_jwt_secret();
         assert_eq!(secret1, secret2);
     }

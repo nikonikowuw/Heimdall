@@ -6,6 +6,7 @@ use axum::{Json, Router};
 use sea_orm::Set;
 use types::{Camera, CreateCameraRequest, ProbeResult, UpdateCameraRequest};
 
+use crate::camera_probe::CameraProbeService;
 use crate::error::ApiError;
 use crate::response::ApiResponse;
 use crate::state::AppState;
@@ -45,59 +46,6 @@ fn model_to_camera_dto(m: db::entity::camera::Model) -> Camera {
         created_at: m.created_at.timestamp_millis(),
         updated_at: m.updated_at.timestamp_millis(),
     }
-}
-
-/// 异步触发摄像头探活并向全网广播 WebSocket 状态更新
-fn spawn_probe_and_broadcast(state: AppState, camera_id: String, rtsp_url: String) {
-    tokio::spawn(async move {
-        tracing::info!(camera_id = %camera_id, rtsp_url = %media::mask_rtsp_url(&rtsp_url), "开始对摄像头执行异步探活...");
-        match media::StreamProber::probe(&rtsp_url, Duration::from_secs(5)).await {
-            Ok(info) => {
-                tracing::info!(
-                    camera_id = %camera_id,
-                    codec = %info.codec,
-                    width = info.width,
-                    height = info.height,
-                    fps = info.fps,
-                    "摄像头异步探活成功 -> 标记为 healthy"
-                );
-                state
-                    .update_and_broadcast_probe(
-                        &camera_id,
-                        db::ProbeUpdateParams {
-                            status: "healthy",
-                            codec: &info.codec,
-                            width: info.width as i32,
-                            height: info.height as i32,
-                            fps: info.fps,
-                            error_code: "",
-                        },
-                    )
-                    .await;
-            }
-            Err(e) => {
-                let err_str = e.to_string();
-                tracing::warn!(
-                    camera_id = %camera_id,
-                    error = %err_str,
-                    "摄像头异步探活失败 -> 标记为 failed"
-                );
-                state
-                    .update_and_broadcast_probe(
-                        &camera_id,
-                        db::ProbeUpdateParams {
-                            status: "failed",
-                            codec: "",
-                            width: 0,
-                            height: 0,
-                            fps: 0.0,
-                            error_code: &err_str,
-                        },
-                    )
-                    .await;
-            }
-        }
-    });
 }
 
 /// 获取所有摄像头视频源列表
@@ -169,7 +117,12 @@ async fn create_camera(
     let inserted = db::CameraRepo::insert(&state.db, active_model).await?;
 
     // 异步触发一次轻量探活
-    spawn_probe_and_broadcast(state.clone(), camera_id, rtsp_url.to_string());
+    CameraProbeService::spawn_probe_and_broadcast(
+        state.db.clone(),
+        state.event_broadcaster.clone(),
+        camera_id,
+        rtsp_url.to_string(),
+    );
 
     Ok(ApiResponse::success(model_to_camera_dto(inserted)))
 }
@@ -223,7 +176,12 @@ async fn update_camera(
     // 若 RTSP 地址变更，移除旧流会话并异步重新探活
     if rtsp_url_changed {
         state.stream_hub.remove_session(&camera_id).await;
-        spawn_probe_and_broadcast(state.clone(), camera_id, new_url);
+        CameraProbeService::spawn_probe_and_broadcast(
+            state.db.clone(),
+            state.event_broadcaster.clone(),
+            camera_id,
+            new_url,
+        );
     }
 
     Ok(ApiResponse::success(model_to_camera_dto(updated)))
@@ -272,19 +230,20 @@ async fn probe_camera_manual(
                 fps = probe_info.fps,
                 "手动探活成功 -> 标记为 healthy"
             );
-            state
-                .update_and_broadcast_probe(
-                    &camera_id,
-                    db::ProbeUpdateParams {
-                        status: "healthy",
-                        codec: &probe_info.codec,
-                        width: probe_info.width as i32,
-                        height: probe_info.height as i32,
-                        fps: probe_info.fps,
-                        error_code: "",
-                    },
-                )
-                .await;
+            CameraProbeService::broadcast_probe_update(
+                &state.db,
+                &state.event_broadcaster,
+                &camera_id,
+                db::ProbeUpdateParams {
+                    status: "healthy",
+                    codec: &probe_info.codec,
+                    width: probe_info.width as i32,
+                    height: probe_info.height as i32,
+                    fps: probe_info.fps,
+                    error_code: "",
+                },
+            )
+            .await;
 
             Ok(ApiResponse::success(ProbeResult {
                 codec: probe_info.codec,
@@ -296,19 +255,20 @@ async fn probe_camera_manual(
         Err(e) => {
             let err_str = e.to_string();
             tracing::warn!(camera_id = %camera_id, error = %err_str, "手动探活失败 -> 标记为 failed");
-            state
-                .update_and_broadcast_probe(
-                    &camera_id,
-                    db::ProbeUpdateParams {
-                        status: "failed",
-                        codec: "",
-                        width: 0,
-                        height: 0,
-                        fps: 0.0,
-                        error_code: &err_str,
-                    },
-                )
-                .await;
+            CameraProbeService::broadcast_probe_update(
+                &state.db,
+                &state.event_broadcaster,
+                &camera_id,
+                db::ProbeUpdateParams {
+                    status: "failed",
+                    codec: "",
+                    width: 0,
+                    height: 0,
+                    fps: 0.0,
+                    error_code: &err_str,
+                },
+            )
+            .await;
 
             Err(ApiError::Media(e))
         }
@@ -341,7 +301,7 @@ mod tests {
         let db = db::init_test_db().await.unwrap();
         let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
         let state = AppState::new(db, pipeline);
-        state.sync_auth_state().await;
+        crate::sync_auth_state(&state).await;
 
         // 初始化管理员并获得 token
         let password_hash =
