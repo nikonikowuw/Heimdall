@@ -1,16 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import {
-  ArrowRight,
-  Eye,
-  EyeOff,
-  KeyRound,
-  Lock,
-  Moon,
-  ShieldCheck,
-  Sun,
-  User,
-  Wand2,
-} from 'lucide-react'
+import { ArrowRight, Eye, EyeOff, KeyRound, Lock, Moon, Sun, User, Wand2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LocaleDropdown } from '../../components/LocaleDropdown'
 import { useTheme } from '../../hooks/use-theme'
@@ -189,21 +178,13 @@ export const LoginPage: React.FC = () => {
 
       {/* 全局通栏 Header：左上角 Logo，右上角全局视口控制器（语言/FPS/主题滑块） */}
       <header className="pointer-events-none fixed inset-x-0 top-0 z-30 flex items-center justify-between px-6 py-5 sm:px-10 sm:py-6 lg:px-12">
-        {/* 左上角：极简系统标识 */}
-        <div className="pointer-events-auto flex items-center gap-3">
-          <div className="group flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 via-pink-500 to-cyan-400 text-white shadow-lg ring-1 shadow-indigo-500/20 ring-white/20 transition-transform group-hover:scale-105">
-              <ShieldCheck className="h-5 w-5 stroke-[2]" />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-display text-sm font-black tracking-wider text-slate-900 uppercase dark:text-white">
-                Heimdall
-              </span>
-              <span className="font-mono text-[9px] tracking-widest text-slate-400 uppercase dark:text-slate-500">
-                Edge AI Telemetry
-              </span>
-            </div>
-          </div>
+        {/* 左上角：官方品牌标识 */}
+        <div className="pointer-events-auto flex items-center">
+          <img
+            src={isDark ? '/logo-horizontal-dark.svg' : '/logo-horizontal-light.svg'}
+            alt="Heimdall"
+            className="h-8.5 w-auto transition-transform select-none hover:scale-[1.02] sm:h-9"
+          />
         </div>
 
         {/* 右上角：全局视口控制组（FPS 标尺 + 语言自由选择下拉 + 日/夜胶囊滑块） */}
@@ -250,9 +231,9 @@ export const LoginPage: React.FC = () => {
         </div>
       </header>
 
-      {/* 核心双栏架构：左侧纯净深空光学视窗 + 右侧先锋悬浮控制吊舱 */}
+      {/* 核心双栏架构：左侧边缘管线状态 + 右侧先锋悬浮控制吊舱 */}
       <div className="pointer-events-none relative z-20 flex min-h-screen w-full flex-col items-center justify-between px-6 pt-20 pb-6 sm:px-10 sm:pb-8 lg:flex-row lg:px-12 lg:pt-24">
-        {/* 左侧：纯净深空光学观测视窗 */}
+        {/* 左侧：边缘媒体与 AI 管线底层状态 */}
         <div className="flex min-h-[38vh] w-full flex-col justify-between select-none lg:min-h-[calc(100vh-8rem)] lg:flex-1">
           <div />
           <div className="flex flex-1 items-center justify-center" />
@@ -468,26 +449,12 @@ export const LoginPage: React.FC = () => {
             </div>
 
             {/* 吊舱底部安全与版权 */}
-            <div className="space-y-2 border-t border-black/5 pt-5 text-xs text-slate-500 dark:border-white/5">
+            <div className="border-t border-black/5 pt-4 text-xs text-slate-500 dark:border-white/5">
               <div className="flex items-center justify-between font-mono text-[11px] text-slate-400 select-none dark:text-slate-500">
                 <span className="flex items-center gap-1.5">
                   <Lock className="h-3.5 w-3.5 text-emerald-500" />
                   <span>{t('security')}</span>
                 </span>
-                <span>{t('cluster')}</span>
-              </div>
-              <div className="flex items-center justify-between pt-1 text-[11px]">
-                <div className="flex items-center gap-4">
-                  <span className="cursor-pointer transition-colors hover:text-slate-800 dark:hover:text-slate-300">
-                    {t('privacy')}
-                  </span>
-                  <span className="cursor-pointer transition-colors hover:text-slate-800 dark:hover:text-slate-300">
-                    {t('terms')}
-                  </span>
-                  <span className="cursor-pointer transition-colors hover:text-slate-800 dark:hover:text-slate-300">
-                    {t('status')}
-                  </span>
-                </div>
                 <span>© 2026 Heimdall</span>
               </div>
             </div>

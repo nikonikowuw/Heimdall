@@ -3,7 +3,6 @@ import {
   AlertCircle,
   Cpu,
   FileText,
-  Layers,
   LogOut,
   Monitor,
   Moon,
@@ -67,9 +66,18 @@ export function Layout() {
       <aside className="frosted-glass relative z-30 flex w-16 flex-col items-center justify-between py-4">
         <div className="flex flex-col items-center gap-5">
           {/* Logo 标志 */}
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-white shadow-[var(--accent)]/25 shadow-lg">
-            <Layers className="h-5 w-5" />
-          </div>
+          <button
+            type="button"
+            onClick={() => setCurrentTab('live')}
+            title="Heimdall"
+            className="flex h-10 w-10 items-center justify-center rounded-xl transition-transform hover:scale-105 focus:outline-none"
+          >
+            <img
+              src={isDark ? '/favicon-dark.svg' : '/favicon-light.svg'}
+              alt="Heimdall"
+              className="h-10 w-10 rounded-xl shadow-md"
+            />
+          </button>
 
           {/* 导航菜单 */}
           <nav className="flex flex-col gap-1.5">
