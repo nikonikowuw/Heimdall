@@ -2,8 +2,9 @@ use algo_sdk::cv::types::PreprocessMode;
 use algo_sdk::math::clamp_bbox;
 
 pub const YOLOV5_FACE_FIELDS: usize = 16;
+pub const YOLOV8_FACE_FIELDS: usize = 20;
 
-/// YOLOv5-face 单候选框，坐标在解码阶段仍处于模型输入像素空间。
+/// YOLO 单人脸候选框，坐标在解码阶段仍处于模型输入像素空间。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RawFace {
     /// `[x, y, width, height]`，左上角坐标格式。
@@ -51,6 +52,12 @@ fn confidence_value(value: f32) -> f32 {
 /// 每行依次为 `cx, cy, w, h, objectness, class_confidence, 5 * (x, y)`。
 /// 关键点分数在该模型格式中没有单独输出，因此先以检测分数作为保守代理。
 pub fn decode_yolov5_face(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
+    if raw.len() == 5040 * YOLOV8_FACE_FIELDS
+        || (raw.len().is_multiple_of(YOLOV8_FACE_FIELDS)
+            && !raw.len().is_multiple_of(YOLOV5_FACE_FIELDS))
+    {
+        return decode_yolov8_face(raw, conf_threshold);
+    }
     if raw.len() < YOLOV5_FACE_FIELDS || !raw.len().is_multiple_of(YOLOV5_FACE_FIELDS) {
         return Vec::new();
     }
@@ -92,6 +99,77 @@ pub fn decode_yolov5_face(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
         });
     }
     faces
+}
+
+/// 解码已经由导出模型展开的 `[1, N, 20]` YOLOv8-face 张量。
+///
+/// 每行依次为 `cx, cy, w, h, class_confidence, 5 * (x, y, landmark_confidence)`。
+pub fn decode_yolov8_face(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
+    if raw.len() < YOLOV8_FACE_FIELDS || !raw.len().is_multiple_of(YOLOV8_FACE_FIELDS) {
+        return Vec::new();
+    }
+    let threshold = conf_threshold.clamp(0.0, 1.0);
+    let mut faces = Vec::with_capacity(raw.len() / YOLOV8_FACE_FIELDS);
+
+    for row in raw.chunks_exact(YOLOV8_FACE_FIELDS) {
+        let score = confidence_value(row[4]);
+        if score < threshold {
+            continue;
+        }
+        let (cx, cy, width, height) = (row[0], row[1], row[2], row[3]);
+        if !cx.is_finite()
+            || !cy.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || width <= 0.0
+            || height <= 0.0
+        {
+            continue;
+        }
+
+        let mut landmarks = [[0.0; 2]; 5];
+        let mut landmark_scores = [0.0; 5];
+        let mut valid = true;
+        for (index, point) in landmarks.iter_mut().enumerate() {
+            let offset = 5 + index * 3;
+            point[0] = row[offset];
+            point[1] = row[offset + 1];
+            landmark_scores[index] = confidence_value(row[offset + 2]);
+            if !point[0].is_finite() || !point[1].is_finite() {
+                valid = false;
+                break;
+            }
+        }
+        if !valid {
+            continue;
+        }
+
+        faces.push(RawFace {
+            bbox: [cx - width * 0.5, cy - height * 0.5, width, height],
+            landmarks,
+            landmark_scores,
+            score,
+        });
+    }
+    faces
+}
+
+/// 自适应解码 YOLO 人脸检测张量（自动识别 YOLOv8 20 维或 YOLOv5 16 维格式）。
+pub fn decode_face_detections(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
+    if raw.len() == 5040 * YOLOV8_FACE_FIELDS
+        || (raw.len().is_multiple_of(YOLOV8_FACE_FIELDS)
+            && !raw.len().is_multiple_of(YOLOV5_FACE_FIELDS))
+    {
+        decode_yolov8_face(raw, conf_threshold)
+    } else if raw.len().is_multiple_of(YOLOV5_FACE_FIELDS)
+        && !raw.len().is_multiple_of(YOLOV8_FACE_FIELDS)
+    {
+        decode_yolov5_face(raw, conf_threshold)
+    } else if raw.len().is_multiple_of(YOLOV8_FACE_FIELDS) {
+        decode_yolov8_face(raw, conf_threshold)
+    } else {
+        Vec::new()
+    }
 }
 
 /// 对同一张图的人脸候选执行类别无关 NMS。
@@ -214,6 +292,26 @@ mod tests {
         assert_eq!(faces.len(), 1);
         assert_eq!(faces[0].bbox, [260.0, 160.0, 120.0, 160.0]);
         assert!((faces[0].score - 0.855).abs() < 1e-5);
+    }
+
+    #[test]
+    fn decodes_yolov8_face_candidates_with_individual_landmark_scores() {
+        let mut row = [0.0; YOLOV8_FACE_FIELDS];
+        row[0] = 320.0;
+        row[1] = 240.0;
+        row[2] = 120.0;
+        row[3] = 160.0;
+        row[4] = 0.88; // cls_conf
+        for k in 0..5 {
+            row[5 + k * 3] = 300.0 + (k as f32) * 10.0;
+            row[5 + k * 3 + 1] = 220.0 + (k as f32) * 10.0;
+            row[5 + k * 3 + 2] = 0.95;
+        }
+        let faces = decode_face_detections(&row, 0.5);
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].bbox, [260.0, 160.0, 120.0, 160.0]);
+        assert!((faces[0].score - 0.88).abs() < 1e-5);
+        assert!((faces[0].landmark_scores[0] - 0.95).abs() < 1e-5);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use algo_sdk::c_abi::AV_ERR_NOT_IMPLEMENTED;
 use {
     crate::align::align_face,
     crate::coreml::CoreMlFaceModels,
-    crate::detect::{decode_yolov5_face, nms, unmap_letterbox},
+    crate::detect::{decode_face_detections, nms, unmap_letterbox},
     crate::quality::compute_quality,
     algo_sdk::c_abi::{
         AV_ALGO_API_VERSION, AV_ERR_INFERENCE_FAILED, AV_ERR_INTERNAL, AV_ERR_INVALID_ARG,
@@ -338,7 +338,7 @@ unsafe fn extract_face_impl(
     } else {
         0.5
     };
-    let mut faces = decode_yolov5_face(&raw_output, min_score);
+    let mut faces = decode_face_detections(&raw_output, min_score);
     nms(&mut faces, 0.45);
     unmap_letterbox(&mut faces, &detector_mode, image.width(), image.height());
     let min_face_size = if input_ref.min_face_size.is_finite() {

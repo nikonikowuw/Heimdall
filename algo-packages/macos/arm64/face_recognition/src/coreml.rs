@@ -787,10 +787,15 @@ pub struct CoreMlFaceModels {
 
 impl CoreMlFaceModels {
     pub fn load(package_root: &Path) -> Result<Self, AlgoError> {
+        let detector_model_name = if package_root.join("model/yolov8_face.mlpackage").exists() {
+            "yolov8_face.mlpackage"
+        } else {
+            "yolov5n_face.mlpackage"
+        };
         Ok(Self {
             detector: CoreMlRunner::load_model(
                 package_root,
-                "yolov5n_face.mlpackage",
+                detector_model_name,
                 "image",
                 "var_911",
             )?,

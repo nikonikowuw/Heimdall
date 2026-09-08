@@ -43,8 +43,8 @@ __pycache__/
 *.py[cod]
 
 # Runtime data and generated logs
-data/
-var/
+/data/
+/var/
 *.log
 *.db
 *.db-shm

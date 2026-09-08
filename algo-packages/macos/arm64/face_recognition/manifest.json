@@ -3,7 +3,7 @@
   "algorithm_id": "face_recognition",
   "version": "1.0.0",
   "name": "EdgeFace Face Recognition",
-  "description": "YOLOv5n-face detection and Apache-2.0 EdgeFace-s embeddings on Apple Silicon CoreML",
+  "description": "YOLOv8-face detection and Apache-2.0 EdgeFace-s embeddings on Apple Silicon CoreML",
   "algorithm_type": "face_recognition",
   "alarm_type_id": "face_recognize",
   "platform_id": "macos-arm64-coreml",
@@ -13,7 +13,7 @@
     "requires_ane_capable_coreml": true
   },
   "models": {
-    "detector": "model/yolov5n_face.mlpackage",
+    "detector": "model/yolov8_face.mlpackage",
     "embedder": "model/edgeface_s.mlpackage",
     "embedding_dimension": 512
   },

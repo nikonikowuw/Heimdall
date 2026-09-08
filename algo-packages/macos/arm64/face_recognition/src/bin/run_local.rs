@@ -21,7 +21,7 @@ mod macos_run {
     use algo_sdk::testing::MockFrameBuilder;
     use face_recognition_coreml::config::InstanceConfig;
     use face_recognition_coreml::coreml::CoreMlFaceModels;
-    use face_recognition_coreml::detect::{decode_yolov5_face, nms, unmap_letterbox};
+    use face_recognition_coreml::detect::{decode_face_detections, nms, unmap_letterbox};
     use face_recognition_coreml::normalize_embedding;
     use face_recognition_coreml::postprocess::FaceDetection;
     use face_recognition_coreml::quality::compute_quality;
@@ -95,7 +95,8 @@ mod macos_run {
 
         // 阶段 3: 后处理 (张量展开、类别无关 NMS 与 Letterbox 坐标反算还原)
         let t2 = Instant::now();
-        let mut raw_faces = decode_yolov5_face(&raw_output, config.detection_confidence_threshold);
+        let mut raw_faces =
+            decode_face_detections(&raw_output, config.detection_confidence_threshold);
         nms(&mut raw_faces, 0.45);
         unmap_letterbox(&mut raw_faces, &mode, image.width(), image.height());
         let postprocess_ms = t2.elapsed().as_secs_f64() * 1000.0;

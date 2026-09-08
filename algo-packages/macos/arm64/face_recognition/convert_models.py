@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Convert YOLOv5n-face and EdgeFace weights to Apple CoreML .mlpackage format.
+Convert YOLOv8-face / YOLOv5n-face and EdgeFace weights to Apple CoreML .mlpackage format.
 
 Inputs (in weights/):
+  - yolov8-lite-s.pt (or yolov5n-face.pt)
   - edgeface_xs_gamma_06.onnx
-  - yolov5n-face.pt
 
 Outputs (in model/):
+  - yolov8_face.mlpackage (input: 1x3x384x640 RGB [0, 1], output: 1x5040x20 FLOAT16)
   - edgeface_s.mlpackage (input: 1x3x112x112 RGB [-1, 1], output: 1x512 FLOAT16)
-  - yolov5n_face.mlpackage (input: 1x3x384x640 RGB [0, 1], output: 1x15120x16 FLOAT16)
 """
 
 import os
@@ -28,11 +28,20 @@ WEIGHTS_DIR = PACKAGE_DIR / "weights"
 MODEL_DIR = PACKAGE_DIR / "model"
 
 
+def ensure_edgeface_weights():
+    onnx_path = WEIGHTS_DIR / "edgeface_xs_gamma_06.onnx"
+    if not onnx_path.exists():
+        WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+        url = "https://github.com/yakhyo/edgeface-onnx/releases/download/weights/edgeface_xs_gamma_06.onnx"
+        print(f"Downloading EdgeFace weights from {url}...")
+        subprocess.run(["curl", "-L", url, "-o", str(onnx_path)], check=True)
+    return onnx_path
+
+
 def convert_edgeface():
     print("\n=== [1/2] Converting EdgeFace-s ===")
-    onnx_path = WEIGHTS_DIR / "edgeface_xs_gamma_06.onnx"
+    onnx_path = ensure_edgeface_weights()
     output_path = MODEL_DIR / "edgeface_s.mlpackage"
-    assert onnx_path.exists(), f"Missing ONNX weights: {onnx_path}"
 
     import onnx
     import onnxslim
@@ -97,7 +106,6 @@ def convert_edgeface():
         emb = preds["embedding"]
         assert emb.shape == (1, 512), f"Unexpected embedding shape: {emb.shape}"
         print(f"Verification passed: output embedding shape = {emb.shape}")
-
     finally:
         if os.path.exists(fixed_path):
             os.remove(fixed_path)
@@ -105,17 +113,17 @@ def convert_edgeface():
             os.remove(slim_path)
 
 
-def convert_yolov5_face():
-    print("\n=== [2/2] Converting YOLOv5n-face ===")
-    pt_path = WEIGHTS_DIR / "yolov5n-face.pt"
-    output_path = MODEL_DIR / "yolov5n_face.mlpackage"
+def convert_yolov8_face():
+    print("\n=== [2/2] Converting YOLOv8-face (yolov8-lite-s) ===")
+    pt_path = WEIGHTS_DIR / "yolov8-lite-s.pt"
     assert pt_path.exists(), f"Missing PyTorch weights: {pt_path}"
+    output_path = MODEL_DIR / "yolov8_face.mlpackage"
 
-    yolov5_repo = Path("/tmp/yolov5-face")
-    if not (yolov5_repo / "models" / "yolo.py").exists():
-        print("Cloning deepcam-cn/yolov5-face repository...")
+    yolov8_repo = Path("/tmp/yolov8-face")
+    if not (yolov8_repo / "ultralytics").exists():
+        print("Cloning derronqi/yolov8-face repository...")
         subprocess.run(
-            ["git", "clone", "--depth", "1", "https://github.com/deepcam-cn/yolov5-face.git", str(yolov5_repo)],
+            ["git", "clone", "--depth", "1", "https://github.com/derronqi/yolov8-face.git", str(yolov8_repo)],
             check=True,
         )
 
@@ -123,87 +131,125 @@ def convert_yolov5_face():
     sys.modules["matplotlib"] = MagicMock()
     sys.modules["matplotlib.pyplot"] = MagicMock()
 
-    if str(yolov5_repo) not in sys.path:
-        sys.path.insert(0, str(yolov5_repo))
+    if str(yolov8_repo) not in sys.path:
+        sys.path.insert(0, str(yolov8_repo))
 
-    orig_load = torch.load
-    torch.load = lambda *args, **kwargs: orig_load(*args, **{**kwargs, "weights_only": False})
+    import ultralytics.nn.modules.block as block_mod
+    # CoreML-friendly channel shuffle without dynamic tensor unpacking
+    block_mod.channel_shuffle = lambda x, groups=2: x.unflatten(1, (groups, -1)).transpose(1, 2).flatten(1, 2)
 
-    from models.experimental import attempt_load
     import coremltools as ct
 
-    print("Step 1: Loading PyTorch YOLOv5n-face checkpoint...")
-    base_model = attempt_load(str(pt_path), map_location="cpu")
-    base_model.eval()
+    print("Step 1: Loading PyTorch yolov8-lite-s checkpoint...")
+    ckpt = torch.load(str(pt_path), map_location="cpu", weights_only=False)
+    model = ckpt["model"].float()
+    for mod in model.modules():
+        if isinstance(mod, torch.nn.Conv2d):
+            mod.dilation = tuple(int(x) for x in mod.dilation)
 
-    class YOLOv5FaceDecoded(nn.Module):
+    # Static upsample sizes for 640x384 input
+    model.model[9] = nn.Upsample(size=(24, 40), mode="nearest")
+    model.model[9].f = -1
+    model.model[9].i = 9
+    model.model[13] = nn.Upsample(size=(48, 80), mode="nearest")
+    model.model[13].f = -1
+    model.model[13].i = 13
+
+    class StaticPoseDecoder(nn.Module):
         """
-        Wrapper that decodes YOLOv5-face anchors and produces a single tensor
-        of shape [1, N, 16] with layout:
-          cx, cy, w, h, obj_conf, cls_conf,
-          lm1_x, lm1_y, lm2_x, lm2_y, lm3_x, lm3_y, lm4_x, lm4_y, lm5_x, lm5_y
-        Precomputes grid coordinates for 640x384 (Surveillance 16:9 widescreen) to run purely statically on ANE.
+        Static ANE-optimized decoder for YOLOv8-face.
+        Produces [1, 5040, 20] tensor:
+          cx, cy, w, h, cls_conf, 5 * (x, y, landmark_conf)
         """
-        def __init__(self, model):
+        def __init__(self, pose_module, img_h=384, img_w=640):
             super().__init__()
-            self.base = model
-            detect = model.model[-1]
-            self.nl = detect.nl
-            self.na = detect.na
-            self.no = detect.no
-            self.stride = detect.stride
+            self.cv2 = pose_module.cv2
+            self.cv3 = pose_module.cv3
+            self.cv4 = pose_module.cv4
+            self.dfl_conv = pose_module.dfl.conv
+            self.reg_max = pose_module.reg_max
 
-            for i in range(self.nl):
-                stride = int(self.stride[i].item())
-                ny, nx = 384 // stride, 640 // stride
+            strides = [8, 16, 32]
+            dims = [(48, 80), (24, 40), (12, 20)]
+            for i, (stride, (ny, nx)) in enumerate(zip(strides, dims)):
                 yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)], indexing="ij")
-                grid = torch.stack((xv, yv), 2).view((1, 1, ny, nx, 2)).expand((1, self.na, ny, nx, 2)).float()
-                anchor_grid = (detect.anchors[i].clone() * self.stride[i]).view((1, self.na, 1, 1, 2)).expand((1, self.na, ny, nx, 2)).float()
-                self.register_buffer(f"grid_{i}", grid)
-                self.register_buffer(f"anchor_grid_{i}", anchor_grid)
+                ax = (xv.float() + 0.5).view(1, ny * nx)
+                ay = (yv.float() + 0.5).view(1, ny * nx)
+                self.register_buffer(f"ax_{i}", ax)
+                self.register_buffer(f"ay_{i}", ay)
+                self.register_buffer(f"stride_{i}", torch.tensor(float(stride)))
+
+        def forward(self, feats):
+            outputs = []
+            anchor_counts = [3840, 960, 240]
+            for i in range(3):
+                x = feats[i]
+                box_raw = self.cv2[i](x)
+                cls_raw = self.cv3[i](x)
+                kpt_raw = self.cv4[i](x)
+                num_anchors = anchor_counts[i]
+
+                box_reshaped = box_raw.view(1, 4, 16, num_anchors).transpose(2, 1).softmax(1)
+                dist = self.dfl_conv(box_reshaped).view(1, 4, num_anchors)
+                lt = dist[:, :2]
+                rb = dist[:, 2:]
+
+                ax = getattr(self, f"ax_{i}")
+                ay = getattr(self, f"ay_{i}")
+                stride = getattr(self, f"stride_{i}")
+
+                x1 = ax - lt[:, 0]
+                y1 = ay - lt[:, 1]
+                x2 = ax + rb[:, 0]
+                y2 = ay + rb[:, 1]
+
+                cx = (x1 + x2) * 0.5 * stride
+                cy = (y1 + y2) * 0.5 * stride
+                w = (x2 - x1) * stride
+                h = (y2 - y1) * stride
+
+                score = cls_raw.view(1, 1, num_anchors).sigmoid()
+
+                kpt_flat = kpt_raw.view(1, 15, num_anchors)
+                kpts_out = []
+                for k in range(5):
+                    kx = (kpt_flat[:, k * 3] * 2.0 + ax - 0.5) * stride
+                    ky = (kpt_flat[:, k * 3 + 1] * 2.0 + ay - 0.5) * stride
+                    kc = kpt_flat[:, k * 3 + 2].sigmoid()
+                    kpts_out.extend([kx.unsqueeze(1), ky.unsqueeze(1), kc.unsqueeze(1)])
+
+                kpts_tensor = torch.cat(kpts_out, dim=1)
+                scale_out = torch.cat(
+                    [cx.unsqueeze(1), cy.unsqueeze(1), w.unsqueeze(1), h.unsqueeze(1), score, kpts_tensor],
+                    dim=1,
+                )
+                outputs.append(scale_out.permute(0, 2, 1))
+
+            return torch.cat(outputs, dim=1)
+
+    class FullModel(nn.Module):
+        def __init__(self, m):
+            super().__init__()
+            self.backbone = m.model[:-1]
+            self.save = m.save
+            self.pose = StaticPoseDecoder(m.model[22])
 
         def forward(self, x):
             y = []
-            for m in self.base.model:
-                if m.f != -1:
-                    x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
-                if isinstance(m, type(self.base.model[-1])):
-                    outputs = []
-                    for i in range(self.nl):
-                        xi = m.m[i](x[i])
-                        bs, _, ny, nx = xi.shape
-                        xi = xi.view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            for mod in self.backbone:
+                if mod.f != -1:
+                    x = y[mod.f] if isinstance(mod.f, int) else [x if j == -1 else y[j] for j in mod.f]
+                x = mod(x)
+                y.append(x if mod.i in self.save else None)
+            return self.pose([y[15], y[18], y[21]])
 
-                        grid = getattr(self, f"grid_{i}")
-                        anchor_grid = getattr(self, f"anchor_grid_{i}")
-                        stride = self.stride[i]
-
-                        box_xy = (xi[..., 0:2].sigmoid() * 2.0 - 0.5 + grid) * stride
-                        box_wh = (xi[..., 2:4].sigmoid() * 2.0) ** 2 * anchor_grid
-                        obj_conf = xi[..., 4:5].sigmoid()
-                        cls_conf = xi[..., 15:16].sigmoid()
-
-                        lm0 = xi[..., 5:7] * anchor_grid + grid * stride
-                        lm1 = xi[..., 7:9] * anchor_grid + grid * stride
-                        lm2 = xi[..., 9:11] * anchor_grid + grid * stride
-                        lm3 = xi[..., 11:13] * anchor_grid + grid * stride
-                        lm4 = xi[..., 13:15] * anchor_grid + grid * stride
-
-                        row = torch.cat([box_xy, box_wh, obj_conf, cls_conf, lm0, lm1, lm2, lm3, lm4], dim=-1)
-                        outputs.append(row.view(bs, -1, 16))
-                    return torch.cat(outputs, dim=1)
-                x = m(x)
-                y.append(x if m.i in self.base.save else None)
-
-    print("Step 2: Instantiating decoded model with precomputed static grids...")
-    decoded_model = YOLOv5FaceDecoded(base_model)
-    decoded_model.eval()
-
-    print("Step 3: Tracing PyTorch model (640x384)...")
+    print("Step 2: Tracing static YOLOv8-face model (640x384)...")
+    full_model = FullModel(model)
+    full_model.eval()
     dummy_input = torch.randn(1, 3, 384, 640)
-    traced = torch.jit.trace(decoded_model, dummy_input)
+    traced = torch.jit.trace(full_model, dummy_input)
 
-    print("Step 4: Converting to CoreML .mlpackage (ANE/GPU FLOAT16)...")
+    print("Step 3: Converting to CoreML .mlpackage (ANE/GPU FLOAT16)...")
     mlmodel = ct.convert(
         traced,
         inputs=[
@@ -223,19 +269,30 @@ def convert_yolov5_face():
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     mlmodel.save(str(output_path))
-    print(f"Successfully exported YOLOv5n-face CoreML model: {output_path}")
+    print(f"Successfully exported YOLOv8-face CoreML model: {output_path}")
+
+    # Maintain yolov5n_face.mlpackage link for seamless backward compatibility
+    legacy_path = MODEL_DIR / "yolov5n_face.mlpackage"
+    if legacy_path.is_symlink() or legacy_path.exists():
+        if legacy_path.is_symlink():
+            legacy_path.unlink()
+    if not legacy_path.exists():
+        legacy_path.symlink_to("yolov8_face.mlpackage")
 
     # Verification
     test_img = Image.new("RGB", (640, 384), color=(114, 114, 114))
     preds = mlmodel.predict({"image": test_img})
     out = preds["var_911"]
-    assert out.shape == (1, 15120, 16), f"Unexpected output shape: {out.shape}"
+    assert out.shape == (1, 5040, 20), f"Unexpected output shape: {out.shape}"
     print(f"Verification passed: output tensor shape = {out.shape}")
 
 
 def main():
     convert_edgeface()
-    convert_yolov5_face()
+    if (WEIGHTS_DIR / "yolov8-lite-s.pt").exists():
+        convert_yolov8_face()
+    else:
+        print(f"yolov8-lite-s.pt not found in {WEIGHTS_DIR}")
     print("\n All models converted and verified successfully!")
 
 

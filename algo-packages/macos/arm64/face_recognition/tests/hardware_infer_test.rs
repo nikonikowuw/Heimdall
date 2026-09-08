@@ -3,7 +3,10 @@
 #[ignore = "需要 macOS 14+、Apple Silicon 和两个 CoreML 模型包"]
 fn hardware_inference_requires_real_models() {
     let package_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    assert!(package_root.join("model/yolov5n_face.mlpackage").exists());
+    assert!(
+        package_root.join("model/yolov8_face.mlpackage").exists()
+            || package_root.join("model/yolov5n_face.mlpackage").exists()
+    );
     assert!(package_root.join("model/edgeface_s.mlpackage").exists());
 }
 

@@ -6,7 +6,7 @@ use algo_sdk::frame::SafeFrame;
 use algo_sdk::plugin::{AlgoPlugin, InitContext};
 
 use crate::config::InstanceConfig;
-use crate::detect::{decode_yolov5_face, nms, unmap_letterbox};
+use crate::detect::{decode_face_detections, nms, unmap_letterbox};
 use crate::postprocess::FaceDetection;
 use crate::quality::compute_quality;
 
@@ -66,7 +66,7 @@ impl AlgoPlugin for FaceRecognizer {
         // SAFETY: pixelbuffer 由当前 CvBuffer 持有，直到预测返回前不会释放。
         let raw_output = unsafe { self.models.predict_detector(pixelbuffer)? };
         let mut raw_faces =
-            decode_yolov5_face(&raw_output, self.config.detection_confidence_threshold);
+            decode_face_detections(&raw_output, self.config.detection_confidence_threshold);
         nms(&mut raw_faces, 0.45);
         unmap_letterbox(&mut raw_faces, &mode, frame.width(), frame.height());
 
