@@ -287,12 +287,124 @@ def convert_yolov8_face():
     print(f"Verification passed: output tensor shape = {out.shape}")
 
 
+def convert_person_detect():
+    print("\n=== [3/3] Converting Person Detector (yolo26n) ===")
+    pt_path = WEIGHTS_DIR / "yolo26n.pt"
+    if not pt_path.exists():
+        fallback_path = Path("/Users/zhang/dev/go/argus/algo-packages/macos/arm64/face_recognition/weights/yolo26n.pt")
+        if fallback_path.exists():
+            import shutil
+            WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copy(fallback_path, pt_path)
+    assert pt_path.exists(), f"Missing PyTorch weights: {pt_path}"
+
+    from ultralytics.nn.modules.block import Attention
+
+    def static_attention_forward(self, x: torch.Tensor) -> torch.Tensor:
+        B = 1
+        C = int(x.shape[1])
+        H = int(x.shape[2])
+        W = int(x.shape[3])
+        N = H * W
+        qkv = self.qkv(x)
+        qkv_flat = qkv.view(1, self.num_heads, self.key_dim * 2 + self.head_dim, N)
+        q = qkv_flat[:, :, :self.key_dim, :]
+        k = qkv_flat[:, :, self.key_dim:self.key_dim * 2, :]
+        v = qkv_flat[:, :, self.key_dim * 2:, :]
+
+        attn = ((q * self.scale).transpose(-2, -1) @ k).softmax(dim=-1)
+        out = (v @ attn.transpose(-2, -1)).view(1, C, H, W)
+        pe = self.pe(v.reshape(1, C, H, W))
+        return self.proj(out + pe)
+
+    Attention.forward = static_attention_forward
+
+    import coremltools as ct
+
+    ckpt = torch.load(str(pt_path), map_location="cpu", weights_only=False)
+    model = ckpt["model"].float()
+    model.eval()
+
+    detect = model.model[23]
+    detect.end2end = False
+    detect.export = True
+
+    class PersonDetectModel(torch.nn.Module):
+        def __init__(self, m):
+            super().__init__()
+            self.m = m
+        def forward(self, x):
+            out = self.m(x)
+            person_out = torch.cat([out[:, :4, :], out[:, 4:5, :]], dim=1)
+            return person_out.permute(0, 2, 1)
+
+    p_model = PersonDetectModel(model)
+
+    # 1. 640x384
+    print("Step 1: Converting person_detect_640x384.mlpackage...")
+    detect.shape = None
+    dummy_640 = torch.randn(1, 3, 384, 640)
+    _ = p_model(dummy_640)
+    traced_640 = torch.jit.trace(p_model, dummy_640)
+    ml_640 = ct.convert(
+        traced_640,
+        inputs=[ct.ImageType(name="image", shape=(1, 3, 384, 640), color_layout=ct.colorlayout.RGB, scale=1.0/255.0)],
+        outputs=[ct.TensorType(name="var_911")],
+        compute_precision=ct.precision.FLOAT16,
+        compute_units=ct.ComputeUnit.ALL,
+        minimum_deployment_target=ct.target.macOS13,
+    )
+    out_640 = MODEL_DIR / "person_detect_640x384.mlpackage"
+    ml_640.save(str(out_640))
+    print(f"Successfully exported {out_640}")
+
+    # 2. 384x224 (padded from 384x216, multiple of stride 32)
+    print("Step 2: Converting person_detect_384x216.mlpackage (384x224)...")
+    detect.shape = None
+    dummy_384 = torch.randn(1, 3, 224, 384)
+    _ = p_model(dummy_384)
+    traced_384 = torch.jit.trace(p_model, dummy_384)
+    ml_384 = ct.convert(
+        traced_384,
+        inputs=[ct.ImageType(name="image", shape=(1, 3, 224, 384), color_layout=ct.colorlayout.RGB, scale=1.0/255.0)],
+        outputs=[ct.TensorType(name="var_911")],
+        compute_precision=ct.precision.FLOAT16,
+        compute_units=ct.ComputeUnit.ALL,
+        minimum_deployment_target=ct.target.macOS13,
+    )
+    out_384 = MODEL_DIR / "person_detect_384x216.mlpackage"
+    ml_384.save(str(out_384))
+    print(f"Successfully exported {out_384}")
+
+    # Maintain default person_detect.mlpackage symlink to 640x384
+    default_link = MODEL_DIR / "person_detect.mlpackage"
+    if default_link.is_symlink() or default_link.exists():
+        if default_link.is_symlink():
+            default_link.unlink()
+    if not default_link.exists():
+        default_link.symlink_to("person_detect_640x384.mlpackage")
+
+    # Verification
+    test_img_640 = Image.new("RGB", (640, 384), color=(114, 114, 114))
+    preds_640 = ml_640.predict({"image": test_img_640})
+    assert preds_640["var_911"].shape == (1, 5040, 5)
+
+    test_img_384 = Image.new("RGB", (384, 224), color=(114, 114, 114))
+    preds_384 = ml_384.predict({"image": test_img_384})
+    assert preds_384["var_911"].shape == (1, 1764, 5)
+    print("Verification passed for both person detection models!")
+
+
 def main():
     convert_edgeface()
     if (WEIGHTS_DIR / "yolov8-lite-s.pt").exists():
         convert_yolov8_face()
     else:
         print(f"yolov8-lite-s.pt not found in {WEIGHTS_DIR}")
+    if (WEIGHTS_DIR / "yolo26n.pt").exists():
+        convert_person_detect()
+    else:
+        print(f"yolo26n.pt not found in {WEIGHTS_DIR}")
     print("\n All models converted and verified successfully!")
 
 

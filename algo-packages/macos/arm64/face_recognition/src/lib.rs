@@ -1,6 +1,9 @@
 //! macOS arm64 人脸检测与 EdgeFace 特征提取算法包。
 
 pub mod align;
+pub mod association;
+pub mod best_shot;
+pub mod bytetrack;
 pub mod config;
 #[cfg(target_os = "macos")]
 pub mod coreml;
@@ -25,10 +28,7 @@ use {
     crate::coreml::CoreMlFaceModels,
     crate::detect::{decode_face_detections, nms, unmap_letterbox},
     crate::quality::compute_quality,
-    algo_sdk::c_abi::{
-        AV_ALGO_API_VERSION, AV_ERR_INFERENCE_FAILED, AV_ERR_INTERNAL, AV_ERR_INVALID_ARG,
-        AV_ERR_MODEL_LOAD_FAILED, AV_OK,
-    },
+    algo_sdk::c_abi::{AV_ALGO_API_VERSION, AV_ERR_INTERNAL, AV_ERR_INVALID_ARG, AV_OK},
     algo_sdk::cv::types::{LetterboxLayout, PreprocessMode},
     algo_sdk::error::AlgoError,
     algo_sdk::macros::{validate_abi_header, LibraryContext},
@@ -241,6 +241,112 @@ fn write_output_success(
 }
 
 #[cfg(target_os = "macos")]
+struct ExtractedFaceData {
+    embedding: [f32; 512],
+    bbox: [f32; 4],
+    quality_score: f32,
+    detection_score: f32,
+    aligned_jpeg: Vec<u8>,
+}
+
+#[cfg(target_os = "macos")]
+fn run_face_extraction_pipeline(
+    package_root: &Path,
+    input_ref: &AvFaceExtractInput,
+) -> Result<ExtractedFaceData, AlgoError> {
+    if input_ref.image_bytes.is_null() || input_ref.image_bytes_len == 0 {
+        return Err(AlgoError::Preprocess {
+            reason: "image_bytes 为空".to_string(),
+        });
+    }
+    let image_len = input_ref.image_bytes_len as usize;
+    if image_len > 32 * 1024 * 1024 {
+        return Err(AlgoError::Preprocess {
+            reason: "JPEG 输入超过 32 MiB 限制".to_string(),
+        });
+    }
+    // SAFETY: C ABI 输入契约保证 image_bytes 指向 image_bytes_len 个只读字节。
+    let image_bytes = unsafe { slice::from_raw_parts(input_ref.image_bytes, image_len) };
+    let image = image::load_from_memory(image_bytes)
+        .map_err(|error| AlgoError::Preprocess {
+            reason: format!("JPEG 解码失败: {error}"),
+        })?
+        .to_rgb8();
+
+    let (detector_rgb, detector_mode) = prepare_detector_input(&image)?;
+    let models = shared_models(package_root)?;
+    let detector_buffer = coreml::OwnedPixelBuffer::from_rgb(&detector_rgb, 640, 384)?;
+
+    // SAFETY: detector_buffer 在调用返回前保持有效。
+    let raw_output = unsafe { models.predict_detector(detector_buffer.as_ptr()) }?;
+
+    let min_score = if input_ref.min_detection_score.is_finite() {
+        input_ref.min_detection_score.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let mut faces = decode_face_detections(&raw_output, min_score);
+    nms(&mut faces, 0.45);
+    unmap_letterbox(&mut faces, &detector_mode, image.width(), image.height());
+
+    let min_face_size = if input_ref.min_face_size.is_finite() {
+        input_ref.min_face_size.max(1.0).round() as u32
+    } else {
+        30
+    };
+    let min_quality_score = if input_ref.min_quality_score.is_finite() {
+        input_ref.min_quality_score.clamp(0.0, 1.0)
+    } else {
+        0.3
+    };
+    let thresholds = config::QualityThresholds {
+        min_score: min_quality_score,
+        ..config::QualityThresholds::default()
+    };
+
+    let Some((face, quality)) = faces
+        .into_iter()
+        .filter_map(|face| {
+            let quality = compute_quality(
+                &face.landmarks,
+                &face.landmark_scores,
+                face.bbox[2] * image.width() as f32,
+                &thresholds,
+            );
+            if quality.accepted(&thresholds, min_face_size) {
+                Some((face, quality))
+            } else {
+                None
+            }
+        })
+        .max_by(|left, right| left.0.score.total_cmp(&right.0.score))
+    else {
+        return Err(AlgoError::Inference {
+            reason: "NO_FACE_DETECTED: 输入图像未检出满足置信度与质量阈值的人脸".to_string(),
+        });
+    };
+
+    let aligned =
+        align_face(&image, image.width(), image.height(), &face.landmarks).map_err(|reason| {
+            AlgoError::Preprocess {
+                reason: reason.to_string(),
+            }
+        })?;
+
+    let embedding_values = models.predict_embedding(&aligned)?;
+    let embedding = normalize_embedding(&embedding_values)?;
+    let aligned_jpeg = encode_aligned_jpeg(&aligned)?;
+
+    Ok(ExtractedFaceData {
+        embedding,
+        bbox: face.bbox,
+        quality_score: quality.score,
+        detection_score: face.score,
+        aligned_jpeg,
+    })
+}
+
+#[cfg(target_os = "macos")]
 unsafe fn extract_face_impl(
     lib: AvAlgoLibrary,
     input: *const AvFaceExtractInput,
@@ -276,158 +382,25 @@ unsafe fn extract_face_impl(
     output_ref.size = std::mem::size_of::<AvFaceExtractOutput>() as u32;
     output_ref.api_version = AV_ALGO_API_VERSION;
 
-    if input_ref.image_bytes.is_null() || input_ref.image_bytes_len == 0 {
-        write_output_error(output_ref, "image_bytes 为空", AV_ERR_INVALID_ARG);
-        return AV_ERR_INVALID_ARG;
-    }
-    let image_len = input_ref.image_bytes_len as usize;
-    if image_len > 32 * 1024 * 1024 {
-        write_output_error(output_ref, "JPEG 输入超过 32 MiB 限制", AV_ERR_INVALID_ARG);
-        return AV_ERR_INVALID_ARG;
-    }
-    // SAFETY: C ABI 输入契约保证 image_bytes 指向 image_bytes_len 个只读字节。
-    let image_bytes = unsafe { slice::from_raw_parts(input_ref.image_bytes, image_len) };
-    let image = match image::load_from_memory(image_bytes) {
-        Ok(image) => image.to_rgb8(),
-        Err(error) => {
-            let algo_error = AlgoError::Preprocess {
-                reason: format!("JPEG 解码失败: {error}"),
-            };
-            write_output_error(
-                output_ref,
-                &algo_error.to_string(),
-                algo_error.to_c_status(),
-            );
-            return algo_error.to_c_status();
-        }
-    };
-    let (detector_rgb, detector_mode) = match prepare_detector_input(&image) {
-        Ok(value) => value,
-        Err(error) => {
-            write_output_error(output_ref, &error.to_string(), error.to_c_status());
-            return error.to_c_status();
-        }
-    };
-
     // SAFETY: lib 是 export_algo!::library_open 返回的 LibraryContext 句柄，且在本次同步调用期间有效。
     let library = unsafe { &*(lib as *const LibraryContext) };
-    let models = match shared_models(&library.package_root) {
-        Ok(models) => models,
-        Err(error) => {
-            write_output_error(output_ref, &error.to_string(), AV_ERR_MODEL_LOAD_FAILED);
-            return AV_ERR_MODEL_LOAD_FAILED;
-        }
-    };
-    let detector_buffer = match coreml::OwnedPixelBuffer::from_rgb(&detector_rgb, 640, 384) {
-        Ok(buffer) => buffer,
-        Err(error) => {
-            write_output_error(output_ref, &error.to_string(), error.to_c_status());
-            return error.to_c_status();
-        }
-    };
-    // SAFETY: detector_buffer 在调用返回前保持有效。
-    let raw_output = match unsafe { models.predict_detector(detector_buffer.as_ptr()) } {
-        Ok(output) => output,
-        Err(error) => {
-            write_output_error(output_ref, &error.to_string(), AV_ERR_INFERENCE_FAILED);
-            return AV_ERR_INFERENCE_FAILED;
-        }
-    };
-    let min_score = if input_ref.min_detection_score.is_finite() {
-        input_ref.min_detection_score.clamp(0.0, 1.0)
-    } else {
-        0.5
-    };
-    let mut faces = decode_face_detections(&raw_output, min_score);
-    nms(&mut faces, 0.45);
-    unmap_letterbox(&mut faces, &detector_mode, image.width(), image.height());
-    let min_face_size = if input_ref.min_face_size.is_finite() {
-        input_ref.min_face_size.max(1.0).round() as u32
-    } else {
-        30
-    };
-    let min_quality_score = if input_ref.min_quality_score.is_finite() {
-        input_ref.min_quality_score.clamp(0.0, 1.0)
-    } else {
-        0.3
-    };
-    let thresholds = config::QualityThresholds {
-        min_score: min_quality_score,
-        ..config::QualityThresholds::default()
-    };
-    let Some((face, quality)) = faces
-        .into_iter()
-        .filter_map(|face| {
-            let quality = compute_quality(
-                &face.landmarks,
-                &face.landmark_scores,
-                face.bbox[2] * image.width() as f32,
-                &thresholds,
-            );
-            if quality.accepted(&thresholds, min_face_size) {
-                Some((face, quality))
-            } else {
-                None
-            }
-        })
-        .max_by(|left, right| left.0.score.total_cmp(&right.0.score))
-    else {
-        write_output_error(
-            output_ref,
-            "NO_FACE_DETECTED: 输入图像未检出满足置信度与质量阈值的人脸",
-            AV_ERR_INFERENCE_FAILED,
-        );
-        return AV_ERR_INFERENCE_FAILED;
-    };
-
-    let aligned = match align_face(&image, image.width(), image.height(), &face.landmarks) {
-        Ok(aligned) => aligned,
-        Err(reason) => {
-            let error = AlgoError::Preprocess {
-                reason: reason.to_string(),
-            };
-            write_output_error(output_ref, &error.to_string(), error.to_c_status());
-            return error.to_c_status();
-        }
-    };
-    let embedding_values = match models.predict_embedding(&aligned) {
-        Ok(values) => values,
-        Err(error) => {
-            write_output_error(
+    match run_face_extraction_pipeline(&library.package_root, input_ref) {
+        Ok(data) => {
+            write_output_success(
                 output_ref,
-                &format!("EMBED_INFERENCE_FAILED: {error}"),
-                AV_ERR_INFERENCE_FAILED,
+                data.embedding,
+                data.bbox,
+                data.quality_score,
+                data.detection_score,
+                &data.aligned_jpeg,
             );
-            return AV_ERR_INFERENCE_FAILED;
+            AV_OK
         }
-    };
-    let embedding = match normalize_embedding(&embedding_values) {
-        Ok(embedding) => embedding,
-        Err(error) => {
-            write_output_error(
-                output_ref,
-                &format!("EMBED_NORM_FAILED: {error}"),
-                AV_ERR_INFERENCE_FAILED,
-            );
-            return AV_ERR_INFERENCE_FAILED;
-        }
-    };
-    let jpeg = match encode_aligned_jpeg(&aligned) {
-        Ok(jpeg) => jpeg,
         Err(error) => {
             write_output_error(output_ref, &error.to_string(), error.to_c_status());
-            return error.to_c_status();
+            error.to_c_status()
         }
-    };
-    write_output_success(
-        output_ref,
-        embedding,
-        face.bbox,
-        quality.score,
-        face.score,
-        &jpeg,
-    );
-    AV_OK
+    }
 }
 
 /// 独立的人脸特征提取 C ABI 符号。

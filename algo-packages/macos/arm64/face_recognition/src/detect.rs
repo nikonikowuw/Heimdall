@@ -3,6 +3,9 @@ use algo_sdk::math::clamp_bbox;
 
 pub const YOLOV5_FACE_FIELDS: usize = 16;
 pub const YOLOV8_FACE_FIELDS: usize = 20;
+pub const PERSON_FIELDS: usize = 5;
+
+pub use crate::association::PersonCandidate;
 
 /// YOLO 单人脸候选框，坐标在解码阶段仍处于模型输入像素空间。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,17 +50,39 @@ fn confidence_value(value: f32) -> f32 {
     }
 }
 
+/// 人脸模型输出张量格式枚举。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaceTensorFormat {
+    YoloV8,
+    YoloV5,
+    Unknown,
+}
+
+impl FaceTensorFormat {
+    #[inline]
+    pub fn detect(len: usize) -> Self {
+        if len == 0 {
+            Self::Unknown
+        } else if len == 5040 * YOLOV8_FACE_FIELDS {
+            Self::YoloV8
+        } else {
+            let is_v8 = len.is_multiple_of(YOLOV8_FACE_FIELDS);
+            let is_v5 = len.is_multiple_of(YOLOV5_FACE_FIELDS);
+            match (is_v8, is_v5) {
+                (true, false) => Self::YoloV8,
+                (false, true) => Self::YoloV5,
+                (true, true) => Self::YoloV8, // 公倍数时优先采用 YOLOv8
+                (false, false) => Self::Unknown,
+            }
+        }
+    }
+}
+
 /// 解码已经由导出模型展开的 `[1, N, 16]` YOLOv5-face 张量。
 ///
 /// 每行依次为 `cx, cy, w, h, objectness, class_confidence, 5 * (x, y)`。
 /// 关键点分数在该模型格式中没有单独输出，因此先以检测分数作为保守代理。
 pub fn decode_yolov5_face(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
-    if raw.len() == 5040 * YOLOV8_FACE_FIELDS
-        || (raw.len().is_multiple_of(YOLOV8_FACE_FIELDS)
-            && !raw.len().is_multiple_of(YOLOV5_FACE_FIELDS))
-    {
-        return decode_yolov8_face(raw, conf_threshold);
-    }
     if raw.len() < YOLOV5_FACE_FIELDS || !raw.len().is_multiple_of(YOLOV5_FACE_FIELDS) {
         return Vec::new();
     }
@@ -156,19 +181,98 @@ pub fn decode_yolov8_face(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
 
 /// 自适应解码 YOLO 人脸检测张量（自动识别 YOLOv8 20 维或 YOLOv5 16 维格式）。
 pub fn decode_face_detections(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
-    if raw.len() == 5040 * YOLOV8_FACE_FIELDS
-        || (raw.len().is_multiple_of(YOLOV8_FACE_FIELDS)
-            && !raw.len().is_multiple_of(YOLOV5_FACE_FIELDS))
-    {
-        decode_yolov8_face(raw, conf_threshold)
-    } else if raw.len().is_multiple_of(YOLOV5_FACE_FIELDS)
-        && !raw.len().is_multiple_of(YOLOV8_FACE_FIELDS)
-    {
-        decode_yolov5_face(raw, conf_threshold)
-    } else if raw.len().is_multiple_of(YOLOV8_FACE_FIELDS) {
-        decode_yolov8_face(raw, conf_threshold)
-    } else {
-        Vec::new()
+    match FaceTensorFormat::detect(raw.len()) {
+        FaceTensorFormat::YoloV8 => decode_yolov8_face(raw, conf_threshold),
+        FaceTensorFormat::YoloV5 => decode_yolov5_face(raw, conf_threshold),
+        FaceTensorFormat::Unknown => Vec::new(),
+    }
+}
+
+/// 解码 YOLO 人体检测张量（shape `[1, N, 5]`，每行依次为 `cx, cy, w, h, score`）。
+pub fn decode_person_detections(raw: &[f32], conf_threshold: f32) -> Vec<PersonCandidate> {
+    if raw.len() < PERSON_FIELDS || !raw.len().is_multiple_of(PERSON_FIELDS) {
+        return Vec::new();
+    }
+    let threshold = conf_threshold.clamp(0.0, 1.0);
+    let mut persons = Vec::with_capacity(raw.len() / PERSON_FIELDS);
+
+    for row in raw.chunks_exact(PERSON_FIELDS) {
+        let score = confidence_value(row[4]);
+        if score < threshold {
+            continue;
+        }
+        let (cx, cy, width, height) = (row[0], row[1], row[2], row[3]);
+        if !cx.is_finite()
+            || !cy.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || width <= 0.0
+            || height <= 0.0
+        {
+            continue;
+        }
+
+        persons.push(PersonCandidate {
+            bbox: [cx - width * 0.5, cy - height * 0.5, width, height],
+            score,
+        });
+    }
+    persons
+}
+
+/// 对人体候选框执行类别无关 NMS。
+pub fn nms_persons(persons: &mut Vec<PersonCandidate>, iou_threshold: f32) {
+    if persons.len() <= 1 {
+        return;
+    }
+    persons.sort_by(|left, right| right.score.total_cmp(&left.score));
+    let mut kept = Vec::with_capacity(persons.len());
+    for p in persons.iter().copied() {
+        if kept.iter().all(|prev: &PersonCandidate| {
+            let iou = crate::bytetrack::box_iou(&prev.bbox, &p.bbox);
+            iou < iou_threshold
+        }) {
+            kept.push(p);
+        }
+    }
+    *persons = kept;
+}
+
+/// 反算人体检测框至 `[0.0, 1.0]` 归一化全图空间。
+pub fn unmap_persons_letterbox(
+    persons: &mut [PersonCandidate],
+    mode: &PreprocessMode,
+    orig_width: u32,
+    orig_height: u32,
+) {
+    if orig_width == 0 || orig_height == 0 {
+        return;
+    }
+    let (orig_w, orig_h) = (orig_width as f32, orig_height as f32);
+    for person in persons.iter_mut() {
+        let x1 = person.bbox[0];
+        let y1 = person.bbox[1];
+        let x2 = x1 + person.bbox[2];
+        let y2 = y1 + person.bbox[3];
+
+        let p1 = map_point([x1, y1], mode, orig_w, orig_h);
+        let p2 = map_point([x2, y2], mode, orig_w, orig_h);
+
+        let unmapped_x = p1[0].min(p2[0]);
+        let unmapped_y = p1[1].min(p2[1]);
+        let unmapped_w = (p2[0] - p1[0]).abs();
+        let unmapped_h = (p2[1] - p1[1]).abs();
+
+        let mut normalized = algo_sdk::math::NormBox::new(
+            unmapped_x,
+            unmapped_y,
+            unmapped_w,
+            unmapped_h,
+            person.score,
+            0,
+        );
+        clamp_bbox(&mut normalized);
+        person.bbox = [normalized.x, normalized.y, normalized.w, normalized.h];
     }
 }
 

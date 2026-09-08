@@ -100,61 +100,75 @@ impl IntoIterator for AffineMatrix2D {
     }
 }
 
-/// 最小二乘估计二维仿射变换矩阵。
+/// 使用 Umeyama 算法闭式求解 2D 相似变换矩阵（保角无剪切，4 自由度：等比缩放、旋转、平移）。
+pub fn estimate_similarity_checked(
+    src: &[[f32; 2]; 5],
+    dst: &[[f64; 2]; 5],
+) -> Result<AffineMatrix2D, &'static str> {
+    let n = src.len() as f64;
+    if n == 0.0 {
+        return Err("输入点集为空");
+    }
+
+    // 1. 计算源点集与目标点集的质心 (Centroids)
+    let (mut src_cx, mut src_cy) = (0.0f64, 0.0f64);
+    let (mut dst_cx, mut dst_cy) = (0.0f64, 0.0f64);
+    for (s, d) in src.iter().zip(dst.iter()) {
+        src_cx += s[0] as f64;
+        src_cy += s[1] as f64;
+        dst_cx += d[0];
+        dst_cy += d[1];
+    }
+    src_cx /= n;
+    src_cy /= n;
+    dst_cx /= n;
+    dst_cy /= n;
+
+    // 2. 中心化并计算方差与协方差
+    let mut src_var = 0.0f64;
+    let mut s_xx = 0.0f64;
+    let mut s_xy = 0.0f64;
+    let mut s_yx = 0.0f64;
+    let mut s_yy = 0.0f64;
+
+    for (s, d) in src.iter().zip(dst.iter()) {
+        let sx = s[0] as f64 - src_cx;
+        let sy = s[1] as f64 - src_cy;
+        let dx = d[0] - dst_cx;
+        let dy = d[1] - dst_cy;
+
+        src_var += sx * sx + sy * sy;
+        s_xx += sx * dx;
+        s_xy += sx * dy;
+        s_yx += sy * dx;
+        s_yy += sy * dy;
+    }
+
+    if src_var <= 1e-8 || !src_var.is_finite() {
+        return Err("关键点几何退化，无法估计仿射矩阵");
+    }
+
+    // 3. 求解相似变换参数 a = s*cos(theta), b = s*sin(theta)
+    let a = (s_xx + s_yy) / src_var;
+    let b = (s_xy - s_yx) / src_var;
+
+    if !a.is_finite() || !b.is_finite() {
+        return Err("变换系数计算溢出");
+    }
+
+    // 4. 求解平移量
+    let tx = dst_cx - (a * src_cx - b * src_cy);
+    let ty = dst_cy - (b * src_cx + a * src_cy);
+
+    Ok(AffineMatrix2D([a, -b, tx, b, a, ty]))
+}
+
+/// 兼容接口：使用带保角相似变换约束的最小二乘估计二维变换矩阵。
 pub fn estimate_affine_checked(
     src: &[[f32; 2]; 5],
     dst: &[[f64; 2]; 5],
 ) -> Result<AffineMatrix2D, &'static str> {
-    let mut normal = [[0.0f64; 7]; 6];
-    for (source, target) in src.iter().zip(dst.iter()) {
-        let x = source[0] as f64;
-        let y = source[1] as f64;
-        let rows = [
-            ([x, y, 1.0, 0.0, 0.0, 0.0], target[0]),
-            ([0.0, 0.0, 0.0, x, y, 1.0], target[1]),
-        ];
-        for (row, value) in rows {
-            for column in 0..6 {
-                for rhs_column in 0..6 {
-                    normal[column][rhs_column] += row[column] * row[rhs_column];
-                }
-                normal[column][6] += row[column] * value;
-            }
-        }
-    }
-
-    for pivot in 0..6 {
-        let mut best = pivot;
-        for row in (pivot + 1)..6 {
-            if normal[row][pivot].abs() > normal[best][pivot].abs() {
-                best = row;
-            }
-        }
-        if normal[best][pivot].abs() <= 1e-10 {
-            return Err("关键点几何退化，无法估计仿射矩阵");
-        }
-        normal.swap(pivot, best);
-        let divisor = normal[pivot][pivot];
-        for value in normal[pivot].iter_mut().skip(pivot) {
-            *value /= divisor;
-        }
-        for row in 0..6 {
-            if row == pivot {
-                continue;
-            }
-            let factor = normal[row][pivot];
-            let pivot_row = normal[pivot];
-            for (column, value) in normal[row].iter_mut().enumerate().skip(pivot) {
-                *value -= factor * pivot_row[column];
-            }
-        }
-    }
-
-    let mut matrix = [0.0; 6];
-    for (index, value) in matrix.iter_mut().enumerate() {
-        *value = normal[index][6];
-    }
-    Ok(AffineMatrix2D(matrix))
+    estimate_similarity_checked(src, dst)
 }
 
 /// 与任务设计保持兼容的非 fallible 包装；退化输入回退到恒等矩阵。

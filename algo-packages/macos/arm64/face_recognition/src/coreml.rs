@@ -81,54 +81,23 @@ impl Drop for AutoreleasePool {
     }
 }
 
-macro_rules! objc_send {
-    ($target:expr, $selector:expr $(, $arg:expr)*) => {{
+macro_rules! objc_msg {
+    ($target:expr, $selector:expr $(, $arg:expr)* => $ret:ty) => {{
         #[allow(unused_unsafe)]
         {
             let function: unsafe extern "C" fn(
                 *mut c_void,
-                *mut c_void $(, objc_send!(@type $arg))*
-            ) -> *mut c_void =
+                *mut c_void $(, objc_msg!(@type $arg))*
+            ) -> $ret =
                 // SAFETY: objc_msgSend 的地址按当前 selector 的确切 C 函数签名转换。
                 unsafe { std::mem::transmute(objc_msgSend as *const ()) };
             // SAFETY: 调用方保证 target、selector 和参数符合 Objective-C 方法签名。
             unsafe { function($target, $selector $(, $arg)*) }
         }
     }};
-    (@type $arg:expr) => { _ };
-}
-
-macro_rules! objc_send_isize {
-    ($target:expr, $selector:expr $(, $arg:expr)*) => {{
-        #[allow(unused_unsafe)]
-        {
-            let function: unsafe extern "C" fn(
-                *mut c_void,
-                *mut c_void $(, objc_send_isize!(@type $arg))*
-            ) -> isize =
-                // SAFETY: objc_msgSend 的地址按当前 selector 的确切整数返回签名转换。
-                unsafe { std::mem::transmute(objc_msgSend as *const ()) };
-            // SAFETY: 调用方保证 target、selector 和参数符合 Objective-C 方法签名。
-            unsafe { function($target, $selector $(, $arg)*) }
-        }
-    }};
-    (@type $arg:expr) => { _ };
-}
-
-macro_rules! objc_send_void {
-    ($target:expr, $selector:expr $(, $arg:expr)*) => {{
-        #[allow(unused_unsafe)]
-        {
-            let function: unsafe extern "C" fn(
-                *mut c_void,
-                *mut c_void $(, objc_send_void!(@type $arg))*
-            ) =
-                // SAFETY: objc_msgSend 的地址按当前 selector 的确切 void 返回签名转换。
-                unsafe { std::mem::transmute(objc_msgSend as *const ()) };
-            // SAFETY: 调用方保证 target、selector 和参数符合 Objective-C 方法签名。
-            unsafe { function($target, $selector $(, $arg)*) }
-        }
-    }};
+    ($target:expr, $selector:expr $(, $arg:expr)*) => {
+        objc_msg!($target, $selector $(, $arg)* => *mut c_void)
+    };
     (@type $arg:expr) => { _ };
 }
 
@@ -168,7 +137,7 @@ fn ns_string(value: &str) -> Result<*mut c_void, AlgoError> {
     })?;
     let class = get_class("NSString")?;
     let selector = register_selector("stringWithUTF8String:")?;
-    let string = objc_send!(class, selector, value.as_ptr());
+    let string = objc_msg!(class, selector, value.as_ptr());
     if string.is_null() {
         Err(AlgoError::Internal {
             reason: "创建 NSString 失败".to_string(),
@@ -185,18 +154,15 @@ fn ns_error_description(error: *mut c_void) -> String {
     let Ok(description_selector) = register_selector("localizedDescription") else {
         return "NSError (无法获取描述)".to_string();
     };
-    let description = objc_send!(error, description_selector);
+    let description = objc_msg!(error, description_selector);
     if description.is_null() {
         return "NSError (描述为空)".to_string();
     }
     let Ok(utf8_selector) = register_selector("UTF8String") else {
         return "NSError (无法获取 UTF8 描述)".to_string();
     };
-    let function: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *const c_char =
-        // SAFETY: objc_msgSend 被绑定为 NSString::UTF8String 的正确返回类型。
-        unsafe { std::mem::transmute(objc_msgSend as *const ()) };
     // SAFETY: description 是有效 NSString，selector 返回其内部 NUL 结尾 UTF-8 指针。
-    let utf8 = unsafe { function(description, utf8_selector) };
+    let utf8 = objc_msg!(description, utf8_selector => *const c_char);
     if utf8.is_null() {
         "NSError (UTF8 描述为空)".to_string()
     } else {
@@ -371,7 +337,7 @@ impl CoreMlRunner {
         let path_string_ns = ns_string(path_string)?;
         let nsurl_class = get_class("NSURL")?;
         let file_url = register_selector("fileURLWithPath:")?;
-        let model_url = objc_send!(nsurl_class, file_url, path_string_ns);
+        let model_url = objc_msg!(nsurl_class, file_url, path_string_ns);
         if model_url.is_null() {
             return Err(AlgoError::ModelLoad {
                 reason: "创建 CoreML 模型 NSURL 失败".to_string(),
@@ -385,7 +351,7 @@ impl CoreMlRunner {
         ) {
             let compile_selector = register_selector("compileModelAtURL:error:")?;
             let mut error: *mut c_void = null_mut();
-            let compiled = objc_send!(mlmodel_class, compile_selector, model_url, &mut error);
+            let compiled = objc_msg!(mlmodel_class, compile_selector, model_url, &mut error);
             if compiled.is_null() || !error.is_null() {
                 return Err(AlgoError::ModelLoad {
                     reason: format!("编译 CoreML 模型失败: {}", ns_error_description(error)),
@@ -399,8 +365,8 @@ impl CoreMlRunner {
         let configuration_class = get_class("MLModelConfiguration")?;
         let alloc_selector = register_selector("alloc")?;
         let init_selector = register_selector("init")?;
-        let configuration = objc_send!(
-            objc_send!(configuration_class, alloc_selector),
+        let configuration = objc_msg!(
+            objc_msg!(configuration_class, alloc_selector),
             init_selector
         );
         if configuration.is_null() {
@@ -410,11 +376,11 @@ impl CoreMlRunner {
         }
         let compute_units = register_selector("setComputeUnits:")?;
         // SAFETY: 2 是公开枚举 MLComputeUnitsAll，启用 CPU/GPU/ANE 自动调度。
-        objc_send_void!(configuration, compute_units, 2isize);
+        objc_msg!(configuration, compute_units, 2isize => ());
 
         let load_selector = register_selector("modelWithContentsOfURL:configuration:error:")?;
         let mut error: *mut c_void = null_mut();
-        let model = objc_send!(
+        let model = objc_msg!(
             mlmodel_class,
             load_selector,
             compiled_url,
@@ -439,38 +405,38 @@ impl CoreMlRunner {
         let object_at_index = register_selector("objectAtIndex:")?;
         let mut input_name = null_mut();
         let mut output_name = null_mut();
-        let description = objc_send!(model, model_description);
+        let description = objc_msg!(model, model_description);
         if !description.is_null() {
-            let inputs = objc_send!(description, input_descriptions);
+            let inputs = objc_msg!(description, input_descriptions);
             let input_keys = if inputs.is_null() {
                 null_mut()
             } else {
-                objc_send!(inputs, all_keys)
+                objc_msg!(inputs, all_keys)
             };
             if !input_keys.is_null() {
-                let input_count = objc_send_isize!(input_keys, count);
+                let input_count = objc_msg!(input_keys, count => isize);
                 for index in 0..input_count {
-                    let key = objc_send!(input_keys, object_at_index, index);
-                    let feature = objc_send!(inputs, object_for_key, key);
-                    if objc_send_isize!(feature, feature_type) == ML_FEATURE_TYPE_IMAGE {
+                    let key = objc_msg!(input_keys, object_at_index, index);
+                    let feature = objc_msg!(inputs, object_for_key, key);
+                    if objc_msg!(feature, feature_type => isize) == ML_FEATURE_TYPE_IMAGE {
                         input_name = key;
                         break;
                     }
                 }
             }
 
-            let outputs = objc_send!(description, output_descriptions);
+            let outputs = objc_msg!(description, output_descriptions);
             let output_keys = if outputs.is_null() {
                 null_mut()
             } else {
-                objc_send!(outputs, all_keys)
+                objc_msg!(outputs, all_keys)
             };
             if !output_keys.is_null() {
-                let output_count = objc_send_isize!(output_keys, count);
+                let output_count = objc_msg!(output_keys, count => isize);
                 for index in 0..output_count {
-                    let key = objc_send!(output_keys, object_at_index, index);
-                    let feature = objc_send!(outputs, object_for_key, key);
-                    if objc_send_isize!(feature, feature_type) == ML_FEATURE_TYPE_MULTI_ARRAY {
+                    let key = objc_msg!(output_keys, object_at_index, index);
+                    let feature = objc_msg!(outputs, object_for_key, key);
+                    if objc_msg!(feature, feature_type => isize) == ML_FEATURE_TYPE_MULTI_ARRAY {
                         output_name = key;
                         break;
                     }
@@ -536,7 +502,7 @@ impl CoreMlRunner {
         }
         let _pool = AutoreleasePool::new();
         let selectors = self.selectors;
-        let feature_value = objc_send!(
+        let feature_value = objc_msg!(
             selectors.feature_value_class,
             selectors.feature_value_pixel_buffer,
             pixel_buffer
@@ -546,7 +512,7 @@ impl CoreMlRunner {
                 reason: "创建 MLFeatureValue 失败".to_string(),
             });
         }
-        let dictionary = objc_send!(
+        let dictionary = objc_msg!(
             selectors.dictionary_class,
             selectors.dictionary_with_object,
             feature_value,
@@ -558,8 +524,8 @@ impl CoreMlRunner {
             });
         }
         let mut error: *mut c_void = null_mut();
-        let provider = objc_send!(
-            objc_send!(selectors.provider_class, selectors.alloc),
+        let provider = objc_msg!(
+            objc_msg!(selectors.provider_class, selectors.alloc),
             selectors.init_dictionary,
             dictionary,
             &mut error
@@ -573,13 +539,13 @@ impl CoreMlRunner {
             });
         }
         error = null_mut();
-        let output_provider = objc_send!(self.model, selectors.prediction, provider, &mut error);
+        let output_provider = objc_msg!(self.model, selectors.prediction, provider, &mut error);
         if output_provider.is_null() || !error.is_null() {
             return Err(AlgoError::Inference {
                 reason: format!("CoreML 前向推理失败: {}", ns_error_description(error)),
             });
         }
-        let output_feature = objc_send!(
+        let output_feature = objc_msg!(
             output_provider,
             selectors.feature_for_name,
             self.output_name
@@ -589,29 +555,28 @@ impl CoreMlRunner {
                 reason: "CoreML 输出特征不存在".to_string(),
             });
         }
-        let array = objc_send!(output_feature, selectors.multi_array_value);
+        let array = objc_msg!(output_feature, selectors.multi_array_value);
         if array.is_null() {
             return Err(AlgoError::Inference {
                 reason: "CoreML 输出不是 MLMultiArray".to_string(),
             });
         }
-        let count = objc_send_isize!(array, selectors.count);
+        let count = objc_msg!(array, selectors.count => isize);
         if count <= 0 || count as usize > MAX_OUTPUT_ELEMENTS {
             return Err(AlgoError::Inference {
                 reason: format!("CoreML 输出元素数非法: {count}"),
             });
         }
-        let data_pointer = objc_send!(array, selectors.data_pointer);
+        let data_pointer = objc_msg!(array, selectors.data_pointer);
         if data_pointer.is_null() {
             return Err(AlgoError::Inference {
                 reason: "CoreML 输出 dataPointer 为空".to_string(),
             });
         }
-        let shape = read_ns_integer_array(objc_send!(array, selectors.shape), selectors);
-        let strides = read_ns_integer_array(objc_send!(array, selectors.strides), selectors);
-        let offsets = logical_offsets(count as usize, &shape, &strides)?;
-        let data_type = objc_send_isize!(array, selectors.data_type);
-        read_tensor(data_pointer, data_type, &offsets)
+        let shape = read_ns_integer_array(objc_msg!(array, selectors.shape), selectors);
+        let strides = read_ns_integer_array(objc_msg!(array, selectors.strides), selectors);
+        let data_type = objc_msg!(array, selectors.data_type => isize);
+        read_tensor(data_pointer, data_type, count as usize, &shape, &strides)
     }
 
     pub fn predict_rgb(&self, rgb: &[u8], width: u32, height: u32) -> Result<Vec<f32>, AlgoError> {
@@ -652,19 +617,36 @@ fn read_ns_integer_array(array: *mut c_void, selectors: CachedSelectors) -> Vec<
     if array.is_null() {
         return Vec::new();
     }
-    let count = objc_send_isize!(array, selectors.count);
+    let count = objc_msg!(array, selectors.count => isize);
     if count <= 0 || count > 16 {
         return Vec::new();
     }
     let mut values = Vec::with_capacity(count as usize);
     for index in 0..count {
-        let object = objc_send!(array, selectors.object_at_index, index);
+        let object = objc_msg!(array, selectors.object_at_index, index);
         if object.is_null() {
             return Vec::new();
         }
-        values.push(objc_send_isize!(object, selectors.integer_value));
+        values.push(objc_msg!(object, selectors.integer_value => isize));
     }
     values
+}
+
+fn is_contiguous_c_order(shape: &[isize], strides: &[isize]) -> bool {
+    if shape.is_empty() || shape.len() != strides.len() {
+        return false;
+    }
+    let mut expected_stride = 1isize;
+    for (&dim, &stride) in shape.iter().zip(strides.iter()).rev() {
+        if dim <= 0 || stride != expected_stride {
+            return false;
+        }
+        match expected_stride.checked_mul(dim) {
+            Some(next) => expected_stride = next,
+            None => return false,
+        }
+    }
+    true
 }
 
 fn logical_offsets(
@@ -713,16 +695,79 @@ fn logical_offsets(
     Ok(offsets)
 }
 
-fn read_tensor(
+fn validate_finite(output: &[f32]) -> Result<(), AlgoError> {
+    if output.iter().any(|value| !value.is_finite()) {
+        return Err(AlgoError::Inference {
+            reason: "CoreML 输出包含 NaN 或无穷值".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn read_tensor_contiguous(
     data_pointer: *mut c_void,
     data_type: isize,
-    offsets: &[usize],
+    count: usize,
 ) -> Result<Vec<f32>, AlgoError> {
-    let mut output = vec![0.0f32; offsets.len()];
+    let mut output = vec![0.0f32; count];
     match data_type {
         ML_DATA_TYPE_FLOAT16 => {
-            let mut packed = Vec::with_capacity(offsets.len());
-            for offset in offsets {
+            let source = VImageBuffer {
+                data: data_pointer,
+                height: 1,
+                width: count,
+                row_bytes: count * 2,
+            };
+            let destination = VImageBuffer {
+                data: output.as_mut_ptr().cast::<c_void>(),
+                height: 1,
+                width: count,
+                row_bytes: count * 4,
+            };
+            // SAFETY: source 指向 count 个合法 f16 内存，destination 指向已分配的 count 个 f32。
+            let status = unsafe { vImageConvert_Planar16FtoPlanarF(&source, &destination, 0) };
+            if status != 0 {
+                return Err(AlgoError::Inference {
+                    reason: format!("Float16 转 Float32 失败: {status}"),
+                });
+            }
+        }
+        ML_DATA_TYPE_FLOAT32 => {
+            // SAFETY: data_pointer 是 CoreML MLMultiArray 的只读数据首地址，连续且包含 count 个 f32。
+            unsafe {
+                ptr::copy_nonoverlapping(data_pointer as *const f32, output.as_mut_ptr(), count);
+            }
+        }
+        ML_DATA_TYPE_DOUBLE => {
+            // SAFETY: data_pointer 指向连续的 count 个 f64。
+            let slice = unsafe { std::slice::from_raw_parts(data_pointer as *const f64, count) };
+            for (dst, &src) in output.iter_mut().zip(slice.iter()) {
+                *dst = src as f32;
+            }
+        }
+        other => {
+            return Err(AlgoError::Inference {
+                reason: format!("不支持的 CoreML 输出数据类型: {other}"),
+            });
+        }
+    }
+    validate_finite(&output)?;
+    Ok(output)
+}
+
+fn read_tensor_strided(
+    data_pointer: *mut c_void,
+    data_type: isize,
+    count: usize,
+    shape: &[isize],
+    strides: &[isize],
+) -> Result<Vec<f32>, AlgoError> {
+    let offsets = logical_offsets(count, shape, strides)?;
+    let mut output = vec![0.0f32; count];
+    match data_type {
+        ML_DATA_TYPE_FLOAT16 => {
+            let mut packed = Vec::with_capacity(count);
+            for offset in &offsets {
                 // SAFETY: CoreML MLMultiArray dataPointer 在 count/shape/stride 校验后可读；
                 // read_unaligned 允许底层分配不满足 u16 对齐。
                 let value =
@@ -770,28 +815,68 @@ fn read_tensor(
             });
         }
     }
-    if output.iter().any(|value| !value.is_finite()) {
-        return Err(AlgoError::Inference {
-            reason: "CoreML 输出包含 NaN 或无穷值".to_string(),
-        });
-    }
+    validate_finite(&output)?;
     Ok(output)
 }
 
-/// 人脸检测和 EdgeFace 特征提取的双模型持有者。
+fn read_tensor(
+    data_pointer: *mut c_void,
+    data_type: isize,
+    count: usize,
+    shape: &[isize],
+    strides: &[isize],
+) -> Result<Vec<f32>, AlgoError> {
+    if shape.is_empty() || is_contiguous_c_order(shape, strides) {
+        read_tensor_contiguous(data_pointer, data_type, count)
+    } else {
+        read_tensor_strided(data_pointer, data_type, count, shape, strides)
+    }
+}
+
+/// 人体检测、人脸检测和 EdgeFace 特征提取的模型持有者。
 #[derive(Debug)]
 pub struct CoreMlFaceModels {
     pub detector: CoreMlRunner,
     pub embedder: CoreMlRunner,
+    pub person_detector: Option<CoreMlRunner>,
 }
 
 impl CoreMlFaceModels {
     pub fn load(package_root: &Path) -> Result<Self, AlgoError> {
+        Self::load_with_person_model(package_root, "person_detect.mlpackage")
+    }
+
+    pub fn load_with_person_model(
+        package_root: &Path,
+        person_model_name: &str,
+    ) -> Result<Self, AlgoError> {
         let detector_model_name = if package_root.join("model/yolov8_face.mlpackage").exists() {
             "yolov8_face.mlpackage"
         } else {
             "yolov5n_face.mlpackage"
         };
+
+        let person_detector = if package_root.join("model").join(person_model_name).exists() {
+            Some(CoreMlRunner::load_model(
+                package_root,
+                person_model_name,
+                "image",
+                "var_911",
+            )?)
+        } else if package_root
+            .join("model/person_detect_640x384.mlpackage")
+            .exists()
+        {
+            Some(CoreMlRunner::load_model(
+                package_root,
+                "person_detect_640x384.mlpackage",
+                "image",
+                "var_911",
+            )?)
+        } else {
+            None
+        };
+
         Ok(Self {
             detector: CoreMlRunner::load_model(
                 package_root,
@@ -805,6 +890,7 @@ impl CoreMlFaceModels {
                 "input",
                 "embedding",
             )?,
+            person_detector,
         })
     }
 
@@ -816,6 +902,20 @@ impl CoreMlFaceModels {
     ) -> Result<Vec<f32>, AlgoError> {
         // SAFETY: 由调用方保证 pixel_buffer 生命周期，本函数仅借用它做同步预测。
         unsafe { self.detector.predict_pixelbuffer(pixel_buffer) }
+    }
+
+    /// # Safety
+    /// `pixel_buffer` 必须在当前调用期间保持有效。
+    pub unsafe fn predict_person_detector(
+        &self,
+        pixel_buffer: *mut c_void,
+    ) -> Result<Vec<f32>, AlgoError> {
+        if let Some(ref runner) = self.person_detector {
+            // SAFETY: 由调用方保证 pixel_buffer 生命周期，本函数仅借用它做同步预测。
+            unsafe { runner.predict_pixelbuffer(pixel_buffer) }
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     pub fn predict_embedding(&self, rgb: &[u8]) -> Result<Vec<f32>, AlgoError> {
