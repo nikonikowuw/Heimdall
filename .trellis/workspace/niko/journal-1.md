@@ -456,3 +456,24 @@ Fixed configurable algorithm package upload limits end to end: centralized and v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: API 层架构重构：AppState 瘦身 + 路由文件拆分
+
+**Date**: 2026-09-08
+**Task**: API 层架构重构：AppState 瘦身 + 路由文件拆分
+**Branch**: `dev`
+
+### Summary
+
+完成 API 层架构重构。将 CameraProbeService 从 AppState 解耦为独立后台服务并提供静态广播方法；sync_auth_state 下沉至 routes::auth 使 AppState 退化为纯同步数据结构；algo.rs 585行拆分为 algo/{archive, dto, lifecycle, upload_service} 四模块（路由降至 117 行）；system.rs 拆为 system/{mod, overview, network, storage, time} 子路由（mod.rs 仅 24 行）；evidence 图片服务补齐 camera_id/client_ip 访问日志；WebSocket 广播 Lagged/Closed 错误区分处理。全量门禁通过：cargo fmt、clippy、277 个测试全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5cff35b` | (see git log) |
+
+### Status
+
+[OK] **Completed**

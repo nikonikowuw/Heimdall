@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-09-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~458 | Active |
+| `journal-1.md` | ~479 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-09-08 | API 层架构重构：AppState 瘦身 + 路由文件拆分 | `5cff35b` | `dev` |
 | 17 | 2026-09-08 | 优化系统概述模块 - 工业级硬件监控仪表盘 | `23b7ce5` | `dev` |
 | 16 | 2026-09-08 | macOS arm64 人脸识别算法包 (EdgeFace) 实现与代码精简 | `0df3c1e` | `dev` |
 | 15 | 2026-09-07 | RK3576 RKNN 通用目标检测算法包开发与硬件压测 | `9b92700` | `dev` |
