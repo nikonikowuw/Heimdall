@@ -414,3 +414,24 @@ Fixed configurable algorithm package upload limits end to end: centralized and v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: macOS arm64 人脸识别算法包 (EdgeFace) 实现与代码精简
+
+**Date**: 2026-09-08
+**Task**: macOS arm64 人脸识别算法包 (EdgeFace) 实现与代码精简
+**Branch**: `dev`
+
+### Summary
+
+实现基于 Apple Silicon CoreML/ANE 的人脸检测 (YOLOv5n-face) 与特征提取 (EdgeFace-S) 算法包，支持 112x112 ArcFace 五点仿射对齐、质量门控、独立 C ABI 单帧特征提取符号与 run_local 本地评测工具；完成全模块代码结构精简与门禁验证
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0df3c1e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
