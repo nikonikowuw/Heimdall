@@ -435,3 +435,24 @@ Fixed configurable algorithm package upload limits end to end: centralized and v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: 优化系统概述模块 - 工业级硬件监控仪表盘
+
+**Date**: 2026-09-08
+**Task**: 优化系统概述模块 - 工业级硬件监控仪表盘
+**Branch**: `dev`
+
+### Summary
+
+完成系统概述模块工业级升级与代码审查修复：重构多核CPU/内存/磁盘/网络/温度指标采集层并移至api crate消除架构反向依赖；对接RKNN与Ascend多核NPU监控并修复利用率计算与双重读取；修复macOS Mach内存泄漏与前端轮询竞态；前端新增Top 5进程排行与网络实时走势曲线，全链路门禁测试全绿并通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `23b7ce5` | (see git log) |
+
+### Status
+
+[OK] **Completed**
