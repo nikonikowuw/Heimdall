@@ -36,13 +36,9 @@ export function NetworkSettings(): React.ReactElement {
   const [conflictIp, setConflictIp] = useState('')
   const [conflictMac, setConflictMac] = useState<string | null>(null)
 
-  const {
-    pendingOp,
-    syncPendingOp,
-    trialError,
-    confirmTrial,
-    cancelTrial,
-  } = useNetworkTrial({ onReload: () => loadData() })
+  const { pendingOp, syncPendingOp, trialError, confirmTrial, cancelTrial } = useNetworkTrial({
+    onReload: () => loadData(),
+  })
 
   const loadData = useCallback(async () => {
     try {
@@ -139,11 +135,7 @@ export function NetworkSettings(): React.ReactElement {
 
       {/* 试运行防失联全屏横幅 */}
       {pendingOp && pendingOp.status === 'pending_confirm' && (
-        <NetworkTrialBanner
-          operation={pendingOp}
-          onConfirm={confirmTrial}
-          onCancel={cancelTrial}
-        />
+        <NetworkTrialBanner operation={pendingOp} onConfirm={confirmTrial} onCancel={cancelTrial} />
       )}
 
       {(error || trialError) && (

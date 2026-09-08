@@ -747,7 +747,6 @@ mod tests {
     async fn test_vpu_concurrency_limiter_and_graceful_fallback() {
         let temp_dir =
             std::env::temp_dir().join(format!("test_vpu_limit_{}", uuid::Uuid::new_v4().simple()));
-        // 配置全局仅允许 1 个并发硬件抓拍通道，借调超时 10ms
         let manager =
             PipelineManager::with_all_options(&temp_dir, SnapshotConfig::default(), 1, 10);
         let cam_id = "cam_vpu_limit_test";
@@ -776,8 +775,9 @@ mod tests {
             .await;
 
         // 触发抓拍：因配额已被占满且超过 10ms，自动自适应降级复用子码流，杜绝崩溃或死锁
+        let target = types::BoundingBox::new(0.1, 0.1, 0.3, 0.3);
         let snapshot = manager
-            .trigger_snapshot(cam_id, 1000, None)
+            .trigger_snapshot(cam_id, 1000, Some(target))
             .await
             .expect("配额超限自适应降级抓拍应成功");
 

@@ -3,10 +3,10 @@ name = "app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-default-run = "argus"
+default-run = "heimdall"
 
 [[bin]]
-name = "argus"
+name = "heimdall"
 path = "src/main.rs"
 
 [lints]

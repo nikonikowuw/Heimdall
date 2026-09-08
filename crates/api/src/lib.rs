@@ -1,6 +1,7 @@
 pub mod crypto;
 pub mod error;
 pub mod i18n;
+pub mod metrics;
 pub mod middleware;
 pub mod network_service;
 pub mod response;

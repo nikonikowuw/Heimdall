@@ -90,8 +90,8 @@ fn test_sandbox_subprocess_self_test() {
         return;
     };
     let candidates = [
-        Path::new("../../target/debug/argus"),
-        Path::new("target/debug/argus"),
+        Path::new("../../target/debug/heimdall"),
+        Path::new("target/debug/heimdall"),
     ];
     if let Some(bin) = candidates.into_iter().find(|p| p.exists()) {
         if let Ok(canon) = bin.canonicalize() {

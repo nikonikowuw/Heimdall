@@ -25,12 +25,13 @@ pub use event::{TOPIC_ALARM_STATUS_CHANGED, TOPIC_ALARM_TRIGGERED, TOPIC_CAMERA_
 pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
 pub use oplog::OperationLog;
 pub use system::{
-    EvictionReport, ForceSyncResponse, InterfaceCapabilities, IpConfig, IpMethod,
-    NetworkChangeOperation, NetworkDiagnosticRequest, NetworkDiagnosticResult,
-    NetworkDiagnosticType, NetworkInterface, NetworkInterfaceState, NetworkInterfaceType,
-    NetworkInterfacesResponse, NetworkManager, NetworkUpdateResult, OperationConfirmResult,
-    OperationStatus, OverwriteMode, SetTimeResponse, StorageConfig, StorageHealthLevel,
-    StorageStatus, SystemOverview, TimeConfig, TimeStatus,
+    CoreMetrics, CpuMetrics, DiskMetrics, EvictionReport, ForceSyncResponse, InterfaceCapabilities,
+    IpConfig, IpMethod, MemoryMetrics, NetworkChangeOperation, NetworkDiagnosticRequest,
+    NetworkDiagnosticResult, NetworkDiagnosticType, NetworkInterface, NetworkInterfaceMetrics,
+    NetworkInterfaceState, NetworkInterfaceType, NetworkInterfacesResponse, NetworkManager,
+    NetworkUpdateResult, NpuCoreMetrics, NpuMetrics, OperationConfirmResult, OperationStatus,
+    OverwriteMode, ProcessMetrics, SetTimeResponse, StorageConfig, StorageHealthLevel,
+    StorageStatus, SystemOverview, ThermalMetrics, ThermalZone, TimeConfig, TimeStatus,
 };
 pub use task::{
     AnalysisTask, DetectionLineDirection, DetectionPoint, DetectionRule, DetectionRuleRole,

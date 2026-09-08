@@ -10,6 +10,7 @@ pub struct SystemOverview {
     pub os_info: String,
     pub kernel_version: String,
     pub uptime_seconds: u64,
+    // === 保留旧字段以向后兼容 ===
     pub cpu_usage_percent: f64,
     pub memory_usage_percent: f64,
     pub memory_used_mb: u64,
@@ -23,6 +24,140 @@ pub struct SystemOverview {
     pub active_tasks: u32,
     pub today_alarms: u32,
     pub today_captures: u32,
+    // === 新增字段 ===
+    pub cpu: CpuMetrics,
+    pub memory: MemoryMetrics,
+    pub npu: Option<NpuMetrics>,
+    pub network: Vec<NetworkInterfaceMetrics>,
+    pub thermal: ThermalMetrics,
+    pub disk: DiskMetrics,
+}
+
+// ─── CPU 指标 ───
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuMetrics {
+    pub overall_percent: f64,
+    pub per_core: Vec<CoreMetrics>,
+    pub temperature: Option<f32>,
+    pub frequency_mhz: Option<u32>,
+    pub top_processes: Vec<ProcessMetrics>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreMetrics {
+    pub core_id: u32,
+    pub usage_percent: f64,
+    pub frequency_mhz: Option<u32>,
+    pub temperature: Option<f32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessMetrics {
+    pub pid: u32,
+    pub name: String,
+    pub cpu_percent: f64,
+    pub memory_mb: u64,
+}
+
+// ─── 内存指标 ───
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryMetrics {
+    pub total_mb: u64,
+    pub used_mb: u64,
+    pub available_mb: u64,
+    pub cached_mb: u64,
+    pub buffer_mb: u64,
+    pub swap_total_mb: u64,
+    pub swap_used_mb: u64,
+}
+
+// ─── NPU 指标 ───
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NpuMetrics {
+    pub device_type: String,
+    pub cores: Vec<NpuCoreMetrics>,
+    pub total_memory_mb: u64,
+    pub used_memory_mb: u64,
+    pub temperature: Option<f32>,
+    pub active_sessions: u32,
+    pub inference_count: u64,
+}
+
+impl NpuMetrics {
+    /// 所有核心的平均利用率百分比，无核心时返回 None
+    pub fn avg_utilization(&self) -> Option<f64> {
+        if self.cores.is_empty() {
+            None
+        } else {
+            let sum: f64 = self.cores.iter().map(|c| c.utilization_percent).sum();
+            Some(sum / self.cores.len() as f64)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NpuCoreMetrics {
+    pub core_id: u32,
+    pub utilization_percent: f64,
+    pub frequency_mhz: u32,
+    pub power_watts: Option<f32>,
+}
+
+// ─── 网络接口指标 ───
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkInterfaceMetrics {
+    pub name: String,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub rx_errors: u64,
+    pub tx_errors: u64,
+    pub rx_dropped: u64,
+    pub tx_dropped: u64,
+    pub speed_mbps: Option<u32>,
+    pub link_up: bool,
+}
+
+// ─── 温度指标 ───
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThermalMetrics {
+    pub zones: Vec<ThermalZone>,
+    pub throttle_active: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThermalZone {
+    pub name: String,
+    pub temperature: f32,
+    pub type_label: String,
+}
+
+// ─── 磁盘指标 ───
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskMetrics {
+    pub total_gb: f64,
+    pub used_gb: f64,
+    pub available_gb: f64,
+    pub inode_total: u64,
+    pub inode_used: u64,
+    pub inode_available: u64,
 }
 
 // ─── 存储配置 ───

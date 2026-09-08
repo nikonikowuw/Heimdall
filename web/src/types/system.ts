@@ -6,6 +6,7 @@ export interface SystemOverview {
   osInfo: string
   kernelVersion: string
   uptimeSeconds: number
+  // === 旧字段（向后兼容） ===
   cpuUsagePercent: number
   memoryUsagePercent: number
   memoryUsedMb: number
@@ -19,6 +20,108 @@ export interface SystemOverview {
   activeTasks: number
   todayAlarms: number
   todayCaptures: number
+  // === 新字段 ===
+  cpu: CpuMetrics
+  memory: MemoryMetrics
+  npu: NpuMetrics | null
+  network: NetworkInterfaceMetrics[]
+  thermal: ThermalMetrics
+  disk: DiskMetrics
+}
+
+// ─── CPU 指标 ───
+
+export interface CpuMetrics {
+  overallPercent: number
+  perCore: CoreMetrics[]
+  temperature: number | null
+  frequencyMhz: number | null
+  topProcesses: ProcessMetrics[]
+}
+
+export interface CoreMetrics {
+  coreId: number
+  usagePercent: number
+  frequencyMhz: number | null
+  temperature: number | null
+}
+
+export interface ProcessMetrics {
+  pid: number
+  name: string
+  cpuPercent: number
+  memoryMb: number
+}
+
+// ─── 内存指标 ───
+
+export interface MemoryMetrics {
+  totalMb: number
+  usedMb: number
+  availableMb: number
+  cachedMb: number
+  bufferMb: number
+  swapTotalMb: number
+  swapUsedMb: number
+}
+
+// ─── NPU 指标 ───
+
+export interface NpuMetrics {
+  deviceType: string
+  cores: NpuCoreMetrics[]
+  totalMemoryMb: number
+  usedMemoryMb: number
+  temperature: number | null
+  activeSessions: number
+  inferenceCount: number
+}
+
+export interface NpuCoreMetrics {
+  coreId: number
+  utilizationPercent: number
+  frequencyMhz: number
+  powerWatts: number | null
+}
+
+// ─── 网络接口指标 ───
+
+export interface NetworkInterfaceMetrics {
+  name: string
+  rxBytes: number
+  txBytes: number
+  rxPackets: number
+  txPackets: number
+  rxErrors: number
+  txErrors: number
+  rxDropped: number
+  txDropped: number
+  speedMbps: number | null
+  linkUp: boolean
+}
+
+// ─── 温度指标 ───
+
+export interface ThermalMetrics {
+  zones: ThermalZone[]
+  throttleActive: boolean
+}
+
+export interface ThermalZone {
+  name: string
+  temperature: number
+  typeLabel: string
+}
+
+// ─── 磁盘指标 ───
+
+export interface DiskMetrics {
+  totalGb: number
+  usedGb: number
+  availableGb: number
+  inodeTotal: number
+  inodeUsed: number
+  inodeAvailable: number
 }
 
 // ─── 存储配置 ───

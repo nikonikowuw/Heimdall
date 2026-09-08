@@ -40,7 +40,6 @@ RKNN_SSH_PORT     ?= 22
 # Cargo 构建参数
 # ──────────────────────────────────────────────────────────────────────────────
 CARGO       := cargo
-CARGO_FLAGS := --workspace
 RELEASE     := --release
 
 # 主程序交叉编译 feature 组合 (RKNN 平台)
@@ -66,9 +65,11 @@ help: ## 显示此帮助信息
 	@echo "  $(GREEN)本机构建 (macOS):$(RESET)"
 	@echo "    make build              构建主程序 (debug)"
 	@echo "    make build-release      构建主程序 (release)"
-	@echo "    make check              语法与类型检查"
+	@echo "    make check              语法检查 (主程序)"
+	@echo "    make check-all          语法检查 (整个 workspace)"
 	@echo "    make test               运行测试"
-	@echo "    make clippy             Clippy lint 检查"
+	@echo "    make clippy             Clippy lint (主程序)"
+	@echo "    make clippy-all         Clippy lint (整个 workspace)"
 	@echo "    make fmt                代码格式化"
 	@echo "    make fmt-check          格式化检查 (CI)"
 	@echo ""
@@ -123,23 +124,31 @@ ensure-web-dist:
 
 .PHONY: build
 build: ensure-web-dist ## 构建主程序 (debug, macOS)
-	$(CARGO) build $(CARGO_FLAGS)
+	$(CARGO) build -p app
 
 .PHONY: build-release
 build-release: ensure-web-dist ## 构建主程序 (release, macOS)
-	$(CARGO) build $(CARGO_FLAGS) $(RELEASE)
+	$(CARGO) build -p app $(RELEASE)
 
 .PHONY: check
-check: ## 语法与类型检查
-	$(CARGO) check $(CARGO_FLAGS)
+check: ## 语法与类型检查 (主程序)
+	$(CARGO) check -p app
+
+.PHONY: check-all
+check-all: ## 语法检查 (整个 workspace)
+	$(CARGO) check --workspace
 
 .PHONY: test
-test: ## 运行测试
-	$(CARGO) test $(CARGO_FLAGS)
+test: ## 运行测试 (主程序相关)
+	$(CARGO) test -p app -p types -p api -p infer
 
 .PHONY: clippy
-clippy: ## Clippy lint 检查
-	$(CARGO) clippy $(CARGO_FLAGS) -- -D warnings
+clippy: ## Clippy lint 检查 (主程序)
+	$(CARGO) clippy -p app -- -D warnings
+
+.PHONY: clippy-all
+clippy-all: ## Clippy lint 检查 (整个 workspace)
+	$(CARGO) clippy --workspace -- -D warnings
 
 .PHONY: fmt
 fmt: ## 代码格式化
@@ -159,7 +168,7 @@ rknn: ensure-web-dist verify-cross ## [交叉编译] 主程序 for RK3576 (relea
 	$(CARGO) zigbuild -p app $(RELEASE) \
 		--target $(RKNN_TARGET) \
 		--features $(RKNN_APP_FEATURES)
-	@echo -e "$(GREEN)[rknn]$(RESET) 产物: target/$(RKNN_TARGET)/release/argus"
+	@echo -e "$(GREEN)[rknn]$(RESET) 产物: target/$(RKNN_TARGET)/release/heimdall"
 
 .PHONY: rknn-check
 rknn-check: verify-cross ## [交叉编译] 主程序语法检查
@@ -172,9 +181,9 @@ rknn-deploy: rknn ## [交叉编译] 主程序部署到 RK3576 设备
 	@echo -e "$(CYAN)[rknn-deploy]$(RESET) 部署到 $(RKNN_HOST):$(RKNN_DEPLOY_PATH)..."
 	@ssh -p $(RKNN_SSH_PORT) $(RKNN_HOST) "mkdir -p $(RKNN_DEPLOY_PATH)/bin"
 	@scp -P $(RKNN_SSH_PORT) \
-		$(WORKSPACE_ROOT)/target/$(RKNN_TARGET)/release/argus \
+		$(WORKSPACE_ROOT)/target/$(RKNN_TARGET)/release/heimdall \
 		$(RKNN_HOST):$(RKNN_DEPLOY_PATH)/bin/
-	@echo -e "$(GREEN)[rknn-deploy]$(RESET) 部署完成: $(RKNN_HOST):$(RKNN_DEPLOY_PATH)/bin/argus"
+	@echo -e "$(GREEN)[rknn-deploy]$(RESET) 部署完成: $(RKNN_HOST):$(RKNN_DEPLOY_PATH)/bin/heimdall"
 
 # ============================================================================
 #  前端构建

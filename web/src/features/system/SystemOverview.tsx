@@ -1,4 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+/**
+ * 系统概述模块
+ *
+ * 工业级硬件监控仪表盘，显示系统资源状态、NPU 多核心状态、
+ * 网络流量、温度和存储使用情况。
+ */
+
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import { Server, Cpu, HardDrive, Camera, AlertTriangle, Activity, Clock } from 'lucide-react'
@@ -6,6 +13,15 @@ import { systemApi } from '../../lib/system-api'
 import { RefreshButton } from '../../components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import type { SystemOverview as SystemOverviewData } from '../../types/system'
+
+// 导入新的组件
+import { CpuHeatmap } from './components/CpuHeatmap'
+import { NpuOverview } from './components/NpuOverview'
+import { NetworkChart } from './components/NetworkChart'
+import { ThermalStatus } from './components/ThermalStatus'
+import { MemoryDetail } from './components/MemoryDetail'
+import { DiskDetail } from './components/DiskDetail'
+import { ProcessList } from './components/ProcessList'
 
 function formatUptime(
   seconds: number,
@@ -78,34 +94,102 @@ export function SystemOverview(): React.ReactElement {
   const { t } = useTranslation('system')
   const [data, setData] = useState<SystemOverviewData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const dataRef = useRef<SystemOverviewData | null>(null)
+  dataRef.current = data
+
   const loadData = useCallback(
-    async (signal?: AbortSignal) => {
+    async (isManual = false, signal?: AbortSignal) => {
       try {
-        setLoading(true)
-        setError(null)
+        if (isManual) {
+          setRefreshing(true)
+        }
         const overview = await systemApi.getOverview(signal)
-        if (!signal?.aborted) setData(overview)
+        if (!signal?.aborted) {
+          setData(overview)
+          setError(null)
+        }
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        if (!signal?.aborted)
-          setError(
-            err instanceof Error
-              ? err.message
-              : t('loadFailed', { defaultValue: 'Failed to load' }),
-          )
+        if (!signal?.aborted) {
+          // 仅在初始未载入或手动刷新失败时抛出错误横幅，避免后台静默采集闪烁打断
+          if (!dataRef.current || isManual) {
+            setError(
+              err instanceof Error
+                ? err.message
+                : t('loadFailed', { defaultValue: 'Failed to load' }),
+            )
+          }
+        }
       } finally {
-        if (!signal?.aborted) setLoading(false)
+        if (!signal?.aborted) {
+          setLoading(false)
+          setRefreshing(false)
+        }
       }
     },
     [t],
   )
 
+  // 定时 2s 轮询采集，并在页面隐藏时挂起节能（防重叠与防 AbortController 泄露）
   useEffect(() => {
-    const controller = new AbortController()
-    loadData(controller.signal)
-    return () => controller.abort()
+    let activeController: AbortController | null = null
+    let timerId: ReturnType<typeof setTimeout> | null = null
+    let isMounted = true
+
+    const scheduleNext = (delayMs: number) => {
+      if (!isMounted) return
+      if (timerId) clearTimeout(timerId)
+      timerId = setTimeout(executePoll, delayMs)
+    }
+
+    const executePoll = async () => {
+      if (!isMounted) return
+      if (document.visibilityState !== 'visible') {
+        scheduleNext(2000)
+        return
+      }
+
+      // 中断仍在飞行的上一次请求，防止网络波动堆积
+      if (activeController) {
+        activeController.abort()
+      }
+      const controller = new AbortController()
+      activeController = controller
+
+      try {
+        await loadData(false, controller.signal)
+      } finally {
+        if (isMounted) {
+          if (activeController === controller) {
+            activeController = null
+          }
+          scheduleNext(2000)
+        }
+      }
+    }
+
+    // 首次进入立即触发加载
+    executePoll()
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isMounted) {
+        executePoll()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      isMounted = false
+      if (timerId) clearTimeout(timerId)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      if (activeController) {
+        activeController.abort()
+        activeController = null
+      }
+    }
   }, [loadData])
 
   return (
@@ -117,19 +201,53 @@ export function SystemOverview(): React.ReactElement {
             {t('overview.title', { defaultValue: '系统概览' })}
           </h2>
           <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-            {t('overview.subtitle', { defaultValue: '设备运行状态与资源概览' })}
+            {t('overview.subtitle', {
+              defaultValue: '设备运行状态与资源概览',
+            })}
           </p>
         </div>
-        <RefreshButton onClick={() => loadData()} loading={loading} />
+        <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-[11px] text-[var(--text-muted)]">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--accent-green)] opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--accent-green)]" />
+            </span>
+            <span>{t('overview.live', { defaultValue: 'Live (2s)' })}</span>
+          </div>
+          <RefreshButton onClick={() => loadData(true)} loading={refreshing} />
+        </div>
       </div>
 
-      {error && <ErrorBanner message={error} onRetry={() => loadData()} />}
+      {error && <ErrorBanner message={error} onRetry={() => loadData(true)} />}
 
-      {/* Resource gauges */}
-      <SettingsSection title={t('overview.resources', { defaultValue: '资源状态' })}>
-        {loading && !data ? (
-          <LoadingSkeleton rows={4} />
-        ) : data ? (
+      {/* 首次加载时所有区块显示骨架屏 */}
+      {loading && !data && (
+        <>
+          <SettingsSection title={t('overview.resources', { defaultValue: '资源状态' })}>
+            <LoadingSkeleton rows={2} />
+          </SettingsSection>
+          <SettingsSection title={t('overview.cpuCores', { defaultValue: 'CPU 核心' })}>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-28 animate-pulse rounded-xl bg-[var(--bg-secondary)]" />
+              ))}
+            </div>
+          </SettingsSection>
+          <SettingsSection title={t('overview.memoryDetail', { defaultValue: '内存详情' })}>
+            <LoadingSkeleton rows={3} />
+          </SettingsSection>
+          <SettingsSection title={t('overview.network', { defaultValue: '网络流量' })}>
+            <LoadingSkeleton rows={2} />
+          </SettingsSection>
+          <SettingsSection title={t('overview.diskDetail', { defaultValue: '磁盘详情' })}>
+            <LoadingSkeleton rows={2} />
+          </SettingsSection>
+        </>
+      )}
+
+      {/* 数据就绪后显示实际内容 */}
+      {data && (
+        <SettingsSection title={t('overview.resources', { defaultValue: '资源状态' })}>
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <GaugeCard icon={Cpu} label="CPU" value={data.cpuUsagePercent} />
             <GaugeCard
@@ -148,8 +266,57 @@ export function SystemOverview(): React.ReactElement {
               detail={`${data.diskUsedGb}GB / ${data.diskTotalGb}GB`}
             />
           </div>
-        ) : null}
-      </SettingsSection>
+        </SettingsSection>
+      )}
+
+      {/* CPU 核心热力图 - 新增 */}
+      {data && data.cpu.perCore.length > 0 && (
+        <SettingsSection title={t('overview.cpuCores', { defaultValue: 'CPU 核心' })}>
+          <CpuHeatmap cores={data.cpu.perCore} />
+        </SettingsSection>
+      )}
+
+      {/* Top 5 进程资源消耗 - 新增 */}
+      {data && data.cpu.topProcesses && data.cpu.topProcesses.length > 0 && (
+        <SettingsSection title={t('overview.topProcesses', { defaultValue: '进程资源消耗排行' })}>
+          <ProcessList processes={data.cpu.topProcesses} />
+        </SettingsSection>
+      )}
+
+      {/* NPU 多核心概览 - 新增 */}
+      {data && data.npu && (
+        <SettingsSection title={t('overview.npu', { defaultValue: 'NPU 状态' })}>
+          <NpuOverview npu={data.npu} />
+        </SettingsSection>
+      )}
+
+      {/* 内存详细统计 - 新增 */}
+      {data && (
+        <SettingsSection title={t('overview.memoryDetail', { defaultValue: '内存详情' })}>
+          <MemoryDetail memory={data.memory} />
+        </SettingsSection>
+      )}
+
+      {/* 网络流量 - 新增 */}
+      {data && data.network.length > 0 && (
+        <SettingsSection title={t('overview.network', { defaultValue: '网络流量' })}>
+          <NetworkChart interfaces={data.network} />
+        </SettingsSection>
+      )}
+
+      {/* 温度状态 - 新增 */}
+      {data && data.thermal.zones.length > 0 && (
+        <SettingsSection title={t('overview.thermal', { defaultValue: '温度状态' })}>
+          <ThermalStatus thermal={data.thermal} />
+        </SettingsSection>
+      )}
+
+      {/* 磁盘详细统计 - 新增 */}
+      {data && (
+        <SettingsSection title={t('overview.diskDetail', { defaultValue: '磁盘详情' })}>
+          <DiskDetail disk={data.disk} />
+        </SettingsSection>
+      )}
 
       {/* Device info + Business status side by side */}
       <div className="grid gap-5 lg:grid-cols-2">

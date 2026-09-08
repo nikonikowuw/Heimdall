@@ -125,8 +125,9 @@ async fn test_dual_stream_fallback_to_sub_stream() {
         .await;
 
     // 触发抓拍
+    let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
     let snapshot = manager
-        .trigger_snapshot(cam_id, 1741100010000, None)
+        .trigger_snapshot(cam_id, 1741100010000, Some(target))
         .await
         .expect("平滑降级抓拍应成功");
 
@@ -190,8 +191,9 @@ async fn test_large_gop_fast_mode_within_threshold() {
         .await;
 
     // 告警时标位于 1200ms，与 I 帧相位差 200ms (< 500ms 阈值)
+    let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
     let snapshot = manager
-        .trigger_snapshot(cam_id, 1200, None)
+        .trigger_snapshot(cam_id, 1200, Some(target))
         .await
         .expect("极速模式单帧解码抓拍应成功");
 
@@ -256,8 +258,9 @@ async fn test_large_gop_sub_stream_reuse_on_large_gap() {
         .await;
 
     // 触发抓拍 (告警时标 3000ms)
+    let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
     let snapshot = manager
-        .trigger_snapshot(cam_id, 3000, None)
+        .trigger_snapshot(cam_id, 3000, Some(target))
         .await
         .expect("抓拍应成功");
 
@@ -320,8 +323,9 @@ async fn test_large_gop_adaptive_burst_decode() {
         .update_sub_stream_frame(cam_id, fallback_frame)
         .await;
 
+    let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
     let snapshot = manager
-        .trigger_snapshot(cam_id, 1600, None)
+        .trigger_snapshot(cam_id, 1600, Some(target))
         .await
         .expect("自适应追帧解码应成功");
 
@@ -384,8 +388,9 @@ async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
         .update_sub_stream_frame(cam_id, fallback_frame)
         .await;
 
+    let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
     let snapshot = manager
-        .trigger_snapshot(cam_id, 2200, None)
+        .trigger_snapshot(cam_id, 2200, Some(target))
         .await
         .expect("抓拍应平滑回退成功");
 
@@ -448,8 +453,9 @@ async fn test_large_gop_burst_timeout_budget_fuse() {
         .update_sub_stream_frame(cam_id, fallback_frame)
         .await;
 
+    let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
     let snapshot = manager
-        .trigger_snapshot(cam_id, 1600, None)
+        .trigger_snapshot(cam_id, 1600, Some(target))
         .await
         .expect("熔断抓拍应成功");
 

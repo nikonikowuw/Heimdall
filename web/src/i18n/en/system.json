@@ -16,6 +16,8 @@
   },
   "overview": {
     "title": "System Overview",
+    "subtitle": "Device runtime status and resource overview",
+    "live": "Live (2s)",
     "deviceInfo": "Device Info",
     "version": "Software Version",
     "model": "Device Model",
@@ -25,15 +27,91 @@
     "days": "d",
     "hours": "h",
     "mins": "m",
-    "resources": "Resources",
+    "resources": "Resource Status",
+    "cpuCores": "CPU Cores",
+    "topProcesses": "Top Resource Consumers",
     "memory": "Memory",
+    "memoryDetail": "Memory Details",
+    "npu": "NPU Status",
+    "network": "Network Traffic",
+    "thermal": "Temperature",
     "disk": "Disk",
+    "diskDetail": "Disk Details",
     "inode": "Inode Available",
     "business": "Business Status",
     "activeCameras": "Active Cameras",
     "activeTasks": "Active Tasks",
     "todayAlarms": "Today Alarms",
     "todayCaptures": "Today Captures"
+  },
+  "cpu": {
+    "core": "Core {{id}}",
+    "noData": "No CPU data available"
+  },
+  "process": {
+    "title": "Process Resource Ranking",
+    "topList": "Top Resource Consumers (Top 5)",
+    "pid": "PID",
+    "name": "Process Name",
+    "cpu": "CPU %",
+    "memory": "Memory",
+    "noData": "No active process metrics available"
+  },
+  "diskMetrics": {
+    "usage": "Disk Usage",
+    "total": "Total",
+    "used": "Used",
+    "available": "Available",
+    "usedAmount": "{{amount}} used",
+    "freeAmount": "{{amount}} free",
+    "inode": "Inode",
+    "inodeUsed": "{{count}} used",
+    "inodeFree": "{{count}} free"
+  },
+  "memoryMetrics": {
+    "usage": "Memory Usage",
+    "total": "Total",
+    "used": "Used",
+    "available": "Available",
+    "cached": "Cached (reclaimable)",
+    "buffer": "Buffer",
+    "swap": "Swap"
+  },
+  "npu": {
+    "balance": "Load Balance",
+    "avgUsage": "Avg Usage",
+    "memory": "Memory",
+    "temperature": "Temperature",
+    "sessions": "Sessions",
+    "inferences": "Inferences",
+    "noData": "No NPU data available",
+    "core": "Core {{id}}",
+    "deviceTypes": {
+      "rk3588": "Rockchip RK3588 NPU (3-Core)",
+      "rk3576": "Rockchip RK3576 NPU (2-Core)",
+      "rk3568": "Rockchip RK3568 NPU",
+      "rknn": "Rockchip RKNN NPU",
+      "ascend": "Huawei Ascend NPU"
+    }
+  },
+  "thermal": {
+    "noData": "No temperature data available",
+    "throttling": "Thermal throttling active - Performance may be reduced",
+    "highest": "Highest temperature",
+    "levels": {
+      "critical": "Critical",
+      "hot": "Hot",
+      "warm": "Warm",
+      "normal": "Normal"
+    },
+    "types": {
+      "cpu": "CPU",
+      "npu": "NPU",
+      "ddr": "DDR",
+      "gpu": "GPU",
+      "board": "Board",
+      "other": "Other"
+    }
   },
   "account": {
     "title": "Account & Security",
@@ -45,6 +123,14 @@
   },
   "network": {
     "title": "Network / Service",
+    "rx": "RX (Receive)",
+    "tx": "TX (Send)",
+    "collectingTrend": "Collecting real-time curve...",
+    "trendWindow": "Live 30s Trend",
+    "noData": "No network interfaces available",
+    "pkts": "pkts",
+    "err": "err",
+    "drop": "drop",
     "interfaces": "Network Interfaces",
     "unmanaged": "Unmanaged",
     "management": "Management",

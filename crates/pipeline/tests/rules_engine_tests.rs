@@ -170,6 +170,7 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
     let cleaner = StorageCleaner::new(StorageCleanerConfig {
         evidence_dir: temp_evidence_dir.clone(),
         min_free_ratio: 0.99, // 触发淘汰
+        emergency_free_ratio: 0.01,
         batch_delete_size: 10,
         ..Default::default()
     });

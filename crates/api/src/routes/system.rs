@@ -1,10 +1,13 @@
 use axum::{extract::State, Json};
 
+use std::collections::HashSet;
+
 use crate::error::ApiError;
+use crate::metrics::{
+    CpuCollector, DiskCollector, MemoryCollector, NetworkCollector, ThermalCollector,
+};
 use crate::response::ApiResponse;
 use crate::state::AppState;
-
-const GIB: f64 = (1024 * 1024 * 1024) as f64;
 
 #[inline]
 fn round_1dp(v: f64) -> f64 {
@@ -17,37 +20,23 @@ fn round_1dp(v: f64) -> f64 {
 pub async fn get_overview(
     State(state): State<AppState>,
 ) -> Result<ApiResponse<types::SystemOverview>, ApiError> {
-    // 阻塞 I/O 读取 /proc 与系统信息，不阻塞 tokio runtime
-    let raw = tokio::task::spawn_blocking(crate::system_info::read_system_info)
-        .await
-        .map_err(|e| ApiError::SystemInfo(format!("spawn_blocking 失败: {e}")))?;
-
-    // 磁盘使用率（若 storage_cleaner 已装配，以 evidence_dir 所在物理分区为准，保证与存储页一致）
-    let (disk_total_bytes, disk_available_bytes) = state
-        .storage_cleaner
-        .as_ref()
-        .and_then(|cleaner| cleaner.current_fs_stat().ok())
-        .map(|stat| (stat.total_bytes, stat.available_bytes))
-        .unwrap_or((raw.disk.total_bytes, raw.disk.available_bytes));
-
-    let disk_used_bytes = disk_total_bytes.saturating_sub(disk_available_bytes);
-    let disk_total_gb = disk_total_bytes as f64 / GIB;
-    let disk_used_gb = disk_used_bytes as f64 / GIB;
-    let disk_usage_percent = if disk_total_bytes > 0 {
-        (disk_used_bytes as f64 / disk_total_bytes as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    // 内存
-    let memory_total_mb = raw.memory.total_kb / 1024;
-    let memory_used_mb = (raw.memory.total_kb.saturating_sub(raw.memory.available_kb)) / 1024;
-    let memory_usage_percent = if raw.memory.total_kb > 0 {
-        ((raw.memory.total_kb - raw.memory.available_kb) as f64 / raw.memory.total_kb as f64)
-            * 100.0
-    } else {
-        0.0
-    };
+    // 并行采集所有系统指标
+    // 磁盘采集使用根路径；若 storage_cleaner 可用，后续以 cleaner 的 fs_stat 覆盖
+    let (
+        cpu_metrics,
+        memory_metrics,
+        disk_metrics,
+        network_metrics,
+        thermal_metrics,
+        top_processes,
+    ) = tokio::join!(
+        CpuCollector::collect(),
+        MemoryCollector::collect(),
+        DiskCollector::collect(),
+        NetworkCollector::collect_all(),
+        ThermalCollector::collect(),
+        CpuCollector::get_top_processes(5),
+    );
 
     // 业务统计（使用 count 聚合查询，不加载全部记录）
     let db = &state.db;
@@ -66,34 +55,165 @@ pub async fn get_overview(
         .await
         .unwrap_or(0) as u32;
 
-    // NPU 状态（平台相关，不可用时返回 null）
-    let npu_usage = detect_npu_usage();
+    // NPU 状态（平台相关，不可用时返回 None）
+    // detect_npu_metrics 内部涉及 sysfs 探测，必须在阻塞线程中执行
+    let npu_metrics = tokio::task::spawn_blocking(detect_npu_metrics)
+        .await
+        .unwrap_or(None);
+
+    // 获取基础设备与系统运行元数据（使用 spawn_blocking 避免阻塞，耗时 < 1ms，无冗余休眠）
+    let host_info = tokio::task::spawn_blocking(crate::system_info::read_host_metadata)
+        .await
+        .map_err(|e| ApiError::SystemInfo(format!("spawn_blocking 失败: {e}")))?;
+
+    // 收集器已直接产出 types:: API 类型，无需逐字段转换
+    // 仅对需要精度控制的字段应用 round_1dp
+    let mut cpu_overview = cpu_metrics;
+    cpu_overview.overall_percent = round_1dp(cpu_overview.overall_percent);
+    for core in &mut cpu_overview.per_core {
+        core.usage_percent = round_1dp(core.usage_percent);
+    }
+    let mut procs = top_processes;
+    for proc in &mut procs {
+        proc.cpu_percent = round_1dp(proc.cpu_percent);
+    }
+    cpu_overview.top_processes = procs;
+
+    // 磁盘：若 storage_cleaner 已装配，以 evidence_dir 所在物理分区为准（保证与存储页一致）；
+    // 否则使用 collector 采集的根分区数据作为 fallback
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let (disk_overview, disk_usage_percent) = state
+        .storage_cleaner
+        .as_ref()
+        .and_then(|cleaner| cleaner.current_fs_stat().ok())
+        .map(|stat| {
+            let used_bytes = stat.total_bytes.saturating_sub(stat.available_bytes);
+            let raw_pct = if stat.total_bytes > 0 {
+                (used_bytes as f64 / stat.total_bytes as f64) * 100.0
+            } else {
+                0.0
+            };
+            (
+                types::DiskMetrics {
+                    total_gb: round_1dp(stat.total_bytes as f64 / GIB),
+                    used_gb: round_1dp(used_bytes as f64 / GIB),
+                    available_gb: round_1dp(stat.available_bytes as f64 / GIB),
+                    inode_total: stat.total_inodes,
+                    inode_used: stat.total_inodes.saturating_sub(stat.available_inodes),
+                    inode_available: stat.available_inodes,
+                },
+                round_1dp(raw_pct),
+            )
+        })
+        .unwrap_or_else(|| {
+            let raw_pct = if disk_metrics.total_gb > 0.0 {
+                (disk_metrics.used_gb / disk_metrics.total_gb) * 100.0
+            } else {
+                0.0
+            };
+            (disk_metrics, round_1dp(raw_pct))
+        });
+
+    // 温度：对各 zone 温度应用精度控制
+    let mut thermal_overview = thermal_metrics;
+    for zone in &mut thermal_overview.zones {
+        zone.temperature = round_1dp(zone.temperature as f64) as f32;
+    }
+
+    // 计算旧字段的兼容值
+    let memory_usage_percent = if memory_metrics.total_mb > 0 {
+        (memory_metrics.used_mb as f64 / memory_metrics.total_mb as f64) * 100.0
+    } else {
+        0.0
+    };
 
     Ok(ApiResponse::success(types::SystemOverview {
         software_version: env!("CARGO_PKG_VERSION").to_string(),
-        device_model: raw.device_model,
-        os_info: raw.os_info,
-        kernel_version: raw.kernel_version,
-        uptime_seconds: raw.uptime as u64,
-        cpu_usage_percent: round_1dp(raw.cpu.usage_percent),
+        device_model: host_info.device_model,
+        os_info: host_info.os_info,
+        kernel_version: host_info.kernel_version,
+        uptime_seconds: host_info.uptime_seconds,
+        // 旧字段（向后兼容）
+        cpu_usage_percent: cpu_overview.overall_percent,
         memory_usage_percent: round_1dp(memory_usage_percent),
-        memory_used_mb,
-        memory_total_mb,
-        npu_usage_percent: npu_usage,
-        disk_usage_percent: round_1dp(disk_usage_percent),
-        disk_used_gb: round_1dp(disk_used_gb),
-        disk_total_gb: round_1dp(disk_total_gb),
+        memory_used_mb: memory_metrics.used_mb,
+        memory_total_mb: memory_metrics.total_mb,
+        npu_usage_percent: npu_metrics
+            .as_ref()
+            .and_then(|m| m.avg_utilization())
+            .map(round_1dp),
+        disk_usage_percent,
+        disk_used_gb: disk_overview.used_gb,
+        disk_total_gb: disk_overview.total_gb,
         active_cameras,
         total_cameras,
         active_tasks,
         today_alarms,
         today_captures,
+        // 新字段
+        cpu: cpu_overview,
+        memory: memory_metrics,
+        npu: npu_metrics,
+        network: network_metrics,
+        thermal: thermal_overview,
+        disk: disk_overview,
     }))
 }
 
-/// 检测 NPU 使用率（平台相关，不可用时返回 None）
-fn detect_npu_usage() -> Option<f64> {
-    None
+/// 检测 NPU 指标（统一调用 infer 跨平台接口，不可用时返回 None）
+///
+/// 合并所有 NPU 设备的核心列表，避免多设备场景下静默丢弃额外设备。
+/// 注意：此函数涉及 sysfs/驱动探测，调用方应通过 `spawn_blocking` 执行。
+fn detect_npu_metrics() -> Option<types::NpuMetrics> {
+    let monitor = infer::global_monitor();
+    let devices = monitor.collect_all();
+    if devices.is_empty() {
+        return None;
+    }
+
+    // 合并所有设备的核心列表，汇总内存、温度与推理次数
+    let mut all_cores = Vec::new();
+    let mut total_memory_mb = 0u64;
+    let mut used_memory_mb = 0u64;
+    let mut max_temperature: Option<f32> = None;
+    let mut total_sessions = 0u32;
+    let mut total_inference_count = 0u64;
+    let mut device_type_set: HashSet<String> = HashSet::new();
+
+    for device in &devices {
+        total_memory_mb += device.total_memory_mb;
+        used_memory_mb += device.used_memory_mb;
+        total_sessions += device.active_sessions;
+        total_inference_count += device.inference_count;
+        max_temperature = match (max_temperature, device.temperature) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (None, Some(b)) => Some(b),
+            (a, None) => a,
+        };
+        device_type_set.insert(device.device_type.to_string());
+        for c in &device.cores {
+            all_cores.push(types::NpuCoreMetrics {
+                core_id: c.core_id,
+                utilization_percent: round_1dp(c.utilization_percent),
+                frequency_mhz: c.frequency_mhz,
+                power_watts: c.power_watts,
+            });
+        }
+    }
+
+    let mut device_types: Vec<String> = device_type_set.into_iter().collect();
+    device_types.sort();
+    let device_type = device_types.join(", ");
+
+    Some(types::NpuMetrics {
+        device_type,
+        cores: all_cores,
+        total_memory_mb,
+        used_memory_mb,
+        temperature: max_temperature,
+        active_sessions: total_sessions,
+        inference_count: total_inference_count,
+    })
 }
 
 // ─── 网络配置 ───

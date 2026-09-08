@@ -16,6 +16,8 @@
   },
   "overview": {
     "title": "系统概览",
+    "subtitle": "设备运行状态与资源概览",
+    "live": "实时监控 (2s)",
     "deviceInfo": "设备信息",
     "version": "软件版本",
     "model": "设备型号",
@@ -26,8 +28,15 @@
     "hours": "小时",
     "mins": "分",
     "resources": "资源状态",
+    "cpuCores": "CPU 核心",
+    "topProcesses": "进程资源占用排行",
     "memory": "内存",
+    "memoryDetail": "内存详情",
+    "npu": "NPU 状态",
+    "network": "网络流量",
+    "thermal": "温度状态",
     "disk": "磁盘",
+    "diskDetail": "磁盘详情",
     "inode": "Inode 可用",
     "business": "业务状态",
     "activeCameras": "活跃摄像头",
@@ -35,16 +44,66 @@
     "todayAlarms": "今日告警",
     "todayCaptures": "今日抓拍"
   },
-  "account": {
-    "title": "账号与安全",
-    "currentAccount": "当前账号",
-    "username": "用户名",
-    "createdAt": "创建时间",
-    "updatedAt": "更新时间",
-    "changePassword": "修改密码"
+  "cpu": {
+    "core": "核心 {{id}}",
+    "noData": "暂无 CPU 数据"
+  },
+  "process": {
+    "title": "进程资源排行",
+    "topList": "高资源消耗进程 (Top 5)",
+    "pid": "PID",
+    "name": "进程名称",
+    "cpu": "CPU 占比",
+    "memory": "内存消耗",
+    "noData": "暂无活跃进程监控数据"
+  },
+  "diskMetrics": {
+    "usage": "磁盘使用率",
+    "total": "总容量",
+    "used": "已用",
+    "available": "可用",
+    "usedAmount": "{{amount}} 已用",
+    "freeAmount": "{{amount}} 剩余",
+    "inode": "Inode 节点",
+    "inodeUsed": "{{count}} 已用",
+    "inodeFree": "{{count}} 剩余"
+  },
+  "memoryMetrics": {
+    "usage": "内存使用率",
+    "total": "总内存",
+    "used": "已用内存",
+    "available": "可用内存",
+    "cached": "缓存 (可回收)",
+    "buffer": "缓冲区",
+    "swap": "交换分区"
+  },
+  "npu": {
+    "balance": "负载均衡度",
+    "avgUsage": "平均使用率",
+    "memory": "内存",
+    "temperature": "温度",
+    "sessions": "推理会话",
+    "inferences": "累计推理",
+    "noData": "暂无 NPU 数据",
+    "core": "核心 {{id}}",
+    "deviceTypes": {
+      "rk3588": "Rockchip RK3588 NPU (3核)",
+      "rk3576": "Rockchip RK3576 NPU (2核)",
+      "rk3568": "Rockchip RK3568 NPU",
+      "rknn": "Rockchip RKNN NPU",
+      "ascend": "华为昇腾 Ascend NPU"
+    }
   },
   "network": {
     "title": "网络/服务",
+    "rx": "RX (接收)",
+    "tx": "TX (发送)",
+    "collectingTrend": "正在收集实时曲线...",
+    "trendWindow": "实时走势 (近30秒)",
+    "noData": "暂无可用网卡数据",
+    "pkts": "包",
+    "err": "错误",
+    "drop": "丢弃",
     "interfaces": "网卡列表",
     "unmanaged": "无管理服务",
     "management": "管理网卡",
@@ -57,6 +116,33 @@
     "confirmApply": "确认并应用",
     "ipAddress": "IP 地址",
     "prefix": "前缀"
+  },
+  "thermal": {
+    "noData": "暂无温度传感器数据",
+    "throttling": "检测到温度降频保护，设备性能可能受限",
+    "highest": "最高温度",
+    "levels": {
+      "critical": "严重过热",
+      "hot": "偏高",
+      "warm": "温热",
+      "normal": "正常"
+    },
+    "types": {
+      "cpu": "CPU",
+      "npu": "NPU",
+      "ddr": "DDR 内存",
+      "gpu": "GPU",
+      "board": "主板",
+      "other": "其他"
+    }
+  },
+  "account": {
+    "title": "账号与安全",
+    "currentAccount": "当前账号",
+    "username": "用户名",
+    "createdAt": "创建时间",
+    "updatedAt": "更新时间",
+    "changePassword": "修改密码"
   },
   "storage": {
     "title": "存储与保留策略",
