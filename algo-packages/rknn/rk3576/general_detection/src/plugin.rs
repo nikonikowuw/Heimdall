@@ -1,18 +1,23 @@
 //! 通用目标检测算法插件实现 (RK3576 RKNN GeneralDetector)
 
-use std::path::Path;
-
-use algo_sdk::cv::engine::CvEngine;
-use algo_sdk::cv::platforms::rockchip::RgaCvEngine;
 use algo_sdk::emitter::ResultEmitter;
 use algo_sdk::error::AlgoError;
 use algo_sdk::frame::SafeFrame;
 use algo_sdk::plugin::{AlgoPlugin, InitContext};
 
-use crate::config::{ClassMask, InstanceConfig};
-use crate::postprocess::{parse_and_unmap_output, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH};
-use crate::rknn::{RknnRuntime, RknnSession};
+use crate::config::InstanceConfig;
 
+#[cfg(target_os = "linux")]
+use {
+    crate::config::ClassMask,
+    crate::postprocess::{parse_and_unmap_output, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH},
+    crate::rknn::{RknnRuntime, RknnSession},
+    algo_sdk::cv::engine::CvEngine,
+    algo_sdk::cv::platforms::rockchip::RgaCvEngine,
+    std::path::Path,
+};
+
+#[cfg(target_os = "linux")]
 /// 寻找算法包内有效的 RKNN 模型文件路径
 fn locate_model_file(package_root: &Path) -> Result<std::path::PathBuf, AlgoError> {
     // 1. 优先检测标准模型路径
@@ -37,6 +42,7 @@ fn locate_model_file(package_root: &Path) -> Result<std::path::PathBuf, AlgoErro
     })
 }
 
+#[cfg(target_os = "linux")]
 pub struct GeneralDetector {
     pub session: RknnSession,
     pub cv_engine: RgaCvEngine,
@@ -45,6 +51,7 @@ pub struct GeneralDetector {
     pub custom_label: Option<&'static str>,
 }
 
+#[cfg(target_os = "linux")]
 impl std::fmt::Debug for GeneralDetector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GeneralDetector")
@@ -54,6 +61,7 @@ impl std::fmt::Debug for GeneralDetector {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl AlgoPlugin for GeneralDetector {
     type Config = InstanceConfig;
 
@@ -175,5 +183,26 @@ impl AlgoPlugin for GeneralDetector {
         self.mask = ClassMask::from_classes(&config.target_classes);
         self.config = config;
         Ok(())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug)]
+pub struct GeneralDetector;
+
+#[cfg(not(target_os = "linux"))]
+impl AlgoPlugin for GeneralDetector {
+    type Config = InstanceConfig;
+
+    fn init(_ctx: &InitContext<'_>, _config: Self::Config) -> Result<Self, AlgoError> {
+        Err(AlgoError::NotImplemented)
+    }
+
+    fn process(
+        &mut self,
+        _frame: SafeFrame<'_>,
+        _emitter: &mut ResultEmitter<'_>,
+    ) -> Result<(), AlgoError> {
+        Err(AlgoError::NotImplemented)
     }
 }

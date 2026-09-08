@@ -22,8 +22,10 @@ use types::system::{
     NetworkManager, NetworkUpdateResult, OperationConfirmResult,
 };
 
-use backend::networkd::{list_interfaces_networkd, update_interface_networkd};
-use backend::nm::{list_interfaces_nm, update_interface_nm};
+use backend::networkd::update_interface_networkd;
+use backend::nm::update_interface_nm;
+#[cfg(not(target_os = "macos"))]
+use backend::{networkd::list_interfaces_networkd, nm::list_interfaces_nm};
 use operation::NetworkOperationManager;
 
 /// 全局事务与看门狗管理器

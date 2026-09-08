@@ -180,7 +180,7 @@ mod macos_run {
         Ok(())
     }
 
-    fn main() -> Result<(), Box<dyn std::error::Error>> {
+    pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let env_map = load_env_file(".env");
         let confidence = get_env_f32("CONF_THRESH", 0.5, &env_map);
         let iou = get_env_f32("IOU_THRESH", 0.45, &env_map);

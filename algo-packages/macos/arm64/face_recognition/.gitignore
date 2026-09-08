@@ -1,0 +1,5 @@
+.env
+result.jpg
+*.tar.gz
+*.tgz
+weights/

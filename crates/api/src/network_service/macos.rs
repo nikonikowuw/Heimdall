@@ -256,7 +256,7 @@ fn observed_ip_config(observed: &MacIpv4) -> IpConfig {
 #[cfg(target_os = "macos")]
 async fn get_macos_ipv4_config(service_name: &str, observed: &MacIpv4) -> IpConfig {
     let mut config = observed_ip_config(observed);
-    let info = run_command_c("networksetup", &["-getinfo", service_name])
+    let info = run_command_with_c_locale("networksetup", &["-getinfo", service_name])
         .await
         .unwrap_or_default();
 
@@ -281,7 +281,9 @@ async fn get_macos_ipv4_config(service_name: &str, observed: &MacIpv4) -> IpConf
         }
     }
 
-    if let Ok(dns_output) = run_command_c("networksetup", &["-getdnsservers", service_name]).await {
+    if let Ok(dns_output) =
+        run_command_with_c_locale("networksetup", &["-getdnsservers", service_name]).await
+    {
         config.dns = dns_output
             .lines()
             .map(str::trim)

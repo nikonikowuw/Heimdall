@@ -443,29 +443,41 @@ pub fn find_entry_library(package_dir: &Path, algorithm_id: &str) -> Result<Path
     } else {
         "so"
     };
+    let alt_ext = if ext == "dylib" { "so" } else { "dylib" };
 
-    // 优先尝试标准命名的动态库: lib{algorithm_id}.{ext}
-    let standard_name = format!("lib{algorithm_id}.{ext}");
-    let candidate = lib_dir.join(&standard_name);
-    if candidate.is_file() {
-        return Ok(candidate);
+    // 优先尝试宿主原生命名的动态库，再尝试异构目标平台的命名
+    for candidate_ext in [ext, alt_ext] {
+        let candidate = lib_dir.join(format!("lib{algorithm_id}.{candidate_ext}"));
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
     }
 
-    // 扫描 lib/ 目录下的第一个匹配后缀的动态库
+    // 扫描 lib/ 目录下的匹配文件（优先宿主原生扩展名，再回退异构扩展名）
     if let Ok(entries) = std::fs::read_dir(&lib_dir) {
+        let mut fallback = None;
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(e) = path.extension() {
                 if e == ext {
                     return Ok(path);
                 }
+                if e == alt_ext && fallback.is_none() {
+                    fallback = Some(path);
+                }
             }
+        }
+        if let Some(path) = fallback {
+            return Ok(path);
         }
     }
 
     Err(InferError::SandboxValidation {
         step: "定位动态库".to_string(),
-        reason: format!("在 {:?} 中未找到动态库文件 (*.{})", lib_dir, ext),
+        reason: format!(
+            "在 {:?} 中未找到动态库文件 (*.{} / *.{})",
+            lib_dir, ext, alt_ext
+        ),
     })
 }
 

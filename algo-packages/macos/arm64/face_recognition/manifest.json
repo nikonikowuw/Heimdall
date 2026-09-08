@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "algorithm_id": "face_recognition",
+  "version": "1.0.0",
+  "name": "EdgeFace Face Recognition",
+  "description": "YOLOv5n-face detection and Apache-2.0 EdgeFace-s embeddings on Apple Silicon CoreML",
+  "algorithm_type": "face_recognition",
+  "alarm_type_id": "face_recognize",
+  "platform_id": "macos-arm64-coreml",
+  "min_adapter_version": "1.0.0",
+  "runtime_constraints": {
+    "min_os_version": "14.0",
+    "requires_ane_capable_coreml": true
+  },
+  "models": {
+    "detector": "model/yolov5n_face.mlpackage",
+    "embedder": "model/edgeface_s.mlpackage",
+    "embedding_dimension": 512
+  },
+  "resource_profile": {
+    "min_free_memory_mb": 256,
+    "fps_tiers": [
+      { "fps": 5, "units": 80 },
+      { "fps": 15, "units": 200 },
+      { "fps": 30, "units": 400 }
+    ]
+  },
+  "self_test": {
+    "timeout_ms": 10000,
+    "input_mode": "test_image"
+  }
+}

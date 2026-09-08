@@ -38,7 +38,7 @@ extern "C" {
     fn CVPixelBufferRelease(pixel_buffer: *mut c_void);
 }
 
-#[cfg(all(target_os = "macos", feature = "testing-hardware"))]
+#[cfg(target_os = "macos")]
 const K_CVPIXEL_FORMAT_NV12: u32 = 0x34323076; // '420v'
 
 #[cfg(all(target_os = "linux", feature = "testing-hardware"))]

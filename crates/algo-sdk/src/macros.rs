@@ -302,7 +302,17 @@ pub fn validate_frame_caps(caps: &AvFrameCaps) -> Result<(), AlgoError> {
     Ok(())
 }
 
-/// 一行导出算法包 C ABI 虚函数表与符号
+/// 默认算法包 library 生命周期 hook；未声明专用 hook 的包保持原行为。
+#[doc(hidden)]
+pub fn noop_library_open(_package_root: &std::path::Path) -> Result<(), AlgoError> {
+    Ok(())
+}
+
+/// 默认算法包 library 生命周期 hook；未声明专用 hook 的包保持原行为。
+#[doc(hidden)]
+pub fn noop_library_close(_package_root: &std::path::Path) {}
+
+/// 一行导出算法包 C ABI 虚表与可选 library 生命周期 hook
 #[macro_export]
 macro_rules! export_algo {
     (
@@ -311,6 +321,25 @@ macro_rules! export_algo {
         version: $ver:expr,
         algo_type: $atype:expr,
         alarm_type_id: $alarm:expr
+    ) => {
+        $crate::export_algo!(
+            $plugin_ty,
+            algo_id: $id,
+            version: $ver,
+            algo_type: $atype,
+            alarm_type_id: $alarm,
+            library_open_hook: $crate::macros::noop_library_open,
+            library_close_hook: $crate::macros::noop_library_close
+        );
+    };
+    (
+        $plugin_ty:ty,
+        algo_id: $id:expr,
+        version: $ver:expr,
+        algo_type: $atype:expr,
+        alarm_type_id: $alarm:expr,
+        library_open_hook: $open_hook:path,
+        library_close_hook: $close_hook:path
     ) => {
         // ── 11 个 C ABI 回调入口（带 catch_unwind Panic 防火墙） ──
 
@@ -351,6 +380,11 @@ macro_rules! export_algo {
                     package_root: std::path::PathBuf::from(root_str),
                     platform_id: platform_str.to_string(),
                 });
+
+                if let Err(error) = $open_hook(&lib_ctx.package_root) {
+                    $crate::macros::set_last_error(error.to_string());
+                    return error.to_c_status();
+                }
 
                 // SAFETY: out 校验过非空
                 unsafe {
@@ -404,7 +438,11 @@ macro_rules! export_algo {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if !lib.is_null() {
                     // SAFETY: 回收 library_open 中通过 Box::into_raw 创建的内存
-                    let _ = unsafe { Box::from_raw(lib as *mut $crate::macros::LibraryContext) };
+                    let lib_ctx = unsafe {
+                        Box::from_raw(lib as *mut $crate::macros::LibraryContext)
+                    };
+                    $close_hook(&lib_ctx.package_root);
+                    drop(lib_ctx);
                 }
                 $crate::c_abi::AV_OK
             }))

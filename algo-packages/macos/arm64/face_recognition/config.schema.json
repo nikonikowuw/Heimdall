@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "EdgeFace 人脸识别配置",
+  "description": "人脸检测置信度、最小尺寸和质量门控阈值",
+  "additionalProperties": false,
+  "properties": {
+    "detection_confidence_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.5
+    },
+    "min_face_size": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30
+    },
+    "quality_thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.3
+        },
+        "max_yaw": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 180.0,
+          "default": 45.0
+        },
+        "max_pitch": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 90.0,
+          "default": 30.0
+        },
+        "max_blur": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.7
+        }
+      },
+      "default": {}
+    }
+  },
+  "required": []
+}

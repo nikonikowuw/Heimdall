@@ -3,7 +3,7 @@
 //! 负责将算法计算出的目标框序列化为 Heimdall 契约 JSON，
 //! 挂载全景大图/特写抓拍请求，并安全回调宿主 `on_result`。
 
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{c_void, CString};
 use std::marker::PhantomData;
 
 use serde::ser::SerializeSeq;
@@ -85,6 +85,51 @@ impl<'a> ResultEmitter<'a> {
         self.frame_id
     }
 
+    /// 发射指定类型的 JSON 结果。
+    ///
+    /// `json` 可以不带结尾 NUL；方法会在回调前构造临时 C 字符串，保证
+    /// `AvAlgoResult::json` 在宿主同步回调期间有效。
+    pub fn emit_json_result(
+        &mut self,
+        kind: u32,
+        json: &[u8],
+        images: &[AvAlgoImageReq],
+    ) -> Result<(), AlgoError> {
+        let json_len = u32::try_from(json.len()).map_err(|_| AlgoError::OutOfMemory)?;
+        let image_count = u32::try_from(images.len()).map_err(|_| AlgoError::OutOfMemory)?;
+        let c_json = CString::new(json).map_err(|e| AlgoError::Internal {
+            reason: format!("结果 JSON 包含非法空字符: {e}"),
+        })?;
+        let result = AvAlgoResult {
+            size: std::mem::size_of::<AvAlgoResult>() as u32,
+            api_version: AV_ALGO_API_VERSION,
+            kind,
+            reserved0: 0,
+            frame_id: self.frame_id,
+            json: c_json.as_ptr(),
+            json_len,
+            image_count,
+            images: if images.is_empty() {
+                std::ptr::null()
+            } else {
+                images.as_ptr()
+            },
+        };
+
+        if let Some(cb) = self.on_result {
+            // SAFETY: result、c_json 和 images 在同步回调期间保持有效；宿主不得保存裸指针。
+            unsafe {
+                cb(&result, self.user_data);
+            }
+        }
+        Ok(())
+    }
+
+    /// 发射人脸识别结果 JSON，不自动附加抓拍请求。
+    pub fn emit_recognition_json(&mut self, json: &[u8]) -> Result<(), AlgoError> {
+        self.emit_json_result(AV_RESULT_RECOGNITION, json, &[])
+    }
+
     /// 发射告警检测结果，并自动请求全景大图抓拍
     pub fn emit_detections(&mut self, boxes: &[NormBox]) -> Result<(), AlgoError> {
         let envelope = JsonAlarmEnvelope {
@@ -92,14 +137,8 @@ impl<'a> ResultEmitter<'a> {
             objects: BoxesSerializer(boxes),
         };
 
-        let mut json_bytes = serde_json::to_vec(&envelope).map_err(|e| AlgoError::Internal {
+        let json_bytes = serde_json::to_vec(&envelope).map_err(|e| AlgoError::Internal {
             reason: format!("序列化告警 JSON 失败: {e}"),
-        })?;
-        let json_len = json_bytes.len() as u32;
-        json_bytes.push(0);
-
-        let c_json = CStr::from_bytes_with_nul(&json_bytes).map_err(|e| AlgoError::Internal {
-            reason: format!("JSON 包含非法空字符: {e}"),
         })?;
 
         // 默认挂载全景大图抓拍请求 (x=0, y=0, w=1, h=1, purpose=1)
@@ -114,63 +153,21 @@ impl<'a> ResultEmitter<'a> {
             reserved0: 0,
         };
 
-        let images = [full_req];
-
-        let result = AvAlgoResult {
-            size: std::mem::size_of::<AvAlgoResult>() as u32,
-            api_version: AV_ALGO_API_VERSION,
-            kind: AV_RESULT_ALARM,
-            reserved0: 0,
-            frame_id: self.frame_id,
-            json: c_json.as_ptr(),
-            json_len,
-            image_count: images.len() as u32,
-            images: images.as_ptr(),
-        };
-
-        if let Some(cb) = self.on_result {
-            // SAFETY: result 在本栈帧内有效，c_json 与 images 在此调用期间存活
-            unsafe {
-                cb(&result, self.user_data);
-            }
-        }
-
-        Ok(())
+        self.emit_json_result(AV_RESULT_ALARM, &json_bytes, &[full_req])
     }
 
     /// 自检模式发射合格信号
     pub fn emit_self_test(&mut self, detection_count: usize) -> Result<(), AlgoError> {
-        let json_str = serde_json::json!({
+        let json_bytes = serde_json::to_vec(&serde_json::json!({
             "self_test": true,
             "detections_count": detection_count,
             "status": "passed"
-        })
-        .to_string();
-
-        let c_json = CString::new(json_str).map_err(|e| AlgoError::Internal {
+        }))
+        .map_err(|e| AlgoError::Internal {
             reason: e.to_string(),
         })?;
 
-        let result = AvAlgoResult {
-            size: std::mem::size_of::<AvAlgoResult>() as u32,
-            api_version: AV_ALGO_API_VERSION,
-            kind: AV_RESULT_SELF_TEST,
-            reserved0: 0,
-            frame_id: self.frame_id,
-            json: c_json.as_ptr(),
-            json_len: c_json.as_bytes().len() as u32,
-            image_count: 0,
-            images: std::ptr::null(),
-        };
-
-        if let Some(cb) = self.on_result {
-            // SAFETY: result 与 c_json 在调用期间有效
-            unsafe {
-                cb(&result, self.user_data);
-            }
-        }
-
-        Ok(())
+        self.emit_json_result(AV_RESULT_SELF_TEST, &json_bytes, &[])
     }
 }
 

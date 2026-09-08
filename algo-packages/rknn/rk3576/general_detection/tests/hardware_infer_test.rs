@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! RK3576 真实硬件前向推理与模型初始化集成测试
 
 use std::ffi::c_void;

@@ -895,6 +895,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "face-recognition"
+version = "1.0.0"
+dependencies = [
+ "algo-sdk",
+ "image",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
