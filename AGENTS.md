@@ -1,22 +1,21 @@
 # AGENTS.md
 
-Heimdall 仓库级协作入口，适用于 AI 智能体与工程师。本文只保留跨层、不可妥协的规则；分层实现细节以 `.trellis/spec/` 为准。
+Heimdall 仓库级协作入口，适用于 AI 智能体与工程师。本文只保留跨层、不可妥协的规则；分层实现细节以 `docs/nuwa/` 为准。
 
 ## 规范入口
 
 开始工作前：
 
-1. 阅读 `.trellis/workflow.md`，确认当前 Trellis 阶段、活动任务和必须完成的步骤。
-2. 修改代码前阅读 `.trellis/spec/guides/index.md`，再按目标层阅读对应 spec index 及其 `Pre-Development Checklist` 指向的文件。
+1. 修改代码前阅读 [Nuwa 全局指南索引](docs/nuwa/guides/index.md)，再按目标层阅读对应 spec index 及其 `Pre-Development Checklist` 指向的文件。
+2. 了解项目全貌可阅读 [Nuwa 架构总览与规范导航](docs/nuwa/README.md)。
 3. 修改跨层数据或接口时，同时阅读跨层指南和相关 API/类型规范。
-4. 发现 spec 与实际代码或硬件行为不一致时，先以可验证事实为准，记录差异；完成后通过 spec 更新流程补回约定。
+4. 发现 spec 与实际代码或硬件行为不一致时，先以可验证事实为准，记录差异；完成后更新 `docs/nuwa/` 对应规范补回约定。
 
 权威关系如下：
 
 - `AGENTS.md`：仓库级协作规则与不可违背的项目契约。
-- `.trellis/spec/`：后端、前端和跨层的详细设计、编码及质量规范。
-- `.trellis/tasks/`：当前任务的需求、设计、执行计划和验证记录。
-- Trellis 托管区：仅通过 Trellis 更新机制维护，不手工修改。
+- `docs/nuwa/`：Nuwa（女娲）工程规范体系，包含后端、前端和跨层的详细设计、编码及质量规范。
+- `docs/`：项目评估、算法调研及历史设计方案。
 
 ## 工作方式
 
@@ -101,26 +100,3 @@ pnpm build
 ```
 
 测试应优先覆盖纯逻辑、边界转换、资源清理和用户可观察行为；修复 bug 时先建立可复现的失败测试。禁止提交 `dbg!`、`println!`、`console.log`、`todo!()`、`@ts-ignore` 或被关闭的 lint 规则。
-
-<!-- TRELLIS:START -->
-# Trellis Instructions
-
-These instructions are for AI assistants working in this project.
-
-This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
-
-- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
-- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
-- `.trellis/workspace/` — per-developer journals and session traces
-- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
-
-If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
-
-If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
-
-- `.agents/skills/` — reusable Trellis skills
-- `.codex/agents/` — optional custom subagents
-
-Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
-
-<!-- TRELLIS:END -->
