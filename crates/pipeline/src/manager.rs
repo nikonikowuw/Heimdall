@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::RwLock as TokioRwLock;
 
@@ -13,6 +13,9 @@ use types::{
 };
 
 use crate::error::PipelineError;
+use crate::events::{
+    PipelineAlarmEvent, PipelineAnalysisEvent, DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
+};
 use crate::pump::{PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig};
 use crate::roi::RoiAffineMapper;
 use crate::rules::{RuleEvaluator, TriggeredAlarm};
@@ -104,6 +107,9 @@ pub struct PipelineManager {
     snapshot_engine: Arc<SnapshotEngine>,
     snapshot_semaphore: Arc<tokio::sync::Semaphore>,
     permit_timeout_ms: u64,
+    analysis_event_tx: tokio::sync::broadcast::Sender<PipelineAnalysisEvent>,
+    pending_alarm_events: Arc<Mutex<VecDeque<PipelineAlarmEvent>>>,
+    dropped_pending_alarm_events: AtomicU64,
 }
 
 impl Default for PipelineManager {
@@ -141,6 +147,8 @@ impl PipelineManager {
         max_concurrent_decoders: usize,
         permit_timeout_ms: u64,
     ) -> Self {
+        let (analysis_event_tx, _) =
+            tokio::sync::broadcast::channel(DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY);
         Self {
             tasks: Arc::new(TokioRwLock::new(HashMap::new())),
             pipelines: Arc::new(TokioRwLock::new(HashMap::new())),
@@ -150,12 +158,75 @@ impl PipelineManager {
                 max_concurrent_decoders.max(1),
             )),
             permit_timeout_ms,
+            analysis_event_tx,
+            pending_alarm_events: Arc::new(Mutex::new(VecDeque::with_capacity(
+                DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
+            ))),
+            dropped_pending_alarm_events: AtomicU64::new(0),
         }
     }
 
     /// 获取快照抓拍引擎句柄
     pub fn snapshot_engine(&self) -> &SnapshotEngine {
         &self.snapshot_engine
+    }
+
+    /// 订阅管线统一分析事件（实时航迹与规则告警）
+    pub fn subscribe_analysis_events(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<PipelineAnalysisEvent> {
+        self.analysis_event_tx.subscribe()
+    }
+
+    /// 向管线分析事件通道发布事件。
+    ///
+    /// Tracks 走实时 broadcast；Alarm 额外进入有界内存补偿缓冲（有界 1024 槽位），
+    /// 仅用于在下游持久化 Worker 启动前或广播 Lagged 时提供无损补偿读取，不包含任何数据库或外部持久化逻辑。
+    pub fn publish_analysis_event(&self, event: PipelineAnalysisEvent) {
+        if let PipelineAnalysisEvent::Alarm(alarm) = &event {
+            let mut pending = self
+                .pending_alarm_events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if pending.len() >= DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY {
+                pending.pop_front();
+                self.dropped_pending_alarm_events
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::error!(
+                    capacity = DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
+                    "待持久化告警队列已满，丢弃最旧告警并记录溢出计数"
+                );
+            }
+            pending.push_back((**alarm).clone());
+        }
+
+        let _ = self.analysis_event_tx.send(event);
+    }
+
+    /// 取出待持久化告警。返回值有界，调用方应在独立 Worker 中处理。
+    pub fn drain_pending_alarm_events(&self, max_events: usize) -> Vec<PipelineAlarmEvent> {
+        if max_events == 0 {
+            return Vec::new();
+        }
+        let mut pending = self
+            .pending_alarm_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let take = max_events.min(pending.len());
+        pending.drain(..take).collect()
+    }
+
+    /// 当前待持久化告警数量。
+    pub fn pending_alarm_event_count(&self) -> usize {
+        self.pending_alarm_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+
+    /// 累计因待持久化队列满而淘汰的告警数量。
+    pub fn dropped_pending_alarm_event_count(&self) -> u64 {
+        self.dropped_pending_alarm_events.load(Ordering::Relaxed)
     }
 
     /// 注册或获取某路摄像头的分析管线上下文
@@ -168,6 +239,40 @@ impl PipelineManager {
         let ctx = Arc::new(CameraPipelineContext::new(camera_id));
         pipelines.insert(camera_id.to_string(), ctx.clone());
         ctx
+    }
+
+    /// 获取某路摄像头的分析管线上下文（若不存在返回 None）
+    pub async fn get_pipeline_context(
+        &self,
+        camera_id: &str,
+    ) -> Option<Arc<CameraPipelineContext>> {
+        let pipelines = self.pipelines.read().await;
+        pipelines.get(camera_id).cloned()
+    }
+
+    /// 在没有任务、pump、AI 或预览引用时移除摄像头上下文。
+    pub async fn remove_pipeline_context_if_idle(&self, camera_id: &str) -> bool {
+        // 固定锁顺序为 tasks -> pumps -> pipelines，且持有只读守卫直到删除完成，
+        // 防止检查与删除之间并发挂载新任务或 pump。
+        let tasks = self.tasks.read().await;
+        if tasks.contains_key(camera_id) {
+            return false;
+        }
+        let pumps = self.pumps.read().await;
+        if pumps.contains_key(camera_id) {
+            return false;
+        }
+
+        let mut pipelines = self.pipelines.write().await;
+        let is_idle = pipelines
+            .get(camera_id)
+            .map(|ctx| !ctx.is_decoder_needed())
+            .unwrap_or(false);
+        if !is_idle {
+            return false;
+        }
+
+        pipelines.remove(camera_id).is_some()
     }
 
     /// 向摄像机主码流环形队列压入压缩 NALU 包
@@ -231,8 +336,31 @@ impl PipelineManager {
                     .clone()
             };
 
-            while let Ok(pkt) = packet_rx.recv().await {
-                ctx.ring_buffer.push(pkt);
+            let mut awaiting_keyframe = false;
+            loop {
+                match packet_rx.recv().await {
+                    Ok(pkt) => {
+                        if awaiting_keyframe && !pkt.is_keyframe {
+                            continue;
+                        }
+                        awaiting_keyframe = false;
+                        ctx.ring_buffer.push(pkt);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        // 丢包后旧 GOP 已不再可靠，清空并等待新的关键帧恢复证据链。
+                        ctx.ring_buffer.clear();
+                        awaiting_keyframe = true;
+                        tracing::warn!(
+                            camera_id = %camera_id,
+                            skipped,
+                            "主码流 RingBuffer attach 发生 Lagged，清空残缺 GOP 并等待新关键帧"
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::warn!(camera_id = %camera_id, "主码流广播已关闭，RingBuffer attach 退出");
+                        break;
+                    }
+                }
             }
         })
     }
@@ -313,8 +441,10 @@ impl PipelineManager {
         task: AnalysisTask,
     ) -> Result<(), PipelineError> {
         let rules = task.rules.clone();
-        let mut tasks = self.tasks.write().await;
-        tasks.insert(camera.camera_id.clone(), task);
+        {
+            let mut tasks = self.tasks.write().await;
+            tasks.insert(camera.camera_id.clone(), task);
+        }
 
         // 注册管线并激活按需解码
         self.set_ai_active(&camera.camera_id, true).await;
@@ -797,8 +927,6 @@ mod tests {
         use async_trait::async_trait;
         use infer::InferenceBackend;
         use media::decoders::MockDecoder;
-        use std::sync::atomic::AtomicBool;
-        use tokio::sync::broadcast;
         use types::TransportPolicy;
 
         #[derive(Debug)]
@@ -819,26 +947,10 @@ mod tests {
         let manager = Arc::new(PipelineManager::new());
         let cam_id = "cam_pump_lifecycle_test";
 
-        let (broadcast_tx, _) = broadcast::channel(16);
-        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-        let session = Arc::new(media::CameraStreamSession {
-            camera_id: cam_id.to_string(),
-            rtsp_url: "rtsp://dummy/sub".to_string(),
-            transport_policy: TransportPolicy::Tcp,
-            active_viewers: Arc::new(std::sync::atomic::AtomicUsize::new(1)),
-            ai_task_enabled: Arc::new(AtomicBool::new(true)),
-            keyframe_cache: Arc::new(tokio::sync::RwLock::new(
-                media::stream_hub::KeyframeCache::default(),
-            )),
-            broadcast_tx,
-            cancel_signal: Arc::new(AtomicBool::new(false)),
-            cancel_tx,
-            cancel_rx,
-            ingestor_running: Arc::new(AtomicBool::new(true)),
-            last_packet_time: Arc::new(std::sync::atomic::AtomicI64::new(1000)),
-            cooldown_cancel: Arc::new(tokio::sync::Mutex::new(None)),
-            consecutive_probe_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        });
+        let session =
+            media::CameraStreamSession::mock(cam_id, "rtsp://dummy/sub", TransportPolicy::Tcp);
+        session.active_viewers.store(1, Ordering::SeqCst);
+        session.ai_task_enabled.store(true, Ordering::SeqCst);
 
         let decoder = Box::new(MockDecoder::new(cam_id, CodecType::H264, 640, 360));
         let worker = infer::InferenceWorker::new(Arc::new(DummyInferBackend));
@@ -870,8 +982,6 @@ mod tests {
         use async_trait::async_trait;
         use infer::InferenceBackend;
         use media::decoders::MockDecoder;
-        use std::sync::atomic::AtomicBool;
-        use tokio::sync::broadcast;
         use types::TransportPolicy;
 
         #[derive(Debug)]
@@ -892,26 +1002,8 @@ mod tests {
         let manager = Arc::new(PipelineManager::new());
         for i in 1..=2 {
             let cam_id = format!("cam_all_{i}");
-            let (broadcast_tx, _) = broadcast::channel(16);
-            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            let session = Arc::new(media::CameraStreamSession {
-                camera_id: cam_id.clone(),
-                rtsp_url: "rtsp://dummy/sub".to_string(),
-                transport_policy: TransportPolicy::Tcp,
-                active_viewers: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-                ai_task_enabled: Arc::new(AtomicBool::new(false)),
-                keyframe_cache: Arc::new(tokio::sync::RwLock::new(
-                    media::stream_hub::KeyframeCache::default(),
-                )),
-                broadcast_tx,
-                cancel_signal: Arc::new(AtomicBool::new(false)),
-                cancel_tx,
-                cancel_rx,
-                ingestor_running: Arc::new(AtomicBool::new(true)),
-                last_packet_time: Arc::new(std::sync::atomic::AtomicI64::new(1000)),
-                cooldown_cancel: Arc::new(tokio::sync::Mutex::new(None)),
-                consecutive_probe_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            });
+            let session =
+                media::CameraStreamSession::mock(&cam_id, "rtsp://dummy/sub", TransportPolicy::Tcp);
 
             let decoder = Box::new(MockDecoder::new(&cam_id, CodecType::H264, 640, 360));
             let worker = infer::InferenceWorker::new(Arc::new(DummyInfer));
@@ -934,5 +1026,126 @@ mod tests {
 
         assert!(!manager.is_analysis_pump_running("cam_all_1").await);
         assert!(!manager.is_analysis_pump_running("cam_all_2").await);
+    }
+
+    #[tokio::test]
+    async fn test_attach_main_stream_lagged_handling() {
+        use std::time::Duration;
+
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_lagged_test";
+
+        // 创建较小容量广播通道以便测试 Lagged
+        let (tx, rx) = tokio::sync::broadcast::channel(2);
+        let attach_handle = manager.attach_main_stream(cam_id, rx);
+
+        let make_pkt = |pts: i64, key: bool| {
+            Arc::new(EncodedPacket {
+                pts_ms: pts,
+                is_keyframe: key,
+                codec: CodecType::H264,
+                payload: Bytes::from_static(b"\x00\x00\x00\x01\x65idr"),
+            })
+        };
+
+        // 1. 发送第 1 包并等待进入 RingBuffer
+        let _ = tx.send(make_pkt(1000, true));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let ctx = manager
+            .get_pipeline_context(cam_id)
+            .await
+            .expect("context must exist");
+        assert_eq!(ctx.ring_buffer.len(), 1);
+
+        // 2. 连续发送超过容量，制造 Lagged 溢出
+        for i in 1..=5 {
+            let _ = tx.send(make_pkt(1000 + i * 40, false));
+        }
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(ctx.ring_buffer.is_empty(), "关键帧恢复前不得写入残缺 GOP");
+
+        // 3. 再次发送新的完整关键帧，RingBuffer 在清空残缺 GOP 后应正常恢复接收
+        let _ = tx.send(make_pkt(2000, true));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(!ctx.ring_buffer.is_empty());
+        let newest = ctx.ring_buffer.newest_pts().expect("newest pts must exist");
+        assert_eq!(newest, 2000);
+
+        attach_handle.abort();
+        let _ = attach_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_pending_alarm_events_and_drain() {
+        use crate::events::{EvidenceStatus, PipelineAlarmEvent};
+        use crate::rules::TriggeredAlarm;
+        use types::DetectionRuleRole;
+
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_alarm_queue_test";
+
+        assert_eq!(manager.pending_alarm_event_count(), 0);
+
+        let dummy_alarm = TriggeredAlarm {
+            rule_index: 0,
+            role: DetectionRuleRole::Line,
+            tracked_object: types::TrackedObject {
+                track_id: 1,
+                class_id: 0,
+                label: "person".to_string(),
+                confidence: 0.9,
+                bbox: BoundingBox::new(0.1, 0.1, 0.4, 0.4),
+                trajectory: vec![],
+            },
+            occurred_at_ms: 1000,
+        };
+
+        let event = PipelineAlarmEvent {
+            event_id: "evt_123".to_string(),
+            camera_id: cam_id.to_string(),
+            alarm: dummy_alarm,
+            snapshot: None,
+            evidence_status: EvidenceStatus::Ready,
+            evidence_error: None,
+            timestamp: 1000,
+        };
+
+        manager.publish_analysis_event(PipelineAnalysisEvent::Alarm(Box::new(event)));
+
+        assert_eq!(manager.pending_alarm_event_count(), 1);
+
+        let drained = manager.drain_pending_alarm_events(10);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].event_id, "evt_123");
+        assert_eq!(manager.pending_alarm_event_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_pipeline_context_if_idle() {
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_context_idle_test";
+
+        let _ctx = manager.get_or_create_context(cam_id).await;
+        assert!(manager.get_pipeline_context(cam_id).await.is_some());
+
+        // 初始状态下无 task、无 pump、无 AI、无预览，属于闲置状态，可成功回收
+        let removed = manager.remove_pipeline_context_if_idle(cam_id).await;
+        assert!(removed);
+        assert!(manager.get_pipeline_context(cam_id).await.is_none());
+
+        // 当开启 AI 时，不可移除
+        let _ctx = manager.get_or_create_context(cam_id).await;
+        manager.set_ai_active(cam_id, true).await;
+        let removed = manager.remove_pipeline_context_if_idle(cam_id).await;
+        assert!(!removed);
+        assert!(manager.get_pipeline_context(cam_id).await.is_some());
+
+        // 关闭 AI 后可移除
+        manager.set_ai_active(cam_id, false).await;
+        let removed = manager.remove_pipeline_context_if_idle(cam_id).await;
+        assert!(removed);
+        assert!(manager.get_pipeline_context(cam_id).await.is_none());
     }
 }

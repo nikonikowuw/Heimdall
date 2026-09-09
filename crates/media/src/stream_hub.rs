@@ -43,6 +43,11 @@ pub struct CameraStreamSession {
     pub transport_policy: TransportPolicy,
     pub active_viewers: Arc<AtomicUsize>,
     pub ai_task_enabled: Arc<AtomicBool>,
+    /// 由外部控制面持有的 AI 保活状态。
+    manual_ai_enabled: Arc<AtomicBool>,
+    /// 当前持有该物理 session 的分析 pump 数量。
+    /// `ai_task_enabled` 是兼容性的派生状态，不能被单个 pump 直接覆盖。
+    pub ai_task_refs: Arc<AtomicUsize>,
     pub keyframe_cache: Arc<RwLock<KeyframeCache>>,
     pub broadcast_tx: broadcast::Sender<Arc<EncodedPacket>>,
     pub cancel_signal: Arc<AtomicBool>,
@@ -55,11 +60,98 @@ pub struct CameraStreamSession {
 }
 
 impl CameraStreamSession {
+    fn refresh_ai_task_enabled(&self) {
+        let enabled = self.manual_ai_enabled.load(Ordering::SeqCst)
+            || self.ai_task_refs.load(Ordering::SeqCst) > 0;
+        self.ai_task_enabled.store(enabled, Ordering::SeqCst);
+    }
+
+    /// 获取一个分析 pump 的 AI 保活引用。
+    pub fn acquire_ai_task(&self) {
+        self.ai_task_refs.fetch_add(1, Ordering::SeqCst);
+        self.refresh_ai_task_enabled();
+    }
+
+    /// 释放一个分析 pump 的 AI 保活引用，并返回剩余引用数。
+    pub fn release_ai_task(&self) -> usize {
+        let previous = self
+            .ai_task_refs
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                Some(count.saturating_sub(1))
+            })
+            .unwrap_or(0);
+        let remaining = previous.saturating_sub(1);
+        self.refresh_ai_task_enabled();
+        remaining
+    }
+
+    /// 获取一个分析 pump 的 AI 保活租约（RAII 守卫）。
+    pub fn acquire_ai_task_lease(self: &Arc<Self>) -> AiTaskLease {
+        AiTaskLease::new(self.clone())
+    }
+
+    /// 当前分析 pump 保活引用数。
+    pub fn ai_task_ref_count(&self) -> usize {
+        self.ai_task_refs.load(Ordering::SeqCst)
+    }
+
     pub async fn cancel_cooldown(&self) {
         let mut guard = self.cooldown_cancel.lock().await;
         if let Some(handle) = guard.take() {
             handle.abort();
         }
+    }
+
+    /// 构造用于测试或离线注入的模拟流会话
+    pub fn mock(
+        stream_key: impl Into<String>,
+        rtsp_url: impl Into<String>,
+        transport_policy: TransportPolicy,
+    ) -> Arc<Self> {
+        let (broadcast_tx, _) = broadcast::channel(128);
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        Arc::new(Self {
+            camera_id: stream_key.into(),
+            rtsp_url: rtsp_url.into(),
+            transport_policy,
+            active_viewers: Arc::new(AtomicUsize::new(0)),
+            ai_task_enabled: Arc::new(AtomicBool::new(false)),
+            manual_ai_enabled: Arc::new(AtomicBool::new(false)),
+            ai_task_refs: Arc::new(AtomicUsize::new(0)),
+            keyframe_cache: Arc::new(RwLock::new(KeyframeCache::default())),
+            broadcast_tx,
+            cancel_signal: Arc::new(AtomicBool::new(false)),
+            cancel_tx,
+            cancel_rx,
+            ingestor_running: Arc::new(AtomicBool::new(false)),
+            last_packet_time: Arc::new(AtomicI64::new(0)),
+            cooldown_cancel: Arc::new(Mutex::new(None)),
+            consecutive_probe_failures: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+}
+
+/// 分析任务对流会话的 AI 保活租约（RAII 守卫）。
+/// 当 Lease 被 Drop 时自动释放引用计数，保证即使发生 Panic 或被取消也不会泄漏保活状态。
+#[derive(Debug)]
+pub struct AiTaskLease {
+    session: Arc<CameraStreamSession>,
+}
+
+impl AiTaskLease {
+    pub fn new(session: Arc<CameraStreamSession>) -> Self {
+        session.acquire_ai_task();
+        Self { session }
+    }
+
+    pub fn session(&self) -> &Arc<CameraStreamSession> {
+        &self.session
+    }
+}
+
+impl Drop for AiTaskLease {
+    fn drop(&mut self) {
+        self.session.release_ai_task();
     }
 }
 
@@ -149,6 +241,8 @@ impl StreamHub {
             transport_policy,
             active_viewers: Arc::new(AtomicUsize::new(0)),
             ai_task_enabled: Arc::new(AtomicBool::new(false)),
+            manual_ai_enabled: Arc::new(AtomicBool::new(false)),
+            ai_task_refs: Arc::new(AtomicUsize::new(0)),
             keyframe_cache: Arc::new(RwLock::new(KeyframeCache::default())),
             broadcast_tx,
             cancel_signal: Arc::new(AtomicBool::new(false)),
@@ -189,14 +283,17 @@ impl StreamHub {
             }
         }
 
-        // 检查受影响的物理流：若既无其他绑定设备，又无活跃观众，才真正销毁物理拉流会话
+        // 检查受影响的物理流：若既无其他绑定设备，又无活跃观众且无 AI 任务，才真正销毁物理拉流会话
         let mut map = self.sessions.write().await;
         let url_map = self.url_to_keys.read().await;
         for url in affected_urls {
             let still_bound = url_map.get(&url).map(|s| !s.is_empty()).unwrap_or(false);
             if !still_bound {
                 if let Some(session) = map.get(&url) {
-                    if session.active_viewers.load(Ordering::SeqCst) == 0 {
+                    if session.active_viewers.load(Ordering::SeqCst) == 0
+                        && session.ai_task_ref_count() == 0
+                        && !session.ai_task_enabled.load(Ordering::SeqCst)
+                    {
                         if let Some(s) = map.remove(&url) {
                             s.cancel_signal.store(true, Ordering::SeqCst);
                             let _ = s.cancel_tx.send(true);
@@ -289,7 +386,10 @@ impl StreamHub {
                     Err(actual) => current = actual,
                 }
             };
-            if new_val == 0 && !session.ai_task_enabled.load(Ordering::SeqCst) {
+            if new_val == 0
+                && !session.ai_task_enabled.load(Ordering::SeqCst)
+                && session.ai_task_ref_count() == 0
+            {
                 // 观众归零且 AI 未开启，启动 5 秒冷却挂起
                 Self::start_cooldown_timer(session.clone()).await;
             }
@@ -308,13 +408,19 @@ impl StreamHub {
             .get_or_create_session(stream_key, rtsp_url, transport_policy)
             .await;
 
-        session.ai_task_enabled.store(enabled, Ordering::SeqCst);
-
         if enabled {
+            session.manual_ai_enabled.store(true, Ordering::SeqCst);
+            session.refresh_ai_task_enabled();
             session.cancel_cooldown().await;
             Self::ensure_ingestor_started(&session);
-        } else if session.active_viewers.load(Ordering::SeqCst) == 0 {
-            Self::start_cooldown_timer(session.clone()).await;
+        } else {
+            session.manual_ai_enabled.store(false, Ordering::SeqCst);
+            session.refresh_ai_task_enabled();
+            if session.active_viewers.load(Ordering::SeqCst) == 0
+                && session.ai_task_ref_count() == 0
+            {
+                Self::start_cooldown_timer(session.clone()).await;
+            }
         }
     }
 
@@ -625,5 +731,57 @@ mod tests {
         // 退订 cam-b，总观众数归零
         hub.unsubscribe("cam-b:main").await;
         assert_eq!(session_a.active_viewers.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_stream_hub_ai_task_ref_counting_and_retention() {
+        let hub = StreamHub::new();
+        let url = "rtsp://127.0.0.1:8554/shared_sub";
+
+        let session_a = hub
+            .get_or_create_session("cam-1:sub", url, TransportPolicy::Tcp)
+            .await;
+        let session_b = hub
+            .get_or_create_session("cam-2:sub", url, TransportPolicy::Tcp)
+            .await;
+        assert!(Arc::ptr_eq(&session_a, &session_b));
+
+        // 1. Pump A 挂载并获取 AI 引用
+        session_a.acquire_ai_task();
+        assert_eq!(session_a.ai_task_ref_count(), 1);
+        assert!(session_a.ai_task_enabled.load(Ordering::SeqCst));
+
+        // 2. Pump B 挂载并获取 AI 引用
+        session_b.acquire_ai_task();
+        assert_eq!(session_a.ai_task_ref_count(), 2);
+
+        // 3. 外部尝试通过 set_ai_enabled 关闭 cam-1 的 AI：由于 Pump 仍持有引用，不得提前关闭物理流 AI 保活
+        hub.set_ai_enabled("cam-1:sub", url, TransportPolicy::Tcp, false)
+            .await;
+        assert!(session_a.ai_task_enabled.load(Ordering::SeqCst));
+
+        // 4. 尝试移除 cam-1 会话：由于仍存在 AI 引用，物理拉流会话不得被销毁
+        hub.remove_session("cam-1").await;
+        assert!(!session_a.cancel_signal.load(Ordering::SeqCst));
+
+        // 5. Pump A 释放引用，剩余 1 个引用，AI 保持激活
+        let rem = session_a.release_ai_task();
+        assert_eq!(rem, 1);
+        assert!(session_a.ai_task_enabled.load(Ordering::SeqCst));
+
+        // 6. Pump B 释放引用，引用归零，AI 自动重置为 false
+        let rem = session_b.release_ai_task();
+        assert_eq!(rem, 0);
+        assert!(!session_a.ai_task_enabled.load(Ordering::SeqCst));
+
+        // 外部控制面保活与 pump lease 独立计数，lease 释放不得覆盖手工保活状态。
+        let lease = session_a.acquire_ai_task_lease();
+        hub.set_ai_enabled("cam-1:sub", url, TransportPolicy::Tcp, true)
+            .await;
+        drop(lease);
+        assert!(session_a.ai_task_enabled.load(Ordering::SeqCst));
+        hub.set_ai_enabled("cam-1:sub", url, TransportPolicy::Tcp, false)
+            .await;
+        assert!(!session_a.ai_task_enabled.load(Ordering::SeqCst));
     }
 }

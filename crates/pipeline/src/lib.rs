@@ -1,4 +1,6 @@
+pub mod coordinator;
 pub mod error;
+pub mod events;
 pub mod geometry;
 pub mod manager;
 pub mod motion_gate;
@@ -10,7 +12,15 @@ pub mod storage_cleaner;
 pub mod thermal;
 pub mod tracker;
 
+pub use coordinator::{
+    ActiveRuntimeEntry, CameraPipelineRuntimeInfo, CoordinatorError, StartCameraPipelineParams,
+    TaskRuntimeCoordinator,
+};
 pub use error::PipelineError;
+pub use events::{
+    EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineTrackEvent,
+    DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
+};
 pub use geometry::{check_line_crossing, point_in_polygon};
 pub use manager::{
     PipelineManager, DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS, DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,

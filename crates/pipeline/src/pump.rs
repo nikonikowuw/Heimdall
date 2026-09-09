@@ -9,16 +9,21 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use media::decoder::VideoDecoder;
 use media::stream_hub::CameraStreamSession;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use types::FrameRef;
+use types::{FrameRef, MotionGateConfig};
 
 use infer::InferenceWorkerHandle;
 
+use crate::events::{
+    EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineTrackEvent,
+};
 use crate::manager::PipelineManager;
+use crate::motion_gate::MotionGate;
 
 /// 子码流分析驱动泵配置
 #[derive(Debug, Clone)]
@@ -38,6 +43,58 @@ impl Default for SubStreamPumpConfig {
     }
 }
 
+/// pump 任务停止等待上限；超时后后台任务继续持有硬件句柄，避免控制面被拖死。
+pub const DEFAULT_PUMP_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(3000);
+
+struct BlockingDecoder {
+    inner: Option<Box<dyn VideoDecoder + Send>>,
+}
+
+impl BlockingDecoder {
+    fn new(inner: Box<dyn VideoDecoder + Send>) -> Self {
+        Self { inner: Some(inner) }
+    }
+
+    async fn decode_packet(
+        &mut self,
+        packet: &[u8],
+        pts: i64,
+    ) -> Result<Option<FrameRef>, media::error::MediaError> {
+        self.inner
+            .as_mut()
+            .expect("decoder owner must remain present")
+            .decode_packet(packet, pts)
+            .await
+    }
+
+    async fn flush(&mut self) -> Result<Vec<FrameRef>, media::error::MediaError> {
+        self.inner
+            .as_mut()
+            .expect("decoder owner must remain present")
+            .flush()
+            .await
+    }
+
+    async fn dispose(&mut self) {
+        if let Some(decoder) = self.inner.take() {
+            let _ = tokio::task::spawn_blocking(move || drop(decoder)).await;
+        }
+    }
+}
+
+impl Drop for BlockingDecoder {
+    fn drop(&mut self) {
+        let Some(decoder) = self.inner.take() else {
+            return;
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(move || drop(decoder));
+        } else {
+            drop(decoder);
+        }
+    }
+}
+
 /// 驱动泵运行统计指标
 #[derive(Debug, Default)]
 pub struct PumpMetrics {
@@ -49,6 +106,8 @@ pub struct PumpMetrics {
     pub frames_sampled: AtomicU64,
     /// 累计完成推理的帧数
     pub frames_inferred: AtomicU64,
+    /// 累计因运动门控跳过的推理帧数
+    pub frames_skipped_motion: AtomicU64,
     /// 累计因队列积压跳过的网络包数 (Lagged)
     pub frames_dropped_lagged: AtomicU64,
     /// 累计解码失败次数
@@ -203,25 +262,28 @@ impl SubStreamAnalysisPump {
     fn start_internal(
         camera_id: impl Into<String>,
         session: Arc<CameraStreamSession>,
-        mut decoder: Box<dyn VideoDecoder + Send>,
+        decoder: Box<dyn VideoDecoder + Send>,
         worker: InferenceWorkerHandle,
         managed_worker: Option<infer::InferenceWorker>,
         pipeline_mgr: Arc<PipelineManager>,
         config: SubStreamPumpConfig,
     ) -> Self {
+        let mut decoder = BlockingDecoder::new(decoder);
         let camera_id = camera_id.into();
         let cancel_token = CancellationToken::new();
         let decode_cancel = cancel_token.clone();
         let infer_cancel = cancel_token.clone();
         let cam_id = camera_id.clone();
         let cam_id_for_infer = camera_id.clone();
+        let target_fps = config.target_fps;
+        let motion_gate_enabled = config.motion_gate_enabled;
         let metrics = Arc::new(PumpMetrics::default());
         let metrics_clone = metrics.clone();
         let infer_metrics = metrics.clone();
         let pipeline_mgr_for_infer = pipeline_mgr.clone();
 
-        // 标记 Session 的 AI 任务激活状态（驱动 StreamHub 拉流保活）
-        session.ai_task_enabled.store(true, Ordering::SeqCst);
+        // 获取流会话的 RAII AI 保活租约，异常与正常关停均能保证引用回收
+        let ai_lease = session.acquire_ai_task_lease();
 
         let mut packet_rx = session.broadcast_tx.subscribe();
 
@@ -235,13 +297,16 @@ impl SubStreamAnalysisPump {
 
         // 协程 1: 专用解码主循环（维持参考帧链完整，快速轮转，决不被推理阻塞）
         let decode_handle = tokio::spawn(async move {
+            let _ai_lease = ai_lease;
             tracing::info!(
                 camera_id = %cam_id,
-                target_fps = config.target_fps,
+                target_fps = target_fps,
                 "子码流分析驱动泵解码循环已启动"
             );
 
-            let mut governor = AnalysisFpsGovernor::new(config.target_fps);
+            let mut governor = AnalysisFpsGovernor::new(target_fps);
+            let mut motion_gate =
+                motion_gate_enabled.then(|| MotionGate::new(MotionGateConfig::default()));
 
             loop {
                 tokio::select! {
@@ -281,7 +346,17 @@ impl SubStreamAnalysisPump {
                                 // 1. 实时更新管线保底快照候选帧 (sub_stream_fallback)
                                 pipeline_mgr.update_sub_stream_frame(&cam_id, frame.clone()).await;
 
-                                // 2. 检查当前帧是否命中抽帧节流采样
+                                // 2. 运动门控过滤：静止帧跳过推理，节省算力
+                                if let Some(gate) = motion_gate.as_mut() {
+                                    if gate.should_skip_frame(&frame) {
+                                        metrics_clone
+                                            .frames_skipped_motion
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        continue;
+                                    }
+                                }
+
+                                // 3. 检查当前帧是否命中抽帧节流采样
                                 if governor.should_sample(frame.timestamp) {
                                     metrics_clone.frames_sampled.fetch_add(1, Ordering::Relaxed);
 
@@ -310,12 +385,26 @@ impl SubStreamAnalysisPump {
                 }
             }
 
-            // 驱动泵退出前刷新解码器
-            let _ = decoder.flush().await;
+            // 驱动泵退出前在有界时间内刷新解码器，并把句柄析构放到 blocking 线程。
+            match tokio::time::timeout(
+                media::decoder::DEFAULT_THREAD_SHUTDOWN_TIMEOUT,
+                decoder.flush(),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(camera_id = %cam_id, error = %err, "子码流解码器 flush 失败")
+                }
+                Err(_) => tracing::error!(
+                    camera_id = %cam_id,
+                    timeout_ms = media::decoder::DEFAULT_THREAD_SHUTDOWN_TIMEOUT.as_millis() as u64,
+                    "子码流解码器 flush 超时，隔离硬件句柄"
+                ),
+            }
+            decoder.dispose().await;
 
-            // 恢复 Session 的 AI 状态
-            session.ai_task_enabled.store(false, Ordering::SeqCst);
-
+            // AI 保活租约随着 _ai_lease 变量在协程退出时自动释放 (Drop)，无泄露风险。
             tracing::info!(camera_id = %cam_id, "子码流分析驱动泵解码循环已完全停止并清理资源");
         });
 
@@ -342,15 +431,25 @@ impl SubStreamAnalysisPump {
                                     infer_metrics.frames_inferred.fetch_add(1, Ordering::Relaxed);
 
                                     // 驱动管线执行航迹跟踪与几何规则判定 (严格保序执行)
-                                    let (_tracked, alarms) = pipeline_mgr_for_infer
+                                    let (tracked, alarms) = pipeline_mgr_for_infer
                                         .process_detections(&cam_id_for_infer, detections, timestamp)
                                         .await;
+
+                                    // 广播航迹追踪事件；空列表也是有效的“清空旧框”更新。
+                                    pipeline_mgr_for_infer.publish_analysis_event(
+                                        PipelineAnalysisEvent::Tracks(PipelineTrackEvent {
+                                            camera_id: cam_id_for_infer.clone(),
+                                            timestamp,
+                                            tracks: tracked,
+                                        }),
+                                    );
 
                                     // 告警触发时，自动联动 RingBuffer / 保底帧执行靶向快照落地
                                     if !alarms.is_empty() {
                                         infer_metrics.alarms_triggered.fetch_add(alarms.len() as u64, Ordering::Relaxed);
                                         for alarm in alarms {
                                             let bbox = Some(alarm.tracked_object.bbox);
+                                            let event_id = uuid::Uuid::new_v4().to_string();
                                             match pipeline_mgr_for_infer
                                                 .trigger_snapshot(&cam_id_for_infer, timestamp, bbox)
                                                 .await
@@ -359,19 +458,47 @@ impl SubStreamAnalysisPump {
                                                     infer_metrics.snapshots_saved.fetch_add(1, Ordering::Relaxed);
                                                     tracing::info!(
                                                         camera_id = %cam_id_for_infer,
+                                                        event_id = %event_id,
                                                         target_pts = timestamp,
                                                         rule_index = alarm.rule_index,
                                                         path = %snapshot_res.image_rel_path,
                                                         is_fallback = snapshot_res.is_fallback_sub_stream,
                                                         "规则引擎告警触发高清快照落地成功"
                                                     );
+                                                    pipeline_mgr_for_infer.publish_analysis_event(
+                                                        PipelineAnalysisEvent::Alarm(Box::new(
+                                                            PipelineAlarmEvent {
+                                                                event_id,
+                                                                camera_id: cam_id_for_infer.clone(),
+                                                                alarm,
+                                                                snapshot: Some(snapshot_res),
+                                                                evidence_status: EvidenceStatus::Ready,
+                                                                evidence_error: None,
+                                                                timestamp,
+                                                            },
+                                                        )),
+                                                    );
                                                 }
                                                 Err(err) => {
                                                     tracing::error!(
                                                         camera_id = %cam_id_for_infer,
+                                                        event_id = %event_id,
                                                         target_pts = timestamp,
                                                         error = %err,
-                                                        "规则引擎告警触发快照捕获失败"
+                                                        "规则引擎告警证据捕获失败，保留告警事实"
+                                                    );
+                                                    pipeline_mgr_for_infer.publish_analysis_event(
+                                                        PipelineAnalysisEvent::Alarm(Box::new(
+                                                            PipelineAlarmEvent {
+                                                                event_id,
+                                                                camera_id: cam_id_for_infer.clone(),
+                                                                alarm,
+                                                                snapshot: None,
+                                                                evidence_status: EvidenceStatus::Failed,
+                                                                evidence_error: Some(err.to_string()),
+                                                                timestamp,
+                                                            },
+                                                        )),
                                                     );
                                                 }
                                             }
@@ -413,17 +540,55 @@ impl SubStreamAnalysisPump {
         *guard = new_worker;
     }
 
-    /// 停止驱动泵并等待任务终止与工作线程资源回收
+    /// 停止驱动泵并等待任务终止与工作线程资源回收。
+    /// 硬件线程回收在 blocking pool 中执行，async 控制面不会同步 join。
     pub async fn stop(&mut self) {
         self.cancel_token.cancel();
         if let Some(handle) = self.decode_handle.take() {
-            let _ = handle.await;
+            match tokio::time::timeout(DEFAULT_PUMP_SHUTDOWN_TIMEOUT, handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(camera_id = %self.camera_id, error = %err, "子码流解码任务异常退出")
+                }
+                Err(_) => tracing::error!(
+                    camera_id = %self.camera_id,
+                    timeout_ms = DEFAULT_PUMP_SHUTDOWN_TIMEOUT.as_millis() as u64,
+                    "子码流解码任务停止超时，保留后台句柄隔离"
+                ),
+            }
         }
         if let Some(handle) = self.infer_handle.take() {
-            let _ = handle.await;
+            match tokio::time::timeout(DEFAULT_PUMP_SHUTDOWN_TIMEOUT, handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(camera_id = %self.camera_id, error = %err, "子码流推理任务异常退出")
+                }
+                Err(_) => tracing::error!(
+                    camera_id = %self.camera_id,
+                    timeout_ms = DEFAULT_PUMP_SHUTDOWN_TIMEOUT.as_millis() as u64,
+                    "子码流推理任务停止超时，保留后台句柄隔离"
+                ),
+            }
         }
-        if let Some(mut worker) = self.managed_worker.take() {
-            worker.shutdown();
+        if let Some(worker) = self.managed_worker.take() {
+            let shutdown = tokio::task::spawn_blocking(move || {
+                let mut worker = worker;
+                worker.shutdown()
+            });
+            match tokio::time::timeout(DEFAULT_PUMP_SHUTDOWN_TIMEOUT, shutdown).await {
+                Ok(Ok(true)) => {}
+                Ok(Ok(false)) => {
+                    tracing::error!(camera_id = %self.camera_id, "推理 Worker 停止超时，已隔离线程")
+                }
+                Ok(Err(err)) => {
+                    tracing::error!(camera_id = %self.camera_id, error = %err, "推理 Worker 回收任务异常")
+                }
+                Err(_) => tracing::error!(
+                    camera_id = %self.camera_id,
+                    timeout_ms = DEFAULT_PUMP_SHUTDOWN_TIMEOUT.as_millis() as u64,
+                    "推理 Worker 回收任务等待超时"
+                ),
+            }
         }
     }
 
@@ -458,8 +623,16 @@ impl Drop for SubStreamAnalysisPump {
         if !self.cancel_token.is_cancelled() {
             self.cancel_token.cancel();
         }
-        if let Some(mut worker) = self.managed_worker.take() {
-            worker.shutdown();
+        if let Some(worker) = self.managed_worker.take() {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn_blocking(move || {
+                    let mut worker = worker;
+                    worker.shutdown();
+                });
+            } else {
+                let mut worker = worker;
+                worker.shutdown();
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 //! 子码流驱动泵与常驻推理工作线程端到端闭环集成测试
 #![allow(clippy::unwrap_used)]
 
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -63,24 +63,8 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
     manager.set_camera_rules(cam_id, rules).await;
 
     // 2. 初始化模拟子码流会话
-    let (broadcast_tx, _) = tokio::sync::broadcast::channel(32);
-    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    let session = Arc::new(CameraStreamSession {
-        camera_id: cam_id.to_string(),
-        rtsp_url: "rtsp://mock-sub/live".to_string(),
-        transport_policy: TransportPolicy::Tcp,
-        active_viewers: Arc::new(AtomicUsize::new(0)),
-        ai_task_enabled: Arc::new(AtomicBool::new(false)),
-        keyframe_cache: Arc::new(tokio::sync::RwLock::new(Default::default())),
-        broadcast_tx: broadcast_tx.clone(),
-        cancel_signal: Arc::new(AtomicBool::new(false)),
-        cancel_tx,
-        cancel_rx,
-        ingestor_running: Arc::new(AtomicBool::new(true)),
-        last_packet_time: Arc::new(AtomicI64::new(1000)),
-        cooldown_cancel: Arc::new(tokio::sync::Mutex::new(None)),
-        consecutive_probe_failures: Arc::new(AtomicUsize::new(0)),
-    });
+    let session = CameraStreamSession::mock(cam_id, "rtsp://mock-sub/live", TransportPolicy::Tcp);
+    let broadcast_tx = session.broadcast_tx.clone();
 
     // 3. 构建专用常驻推理线程与解码器
     let infer_backend = Arc::new(E2eMockInferBackend {
@@ -202,24 +186,7 @@ async fn test_sub_stream_pump_managed_worker_lifecycle() {
     let manager = Arc::new(PipelineManager::with_evidence_dir(&temp_dir));
     let cam_id = "cam_managed_worker_test";
 
-    let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
-    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    let session = Arc::new(CameraStreamSession {
-        camera_id: cam_id.to_string(),
-        rtsp_url: "rtsp://mock-sub/live".to_string(),
-        transport_policy: TransportPolicy::Tcp,
-        active_viewers: Arc::new(AtomicUsize::new(0)),
-        ai_task_enabled: Arc::new(AtomicBool::new(false)),
-        keyframe_cache: Arc::new(tokio::sync::RwLock::new(Default::default())),
-        broadcast_tx,
-        cancel_signal: Arc::new(AtomicBool::new(false)),
-        cancel_tx,
-        cancel_rx,
-        ingestor_running: Arc::new(AtomicBool::new(true)),
-        last_packet_time: Arc::new(AtomicI64::new(1000)),
-        cooldown_cancel: Arc::new(tokio::sync::Mutex::new(None)),
-        consecutive_probe_failures: Arc::new(AtomicUsize::new(0)),
-    });
+    let session = CameraStreamSession::mock(cam_id, "rtsp://mock-sub/live", TransportPolicy::Tcp);
 
     let infer_backend = Arc::new(E2eMockInferBackend {
         current_y: std::sync::Mutex::new(0.45),
@@ -356,24 +323,8 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
     let worker = InferenceWorker::new(backend);
 
     // 4. 初始化模拟子码流会话
-    let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
-    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    let session = Arc::new(CameraStreamSession {
-        camera_id: cam_id.to_string(),
-        rtsp_url: "rtsp://mock-real/live".to_string(),
-        transport_policy: TransportPolicy::Tcp,
-        active_viewers: Arc::new(AtomicUsize::new(0)),
-        ai_task_enabled: Arc::new(AtomicBool::new(false)),
-        keyframe_cache: Arc::new(tokio::sync::RwLock::new(Default::default())),
-        broadcast_tx: broadcast_tx.clone(),
-        cancel_signal: Arc::new(AtomicBool::new(false)),
-        cancel_tx,
-        cancel_rx,
-        ingestor_running: Arc::new(AtomicBool::new(true)),
-        last_packet_time: Arc::new(AtomicI64::new(1000)),
-        cooldown_cancel: Arc::new(tokio::sync::Mutex::new(None)),
-        consecutive_probe_failures: Arc::new(AtomicUsize::new(0)),
-    });
+    let session = CameraStreamSession::mock(cam_id, "rtsp://mock-real/live", TransportPolicy::Tcp);
+    let broadcast_tx = session.broadcast_tx.clone();
 
     // 5. 挂载子码流驱动泵并启动
     manager
