@@ -3,7 +3,7 @@
   "name": "task-algo-binding-contract",
   "title": "任务算法绑定数据契约与实例一致性",
   "description": "补齐任务算法绑定字段、显式运行状态、数据库迁移与任务/算法实例单一事实源。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

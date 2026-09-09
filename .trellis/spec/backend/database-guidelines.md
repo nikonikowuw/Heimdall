@@ -25,6 +25,13 @@
 - 查询封装在 Repository，`api` / `pipeline` 不直接使用 SeaORM DSL；列表必须有 `limit`。
 - 时间范围与摄像头过滤建立对应复合索引，例如 `(camera_id, timestamp)`；分页遵循 [API 契约](./api-guidelines.md#分页)。
 
+## 任务与算法实例原子同步
+
+- 摄像头分析任务遵循“一个摄像头任务对应一个主算法实例”的配置约束。
+- 任务与主算法实例的配置修改、状态同步与级联删除，统一收敛在 `TaskRepo::save_task_and_sync_instance`、`update_status` 和 `delete_task_and_instance` 内部的单一 SQLite 事务（`db.transaction`），禁止在 API 或业务层进行双写，杜绝产生孤儿实例或半更新记录。
+- 数据层入库强校验：`analysis_fps >= 0`、`algo_params_json` 必须为有效 JSON Object。提供 `algorithm_id` 时必须检验其在 `algorithms` 表的存在性，不存在时立即回滚并返回 `DbError::NotFound`，严禁写入无效算法。
+- `TaskStatus` 采用显式 `#[repr(i32)]` 固定持久化数值：`Stopped(0)`、`Starting(1)`、`Running(2)`、`Degraded(3)`、`Reconnecting(4)`、`Error(5)`，禁止依赖隐式 enum cast。
+
 ## 写入与存储保护
 
 - 高频写入经过有界通道攒批提交，例如 32 条或 1000ms 到期；满载丢旧并计数告警，禁止逐事件单事务刷盘。
