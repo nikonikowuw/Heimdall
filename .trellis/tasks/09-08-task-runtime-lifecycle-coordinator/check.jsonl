@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码质量、测试覆盖与断言完整性校验规范"}
+{"file": ".trellis/spec/backend/concurrency-guidelines.md", "reason": "并发模型、Tokio 协程与专有工作线程边界、超时与取消隔离规范"}
+{"file": ".trellis/spec/backend/media-pipeline.md", "reason": "媒体管线双流分工、RingBuffer 挂载与解码器生命周期规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误定义与反向回滚资源释放规范"}

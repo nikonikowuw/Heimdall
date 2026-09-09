@@ -3,7 +3,7 @@
   "name": "task-runtime-lifecycle-coordinator",
   "title": "分析任务运行时协调与双流资源生命周期",
   "description": "实现按摄像头管理的分析运行时，统一主码流RingBuffer、子码流pump、decoder、InferenceWorker和StreamHub订阅的启动、停止、回滚与幂等。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
