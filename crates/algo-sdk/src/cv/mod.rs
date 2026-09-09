@@ -10,7 +10,7 @@ pub mod layout;
 pub mod platforms;
 pub mod types;
 
-pub use buffer::CvBuffer;
+pub use buffer::{CvBuffer, DmaBufLayout};
 pub use engine::CvEngine;
 pub use layout::compute_letterbox_layout;
 pub use types::{LetterboxLayout, PixelFormat, PreprocessMode};

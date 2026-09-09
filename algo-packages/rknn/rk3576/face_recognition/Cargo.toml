@@ -21,7 +21,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 libc = { workspace = true }
 uuid = { workspace = true }
+sha2 = { workspace = true }
 
 [[bin]]
-name = "face_recognition_run_local"
+name = "face_recognition_rknn_run_local"
 path = "src/bin/run_local.rs"

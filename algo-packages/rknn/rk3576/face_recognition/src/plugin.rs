@@ -2,23 +2,19 @@
 
 use std::sync::Arc;
 
-use algo_sdk::cv::platforms::rockchip::RgaCvEngine;
-use algo_sdk::cv::{CvEngine, PreprocessMode};
+use algo_sdk::cv::{self, PreprocessMode};
 use algo_sdk::emitter::ResultEmitter;
 use algo_sdk::error::AlgoError;
 use algo_sdk::frame::SafeFrame;
 use algo_sdk::plugin::{AlgoPlugin, InitContext};
 
 use crate::config::InstanceConfig;
-use crate::detect::decode_yolov8_face;
 use crate::postprocess::{emit_face_detections, FaceDetection};
 use crate::quality::compute_quality;
-use crate::rknn::RknnInferenceOutput;
 use crate::SharedModels;
 
 pub struct FaceRecognizer {
     pub models: Arc<SharedModels>,
-    pub cv_engine: RgaCvEngine,
     pub config: InstanceConfig,
 }
 
@@ -38,12 +34,7 @@ impl AlgoPlugin for FaceRecognizer {
             .validate()
             .map_err(|reason| AlgoError::ConfigParse { reason })?;
         let models = crate::shared_models(ctx.package_root)?;
-        let cv_engine = RgaCvEngine::new();
-        Ok(Self {
-            models,
-            cv_engine,
-            config,
-        })
+        Ok(Self { models, config })
     }
 
     fn process(
@@ -51,10 +42,13 @@ impl AlgoPlugin for FaceRecognizer {
         frame: SafeFrame<'_>,
         emitter: &mut ResultEmitter<'_>,
     ) -> Result<(), AlgoError> {
-        // 1. 调用 CV 引擎进行等比缩放与 Letterbox 填充至 640×384
-        let (buf, mode) = self
-            .cv_engine
-            .letterbox(&frame, 640, 384, [114, 114, 114])?;
+        // 宏在当前线程作用域注入宿主的 CvEngine；不要绕过 image_ops 重新创建平台引擎。
+        let (buf, mode) = cv::letterbox(
+            &frame,
+            self.models.detector_width,
+            self.models.detector_height,
+            [114, 114, 114],
+        )?;
 
         let PreprocessMode::Letterbox(layout) = mode else {
             return Err(AlgoError::Preprocess {
@@ -62,51 +56,32 @@ impl AlgoPlugin for FaceRecognizer {
             });
         };
 
-        let Some(host_bytes) = buf.as_host_bytes() else {
+        let min_score = self.config.detection_confidence_threshold;
+        let faces = if buf.as_dma_buf_layout().is_some() {
+            self.models.worker.detect_dma_buf(buf, layout, min_score)?
+        } else if let Some(host_bytes) = buf.as_host_bytes() {
+            self.models
+                .worker
+                .detect_host(host_bytes.to_vec(), layout, min_score)?
+        } else {
             return Err(AlgoError::Preprocess {
-                reason: "无法获取 Letterbox 画布的主机内存字节切片".to_string(),
+                reason: "预处理输出既无有效 DMA-BUF 布局，也无 Host 内存视图".to_string(),
             });
         };
 
         let orig_w = frame.width();
-        let _orig_h = frame.height();
+        let orig_h = frame.height();
 
-        // 2. 检测推理
-        let detector = self
-            .models
-            .detector
-            .lock()
-            .map_err(|_| AlgoError::Internal {
-                reason: "RKNN 检测会话互斥锁中毒".to_string(),
-            })?;
-
-        let attrs: Vec<[u32; 4]> = detector
-            .output_attrs
-            .iter()
-            .map(|a| [a.dims[0], a.dims[1], a.dims[2], a.dims[3]])
-            .collect();
-
-        let min_score = self.config.detection_confidence_threshold;
-
-        let faces = detector.infer_with_host_bytes(host_bytes, |output| match output {
-            RknnInferenceOutput::Float32(float_views) => {
-                let decoded = decode_yolov8_face(float_views, &attrs, &layout, min_score, 0.45);
-                Ok(decoded)
-            }
-        })?;
-
-        // 释放 detector 锁
-        drop(detector);
-
-        // 3. 质量门控过滤
+        // 质量门控过滤
         let detections: Vec<FaceDetection> = faces
             .into_iter()
             .filter_map(|face| {
                 let face_width_pixels = face.bbox[2] * orig_w as f32;
+                let face_height_pixels = face.bbox[3] * orig_h as f32;
                 let quality = compute_quality(
                     &face.landmarks,
                     &face.landmark_scores,
-                    face_width_pixels,
+                    face_width_pixels.min(face_height_pixels),
                     &self.config.quality_thresholds,
                 );
                 if quality.accepted(&self.config.quality_thresholds, self.config.min_face_size) {

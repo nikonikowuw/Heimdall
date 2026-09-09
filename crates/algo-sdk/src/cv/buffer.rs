@@ -14,6 +14,9 @@ pub(crate) enum CvBufferKind {
     DmaBuf {
         fd: i32,
         close_fd: bool,
+        size: usize,
+        stride: [u32; 4],
+        h_stride: u32,
         _guard: Option<Box<dyn Any + Send>>,
     },
     /// Apple CoreVideo CVPixelBufferRef
@@ -38,6 +41,16 @@ pub(crate) enum CvBufferKind {
 
 // SAFETY: CvBufferKind 只在线程间转移所有权；底层句柄的跨线程约束由对应宿主/平台 lease 保证。
 unsafe impl Send for CvBufferKind {}
+
+/// DMA-BUF 的物理图像布局，供下游硬件绑定时校验容量和 stride。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DmaBufLayout {
+    pub fd: i32,
+    pub size: usize,
+    /// packed RGB 的 stride 以字节表示；多平面格式按 plane 保存字节 stride。
+    pub stride: [u32; 4],
+    pub h_stride: u32,
+}
 
 /// 抽象显存图像容器，通过 RAII 自动管理底层异构硬件显存资源
 pub struct CvBuffer {
@@ -72,11 +85,81 @@ impl CvBuffer {
         format: PixelFormat,
         guard: Option<Box<dyn Any + Send>>,
     ) -> Self {
+        let (stride, size) = match format {
+            PixelFormat::Nv12 => {
+                let stride = width;
+                let size = usize::try_from(stride)
+                    .ok()
+                    .and_then(|row| row.checked_mul(height as usize))
+                    .and_then(|luma| luma.checked_add(luma / 2))
+                    .unwrap_or(0);
+                ([stride, stride, 0, 0], size)
+            }
+            PixelFormat::I420 => {
+                let y_stride = width;
+                let chroma_stride = width.div_ceil(2);
+                let y_size = usize::try_from(y_stride)
+                    .ok()
+                    .and_then(|row| row.checked_mul(height as usize))
+                    .unwrap_or(0);
+                let chroma_size = usize::try_from(chroma_stride)
+                    .ok()
+                    .and_then(|row| row.checked_mul(usize::try_from(height.div_ceil(2)).ok()?))
+                    .unwrap_or(0);
+                let size = y_size
+                    .checked_add(chroma_size)
+                    .and_then(|total| total.checked_add(chroma_size))
+                    .unwrap_or(0);
+                ([y_stride, chroma_stride, chroma_stride, 0], size)
+            }
+            PixelFormat::Bgra => {
+                let stride = width.saturating_mul(4);
+                let size = usize::try_from(stride)
+                    .ok()
+                    .and_then(|row| row.checked_mul(height as usize))
+                    .unwrap_or(0);
+                ([stride, 0, 0, 0], size)
+            }
+            PixelFormat::Rgb24 => {
+                let stride = width.saturating_mul(3);
+                let size = usize::try_from(stride)
+                    .ok()
+                    .and_then(|row| row.checked_mul(height as usize))
+                    .unwrap_or(0);
+                ([stride, 0, 0, 0], size)
+            }
+            PixelFormat::Unknown(_) => {
+                let stride = width;
+                let size = usize::try_from(stride)
+                    .ok()
+                    .and_then(|row| row.checked_mul(height as usize))
+                    .unwrap_or(0);
+                ([stride, 0, 0, 0], size)
+            }
+        };
+        Self::from_dma_buf_with_layout(fd, width, height, format, size, stride, height, guard)
+    }
+
+    /// 从 DMA-BUF 构造带有真实物理布局的图像容器。
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_dma_buf_with_layout(
+        fd: i32,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        size: usize,
+        stride: [u32; 4],
+        h_stride: u32,
+        guard: Option<Box<dyn Any + Send>>,
+    ) -> Self {
         let close_fd = guard.is_none();
         Self {
             inner: CvBufferKind::DmaBuf {
                 fd,
                 close_fd,
+                size,
+                stride,
+                h_stride,
                 _guard: guard,
             },
             width,
@@ -164,18 +247,43 @@ impl CvBuffer {
         self.format
     }
 
-    /// 获取底层 DMA-BUF 文件描述符（供硬件零拷贝 NPU 会话使用）
-    pub fn as_dma_buf_fd(&self) -> Option<i32> {
+    /// 获取 DMA-BUF 的 fd、容量和物理 stride。
+    pub fn as_dma_buf_layout(&self) -> Option<DmaBufLayout> {
         match &self.inner {
-            CvBufferKind::DmaBuf { fd, .. } => Some(*fd),
+            CvBufferKind::DmaBuf {
+                fd,
+                size,
+                stride,
+                h_stride,
+                ..
+            } => Some(DmaBufLayout {
+                fd: *fd,
+                size: *size,
+                stride: *stride,
+                h_stride: *h_stride,
+            }),
             CvBufferKind::HostOps { view, .. }
                 if view.opaque_kind == AV_OPAQUE_DMABUF && !view.opaque.is_null() =>
             {
-                let fd = view.opaque as usize;
-                (fd <= i32::MAX as usize).then_some(fd as i32)
+                let fd = (view.opaque as usize).try_into().ok()?;
+                let stride = view.stride.map(|value| u32::try_from(value).unwrap_or(0));
+                let stride0 = usize::try_from(stride[0]).ok()?;
+                let h_stride = view.height;
+                let size = stride0.checked_mul(h_stride as usize)?;
+                Some(DmaBufLayout {
+                    fd,
+                    size,
+                    stride,
+                    h_stride,
+                })
             }
             _ => None,
         }
+    }
+
+    /// 获取底层 DMA-BUF 文件描述符（供兼容调用方使用）。
+    pub fn as_dma_buf_fd(&self) -> Option<i32> {
+        self.as_dma_buf_layout().map(|layout| layout.fd)
     }
 
     /// 获取宿主分配的完整图像视图，供需要 stride/offset 的平台推理会话使用。

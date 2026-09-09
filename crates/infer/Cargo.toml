@@ -25,7 +25,6 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 libloading = { workspace = true }
 image = { workspace = true }
-sha2 = { workspace = true }
 futures = "0.3"
 
 [dev-dependencies]

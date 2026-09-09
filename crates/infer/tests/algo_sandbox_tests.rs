@@ -210,18 +210,6 @@ async fn test_algo_instance_detect_with_real_frame() {
 }
 
 #[test]
-fn test_sha256_computation() {
-    let Some(manifest_path) =
-        resolve_path("algo-packages/macos-arm64/general_detection/manifest.json")
-    else {
-        return;
-    };
-
-    let hash = infer::sandbox::compute_file_sha256(&manifest_path).expect("计算 SHA256 失败");
-    assert_eq!(hash.len(), 64);
-}
-
-#[test]
 fn test_rknn_rk3576_package_structure_and_sandbox_guards() {
     let Some(pkg_path) = resolve_path("algo-packages/rknn/rk3576/general_detection") else {
         return;

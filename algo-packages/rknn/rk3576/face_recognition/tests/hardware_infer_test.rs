@@ -6,11 +6,7 @@
 use std::path::Path;
 
 use face_recognition::align::align_face;
-use face_recognition::detect::decode_yolov8_face;
-use face_recognition::rknn::RknnInferenceOutput;
-use face_recognition::{
-    cosine_similarity, normalize_embedding, prepare_detector_input, shared_models,
-};
+use face_recognition::{cosine_similarity, prepare_detector_input_for, shared_models};
 
 #[test]
 #[ignore = "需要物理 RK3576 NPU 硬件和 librknnrt.so 环境"]
@@ -47,25 +43,18 @@ fn test_rknn_hardware_face_detection_and_embedding() {
     assert!(orig_w > 0 && orig_h > 0);
 
     // 3. 预处理与检测推理
-    let (detector_rgb, layout) = prepare_detector_input(&image);
-    assert_eq!(detector_rgb.len(), (640 * 384 * 3) as usize);
+    let (detector_rgb, layout) =
+        prepare_detector_input_for(&image, models.detector_width, models.detector_height)
+            .expect("detector 预处理失败");
+    assert_eq!(
+        detector_rgb.len(),
+        (models.detector_width * models.detector_height * 3) as usize
+    );
 
-    let detector = models.detector.lock().expect("获取 detector 锁失败");
-    let attrs: Vec<[u32; 4]> = detector
-        .output_attrs
-        .iter()
-        .map(|a| [a.dims[0], a.dims[1], a.dims[2], a.dims[3]])
-        .collect();
-
-    let faces = detector
-        .infer_with_host_bytes(&detector_rgb, |output| match output {
-            RknnInferenceOutput::Float32(float_views) => {
-                let decoded = decode_yolov8_face(float_views, &attrs, &layout, 0.25, 0.45);
-                Ok(decoded)
-            }
-        })
+    let faces = models
+        .worker
+        .detect_host(detector_rgb, layout, 0.25)
         .expect("人脸检测推理失败");
-    drop(detector);
 
     assert!(!faces.is_empty(), "在 testimage.jpg 中未检出任何有效人脸");
 
@@ -91,17 +80,7 @@ fn test_rknn_hardware_face_detection_and_embedding() {
     assert_eq!(aligned.len(), 112 * 112 * 3);
 
     // 5. 提取特征嵌入
-    let embedder = models.embedder.lock().expect("获取 embedder 锁失败");
-    let embedding = embedder
-        .infer_with_host_bytes(&aligned, |output| match output {
-            RknnInferenceOutput::Float32(float_views) => {
-                let raw_emb = float_views[0];
-                let emb = normalize_embedding(raw_emb)?;
-                Ok(emb)
-            }
-        })
-        .expect("特征提取推理失败");
-    drop(embedder);
+    let embedding = models.worker.embed_host(aligned).expect("特征提取推理失败");
 
     // 6. 验证特征向量
     assert_eq!(embedding.len(), 512);

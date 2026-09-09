@@ -629,11 +629,6 @@ impl MockFrameBuilder {
         desc.pixel_format = pixel_format;
         desc.stride = stride;
         desc.opaque_kind = opaque_kind;
-        desc.plane_count = match pixel_format {
-            AV_PIX_NV12 => 2,
-            AV_PIX_I420 => 3,
-            _ => 1,
-        };
         desc.offset = if pixel_format == AV_PIX_NV12 || pixel_format == AV_PIX_I420 {
             offset
         } else {
@@ -644,22 +639,17 @@ impl MockFrameBuilder {
             match &storage {
                 MockStorage::Host(bytes) => {
                     desc.opaque = bytes.as_ptr() as *mut c_void;
-                    desc.memory_type = AV_MEM_HOST;
                     desc.opaque_kind = AV_OPAQUE_NONE;
                 }
                 #[cfg(target_os = "macos")]
                 MockStorage::ApplePixelBuffer(ptr) => {
                     desc.opaque = *ptr;
                     desc.frame_token = *ptr;
-                    desc.memory_type = AV_MEM_PLATFORM_SURFACE;
-                    desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
                 }
                 #[cfg(all(target_os = "linux", feature = "testing-hardware"))]
                 MockStorage::DmaBuf(fd) => {
                     use std::os::fd::AsRawFd;
                     desc.opaque = fd.as_raw_fd() as usize as *mut c_void;
-                    desc.memory_type = AV_MEM_PLATFORM_SURFACE;
-                    desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
                 }
             }
             return MockFrame {
@@ -738,8 +728,6 @@ impl MockFrameBuilder {
                 }
                 desc.opaque = raw_buf;
                 desc.frame_token = raw_buf;
-                desc.memory_type = AV_MEM_PLATFORM_SURFACE;
-                desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
                 return MockFrame {
                     desc,
                     _storage: MockStorage::ApplePixelBuffer(raw_buf),
@@ -750,7 +738,6 @@ impl MockFrameBuilder {
         desc.opaque = raw_bytes.as_ptr() as *mut c_void;
         let storage = MockStorage::Host(raw_bytes);
         desc.opaque_kind = AV_OPAQUE_NONE;
-        desc.memory_type = AV_MEM_HOST;
 
         MockFrame {
             desc,

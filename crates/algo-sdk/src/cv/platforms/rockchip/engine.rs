@@ -131,13 +131,6 @@ impl RgaCvEngine {
             });
         }
 
-        if frame.raw_desc().modifier != 0 {
-            return Err(AlgoError::IncompatibleFrame {
-                reason: "RGA handle path requires a linear DMA-BUF without a format modifier"
-                    .to_string(),
-            });
-        }
-
         let (rga_format, w_stride, h_stride, size) = match format {
             PixelFormat::Nv12 => {
                 let stride_y = positive_stride(frame.stride(0), alloc_width)?;
@@ -306,11 +299,19 @@ impl RgaCvEngine {
         };
         runtime.execute(src, dst, src_rect, dst_rect, fill)?;
         let fd = lease.fd();
-        Ok(CvBuffer::from_dma_buf(
+        Ok(CvBuffer::from_dma_buf_with_layout(
             fd,
             spec.width,
             spec.height,
             PixelFormat::Rgb24,
+            spec.size,
+            [
+                spec.w_stride.checked_mul(3).ok_or(AlgoError::OutOfMemory)?,
+                0,
+                0,
+                0,
+            ],
+            spec.h_stride,
             Some(Box::new(lease)),
         ))
     }
@@ -534,13 +535,11 @@ fn source_color_space_mode(frame: &SafeFrame<'_>, format: PixelFormat) -> i32 {
     if !matches!(format, PixelFormat::Nv12 | PixelFormat::I420) {
         return rgb_color_space_mode();
     }
-    let bt709 = frame.raw_desc().color_matrix == 1;
-    let full = frame.raw_desc().color_range == 2;
-    match (bt709, full) {
-        (true, true) => IM_YUV_BT709_FULL_RANGE,
-        (true, false) => IM_YUV_BT709_LIMIT_RANGE,
-        (false, true) => IM_YUV_BT601_FULL_RANGE,
-        (false, false) => IM_YUV_BT601_LIMIT_RANGE,
+    match frame.raw_desc().color_space {
+        crate::c_abi::AV_COLOR_SPACE_BT709_FULL => IM_YUV_BT709_FULL_RANGE,
+        crate::c_abi::AV_COLOR_SPACE_BT709_LIMITED => IM_YUV_BT709_LIMIT_RANGE,
+        crate::c_abi::AV_COLOR_SPACE_BT601_FULL => IM_YUV_BT601_FULL_RANGE,
+        _ => IM_YUV_BT601_LIMIT_RANGE,
     }
 }
 
@@ -584,7 +583,6 @@ mod tests {
         let mut desc = AvFrameDesc::default_nv12(640, 480, 640, 320, 0);
         desc.pixel_format = crate::c_abi::AV_PIX_I420;
         desc.stride = [640, 320, 336, 0];
-        desc.plane_count = 3;
         desc.opaque = data.as_ptr() as *mut std::ffi::c_void;
         desc.opaque_kind = AV_OPAQUE_NONE;
         let frame = SafeFrame::from_ref(&desc).expect("valid frame");

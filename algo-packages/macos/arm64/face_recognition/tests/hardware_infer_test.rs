@@ -82,10 +82,6 @@ fn test_face_extraction_and_cosine_similarity() {
         api_version: AV_ALGO_API_VERSION,
         image_bytes: image_bytes.as_ptr(),
         image_bytes_len: image_bytes.len() as u32,
-        min_detection_score: 0.5,
-        min_face_size: 30.0,
-        min_quality_score: 0.3,
-        reserved: 0,
     };
 
     // SAFETY: AvFaceExtractOutput 是纯 POD 内存布局，零初始化符合 C ABI 约定。
@@ -98,18 +94,25 @@ fn test_face_extraction_and_cosine_similarity() {
     assert_eq!(status, 0, "extract_face 应成功返回 0");
     assert_eq!(output.status_code, 0);
     assert_eq!(output.embedding_dim, 512);
+    assert!(!output.embedding.is_null());
+    assert!(!output.aligned_jpeg.is_null());
     assert!(output.aligned_jpeg_len > 0);
     assert!(output.quality_score > 0.3);
 
+    // SAFETY: extract_face 成功返回后，embedding 保证指向有效的 embedding_dim 个 f32 浮点数。
+    let embedding_slice =
+        unsafe { std::slice::from_raw_parts(output.embedding, output.embedding_dim as usize) };
+
     // 验证 L2 范数约为 1.0
-    let l2_norm: f32 = output.embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let l2_norm: f32 = embedding_slice.iter().map(|v| v * v).sum::<f32>().sqrt();
     assert!(
         (l2_norm - 1.0).abs() < 1e-4,
         "特征向量 L2 范数应接近 1.0: {l2_norm}"
     );
 
     // 验证自身与自身余弦相似度为 1.0
-    let self_sim = cosine_similarity(&output.embedding, &output.embedding);
+    let embedding_array: &[f32; 512] = embedding_slice.try_into().expect("512 dims");
+    let self_sim = cosine_similarity(embedding_array, embedding_array);
     assert!(
         (self_sim - 1.0).abs() < 1e-5,
         "同一特征余弦相似度应为 1.0: {self_sim}"

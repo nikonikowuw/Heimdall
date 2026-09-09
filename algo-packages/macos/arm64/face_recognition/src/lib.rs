@@ -34,7 +34,6 @@ use {
     algo_sdk::macros::{validate_abi_header, LibraryContext},
     image::codecs::jpeg::JpegEncoder,
     image::{ExtendedColorType, RgbImage},
-    std::ffi::c_char,
     std::panic::{catch_unwind, AssertUnwindSafe},
     std::path::Path,
     std::slice,
@@ -201,49 +200,55 @@ fn encode_aligned_jpeg(rgb: &[u8]) -> Result<Vec<u8>, AlgoError> {
     Ok(jpeg)
 }
 
+struct ExtractCache {
+    embedding: [f32; 512],
+    aligned_jpeg: Vec<u8>,
+}
+
+thread_local! {
+    static EXTRACT_CACHE: std::cell::RefCell<ExtractCache> = const {
+        std::cell::RefCell::new(ExtractCache {
+            embedding: [0.0; 512],
+            aligned_jpeg: Vec::new(),
+        })
+    };
+}
+
 #[cfg(target_os = "macos")]
-fn write_output_error(output: &mut AvFaceExtractOutput, message: &str, status: c_int) {
+fn write_output_error(output: &mut AvFaceExtractOutput, status: c_int) {
     output.status_code = status.unsigned_abs();
-    let bytes = message.as_bytes();
-    let copy_len = bytes
-        .len()
-        .min(output.error_message.len().saturating_sub(1));
-    for (target, source) in output
-        .error_message
-        .iter_mut()
-        .zip(bytes.iter())
-        .take(copy_len)
-    {
-        *target = *source as c_char;
-    }
-    if copy_len < output.error_message.len() {
-        output.error_message[copy_len] = 0;
-    }
+    output.embedding = std::ptr::null();
+    output.embedding_dim = 0;
+    output.aligned_jpeg = std::ptr::null();
+    output.aligned_jpeg_len = 0;
 }
 
 #[cfg(target_os = "macos")]
 fn write_output_success(
     output: &mut AvFaceExtractOutput,
     embedding: [f32; 512],
-    bbox: [f32; 4],
     quality_score: f32,
     detection_score: f32,
-    jpeg: &[u8],
+    jpeg: Vec<u8>,
 ) {
     output.status_code = 0;
-    output.embedding = embedding;
     output.embedding_dim = 512;
-    output.bbox = bbox;
     output.quality_score = quality_score;
     output.detection_score = detection_score;
-    output.aligned_jpeg_data[..jpeg.len()].copy_from_slice(jpeg);
-    output.aligned_jpeg_len = jpeg.len() as u32;
+
+    EXTRACT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.embedding = embedding;
+        cache.aligned_jpeg = jpeg;
+        output.embedding = cache.embedding.as_ptr();
+        output.aligned_jpeg = cache.aligned_jpeg.as_ptr();
+        output.aligned_jpeg_len = cache.aligned_jpeg.len() as u32;
+    });
 }
 
 #[cfg(target_os = "macos")]
 struct ExtractedFaceData {
     embedding: [f32; 512],
-    bbox: [f32; 4],
     quality_score: f32,
     detection_score: f32,
     aligned_jpeg: Vec<u8>,
@@ -280,25 +285,13 @@ fn run_face_extraction_pipeline(
     // SAFETY: detector_buffer 在调用返回前保持有效。
     let raw_output = unsafe { models.predict_detector(detector_buffer.as_ptr()) }?;
 
-    let min_score = if input_ref.min_detection_score.is_finite() {
-        input_ref.min_detection_score.clamp(0.0, 1.0)
-    } else {
-        0.5
-    };
+    let min_score = 0.5;
     let mut faces = decode_face_detections(&raw_output, min_score);
     nms(&mut faces, 0.45);
     unmap_letterbox(&mut faces, &detector_mode, image.width(), image.height());
 
-    let min_face_size = if input_ref.min_face_size.is_finite() {
-        input_ref.min_face_size.max(1.0).round() as u32
-    } else {
-        30
-    };
-    let min_quality_score = if input_ref.min_quality_score.is_finite() {
-        input_ref.min_quality_score.clamp(0.0, 1.0)
-    } else {
-        0.3
-    };
+    let min_face_size = 30u32;
+    let min_quality_score = 0.3f32;
     let thresholds = config::QualityThresholds {
         min_score: min_quality_score,
         ..config::QualityThresholds::default()
@@ -339,7 +332,6 @@ fn run_face_extraction_pipeline(
 
     Ok(ExtractedFaceData {
         embedding,
-        bbox: face.bbox,
         quality_score: quality.score,
         detection_score: face.score,
         aligned_jpeg,
@@ -389,15 +381,15 @@ unsafe fn extract_face_impl(
             write_output_success(
                 output_ref,
                 data.embedding,
-                data.bbox,
                 data.quality_score,
                 data.detection_score,
-                &data.aligned_jpeg,
+                data.aligned_jpeg,
             );
             AV_OK
         }
         Err(error) => {
-            write_output_error(output_ref, &error.to_string(), error.to_c_status());
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, error.to_c_status());
             error.to_c_status()
         }
     }
@@ -436,11 +428,8 @@ pub unsafe extern "C" fn av_algo_extract_face(
                     // SAFETY: 只在指针对齐且非空时访问；size 校验失败时不写入调用方缓冲区。
                     unsafe {
                         if (*output).size as usize >= std::mem::size_of::<AvFaceExtractOutput>() {
-                            write_output_error(
-                                &mut *output,
-                                "av_algo_extract_face 发生 Panic",
-                                AV_ERR_INTERNAL,
-                            );
+                            algo_sdk::macros::set_last_error("av_algo_extract_face 发生 Panic");
+                            write_output_error(&mut *output, AV_ERR_INTERNAL);
                         }
                     }
                 }

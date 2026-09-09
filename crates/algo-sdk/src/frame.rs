@@ -149,13 +149,13 @@ impl<'a> SafeFrame<'a> {
     }
 
     #[inline]
-    pub fn memory_type(&self) -> u32 {
-        self.desc.memory_type
+    pub fn opaque_kind(&self) -> u32 {
+        self.desc.opaque_kind
     }
 
     #[inline]
-    pub fn layout(&self) -> u32 {
-        self.desc.layout
+    pub fn color_space(&self) -> u32 {
+        self.desc.color_space
     }
 
     #[inline]
@@ -175,8 +175,12 @@ impl<'a> SafeFrame<'a> {
 
     /// 获取 NV12/I420 的色彩转换参数。
     pub(crate) fn yuv_conversion(&self) -> YuvConversion {
-        let bt709 = self.desc.color_matrix == 1;
-        let full_range = self.desc.color_range == 2;
+        let (bt709, full_range) = match self.desc.color_space {
+            AV_COLOR_SPACE_BT709_FULL => (true, true),
+            AV_COLOR_SPACE_BT709_LIMITED => (true, false),
+            AV_COLOR_SPACE_BT601_FULL => (false, true),
+            _ => (false, false),
+        };
         let (y_offset, y_scale, r_cr, g_cb, g_cr, b_cb) = match (bt709, full_range) {
             (true, true) => (0.0, 1.0, 1.5748, -0.1873, -0.4681, 1.8556),
             (true, false) => (16.0, 1.164, 1.793, -0.213, -0.533, 2.112),
@@ -202,11 +206,6 @@ impl<'a> SafeFrame<'a> {
             matrix_b_cb,
             full_range,
         }
-    }
-
-    #[inline]
-    pub fn wall_time_ns(&self) -> i64 {
-        self.desc.wall_time_ns
     }
 
     #[inline]
@@ -381,26 +380,14 @@ fn validate_desc(desc: &AvFrameDesc) -> Result<(), AlgoError> {
             reason: "帧分配尺寸小于有效尺寸".to_string(),
         });
     }
-    if desc.memory_type != AV_MEM_HOST && desc.memory_type != AV_MEM_PLATFORM_SURFACE {
-        return Err(AlgoError::Preprocess {
-            reason: "帧 memory_type 未知".to_string(),
-        });
-    }
-    let required_planes = match desc.pixel_format {
-        AV_PIX_NV12 => 2,
-        AV_PIX_I420 => 3,
-        AV_PIX_RGB24 | AV_PIX_BGRA => 1,
+    match desc.pixel_format {
+        AV_PIX_NV12 | AV_PIX_I420 | AV_PIX_RGB24 | AV_PIX_BGRA => {}
         _ => {
             return Err(AlgoError::IncompatibleFrame {
                 reason: format!("帧 pixel_format 未知: {}", desc.pixel_format),
             });
         }
     };
-    if desc.plane_count < required_planes {
-        return Err(AlgoError::Preprocess {
-            reason: "帧 plane_count 小于像素格式要求".to_string(),
-        });
-    }
     if desc.stride.iter().any(|stride| *stride < 0) {
         return Err(AlgoError::Preprocess {
             reason: "帧 stride 不能为负数".to_string(),
@@ -458,11 +445,6 @@ fn validate_desc(desc: &AvFrameDesc) -> Result<(), AlgoError> {
     }
     match desc.opaque_kind {
         AV_OPAQUE_NONE => {
-            if desc.memory_type != AV_MEM_HOST {
-                return Err(AlgoError::Preprocess {
-                    reason: "Host 帧必须使用 AV_MEM_HOST + AV_OPAQUE_NONE".to_string(),
-                });
-            }
             if desc.opaque.is_null() {
                 return Err(AlgoError::Preprocess {
                     reason: "Host 帧 data 指针为空".to_string(),
@@ -470,11 +452,6 @@ fn validate_desc(desc: &AvFrameDesc) -> Result<(), AlgoError> {
             }
         }
         AV_OPAQUE_DMABUF => {
-            if desc.memory_type != AV_MEM_PLATFORM_SURFACE {
-                return Err(AlgoError::Preprocess {
-                    reason: "DMA-BUF 帧必须使用平台显存类型".to_string(),
-                });
-            }
             if desc.opaque.is_null() || (desc.opaque as usize) > i32::MAX as usize {
                 return Err(AlgoError::Preprocess {
                     reason: "DMA-BUF fd 无效".to_string(),
@@ -482,9 +459,9 @@ fn validate_desc(desc: &AvFrameDesc) -> Result<(), AlgoError> {
             }
         }
         AV_OPAQUE_CVPIXELBUFFER | AV_OPAQUE_ASCEND_DEVICE_MEMORY => {
-            if desc.memory_type != AV_MEM_PLATFORM_SURFACE || desc.opaque.is_null() {
+            if desc.opaque.is_null() {
                 return Err(AlgoError::Preprocess {
-                    reason: "平台原生帧句柄或 memory_type 无效".to_string(),
+                    reason: "平台原生帧句柄无效".to_string(),
                 });
             }
         }
@@ -506,7 +483,6 @@ mod tests {
         let mut desc = AvFrameDesc::default_nv12(1920, 1080, 1920, 1920, 12345);
         desc.opaque = 42_usize as *mut c_void;
         desc.opaque_kind = AV_OPAQUE_DMABUF;
-        desc.memory_type = AV_MEM_PLATFORM_SURFACE;
 
         let frame = SafeFrame::from_ref(&desc).expect("DMA-BUF 帧描述符有效");
         assert_eq!(frame.height(), 1080);

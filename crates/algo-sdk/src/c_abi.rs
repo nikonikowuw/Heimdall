@@ -40,6 +40,13 @@ pub const AV_LAYOUT_UNKNOWN: u32 = 0;
 pub const AV_LAYOUT_LINEAR: u32 = 1;
 pub const AV_LAYOUT_PLATFORM_NATIVE: u32 = 2;
 
+/// 色彩空间
+pub const AV_COLOR_SPACE_UNKNOWN: u32 = 0;
+pub const AV_COLOR_SPACE_BT601_LIMITED: u32 = 1;
+pub const AV_COLOR_SPACE_BT601_FULL: u32 = 2;
+pub const AV_COLOR_SPACE_BT709_LIMITED: u32 = 3;
+pub const AV_COLOR_SPACE_BT709_FULL: u32 = 4;
+
 /// 原生句柄类型
 pub const AV_OPAQUE_NONE: u32 = 0;
 pub const AV_OPAQUE_CVPIXELBUFFER: u32 = 0x1001;
@@ -65,36 +72,26 @@ pub type AvAlgoResultCb = unsafe extern "C" fn(result: *const AvAlgoResult, user
 pub type AvAlgoLibrary = *mut c_void;
 pub type AvAlgoInstance = *mut c_void;
 
-/// 帧描述符 (152 字节，固定 64 位 ABI 布局)
+/// 帧描述符 (120 字节，固定 64 位 ABI 布局，8 字节对齐)
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct AvFrameDesc {
     pub size: u32,
     pub api_version: u32,
     pub frame_id: u64,
-    pub wall_time_ns: i64,
     pub pts_ns: i64,
-    pub modifier: u64,
-    pub offset: [u64; 4],
-    pub opaque: *mut c_void,
-    pub frame_token: *mut c_void,
-    pub platform_tag: u32,
-    pub opaque_kind: u32,
-    pub memory_type: u32,
-    pub pixel_format: u32,
-    pub layout: u32,
     pub width: u32,
     pub height: u32,
     pub alloc_width: u32,
     pub alloc_height: u32,
+    pub pixel_format: u32,
+    pub opaque_kind: u32,
+    pub color_space: u32,
+    pub reserved: u32,
+    pub opaque: *mut c_void,
+    pub frame_token: *mut c_void,
     pub stride: [i32; 4],
-    pub color_primaries: u16,
-    pub color_transfer: u16,
-    pub color_matrix: u16,
-    pub color_range: u8,
-    pub plane_count: u8,
-    pub time_synced: u8,
-    pub reserved: [u8; 3],
+    pub offset: [u64; 4],
 }
 
 impl AvFrameDesc {
@@ -110,29 +107,19 @@ impl AvFrameDesc {
             size: std::mem::size_of::<Self>() as u32,
             api_version: AV_ALGO_API_VERSION,
             frame_id: 1,
-            wall_time_ns: timestamp_ns,
             pts_ns: timestamp_ns,
-            modifier: 0,
-            offset: [0; 4],
-            opaque: std::ptr::null_mut(),
-            frame_token: std::ptr::null_mut(),
-            platform_tag: 0,
-            opaque_kind: AV_OPAQUE_NONE,
-            memory_type: AV_MEM_HOST,
-            pixel_format: AV_PIX_NV12,
-            layout: AV_LAYOUT_LINEAR,
             width,
             height,
             alloc_width: width,
             alloc_height: height,
+            pixel_format: AV_PIX_NV12,
+            opaque_kind: AV_OPAQUE_NONE,
+            color_space: AV_COLOR_SPACE_BT709_LIMITED,
+            reserved: 0,
+            opaque: std::ptr::null_mut(),
+            frame_token: std::ptr::null_mut(),
             stride: [y_stride, uv_stride, 0, 0],
-            color_primaries: 1,
-            color_transfer: 1,
-            color_matrix: 1,
-            color_range: 1,
-            plane_count: 2,
-            time_synced: 1,
-            reserved: [0; 3],
+            offset: [0; 4],
         }
     }
 }
@@ -379,7 +366,7 @@ pub struct AvAlgoResult {
     pub images: *const AvAlgoImageReq,
 }
 
-/// 人脸特征提取输入参数 (40 字节)
+/// 人脸特征提取输入参数 (24 字节)
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct AvFaceExtractInput {
@@ -387,28 +374,20 @@ pub struct AvFaceExtractInput {
     pub api_version: u32,
     pub image_bytes: *const u8,
     pub image_bytes_len: u32,
-    pub min_detection_score: f32,
-    pub min_face_size: f32,
-    pub min_quality_score: f32,
-    pub reserved: u32,
 }
 
-/// 人脸特征提取输出结果 (67892 字节)
+/// 人脸特征提取输出结果 (56 字节，64 位平台含指针对齐 padding)
 #[repr(C)]
 pub struct AvFaceExtractOutput {
     pub size: u32,
     pub api_version: u32,
     pub status_code: u32,
-    pub reserved: u32,
-    pub error_message: [c_char; 256],
-    pub embedding: [f32; 512],
+    pub embedding: *const f32,
     pub embedding_dim: u32,
-    pub bbox: [f32; 4],
+    pub aligned_jpeg: *const u8,
+    pub aligned_jpeg_len: u32,
     pub quality_score: f32,
     pub detection_score: f32,
-    pub aligned_jpeg_data: [u8; 65536],
-    pub aligned_jpeg_len: u32,
-    pub reserved1: u32,
 }
 
 impl std::fmt::Debug for AvFaceExtractOutput {
@@ -418,8 +397,9 @@ impl std::fmt::Debug for AvFaceExtractOutput {
             .field("api_version", &self.api_version)
             .field("status_code", &self.status_code)
             .field("embedding_dim", &self.embedding_dim)
-            .field("quality_score", &self.quality_score)
             .field("aligned_jpeg_len", &self.aligned_jpeg_len)
+            .field("quality_score", &self.quality_score)
+            .field("detection_score", &self.detection_score)
             .finish()
     }
 }

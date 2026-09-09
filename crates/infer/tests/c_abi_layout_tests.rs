@@ -5,7 +5,7 @@ use std::mem::{offset_of, size_of};
 
 #[test]
 fn test_c_abi_structure_sizes() {
-    assert_eq!(size_of::<AvFrameDesc>(), 152, "AvFrameDesc size mismatch");
+    assert_eq!(size_of::<AvFrameDesc>(), 120, "AvFrameDesc size mismatch");
     assert_eq!(size_of::<AvFrameOps>(), 32, "AvFrameOps size mismatch");
     assert_eq!(size_of::<AvRect>(), 24, "AvRect size mismatch");
     assert_eq!(size_of::<AvImageView>(), 96, "AvImageView size mismatch");
@@ -37,12 +37,12 @@ fn test_c_abi_structure_sizes() {
     assert_eq!(size_of::<AvAlgoResult>(), 48, "AvAlgoResult size mismatch");
     assert_eq!(
         size_of::<AvFaceExtractInput>(),
-        40,
+        24,
         "AvFaceExtractInput size mismatch"
     );
     assert_eq!(
         size_of::<AvFaceExtractOutput>(),
-        67892,
+        56,
         "AvFaceExtractOutput size mismatch"
     );
 }
@@ -53,29 +53,19 @@ fn test_c_abi_field_offsets() {
     assert_eq!(offset_of!(AvFrameDesc, size), 0);
     assert_eq!(offset_of!(AvFrameDesc, api_version), 4);
     assert_eq!(offset_of!(AvFrameDesc, frame_id), 8);
-    assert_eq!(offset_of!(AvFrameDesc, wall_time_ns), 16);
-    assert_eq!(offset_of!(AvFrameDesc, pts_ns), 24);
-    assert_eq!(offset_of!(AvFrameDesc, modifier), 32);
-    assert_eq!(offset_of!(AvFrameDesc, offset), 40);
-    assert_eq!(offset_of!(AvFrameDesc, opaque), 72);
-    assert_eq!(offset_of!(AvFrameDesc, frame_token), 80);
-    assert_eq!(offset_of!(AvFrameDesc, platform_tag), 88);
-    assert_eq!(offset_of!(AvFrameDesc, opaque_kind), 92);
-    assert_eq!(offset_of!(AvFrameDesc, memory_type), 96);
-    assert_eq!(offset_of!(AvFrameDesc, pixel_format), 100);
-    assert_eq!(offset_of!(AvFrameDesc, layout), 104);
-    assert_eq!(offset_of!(AvFrameDesc, width), 108);
-    assert_eq!(offset_of!(AvFrameDesc, height), 112);
-    assert_eq!(offset_of!(AvFrameDesc, alloc_width), 116);
-    assert_eq!(offset_of!(AvFrameDesc, alloc_height), 120);
-    assert_eq!(offset_of!(AvFrameDesc, stride), 124);
-    assert_eq!(offset_of!(AvFrameDesc, color_primaries), 140);
-    assert_eq!(offset_of!(AvFrameDesc, color_transfer), 142);
-    assert_eq!(offset_of!(AvFrameDesc, color_matrix), 144);
-    assert_eq!(offset_of!(AvFrameDesc, color_range), 146);
-    assert_eq!(offset_of!(AvFrameDesc, plane_count), 147);
-    assert_eq!(offset_of!(AvFrameDesc, time_synced), 148);
-    assert_eq!(offset_of!(AvFrameDesc, reserved), 149);
+    assert_eq!(offset_of!(AvFrameDesc, pts_ns), 16);
+    assert_eq!(offset_of!(AvFrameDesc, width), 24);
+    assert_eq!(offset_of!(AvFrameDesc, height), 28);
+    assert_eq!(offset_of!(AvFrameDesc, alloc_width), 32);
+    assert_eq!(offset_of!(AvFrameDesc, alloc_height), 36);
+    assert_eq!(offset_of!(AvFrameDesc, pixel_format), 40);
+    assert_eq!(offset_of!(AvFrameDesc, opaque_kind), 44);
+    assert_eq!(offset_of!(AvFrameDesc, color_space), 48);
+    assert_eq!(offset_of!(AvFrameDesc, reserved), 52);
+    assert_eq!(offset_of!(AvFrameDesc, opaque), 56);
+    assert_eq!(offset_of!(AvFrameDesc, frame_token), 64);
+    assert_eq!(offset_of!(AvFrameDesc, stride), 72);
+    assert_eq!(offset_of!(AvFrameDesc, offset), 88);
 
     // av_image_view 偏移
     assert_eq!(offset_of!(AvImageView, data), 80);

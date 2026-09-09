@@ -212,8 +212,6 @@ impl InferenceBackend for AlgoInstance {
                 desc.opaque = ptr.as_ptr();
                 desc.frame_token = ptr.as_ptr();
                 desc.opaque_kind = AV_OPAQUE_CVPIXELBUFFER;
-                desc.memory_type = AV_MEM_PLATFORM_SURFACE;
-                desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
                 desc.pixel_format = AV_PIX_NV12;
             }
             #[cfg(target_os = "linux")]
@@ -222,16 +220,12 @@ impl InferenceBackend for AlgoInstance {
                 use std::os::fd::AsRawFd;
                 desc.opaque = fd.as_raw_fd() as usize as *mut c_void;
                 desc.opaque_kind = AV_OPAQUE_DMABUF;
-                desc.memory_type = AV_MEM_PLATFORM_SURFACE;
-                desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
             }
             FrameHandle::DeviceMemory { ptr, .. } => {
                 // [infer_fast_path] 华为昇腾 DVPP -> VPC/AIPP -> ACL 原生设备显存直通
                 desc.opaque = ptr.as_ptr();
                 desc.frame_token = ptr.as_ptr();
                 desc.opaque_kind = AV_OPAQUE_ASCEND_DEVICE_MEMORY;
-                desc.memory_type = AV_MEM_PLATFORM_SURFACE;
-                desc.layout = AV_LAYOUT_PLATFORM_NATIVE;
                 desc.pixel_format = AV_PIX_NV12;
             }
             FrameHandle::Host(slice) => {
@@ -242,8 +236,6 @@ impl InferenceBackend for AlgoInstance {
                 );
                 desc.opaque = slice.as_ptr() as *mut c_void;
                 desc.opaque_kind = AV_OPAQUE_NONE;
-                desc.memory_type = AV_MEM_HOST;
-                desc.layout = AV_LAYOUT_LINEAR;
             }
             _ => {
                 tracing::warn!(

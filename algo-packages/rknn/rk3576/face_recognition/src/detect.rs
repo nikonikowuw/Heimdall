@@ -4,6 +4,7 @@
 //! 输出：`Vec<RawFace>`，bbox 和 landmarks 归一化到 [0, 1]
 
 use algo_sdk::cv::LetterboxLayout;
+use algo_sdk::error::AlgoError;
 use algo_sdk::math::clamp_bbox;
 
 /// 每个尺度的输出分支数
@@ -57,15 +58,24 @@ fn sigmoid(x: f32) -> f32 {
 /// DFL 解码：16-bin softmax 加权求和 → 单个偏移值
 ///
 /// 输入 16 个 logits，输出一个浮点偏移量。
-fn compute_dfl(logits: &[f32]) -> f32 {
-    debug_assert_eq!(logits.len(), DFL_LEN);
+fn compute_dfl(logits: &[f32]) -> Result<f32, AlgoError> {
+    if logits.len() != DFL_LEN || logits.iter().any(|value| !value.is_finite()) {
+        return Err(AlgoError::Inference {
+            reason: "DFL logits 长度或数值非法".to_string(),
+        });
+    }
     let max_val = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let exp_sum: f32 = logits.iter().map(|&v| (v - max_val).exp()).sum();
-    logits
+    if !exp_sum.is_finite() || exp_sum <= f32::EPSILON {
+        return Err(AlgoError::Inference {
+            reason: "DFL softmax 分母非法".to_string(),
+        });
+    }
+    Ok(logits
         .iter()
         .enumerate()
         .map(|(i, &v)| (v - max_val).exp() / exp_sum * i as f32)
-        .sum()
+        .sum())
 }
 
 /// 单尺度解码：遍历 grid，解码 box + cls + kpt
@@ -84,21 +94,50 @@ fn decode_scale(
     grid_w: usize,
     stride: usize,
     conf_threshold: f32,
-) -> Vec<RawFace> {
-    let grid_len = grid_h * grid_w;
+) -> Result<Vec<RawFace>, AlgoError> {
+    let grid_len = grid_h.checked_mul(grid_w).ok_or(AlgoError::OutOfMemory)?;
+    let required_box = DFL_LEN
+        .checked_mul(4)
+        .and_then(|channels| channels.checked_mul(grid_len))
+        .ok_or(AlgoError::OutOfMemory)?;
+    let required_kpt = KPT_CHANNELS_PER_POINT
+        .checked_mul(NUM_LANDMARKS)
+        .and_then(|channels| channels.checked_mul(grid_len))
+        .ok_or(AlgoError::OutOfMemory)?;
+    if score_sum.len() < grid_len
+        || cls_tensor.len() < grid_len
+        || box_tensor.len() < required_box
+        || kpt_tensor.len() < required_kpt
+    {
+        return Err(AlgoError::Inference {
+            reason: format!(
+                "YOLOv8-face 输出缓冲区不足: grid={grid_h}x{grid_w}, box={}, score={}, cls={}, kpt={}",
+                box_tensor.len(),
+                score_sum.len(),
+                cls_tensor.len(),
+                kpt_tensor.len()
+            ),
+        });
+    }
     let mut faces = Vec::new();
 
     for gy in 0..grid_h {
         for gx in 0..grid_w {
             let offset = gy * grid_w + gx;
 
+            let objectness = score_sum[offset];
+            let cls_score = cls_tensor[offset];
+            // Runtime 的 want_float 输出若出现 NaN/Inf，丢弃该候选而不是把非法值带入 NMS/JSON。
+            if !objectness.is_finite() || !cls_score.is_finite() {
+                continue;
+            }
+
             // 快速过滤：score_sum < threshold 直接跳过
-            if score_sum[offset] < conf_threshold {
+            if objectness < conf_threshold {
                 continue;
             }
 
             // 检测置信度
-            let cls_score = cls_tensor[offset];
             if cls_score < conf_threshold {
                 continue;
             }
@@ -111,7 +150,7 @@ fn decode_scale(
                 for (k, logit) in logits.iter_mut().enumerate() {
                     *logit = box_tensor[base + k * grid_len];
                 }
-                *offset_val = compute_dfl(&logits);
+                *offset_val = compute_dfl(&logits)?;
             }
 
             // 还原为原图像素坐标
@@ -137,6 +176,10 @@ fn decode_scale(
                 let raw_x = kpt_tensor[kx_idx];
                 let raw_y = kpt_tensor[ky_idx];
                 let raw_conf = kpt_tensor[kc_idx];
+                if !raw_x.is_finite() || !raw_y.is_finite() || !raw_conf.is_finite() {
+                    landmarks = [[f32::NAN; 2]; NUM_LANDMARKS];
+                    break;
+                }
 
                 // 关键点坐标映射：(grid + offset * 2.0 - 0.5) * stride
                 landmarks[p][0] = (gx as f32 + raw_x * 2.0 - 0.5) * stride as f32;
@@ -144,6 +187,12 @@ fn decode_scale(
                 landmark_scores[p] = sigmoid(raw_conf);
             }
 
+            if landmarks
+                .iter()
+                .any(|point| point.iter().any(|value| !value.is_finite()))
+            {
+                continue;
+            }
             faces.push(RawFace {
                 bbox: [x1, y1, w, h],
                 landmarks,
@@ -153,7 +202,7 @@ fn decode_scale(
         }
     }
 
-    faces
+    Ok(faces)
 }
 
 /// 对人脸候选执行类别无关 NMS
@@ -216,44 +265,66 @@ pub fn decode_yolov8_face(
     layout: &LetterboxLayout,
     conf_threshold: f32,
     nms_threshold: f32,
-) -> Vec<RawFace> {
-    assert_eq!(float_outputs.len(), 12, "YOLOv8n-face 必须有 12 个输出张量");
+) -> Result<Vec<RawFace>, AlgoError> {
+    if !conf_threshold.is_finite()
+        || !(0.0..=1.0).contains(&conf_threshold)
+        || !nms_threshold.is_finite()
+        || !(0.0..=1.0).contains(&nms_threshold)
+    {
+        return Err(AlgoError::Inference {
+            reason: "YOLOv8n-face 阈值必须是 [0, 1] 范围内的有限数".to_string(),
+        });
+    }
+    if float_outputs.len() != 12 || output_attrs.len() != 12 {
+        return Err(AlgoError::Inference {
+            reason: format!(
+                "YOLOv8n-face 输出数量必须为 12: tensors={}, attrs={}",
+                float_outputs.len(),
+                output_attrs.len()
+            ),
+        });
+    }
 
+    let expected_channels = [64usize, 1, 1, 15];
     let mut all_faces = Vec::new();
-
     for scale in 0..3 {
         let base = scale * BRANCHES_PER_SCALE;
-
-        // 从 attrs 获取 grid 尺寸（NCHW 布局：dims[2]=H, dims[3]=W）
-        let grid_h = output_attrs[base][2] as usize;
-        let grid_w = output_attrs[base][3] as usize;
-        let stride = 8 * (1 << scale); // P3=8, P4=16, P5=32
-
-        let box_tensor = float_outputs[base];
-        let score_sum = float_outputs[base + 1];
-        let cls_tensor = float_outputs[base + 2];
-        let kpt_tensor = float_outputs[base + 3];
-
+        let grid_h = usize::try_from(output_attrs[base][2]).map_err(|_| AlgoError::OutOfMemory)?;
+        let grid_w = usize::try_from(output_attrs[base][3]).map_err(|_| AlgoError::OutOfMemory)?;
+        if grid_h == 0 || grid_w == 0 {
+            return Err(AlgoError::Inference {
+                reason: format!("YOLOv8n-face 输出 {base} 网格尺寸为 0"),
+            });
+        }
+        for branch in 0..BRANCHES_PER_SCALE {
+            let attr = output_attrs[base + branch];
+            if attr[0] != 1
+                || attr[1] as usize != expected_channels[branch]
+                || attr[2] as usize != grid_h
+                || attr[3] as usize != grid_w
+            {
+                return Err(AlgoError::Inference {
+                    reason: format!("YOLOv8n-face 输出 {} 形状非法: {:?}", base + branch, attr),
+                });
+            }
+        }
+        let stride = 8 * (1 << scale);
         let faces = decode_scale(
-            box_tensor,
-            score_sum,
-            cls_tensor,
-            kpt_tensor,
+            float_outputs[base],
+            float_outputs[base + 1],
+            float_outputs[base + 2],
+            float_outputs[base + 3],
             grid_h,
             grid_w,
             stride,
             conf_threshold,
-        );
+        )?;
         all_faces.extend(faces);
     }
 
-    // NMS 去重
     nms(&mut all_faces, nms_threshold);
-
-    // 归一化到原图 [0, 1]
     normalize_to_relative(&mut all_faces, layout);
-
-    all_faces
+    Ok(all_faces)
 }
 
 #[cfg(test)]
@@ -271,7 +342,7 @@ mod tests {
     fn test_compute_dfl_uniform() {
         // 均匀分布 → 加权平均 = 7.5
         let logits = [0.0; DFL_LEN];
-        let result = compute_dfl(&logits);
+        let result = compute_dfl(&logits).expect("均匀 logits 应可解码");
         assert!((result - 7.5).abs() < 1e-5);
     }
 
@@ -280,7 +351,7 @@ mod tests {
         // 峰值在 index 3 → 结果接近 3.0
         let mut logits = [-10.0; DFL_LEN];
         logits[3] = 10.0;
-        let result = compute_dfl(&logits);
+        let result = compute_dfl(&logits).expect("尖峰 logits 应可解码");
         assert!((result - 3.0).abs() < 0.01);
     }
 
@@ -305,6 +376,22 @@ mod tests {
         assert!((faces[0].score - 0.9).abs() < 1e-6);
     }
 
+    #[test]
+    fn rejects_short_output_buffers_and_invalid_thresholds() {
+        let layout = LetterboxLayout {
+            scale: 1.0,
+            pad_left: 0,
+            pad_top: 0,
+            dst_w: 640,
+            dst_h: 384,
+            scaled_w: 640,
+            scaled_h: 384,
+        };
+        let attrs = [[1, 64, 48, 80]; 12];
+        let outputs: Vec<&[f32]> = vec![&[]; 12];
+        assert!(decode_yolov8_face(&outputs, &attrs, &layout, 0.25, 0.45).is_err());
+        assert!(decode_yolov8_face(&outputs, &attrs, &layout, f32::NAN, 0.45).is_err());
+    }
     #[test]
     fn test_normalize_to_relative_with_padding() {
         let layout = LetterboxLayout {

@@ -1,4 +1,4 @@
-//! 七步安全沙箱自检器与平台拓扑感知体系
+//! 六步安全沙箱自检器与平台拓扑感知体系
 //! 支持物理子进程隔离执行自检，坚决防范段错误（SIGSEGV）带崩主进程。
 
 use std::path::{Path, PathBuf};
@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::c_abi::loader::{check_c_status, LoadedLib, RawAlgoLibrary};
 use crate::c_abi::types::*;
@@ -120,23 +119,7 @@ impl AlgoSandbox {
             });
         }
 
-        let step = "2.SHA256 完整性与安全指纹校验";
-        let checksum_file = canonical_dir.join("checksum.sha256");
-        if checksum_file.is_file() {
-            verify_checksum_file(&checksum_file, &canonical_dir).map_err(|e| {
-                InferError::SandboxValidation {
-                    step: step.to_string(),
-                    reason: format!("SHA256 校验失败: {e}"),
-                }
-            })?;
-        } else if let Ok(hash) = compute_file_sha256(&manifest_path) {
-            tracing::debug!(
-                manifest_sha256 = %hash,
-                "算法包未附带 checksum.sha256，已登记 manifest 安全指纹"
-            );
-        }
-
-        let step = "3.解析 Manifest 与平台匹配";
+        let step = "2.解析 Manifest 与平台匹配";
         let manifest_str =
             std::fs::read_to_string(&manifest_path).map_err(|e| InferError::SandboxValidation {
                 step: step.to_string(),
@@ -196,7 +179,7 @@ impl AlgoSandbox {
         tracing::info!(
             algorithm_id = %manifest.algorithm_id,
             version = %manifest.version,
-            "算法包七步沙箱安全校验 100% 通过"
+            "算法包六步沙箱安全校验 100% 通过"
         );
 
         Ok(manifest)
@@ -210,7 +193,7 @@ impl AlgoSandbox {
             .map(PathBuf::from)
             .or_else(|_| std::env::current_exe())
             .map_err(|e| InferError::SandboxValidation {
-                step: "5.派生隔离子进程".to_string(),
+                step: "4.派生隔离子进程".to_string(),
                 reason: format!("获取当前可执行文件路径失败: {e}"),
             })?;
 
@@ -221,7 +204,7 @@ impl AlgoSandbox {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| InferError::SandboxValidation {
-                step: "5.派生隔离子进程".to_string(),
+                step: "4.派生隔离子进程".to_string(),
                 reason: format!("启动自测子进程失败: {e}"),
             })?;
 
@@ -254,7 +237,7 @@ impl AlgoSandbox {
                             let _ = err_pipe.read_to_string(&mut stderr_msg);
                         }
                         return Err(InferError::SandboxValidation {
-                            step: "7.真实前向推理自测".to_string(),
+                            step: "6.真实前向推理自测".to_string(),
                             reason: format!(
                                 "沙箱子进程异常退出 (状态码: {status:?}, stderr: {stderr_msg})"
                             ),
@@ -265,7 +248,7 @@ impl AlgoSandbox {
                     if start.elapsed() > timeout {
                         let _ = child.kill();
                         return Err(InferError::SandboxValidation {
-                            step: "7.真实前向推理自测".to_string(),
+                            step: "6.真实前向推理自测".to_string(),
                             reason: "算法包自测超时 (超过 10 秒)，已被沙箱强杀".to_string(),
                         });
                     }
@@ -273,7 +256,7 @@ impl AlgoSandbox {
                 }
                 Err(e) => {
                     return Err(InferError::SandboxValidation {
-                        step: "5.监控隔离子进程".to_string(),
+                        step: "4.监控隔离子进程".to_string(),
                         reason: format!("等待子进程出错: {e}"),
                     });
                 }
@@ -297,7 +280,7 @@ impl AlgoSandbox {
 
         if raw_lib.meta().algorithm_id != manifest.algorithm_id {
             return Err(InferError::SandboxValidation {
-                step: "6.核对算法库元数据".to_string(),
+                step: "5.核对算法库元数据".to_string(),
                 reason: format!(
                     "动态库导出的 algorithm_id [{}] 与 manifest [{}] 不一致",
                     raw_lib.meta().algorithm_id,
@@ -309,7 +292,7 @@ impl AlgoSandbox {
         // 3. 准备测试图像并转换为硬件加速平台帧
         let testimage_path = package_dir.join("testimage.jpg");
         let img = image::open(&testimage_path).map_err(|e| InferError::SandboxValidation {
-            step: "7.准备测试图片".to_string(),
+            step: "6.准备测试图片".to_string(),
             reason: format!("解码 testimage.jpg 失败: {e}"),
         })?;
 
@@ -403,8 +386,6 @@ impl AlgoSandbox {
             frame.opaque = pixel_buffer.as_raw();
             frame.frame_token = pixel_buffer.as_raw();
             frame.opaque_kind = AV_OPAQUE_CVPIXELBUFFER;
-            frame.memory_type = AV_MEM_PLATFORM_SURFACE;
-            frame.layout = AV_LAYOUT_PLATFORM_NATIVE;
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -479,42 +460,6 @@ pub fn find_entry_library(package_dir: &Path, algorithm_id: &str) -> Result<Path
             lib_dir, ext, alt_ext
         ),
     })
-}
-
-/// 计算指定文件的 SHA256 十六进制摘要
-pub fn compute_file_sha256(path: &Path) -> Result<String, std::io::Error> {
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-/// 校验算法包内置的 checksum.sha256 文件
-fn verify_checksum_file(checksum_file: &Path, base_dir: &Path) -> Result<(), String> {
-    let content = std::fs::read_to_string(checksum_file).map_err(|e| e.to_string())?;
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let expected_hash = parts[0];
-        let file_rel = parts[1].trim_start_matches('*');
-        let target_file = base_dir.join(file_rel);
-        if !target_file.is_file() {
-            return Err(format!("校验列表中的文件不存在: {file_rel}"));
-        }
-        let actual_hash = compute_file_sha256(&target_file).map_err(|e| e.to_string())?;
-        if !expected_hash.eq_ignore_ascii_case(&actual_hash) {
-            return Err(format!(
-                "文件 {file_rel} 校验和不匹配: 期望 {expected_hash}, 实际 {actual_hash}"
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// 非 macOS 平台开发/回退自测使用的软件 RGB24 转 NV12 转换器

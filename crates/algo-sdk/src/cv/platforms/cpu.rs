@@ -558,7 +558,6 @@ mod tests {
 
         let mut desc = AvFrameDesc::default_nv12(width, height, y_stride, chroma_stride, 0);
         desc.pixel_format = AV_PIX_I420;
-        desc.plane_count = 3;
         desc.stride[2] = chroma_stride;
         desc.offset = [y_offset as u64, u_offset as u64, v_offset as u64, 0];
         desc.opaque = data.as_ptr() as *mut std::ffi::c_void;
@@ -587,7 +586,6 @@ mod tests {
         ]);
         let mut desc = AvFrameDesc::default_nv12(width, height, 8, 0, 0);
         desc.pixel_format = AV_PIX_BGRA;
-        desc.plane_count = 1;
         desc.offset = [4, 0, 0, 0];
         desc.opaque = data.as_ptr() as *mut std::ffi::c_void;
 

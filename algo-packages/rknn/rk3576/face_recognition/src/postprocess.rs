@@ -118,7 +118,8 @@ pub fn emit_face_detections(
                 detection_score: f.detection_score,
                 quality: f.quality,
                 embedding: None,
-                is_best_shot: true,
+                // 常驻检测路径不做 readback/embedding；抓拍接口单独返回 best shot。
+                is_best_shot: false,
             }),
         })
         .collect();
