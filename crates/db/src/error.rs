@@ -30,6 +30,9 @@ pub enum DbError {
 
     #[error("系统内置算法包受保护，禁止删除: {0}")]
     BuiltinAlgoProtected(String),
+
+    #[error("数据校验错误: {0}")]
+    Validation(String),
 }
 
 impl From<sea_orm::TransactionError<DbError>> for DbError {

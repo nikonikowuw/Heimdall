@@ -11,6 +11,11 @@ pub struct Model {
     pub name: String,
     pub desired_enabled: bool,
     pub actual_status: i32,
+    pub status_message: String,
+    pub algorithm_id: String,
+    pub analysis_fps: i32,
+    #[sea_orm(column_type = "Text")]
+    pub algo_params_json: String,
     #[sea_orm(column_type = "Text")]
     pub rules_json: String,
     #[sea_orm(column_type = "Text")]

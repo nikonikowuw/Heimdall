@@ -20,4 +20,4 @@ pub use gallery::GalleryRepo;
 pub use oplog::OplogRepo;
 pub use recognition::RecognitionRepo;
 pub use system_config::SystemConfigRepo;
-pub use task::TaskRepo;
+pub use task::{SaveTaskParams, TaskRepo};

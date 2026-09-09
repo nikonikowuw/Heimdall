@@ -13,7 +13,7 @@ pub use repository::{
     algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, UpdateInstanceParams},
     camera::ProbeUpdateParams,
     AdminUserRepo, AlarmRepo, CameraRepo, CaptureRepo, GalleryRepo, OplogRepo, RecognitionRepo,
-    SystemConfigRepo, TaskRepo,
+    SaveTaskParams, SystemConfigRepo, TaskRepo,
 };
 pub use schema::create_tables_if_not_exist;
 pub use sea_orm::{self, DatabaseConnection};
