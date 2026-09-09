@@ -521,3 +521,44 @@ Defined explicit i32 mapping for TaskStatus and added algorithm binding fields t
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: 分析任务运行时协调与双流资源生命周期实现及质量复核
+
+**Date**: 2026-09-09
+**Task**: 分析任务运行时协调与双流资源生命周期实现及质量复核
+**Branch**: `dev`
+
+### Summary
+
+完成 TaskRuntimeCoordinator 摄像机级运行时编排、双流 RingBuffer 与 Pump 生命周期治理、StreamHub AI 保活及阻塞式硬件解码器析构保护，并通过全量门禁与 Code Review 验证
+
+### Main Changes
+
+- 实现 TaskRuntimeCoordinator，统一双流 RingBuffer、分析泵、解码器与 InferenceWorker 启动、停止与回滚
+- 引入 BlockingDecoder 保证硬件解码器析构脱离 Tokio Worker 并在专用 blocking 池执行
+- 解决 PipelineManager 内部锁层级死锁，并增加广播 Lagged 后的关键帧门控防止残缺 GOP
+- 改进 StreamHub AI 会话保持计数，区隔人工使能与 Pump 引用
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d0eb1c7` | (see git log) |
+| `2932302` | (see git log) |
+| `5a0d4c7` | (see git log) |
+
+### Testing
+
+- [OK] cargo test -p pipeline (33 unit + 12 coordinator + 7 snapshot + 1 rules + 3 pump e2e 全部通过)
+- [OK] cargo test --workspace 全部通过
+- [OK] cargo clippy -p pipeline --all-targets -- -D warnings 零告警通过
+- [OK] cargo fmt --all -- --check 格式检查通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进 09-08-task-api-pipeline-orchestration 任务编排与状态同步
