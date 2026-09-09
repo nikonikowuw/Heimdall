@@ -1,202 +1,48 @@
-# 推理后端规范
+# 推理后端
 
-> Heimdall 要在 Apple Silicon、Ascend、Rockchip 三套完全不同的 NPU SDK 上跑同一套业务逻辑。**平台差异全部收敛在本 crate 内**，上层代码不感知。
+平台预处理、模型加载与 SDK 调用收敛在 `infer`/媒体 FFI 及算法实现内，上层只使用统一契约。
 
-> ⚠️ **状态：立项约定（尚未经代码验证）**
-> trait 签名是设计草案，首批后端实现落地后必须回填真实签名与示例，并删除本提示。
+## 实现入口
 
----
+| 入口                                               | 职责                                   |
+| -------------------------------------------------- | -------------------------------------- |
+| [backend.rs](../../../crates/infer/src/backend.rs) | 当前 `InferenceBackend` 公开接口       |
+| [worker.rs](../../../crates/infer/src/worker.rs)   | 有界队列与常驻推理 Worker              |
+| [package.rs](../../../crates/infer/src/package.rs) | `AlgoPackage`、实例和注册表            |
+| [sandbox.rs](../../../crates/infer/src/sandbox.rs) | 包验证与平台匹配                       |
+| [算法 SDK 规范](./algo-sdk-guidelines.md)          | 插件 trait、C ABI、帧/预处理与模型会话 |
 
-## 铁律
-
-**`infer` 之外的任何 crate，代码里不允许出现平台分支。**
-
-```rust
-// ❌ 出现在 pipeline 里
-#[cfg(feature = "backend-rknn")]
-let out = rknn_infer(frame)?;
-
-// ✅ 上层只看到 trait
-let out = self.backend.infer(frame)?;
-```
-
-违反这条会导致每加一个平台就要改遍全仓库。发现这种代码要当成 bug 修，不是风格问题。
-
----
-
-## 抽象层
+当前公开方法为：
 
 ```rust
-// crates/infer/src/backend.rs
-
-/// 后端工厂：负责加载模型，产出可推理的实例。
-pub trait InferenceBackend: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn capabilities(&self) -> BackendCapabilities;
-    fn load(&self, spec: &ModelSpec) -> Result<Box<dyn LoadedModel>, InferError>;
-}
-
-/// 已加载的模型实例。绑定在固定线程上使用，见 concurrency-guidelines.md。
-pub trait LoadedModel: Send {
-    fn input_spec(&self) -> &TensorSpec;
-    fn infer(&mut self, frame: FrameRef) -> Result<RawOutput, InferError>;
-}
-
-pub struct BackendCapabilities {
-    /// 支持的输入像素格式（决定预处理路径）
-    pub input_formats: &'static [PixelFormat],
-    /// 是否支持零拷贝输入（接受平台原生 buffer 句柄）
-    pub zero_copy_input: bool,
-    /// 可并行推理的实例数（NPU core 数）
-    pub parallel_slots: usize,
-}
+async fn detect(&self, frame: &FrameRef) -> Result<Vec<Detection>, InferError>;
 ```
 
-设计要点：
+旧 `LoadedModel::infer/RawOutput/BackendCapabilities` 示例是未落地草案，不能据此调用或新增重复抽象。
+对外 async 不代表 SDK 可以在 Tokio Worker 内执行；同步硬件工作仍须按 [并发规范](./concurrency-guidelines.md) 隔离。
 
-- **`infer` 是 `&mut self`**：NPU 会话有内部状态，不是无状态函数。这也强制了"一个模型实例绑一个线程"。
-- **`infer` 是同步的**：SDK 就是阻塞的，包成 async 只会骗人。异步化由调用方通过通道完成，见 [concurrency-guidelines.md](./concurrency-guidelines.md)。
-- **输入是 `FrameRef` 而非 `Vec<u8>`**：`FrameRef` 持有平台原生 buffer 句柄，让零拷贝成为可能，见 [media-pipeline.md](./media-pipeline.md)。
-- **预处理内聚原则（Preprocess Encapsulated in Backend）**：
-  - 硬件专属预处理（Rockchip RGA 2D 缩放、Ascend DVPP VPC、Apple CoreVideo/Metal、CPU SIMD）**必须内聚在对应的 Backend 实现内部**，严禁在 `pipeline` 层建立通用的全量 CPU 内存预处理抽象！
-  - `pipeline` 只需直接调用 `backend.infer(&frame)`，Backend 内部自洽识别持有的 `FrameHandle`，调用专属 2D 硬件单元完成跨步对齐缩放与色彩转换，全链路显存不落地。
-- **架构权衡：Trait 动态分发 (`Box<dyn InferenceBackend>`)**：
-  - 为什么不用编译期泛型？AI 边缘推理单次耗时在 5ms ~ 30ms 级别，而 Trait 虚表寻址开销仅数纳秒（ns），可忽略不计；
-  - 换来的是避免了泛型单态化导致的编译时长与二进制体积膨胀，且支持运行时根据配置动态按需切换后端或模型实例。
+## 后端选择与模型
 
----
+- feature 名称和依赖见 [infer/Cargo.toml](../../../crates/infer/Cargo.toml)：默认 `backend-cpu`，另有 `backend-coreml/rknn/ascend`。
+- feature 只决定可用实现，不控制业务行为；部署明确选择后端，不隐式猜测或伪装硬件成功。
+- 至少需要一个可用后端；请求未编译/不可用的后端应明确报错。旧“零后端编译期断言”尚未在 `lib.rs` 实现。
+- 开发机测试不依赖 NPU；CPU 仅作物理无加速器时的显式调试回退，不能代表硬件实现已验证。
+- 模型和 session 常驻固定 Worker，同一 session 不并发调用，不逐帧加载模型或迁移线程。
+- 硬件预处理在对应后端/插件内完成，不在 Pipeline 建全量 CPU 像素转换抽象。
+- 模型、输入尺寸、类别、归一化/量化参数由算法包元数据或模型描述提供；转换脚本记录完整参数和量化数据来源，变化时同步更新。
+- `.rknn/.om/.mlpackage` 按平台交付，不混用；模型二进制走独立分发，转换脚本受版本控制。
 
-## feature flag 约定
+## 输出与后处理
 
-```toml
-# crates/infer/Cargo.toml
-[features]
-default = ["backend-cpu"]
-backend-cpu    = ["dep:ort"]         # 开源官方 ONNX Runtime 跨平台回退
-backend-rknn   = []                  # 瑞芯微平台：链接 native/rknn 极薄 C 垫片与 librknnrt
-backend-ascend = []                  # 华为昇腾：链接 native/ascend 极薄 C 垫片与 libascendcl
-backend-coreml = ["dep:coreml-rs"]   # 苹果生态：Core ML / ANE 绑定 (或 objc2 原生调用)
-```
+系统级规则、跟踪与平台无关后处理归 `pipeline`；模型私有张量解码留在算法包并复用 SDK 数学工具。
+SDK 内置 NMS 等特殊路径必须适配成同一对外结果，不能把平台张量/错误码泄露给上层。
+坐标去 padding 和逆缩放共用预处理参数，最终格式与时间基准一致，详见 [跨层检查](../guides/cross-layer-thinking-guide.md)。
 
-规则：
+CoreML 计算单元、RKNN 核心掩码、映射缓存和输出 RAII 的约束统一放在 SDK 的 [Apple Silicon](./algo-sdk-guidelines.md#apple-silicon) / [Rockchip RKNN](./algo-sdk-guidelines.md#rockchip-rknn) 小节，避免两处漂移。
 
-- **`backend-cpu` 必须始终可用**，且是默认 feature。开发机上没有 NPU，`cargo test` 和 `cargo clippy` 必须能全绿通过。
-- 平台 feature **互不冲突**，允许同时编译多个（虽然实际部署通常只开一个）。
-- **不允许"零后端"构建**：`lib.rs` 顶部加编译期断言，至少启用一个后端。
-- feature 只控制**编译进哪些实现**，不控制业务行为。运行时选哪个后端由配置决定。
+## 验证
 
----
-
-## 后端注册与选择
-
-```rust
-// crates/infer/src/registry.rs
-pub fn available_backends() -> Vec<Box<dyn InferenceBackend>> {
-    let mut v: Vec<Box<dyn InferenceBackend>> = Vec::new();
-    #[cfg(feature = "backend-rknn")]   v.push(Box::new(RknnBackend::new()));
-    #[cfg(feature = "backend-ascend")] v.push(Box::new(AscendBackend::new()));
-    #[cfg(feature = "backend-coreml")] v.push(Box::new(CoreMlBackend::new()));
-    #[cfg(feature = "backend-cpu")]    v.push(Box::new(CpuBackend::new()));
-    v
-}
-```
-
-约定：
-
-- **`#[cfg]` 只允许出现在 `registry.rs` 和 `backends/mod.rs`**，其它文件里一律不出现。
-- 配置里写后端名（`"rknn"`），启动时按名字查找。找不到就报明确错误：`BackendUnavailable { backend }`，消息要提示"该后端未编译进本次构建"。
-- 不做"自动探测最优后端"的魔法 —— 边缘设备部署是确定的，配置里写死更可预期，排查也更容易。
-
----
-
-## 模型规格
-
-模型文件是平台专属的（`.rknn` / `.om` / `.mlpackage`），不能跨平台复用：
-
-```
-models/
-├── yolov8n/
-│   ├── model.onnx           # 中间产物，转换源
-│   ├── rk3576/model.rknn
-│   ├── ascend310/model.om
-│   ├── coreml/model.mlpackage
-│   └── manifest.toml        # 输入形状、归一化参数、类别表、量化信息
-```
-
-约定：
-
-- **`manifest.toml` 是唯一的元数据来源**。输入尺寸、均值方差、类别名不允许硬编码在 Rust 代码里。
-- **模型二进制文件不入 git**（体积大且是构建产物）。转换脚本入 git，模型走单独分发。
-- 转换脚本放 `models/<name>/convert/`，每个平台一份，记录完整的转换命令与量化数据集来源。**转换参数变了必须改脚本，不允许只在本地手动跑一遍**。
-
-平台专属的转换细节（ATC 参数、rknn-toolkit2 配置、coremltools 选项）不写在 spec 里 —— 分别由 `ascend-pro`、`rknn-pro` 技能与 Apple 官方 Core ML / VideoToolbox 文档承载。
-
----
-
-## 后处理放哪
-
-NMS、坐标还原、置信度过滤这类后处理是**平台无关**的，放在 `infer/src/postprocess/`，不要在每个后端实现里各写一份。
-
-例外：部分 SDK 支持把 NMS 融进模型（如 RKNN 的部分算子）。这种情况下后端实现里做格式适配，把结果转成统一的 `Vec<Detection>` 再返回 —— **对外输出格式必须一致**。
-
----
-
-## 测试策略
-
-| 测试 | 怎么做 |
-|------|--------|
-| trait 契约测试 | 对 `backend-cpu` 跑完整流程，验证输入输出形状与数值范围 |
-| 后处理单元测试 | NMS、坐标变换用固定输入测，不依赖任何后端 |
-| 真机后端测试 | `#[ignore]` + `#[cfg(feature = "backend-rknn")]`，只在设备上手动跑 |
-| 跨后端一致性 | 同一张图在 CPU 和 NPU 后端上的检测结果差异在阈值内（量化会有偏差，不要求逐位相等） |
-
-**规则**：开发机上 `cargo test` 必须全绿。任何需要真实 NPU 的测试都要 `#[ignore]`。
-
----
-
-## CoreML / Apple Silicon 专项优化与陷阱
-
-在 Apple Silicon (macOS arm64) 下使用 CoreML 原生推理时，必须严格遵守以下契约（完整实现见 `algo-sdk-guidelines.md` 第 9 节）：
-
-- **`MLComputeUnits` 枚举映射绝对契约**：
-  Apple 原生枚举定义中：`MLComputeUnitsCPUOnly = 0`，`MLComputeUnitsCPUAndGPU = 1`，`MLComputeUnitsAll = 2`。必须显式配置为 `2`（或使用 `MLComputeUnitsAll` 常量），严禁传 `0`，否则会强制 CoreML 降级为 CPU 软件模拟，导致推理延迟从 ~2.5ms 骤升至 10ms+！
-- **Objective-C Runtime 选择器热路径预缓存**：
-  严禁在推理热路径调用 `objc_getClass` 与 `sel_registerName`（每帧 17 次字符串哈希与分配）。必须在模型加载初始化阶段一次性预缓存至常驻句柄。
-- **Accelerate 框架 Float16 SIMD 向量化转换**：
-  CoreML 输出的 Float16 半精度张量必须直接调用 Accelerate 框架的 `vImageConvert_Planar16FtoPlanarF` 硬件 NEON 指令进行批量反量化，禁止在 Rust 中写 CPU 标量位移循环。
-
----
-
-## Rockchip RKNN 专项优化与工程实践
-
-在 Rockchip (RK3576 / RK3588) Linux 下使用 RKNN 原生推理时，必须严格遵守以下契约（完整实现见 `algo-sdk-guidelines.md` 第 10 节）：
-
-- **NPU 多核调度掩码强制激活**：
-  RK3576 (双核) 必须显式配置 `RKNN_NPU_CORE_0_1` (掩码 3)，RK3588 (三核) 建议配置 `RKNN_NPU_CORE_0_1_2` (掩码 7)。严禁留空使用单核 AUTO 调度（单核推理 ~15.2ms vs 双核 ~8.4ms）。
-- **零拷贝 DMA-BUF 虚拟内存常驻缓存**：
-  `rknn_create_mem_from_fd` 在 Rockchip BSP 下要求必须传入有效映射的 `virt_addr`。必须通过常驻 `HashMap<fd, DmaMemEntry>` 缓存用户态 `mmap` 地址，禁止在逐帧推理热路径中频繁调用 `libc::mmap` / `libc::munmap` 引发内核 `mmap_lock` 锁竞争。
-- **6 分支 INT8 DFL 原生解码与分支剪枝**：
-  保持 `want_float = 0` 获取原生 INT8 特征图，避免驱动在 CPU 端进行耗时 ~10ms+ 的浮点反量化。通过类别置信度前置剪枝，只对有效网格执行 16-bin Softmax DFL 坐标还原，将后处理耗时压降至 1.60ms 内。
-- **`rknn_outputs_release` RAII 生命周期托管**：
-  使用 `RknnOutputsGuard` 封装 `RknnOutput`，确保即使后处理中途抛出 `AlgoError` 或捕获 Panic，驱动级显存与锁资源也能安全释放。
-- **RGA 堆分配兼容性**：
-  仅在显式指定 `RgaCore::Rga2` 时强制校验 DMA32 堆（4GB 物理地址限制）；在 `Auto` 或 `Rga3` 策略下（如 RK3576/RK3588），允许从 `/dev/dma_heap/system` 64 位物理地址堆分配。
-
----
-
-## 禁止事项
-
-- ❌ `infer` 之外出现平台 `#[cfg]`
-- ❌ 每次推理重新加载模型（加载耗时是推理的几十倍）
-- ❌ 把输入输出形状、类别表硬编码在代码里（放 `manifest.toml`）
-- ❌ 把 `LoadedModel` 在多个线程间移动使用（SDK 上下文通常有线程亲和要求）
-- ❌ 后端实现里返回平台原生的错误码类型（在绑定层就转成 `InferError`）
-
----
-
-## 待验证事项
-
-- [ ] `FrameRef` 的确切定义（各平台 buffer 句柄如何统一表达）
-- [ ] `RawOutput` 是否需要支持多输出头（分割/姿态模型）
-- [x] RKNN context 是否真的不可跨线程：已验证单个 `RknnContext` 非线程安全，不可并发调用；必须绑定在专用推理线程内使用；跨线程扩展需使用独立 context 或多进程实例。
-- [ ] 三平台量化后的精度差异范围，据此定一致性测试阈值
+- 无硬件测试验证类型/形状、坐标范围、配置与失败分支。
+- 真机测试按平台 feature + `#[ignore]` 隔离，记录设备、SDK、预处理和模型版本。
+- 同图跨后端比较统一结果，量化误差按实测阈值验收，不要求逐位相等。
+- 三平台精度/资源预算需要各自基线；声明支持不等于已完成真机验证。

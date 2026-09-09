@@ -1,134 +1,47 @@
-# 前端类型安全规范 (Type Safety Guidelines)
+# 类型与时间
 
-> 基于 TypeScript 严格模式。核心目标：**前端类型与 Rust 后端 DTO 绝对对齐，消灭运行时隐式类型崩溃**。
+类型入口：[types/index.ts](../../../web/src/types/index.ts)、[types/system.ts](../../../web/src/types/system.ts)。协议以 [API 规范](../backend/api-guidelines.md) 为准。
 
----
+## 编译与边界
 
-## 1. tsconfig 编译基线
+- 类型基线：`strict`、`noUncheckedIndexedAccess`、`noUnusedLocals`、`noUnusedParameters`、`noFallthroughCasesInSwitch`、`verbatimModuleSyntax`；不因编码方便关闭检查。
+- 未知输入用 `unknown`，在网络/配置边界通过共享类型守卫收窄，禁止 `any`、非空断言 `!` 和 UI 内临时 DTO 断言。
+- 必要的输入类型断言收敛在 API 边界并注明来源；`as const` 等字面量收窄不替代运行时校验。
+- 不使用 `@ts-ignore`；临时 `@ts-expect-error` 必须关联明确缺陷，不作为常规错误处理。
 
-必须开启以下核心规则，严禁因编码繁琐而关闭：
+## DTO
 
-```jsonc
-{
-  "compilerOptions": {
-    "strict": true,
-    "noUncheckedIndexedAccess": true,      // 数组下标索引 arr[0] 推导为 T | undefined，防御越界
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "verbatimModuleSyntax": true
-  }
-}
-```
+| 内容      | 约定                                                    |
+| --------- | ------------------------------------------------------- |
+| 字段      | 与 Rust serde 的 camelCase 名称逐字对齐                 |
+| 绝对时间  | `number`，UTC Unix 毫秒；不声明为 `Date/string`         |
+| 可空字段  | Rust `Option<T>` 对应 `T \| null`，不擅自改为 undefined |
+| 几何坐标  | `[0, 1]` 浮点，边界校验后交给渲染层                     |
+| 信封/分页 | 导入共享类型，按具体端点形状解包，不重复定义            |
 
----
+共享 DTO 放 `types/`，feature 私有类型放本域，Props 放组件附近。
+改字段同步 Rust DTO、共享 TS 类型、解码器和全部消费者；编译器不能自动发现后端单侧改名。
 
-## 2. 与后端 DTO 对齐铁律
+## 联合类型
 
-后端所有 DTO 集中定义于 `src/types/api.ts`，字段名采用 camelCase，与后端 `#[serde(rename_all = "camelCase")]` 逐字对齐：
+WS 消息用 `type` 判别联合，异步状态用互斥的 `idle/loading/success/error` 变体；新增变体时必须暴露遗漏分支。
 
-### 2.1 统一信封与分页契约
 ```ts
-// src/types/api.ts
-export interface ApiResponse<T> {
-  code: number        // 0 = 成功，非 0 = 业务错误码
-  message: string     // 成功为 "success"，错误为人类可读提示
-  data: T | null      // 成功返回负载，错误固定为 null
-  timestamp: number   // 13 位 UTC Unix 毫秒
-}
-
-export interface PaginatedData<T> {
-  items: T[]
-  total: number
-  page: number
-  pageSize: number
-  totalPages: number
-}
-
-export interface CursorParams {
-  limit?: number      // 默认 50，上限 500
-  before?: number     // 游标时间戳（13 位 UTC 毫秒）
-  cameraId?: string
-}
+// switch 已处理所有联合变体后的 default 分支
+const exhaustive: never = message;
+return exhaustive;
 ```
 
-### 2.2 字段映射规范
-- **时间戳必须是 `number`**：DTO 中的时间字段必须显式声明为 `number`（13 位 UTC Unix 毫秒），**严禁声明为 `string` 或 `Date`**；
-- **空值映射**：后端 `Option<T>` 在 JSON 中序列化为 `null`，前端 DTO 必须声明为 `T | null`，不得声明为 `T | undefined`；
-- **坐标归一化**：目标检测框坐标必须使用归一化区间 `[0.0, 1.0]`：
-  ```ts
-  export interface BoundingBox {
-    x: number; y: number; width: number; height: number;
-  }
-  ```
+类型守卫、归一化、状态 reducer 和元数据投影由数据所有者维护，组件不另建 payload 契约。
 
----
+## 时间显示
 
-## 3. 网络边界与类型断言收敛
+统一使用 [lib/time.ts](../../../web/src/lib/time.ts) 的 `Intl.DateTimeFormat` / `Intl.RelativeTimeFormat`。
 
-- **断言隔离**：`as` 类型断言**仅允许出现在 `src/lib/api/` 的网络请求封装中**，且必须附带来源注释。**严禁在组件、hooks 或业务工具函数中使用 `as SomeType` 断言逃逸**；
-- **严禁 `any`**：禁止在代码中出现 `any`。对于未定类型必须使用 `unknown`，并通过自定义类型守卫（Type Guard）收窄后使用。
+- 比较和差值按 UTC 毫秒计算，只在展示时构造 Date；不手工切片日期字符串，不为格式化新增日期库。
+- 使用用户语言和浏览器/显式时区，统一 24 小时制；关键设置/HUD 标明当前时区。
+- 相对时间：小于 1 分钟显示刚刚，1～59 分钟/1～23 小时显示相对值，24 小时起显示绝对日期时间。
+- 语言与时区分别处理：当前 formatter 使用浏览器时区，语言切换不会自动变成 Shanghai/Taipei/UTC；不能沿用旧的语言推断时区草案。
+- 检测框匹配视频帧时使用原始时间基准，不做本地化换算；CSV/Excel 导出显示时间使用 ISO 8601。
 
----
-
-## 4. 可辨识联合与编译期穷尽检查
-
-- **WebSocket 消息分发**：以 `type` 字段驱动，`switch` 语句中**必须包含 `never` 穷尽检查**，确保后端新增消息事件类型时前端直接在编译期报错阻断：
-  ```ts
-  export type WsMessage =
-    | { type: "alarm.reported"; payload: AlarmDto }
-    | { type: "capture.reported"; payload: CaptureDto }
-    | { type: "task.reconciled"; payload: { taskId: string; status: string } }
-    | { type: "stream.lagged"; payload: { skipped: number } }
-
-  function dispatchWs(msg: WsMessage) {
-    switch (msg.type) {
-      case "alarm.reported":   return handleAlarm(msg.payload)
-      case "capture.reported": return handleCapture(msg.payload)
-      case "task.reconciled":  return handleTask(msg.payload)
-      case "stream.lagged":    return handleLagged(msg.payload)
-      default: {
-        const _exhaustive: never = msg // 后端新增类型未处理时编译失败
-        return _exhaustive
-      }
-    }
-  }
-  ```
-- **异步状态管理**：使用显式互斥联合类型 `AsyncState<T>`，禁止用多个 `boolean` 标志组合（如 `{ loading: true, data: ... }`）引发非法状态：
-  ```ts
-  type AsyncState<T> =
-    | { status: "idle" }
-    | { status: "loading" }
-    | { status: "success"; data: T }
-    | { status: "error"; error: string }
-  ```
-
----
-
-## 5. 时间格式化规范
-
-- **严禁手动截取**：严禁写 `new Date(ts).toISOString().slice(0, 10)` 等跨浏览器兼容性极差的手动字符串切片；
-- **统一国际化格式化**：统一使用 `Intl.DateTimeFormat` 或通过 `src/lib/time.ts` 工具函数格式化时间，自动适配浏览器语言与本地时区。
-
----
-
-## 6. 类型存放组织规范
-
-| 类型类别 | 存放位置 | 规则 |
-|---------|---------|------|
-| **后端 DTO** | `src/types/api.ts` | 与后端完全对齐的唯一权威信源 |
-| **全局领域模型** | `src/types/` | 跨多个 feature 共用的前端领域抽象 |
-| **Feature 专属类型** | `src/features/<name>/types.ts` | 仅在本 feature 内流转的状态/模型 |
-| **组件 Props** | 紧邻组件文件内 | 声明于组件正上方，不集中到全局 `types/` |
-
----
-
-## 7. 禁止事项 (Iron Rules)
-
-- ❌ 使用 `any` 类型
-- ❌ 在 `src/lib/api/` 之外使用 `as` 类型断言
-- ❌ 使用 `@ts-ignore`（若确需临时规避，使用 `@ts-expect-error` 并注明缺陷跟踪链接）
-- ❌ 使用非空断言操作符 `!`（必须使用可选链 `?.` 或显式条件判空）
-- ❌ DTO 中时间戳字段使用 `string` 或 `Date` 类型（必须为 `number`）
-- ❌ 关闭 tsconfig 中任何 strict 检查选项
-- ❌ 手动通过字符串切片格式化日期
+验证空值/非法输入、漏处理联合变体、坐标边界和时间阈值；不以局部断言绕过共享契约。
