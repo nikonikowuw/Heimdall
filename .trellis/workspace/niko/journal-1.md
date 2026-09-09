@@ -499,3 +499,25 @@ Fixed configurable algorithm package upload limits end to end: centralized and v
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: Implement task algorithm binding contract and instance consistency
+
+**Date**: 2026-09-09
+**Task**: Implement task algorithm binding contract and instance consistency
+**Branch**: `dev`
+
+### Summary
+
+Defined explicit i32 mapping for TaskStatus and added algorithm binding fields to AnalysisTask. Added V5 migration and implemented atomic transactional sync between analysis_tasks and algorithm_instances in TaskRepo. Updated API DTOs and handlers with validation. Updated backend database guidelines spec.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `62eb169` | (see git log) |
+| `d0bae9b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
