@@ -562,3 +562,25 @@ Defined explicit i32 mapping for TaskStatus and added algorithm binding fields t
 ### Next Steps
 
 - 推进 09-08-task-api-pipeline-orchestration 任务编排与状态同步
+
+
+## Session 22: 实现任务API启停编排与状态双写同步
+
+**Date**: 2026-09-10
+**Task**: 实现任务API启停编排与状态双写同步
+**Branch**: `dev`
+
+### Summary
+
+接入 TaskRuntimeService 协调层，实现任务启用/停用/配置重载、摄像头与任务级联析构编排、默认算法按需解析及状态持久化双写与回滚机制，补充幂等性与优雅停机覆盖。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `453d895` | (see git log) |
+| `d7a3207` | (see git log) |
+
+### Status
+
+[OK] **Completed**
