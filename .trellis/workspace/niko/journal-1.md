@@ -643,3 +643,24 @@ Defined explicit i32 mapping for TaskStatus and added algorithm binding fields t
 ### Next Steps
 
 - 推进 09-08-realtime-detection-metadata-canvas-overlay 任务（实时画面检测框与元数据 Canvas2D 渲染）
+
+
+## Session 25: 实时AI检测框与跟踪元数据流转及Canvas2D叠加渲染
+
+**Date**: 2026-09-10
+**Task**: 实时AI检测框与跟踪元数据流转及Canvas2D叠加渲染
+**Branch**: `dev`
+
+### Summary
+
+完成实时AI检测框与航迹元数据的低开销WebSocket下发流转（视口感知静默、15 FPS频控节流、边缘清空）与前端LivePlayer Canvas 2D离屏平滑叠加渲染，统一全局wsClient与trackStore发布订阅架构，全链路门禁通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a579f60` | (see git log) |
+
+### Status
+
+[OK] **Completed**
