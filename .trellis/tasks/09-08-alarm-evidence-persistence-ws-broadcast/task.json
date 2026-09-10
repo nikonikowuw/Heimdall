@@ -3,7 +3,7 @@
   "name": "alarm-evidence-persistence-ws-broadcast",
   "title": "规则告警与抓拍证据三支柱落库及WebSocket实时广播",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

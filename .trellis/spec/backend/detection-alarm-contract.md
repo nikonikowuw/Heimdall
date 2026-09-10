@@ -11,7 +11,7 @@
 | [SDK emitter](../../../crates/algo-sdk/src/emitter.rs)                                                 | 每次检测发射 `AV_RESULT_ALARM=1`、新 UUID、`bbox: [x,y,w,h]` 和全景抓拍请求                                                         |
 | [宿主解析](../../../crates/infer/src/package.rs) / [回调](../../../crates/infer/src/c_abi/loader.rs)   | 仅收集 JSON、提取 `objects`；未保留 `kind/frame_id/images`、忽略 `event_id`，将 xywh 直接传给 xyxy 构造器，部分解析错误被当作空结果 |
 | [规则引擎](../../../crates/pipeline/src/rules.rs) / [管线](../../../crates/pipeline/src/pump.rs)       | 跟踪和规则触发后执行抓拍；规则关联仍用 `rule_index`，不是稳定规则 ID                                                                |
-| [AlarmDto](../../../crates/api/src/routes/alarm.rs) / [entity](../../../crates/db/src/entity/alarm.rs) | 图片字段平铺，尚无 `ruleId` / `evidenceStatus`；不能假定下述异步证据状态已落地                                                      |
+| [AlarmDto](../../../crates/api/src/routes/alarm.rs) / [entity](../../../crates/db/src/entity/alarm.rs) | 通过 `AlarmDispatchService` 异步持久化至 `alarm_records` 与 `capture_records`，并广播 `alarm.triggered`；图片字段平铺，快照失败保留告警事实（路径留空） |
 
 ## 2. 接口与兼容迁移
 

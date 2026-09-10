@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/detection-alarm-contract.md", "reason": "验证告警落库字段、三支柱抓拍记录与 WS 广播载荷严格符合契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查数据库操作是否收敛在仓储内且无阻塞写盘"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁：clippy、fmt 与端到端集成测试通过"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁：typecheck 与组件渲染无报错"}

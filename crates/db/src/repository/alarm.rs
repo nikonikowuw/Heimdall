@@ -1,6 +1,6 @@
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    QueryOrder, QuerySelect, TransactionTrait,
 };
 
 use crate::entity::alarm::{ActiveModel, Column, Entity, Model};
@@ -73,6 +73,35 @@ impl AlarmRepo {
         active_model: ActiveModel,
     ) -> Result<Model, DbError> {
         active_model.insert(db).await.map_err(DbError::from)
+    }
+
+    pub async fn insert_alarm_with_optional_capture(
+        db: &DatabaseConnection,
+        alarm: ActiveModel,
+        capture: Option<crate::entity::capture::ActiveModel>,
+    ) -> Result<Model, DbError> {
+        db.transaction::<_, Model, DbError>(|txn| {
+            Box::pin(async move {
+                let saved_alarm = alarm.insert(txn).await.map_err(DbError::from)?;
+                if let Some(cap) = capture {
+                    cap.insert(txn).await.map_err(DbError::from)?;
+                }
+                Ok(saved_alarm)
+            })
+        })
+        .await
+        .map_err(DbError::from)
+    }
+
+    pub async fn find_by_event_id(
+        db: &DatabaseConnection,
+        event_id: &str,
+    ) -> Result<Option<Model>, DbError> {
+        Entity::find()
+            .filter(Column::EventId.eq(event_id))
+            .one(db)
+            .await
+            .map_err(DbError::from)
     }
 
     pub async fn delete_by_event_id(

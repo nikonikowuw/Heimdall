@@ -172,6 +172,10 @@ async fn main() -> Result<()> {
     let probe_svc = Arc::new(api::CameraProbeService::from_state(&state));
     probe_svc.start_periodic_probe_worker(std::time::Duration::from_secs(30));
 
+    // 启动后台告警异步持久化与 WebSocket 实时广播工作线程
+    let alarm_svc = Arc::new(api::AlarmDispatchService::from_state(&state));
+    alarm_svc.start_worker();
+
     // 执行网络服务冷启动防失联自愈检查（恢复意外断电或重启前未确认的网卡快照）
     api::NetworkService::recover_pending_snapshots_on_startup().await;
 

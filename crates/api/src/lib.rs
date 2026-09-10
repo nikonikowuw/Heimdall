@@ -1,3 +1,4 @@
+pub mod alarm_service;
 pub mod algo;
 pub mod camera_probe;
 pub mod crypto;
@@ -14,6 +15,7 @@ pub mod system_info;
 pub mod task_service;
 pub mod time_service;
 
+pub use alarm_service::AlarmDispatchService;
 pub use camera_probe::CameraProbeService;
 pub use error::ApiError;
 pub use network_service::NetworkService;
