@@ -6,9 +6,10 @@
   "description": "YOLOv8n-face detection and EdgeFace-xs embeddings on Rockchip RK3576 NPU",
   "algorithm_type": "face_recognition",
   "alarm_type_id": "face_recognize",
-  "platform_id": "rknn-rk3576",
+  "platform_id": "linux-rknn",
   "min_adapter_version": "1.0.0",
   "runtime_constraints": {
+    "target_soc": "rk3576",
     "requires_rknn_runtime": true,
     "min_rknnrt_version": "1.5.0"
   },

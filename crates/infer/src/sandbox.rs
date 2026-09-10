@@ -71,7 +71,7 @@ pub struct SelfTestReport {
 pub struct AlgoSandbox;
 
 impl AlgoSandbox {
-    /// 对指定算法包目录执行七步沙箱安全校验
+    /// 对指定算法包目录执行六步沙箱安全校验
     ///
     /// `use_subprocess`: 是否启用物理子进程隔离自检（生产和上传时必须为 true）
     pub fn validate_package(
@@ -151,7 +151,7 @@ impl AlgoSandbox {
             });
         }
 
-        let step = "4.Config Schema 格式校验";
+        let step = "3.Config Schema 格式校验";
         let schema_path = canonical_dir.join("config.schema.json");
         if schema_path.exists() {
             let schema_str = std::fs::read_to_string(&schema_path).map_err(|e| {

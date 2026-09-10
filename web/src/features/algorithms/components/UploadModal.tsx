@@ -31,7 +31,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuc
     t('upload.step4'),
     t('upload.step5'),
     t('upload.step6'),
-    t('upload.step7'),
   ]
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -70,7 +69,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuc
 
     // 动态步进动画定时器模拟物理沙箱前置校验推进
     const timer = setInterval(() => {
-      setCurrentStepIdx((prev) => (prev < 6 ? prev + 1 : prev))
+      setCurrentStepIdx((prev) => (prev < 5 ? prev + 1 : prev))
     }, 600)
 
     try {
@@ -78,7 +77,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuc
       clearInterval(timer)
       setUploadResult(res)
       if (res.passed) {
-        setCurrentStepIdx(7)
+        setCurrentStepIdx(stepsList.length)
         onSuccess()
       } else {
         setCurrentStepIdx(res.stepsPassed)
@@ -183,11 +182,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuc
                         : t('upload.testingTitle')}
                   </span>
                   <span className="font-mono text-[var(--accent)]">
-                    {Math.min(currentStepIdx, 7)} / 7
+                    {Math.min(currentStepIdx, stepsList.length)} / {stepsList.length}
                   </span>
                 </div>
 
-                {/* 七步自检列表 */}
+                {/* 六步自检列表 */}
                 <div className="space-y-2">
                   {stepsList.map((step, idx) => {
                     const stepNum = idx + 1

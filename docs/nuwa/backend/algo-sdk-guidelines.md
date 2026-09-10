@@ -162,16 +162,16 @@ unsafe extern "C" fn(
 | `linux-x64`    | `generic-x86_64-cpu`、`linux-x86_64` |
 
 归档由 [archive.rs](../../../crates/api/src/algo/archive.rs) 识别 `.tar.gz/.tgz/.tar/.zip`，拒绝绝对路径、`..` 和逃逸目标目录的条目。
-生产/上传必须启用子进程自检，失败拒绝加载。`AGENTS.md` 要求七步沙箱；当前 `validate_package` 实现以下六项，缺口不能用改编号掩盖：
+生产/上传必须启用子进程自检，失败拒绝加载。算法包必须完整通过以下**六步沙箱物理自检**：
 
 | 检查            | 失败条件                                          |
 | --------------- | ------------------------------------------------- |
-| 路径与结构      | canonicalize 失败，缺 manifest/lib/testimage      |
-| Manifest 与平台 | 解析/版本/平台匹配失败                            |
-| Config Schema   | 存在但不是合法 JSON                               |
-| 子进程隔离      | 派生或监控失败                                    |
-| 元数据一致性    | library_query 的 algorithm_id 与 manifest 不同    |
-| 真实前向自检    | 原生测试帧处理失败，回调结果不合格，超时/异常退出 |
+| 1. 路径与结构   | canonicalize 失败，缺 manifest/lib/testimage      |
+| 2. Manifest 与平台 | 解析/版本/平台匹配失败                         |
+| 3. Config Schema | 存在但不是合法 JSON                              |
+| 4. 子进程隔离   | 派生或监控失败                                    |
+| 5. 元数据一致性 | library_query 的 algorithm_id 与 manifest 不同    |
+| 6. 真实前向自检 | 原生测试帧处理失败，回调结果不合格，超时/异常退出 |
 
 子进程使用当前可执行文件的 `__verify-algo <package_dir>`，看门狗 **10000ms**；超时终止，非零退出或 SIGSEGV 等信号均失败。
 库查找顺序：`lib/lib{algorithm_id}.{本机扩展名}` → 异构扩展名 → lib 目录按扩展名扫描；不能因此跳过平台匹配。
@@ -207,4 +207,4 @@ unsafe extern "C" fn(
 | 宿主所有停止/重置路径均 flush                                  | SDK 已提供入口，`RawAlgoInstance::drop` 当前直接 destroy；调用接线仍需验证/补齐         |
 | `instance_update_config` 更新离线提取阈值                      | 库级提取当前使用自身阈值，不能推断与实例配置自动联动；模型由 `shared_models` 惰性初始化 |
 | Manifest runtime_constraints/resource_profile/self_test 已生效 | 当前 `AlgoManifest` 未建模这些扩展字段；不能据此声称 OS、资源或自检超时限制已执行       |
-| config.schema 必填且七步全部实现                               | 交付要求保留，但当前校验允许 schema 缺失，沙箱仍为上述六项                              |
+| config.schema 必填且六步全部实现                               | 交付要求保留，但当前校验允许 schema 缺失，沙箱为上述六项                                |

@@ -304,7 +304,7 @@ pub async fn handle_package_upload(
         Err(boxed_err) => {
             return Ok(SandboxCheckResultDto {
                 passed: false,
-                steps_total: 7,
+                steps_total: 6,
                 steps_passed: boxed_err.failed_idx,
                 steps,
                 error_message: Some(boxed_err.message),
@@ -383,8 +383,8 @@ pub async fn handle_package_upload(
 
     Ok(SandboxCheckResultDto {
         passed: true,
-        steps_total: 7,
-        steps_passed: 7,
+        steps_total: 6,
+        steps_passed: 6,
         steps,
         error_message: None,
         version: Some(UploadVersionInfo {

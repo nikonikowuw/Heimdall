@@ -1,4 +1,4 @@
-//! 算法包七步沙箱校验与真实前向推理自测测试套件
+//! 算法包六步沙箱校验与真实前向推理自测测试套件
 
 use infer::package::AlgoRegistry;
 use infer::sandbox::{normalize_platform_id, AlgoSandbox};
@@ -67,7 +67,7 @@ fn test_sandbox_rust_yolo26n_package_in_process_self_test() {
         return;
     };
 
-    // 运行重构后的纯 Rust yolo26n 算法包七步沙箱自检
+    // 运行重构后的纯 Rust yolo26n 算法包六步沙箱自检
     let res = AlgoSandbox::validate_package(&pkg_path, false);
     assert!(
         res.is_ok(),

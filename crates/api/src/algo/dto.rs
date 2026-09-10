@@ -127,11 +127,10 @@ pub struct SandboxCheckResultDto {
 pub fn get_standard_steps() -> Vec<String> {
     vec![
         "1. 路径防穿透与目录结构检查".to_string(),
-        "2. SHA256 完整性与安全指纹校验".to_string(),
-        "3. 解析 Manifest 与平台拓扑匹配".to_string(),
-        "4. Config Schema 参数格式校验".to_string(),
-        "5. 派生隔离子进程与超时守护".to_string(),
-        "6. 算法库 C ABI 导出符号核对".to_string(),
-        "7. 真实前向推理自测与内存复核".to_string(),
+        "2. 解析 Manifest 与平台拓扑匹配".to_string(),
+        "3. Config Schema 参数格式校验".to_string(),
+        "4. 派生隔离子进程与超时守护".to_string(),
+        "5. 算法库 C ABI 导出符号核对".to_string(),
+        "6. 真实前向推理自测与内存复核".to_string(),
     ]
 }

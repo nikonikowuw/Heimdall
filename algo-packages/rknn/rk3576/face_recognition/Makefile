@@ -21,7 +21,7 @@ help:
 		'make clean     remove package build artifacts'
 
 build:
-	$(CARGO_ZIGBUILD) build -p $(PACKAGE) --release --target $(TARGET)
+	cd $(WORKSPACE_ROOT) && $(CARGO_ZIGBUILD) build -p $(PACKAGE) --release --target $(TARGET)
 	@mkdir -p lib
 	cp $(WORKSPACE_ROOT)/target/$(TARGET)/release/libface_recognition.so $(LIB)
 
@@ -40,6 +40,7 @@ hardware:
 	cd $(WORKSPACE_ROOT) && $(CARGO) test -p $(PACKAGE) -- --ignored --nocapture
 
 package: build
+	@rm -f face_recognition.tar.gz
 	tar -czf face_recognition.tar.gz \
 		--exclude='.DS_Store' \
 		--exclude='src' \
@@ -48,7 +49,8 @@ package: build
 		--exclude='Makefile' \
 		--exclude='*.tar.gz' \
 		--exclude='target' \
-		manifest.json config.schema.json README.md model lib
+		--exclude='.env' \
+		manifest.json config.schema.json README.md testimage.jpg model lib
 
 clean:
 	rm -rf lib face_recognition.tar.gz

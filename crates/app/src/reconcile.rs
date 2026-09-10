@@ -71,7 +71,7 @@ pub async fn reconcile_and_seed_algorithms(
             continue;
         }
 
-        // 2. 仅对未入库的新算法包执行 7 步沙箱物理自测校验
+        // 2. 仅对未入库的新算法包执行 6 步沙箱物理自测校验
         match AlgoSandbox::validate_package(&dir, false) {
             Ok(manifest) => {
                 let is_builtin = dir.starts_with(&base_algo_dir)

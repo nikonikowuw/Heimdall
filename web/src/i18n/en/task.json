@@ -78,11 +78,11 @@
     "unprobedStatus": "Pending"
   },
   "sandbox": {
-    "title": "7-Step Sandbox Self-Test",
+    "title": "6-Step Sandbox Self-Test",
     "status": "Sandbox Status:",
-    "allPassed": "7/7 All Passed (HOT READY)",
-    "interrupted": "{{passed}}/7 Interrupted",
-    "tip": "Click button above to trigger 7-step security verification in an isolated subprocess (Path, SHA256, ABI, and forward inference).",
+    "allPassed": "6/6 All Passed (HOT READY)",
+    "interrupted": "{{passed}}/6 Interrupted",
+    "tip": "Click button above to trigger 6-step security verification in an isolated subprocess (Path, Manifest, Schema, Subprocess, ABI, and forward inference).",
     "uploadSuccess": "Algorithm package uploaded, validated, and hot-loaded successfully!"
   },
   "studio": {

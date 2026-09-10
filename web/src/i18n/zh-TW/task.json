@@ -78,12 +78,12 @@
     "unprobedStatus": "待探活"
   },
   "sandbox": {
-    "title": "七步沙箱安全自檢",
+    "title": "六步沙箱安全自檢",
     "status": "沙箱檢驗狀態:",
-    "allPassed": "7/7 全部通過 (HOT READY)",
-    "interrupted": "{{passed}}/7 驗證中斷",
-    "tip": "點擊上方按鈕觸發隔離子進程對該演算法包執行 7 步安全自檢（結構、SHA256、ABI 符號與前向推理自測）。",
-    "uploadSuccess": "演算法包上傳並通過 7 步沙箱自檢，已成功熱載入！"
+    "allPassed": "6/6 全部通過 (HOT READY)",
+    "interrupted": "{{passed}}/6 驗證中斷",
+    "tip": "點擊上方按鈕觸發隔離子進程對該演算法包執行 6 步安全自檢（結構、Manifest、Schema、子程序、ABI 符號與前向推理自測）。",
+    "uploadSuccess": "演算法包上傳並通過 6 步沙箱自檢，已成功熱載入！"
   },
   "studio": {
     "backToChannels": "返回通道列表",

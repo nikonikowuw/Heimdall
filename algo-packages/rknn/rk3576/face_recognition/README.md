@@ -12,12 +12,12 @@
 
 ## 模型契约
 
-`manifest.json` 是模型路径、SHA-256、输入尺寸、输入布局和输出形状的唯一运行时来源。当前已校验的模型摘要：
+`manifest.json` 是模型路径、输入尺寸、输入布局和输出形状的唯一运行时来源。模型摘要：
 
-| 模型 | 输入 | 输出 | SHA-256 |
-| --- | --- | --- | --- |
-| `yolov8n-face-640x384_mixed_face.rknn` | `1x3x384x640`, RGB, uint8 | 12 tensors: `48x80`, `24x40`, `12x20` 三尺度 | `14d7db34c4f79fc441db30ed703d739fc90e47767dfadc42cd7fb27d3ce4894a` |
-| `edgeface_xs_gamma_06_rk3576_fp16.rknn` | `1x3x112x112`, RGB, uint8 | 512D FP32 view | `ed99d6e416fb24eb1f7a77beb8f1929159018b57da3a87a6cd7dbb8ff569d85a` |
+| 模型 | 输入 | 输出 |
+| --- | --- | --- |
+| `yolov8n-face-640x384_mixed_face.rknn` | `1x3x384x640`, RGB, uint8 | 12 tensors: `48x80`, `24x40`, `12x20` 三尺度 |
+| `edgeface_xs_gamma_06_rk3576_fp16.rknn` | `1x3x112x112`, RGB, uint8 | 512D FP32 view |
 
 输入的模型布局是 NCHW；Rust 提交的 packed RGB buffer 使用 RKNN `Nhwc` input descriptor，由 Runtime 负责输入格式转换和量化。输入均设置 `pass_through = 0`，因此实际量化/归一化必须与转换模型时的 `mean_values`、`std_values` 保持一致。
 

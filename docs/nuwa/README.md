@@ -27,7 +27,7 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
    - 淘汰时优先清除无告警普通抓拍，单一 SQLite 事务内同步销毁物理文件与 DB 记录（“图在案在，图销案销”）。
 6. **算法沙箱与防御性安全**：
    - 算法包遵循稳定 C ABI 虚表规范；
-   - 上传解压严格防御 Tar/Zip-Slip 路径逃逸漏洞；七步物理沙箱自检通过后方可加载。
+   - 上传解压严格防御 Tar/Zip-Slip 路径逃逸漏洞；六步物理沙箱自检通过后方可加载。
 
 ---
 
@@ -51,7 +51,7 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | [📹 媒体管线](./backend/media-pipeline.md) | RTSP 拉流、解码、RingBuffer 与 StreamHub | 零拷贝帧引用、丢帧降级、无界队列杜绝 |
 | [🧠 推理后端](./backend/inference-backends.md) | RKNN、Apple Core ML、Ascend CANN 适配 | NPU 调度、内存池复用、RAII 释放 |
 | [🔒 FFI 规范](./backend/ffi-guidelines.md) | C ABI、裸指针、内存对齐与 safe 封装 | `// SAFETY:` 注释、双侧内存布局断言 |
-| [📦 算法 SDK 与沙箱](./backend/algo-sdk-guidelines.md) | 动态库装载、参数校验与七步自检沙箱 | 目录防穿透、子进程隔离自检、虚表版本 |
+| [📦 算法 SDK 与沙箱](./backend/algo-sdk-guidelines.md) | 动态库装载、参数校验与六步自检沙箱 | 目录防穿透、子进程隔离自检、虚表版本 |
 | [🚨 检测告警契约](./backend/detection-alarm-contract.md) | 检测载荷、ByteTrack、几何判定与证据三支柱 | `trackId` 连续性、5 秒冷却防抖、状态流转 |
 | [⚡ 并发与异步](./backend/concurrency-guidelines.md) | Tokio 异步、专用工作线程与停机协调 | 不持锁 await、有界通道、优雅退出 |
 | [💾 数据库与淘汰](./backend/database-guidelines.md) | SQLite WAL 模式、迁移与原子级联淘汰 | statvfs 水位检测、单事务图文同步清理 |

@@ -29,7 +29,7 @@
 ├── manifest.json            # 算法元数据、输入能力与资源档案
 ├── config.schema.json       # 参数 JSON Schema 校验契约
 ├── .env.example             # 本地单机调试与参数调优模板
-├── testimage.jpg            # 七步安全沙箱自检样例图像 (810x1080)
+├── testimage.jpg            # 六步安全沙箱自检样例图像 (810x1080)
 ├── model/
 │   └── yolov8n-640x384-rk3576.rknn # Rockchip 官方优化版 RKNN 模型
 ├── lib/
