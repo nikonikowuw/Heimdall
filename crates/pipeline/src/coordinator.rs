@@ -14,7 +14,6 @@ use types::{CodecType, TransportPolicy};
 
 use crate::error::PipelineError;
 use crate::manager::PipelineManager;
-use crate::pump::SubStreamPumpConfig;
 
 const MAX_ALGO_PARAMS_BYTES: usize = 64 * 1024;
 const ATTACH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -44,6 +43,47 @@ pub enum CoordinatorError {
     TaskJoin(#[from] tokio::task::JoinError),
 }
 
+/// 单个算法实例启动配置
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceLaunchConfig {
+    /// 算法包唯一标识
+    pub algorithm_id: String,
+    /// 算法初始化业务自定义参数
+    pub algo_params: serde_json::Value,
+    /// 分析采样目标帧率 (0 表示不限帧率，1..=60 为目标帧率)
+    pub target_fps: u32,
+}
+
+impl InstanceLaunchConfig {
+    /// 从持久化参数解析构建启动配置并校验
+    pub fn from_persisted(
+        algorithm_id: impl Into<String>,
+        params_json: &str,
+        analysis_fps: i32,
+    ) -> Result<Self, String> {
+        if !(0..=60).contains(&analysis_fps) {
+            return Err(format!(
+                "analysis_fps 超出 0..=60 范围 (当前: {analysis_fps})"
+            ));
+        }
+        let algo_params = match serde_json::from_str::<serde_json::Value>(params_json) {
+            Ok(value) if value.is_object() => value,
+            Ok(_) => return Err("params_json 不是有效 JSON Object".to_string()),
+            Err(err) => return Err(format!("params_json 无法解析: {err}")),
+        };
+        let target_fps = if analysis_fps > 0 {
+            analysis_fps as u32
+        } else {
+            10
+        };
+        Ok(Self {
+            algorithm_id: algorithm_id.into(),
+            algo_params,
+            target_fps,
+        })
+    }
+}
+
 /// 启动单路摄像头分析管线参数
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartCameraPipelineParams {
@@ -59,17 +99,64 @@ pub struct StartCameraPipelineParams {
     pub sub_codec: CodecType,
     /// 网络流传输协议策略 (Auto / TCP / UDP)
     pub transport_policy: TransportPolicy,
-    /// 绑定的算法包 ID
-    pub algorithm_id: String,
-    /// 算法初始化业务自定义参数
-    pub algo_params: serde_json::Value,
-    /// 分析采样目标帧率 (1..=60)
-    pub target_fps: u32,
+    /// 绑定的算法实例集合
+    pub instances: Vec<InstanceLaunchConfig>,
     /// 是否启用简易帧差运动门控 (静止场景跳过推理)
     pub motion_gate_enabled: bool,
 }
 
 impl StartCameraPipelineParams {
+    /// 兼容单算法构造器
+    #[allow(clippy::too_many_arguments)]
+    pub fn single(
+        camera_id: impl Into<String>,
+        main_rtsp_url: impl Into<String>,
+        main_codec: CodecType,
+        sub_rtsp_url: impl Into<String>,
+        sub_codec: CodecType,
+        transport_policy: TransportPolicy,
+        algorithm_id: impl Into<String>,
+        algo_params: serde_json::Value,
+        target_fps: u32,
+        motion_gate_enabled: bool,
+    ) -> Self {
+        Self {
+            camera_id: camera_id.into(),
+            main_rtsp_url: main_rtsp_url.into(),
+            main_codec,
+            sub_rtsp_url: sub_rtsp_url.into(),
+            sub_codec,
+            transport_policy,
+            motion_gate_enabled,
+            instances: vec![InstanceLaunchConfig {
+                algorithm_id: algorithm_id.into(),
+                algo_params,
+                target_fps,
+            }],
+        }
+    }
+
+    /// 获取主算法 ID (首个算法实例)
+    pub fn primary_algorithm_id(&self) -> &str {
+        self.instances
+            .first()
+            .map(|i| i.algorithm_id.as_str())
+            .unwrap_or("")
+    }
+
+    /// 获取主算法采样帧率
+    pub fn primary_target_fps(&self) -> u32 {
+        self.instances.first().map(|i| i.target_fps).unwrap_or(0)
+    }
+
+    /// 获取主算法自定义参数
+    pub fn primary_algo_params(&self) -> serde_json::Value {
+        self.instances
+            .first()
+            .map(|i| i.algo_params.clone())
+            .unwrap_or_else(|| serde_json::json!({}))
+    }
+
     /// 校验启动参数合法性，并在进入媒体/FFI 层前拒绝明显无效输入。
     pub fn validate(&self) -> Result<(), CoordinatorError> {
         let cam_id = self.camera_id.trim();
@@ -87,32 +174,46 @@ impl StartCameraPipelineParams {
         validate_rtsp_url("main_rtsp_url", &self.main_rtsp_url)?;
         validate_rtsp_url("sub_rtsp_url", &self.sub_rtsp_url)?;
 
-        let algo_id = self.algorithm_id.trim();
-        if algo_id.is_empty() {
+        if self.instances.is_empty() {
             return Err(CoordinatorError::Validation {
-                reason: "algorithm_id 不能为空".to_string(),
-            });
-        }
-        if algo_id.len() > 128 || algo_id.contains('\0') {
-            return Err(CoordinatorError::Validation {
-                reason: "algorithm_id 长度或字符非法".to_string(),
+                reason: "至少需要一个算法实例".to_string(),
             });
         }
 
-        if self.target_fps == 0 || self.target_fps > 60 {
-            return Err(CoordinatorError::Validation {
-                reason: format!("target_fps 必须在 1..=60 之间 (当前: {})", self.target_fps),
-            });
-        }
+        let mut seen = HashSet::with_capacity(self.instances.len());
+        for inst in &self.instances {
+            let algo_id = inst.algorithm_id.trim();
+            if algo_id.is_empty() {
+                return Err(CoordinatorError::Validation {
+                    reason: "algorithm_id 不能为空".to_string(),
+                });
+            }
+            if algo_id.len() > 128 || algo_id.contains('\0') {
+                return Err(CoordinatorError::Validation {
+                    reason: "algorithm_id 长度或字符非法".to_string(),
+                });
+            }
+            if !seen.insert(algo_id.to_string()) {
+                return Err(CoordinatorError::Validation {
+                    reason: format!("存在重复的 algorithm_id: {algo_id}"),
+                });
+            }
 
-        let algo_params = self.algo_params.to_string();
-        if algo_params.len() > MAX_ALGO_PARAMS_BYTES || algo_params.contains('\0') {
-            return Err(CoordinatorError::Validation {
-                reason: format!(
-                    "algo_params 序列化后必须小于 {} 字节且不能包含 NUL",
-                    MAX_ALGO_PARAMS_BYTES
-                ),
-            });
+            if inst.target_fps > 60 {
+                return Err(CoordinatorError::Validation {
+                    reason: format!("target_fps 必须在 0..=60 之间 (当前: {})", inst.target_fps),
+                });
+            }
+
+            let algo_params = inst.algo_params.to_string();
+            if algo_params.len() > MAX_ALGO_PARAMS_BYTES || algo_params.contains('\0') {
+                return Err(CoordinatorError::Validation {
+                    reason: format!(
+                        "algo_params 序列化后必须小于 {} 字节且不能包含 NUL",
+                        MAX_ALGO_PARAMS_BYTES
+                    ),
+                });
+            }
         }
 
         Ok(())
@@ -150,6 +251,7 @@ pub struct ActiveRuntimeEntry {
     pub sub_stream_key: String,
     pub sub_session: Arc<media::stream_hub::CameraStreamSession>,
     pub worker_handle: infer::InferenceWorkerHandle,
+    pub worker_handles: Vec<(String, infer::InferenceWorkerHandle)>,
     pub started_at_ms: i64,
 }
 
@@ -167,6 +269,14 @@ impl std::fmt::Debug for ActiveRuntimeEntry {
     }
 }
 
+/// 单算法实例运行时查询信息
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceRuntimeInfo {
+    pub algorithm_id: String,
+    pub target_fps: u32,
+}
+
 /// 摄像头管线运行时查询概要视图
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +285,7 @@ pub struct CameraPipelineRuntimeInfo {
     pub generation: u64,
     pub algorithm_id: String,
     pub target_fps: u32,
+    pub instances: Vec<InstanceRuntimeInfo>,
     pub motion_gate_enabled: bool,
     pub is_pump_running: bool,
     pub frames_decoded: u64,
@@ -291,7 +402,7 @@ impl TaskRuntimeService for TaskRuntimeCoordinator {
     }
 
     async fn has_active_runtime(&self, camera_id: &str) -> bool {
-        self.has_active_runtime(camera_id).await
+        self.is_pipeline_running(camera_id).await
     }
 }
 
@@ -393,7 +504,6 @@ impl TaskRuntimeCoordinator {
     }
 
     /// 启动单路摄像头的分析管线。
-    /// 实际状态转换在 detached task 中执行，调用方取消等待不会截断回滚。
     pub async fn start_camera_pipeline(
         &self,
         params: StartCameraPipelineParams,
@@ -419,37 +529,75 @@ impl TaskRuntimeCoordinator {
             StartSlot::Acquired(guard) => guard,
         };
 
-        let pkg = self
-            .algo_registry
-            .get(&params.algorithm_id)
-            .await
-            .ok_or_else(|| CoordinatorError::AlgorithmNotFound {
-                algorithm_id: params.algorithm_id.clone(),
-            })?;
-        let camera_id = params.camera_id.clone();
-        let algo_params = if params.algo_params.is_null() {
-            None
-        } else {
-            Some(params.algo_params.to_string())
-        };
-        let instance = tokio::task::spawn_blocking(move || {
-            pkg.create_instance(&camera_id, algo_params.as_deref())
-        })
-        .await?
-        .map_err(|err| CoordinatorError::AlgorithmInstance {
-            reason: err.to_string(),
-        })?;
-        let worker = infer::InferenceWorker::new(Arc::new(instance));
+        let mut instance_configs = Vec::with_capacity(params.instances.len());
+        let mut workers = Vec::with_capacity(params.instances.len());
+
+        for inst in &params.instances {
+            let pkg = match self.algo_registry.get(&inst.algorithm_id).await {
+                Some(pkg) => pkg,
+                None => {
+                    shutdown_workers(workers).await;
+                    return Err(CoordinatorError::AlgorithmNotFound {
+                        algorithm_id: inst.algorithm_id.clone(),
+                    });
+                }
+            };
+            let camera_id = params.camera_id.clone();
+            let algo_params = if inst.algo_params.is_null() {
+                None
+            } else {
+                Some(inst.algo_params.to_string())
+            };
+            let instance_result = tokio::task::spawn_blocking(move || {
+                pkg.create_instance(&camera_id, algo_params.as_deref())
+            })
+            .await;
+            let instance = match instance_result {
+                Ok(Ok(instance)) => instance,
+                Ok(Err(err)) => {
+                    shutdown_workers(workers).await;
+                    return Err(CoordinatorError::AlgorithmInstance {
+                        reason: err.to_string(),
+                    });
+                }
+                Err(err) => {
+                    shutdown_workers(workers).await;
+                    return Err(CoordinatorError::TaskJoin(err));
+                }
+            };
+            let worker = infer::InferenceWorker::new(Arc::new(instance));
+            let handle = worker.handle();
+            instance_configs.push(crate::pump::WorkerInstanceConfig {
+                algorithm_id: inst.algorithm_id.clone(),
+                target_fps: inst.target_fps,
+                config_json: if inst.algo_params.is_null() {
+                    None
+                } else {
+                    Some(inst.algo_params.to_string())
+                },
+            });
+            workers.push((inst.algorithm_id.clone(), handle, Some(worker)));
+        }
+
         let decoder_camera_id = params.camera_id.clone();
         let decoder_codec = params.sub_codec;
-        let decoder = tokio::task::spawn_blocking(move || {
+        let decoder = match tokio::task::spawn_blocking(move || {
             media::create_decoder(&decoder_camera_id, decoder_codec)
         })
-        .await?;
-        self.start_resources_locked(params, decoder, worker).await
+        .await
+        {
+            Ok(decoder) => decoder,
+            Err(err) => {
+                shutdown_workers(workers).await;
+                return Err(CoordinatorError::TaskJoin(err));
+            }
+        };
+
+        self.start_resources_locked(params, decoder, instance_configs, workers)
+            .await
     }
 
-    /// 使用指定的 VideoDecoder 与 InferenceWorker 启动分析管线。
+    /// 使用指定的 VideoDecoder 与 InferenceWorker 启动分析管线 (向后兼容/测试注入)
     pub async fn start_camera_pipeline_with_decoder_and_worker(
         &self,
         params: StartCameraPipelineParams,
@@ -493,7 +641,36 @@ impl TaskRuntimeCoordinator {
                 return Err(err);
             }
         };
-        self.start_resources_locked(params, decoder, worker).await
+
+        let handle = worker.handle();
+        let mut instance_configs = Vec::with_capacity(params.instances.len());
+        let mut workers = Vec::with_capacity(params.instances.len());
+        let mut managed_worker_opt = Some(worker);
+
+        if params.instances.is_empty() {
+            instance_configs.push(crate::pump::WorkerInstanceConfig {
+                algorithm_id: "default".to_string(),
+                target_fps: 0,
+                config_json: None,
+            });
+            workers.push(("default".to_string(), handle, managed_worker_opt));
+        } else {
+            for inst in &params.instances {
+                instance_configs.push(crate::pump::WorkerInstanceConfig {
+                    algorithm_id: inst.algorithm_id.clone(),
+                    target_fps: inst.target_fps,
+                    config_json: None,
+                });
+                workers.push((
+                    inst.algorithm_id.clone(),
+                    handle.clone(),
+                    managed_worker_opt.take(),
+                ));
+            }
+        }
+
+        self.start_resources_locked(params, decoder, instance_configs, workers)
+            .await
     }
 
     /// 已经持有 camera operation lock 时装配资源；所有失败路径都在本函数内回滚。
@@ -501,7 +678,12 @@ impl TaskRuntimeCoordinator {
         &self,
         params: StartCameraPipelineParams,
         decoder: Box<dyn media::decoder::VideoDecoder + Send>,
-        worker: infer::InferenceWorker,
+        instance_configs: Vec<crate::pump::WorkerInstanceConfig>,
+        workers: Vec<(
+            String,
+            infer::InferenceWorkerHandle,
+            Option<infer::InferenceWorker>,
+        )>,
     ) -> Result<u64, CoordinatorError> {
         let camera_id = params.camera_id.clone();
         let main_stream_key = format!("{camera_id}:main");
@@ -511,7 +693,18 @@ impl TaskRuntimeCoordinator {
         let mut sub_ai_enabled = false;
         let mut pump_started = false;
         let mut decoder_opt = Some(decoder);
-        let mut worker_opt = Some(worker);
+        let mut workers_opt = Some(workers);
+
+        let primary_handle = workers_opt
+            .as_ref()
+            .and_then(|w| w.first())
+            .map(|(_, h, _)| h.clone())
+            .expect("workers must not be empty");
+
+        let worker_handles = workers_opt
+            .as_ref()
+            .map(|w| w.iter().map(|(id, h, _)| (id.clone(), h.clone())).collect())
+            .unwrap_or_default();
 
         let result: Result<u64, CoordinatorError> = async {
             let main_rx = self
@@ -549,21 +742,18 @@ impl TaskRuntimeCoordinator {
             let active_decoder = decoder_opt
                 .take()
                 .expect("decoder is owned by startup transaction");
-            let active_worker = worker_opt
+            let active_workers = workers_opt
                 .take()
-                .expect("worker is owned by startup transaction");
-            let worker_handle = active_worker.handle();
-            let pump_config = SubStreamPumpConfig {
-                target_fps: params.target_fps,
-                motion_gate_enabled: params.motion_gate_enabled,
-            };
+                .expect("workers are owned by startup transaction");
+
             self.pipeline_mgr
-                .start_analysis_pump_with_worker(
+                .start_analysis_pump_multi_worker(
                     &camera_id,
                     sub_session.clone(),
                     active_decoder,
-                    active_worker,
-                    pump_config,
+                    instance_configs,
+                    active_workers,
+                    params.motion_gate_enabled,
                 )
                 .await;
             pump_started = true;
@@ -580,7 +770,8 @@ impl TaskRuntimeCoordinator {
                     .expect("main attach handle is owned by startup transaction"),
                 sub_stream_key: sub_stream_key.clone(),
                 sub_session,
-                worker_handle,
+                worker_handle: primary_handle,
+                worker_handles,
                 started_at_ms: chrono::Utc::now().timestamp_millis(),
             };
             self.runtimes.write().await.insert(camera_id.clone(), entry);
@@ -595,8 +786,12 @@ impl TaskRuntimeCoordinator {
             if pump_started {
                 self.pipeline_mgr.stop_analysis_pump(&camera_id).await;
             }
-            if let Some(worker) = worker_opt.take() {
-                shutdown_worker(worker).await;
+            if let Some(workers) = workers_opt.take() {
+                for (_, _, worker) in workers {
+                    if let Some(w) = worker {
+                        shutdown_worker(w).await;
+                    }
+                }
             }
             if let Some(decoder) = decoder_opt.take() {
                 dispose_decoder(decoder).await;
@@ -765,11 +960,23 @@ impl TaskRuntimeCoordinator {
             })
             .unwrap_or((0, 0, 0));
 
+        let instances = params
+            .instances
+            .iter()
+            .map(|i| InstanceRuntimeInfo {
+                algorithm_id: i.algorithm_id.clone(),
+                target_fps: i.target_fps,
+            })
+            .collect();
+        let primary_algo = params.primary_algorithm_id().to_string();
+        let primary_fps = params.primary_target_fps();
+
         Some(CameraPipelineRuntimeInfo {
             camera_id: camera_id.to_string(),
             generation,
-            algorithm_id: params.algorithm_id,
-            target_fps: params.target_fps,
+            algorithm_id: primary_algo,
+            target_fps: primary_fps,
+            instances,
             motion_gate_enabled: params.motion_gate_enabled,
             is_pump_running,
             frames_decoded,
@@ -786,6 +993,20 @@ async fn shutdown_worker(worker: infer::InferenceWorker) {
         worker.shutdown()
     })
     .await;
+}
+
+async fn shutdown_workers(
+    workers: Vec<(
+        String,
+        infer::InferenceWorkerHandle,
+        Option<infer::InferenceWorker>,
+    )>,
+) {
+    for (_, _, worker) in workers {
+        if let Some(worker) = worker {
+            shutdown_worker(worker).await;
+        }
+    }
 }
 
 async fn dispose_decoder(decoder: Box<dyn media::decoder::VideoDecoder + Send>) {

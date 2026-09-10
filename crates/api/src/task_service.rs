@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use db::TaskRepo;
 use infer::package::AlgoRegistry;
-use pipeline::StartCameraPipelineParams;
+use pipeline::{InstanceLaunchConfig, StartCameraPipelineParams};
 use types::{CodecType, MotionGateConfig, TransportPolicy};
 
 use crate::error::ApiError;
@@ -24,9 +23,12 @@ pub async fn resolve_algorithm_id(
         return Ok(requested.to_string());
     }
 
-    let existing = TaskRepo::find_by_camera_id(db, camera_id).await?;
+    let existing_instances = db::AlgorithmInstanceRepo::list_by_camera_id(db, camera_id).await?;
     if !desired_enabled {
-        return Ok(existing.map(|task| task.algorithm_id).unwrap_or_default());
+        return Ok(existing_instances
+            .first()
+            .map(|inst| inst.algorithm_id.clone())
+            .unwrap_or_default());
     }
 
     let mut candidates = Vec::new();
@@ -55,13 +57,11 @@ pub async fn resolve_algorithm_id(
     Err(ApiError::BadRequest("未配置可用分析算法包".to_string()))
 }
 
-/// Convert the persisted camera stream configuration into coordinator input.
+/// Convert the persisted camera stream configuration into coordinator input with multi-algorithm instances.
 pub fn build_start_params(
     camera_id: &str,
     camera: &db::entity::camera::Model,
-    algorithm_id: String,
-    algo_params: serde_json::Value,
-    analysis_fps: i32,
+    instances: Vec<InstanceLaunchConfig>,
     motion_gate: Option<&MotionGateConfig>,
 ) -> StartCameraPipelineParams {
     let main_rtsp_url = camera.rtsp_url.trim().to_string();
@@ -85,13 +85,33 @@ pub fn build_start_params(
         sub_rtsp_url,
         sub_codec: codec,
         transport_policy: TransportPolicy::Auto,
-        algorithm_id,
-        algo_params,
-        target_fps: if analysis_fps > 0 {
-            analysis_fps as u32
-        } else {
-            10
-        },
+        instances,
         motion_gate_enabled: motion_gate.map(|config| config.enabled).unwrap_or(true),
     }
+}
+
+/// Helper for single-instance pipeline parameters.
+pub fn build_single_start_params(
+    camera_id: &str,
+    camera: &db::entity::camera::Model,
+    algorithm_id: String,
+    algo_params: serde_json::Value,
+    analysis_fps: i32,
+    motion_gate: Option<&MotionGateConfig>,
+) -> StartCameraPipelineParams {
+    let target_fps = if analysis_fps > 0 {
+        analysis_fps as u32
+    } else {
+        10
+    };
+    build_start_params(
+        camera_id,
+        camera,
+        vec![InstanceLaunchConfig {
+            algorithm_id,
+            algo_params,
+            target_fps,
+        }],
+        motion_gate,
+    )
 }

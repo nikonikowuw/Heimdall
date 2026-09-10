@@ -375,13 +375,10 @@ pub async fn handle_package_upload(
             version = %pkg.manifest().version,
             "算法包上传成功并已即时热装载"
         );
-        if let Ok(inst) = pkg.create_instance("{}", None) {
-            let worker = infer::InferenceWorker::new(std::sync::Arc::new(inst));
-            state
-                .pipeline
-                .reload_algorithm_on_pumps(worker.handle())
-                .await;
-        }
+        state
+            .pipeline
+            .reload_algorithm_on_pumps(&validated_manifest.algorithm_id, pkg)
+            .await;
     }
 
     Ok(SandboxCheckResultDto {

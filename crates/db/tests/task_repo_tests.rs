@@ -1,51 +1,70 @@
 #![allow(clippy::unwrap_used)]
 
 use db::{
-    init_test_db, AlgorithmInstanceRepo, AlgorithmRepo, CameraRepo, DbError, SaveTaskParams,
-    TaskRepo, UpsertAlgorithmParams,
+    init_test_db, AlgorithmInstanceRepo, AlgorithmRepo, CameraRepo, DbError,
+    SaveTaskAlgorithmInstanceParams, SaveTaskParams, SaveTaskWithInstancesParams, TaskRepo,
+    UpsertAlgorithmParams,
 };
-use sea_orm::Set;
 
-async fn setup_test_camera_and_algo(db: &sea_orm::DatabaseConnection) {
+async fn setup_test_camera_and_algo(db: &db::DatabaseConnection) {
+    let now = chrono::Utc::now();
+
+    // 预置摄像头
     let camera_model = db::entity::camera::ActiveModel {
         id: sea_orm::ActiveValue::NotSet,
-        camera_id: Set("CAM-001".to_string()),
-        name: Set("测试摄像头".to_string()),
-        protocol: Set("rtsp".to_string()),
-        rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
-        sub_rtsp_url: Set("".to_string()),
-        remark: Set("".to_string()),
-        last_probe_status: Set("healthy".to_string()),
-        last_probe_at: Set(None),
-        last_probe_error_code: Set("".to_string()),
-        last_success_at: Set(None),
-        last_codec: Set("h264".to_string()),
-        last_width: Set(1920),
-        last_height: Set(1080),
-        last_fps: Set(25.0),
-        gb28181_device_id: Set(None),
-        gb28181_channel_id: Set(None),
-        created_at: Set(chrono::Utc::now()),
-        updated_at: Set(chrono::Utc::now()),
+        camera_id: sea_orm::ActiveValue::Set("CAM-001".to_string()),
+        name: sea_orm::ActiveValue::Set("测试摄像头".to_string()),
+        protocol: sea_orm::ActiveValue::Set("rtsp".to_string()),
+        rtsp_url: sea_orm::ActiveValue::Set("rtsp://127.0.0.1:8554/live".to_string()),
+        sub_rtsp_url: sea_orm::ActiveValue::Set("".to_string()),
+        remark: sea_orm::ActiveValue::Set("".to_string()),
+        last_probe_status: sea_orm::ActiveValue::Set("healthy".to_string()),
+        last_probe_at: sea_orm::ActiveValue::Set(None),
+        last_probe_error_code: sea_orm::ActiveValue::Set("".to_string()),
+        last_success_at: sea_orm::ActiveValue::Set(None),
+        last_codec: sea_orm::ActiveValue::Set("h264".to_string()),
+        last_width: sea_orm::ActiveValue::Set(1920),
+        last_height: sea_orm::ActiveValue::Set(1080),
+        last_fps: sea_orm::ActiveValue::Set(25.0),
+        gb28181_device_id: sea_orm::ActiveValue::Set(None),
+        gb28181_channel_id: sea_orm::ActiveValue::Set(None),
+        created_at: sea_orm::ActiveValue::Set(now),
+        updated_at: sea_orm::ActiveValue::Set(now),
     };
     CameraRepo::insert(db, camera_model)
         .await
         .expect("insert camera");
 
+    // 预置算法包
     AlgorithmRepo::upsert_algorithm(
         db,
         UpsertAlgorithmParams {
             algorithm_id: "general_detection".to_string(),
-            name: "通用目标检测".to_string(),
+            name: "通用检测".to_string(),
             algorithm_type: "detection".to_string(),
-            alarm_type_id: "PERSON_INTRUSION".to_string(),
+            alarm_type_id: "INTRUSION".to_string(),
             active_version: "1.0.0".to_string(),
-            description: "测试算法包".to_string(),
+            description: "通用检测算法".to_string(),
             is_builtin: true,
         },
     )
     .await
-    .expect("upsert algo");
+    .expect("insert algo");
+
+    AlgorithmRepo::upsert_algorithm(
+        db,
+        UpsertAlgorithmParams {
+            algorithm_id: "face_recognition".to_string(),
+            name: "人脸识别".to_string(),
+            algorithm_type: "recognition".to_string(),
+            alarm_type_id: "FACE".to_string(),
+            active_version: "1.0.0".to_string(),
+            description: "人脸识别算法".to_string(),
+            is_builtin: true,
+        },
+    )
+    .await
+    .expect("insert face algo");
 }
 
 #[tokio::test]
@@ -73,9 +92,6 @@ async fn test_save_task_and_sync_instance_happy_path() {
     assert_eq!(saved.camera_id, "CAM-001");
     assert_eq!(saved.name, "周界防范");
     assert!(saved.desired_enabled);
-    assert_eq!(saved.algorithm_id, "general_detection");
-    assert_eq!(saved.analysis_fps, 15);
-    assert_eq!(saved.algo_params_json, r#"{"confidence":0.5}"#);
 
     // 2. 验证自动创建了主算法实例
     let instances = AlgorithmInstanceRepo::list_by_camera_id(&db, "CAM-001")
@@ -108,7 +124,6 @@ async fn test_save_task_and_sync_instance_happy_path() {
 
     assert_eq!(updated.name, "周界防范-更新");
     assert!(!updated.desired_enabled);
-    assert_eq!(updated.analysis_fps, 20);
 
     let instances_after = AlgorithmInstanceRepo::list_by_camera_id(&db, "CAM-001")
         .await
@@ -118,6 +133,87 @@ async fn test_save_task_and_sync_instance_happy_path() {
     assert_eq!(instances_after[0].analysis_fps, 20);
     assert_eq!(instances_after[0].params_json, r#"{"confidence":0.8}"#);
     assert!(!instances_after[0].enabled);
+}
+
+#[tokio::test]
+async fn test_save_task_with_multiple_instances() {
+    let db = init_test_db().await.expect("init test db");
+    setup_test_camera_and_algo(&db).await;
+
+    // 一次性挂载 2 个算法实例
+    let saved = TaskRepo::save_task_with_instances(
+        &db,
+        SaveTaskWithInstancesParams {
+            camera_id: "CAM-001".to_string(),
+            name: "多算法布防".to_string(),
+            desired_enabled: true,
+            rules_json: "[]".to_string(),
+            motion_gate_json: r#"{"enabled":true}"#.to_string(),
+            status_message: None,
+            instances: Some(vec![
+                SaveTaskAlgorithmInstanceParams {
+                    algorithm_id: "general_detection".to_string(),
+                    analysis_fps: 15,
+                    params_json: r#"{"confidence":0.5}"#.to_string(),
+                    enabled: Some(true),
+                },
+                SaveTaskAlgorithmInstanceParams {
+                    algorithm_id: "face_recognition".to_string(),
+                    analysis_fps: 5,
+                    params_json: "{}".to_string(),
+                    enabled: Some(false),
+                },
+            ]),
+        },
+    )
+    .await
+    .expect("save task with multiple instances");
+
+    assert_eq!(saved.camera_id, "CAM-001");
+    assert!(saved.desired_enabled);
+
+    let instances = TaskRepo::list_instances_by_task_id(&db, saved.id)
+        .await
+        .expect("list instances by task id");
+    assert_eq!(instances.len(), 2);
+    assert_eq!(instances[0].algorithm_id, "general_detection");
+    assert_eq!(instances[0].analysis_fps, 15);
+    assert!(instances[0].enabled);
+    assert_eq!(instances[1].algorithm_id, "face_recognition");
+    assert_eq!(instances[1].analysis_fps, 5);
+    assert!(!instances[1].enabled);
+
+    // 重复算法 ID 应该被拒绝
+    let err_dup = TaskRepo::save_task_with_instances(
+        &db,
+        SaveTaskWithInstancesParams {
+            camera_id: "CAM-001".to_string(),
+            name: "重复算法".to_string(),
+            desired_enabled: true,
+            rules_json: "[]".to_string(),
+            motion_gate_json: "{}".to_string(),
+            status_message: None,
+            instances: Some(vec![
+                SaveTaskAlgorithmInstanceParams {
+                    algorithm_id: "general_detection".to_string(),
+                    analysis_fps: 10,
+                    params_json: "{}".to_string(),
+                    enabled: None,
+                },
+                SaveTaskAlgorithmInstanceParams {
+                    algorithm_id: "general_detection".to_string(),
+                    analysis_fps: 20,
+                    params_json: "{}".to_string(),
+                    enabled: None,
+                },
+            ]),
+        },
+    )
+    .await;
+    assert!(matches!(
+        err_dup,
+        Err(DbError::Type(types::TypeError::DuplicateAlgorithmId { .. }))
+    ));
 }
 
 #[tokio::test]
@@ -140,7 +236,11 @@ async fn test_save_task_validation_errors() {
         },
     )
     .await;
-    assert!(matches!(err_fps, Err(DbError::Validation(_))));
+    assert!(matches!(
+        err_fps,
+        Err(DbError::Type(types::TypeError::InvalidAnalysisFps { .. }))
+            | Err(DbError::Validation(_))
+    ));
 
     // 2. 非法 algo_params_json（不是有效 JSON）
     let err_json = TaskRepo::save_task_and_sync_instance(
@@ -157,7 +257,10 @@ async fn test_save_task_validation_errors() {
         },
     )
     .await;
-    assert!(matches!(err_json, Err(DbError::Validation(_))));
+    assert!(matches!(
+        err_json,
+        Err(DbError::Json(_)) | Err(DbError::Validation(_))
+    ));
 
     // 3. 非法 algo_params_json（是 JSON Array 而不是 Object）
     let err_arr = TaskRepo::save_task_and_sync_instance(
@@ -174,7 +277,11 @@ async fn test_save_task_validation_errors() {
         },
     )
     .await;
-    assert!(matches!(err_arr, Err(DbError::Validation(_))));
+    assert!(matches!(
+        err_arr,
+        Err(DbError::Type(types::TypeError::InvalidAlgoParams { .. }))
+            | Err(DbError::Validation(_))
+    ));
 
     // 4. 不存在的 algorithm_id（事务回滚，无残留）
     let err_algo = TaskRepo::save_task_and_sync_instance(
@@ -323,4 +430,84 @@ async fn test_delete_task_and_instance_cascade() {
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn test_update_task_runtime_state_granular() {
+    let db = init_test_db().await.expect("init test db");
+    setup_test_camera_and_algo(&db).await;
+
+    let saved = TaskRepo::save_task_with_instances(
+        &db,
+        SaveTaskWithInstancesParams {
+            camera_id: "CAM-001".to_string(),
+            name: "细粒度状态测试".to_string(),
+            desired_enabled: true,
+            rules_json: "[]".to_string(),
+            motion_gate_json: "{}".to_string(),
+            status_message: None,
+            instances: Some(vec![
+                SaveTaskAlgorithmInstanceParams {
+                    algorithm_id: "general_detection".to_string(),
+                    analysis_fps: 15,
+                    params_json: "{}".to_string(),
+                    enabled: Some(true),
+                },
+                SaveTaskAlgorithmInstanceParams {
+                    algorithm_id: "face_recognition".to_string(),
+                    analysis_fps: 10,
+                    params_json: "{}".to_string(),
+                    enabled: Some(true),
+                },
+            ]),
+        },
+    )
+    .await
+    .expect("save task");
+
+    let instances = TaskRepo::list_instances_by_task_id(&db, saved.id)
+        .await
+        .expect("list instances");
+    assert_eq!(instances.len(), 2);
+
+    // 细粒度更新：实例 1 Running，实例 2 Error
+    let updates = vec![
+        db::TaskInstanceStateUpdate {
+            instance_id: instances[0].instance_id.clone(),
+            actual_status: types::TaskStatus::Running,
+            status_message: "正常运行中".to_string(),
+        },
+        db::TaskInstanceStateUpdate {
+            instance_id: instances[1].instance_id.clone(),
+            actual_status: types::TaskStatus::Error,
+            status_message: "模型加载失败".to_string(),
+        },
+    ];
+
+    let task = TaskRepo::update_task_runtime_state(
+        &db,
+        "CAM-001".to_string(),
+        types::TaskStatus::Error,
+        "存在异常算法实例".to_string(),
+        updates,
+    )
+    .await
+    .expect("update task runtime state");
+
+    assert_eq!(task.actual_status, types::TaskStatus::Error.as_i32());
+    assert_eq!(task.status_message, "存在异常算法实例");
+
+    let instances_after = TaskRepo::list_instances_by_task_id(&db, saved.id)
+        .await
+        .expect("list instances after");
+    assert_eq!(
+        instances_after[0].actual_status,
+        types::TaskStatus::Running.as_i32()
+    );
+    assert_eq!(instances_after[0].status_message, "正常运行中");
+    assert_eq!(
+        instances_after[1].actual_status,
+        types::TaskStatus::Error.as_i32()
+    );
+    assert_eq!(instances_after[1].status_message, "模型加载失败");
 }

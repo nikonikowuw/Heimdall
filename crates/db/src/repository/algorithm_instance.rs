@@ -8,6 +8,7 @@ use crate::error::DbError;
 
 #[derive(Debug, Clone)]
 pub struct CreateInstanceParams {
+    pub task_id: i64,
     pub instance_id: String,
     pub camera_id: String,
     pub algorithm_id: String,
@@ -65,6 +66,20 @@ impl AlgorithmInstanceRepo {
             .map_err(DbError::from)
     }
 
+    /// 根据 task_id 与 algorithm_id 查询唯一算法实例
+    pub async fn find_by_task_id_and_algorithm_id(
+        db: &DatabaseConnection,
+        task_id: i64,
+        algorithm_id: &str,
+    ) -> Result<Option<Model>, DbError> {
+        Entity::find()
+            .filter(Column::TaskId.eq(task_id))
+            .filter(Column::AlgorithmId.eq(algorithm_id))
+            .one(db)
+            .await
+            .map_err(DbError::from)
+    }
+
     /// 创建新的算法实例
     pub async fn create(
         db: &DatabaseConnection,
@@ -74,6 +89,7 @@ impl AlgorithmInstanceRepo {
         let active = ActiveModel {
             id: sea_orm::ActiveValue::NotSet,
             instance_id: Set(params.instance_id),
+            task_id: Set(params.task_id),
             camera_id: Set(params.camera_id),
             algorithm_id: Set(params.algorithm_id),
             analysis_fps: Set(params.analysis_fps),
@@ -81,7 +97,7 @@ impl AlgorithmInstanceRepo {
             rules_json: Set(params.rules_json),
             motion_gate_json: Set(params.motion_gate_json),
             enabled: Set(params.enabled),
-            actual_status: Set(0),
+            actual_status: Set(types::TaskStatus::STOPPED),
             status_message: Set(String::new()),
             created_at: Set(now),
             updated_at: Set(now),
@@ -143,26 +159,14 @@ impl AlgorithmInstanceRepo {
         Ok(())
     }
 
-    /// 更新实例运行时状态
-    pub async fn update_status(
+    /// 删除算法实例（要求校验任务 ID）
+    pub async fn delete_by_task_id_and_instance_id(
         db: &DatabaseConnection,
+        task_id: i64,
         instance_id: &str,
-        actual_status: i32,
-        status_message: &str,
-    ) -> Result<(), DbError> {
-        if let Some(model) = Self::find_by_instance_id(db, instance_id).await? {
-            let mut active: ActiveModel = model.into();
-            active.actual_status = Set(actual_status);
-            active.status_message = Set(status_message.to_string());
-            active.updated_at = Set(chrono::Utc::now());
-            active.update(db).await?;
-        }
-        Ok(())
-    }
-
-    /// 删除算法实例
-    pub async fn delete(db: &DatabaseConnection, instance_id: &str) -> Result<u64, DbError> {
+    ) -> Result<u64, DbError> {
         let res = Entity::delete_many()
+            .filter(Column::TaskId.eq(task_id))
             .filter(Column::InstanceId.eq(instance_id))
             .exec(db)
             .await?;

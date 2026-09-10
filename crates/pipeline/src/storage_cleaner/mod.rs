@@ -1029,8 +1029,8 @@ mod tests {
         // 设置单批仅删 2 条，但 target_free_ratio 设为 0.99 强制持续排空！
         let cleaner = StorageCleaner::new(StorageCleanerConfig {
             evidence_dir: temp_dir.clone(),
-            min_free_ratio: 0.99,
-            target_free_ratio: 0.999,
+            min_free_ratio: 1.0,
+            target_free_ratio: 1.0,
             emergency_free_ratio: 0.08,
             critical_free_ratio: 0.05,
             min_inode_free_ratio: 0.10,
@@ -1083,7 +1083,7 @@ mod tests {
             marked_deleting_count: AtomicU64::new(0),
         };
 
-        let mut cfg = StorageCleanerConfig::default().with_min_free_ratio(0.99);
+        let mut cfg = StorageCleanerConfig::default().with_min_free_ratio(1.0);
         cfg.evidence_dir = temp_dir.clone();
         let cleaner = StorageCleaner::new(cfg);
 

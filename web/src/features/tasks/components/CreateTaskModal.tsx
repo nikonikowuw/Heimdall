@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { AlertCircle, Check, Loader2, Plus, Sliders, Video, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { taskApi } from '@/lib/api'
-import type { Camera, TaskConfigDto } from '@/types'
+import { taskApi, algorithmApi } from '@/lib/api'
+import type { AlgorithmItem, Camera, TaskConfigDto } from '@/types'
 
 export interface CreateTaskModalProps {
   isOpen: boolean
@@ -29,31 +29,57 @@ export function CreateTaskModal({
   const [selectedCameraId, setSelectedCameraId] = useState<string>('')
   const [taskName, setTaskName] = useState<string>('')
   const [desiredEnabled, setDesiredEnabled] = useState<boolean>(true)
+  const [availableAlgorithms, setAvailableAlgorithms] = useState<AlgorithmItem[]>([])
+  const [selectedAlgorithmId, setSelectedAlgorithmId] = useState<string>('')
+  const [analysisFps, setAnalysisFps] = useState<number>(10)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // 打开弹窗时加载当前可用算法，并默认选择已激活版本的算法。
+  useEffect(() => {
+    if (!isOpen) return
+    let active = true
+    algorithmApi
+      .list({ page: 1, pageSize: 100 })
+      .then((result) => {
+        if (!active) return
+        setAvailableAlgorithms(result.items)
+        const defaultAlgorithm =
+          result.items.find((item) => item.activeVersion.trim() !== '') ?? result.items[0]
+        setSelectedAlgorithmId(defaultAlgorithm?.algorithmId ?? '')
+      })
+      .catch(() => {
+        if (active) {
+          setAvailableAlgorithms([])
+          setSelectedAlgorithmId('')
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [isOpen])
 
   // 当弹窗打开时，默认选第一个未绑定任务的摄像头
   useEffect(() => {
     if (isOpen) {
       setErrorMsg(null)
-      if (preselectedCameraId && cameras.some((c) => c.cameraId === preselectedCameraId)) {
-        setSelectedCameraId(preselectedCameraId)
-        const cam = cameras.find((c) => c.cameraId === preselectedCameraId)
-        setTaskName(`Task-${cam?.name || preselectedCameraId}`)
+      const preselected = preselectedCameraId
+        ? cameras.find((c) => c.cameraId === preselectedCameraId)
+        : undefined
+      const defaultCam =
+        preselected ??
+        cameras.find((c) => !existingCameraIdsWithTasks.has(c.cameraId)) ??
+        cameras[0]
+
+      if (defaultCam) {
+        setSelectedCameraId(defaultCam.cameraId)
+        setTaskName(`Task-${defaultCam.name || defaultCam.cameraId}`)
       } else {
-        const firstUnassigned = cameras.find((c) => !existingCameraIdsWithTasks.has(c.cameraId))
-        if (firstUnassigned) {
-          setSelectedCameraId(firstUnassigned.cameraId)
-          setTaskName(`Task-${firstUnassigned.name || firstUnassigned.cameraId}`)
-        } else if (cameras.length > 0) {
-          setSelectedCameraId(cameras[0].cameraId)
-          setTaskName(`Task-${cameras[0].name || cameras[0].cameraId}`)
-        } else {
-          setSelectedCameraId('')
-          setTaskName('')
-        }
+        setSelectedCameraId('')
+        setTaskName('')
       }
       setDesiredEnabled(true)
+      setAnalysisFps(10)
     }
   }, [isOpen, cameras, existingCameraIdsWithTasks, preselectedCameraId])
 
@@ -115,6 +141,15 @@ export function CreateTaskModal({
           contourArea: 100,
           keepaliveIntervalMs: 2000,
         },
+        algorithmInstances: selectedAlgorithmId
+          ? [
+              {
+                algorithmId: selectedAlgorithmId,
+                analysisFps,
+                algoParams: {},
+              },
+            ]
+          : undefined,
       }
 
       const created = await taskApi.updateTask(selectedCameraId, payload)
@@ -262,7 +297,49 @@ export function CreateTaskModal({
               />
             </div>
 
-            {/* 3. 初始布防状态 */}
+            {/* 3. 算法与抽帧配置 */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
+              <div>
+                <label className="mb-1.5 block font-semibold text-[var(--text-primary)]">
+                  {t('algorithm', { defaultValue: '分析算法' })}
+                </label>
+                <select
+                  value={selectedAlgorithmId}
+                  onChange={(e) => setSelectedAlgorithmId(e.target.value)}
+                  disabled={isSubmitting || availableAlgorithms.length === 0}
+                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-60"
+                >
+                  {availableAlgorithms.length === 0 ? (
+                    <option value="">
+                      {t('algorithmFallback', { defaultValue: '使用系统默认算法' })}
+                    </option>
+                  ) : (
+                    availableAlgorithms.map((algorithm) => (
+                      <option key={algorithm.algorithmId} value={algorithm.algorithmId}>
+                        {algorithm.name} ({algorithm.algorithmId})
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block font-semibold text-[var(--text-primary)]">
+                  {t('analysisFps', { defaultValue: '分析 FPS' })}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={60}
+                  step={1}
+                  value={analysisFps}
+                  onChange={(e) => setAnalysisFps(Number(e.target.value))}
+                  disabled={isSubmitting}
+                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+                />
+              </div>
+            </div>
+
+            {/* 4. 初始布防状态 */}
             <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
               <div>
                 <span className="font-semibold text-[var(--text-primary)]">

@@ -13,8 +13,8 @@ pub mod thermal;
 pub mod tracker;
 
 pub use coordinator::{
-    ActiveRuntimeEntry, CameraPipelineRuntimeInfo, CoordinatorError, StartCameraPipelineParams,
-    TaskRuntimeCoordinator, TaskRuntimeService,
+    ActiveRuntimeEntry, CameraPipelineRuntimeInfo, CoordinatorError, InstanceLaunchConfig,
+    InstanceRuntimeInfo, StartCameraPipelineParams, TaskRuntimeCoordinator, TaskRuntimeService,
 };
 pub use error::PipelineError;
 pub use events::{
@@ -26,7 +26,10 @@ pub use manager::{
     PipelineManager, DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS, DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,
 };
 pub use motion_gate::MotionGate;
-pub use pump::{AnalysisFpsGovernor, PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig};
+pub use pump::{
+    AnalysisFpsGovernor, InstanceMetrics, PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig,
+    WorkerInstanceConfig,
+};
 pub use roi::RoiAffineMapper;
 pub use rules::{RuleEvaluator, TriggeredAlarm};
 pub use snapshot::{SnapshotCaptureMode, SnapshotConfig, SnapshotEngine, SnapshotResult};

@@ -183,6 +183,18 @@ async fn main() -> Result<()> {
                 active_loaded_count = loaded,
                 "算法包冷启动自愈对齐与运行时装载完成"
             );
+
+            match reconcile::recover_enabled_tasks(&state.db, state.task_coordinator.as_ref()).await
+            {
+                Ok(summary) => tracing::info!(
+                    attempted = summary.attempted,
+                    recovered = summary.recovered,
+                    deferred = summary.deferred,
+                    failed = summary.failed,
+                    "持久化启用任务冷启动恢复完成"
+                ),
+                Err(err) => tracing::error!(error = %err, "持久化启用任务冷启动恢复流程失败"),
+            }
         }
         Err(err) => {
             tracing::warn!(error = %err, "算法包自愈对齐流程产生警告，继续以容灾模式启动");

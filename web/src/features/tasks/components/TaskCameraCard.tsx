@@ -27,6 +27,40 @@ export interface TaskCameraCardProps {
   t: (key: string, options?: Record<string, unknown>) => string
 }
 
+function getPipelineRuntimeStatus(
+  actualStatus: number,
+  t: (key: string, opts?: { defaultValue?: string }) => string,
+): { label: string; className: string } {
+  switch (actualStatus) {
+    case 1:
+      return {
+        label: t('card.pipelineStarting', { defaultValue: '启动中' }),
+        className: 'text-amber-500',
+      }
+    case 2:
+      return {
+        label: t('card.pipelineRunning', { defaultValue: '运行中' }),
+        className: 'text-emerald-500',
+      }
+    case 3:
+    case 4:
+      return {
+        label: t('card.pipelineDegraded', { defaultValue: '重连中' }),
+        className: 'text-amber-500',
+      }
+    case 5:
+      return {
+        label: t('card.pipelineError', { defaultValue: '异常' }),
+        className: 'text-rose-500',
+      }
+    default:
+      return {
+        label: t('card.pipelineStopped', { defaultValue: '已停止' }),
+        className: 'text-[var(--text-muted)]',
+      }
+  }
+}
+
 export function TaskCameraCard({
   camera,
   config,
@@ -42,6 +76,13 @@ export function TaskCameraCard({
   const lineCount = rules.filter((r) => r.role === 'line').length
   const maskCount = rules.filter((r) => r.role === 'mask').length
   const isMotionGateEco = config?.motionGate?.enabled ?? false
+  const algorithmInstances = config?.algorithmInstances ?? []
+  const primaryInstance =
+    algorithmInstances.find((instance) => instance.enabled) ?? algorithmInstances[0]
+  const algorithmId = primaryInstance?.algorithmId ?? config?.algorithmId ?? ''
+  const analysisFps = primaryInstance?.analysisFps ?? config?.analysisFps ?? 0
+  const actualStatus = primaryInstance?.actualStatus ?? config?.actualStatus ?? 0
+  const runtimeStatus = getPipelineRuntimeStatus(actualStatus, t)
 
   const [copied, setCopied] = useState(false)
   const probeBadge = getProbeBadge(camera.lastProbeStatus, t)
@@ -326,7 +367,25 @@ export function TaskCameraCard({
         </div>
       </div>
 
-      {/* 4. RTSP 直通流单行地址与一键复制 */}
+      {/* 4. 算法绑定与运行状态 */}
+      <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5 text-xs">
+        <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
+          <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+          <span className="truncate font-mono" title={algorithmId || undefined}>
+            {algorithmId || t('card.algorithmUnbound', { defaultValue: '未绑定算法' })}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2 font-mono text-[11px]">
+          <span className="text-[var(--text-muted)]">
+            {analysisFps > 0
+              ? `${analysisFps} FPS`
+              : t('card.fpsAuto', { defaultValue: '自动 FPS' })}
+          </span>
+          <span className={runtimeStatus.className}>{runtimeStatus.label}</span>
+        </span>
+      </div>
+
+      {/* 5. RTSP 直通流单行地址与一键复制 */}
       <div className="mt-2 flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5 font-mono text-xs">
         <div className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
           <Radio className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />

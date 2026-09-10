@@ -13,7 +13,8 @@ use media::decoder::VideoDecoder;
 use media::decoders::MockDecoder;
 use media::stream_hub::StreamHub;
 use pipeline::{
-    PipelineAnalysisEvent, PipelineManager, StartCameraPipelineParams, TaskRuntimeCoordinator,
+    InstanceLaunchConfig, PipelineAnalysisEvent, PipelineManager, StartCameraPipelineParams,
+    TaskRuntimeCoordinator,
 };
 use types::{
     BoundingBox, CodecType, Detection, DetectionLineDirection, DetectionPoint, DetectionRule,
@@ -116,9 +117,11 @@ async fn test_coordinator_full_lifecycle_and_events() {
         sub_rtsp_url: sub_url.to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "test_algo_01".to_string(),
-        algo_params: serde_json::json!({ "threshold": 0.5 }),
-        target_fps: 25,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "test_algo_01".to_string(),
+            algo_params: serde_json::json!({ "threshold": 0.5 }),
+            target_fps: 25,
+        }],
         motion_gate_enabled: false,
     };
 
@@ -207,9 +210,11 @@ async fn test_coordinator_idempotency_and_reconfiguration() {
         sub_rtsp_url: sub_url.to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "general_detection".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 15,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "general_detection".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 15,
+        }],
         motion_gate_enabled: false,
     };
 
@@ -247,7 +252,7 @@ async fn test_coordinator_idempotency_and_reconfiguration() {
 
     // 修改参数（重配 target_fps 从 15 改为 25）
     let mut reconfig_params = params.clone();
-    reconfig_params.target_fps = 25;
+    reconfig_params.instances[0].target_fps = 25;
 
     let worker2 = InferenceWorker::new(backend);
     let decoder2: Box<dyn VideoDecoder + Send> =
@@ -293,9 +298,11 @@ async fn test_coordinator_validation_and_rollback() {
         sub_rtsp_url: "rtsp://localhost/sub".to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "algo_1".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 20,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "algo_1".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 20,
+        }],
         motion_gate_enabled: false,
     };
     let err = coordinator
@@ -312,9 +319,11 @@ async fn test_coordinator_validation_and_rollback() {
         sub_rtsp_url: "rtsp://localhost/sub".to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "non_existent_algo".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 20,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "non_existent_algo".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 20,
+        }],
         motion_gate_enabled: false,
     };
     let err = coordinator
@@ -381,9 +390,11 @@ async fn test_coordinator_alarm_trigger_and_event_broadcast() {
         sub_rtsp_url: sub_url.to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "tripwire_algo".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 25,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "tripwire_algo".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 25,
+        }],
         motion_gate_enabled: false,
     };
 
@@ -453,23 +464,35 @@ async fn test_coordinator_validation_detailed() {
         sub_rtsp_url: "rtsp://127.0.0.1:554/sub".to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "algo_test".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 25,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "algo_test".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 25,
+        }],
         motion_gate_enabled: false,
     };
 
-    // 1. target_fps == 0
+    // 1. target_fps > 60
     let mut p = base_params.clone();
-    p.target_fps = 0;
+    p.instances[0].target_fps = 61;
     let err = p.validate().unwrap_err();
-    assert!(format!("{err}").contains("target_fps 必须在 1..=60 之间"));
+    assert!(format!("{err}").contains("target_fps 必须在 0..=60 之间"));
 
-    // 2. target_fps > 60
+    // 2. 空 instances 校验
     let mut p = base_params.clone();
-    p.target_fps = 61;
+    p.instances.clear();
     let err = p.validate().unwrap_err();
-    assert!(format!("{err}").contains("target_fps 必须在 1..=60 之间"));
+    assert!(format!("{err}").contains("至少需要一个算法实例"));
+
+    // 2b. 重复 algorithm_id
+    let mut p = base_params.clone();
+    p.instances.push(InstanceLaunchConfig {
+        algorithm_id: "algo_test".to_string(),
+        algo_params: serde_json::json!({}),
+        target_fps: 10,
+    });
+    let err = p.validate().unwrap_err();
+    assert!(format!("{err}").contains("存在重复的 algorithm_id"));
 
     // 3. 非 RTSP 协议
     let mut p = base_params.clone();
@@ -491,7 +514,7 @@ async fn test_coordinator_validation_detailed() {
 
     // 6. algo_params 超大 (超 64KB)
     let mut p = base_params.clone();
-    p.algo_params = serde_json::json!({ "big_blob": "x".repeat(70_000) });
+    p.instances[0].algo_params = serde_json::json!({ "big_blob": "x".repeat(70_000) });
     let err = p.validate().unwrap_err();
     assert!(format!("{err}").contains("algo_params 序列化后必须小于"));
 
@@ -531,9 +554,11 @@ async fn test_coordinator_concurrent_starts_serialized() {
         sub_rtsp_url: sub_url.to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "algo_concurrent".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 20,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "algo_concurrent".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 20,
+        }],
         motion_gate_enabled: false,
     };
 
@@ -621,9 +646,11 @@ async fn test_coordinator_start_cancellation_safety() {
         sub_rtsp_url: sub_url.to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "algo_cancel".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 20,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "algo_cancel".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 20,
+        }],
         motion_gate_enabled: false,
     };
 
@@ -704,9 +731,11 @@ async fn test_coordinator_alarm_evidence_failure_preserves_alarm() {
         sub_rtsp_url: sub_url.to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "fail_ev_algo".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 25,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "fail_ev_algo".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 25,
+        }],
         motion_gate_enabled: false,
     };
 
@@ -812,9 +841,11 @@ async fn test_coordinator_empty_tracks_broadcast() {
         sub_rtsp_url: sub_url.to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "empty_algo".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 20,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "empty_algo".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 20,
+        }],
         motion_gate_enabled: false,
     };
 
@@ -904,9 +935,11 @@ async fn test_coordinator_startup_failure_disposes_decoder_on_rollback() {
         sub_rtsp_url: sub_url.to_string(),
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
-        algorithm_id: "test_algo".to_string(),
-        algo_params: serde_json::json!({}),
-        target_fps: 25,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "test_algo".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 25,
+        }],
         motion_gate_enabled: false,
     };
 
@@ -989,9 +1022,11 @@ async fn test_coordinator_stop_all_parallel_and_worker_handle() {
             sub_rtsp_url: sub_url,
             sub_codec: CodecType::H264,
             transport_policy: TransportPolicy::Tcp,
-            algorithm_id: "test_algo".to_string(),
-            algo_params: serde_json::json!({}),
-            target_fps: 20,
+            instances: vec![InstanceLaunchConfig {
+                algorithm_id: "test_algo".to_string(),
+                algo_params: serde_json::json!({}),
+                target_fps: 20,
+            }],
             motion_gate_enabled: false,
         };
 
@@ -1039,4 +1074,87 @@ async fn test_ai_task_lease_raii_protection() {
     // lease1 显式 Drop 后引用归零
     assert_eq!(session.ai_task_ref_count(), 0);
     assert!(!session.ai_task_enabled.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn test_coordinator_multi_algorithm_instances() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_coord_multi_algo_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let pipeline_mgr = Arc::new(PipelineManager::with_evidence_dir(&temp_dir));
+    let stream_hub = Arc::new(StreamHub::new());
+    let algo_registry = Arc::new(AlgoRegistry::new());
+    let coordinator =
+        TaskRuntimeCoordinator::new(pipeline_mgr.clone(), stream_hub.clone(), algo_registry);
+
+    let cam_id = "camera_multi_algo_01";
+    let main_url = "rtsp://mock-main/live";
+    let sub_url = "rtsp://mock-sub/live";
+
+    let _ = stream_hub
+        .get_or_create_session(&format!("{cam_id}:main"), main_url, TransportPolicy::Tcp)
+        .await;
+    let sub_session = stream_hub
+        .get_or_create_session(&format!("{cam_id}:sub"), sub_url, TransportPolicy::Tcp)
+        .await;
+
+    let decoder: Box<dyn VideoDecoder + Send> =
+        Box::new(MockDecoder::new(cam_id, CodecType::H264, 640, 360));
+    let worker = InferenceWorker::new(Arc::new(MockInferBackend::new(0.5)));
+
+    let params = StartCameraPipelineParams {
+        camera_id: cam_id.to_string(),
+        main_rtsp_url: main_url.to_string(),
+        main_codec: CodecType::H264,
+        sub_rtsp_url: sub_url.to_string(),
+        sub_codec: CodecType::H264,
+        transport_policy: TransportPolicy::Tcp,
+        instances: vec![
+            InstanceLaunchConfig {
+                algorithm_id: "algo_face".to_string(),
+                algo_params: serde_json::json!({ "model": "face_v1" }),
+                target_fps: 15,
+            },
+            InstanceLaunchConfig {
+                algorithm_id: "algo_helmet".to_string(),
+                algo_params: serde_json::json!({ "model": "helmet_v2" }),
+                target_fps: 10,
+            },
+        ],
+        motion_gate_enabled: false,
+    };
+
+    // 启动多算法实例管线
+    let gen = coordinator
+        .start_camera_pipeline_with_decoder_and_worker(params.clone(), decoder, worker)
+        .await
+        .expect("多算法实例启动应成功");
+    assert_eq!(gen, 1);
+    assert!(coordinator.is_pipeline_running(cam_id).await);
+
+    // 查询运行时信息，验证 1:N 实例数组正确呈现
+    let info = coordinator
+        .get_runtime_info(cam_id)
+        .await
+        .expect("必须能查到多算法运行时");
+    assert_eq!(info.instances.len(), 2);
+    assert_eq!(info.instances[0].algorithm_id, "algo_face");
+    assert_eq!(info.instances[0].target_fps, 15);
+    assert_eq!(info.instances[1].algorithm_id, "algo_helmet");
+    assert_eq!(info.instances[1].target_fps, 10);
+    assert_eq!(info.algorithm_id, "algo_face");
+    assert_eq!(info.target_fps, 15);
+
+    // 推送子流数据包并验证稳定处理
+    let _ = sub_session.broadcast_tx.send(create_packet(1000, true));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 停止管线
+    assert!(coordinator.stop_camera_pipeline(cam_id).await);
+    assert!(!coordinator.is_pipeline_running(cam_id).await);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }

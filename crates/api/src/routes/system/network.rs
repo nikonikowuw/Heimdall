@@ -94,10 +94,15 @@ pub fn router() -> axum::Router<AppState> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
     use super::*;
+    #[cfg(target_os = "macos")]
     use axum::body::Body;
+    #[cfg(target_os = "macos")]
     use axum::http::{Request, StatusCode};
+    #[cfg(target_os = "macos")]
     use std::sync::Arc;
+    #[cfg(target_os = "macos")]
     use tower::ServiceExt;
 
     #[cfg(target_os = "macos")]

@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LivePlayer } from '@/features/live/components/LivePlayer'
-import { algorithmApi, instanceApi, taskApi } from '@/lib/api'
+import { algorithmApi, taskApi } from '@/lib/api'
 import type {
   AlgoManifest,
   Camera,
@@ -101,57 +101,50 @@ export function LiveRulesStudio({
 
   const stageRef = useRef<HTMLDivElement>(null)
 
-  // 加载系统已入库/激活的算法列表与当前摄像头的算法实例
+  // 加载系统已入库/激活的算法列表
   useEffect(() => {
     let isMounted = true
-    Promise.all([
-      algorithmApi.list().catch(() => ({ items: [], total: 0 })),
-      instanceApi.list(camera.cameraId).catch(() => []),
-    ]).then(([algoRes, instances]) => {
-      if (!isMounted) return
-      let list: AlgoManifest[] = []
-      if (algoRes.items.length > 0) {
-        list = algoRes.items.map((item) => {
-          const actVer = item.versions.find((v) => v.isActive) || item.versions[0]
-          return {
-            algorithmId: item.algorithmId,
-            name: item.name,
-            version: item.activeVersion || (actVer ? actVer.version : '1.0.0'),
-            description: item.description,
-            algorithmType: item.algorithmType,
-            category: item.algorithmType || 'detection',
-            supportedPlatforms: actVer ? [actVer.platformId] : ['macos-arm64'],
-            alarmTypeId: item.alarmTypeId,
-            author: item.isBuiltin ? 'System' : 'Custom',
-            classes: ['person', 'car', 'bicycle', 'motorcycle'],
-          }
-        })
-      } else {
-        list = DEFAULT_ALGO_PACKAGES
-      }
-
-      setAvailableAlgos(list)
-
-      if (instances.length > 0) {
-        const activeInst = instances.find((i) => i.enabled) || instances[0]
-        if (list.some((p) => p.algorithmId === activeInst.algorithmId)) {
-          setSelectedAlgoId(activeInst.algorithmId)
+    algorithmApi
+      .list()
+      .then((algoRes) => {
+        if (!isMounted) return
+        let list: AlgoManifest[] = []
+        if (algoRes.items.length > 0) {
+          list = algoRes.items.map((item) => {
+            const actVer = item.versions.find((v) => v.isActive) || item.versions[0]
+            return {
+              algorithmId: item.algorithmId,
+              name: item.name,
+              version: item.activeVersion || (actVer ? actVer.version : '1.0.0'),
+              description: item.description,
+              algorithmType: item.algorithmType,
+              category: item.algorithmType || 'detection',
+              supportedPlatforms: actVer ? [actVer.platformId] : ['macos-arm64'],
+              alarmTypeId: item.alarmTypeId,
+              author: item.isBuiltin ? 'System' : 'Custom',
+              classes: ['person', 'car', 'bicycle', 'motorcycle'],
+            }
+          })
+        } else {
+          list = DEFAULT_ALGO_PACKAGES
         }
-      } else if (list.length > 0) {
-        setSelectedAlgoId((prev) => {
-          if (list.some((p) => p.algorithmId === prev)) return prev
-          return list[0].algorithmId
-        })
-        if (list[0].classes && list[0].classes.length > 0) {
-          setGlobalTargetClasses(list[0].classes.slice(0, 3))
+
+        setAvailableAlgos(list)
+        if (list.length > 0) {
+          setSelectedAlgoId((prev) => {
+            if (prev && list.some((p) => p.algorithmId === prev)) return prev
+            return list[0].algorithmId
+          })
         }
-      }
-    })
+      })
+      .catch(() => {
+        if (isMounted) setAvailableAlgos(DEFAULT_ALGO_PACKAGES)
+      })
 
     return () => {
       isMounted = false
     }
-  }, [camera.cameraId])
+  }, [])
 
   // 加载选定摄像头的任务布防配置
   useEffect(() => {
@@ -160,6 +153,14 @@ export function LiveRulesStudio({
       .then((dto) => {
         setTaskConfig(dto)
         setIsArmed(dto.desiredEnabled)
+
+        const instances = dto.algorithmInstances ?? []
+        if (instances.length > 0) {
+          const activeInst = instances.find((i) => i.enabled) || instances[0]
+          setSelectedAlgoId(activeInst.algorithmId)
+        } else if (dto.algorithmId) {
+          setSelectedAlgoId(dto.algorithmId)
+        }
 
         if (dto.motionGate) {
           setMotionGateEnabled(dto.motionGate.enabled)
@@ -506,6 +507,18 @@ export function LiveRulesStudio({
     setIsSaving(true)
 
     try {
+      const currentInstances = taskConfig?.algorithmInstances ?? []
+      const selectedInstance = currentInstances.find(
+        (instance) => instance.algorithmId === selectedAlgoId,
+      )
+      const nextInstance = {
+        ...selectedInstance,
+        algorithmId: selectedAlgoId,
+        analysisFps: selectedInstance?.analysisFps ?? 10,
+        algoParams: { confidenceThreshold, targetClasses: globalTargetClasses },
+        enabled: isArmed,
+      }
+
       const payloadDto: TaskConfigDto = {
         cameraId: camera.cameraId,
         name: taskConfig?.name || camera.name || `Task-${camera.cameraId}`,
@@ -521,34 +534,16 @@ export function LiveRulesStudio({
           contourArea: 100,
           keepaliveIntervalMs: 2000,
         },
+        algorithmInstances: selectedAlgoId
+          ? [
+              ...currentInstances.filter((instance) => instance.algorithmId !== selectedAlgoId),
+              nextInstance,
+            ]
+          : currentInstances,
       }
 
-      await taskApi.updateTask(camera.cameraId, payloadDto)
-
-      // 同步维护摄像头算法实例 (单摄像头多算法并发模型)
-      try {
-        const instances = await instanceApi.list(camera.cameraId)
-        const currentInst = instances.find((i) => i.algorithmId === selectedAlgoId)
-        if (currentInst) {
-          await instanceApi.update(currentInst.instanceId, {
-            enabled: isArmed,
-            params: { confidenceThreshold, targetClasses: globalTargetClasses },
-            rules: payloadDto.rules,
-            motionGate: payloadDto.motionGate,
-          })
-        } else {
-          await instanceApi.create({
-            cameraId: camera.cameraId,
-            algorithmId: selectedAlgoId,
-            enabled: isArmed,
-            params: { confidenceThreshold, targetClasses: globalTargetClasses },
-            rules: payloadDto.rules,
-            motionGate: payloadDto.motionGate,
-          })
-        }
-      } catch {
-        // 实例同步容错，不阻断任务主流程
-      }
+      const updatedTask = await taskApi.updateTask(camera.cameraId, payloadDto)
+      setTaskConfig(updatedTask)
 
       setSaveToast(t('footer.saveSuccess'))
       setTimeout(() => setSaveToast(null), 3000)

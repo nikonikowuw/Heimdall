@@ -6,7 +6,9 @@ use algo_sdk::frame::SafeFrame;
 use algo_sdk::plugin::{AlgoPlugin, InitContext};
 
 use crate::config::InstanceConfig;
+#[cfg(target_os = "macos")]
 use crate::detect::{decode_face_detections, nms, unmap_letterbox};
+#[cfg(target_os = "macos")]
 use crate::quality::compute_quality;
 
 #[cfg(target_os = "macos")]

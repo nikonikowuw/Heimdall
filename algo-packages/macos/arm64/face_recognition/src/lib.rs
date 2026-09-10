@@ -15,6 +15,7 @@ pub mod quality;
 use std::ffi::c_int;
 
 use algo_sdk::c_abi::{AvAlgoLibrary, AvFaceExtractInput, AvFaceExtractOutput};
+use algo_sdk::error::AlgoError;
 use algo_sdk::export_algo;
 use algo_sdk::plugin::AlgoPlugin;
 use plugin::FaceRecognizer;
@@ -30,7 +31,6 @@ use {
     crate::quality::compute_quality,
     algo_sdk::c_abi::{AV_ALGO_API_VERSION, AV_ERR_INTERNAL, AV_ERR_INVALID_ARG, AV_OK},
     algo_sdk::cv::types::{LetterboxLayout, PreprocessMode},
-    algo_sdk::error::AlgoError,
     algo_sdk::macros::{validate_abi_header, LibraryContext},
     image::codecs::jpeg::JpegEncoder,
     image::{ExtendedColorType, RgbImage},
@@ -156,7 +156,6 @@ pub fn prepare_detector_input(image: &RgbImage) -> Result<(Vec<u8>, PreprocessMo
     ))
 }
 
-#[cfg(target_os = "macos")]
 pub fn normalize_embedding(values: &[f32]) -> Result<[f32; 512], AlgoError> {
     if values.len() < 512 {
         return Err(AlgoError::Inference {
@@ -200,11 +199,13 @@ fn encode_aligned_jpeg(rgb: &[u8]) -> Result<Vec<u8>, AlgoError> {
     Ok(jpeg)
 }
 
+#[cfg(target_os = "macos")]
 struct ExtractCache {
     embedding: [f32; 512],
     aligned_jpeg: Vec<u8>,
 }
 
+#[cfg(target_os = "macos")]
 thread_local! {
     static EXTRACT_CACHE: std::cell::RefCell<ExtractCache> = const {
         std::cell::RefCell::new(ExtractCache {
@@ -410,7 +411,7 @@ pub unsafe extern "C" fn av_algo_extract_face(
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (lib, input, output);
-        return AV_ERR_NOT_IMPLEMENTED;
+        AV_ERR_NOT_IMPLEMENTED
     }
 
     #[cfg(target_os = "macos")]

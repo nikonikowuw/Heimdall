@@ -221,12 +221,39 @@ export interface MotionGateConfig {
   keepaliveIntervalMs?: number
 }
 
+export interface TaskAlgorithmInstanceDto {
+  instanceId?: string
+  algorithmId: string
+  analysisFps?: number
+  algoParams?: Record<string, unknown>
+  enabled?: boolean
+  actualStatus?: number
+  statusMessage?: string
+  createdAt?: number
+  updatedAt?: number
+}
+
+export interface TaskAlgorithmInstanceSummaryDto {
+  instanceId: string
+  algorithmId: string
+  analysisFps: number
+  enabled: boolean
+  actualStatus: number
+  statusMessage: string
+}
+
 export interface TaskSummaryDto {
   id: number
   cameraId: string
   name: string
   desiredEnabled: boolean
   actualStatus: number
+  statusMessage?: string
+  algorithmId?: string
+  analysisFps?: number
+  algoParams?: Record<string, unknown>
+  algorithmInstanceCount?: number
+  algorithmInstances?: TaskAlgorithmInstanceSummaryDto[]
   rulesCount: number
   motionGateEnabled: boolean
   rules: DetectionRule[]
@@ -239,6 +266,12 @@ export interface TaskConfigDto {
   cameraId: string
   name: string
   desiredEnabled: boolean
+  algorithmId?: string
+  analysisFps?: number
+  algoParams?: Record<string, unknown>
+  actualStatus?: number
+  statusMessage?: string
+  algorithmInstances?: TaskAlgorithmInstanceDto[]
   rules: DetectionRule[]
   motionGate?: MotionGateConfig
 }

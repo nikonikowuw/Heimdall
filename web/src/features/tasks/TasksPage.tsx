@@ -45,6 +45,12 @@ export function TasksPage({
           cameraId: item.cameraId,
           name: item.name,
           desiredEnabled: item.desiredEnabled,
+          algorithmId: item.algorithmId,
+          analysisFps: item.analysisFps,
+          algoParams: item.algoParams,
+          actualStatus: item.actualStatus,
+          statusMessage: item.statusMessage,
+          algorithmInstances: item.algorithmInstances,
           rules: item.rules || [],
           motionGate: item.motionGate,
         }

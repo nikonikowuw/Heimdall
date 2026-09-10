@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::RwLock as TokioRwLock;
 
+use infer::{AlgoPackage, InferenceWorker};
 use media::decoder::VideoDecoder;
 use media::ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
 use types::{
@@ -35,8 +36,10 @@ pub struct CameraPipelineContext {
     pub preview_count: AtomicUsize,
     /// 主码流专用的按需快拍解码器实例 (惰性分配)
     pub snapshot_decoder: TokioMutex<Option<Box<dyn VideoDecoder + Send>>>,
-    /// 纯 Rust 航迹关联跟踪器
+    /// 纯 Rust 航迹关联跟踪器 (兼容单算法入口)
     pub tracker: TokioMutex<SimpleTracker>,
+    /// 多算法独立航迹关联跟踪器映射表 (algorithm_id -> SimpleTracker)
+    pub trackers: TokioMutex<HashMap<String, SimpleTracker>>,
     /// 局部特写预裁剪仿射变换映射器
     pub roi_mapper: TokioRwLock<RoiAffineMapper>,
     /// 任务级空间几何规则
@@ -66,6 +69,7 @@ impl CameraPipelineContext {
             preview_count: AtomicUsize::new(0),
             snapshot_decoder: TokioMutex::new(None),
             tracker: TokioMutex::new(SimpleTracker::new()),
+            trackers: TokioMutex::new(HashMap::new()),
             roi_mapper: TokioRwLock::new(RoiAffineMapper::identity()),
             rules: TokioRwLock::new(Vec::new()),
             rule_evaluator: RuleEvaluator::new(),
@@ -489,14 +493,15 @@ impl PipelineManager {
         tracing::info!(camera_id = %camera_id, count = r.len(), "已更新摄像头空间几何布防规则");
     }
 
-    /// 统一处理算法推理输出的检测结果：
+    /// 统一处理算法推理输出的检测结果并执行指定算法实例的航迹跟踪与几何规则判定：
     /// 1. 执行 Pre-crop ROI 线性仿射坐标还原（将局部归一化 [0,1] 映射至全景大图 [0,1]）；
-    /// 2. 纯 Rust 航迹关联跟踪器更新（维护连续全局 TrackID 与历史移动轨迹）；
-    /// 3. 统一几何规则引擎判定（Mask 区域静默过滤、ROI 入侵、绊线越界及 5 秒防重复报警冷却）；
+    /// 2. 独立算法实例的航迹关联更新（按 algorithm_id 隔离 Tracker，避免航迹冲刷）；
+    /// 3. 几何规则判定与 5 秒防刷屏冷却；
     /// 4. 返回当前活跃 TrackedObject 与触发的 TriggeredAlarm 集合。
-    pub async fn process_detections(
+    pub async fn process_detections_for_algo(
         &self,
         camera_id: &str,
+        algorithm_id: &str,
         detections: Vec<Detection>,
         timestamp_ms: i64,
     ) -> (Vec<TrackedObject>, Vec<TriggeredAlarm>) {
@@ -512,17 +517,31 @@ impl PipelineManager {
             })
             .collect();
 
-        // 2. 航迹关联更新
-        let mut tracker = ctx.tracker.lock().await;
+        // 2. 独立算法实例的航迹关联更新
+        let mut trackers = ctx.trackers.lock().await;
+        let tracker = trackers
+            .entry(algorithm_id.to_string())
+            .or_insert_with(SimpleTracker::new);
         let tracked_objects = tracker.update(global_detections);
 
         // 3. 几何规则评估与 5 秒告警防刷屏冷却
         let rules = ctx.rules.read().await;
         let alarms =
             ctx.rule_evaluator
-                .evaluate(&rules, &tracked_objects, &mut tracker, timestamp_ms, 5000);
+                .evaluate(&rules, &tracked_objects, tracker, timestamp_ms, 5000);
 
         (tracked_objects, alarms)
+    }
+
+    /// 驱动管线执行航迹跟踪与几何规则判定 (向后兼容单算法入口)
+    pub async fn process_detections(
+        &self,
+        camera_id: &str,
+        detections: Vec<Detection>,
+        timestamp_ms: i64,
+    ) -> (Vec<TrackedObject>, Vec<TriggeredAlarm>) {
+        self.process_detections_for_algo(camera_id, "default", detections, timestamp_ms)
+            .await
     }
 
     async fn mount_pump(&self, camera_id: &str, pump: SubStreamAnalysisPump) {
@@ -572,6 +591,33 @@ impl PipelineManager {
         tracing::info!(camera_id = %camera_id, "子码流驱动泵 (含常驻工作线程) 已挂载至管线管理器");
     }
 
+    /// 启动某路摄像头的多算法实例子码流分析驱动泵
+    pub async fn start_analysis_pump_multi_worker(
+        self: &Arc<Self>,
+        camera_id: &str,
+        session: Arc<media::CameraStreamSession>,
+        decoder: Box<dyn VideoDecoder + Send>,
+        instance_configs: Vec<crate::pump::WorkerInstanceConfig>,
+        workers: Vec<(
+            String,
+            infer::InferenceWorkerHandle,
+            Option<infer::InferenceWorker>,
+        )>,
+        motion_gate_enabled: bool,
+    ) {
+        let pump = SubStreamAnalysisPump::start_multi_worker(
+            camera_id,
+            session,
+            decoder,
+            instance_configs,
+            workers,
+            self.clone(),
+            motion_gate_enabled,
+        );
+        self.mount_pump(camera_id, pump).await;
+        tracing::info!(camera_id = %camera_id, "子码流多算法驱动泵已挂载至管线管理器");
+    }
+
     /// 停止某路摄像头的子码流分析驱动泵
     pub async fn stop_analysis_pump(&self, camera_id: &str) -> bool {
         let old_pump = {
@@ -609,15 +655,17 @@ impl PipelineManager {
     }
 
     /// 原子热替换指定摄像头的推理 Worker 句柄 (不断流、零中断)
-    pub async fn replace_pump_worker(
+    /// 原子替换某路摄像头指定算法实例的子码流推理 Worker 句柄
+    pub async fn replace_pump_worker_for_algo(
         &self,
         camera_id: &str,
+        algorithm_id: &str,
         new_worker: infer::InferenceWorkerHandle,
     ) -> Result<(), PipelineError> {
         let pumps = self.pumps.read().await;
         if let Some(pump) = pumps.get(camera_id) {
-            pump.replace_worker(new_worker).await;
-            tracing::info!(camera_id = %camera_id, "已在两帧间隙原子完成子码流推理 Worker 优雅热重载");
+            pump.replace_worker(algorithm_id, new_worker).await;
+            tracing::info!(camera_id = %camera_id, algorithm_id = %algorithm_id, "已在两帧间隙原子完成子码流推理 Worker 优雅热重载");
             Ok(())
         } else {
             Err(PipelineError::PipelineNotFound {
@@ -626,17 +674,107 @@ impl PipelineManager {
         }
     }
 
-    /// 全局热重载：将所有正在运行的驱动泵原子热替换为新的推理 Worker 句柄
+    /// 使用已创建且由目标驱动泵托管的 Worker 原子替换算法实例。
+    pub async fn replace_pump_worker_for_algo_with_owner(
+        &self,
+        camera_id: &str,
+        algorithm_id: &str,
+        new_worker: InferenceWorker,
+    ) -> Result<bool, PipelineError> {
+        let pumps = self.pumps.read().await;
+        if let Some(pump) = pumps.get(camera_id) {
+            Ok(pump
+                .replace_worker_with_owner(algorithm_id, new_worker)
+                .await)
+        } else {
+            Err(PipelineError::PipelineNotFound {
+                camera_id: camera_id.to_string(),
+            })
+        }
+    }
+    /// 向后兼容：原子替换单 Worker 或首个算法 Worker
+    pub async fn replace_pump_worker(
+        &self,
+        camera_id: &str,
+        new_worker: infer::InferenceWorkerHandle,
+    ) -> Result<(), PipelineError> {
+        self.replace_pump_worker_for_algo(
+            camera_id,
+            crate::pump::LEGACY_SINGLE_WORKER_ID,
+            new_worker,
+        )
+        .await
+    }
+
+    /// 全局热重载：为每个匹配的驱动泵创建并托管独立推理 Worker。
     pub async fn reload_algorithm_on_pumps(
         &self,
-        new_worker_handle: infer::InferenceWorkerHandle,
+        algorithm_id: &str,
+        package: Arc<AlgoPackage>,
     ) -> usize {
-        let pumps = self.pumps.read().await;
+        let targets = {
+            let pumps = self.pumps.read().await;
+            let mut targets = Vec::new();
+            for (camera_id, pump) in pumps.iter() {
+                if let Some(config_json) = pump.worker_config_for_algorithm(algorithm_id).await {
+                    targets.push((camera_id.clone(), config_json));
+                }
+            }
+            targets
+        };
+
         let mut count = 0;
-        for (cam_id, pump) in pumps.iter() {
-            pump.replace_worker(new_worker_handle.clone()).await;
-            tracing::info!(camera_id = %cam_id, "已在两帧间隙热切换推理 Worker");
-            count += 1;
+        for (camera_id, config_json) in targets {
+            let package = package.clone();
+            let instance_id = format!("hot-reload-{algorithm_id}-{camera_id}");
+            let worker_result = tokio::task::spawn_blocking(move || {
+                let instance = package.create_instance(&instance_id, config_json.as_deref())?;
+                Ok::<_, infer::InferError>(InferenceWorker::new(Arc::new(instance)))
+            })
+            .await;
+
+            let worker = match worker_result {
+                Ok(Ok(worker)) => worker,
+                Ok(Err(err)) => {
+                    tracing::error!(
+                        camera_id = %camera_id,
+                        algorithm_id = %algorithm_id,
+                        error = %err,
+                        "算法版本热重载创建推理 Worker 失败"
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    tracing::error!(
+                        camera_id = %camera_id,
+                        algorithm_id = %algorithm_id,
+                        error = %err,
+                        "算法版本热重载阻塞任务异常退出"
+                    );
+                    continue;
+                }
+            };
+
+            match self
+                .replace_pump_worker_for_algo_with_owner(&camera_id, algorithm_id, worker)
+                .await
+            {
+                Ok(true) => {
+                    tracing::info!(
+                        camera_id = %camera_id,
+                        algorithm_id = %algorithm_id,
+                        "已在两帧间隙热切换并托管推理 Worker"
+                    );
+                    count += 1;
+                }
+                Ok(false) => {}
+                Err(err) => tracing::warn!(
+                    camera_id = %camera_id,
+                    algorithm_id = %algorithm_id,
+                    error = %err,
+                    "算法版本热重载时目标驱动泵已退出"
+                ),
+            }
         }
         count
     }
@@ -733,6 +871,9 @@ mod tests {
             FrameHandle::Host(vec![128u8; 640 * 360 * 3 / 2].into()),
         );
         manager.update_sub_stream_frame(cam_id, dummy_frame).await;
+
+        // 清空环形缓冲区以模拟主流未就绪，测试无主流解码器时平滑降级至子流帧
+        ctx.ring_buffer.clear();
 
         // 触发抓拍 (无主流解码器时平滑降级至子流帧)
         let bbox = BoundingBox::new(0.1, 0.1, 0.5, 0.5);

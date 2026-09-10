@@ -41,7 +41,7 @@ impl DmaBufCpuAccess {
         #[cfg(target_os = "linux")]
         {
             sync_dma_buf(fd, DMA_BUF_SYNC_READ)?;
-            return Ok(Self { fd });
+            Ok(Self { fd })
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -1246,7 +1246,7 @@ fn dma_identity(layout: &DmaBufLayout) -> Result<DmaIdentity, AlgoError> {
     // SAFETY: fstat 返回成功后完整写入 stat。
     let stat = unsafe { stat.assume_init() };
     Ok(DmaIdentity {
-        device: stat.st_dev as u64,
+        device: stat.st_dev,
         inode: stat.st_ino,
         size: layout.size,
         stride: layout.stride[0],

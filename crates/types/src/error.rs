@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// 核心领域类型基础错误枚举
-#[derive(Debug, Error)]
+#[derive(Debug, PartialEq, Error)]
 pub enum TypeError {
     #[error("几何多边形顶点数量不足: 至少需要 3 个顶点，当前有 {0} 个")]
     InvalidPolygonPoints(usize),
@@ -14,10 +14,25 @@ pub enum TypeError {
 
     #[error("帧载体错误: {0}")]
     Frame(#[from] FrameError),
+
+    #[error("算法实例分析帧率必须在 0..=60 范围内，当前值: {value}")]
+    InvalidAnalysisFps { value: i32 },
+
+    #[error("算法参数必须为 JSON object，当前类型为: {actual_type}")]
+    InvalidAlgoParams { actual_type: String },
+
+    #[error("任务算法实例集合中存在重复算法 ID: {algorithm_id}")]
+    DuplicateAlgorithmId { algorithm_id: String },
+
+    #[error("状态码不在已知范围内: {0}")]
+    UnknownTaskStatusCode(i32),
+
+    #[error("算法 ID 不能为空")]
+    EmptyAlgorithmId,
 }
 
 /// 媒体帧与缓冲区抽象相关错误
-#[derive(Debug, Error)]
+#[derive(Debug, PartialEq, Error)]
 pub enum FrameError {
     #[error("不支持的像素格式: {0:?}")]
     UnsupportedPixelFormat(String),

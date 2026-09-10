@@ -89,7 +89,7 @@ pub fn decode_yolov5_face(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
     let threshold = conf_threshold.clamp(0.0, 1.0);
     let mut faces = Vec::with_capacity(raw.len() / YOLOV5_FACE_FIELDS);
 
-    for row in raw.chunks_exact(YOLOV5_FACE_FIELDS) {
+    for row in raw.as_chunks::<YOLOV5_FACE_FIELDS>().0 {
         let score = confidence_value(row[4]) * confidence_value(row[5]);
         if score < threshold {
             continue;
@@ -136,7 +136,7 @@ pub fn decode_yolov8_face(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> {
     let threshold = conf_threshold.clamp(0.0, 1.0);
     let mut faces = Vec::with_capacity(raw.len() / YOLOV8_FACE_FIELDS);
 
-    for row in raw.chunks_exact(YOLOV8_FACE_FIELDS) {
+    for row in raw.as_chunks::<YOLOV8_FACE_FIELDS>().0 {
         let score = confidence_value(row[4]);
         if score < threshold {
             continue;
@@ -196,7 +196,7 @@ pub fn decode_person_detections(raw: &[f32], conf_threshold: f32) -> Vec<PersonC
     let threshold = conf_threshold.clamp(0.0, 1.0);
     let mut persons = Vec::with_capacity(raw.len() / PERSON_FIELDS);
 
-    for row in raw.chunks_exact(PERSON_FIELDS) {
+    for row in raw.as_chunks::<PERSON_FIELDS>().0 {
         let score = confidence_value(row[4]);
         if score < threshold {
             continue;

@@ -53,19 +53,13 @@ pub async fn activate_version(state: &AppState, id: &str, version: &str) -> Resu
     let root = Path::new(&ver_model.package_root);
     if root.is_dir() {
         if let Ok(pkg) = state.algo_registry.load_and_register(root, false).await {
-            if let Ok(inst) = pkg.create_instance("{}", None) {
-                let worker = infer::InferenceWorker::new(std::sync::Arc::new(inst));
-                let count = state
-                    .pipeline
-                    .reload_algorithm_on_pumps(worker.handle())
-                    .await;
-                tracing::info!(
-                    algorithm_id = %aid,
-                    version = %version,
-                    reloaded_pumps = count,
-                    "已原子完成单进程算法版本优雅热重载"
-                );
-            }
+            let count = state.pipeline.reload_algorithm_on_pumps(&aid, pkg).await;
+            tracing::info!(
+                algorithm_id = %aid,
+                version = %version,
+                reloaded_pumps = count,
+                "已原子完成单进程算法版本优雅热重载"
+            );
         }
     }
 

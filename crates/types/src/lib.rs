@@ -34,6 +34,7 @@ pub use system::{
     StorageStatus, SystemOverview, ThermalMetrics, ThermalZone, TimeConfig, TimeStatus,
 };
 pub use task::{
-    AnalysisTask, DetectionLineDirection, DetectionPoint, DetectionRule, DetectionRuleRole,
-    MotionGateConfig, TaskStatus,
+    aggregate_task_instance_status, validate_task_algorithm_instances, AnalysisTask,
+    DetectionLineDirection, DetectionPoint, DetectionRule, DetectionRuleRole, MotionGateConfig,
+    TaskAlgorithmInstanceConfig, TaskStatus,
 };

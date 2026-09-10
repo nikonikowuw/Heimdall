@@ -162,7 +162,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "api",
+ "async-trait",
  "axum",
+ "chrono",
  "clap",
  "config",
  "db",
@@ -171,6 +173,7 @@ dependencies = [
  "libc",
  "media",
  "pipeline",
+ "sea-orm",
  "serde",
  "serde_json",
  "tokio",

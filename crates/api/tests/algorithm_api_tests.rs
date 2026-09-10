@@ -173,6 +173,30 @@ async fn test_algorithms_and_instances_api_endpoints() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
+    // PUT /api/v1/tasks/instances/{instance_id}
+    let update_body = serde_json::json!({
+        "analysisFps": 25,
+        "params": { "threshold": 0.85 },
+        "enabled": true
+    });
+    let req = Request::builder()
+        .uri(format!("/api/v1/tasks/instances/{instance_id}"))
+        .method("PUT")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .body(Body::from(update_body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(val["code"], 0);
+    assert_eq!(val["data"]["analysisFps"], 25);
+    assert_eq!(val["data"]["params"]["threshold"], 0.85);
+    assert_eq!(val["data"]["enabled"], true);
+
     // PUT /api/v1/tasks/instances/{instance_id}/enabled
     let req = Request::builder()
         .uri(format!("/api/v1/tasks/instances/{instance_id}/enabled"))

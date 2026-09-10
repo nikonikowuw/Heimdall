@@ -8,6 +8,7 @@ pub struct Model {
     pub id: i64,
     #[sea_orm(unique, column_type = "Text")]
     pub instance_id: String,
+    pub task_id: i64,
     pub camera_id: String,
     pub algorithm_id: String,
     pub analysis_fps: i32,

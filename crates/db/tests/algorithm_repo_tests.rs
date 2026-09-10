@@ -2,7 +2,7 @@
 
 use db::{
     init_test_db, AlgorithmInstanceRepo, AlgorithmRepo, CameraRepo, CreateInstanceParams, DbError,
-    UpdateInstanceParams, UpsertAlgorithmParams, UpsertVersionParams,
+    TaskRepo, UpdateInstanceParams, UpsertAlgorithmParams, UpsertVersionParams,
 };
 
 #[tokio::test]
@@ -131,7 +131,6 @@ async fn test_algorithm_and_version_repository_lifecycle() {
     }
 
     // 6. 实例绑定与使用中防卸载保护
-    // 先插入一个测试摄像头
     let cam = db::entity::camera::ActiveModel {
         camera_id: sea_orm::ActiveValue::Set("cam_01".to_string()),
         name: sea_orm::ActiveValue::Set("Gate Cam".to_string()),
@@ -140,8 +139,25 @@ async fn test_algorithm_and_version_repository_lifecycle() {
     };
     CameraRepo::insert(&db, cam).await.expect("insert camera");
 
+    // 创建任务行，满足 algorithm_instances.task_id NOT NULL + UNIQUE(task_id, algorithm_id)
+    let task = TaskRepo::save_task_with_instances(
+        &db,
+        db::SaveTaskWithInstancesParams {
+            camera_id: "cam_01".into(),
+            name: "测试任务".into(),
+            desired_enabled: true,
+            rules_json: "[]".into(),
+            motion_gate_json: "{}".into(),
+            status_message: None,
+            instances: Some(vec![]),
+        },
+    )
+    .await
+    .expect("create task for camera");
+
     // 创建启用的算法实例，绑定 yolo_v8
     let inst_params = CreateInstanceParams {
+        task_id: task.id,
         instance_id: "inst_001".to_string(),
         camera_id: "cam_01".to_string(),
         algorithm_id: "yolo_v8".to_string(),
@@ -208,8 +224,9 @@ async fn test_algorithm_and_version_repository_lifecycle() {
     assert_eq!(updated_inst.analysis_fps, 25);
 
     // 删除实例
-    let deleted_insts = AlgorithmInstanceRepo::delete(&db, "inst_001")
-        .await
-        .expect("delete inst");
+    let deleted_insts =
+        AlgorithmInstanceRepo::delete_by_task_id_and_instance_id(&db, task.id, "inst_001")
+            .await
+            .expect("delete inst");
     assert_eq!(deleted_insts, 1);
 }

@@ -27,8 +27,9 @@
 
 ## 任务与算法实例原子同步
 
-- 摄像头分析任务遵循“一个摄像头任务对应一个主算法实例”的配置约束。
-- 任务与主算法实例的配置修改、状态同步与级联删除，统一收敛在 `TaskRepo::save_task_and_sync_instance`、`update_status` 和 `delete_task_and_instance` 内部的单一 SQLite 事务（`db.transaction`），禁止在 API 或业务层进行双写，杜绝产生孤儿实例或半更新记录。
+- 摄像头分析任务支持挂载多个不同的算法实例（1:N 绑定架构），并通过 `task_id` 显式外键关联 `analysis_tasks`。同一任务下禁止重复挂载相同算法（`UNIQUE(task_id, algorithm_id)`）。
+- 任务与算法实例集合的配置修改、状态同步与级联删除，统一收敛在 `TaskRepo::save_task_with_instances`、`add_instance_to_task`、`update_instance_and_sync_task`、`update_status` 和 `delete_task_with_instances`（以及向后兼容单算法桥接函数）内部的单一 SQLite 事务（`db.transaction`），禁止在 API 或业务层脱离事务进行散装写入，杜绝产生孤儿实例或半更新记录。
+- 多算法实例状态聚合：任务的综合运行状态 (`actual_status`) 严格遵循优先级判定策略聚合（`Error` > `Reconnecting` > `Starting` > `Degraded` > `Running` > `Stopped`），精准反映所挂载算法实例的整体健康状态。
 - 数据层入库强校验：`analysis_fps >= 0`、`algo_params_json` 必须为有效 JSON Object。提供 `algorithm_id` 时必须检验其在 `algorithms` 表的存在性，不存在时立即回滚并返回 `DbError::NotFound`，严禁写入无效算法。
 - `TaskStatus` 采用显式 `#[repr(i32)]` 固定持久化数值：`Stopped(0)`、`Starting(1)`、`Running(2)`、`Degraded(3)`、`Reconnecting(4)`、`Error(5)`，禁止依赖隐式 enum cast。
 
