@@ -248,7 +248,7 @@ fn default_log_level() -> String {
 }
 
 fn default_log_filter() -> String {
-    "info,api=debug,media=debug,pipeline=debug".to_string()
+    "".to_string()
 }
 
 // ============================================================================
@@ -367,6 +367,29 @@ capture_mode = "sub_stream_on_large_gap"
         // 验证其余未配置项使用默认值
         assert_eq!(cfg.database.path, "argus.db");
         assert_eq!(cfg.media.handshake_timeout_ms, 5000);
+        assert_eq!(cfg.logging.level, "info");
+        assert_eq!(cfg.logging.filter, "");
+    }
+
+    #[test]
+    fn test_logging_config_override() {
+        let toml_content = r#"
+[logging]
+level = "warn"
+filter = "warn,media=debug"
+"#;
+
+        let config = config::Config::builder()
+            .add_source(config::File::from_str(
+                toml_content,
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .expect("配置构建应成功");
+
+        let cfg: AppConfig = config.try_deserialize().expect("配置反序列化应成功");
+        assert_eq!(cfg.logging.level, "warn");
+        assert_eq!(cfg.logging.filter, "warn,media=debug");
     }
 
     #[test]

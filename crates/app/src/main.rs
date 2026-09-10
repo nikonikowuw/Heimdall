@@ -56,7 +56,20 @@ async fn main() -> Result<()> {
     }
 
     // 2. 初始化结构化日志
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.logging.filter.clone());
+    // 优先级：环境变量 RUST_LOG > 配置文件 [logging]
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        let trimmed = cfg.logging.filter.trim();
+        // 若 filter 留空，或者用户显式修改了 level (如 level = "warn") 但 filter 仍为遗留模板默认值，
+        // 则优先采用 cfg.logging.level，避免模板中写死的 "media=debug" 强行覆盖用户的全局日志级别。
+        if trimmed.is_empty()
+            || (cfg.logging.level != "info"
+                && trimmed == "info,api=debug,media=debug,pipeline=debug")
+        {
+            cfg.logging.level.clone()
+        } else {
+            trimmed.to_string()
+        }
+    });
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()),

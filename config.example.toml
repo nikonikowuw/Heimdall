@@ -63,7 +63,8 @@ inactivity_timeout_ms = 6000
 ring_buffer_duration_ms = 4000
 
 [logging]
-# 默认日志输出级别: "trace" | "debug" | "info" | "warn" | "error"
+# 默认日志输出级别: "trace" | "debug" | "info" | "warn" | "error" (默认 "info")
 level = "info"
-# 模块级结构化日志过滤指令 (可用环境变量 RUST_LOG 覆盖)
-filter = "info,api=debug,media=debug,pipeline=debug"
+# 模块级结构化日志过滤指令 (可选，留空则默认遵循 level；设置后精确覆盖各模块日志级别，可用环境变量 RUST_LOG 覆盖)
+# 示例: 留空 "" (遵循 level) 或高级指令 "warn,api=debug,media=info"
+filter = ""
