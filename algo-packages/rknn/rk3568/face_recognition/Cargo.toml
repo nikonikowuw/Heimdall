@@ -12,7 +12,7 @@ name = "face_recognition_rk3568"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-algo-sdk = { workspace = true, features = ["rga"] }
+algo-sdk = { workspace = true, features = ["rga", "testing-hardware"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 image = { workspace = true }

@@ -492,11 +492,18 @@ impl MockFrameBuilder {
         })?;
         let rgb_img = img.to_rgb8();
         let (w, h) = rgb_img.dimensions();
+        // 硬件解码帧与视频流格式要求宽高必须为偶数 (2 像素对齐)
+        let (even_w, even_h) = (w & !1, h & !1);
+        let rgb_img = if even_w != w || even_h != h {
+            image::imageops::crop_imm(&rgb_img, 0, 0, even_w, even_h).to_image()
+        } else {
+            rgb_img
+        };
 
         Ok(Self::new()
-            .dimensions(w, h)
+            .dimensions(even_w, even_h)
             .pixel_format(AV_PIX_RGB24)
-            .stride((w * 3) as i32, 0)
+            .stride((even_w * 3) as i32, 0)
             .host_data(rgb_img.into_raw()))
     }
 

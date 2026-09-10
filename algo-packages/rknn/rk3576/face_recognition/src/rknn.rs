@@ -742,27 +742,23 @@ impl RknnSession {
         }
 
         if direct_supported && direct_layout_compatible {
-            let entry = self.ensure_dma_entry(identity, layout, false, true)?;
+            let entry = self.ensure_dma_entry(identity, layout, true, true)?;
             if let Some(mem) = entry.mem {
                 let mut attr = input_attr;
                 attr.type_ = RknnTensorType::Uint8;
                 // 当前 RKNN header 将 h_stride 作为绑定时的物理高度描述。
                 attr.h_stride = layout.h_stride;
-                let set_io_mem =
-                    self.backend
-                        .runtime
-                        .rknn_set_io_mem
-                        .ok_or_else(|| AlgoError::Inference {
-                            reason: "RKNN Runtime 缺少 rknn_set_io_mem".to_string(),
-                        })?;
-                // SAFETY: mem 属于当前 context，attr 是本次同步绑定使用的局部 C POD。
-                let status = unsafe { set_io_mem(self.backend.ctx, mem.as_ptr(), &mut attr) };
-                if status != RKNN_SUCC {
-                    return Err(AlgoError::Inference {
-                        reason: format!("rknn_set_io_mem 绑定 DMA-BUF 失败，错误码: {status}"),
-                    });
+                if let Some(set_io_mem) = self.backend.runtime.rknn_set_io_mem {
+                    // SAFETY: mem 属于当前 context，attr 是本次同步绑定使用的局部 C POD。
+                    let status = unsafe { set_io_mem(self.backend.ctx, mem.as_ptr(), &mut attr) };
+                    if status == RKNN_SUCC {
+                        return self.run_and_process(process_fn);
+                    }
+                    tracing::debug!(
+                        status,
+                        "rknn_set_io_mem 绑定 DMA-BUF 返回非 0，回退到 DMA-BUF 映射通道"
+                    );
                 }
-                return self.run_and_process(process_fn);
             }
         }
 
