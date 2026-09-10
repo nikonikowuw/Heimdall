@@ -584,3 +584,24 @@ Defined explicit i32 mapping for TaskStatus and added algorithm binding fields t
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: 多算法绑定、驱动泵并发调度、冷启动恢复与定向热替换
+
+**Date**: 2026-09-10
+**Task**: 多算法绑定、驱动泵并发调度、冷启动恢复与定向热替换
+**Branch**: `dev`
+
+### Summary
+
+完成任务多算法实例绑定与 V6 数据库迁移，实现单摄像头多算法并发调度与目标跟踪隔离，重构 Drop-Oldest 丢帧指标并修复无限递归；完善冷启动任务恢复与实例生命周期管线联动；前端支持任务创建算法选择与卡片运行态回显；通过双轴审查修复 10 项缺陷，工作区通过全部验证门禁。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `81214ac` | (see git log) |
+
+### Status
+
+[OK] **Completed**
