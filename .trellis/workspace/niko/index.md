@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 23
+- **Total Sessions**: 24
 - **Last Active**: 2026-09-10
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~607 | Active |
+| `journal-1.md` | ~645 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 24 | 2026-09-10 | 实现规则告警与抓拍证据三支柱落库及WebSocket实时广播 | `c4b6703` | `dev` |
 | 23 | 2026-09-10 | 多算法绑定、驱动泵并发调度、冷启动恢复与定向热替换 | `81214ac` | `dev` |
 | 22 | 2026-09-10 | 实现任务API启停编排与状态双写同步 | `453d895`, `d7a3207` | `dev` |
 | 21 | 2026-09-09 | 分析任务运行时协调与双流资源生命周期实现及质量复核 | `d0eb1c7`, `2932302`, `5a0d4c7` | `dev` |

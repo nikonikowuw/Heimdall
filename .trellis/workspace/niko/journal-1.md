@@ -605,3 +605,41 @@ Defined explicit i32 mapping for TaskStatus and added algorithm binding fields t
 ### Status
 
 [OK] **Completed**
+
+
+## Session 24: 实现规则告警与抓拍证据三支柱落库及WebSocket实时广播
+
+**Date**: 2026-09-10
+**Task**: 实现规则告警与抓拍证据三支柱落库及WebSocket实时广播
+**Branch**: `dev`
+
+### Summary
+
+完成告警异步持久化服务 AlarmDispatchService，实现 alarm_records 与 capture_records 的事务原子落库，支持冷启动与 Lagged 补偿，并广播 alarm.triggered 事件
+
+### Main Changes
+
+- 在 crates/api 中实现 AlarmDispatchService，订阅管线分析引擎的告警事件
+- 在 crates/db 中为 AlarmRepo 新增 insert_alarm_with_optional_capture 与 find_by_event_id
+- 在 app 启动时注入并启动 AlarmDispatchService 常驻 Worker 线程
+- 精简代码并消除多余内存克隆与重复日志输出
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c4b6703` | (see git log) |
+
+### Testing
+
+- [OK] cargo test -p api --test alarm_persistence_broadcast_tests (4/4 passed)
+- [OK] cargo test --workspace (全部测试通过)
+- [OK] cargo clippy --all-targets -- -D warnings (0 warnings)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进 09-08-realtime-detection-metadata-canvas-overlay 任务（实时画面检测框与元数据 Canvas2D 渲染）
