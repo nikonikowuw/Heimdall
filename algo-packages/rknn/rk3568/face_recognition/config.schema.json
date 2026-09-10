@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RK3576 人脸识别配置",
+  "description": "常驻人脸检测质量门控配置；embedding 通过低频抓拍接口生成。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "detection_confidence_threshold": {
+      "type": "number",
+      "title": "检测置信度阈值",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.25
+    },
+    "min_face_size": {
+      "type": "integer",
+      "title": "最小人脸尺寸",
+      "minimum": 1,
+      "default": 30
+    },
+    "quality_thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_score": {
+          "type": "number",
+          "title": "最小质量分数",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.3
+        },
+        "max_yaw": {
+          "type": "number",
+          "title": "最大偏航角",
+          "minimum": 0.0,
+          "maximum": 180.0,
+          "default": 45.0
+        },
+        "max_pitch": {
+          "type": "number",
+          "title": "最大俯仰角",
+          "minimum": 0.0,
+          "maximum": 90.0,
+          "default": 30.0
+        },
+        "max_blur": {
+          "type": "number",
+          "title": "最大模糊代理分数",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.7
+        }
+      },
+      "default": {}
+    }
+  }
+}
