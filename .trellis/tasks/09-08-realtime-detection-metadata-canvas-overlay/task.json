@@ -3,7 +3,7 @@
   "name": "realtime-detection-metadata-canvas-overlay",
   "title": "实时画面AI检测框与跟踪元数据流转及Canvas2D叠加渲染",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

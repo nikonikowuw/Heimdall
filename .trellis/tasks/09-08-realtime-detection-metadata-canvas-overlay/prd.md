@@ -28,12 +28,12 @@
 
 ### R1. 后端检测元数据流转与按需限流推送 (`crates/pipeline`, `crates/api`)
 - **R1.1 元数据广播接口与按需节流**：
-  - 在 `PipelineManager` 中维护每路摄像头的最新活跃航迹快照（`current_tracks: Arc<RwLock<HashMap<String, Vec<TrackedObject>>>>`）；
+  - 在 `PipelineManager` 中维护每路摄像头的最新活跃航迹快照（`current_tracks: TokioRwLock<HashMap<String, Vec<TrackedObject>>>>`）；
   - 当驱动泵完成一帧检测并更新跟踪器后，原子刷新该快照；
-  - 针对实时连接的客户端，通过 WebSocket 广播主题 `camera_detections` 周期性（建议 10~15 FPS 节流，避免过多小包拥塞）推送归一化检测坐标：
+  - 针对实时连接的客户端，通过 WebSocket 广播主题 `camera.tracks`（对齐女娲架构点分命名规范）周期性（建议 10~15 FPS 节流，避免过多小包拥塞）推送归一化检测坐标：
     ```json
     {
-      "topic": "camera_detections",
+      "topic": "camera.tracks",
       "payload": {
         "cameraId": "CAM-01",
         "timestamp": 1757300000120,
@@ -55,8 +55,8 @@
 
 ### R2. 前端高性能消费与 Canvas 2D 叠加 (`web/src/features/live/`)
 - **R2.1 零 React 响应式开销的状态接入**：
-  - `LivePage.tsx` 在 WebSocket 消息处理中监听 `camera_detections`；
-  - 采用 `useRef<Map<string, TrackedBBox[]>>` 存储各摄像头的最新追踪框，**严禁将高频元数据直接存入 React `useState`**（防止引起高频 DOM 重排与丢帧）；
+  - 前端在 WebSocket 消息处理中监听 `camera.tracks`；
+  - 采用轻量发布订阅总线（`trackStore`）在内存中管理各摄像头的最新追踪框，**严禁将高频元数据直接存入 React `useState`**（防止引起高频 DOM 重排与丢帧）；
   - 将 `trackedObjects` 传递给当前播放的 `<LivePlayer />` 实例。
 - **R2.2 自适应分辨率与平滑插值渲染**：
   - Canvas 尺寸通过 `ResizeObserver` 动态与视频尺寸像素级对齐；

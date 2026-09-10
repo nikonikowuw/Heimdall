@@ -19,7 +19,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { CameraModal, DeleteCameraModal, normalizeProbeStatus } from '@/features/cameras'
 import { cameraApi, evidenceApi } from '@/lib/api'
-import { useAuthStore } from '@/stores/auth'
+import { wsClient } from '@/lib/wsClient'
 import {
   type AlarmSeverity,
   type AlarmStatus,
@@ -234,167 +234,81 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
     void loadCameras()
   }, [])
 
-  // 监听全网 WebSocket 广播事件（实时刷新探活状态与健康度自动提权）
+  // 监听全网 WebSocket 广播事件（复用全局长连接：实时刷新探活状态与健康度自动提权）
   useEffect(() => {
-    let ws: WebSocket | null = null
-    let isCancelled = false
-    let reconnectTimer: NodeJS.Timeout | null = null
-    let reconnectAttempts = 0
-
-    function scheduleReconnect() {
-      if (isCancelled) return
-      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)
-      reconnectAttempts += 1
-      reconnectTimer = setTimeout(connectWs, delay)
-    }
-
-    function connectWs() {
-      if (isCancelled) return
-      const token = useAuthStore.getState().token
-      if (!token) return
-
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const host = window.location.host
-      const wsUrl = `${protocol}//${host}/api/v1/ws/events?token=${encodeURIComponent(token)}`
-
-      try {
-        const socket = new WebSocket(wsUrl)
-        ws = socket
-
-        socket.onopen = () => {
-          reconnectAttempts = 0
-        }
-
-        socket.onmessage = (e) => {
-          try {
-            const event = JSON.parse(e.data) as {
-              topic: string
-              payload: {
-                cameraId: string
-                status: string
-                codec: string
-                width: number
-                height: number
-                fps: number
-                errorCode: string
-              }
+    const unProbe = wsClient.subscribe<{
+      cameraId: string
+      status: string
+      codec: string
+      width: number
+      height: number
+      fps: number
+      errorCode: string
+    }>(WS_TOPICS.CAMERA_PROBE_UPDATED, (payload) => {
+      if (!payload) return
+      const { cameraId, status, codec, width, height, fps, errorCode } = payload
+      setCameras((prev) => {
+        const next = prev.map((cam) => {
+          if (cam.cameraId === cameraId) {
+            return {
+              ...cam,
+              lastProbeStatus: status as ProbeStatus,
+              lastCodec: codec || cam.lastCodec,
+              lastWidth: width || cam.lastWidth,
+              lastHeight: height || cam.lastHeight,
+              lastFps: fps !== undefined ? fps : cam.lastFps,
+              lastProbeErrorCode: errorCode,
             }
-
-            if (event.topic === WS_TOPICS.CAMERA_PROBE_UPDATED && event.payload) {
-              const { cameraId, status, codec, width, height, fps, errorCode } = event.payload
-              setCameras((prev) => {
-                const next = prev.map((cam) => {
-                  if (cam.cameraId === cameraId) {
-                    return {
-                      ...cam,
-                      lastProbeStatus: status as ProbeStatus,
-                      lastCodec: codec || cam.lastCodec,
-                      lastWidth: width || cam.lastWidth,
-                      lastHeight: height || cam.lastHeight,
-                      lastFps: fps !== undefined ? fps : cam.lastFps,
-                      lastProbeErrorCode: errorCode,
-                    }
-                  }
-                  return cam
-                })
-                return sortCamerasByHealth(next)
-              })
-            }
-
-            if (event.topic === WS_TOPICS.ALARM_TRIGGERED && event.payload) {
-              const p = event.payload as {
-                id?: number
-                eventId?: string
-                cameraId?: string
-                targetLabel?: string
-                ruleType?: string
-                severity?: AlarmSeverity
-                cropImageRelPath?: string
-                imageRelPath?: string
-              }
-              playAlarmChime()
-              setActiveAlarm({
-                id: p.eventId || String(p.id || Date.now()),
-                cameraId: p.cameraId || 'CAM-01',
-                targetLabel: p.targetLabel || 'Target',
-                ruleType: p.ruleType || 'intrusion',
-                severity: p.severity || 'warning',
-                cropImageRelPath: p.cropImageRelPath,
-                imageRelPath: p.imageRelPath,
-              })
-            }
-
-            if (event.topic === WS_TOPICS.ALARM_STATUS_CHANGED && event.payload) {
-              const p = event.payload as {
-                id?: number
-                eventId?: string
-                status?: AlarmStatus
-              }
-              if (p.status === 'processed') {
-                setActiveAlarm((prev) => {
-                  if (!prev) return null
-                  if (prev.id === p.eventId || prev.id === String(p.id)) {
-                    return null
-                  }
-                  return prev
-                })
-              }
-            }
-          } catch {
-            // ignore non-JSON or unrelated messages
           }
-        }
+          return cam
+        })
+        return sortCamerasByHealth(next)
+      })
+    })
 
-        socket.onclose = () => {
-          if (!isCancelled) {
-            scheduleReconnect()
+    const unAlarm = wsClient.subscribe<{
+      id?: number
+      eventId?: string
+      cameraId?: string
+      targetLabel?: string
+      ruleType?: string
+      severity?: AlarmSeverity
+      cropImageRelPath?: string
+      imageRelPath?: string
+    }>(WS_TOPICS.ALARM_TRIGGERED, (p) => {
+      if (!p) return
+      playAlarmChime()
+      setActiveAlarm({
+        id: p.eventId || String(p.id || Date.now()),
+        cameraId: p.cameraId || 'CAM-01',
+        targetLabel: p.targetLabel || 'Target',
+        ruleType: p.ruleType || 'intrusion',
+        severity: p.severity || 'warning',
+        cropImageRelPath: p.cropImageRelPath,
+        imageRelPath: p.imageRelPath,
+      })
+    })
+
+    const unAlarmStatus = wsClient.subscribe<{
+      id?: number
+      eventId?: string
+      status?: AlarmStatus
+    }>(WS_TOPICS.ALARM_STATUS_CHANGED, (p) => {
+      if (p?.status === 'processed') {
+        setActiveAlarm((prev) => {
+          if (!prev) return null
+          if (prev.id === p.eventId || prev.id === String(p.id)) {
+            return null
           }
-        }
-
-        socket.onerror = () => {
-          // onclose 将被触发并处理重连
-        }
-      } catch {
-        if (!isCancelled) {
-          scheduleReconnect()
-        }
+          return prev
+        })
       }
-    }
-
-    connectWs()
+    })
 
     return () => {
-      isCancelled = true
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer)
-        reconnectTimer = null
-      }
-      if (ws) {
-        // 解绑监听器，防止组件卸载后仍触发重连或处理消息
-        ws.onmessage = null
-        ws.onerror = null
-        ws.onclose = null
-
-        if (ws.readyState === WebSocket.CONNECTING) {
-          // 若处于握手阶段，等待建立后再安全关闭，防止浏览器在控制台产生
-          // "WebSocket is closed before the connection is established" 报错
-          const pendingWs = ws
-          pendingWs.onopen = () => {
-            try {
-              pendingWs.close(1000, 'unmounted')
-            } catch {
-              // 忽略关闭异常
-            }
-          }
-        } else if (ws.readyState === WebSocket.OPEN) {
-          try {
-            ws.close(1000, 'unmounted')
-          } catch {
-            // 忽略关闭异常
-          }
-        }
-        ws = null
-      }
+      unProbe()
+      unAlarm()
+      unAlarmStatus()
     }
   }, [])
 

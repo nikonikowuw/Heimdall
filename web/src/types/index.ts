@@ -40,6 +40,7 @@ export const WS_TOPICS = {
   CAMERA_PROBE_UPDATED: 'camera.probe_updated',
   ALARM_TRIGGERED: 'alarm.triggered',
   ALARM_STATUS_CHANGED: 'alarm.status_changed',
+  CAMERA_TRACKS: 'camera.tracks',
 } as const
 
 export type WsTopic = (typeof WS_TOPICS)[keyof typeof WS_TOPICS]
@@ -104,6 +105,12 @@ export interface TrackedBBox {
   confidence: number
   bbox: [number, number, number, number] // [x1, y1, x2, y2] 归一化坐标 0.0 ~ 1.0
   trajectory?: [number, number][]
+}
+
+export interface CameraTracksPayload {
+  cameraId: string
+  timestamp: number
+  tracks: TrackedBBox[]
 }
 
 export interface CameraTelemetry {

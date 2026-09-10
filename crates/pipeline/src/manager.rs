@@ -40,6 +40,8 @@ pub struct CameraPipelineContext {
     pub tracker: TokioMutex<SimpleTracker>,
     /// 多算法独立航迹关联跟踪器映射表 (algorithm_id -> SimpleTracker)
     pub trackers: TokioMutex<HashMap<String, SimpleTracker>>,
+    /// 每路摄像头按算法实例维护的最新活跃航迹快照 (algorithm_id -> Vec<TrackedObject>)
+    pub current_tracks: TokioRwLock<HashMap<String, Vec<TrackedObject>>>,
     /// 局部特写预裁剪仿射变换映射器
     pub roi_mapper: TokioRwLock<RoiAffineMapper>,
     /// 任务级空间几何规则
@@ -70,6 +72,7 @@ impl CameraPipelineContext {
             snapshot_decoder: TokioMutex::new(None),
             tracker: TokioMutex::new(SimpleTracker::new()),
             trackers: TokioMutex::new(HashMap::new()),
+            current_tracks: TokioRwLock::new(HashMap::new()),
             roi_mapper: TokioRwLock::new(RoiAffineMapper::identity()),
             rules: TokioRwLock::new(Vec::new()),
             rule_evaluator: RuleEvaluator::new(),
@@ -323,6 +326,26 @@ impl PipelineManager {
         }
     }
 
+    /// 查询指定摄像头当前是否有活跃的实时预览客户端 (用于按需节流与零开销静默)
+    pub async fn has_preview_subscribers(&self, camera_id: &str) -> bool {
+        self.pipelines
+            .read()
+            .await
+            .get(camera_id)
+            .is_some_and(|ctx| ctx.preview_count.load(Ordering::Relaxed) > 0)
+    }
+
+    /// 获取指定摄像头当前活跃的所有算法实例航迹快照
+    pub async fn get_current_tracks(&self, camera_id: &str) -> Vec<TrackedObject> {
+        let pipelines = self.pipelines.read().await;
+        if let Some(ctx) = pipelines.get(camera_id) {
+            let tracks_map = ctx.current_tracks.read().await;
+            tracks_map.values().flatten().cloned().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// 挂载主码流广播通道，持续将压缩 NALU 包压入 RingBuffer
     pub fn attach_main_stream(
         &self,
@@ -523,6 +546,16 @@ impl PipelineManager {
             .entry(algorithm_id.to_string())
             .or_insert_with(SimpleTracker::new);
         let tracked_objects = tracker.update(global_detections);
+
+        // 同步更新最新航迹快照 (PRD R1.1: 维护活跃航迹快照)
+        {
+            let mut current = ctx.current_tracks.write().await;
+            if tracked_objects.is_empty() {
+                current.remove(algorithm_id);
+            } else {
+                current.insert(algorithm_id.to_string(), tracked_objects.clone());
+            }
+        }
 
         // 3. 几何规则评估与 5 秒告警防刷屏冷却
         let rules = ctx.rules.read().await;
@@ -1288,5 +1321,55 @@ mod tests {
         let removed = manager.remove_pipeline_context_if_idle(cam_id).await;
         assert!(removed);
         assert!(manager.get_pipeline_context(cam_id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_has_preview_subscribers() {
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_preview_test";
+
+        assert!(!manager.has_preview_subscribers(cam_id).await);
+
+        manager.increment_preview(cam_id).await;
+        assert!(manager.has_preview_subscribers(cam_id).await);
+
+        manager.increment_preview(cam_id).await;
+        assert!(manager.has_preview_subscribers(cam_id).await);
+
+        manager.decrement_preview(cam_id).await;
+        assert!(manager.has_preview_subscribers(cam_id).await);
+
+        manager.decrement_preview(cam_id).await;
+        assert!(!manager.has_preview_subscribers(cam_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_get_current_tracks() {
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_current_tracks_test";
+
+        assert!(manager.get_current_tracks(cam_id).await.is_empty());
+
+        let det = types::Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            bbox: types::BoundingBox::new(0.1, 0.2, 0.3, 0.4),
+        };
+
+        let (tracked, _) = manager
+            .process_detections_for_algo(cam_id, "algo_1", vec![det], 1000)
+            .await;
+        assert_eq!(tracked.len(), 1);
+
+        let current = manager.get_current_tracks(cam_id).await;
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].label, "person");
+
+        // 空帧更新该算法，应自动清除
+        manager
+            .process_detections_for_algo(cam_id, "algo_1", vec![], 2000)
+            .await;
+        assert!(manager.get_current_tracks(cam_id).await.is_empty());
     }
 }

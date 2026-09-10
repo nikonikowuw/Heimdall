@@ -176,6 +176,10 @@ async fn main() -> Result<()> {
     let alarm_svc = Arc::new(api::AlarmDispatchService::from_state(&state));
     alarm_svc.start_worker();
 
+    // 启动后台航迹实时流分发与节流工作线程
+    let track_svc = Arc::new(api::TrackDispatchService::from_state(&state));
+    track_svc.start_worker();
+
     // 执行网络服务冷启动防失联自愈检查（恢复意外断电或重启前未确认的网卡快照）
     api::NetworkService::recover_pending_snapshots_on_startup().await;
 

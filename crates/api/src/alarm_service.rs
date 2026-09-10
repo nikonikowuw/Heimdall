@@ -188,14 +188,14 @@ impl AlarmDispatchService {
 
     /// 启动后台常驻工作线程
     pub fn start_worker(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let mut analysis_rx = self.pipeline.subscribe_analysis_events();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+
         tokio::spawn(async move {
             tracing::info!("后台告警异步持久化与实时广播工作线程已启动");
 
             // 启动初期，先排空启动前可能积压的补偿队列
             self.drain_and_persist_pending().await;
-
-            let mut analysis_rx = self.pipeline.subscribe_analysis_events();
-            let mut shutdown_rx = self.shutdown_tx.subscribe();
 
             loop {
                 tokio::select! {

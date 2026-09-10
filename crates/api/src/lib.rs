@@ -14,6 +14,7 @@ pub mod static_files;
 pub mod system_info;
 pub mod task_service;
 pub mod time_service;
+pub mod track_service;
 
 pub use alarm_service::AlarmDispatchService;
 pub use camera_probe::CameraProbeService;
@@ -23,6 +24,7 @@ pub use response::ApiResponse;
 pub use routes::auth::sync_auth_state;
 pub use routes::system::DbEvictionStoreAdapter;
 pub use state::{AppState, WsBroadcastEvent};
+pub use track_service::TrackDispatchService;
 
 use axum::middleware::from_fn;
 use axum::routing::get;

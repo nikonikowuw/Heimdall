@@ -449,6 +449,7 @@ impl SubStreamAnalysisPump {
                                         pipeline_mgr_infer.publish_analysis_event(
                                             PipelineAnalysisEvent::Tracks(PipelineTrackEvent {
                                                 camera_id: cam_id_infer.clone(),
+                                                algorithm_id: algorithm_id_infer.clone(),
                                                 timestamp,
                                                 tracks: tracked,
                                             }),

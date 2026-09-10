@@ -16,6 +16,7 @@ import {
 import mpegts from 'mpegts.js'
 import { useTranslation } from 'react-i18next'
 import { cameraApi } from '@/lib/api'
+import { trackStore } from '@/lib/trackStore'
 import { isWebCodecsSupported, WebCodecsPlayer } from '@/lib/webcodecs'
 import { useAuthStore } from '@/stores/auth'
 import type { CameraTelemetry, TrackedBBox } from '@/types'
@@ -62,7 +63,7 @@ export function LivePlayer({
   isPaused = false,
   stream,
   telemetry,
-  trackedObjects = [],
+  trackedObjects,
   onSpotlight,
   onClose,
   onTogglePause,
@@ -74,8 +75,19 @@ export function LivePlayer({
   const videoRef = useRef<HTMLVideoElement>(null)
   const videoCanvasRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const trackedObjectsRef = useRef<TrackedBBox[]>(trackedObjects)
-  trackedObjectsRef.current = trackedObjects
+  const trackedObjectsRef = useRef<TrackedBBox[]>(trackedObjects ?? [])
+
+  // 同步目标检测框：外部显式传入时直接同步；未传入时自动从实时航迹总线订阅 (零 React 重排开销)
+  useEffect(() => {
+    if (trackedObjects !== undefined) {
+      trackedObjectsRef.current = trackedObjects
+      return
+    }
+
+    return trackStore.subscribe(cameraId, (newTracks) => {
+      trackedObjectsRef.current = newTracks
+    })
+  }, [cameraId, trackedObjects])
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(
     isPaused ? 'paused' : 'connecting',
@@ -307,10 +319,18 @@ export function LivePlayer({
 
   // Canvas 2D 离屏 60fps 绘制循环（零 React 状态开销）
   useEffect(() => {
-    let animId: number
     const canvas = canvasRef.current
     if (!canvas) return
 
+    if (isPaused) {
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+      }
+      return
+    }
+
+    let animId: number
     const render = () => {
       const ctx = canvas.getContext('2d')
       if (ctx) {
@@ -361,7 +381,7 @@ export function LivePlayer({
 
     animId = requestAnimationFrame(render)
     return () => cancelAnimationFrame(animId)
-  }, [isHero])
+  }, [isHero, isPaused])
 
   // 监听画布尺寸自适应
   useEffect(() => {

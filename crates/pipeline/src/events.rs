@@ -39,6 +39,8 @@ pub struct PipelineAlarmEvent {
 pub struct PipelineTrackEvent {
     /// 摄像头 ID
     pub camera_id: String,
+    /// 产生航迹的算法实例标识 (如 "builtin-yolo26")
+    pub algorithm_id: String,
     /// 帧时间戳 (13 位 UTC Unix 毫秒)
     pub timestamp: i64,
     /// 当前帧的所有活跃航迹对象
