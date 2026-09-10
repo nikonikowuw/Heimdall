@@ -69,13 +69,22 @@ mod tests {
 
     #[test]
     fn test_mpp_control_command_definitions() {
-        // 验证 Rockchip MPP 核心控制信令符合官方头文件定义 (rk_mpi_cmd.h)
-        const MPP_DEC_CMD_BASE: i32 = 0x00010000;
-        assert_eq!(MPP_DEC_CMD_BASE + 1, 0x00010001); // MPP_DEC_SET_PARSER_SPLIT_MODE
-        assert_eq!(MPP_DEC_CMD_BASE + 2, 0x00010002); // MPP_DEC_SET_FRAME_INFO
-        assert_eq!(MPP_DEC_CMD_BASE + 4, 0x00010004); // MPP_DEC_SET_FRAME_BUFFER_COUNT
-        assert_eq!(MPP_DEC_CMD_BASE + 5, 0x00010005); // MPP_DEC_SET_INFO_CHANGE_READY
-        assert_eq!(MPP_DEC_CMD_BASE + 6, 0x00010006); // MPP_DEC_SET_OUTPUT_FORMAT
+        // 验证 Rockchip MPP 核心控制信令严格符合官方头文件定义 (rk_mpi_cmd.h)
+        // CMD_MODULE_CODEC(0x00300000) | CMD_CTX_ID_DEC(0x00010000) = 0x00310000
+        const CMD_MODULE_CODEC: i32 = 0x00300000;
+        const CMD_CTX_ID_DEC: i32 = 0x00010000;
+        const MPP_DEC_CMD_BASE: i32 = CMD_MODULE_CODEC | CMD_CTX_ID_DEC;
+        assert_eq!(MPP_DEC_CMD_BASE, 0x00310000);
+
+        assert_eq!(MPP_DEC_CMD_BASE + 1, 0x00310001); // MPP_DEC_SET_FRAME_INFO
+        assert_eq!(MPP_DEC_CMD_BASE + 2, 0x00310002); // MPP_DEC_SET_EXT_BUF_GROUP
+        assert_eq!(MPP_DEC_CMD_BASE + 3, 0x00310003); // MPP_DEC_SET_INFO_CHANGE_READY
+        assert_eq!(MPP_DEC_CMD_BASE + 4, 0x00310004); // MPP_DEC_SET_PRESENT_TIME_ORDER
+        assert_eq!(MPP_DEC_CMD_BASE + 5, 0x00310005); // MPP_DEC_SET_PARSER_SPLIT_MODE
+        assert_eq!(MPP_DEC_CMD_BASE + 6, 0x00310006); // MPP_DEC_SET_PARSER_FAST_MODE
+        assert_eq!(MPP_DEC_CMD_BASE + 7, 0x00310007); // MPP_DEC_GET_STREAM_COUNT
+        assert_eq!(MPP_DEC_CMD_BASE + 8, 0x00310008); // MPP_DEC_GET_VPUMEM_USED_COUNT
+        assert_eq!(MPP_DEC_CMD_BASE + 10, 0x0031000a); // MPP_DEC_SET_OUTPUT_FORMAT
     }
 
     #[test]

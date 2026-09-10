@@ -182,6 +182,69 @@ impl StreamProber {
             None
         }
     }
+
+    /// 从 SDP 描述文本中提取带外参数集 (Extradata)，拼接为标准 Annex-B 格式 (`00 00 00 01 NALU ...`)。
+    /// 包含 H.264 的 SPS+PPS 或 H.265 的 VPS+SPS+PPS。
+    /// 当摄像头不在码流中重复发送带内参数集时，可用于合成初始关键帧注入硬件解码器以唤醒解码流水线。
+    pub fn extract_sdp_extradata(sdp: &str) -> Option<Vec<u8>> {
+        let mut extradata = Vec::new();
+        let mut is_h265 = false;
+
+        for line in sdp.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("H265") || trimmed.contains("HEVC") {
+                is_h265 = true;
+            }
+
+            // H.264: sprop-parameter-sets=base64(SPS),base64(PPS)
+            if let Some(idx) = trimmed.find("sprop-parameter-sets=") {
+                let params = &trimmed[idx + "sprop-parameter-sets=".len()..];
+                let param_list = params.split(';').next().unwrap_or("");
+                for nalu_b64 in param_list.split(',') {
+                    let clean_b64 = nalu_b64.trim();
+                    if !clean_b64.is_empty() {
+                        if let Ok(nalu_bytes) =
+                            base64::engine::general_purpose::STANDARD.decode(clean_b64)
+                        {
+                            extradata.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                            extradata.extend_from_slice(&nalu_bytes);
+                        }
+                    }
+                }
+            }
+
+            // H.265: sprop-vps, sprop-sps, sprop-pps
+            if is_h265 {
+                for key in &["sprop-vps=", "sprop-sps=", "sprop-pps="] {
+                    if let Some(idx) = trimmed.find(key) {
+                        let params = &trimmed[idx + key.len()..];
+                        let first = params
+                            .split(';')
+                            .next()
+                            .unwrap_or("")
+                            .split(',')
+                            .next()
+                            .unwrap_or("");
+                        let clean_b64 = first.trim();
+                        if !clean_b64.is_empty() {
+                            if let Ok(nalu_bytes) =
+                                base64::engine::general_purpose::STANDARD.decode(clean_b64)
+                            {
+                                extradata.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                                extradata.extend_from_slice(&nalu_bytes);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if extradata.is_empty() {
+            None
+        } else {
+            Some(extradata)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +296,56 @@ a=fmtp:96 sprop-sps=QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDllmZpJMreEAAAAEAg;sprop-pps=R
         assert_eq!(info.width, 1920);
         assert_eq!(info.height, 1080);
         assert!(info.is_dimension_known());
+    }
+
+    #[test]
+    fn test_extract_sdp_extradata_h264() {
+        let sdp = r#"
+v=0
+m=video 0 RTP/AVP 96
+a=rtpmap:96 H264/90000
+a=fmtp:96 packetization-mode=1;sprop-parameter-sets=Z2QAKacyhEB4AiflwEQAAAMABAAAAPDY8MYxWA==,aM48gA==
+"#;
+        let extradata =
+            StreamProber::extract_sdp_extradata(sdp).expect("should extract h264 extradata");
+        // 应该包含两个 NALU，均以 00 00 00 01 开头
+        assert!(extradata.len() > 8);
+        assert_eq!(&extradata[..4], &[0x00, 0x00, 0x00, 0x01]);
+        // SPS NAL unit type = 7
+        assert_eq!(extradata[4] & 0x1F, 7);
+        // 搜索第二个起始码
+        let second_start = extradata[4..]
+            .windows(4)
+            .position(|w| w == [0, 0, 0, 1])
+            .map(|p| p + 4);
+        assert!(second_start.is_some());
+        let pps_idx = second_start.expect("second start code must be present") + 4;
+        // PPS NAL unit type = 8
+        assert_eq!(extradata[pps_idx] & 0x1F, 8);
+    }
+
+    #[test]
+    fn test_extract_sdp_extradata_h265() {
+        let sdp = r#"
+v=0
+m=video 0 RTP/AVP 96
+a=rtpmap:96 H265/90000
+a=fmtp:96 sprop-sps=QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDllmZpJMreEAAAAEAg;sprop-pps=RAEBAw==
+"#;
+        let extradata =
+            StreamProber::extract_sdp_extradata(sdp).expect("should extract h265 extradata");
+        assert!(extradata.len() > 8);
+        assert_eq!(&extradata[..4], &[0x00, 0x00, 0x00, 0x01]);
+        // H265 SPS NAL unit type = 33
+        assert_eq!((extradata[4] >> 1) & 0x3F, 33);
+        let second_start = extradata[4..]
+            .windows(4)
+            .position(|w| w == [0, 0, 0, 1])
+            .map(|p| p + 4);
+        assert!(second_start.is_some());
+        let pps_idx = second_start.expect("second start code must be present") + 4;
+        // H265 PPS NAL unit type = 34
+        assert_eq!((extradata[pps_idx] >> 1) & 0x3F, 34);
     }
 
     #[test]

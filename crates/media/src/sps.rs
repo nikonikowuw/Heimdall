@@ -452,8 +452,8 @@ pub fn is_keyframe_or_parameter_set(data: &[u8], codec: CodecType) -> bool {
             let matches_header = match codec {
                 // 5: IDR, 7: SPS, 8: PPS
                 CodecType::H264 => matches!(first & 0x1F, 5 | 7 | 8),
-                // 19, 20: IDR, 32: VPS, 33: SPS, 34: PPS
-                CodecType::H265 => matches!((first >> 1) & 0x3F, 19..=20 | 32..=34),
+                // 16..=21: IRAP (BLA/IDR/CRA), 32: VPS, 33: SPS, 34: PPS
+                CodecType::H265 => matches!((first >> 1) & 0x3F, 16..=21 | 32..=34),
             };
             if matches_header {
                 return true;

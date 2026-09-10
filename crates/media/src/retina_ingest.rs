@@ -21,6 +21,7 @@ use tokio::sync::broadcast;
 use types::{CodecType, EncodedPacket, TransportPolicy};
 
 use crate::error::MediaError;
+use crate::probe::StreamProber;
 use crate::rtsp::{mask_rtsp_url, parse_and_clean_rtsp_url};
 
 /// 将原始 RTSP URL 中的凭证（用户名与密码）提取分离，并返回供 Retina 使用的纯净 Url
@@ -181,10 +182,8 @@ impl RetinaIngestor {
 
                     tokio::select! {
                         biased;
-                        change_res = cancel_rx.changed() => {
-                            if change_res.is_err() || *cancel_rx.borrow() {
-                                break;
-                            }
+                        _ = cancel_rx.wait_for(|&c| c) => {
+                            break;
                         }
                         _ = tokio::time::sleep(backoff) => {}
                     }
@@ -223,17 +222,8 @@ impl RetinaIngestor {
         // 2. 发起 DESCRIBE 握手并解析 SDP（包装握手超时与取消信号监听）
         let mut session = tokio::select! {
             biased;
-            change_res = cancel_rx.changed() => {
-                if change_res.is_err() || *cancel_rx.borrow() {
-                    return Ok(());
-                }
-                return Err((
-                    MediaError::RtspConnect {
-                        url: masked_url.clone(),
-                        reason: "Retina DESCRIBE 阶段被取消中断".into(),
-                    },
-                    0,
-                ));
+            _ = cancel_rx.wait_for(|&c| c) => {
+                return Ok(());
             }
             res = tokio::time::timeout(
                 self.handshake_timeout,
@@ -302,14 +292,8 @@ impl RetinaIngestor {
 
         tokio::select! {
             biased;
-            change_res = cancel_rx.changed() => {
-                if change_res.is_err() || *cancel_rx.borrow() {
-                    return Ok(());
-                }
-                return Err((
-                    MediaError::Protocol("Retina SETUP 阶段被取消中断".into()),
-                    0,
-                ));
+            _ = cancel_rx.wait_for(|&c| c) => {
+                return Ok(());
             }
             res = tokio::time::timeout(
                 self.handshake_timeout,
@@ -333,17 +317,15 @@ impl RetinaIngestor {
             }
         }
 
+        // 工业级加固：在进入 PLAY 之前从 SDP 提取带外参数集（Extradata）
+        let sdp_text = String::from_utf8_lossy(session.sdp());
+        let sdp_extradata = StreamProber::extract_sdp_extradata(&sdp_text);
+
         // 5. 执行 PLAY 握手并获取解复用流
         let playing_session = tokio::select! {
             biased;
-            change_res = cancel_rx.changed() => {
-                if change_res.is_err() || *cancel_rx.borrow() {
-                    return Ok(());
-                }
-                return Err((
-                    MediaError::Protocol("Retina PLAY 阶段被取消中断".into()),
-                    0,
-                ));
+            _ = cancel_rx.wait_for(|&c| c) => {
+                return Ok(());
             }
             res = tokio::time::timeout(
                 self.handshake_timeout,
@@ -367,6 +349,24 @@ impl RetinaIngestor {
             }
         };
 
+        let initial_extradata = sdp_extradata.or_else(|| {
+            playing_session
+                .streams()
+                .get(video_idx)
+                .and_then(|s| s.parameters())
+                .and_then(|p| match p {
+                    retina::codec::ParametersRef::Video(v) => {
+                        let data = v.extra_data();
+                        if !data.is_empty() {
+                            Some(data.to_vec())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                })
+        });
+
         let mut demuxed = playing_session.demuxed().map_err(|e| {
             (
                 MediaError::Protocol(format!("Retina demuxed 初始化失败: {e}")),
@@ -386,15 +386,30 @@ impl RetinaIngestor {
         // 清理伪唤醒
         let _ = cancel_rx.borrow_and_update();
 
+        // 工业级加固：带外 SDP 视频参数集（Extradata）提前补偿注入
+        // 针对部分工控/安防 IPC（海康/大华）不在码流中重复发送带内 SPS/PPS 导致的首帧花屏或等待黑屏，
+        // 将从 SDP 提取出的 SPS/PPS/VPS 参数集封装为初始合成关键帧，优先推入通道唤醒解码器
+        if let Some(extradata) = initial_extradata {
+            tracing::debug!(
+                camera_id = %self.camera_id,
+                len = extradata.len(),
+                "Retina 从 SDP 成功提取带外参数集 (Extradata)，优先合成初始关键帧注入下发"
+            );
+            let packet = Arc::new(EncodedPacket {
+                pts_ms: base_timestamp_ms,
+                is_keyframe: true,
+                codec,
+                payload: Bytes::from(extradata),
+            });
+            let _ = self.tx.send(packet);
+        }
+
         // 6. 持续消费 VideoFrame（看门狗守护，防止半开连接与静默丢包死锁）
         while !cancel_signal.load(Ordering::Relaxed) && !*cancel_rx.borrow() {
             let next_item = tokio::select! {
                 biased;
-                change_res = cancel_rx.changed() => {
-                    if change_res.is_err() || *cancel_rx.borrow() {
-                        break;
-                    }
-                    continue;
+                _ = cancel_rx.wait_for(|&c| c) => {
+                    break;
                 }
                 timed_item = tokio::time::timeout(self.inactivity_timeout, demuxed.next()) => {
                     match timed_item {
