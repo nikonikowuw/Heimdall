@@ -906,16 +906,7 @@ impl MppDecoder {
                 while let Some(cmd) = rx.blocking_recv() {
                     match cmd {
                         DecodeCommand::Decode { packet, pts, reply } => {
-                            let packet_len = packet.len();
                             let res = inner.decode(&packet, pts);
-                            debug!(
-                                camera_id = %cam_id,
-                                packet_len,
-                                pts,
-                                success = res.is_ok(),
-                                has_frame = matches!(&res, Ok(Some(_))),
-                                "解码器处理输入包"
-                            );
                             match &res {
                                 Ok(_) => {
                                     consecutive_errors = 0;
