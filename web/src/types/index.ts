@@ -210,6 +210,7 @@ export interface AlgoManifest {
   supportedPlatforms: string[]
   classes: string[]
   license?: string
+  configSchema?: Record<string, unknown>
 }
 
 export interface SandboxCheckResult {

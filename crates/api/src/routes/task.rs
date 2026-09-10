@@ -87,7 +87,7 @@ pub struct TaskAlgorithmInstanceDto {
     )]
     pub algo_params: serde_json::Value,
     #[serde(default)]
-    pub enabled: bool,
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub actual_status: i32,
     #[serde(default)]
@@ -107,7 +107,7 @@ impl From<&db::entity::algorithm_instance::Model> for TaskAlgorithmInstanceDto {
             algorithm_id: m.algorithm_id.clone(),
             analysis_fps: m.analysis_fps,
             algo_params,
-            enabled: m.enabled,
+            enabled: Some(m.enabled),
             actual_status: m.actual_status,
             status_message: m.status_message.clone(),
             created_at: m.created_at.timestamp_millis(),
@@ -636,7 +636,7 @@ async fn resolve_task_instances_for_save(
                 algorithm_id: item.algorithm_id.clone(),
                 analysis_fps: Some(item.analysis_fps),
                 algo_params: Some(item.algo_params.clone()),
-                enabled: Some(item.enabled),
+                enabled: item.enabled.or(Some(dto.desired_enabled)),
             })
             .collect();
 

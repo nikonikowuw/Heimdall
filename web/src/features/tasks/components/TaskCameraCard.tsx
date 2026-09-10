@@ -84,6 +84,16 @@ export function TaskCameraCard({
   const actualStatus = primaryInstance?.actualStatus ?? config?.actualStatus ?? 0
   const runtimeStatus = getPipelineRuntimeStatus(actualStatus, t)
 
+  const algoParams = (primaryInstance?.algoParams as Record<string, unknown>) ?? {}
+  const rawConf =
+    algoParams.confidence_threshold ??
+    algoParams.confidenceThreshold ??
+    algoParams.detection_confidence_threshold
+  const confDisplay =
+    typeof rawConf === 'number' ? `${(rawConf * 100).toFixed(0)}%` : null
+  const rawClasses = algoParams.target_classes ?? algoParams.targetClasses
+  const classesCount = Array.isArray(rawClasses) ? rawClasses.length : null
+
   const [copied, setCopied] = useState(false)
   const probeBadge = getProbeBadge(camera.lastProbeStatus, t)
 
@@ -184,7 +194,7 @@ export function TaskCameraCard({
               e.stopPropagation()
               onConfigure()
             }}
-            title={t('actions.configureRules', { defaultValue: '配置布防规则' })}
+            title={t('actions.configureRules', { defaultValue: '配置算法与布防规则' })}
             className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
           >
             <Pencil className="h-3.5 w-3.5" />
@@ -368,21 +378,42 @@ export function TaskCameraCard({
       </div>
 
       {/* 4. 算法绑定与运行状态 */}
-      <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5 text-xs">
-        <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
-          <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-          <span className="truncate font-mono" title={algorithmId || undefined}>
-            {algorithmId || t('card.algorithmUnbound', { defaultValue: '未绑定算法' })}
+      <div className="mt-2 flex flex-col gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
+            <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+            <span className="truncate font-mono font-semibold text-[var(--text-primary)]" title={algorithmId || undefined}>
+              {algorithmId || t('card.algorithmUnbound', { defaultValue: '未绑定算法' })}
+            </span>
           </span>
-        </span>
-        <span className="flex shrink-0 items-center gap-2 font-mono text-[11px]">
-          <span className="text-[var(--text-muted)]">
-            {analysisFps > 0
-              ? `${analysisFps} FPS`
-              : t('card.fpsAuto', { defaultValue: '自动 FPS' })}
+          <span className="flex shrink-0 items-center gap-2 font-mono text-[11px]">
+            <span className="text-[var(--text-muted)]">
+              {analysisFps > 0
+                ? `${analysisFps} FPS`
+                : t('card.fpsAuto', { defaultValue: '自动 FPS' })}
+            </span>
+            <span className={runtimeStatus.className}>{runtimeStatus.label}</span>
           </span>
-          <span className={runtimeStatus.className}>{runtimeStatus.label}</span>
-        </span>
+        </div>
+
+        {/* 算法运行参数快速摘要 */}
+        {algorithmId && (confDisplay || classesCount !== null) && (
+          <div className="flex items-center gap-2 border-t border-[var(--border)]/50 pt-1.5 font-mono text-[10px] text-[var(--text-muted)]">
+            {confDisplay && (
+              <span className="flex items-center gap-1">
+                <span>置信度:</span>
+                <span className="font-semibold text-[var(--accent)]">{confDisplay}</span>
+              </span>
+            )}
+            {confDisplay && classesCount !== null && <span>·</span>}
+            {classesCount !== null && (
+              <span className="flex items-center gap-1">
+                <span>警戒类别:</span>
+                <span className="font-semibold text-[var(--text-secondary)]">{classesCount} 类</span>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 5. RTSP 直通流单行地址与一键复制 */}

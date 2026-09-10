@@ -91,6 +91,10 @@ export function TasksPage({
         desiredEnabled: nextDesired,
         rules: currentCfg?.rules || [],
         motionGate: currentCfg?.motionGate || { enabled: true },
+        algorithmInstances: currentCfg?.algorithmInstances?.map((inst) => ({
+          ...inst,
+          enabled: nextDesired,
+        })),
       }
       const updated = await taskApi.updateTask(camera.cameraId, payload)
       setTaskConfigs((prev) => ({ ...prev, [camera.cameraId]: updated }))

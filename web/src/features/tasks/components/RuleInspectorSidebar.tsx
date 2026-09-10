@@ -46,17 +46,18 @@ export function RuleInspectorSidebar({
 }: RuleInspectorSidebarProps): React.ReactElement {
   const { t, i18n } = useTranslation('task')
 
+  const hasClasses = Boolean(activeAlgo.classes && activeAlgo.classes.length > 0)
   const targetClasses = selectedRule?.targetClasses || globalTargetClasses
-  const isAllTargetsSelected = targetClasses.length === activeAlgo.classes.length
+  const isAllTargetsSelected = hasClasses && targetClasses.length === activeAlgo.classes.length
 
   const handleToggleAllTargets = () => {
-    if (!selectedRule) return
+    if (!selectedRule || !hasClasses) return
     const nextTargets = isAllTargetsSelected ? [] : [...activeAlgo.classes]
     onUpdateRule(selectedRule.id, { targetClasses: nextTargets })
   }
 
   const handleToggleSingleTarget = (cls: string) => {
-    if (!selectedRule) return
+    if (!selectedRule || !hasClasses) return
     const current = selectedRule.targetClasses || globalTargetClasses
     const isChecked = current.includes(cls)
     const next = isChecked ? current.filter((c) => c !== cls) : [...current, cls]
@@ -171,42 +172,44 @@ export function RuleInspectorSidebar({
               />
             </div>
 
-            {/* 规则生效目标筛选 */}
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <label className="font-mono text-xs tracking-wider text-[var(--text-muted)] uppercase">
-                  {t('inspector.ruleTargets', { defaultValue: '本规则生效目标' })}
-                </label>
-                <button
-                  type="button"
-                  onClick={handleToggleAllTargets}
-                  className="text-[10px] text-[var(--accent)] hover:underline"
-                >
-                  {isAllTargetsSelected
-                    ? t('studio.clearAll', { defaultValue: '清空' })
-                    : t('studio.selectAll', { defaultValue: '全选' })}
-                </button>
+            {/* 规则生效目标筛选（仅当算法具有多类别时展示） */}
+            {hasClasses && (
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label className="font-mono text-xs tracking-wider text-[var(--text-muted)] uppercase">
+                    {t('inspector.ruleTargets', { defaultValue: '本规则生效目标' })}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleToggleAllTargets}
+                    className="text-[10px] text-[var(--accent)] hover:underline"
+                  >
+                    {isAllTargetsSelected
+                      ? t('studio.clearAll', { defaultValue: '清空' })
+                      : t('studio.selectAll', { defaultValue: '全选' })}
+                  </button>
+                </div>
+                <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1.5">
+                  {activeAlgo.classes.map((cls) => {
+                    const isChecked = targetClasses.includes(cls)
+                    return (
+                      <button
+                        key={cls}
+                        type="button"
+                        onClick={() => handleToggleSingleTarget(cls)}
+                        className={`rounded-md px-2 py-0.5 text-xs font-medium transition-all ${
+                          isChecked
+                            ? 'bg-[var(--accent)] text-white shadow-2xs'
+                            : 'bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        {getLocalizedClassName(cls, i18n.language)}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-              <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1.5">
-                {activeAlgo.classes.map((cls) => {
-                  const isChecked = targetClasses.includes(cls)
-                  return (
-                    <button
-                      key={cls}
-                      type="button"
-                      onClick={() => handleToggleSingleTarget(cls)}
-                      className={`rounded-md px-2 py-0.5 text-xs font-medium transition-all ${
-                        isChecked
-                          ? 'bg-[var(--accent)] text-white shadow-2xs'
-                          : 'bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                      }`}
-                    >
-                      {getLocalizedClassName(cls, i18n.language)}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
+            )}
 
             {/* 防区色彩主题 (ROI 多配置区分) */}
             {selectedRule.role === 'roi' && (

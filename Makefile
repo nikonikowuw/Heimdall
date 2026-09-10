@@ -45,6 +45,11 @@ RELEASE     := --release
 # 主程序交叉编译 feature 组合 (RKNN 平台)
 RKNN_APP_FEATURES := media/mpp,infer/backend-rknn
 
+# Rockchip RK SDK sysroot 库搜索路径 (动态交叉编译链接用)
+# build.rs 读取 RK_MPP_LIB_DIR 环境变量，此处自动探测 ias-engine-sdk sysroot
+RK_MPP_SYSROOT ?= $(HOME)/.cache/ias-engine-sdk/rk3576/sysroot-minimal/usr/lib/aarch64-linux-gnu
+RK_MPP_LIB_DIR ?= $(RK_MPP_SYSROOT)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 颜色输出
 # ──────────────────────────────────────────────────────────────────────────────
@@ -110,13 +115,15 @@ setup-cross: ## 检测并安装交叉编译依赖
 verify-cross: ## 验证交叉编译工具链
 	@$(WORKSPACE_ROOT)/scripts/setup-cross-deps.sh --check
 
-# 确保 web/dist 存在 (rust-embed 需要)
+# 确保 web/dist 存在且最新 (rust-embed 需要)
+WEB_SRCS := $(shell find $(WEB_DIR)/src $(WEB_DIR)/public -type f 2>/dev/null) $(WEB_DIR)/package.json $(WEB_DIR)/index.html
+
+$(WEB_DIST)/index.html: $(WEB_SRCS)
+	@echo -e "$(CYAN)[web]$(RESET) 前端源码有变更，自动触发前端构建..."
+	cd $(WEB_DIR) && pnpm build
+
 .PHONY: ensure-web-dist
-ensure-web-dist:
-	@if [ ! -f "$(WEB_DIST)/index.html" ]; then \
-		echo -e "$(YELLOW)[web]$(RESET) web/dist 不存在，先构建前端..."; \
-		$(MAKE) web; \
-	fi
+ensure-web-dist: $(WEB_DIST)/index.html
 
 # ============================================================================
 #  本机构建 (macOS arm64)
@@ -165,6 +172,7 @@ fmt-check: ## 格式化检查 (CI 用)
 .PHONY: rknn
 rknn: ensure-web-dist verify-cross ## [交叉编译] 主程序 for RK3576 (release)
 	@echo -e "$(CYAN)[rknn]$(RESET) 交叉编译主程序 → $(RKNN_TARGET)..."
+	RK_MPP_LIB_DIR=$(RK_MPP_LIB_DIR) \
 	$(CARGO) zigbuild -p app $(RELEASE) \
 		--target $(RKNN_TARGET) \
 		--features $(RKNN_APP_FEATURES)

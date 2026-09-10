@@ -67,10 +67,11 @@ export function LiveRulesStudio({
 
   // 算法选择与目标感知配置
   const [selectedAlgoId, setSelectedAlgoId] = useState<string>('general_detection')
-  const [globalTargetClasses, setGlobalTargetClasses] = useState<string[]>(['person', 'car'])
+  const [globalTargetClasses, setGlobalTargetClasses] = useState<string[]>([])
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.5)
   const [motionGateEnabled, setMotionGateEnabled] = useState<boolean>(true)
   const [motionGateThreshold, setMotionGateThreshold] = useState<number>(25)
+  const [customAlgoParams, setCustomAlgoParams] = useState<Record<string, unknown>>({})
 
   const activeAlgo =
     availableAlgos.find((a) => a.algorithmId === selectedAlgoId) ||
@@ -82,7 +83,21 @@ export function LiveRulesStudio({
     const found = availableAlgos.find((a) => a.algorithmId === newAlgoId)
     if (found && found.classes && found.classes.length > 0) {
       const valid = globalTargetClasses.filter((c) => found.classes.includes(c))
-      setGlobalTargetClasses(valid.length > 0 ? valid : found.classes.slice(0, 3))
+      setGlobalTargetClasses(
+        valid.length > 0 ? valid : found.classes.slice(0, Math.min(3, found.classes.length)),
+      )
+    } else {
+      setGlobalTargetClasses([])
+    }
+    if (found?.configSchema?.properties) {
+      const props = found.configSchema.properties as Record<string, Record<string, unknown>>
+      const initial: Record<string, unknown> = {}
+      for (const [k, p] of Object.entries(props)) {
+        if (p.default !== undefined) {
+          initial[k] = p.default
+        }
+      }
+      setCustomAlgoParams(initial)
     }
   }
 
@@ -112,6 +127,24 @@ export function LiveRulesStudio({
         if (algoRes.items.length > 0) {
           list = algoRes.items.map((item) => {
             const actVer = item.versions.find((v) => v.isActive) || item.versions[0]
+            const schemaObj = (actVer?.configSchema as Record<string, unknown>) || {}
+            const propertiesObj =
+              (schemaObj.properties as Record<string, Record<string, unknown>>) || {}
+            const targetClassesProp =
+              propertiesObj.target_classes || propertiesObj.allowed_classes || propertiesObj.classes
+            const enumClasses = (targetClassesProp?.items as Record<string, unknown>)?.enum as
+              | string[]
+              | undefined
+            const rawClasses = (actVer?.manifestRaw as Record<string, unknown>)?.classes as
+              | string[]
+              | undefined
+            const detectedClasses =
+              enumClasses && enumClasses.length > 0
+                ? enumClasses
+                : rawClasses && rawClasses.length > 0
+                  ? rawClasses
+                  : []
+
             return {
               algorithmId: item.algorithmId,
               name: item.name,
@@ -122,7 +155,8 @@ export function LiveRulesStudio({
               supportedPlatforms: actVer ? [actVer.platformId] : ['macos-arm64'],
               alarmTypeId: item.alarmTypeId,
               author: item.isBuiltin ? 'System' : 'Custom',
-              classes: ['person', 'car', 'bicycle', 'motorcycle'],
+              classes: detectedClasses,
+              configSchema: schemaObj,
             }
           })
         } else {
@@ -158,6 +192,28 @@ export function LiveRulesStudio({
         if (instances.length > 0) {
           const activeInst = instances.find((i) => i.enabled) || instances[0]
           setSelectedAlgoId(activeInst.algorithmId)
+
+          // 从持久化的 algoParams 恢复算法参数
+          const params = activeInst.algoParams as Record<string, unknown> | undefined
+          if (params && typeof params === 'object') {
+            const conf =
+              params.confidence_threshold ??
+              params.confidenceThreshold ??
+              params.detection_confidence_threshold
+            if (typeof conf === 'number' && conf >= 0 && conf <= 1) {
+              setConfidenceThreshold(conf)
+            }
+            const classes = params.target_classes ?? params.targetClasses
+            if (Array.isArray(classes)) {
+              const valid = classes.filter(
+                (c: unknown): c is string => typeof c === 'string',
+              )
+              if (valid.length > 0) {
+                setGlobalTargetClasses(valid)
+              }
+            }
+            setCustomAlgoParams({ ...params })
+          }
         } else if (dto.algorithmId) {
           setSelectedAlgoId(dto.algorithmId)
         }
@@ -186,7 +242,11 @@ export function LiveRulesStudio({
             name: getDefaultRuleName(r.role, idx + 1),
             visible: true,
             boundAlgo: selectedAlgoId,
-            targetClasses: ['person', 'car'],
+            targetClasses:
+              (r as unknown as { targetClasses?: string[] }).targetClasses ||
+              (activeAlgo.classes.length > 0
+                ? ['person', 'car'].filter((c) => activeAlgo.classes.includes(c))
+                : undefined),
             color,
           }
         })
@@ -196,7 +256,7 @@ export function LiveRulesStudio({
         }
       })
       .catch(() => {})
-  }, [camera, selectedAlgoId])
+  }, [camera, selectedAlgoId, activeAlgo.classes])
 
   // 删除规则
   const deleteRule = useCallback((ruleId: string) => {
@@ -272,8 +332,8 @@ export function LiveRulesStudio({
         lineDirection: role === 'line' ? 'both' : undefined,
         points: [...points],
         visible: true,
-        boundAlgo: 'general_detection',
-        targetClasses: ['person', 'car'],
+        boundAlgo: selectedAlgoId,
+        targetClasses: activeAlgo.classes.length > 0 ? [...globalTargetClasses] : undefined,
         color: assignedColor,
       }
 
@@ -282,7 +342,7 @@ export function LiveRulesStudio({
       setCurrentPoints([])
       setTool('select')
     },
-    [rules, tool],
+    [rules, tool, activeAlgo.classes, globalTargetClasses, selectedAlgoId],
   )
 
   // 完成当前绘制
@@ -511,11 +571,37 @@ export function LiveRulesStudio({
       const selectedInstance = currentInstances.find(
         (instance) => instance.algorithmId === selectedAlgoId,
       )
+      const schemaProps =
+        (activeAlgo.configSchema?.properties as Record<string, unknown>) || {}
+      const mergedParams: Record<string, unknown> = {
+        ...customAlgoParams,
+      }
+
+      if (
+        'confidence_threshold' in schemaProps ||
+        'confidenceThreshold' in schemaProps ||
+        Object.keys(schemaProps).length === 0
+      ) {
+        mergedParams.confidence_threshold = confidenceThreshold
+        mergedParams.confidenceThreshold = confidenceThreshold
+      }
+      if (
+        'target_classes' in schemaProps ||
+        'targetClasses' in schemaProps ||
+        activeAlgo.classes.length > 0
+      ) {
+        mergedParams.target_classes = globalTargetClasses
+        mergedParams.targetClasses = globalTargetClasses
+      }
+      if ('detection_confidence_threshold' in schemaProps) {
+        mergedParams.detection_confidence_threshold = confidenceThreshold
+      }
+
       const nextInstance = {
         ...selectedInstance,
         algorithmId: selectedAlgoId,
         analysisFps: selectedInstance?.analysisFps ?? 10,
-        algoParams: { confidenceThreshold, targetClasses: globalTargetClasses },
+        algoParams: mergedParams,
         enabled: isArmed,
       }
 
@@ -708,6 +794,10 @@ export function LiveRulesStudio({
           onConfidenceThresholdChange={setConfidenceThreshold}
           motionGateEnabled={motionGateEnabled}
           onMotionGateEnabledChange={setMotionGateEnabled}
+          customAlgoParams={customAlgoParams}
+          onCustomAlgoParamChange={(key, val) =>
+            setCustomAlgoParams((p) => ({ ...p, [key]: val }))
+          }
         />
 
         {/* 中央：实时流互动舞台 */}

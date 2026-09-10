@@ -10,9 +10,12 @@ WORKSPACE_ROOT := ../../../..
 
 all: package
 
+# 检测交叉编译工具链 (优先 cross, 其次 cargo zigbuild, 保底 cargo)
+CARGO_CROSS ?= $(shell if command -v cross >/dev/null 2>&1; then echo "CROSS_CONTAINER_ENGINE=podman cross"; elif cargo zigbuild -h >/dev/null 2>&1; then echo "cargo zigbuild"; else echo "cargo"; fi)
+
 # 交叉编译 release
 build:
-	cd $(WORKSPACE_ROOT) && cargo build -p $(PACKAGE) --release --target $(TARGET_TRIPLE)
+	cd $(WORKSPACE_ROOT) && $(CARGO_CROSS) build -p $(PACKAGE) --release --target $(TARGET_TRIPLE)
 	@mkdir -p lib
 	cp $(WORKSPACE_ROOT)/target/$(TARGET_TRIPLE)/release/libface_recognition_rk3568.so lib/libface_recognition.so
 
@@ -23,9 +26,9 @@ host:
 	cp $(WORKSPACE_ROOT)/target/release/libface_recognition_rk3568.so lib/libface_recognition.so
 
 # 打包为标准算法包 (.tar.gz)
-package:
+package: build
 	@if [ ! -f lib/libface_recognition.so ]; then \
-		echo "错误: lib/libface_recognition.so 不存在，请先执行 make build 或 make host"; \
+		echo "错误: lib/libface_recognition.so 构建未生成"; \
 		exit 1; \
 	fi
 	@if [ ! -f model/yolov8n-face-640x384_rk3568_mixed_face.rknn ] || [ ! -f model/edgeface_xs_gamma_06_rk3568_fp16.rknn ]; then \
