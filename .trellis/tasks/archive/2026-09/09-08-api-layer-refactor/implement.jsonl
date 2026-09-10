@@ -1,6 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec entry point — Pre-Development Checklist before modifying api crate"}
-{"file": ".trellis/spec/backend/api-guidelines.md", "reason": "API 层编码规范：路由组织、handler 签名、状态管理约定"}
-{"file": ".trellis/spec/backend/directory-structure.md", "reason": "目录结构规范：模块归属与依赖方向"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误处理规范：ApiError 枚举与 IntoResponse 映射"}
-{"file": ".trellis/spec/backend/concurrency-guidelines.md", "reason": "并发规范：spawn_blocking、线程隔离、tokio worker 保护"}
-{"file": ".trellis/spec/guides/architecture-overview.md", "reason": "架构全局视图：crate 依赖方向与职责边界"}

@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量规范与门禁验证清单"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "数据库单元测试与事务回滚断言"}
-{"file": ".trellis/spec/backend/api-guidelines.md", "reason": "API 契约一致性与参数校验"}

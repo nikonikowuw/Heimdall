@@ -1,7 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "后端开发入口，包含 Pre-Development Checklist 和 Quality Check"}
-{"file": ".trellis/spec/backend/ffi-guidelines.md", "reason": "FFI 安全边界规范，算法包 C ABI 导出必须遵循"}
-{"file": ".trellis/spec/backend/inference-backends.md", "reason": "推理后端规范，RKNN Runtime 集成指南"}
-{"file": ".trellis/spec/backend/algo-sdk-guidelines.md", "reason": "algo-sdk 使用规范，插件架构和导出宏"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误处理规范，AlgoError 使用"}
-{"file": ".trellis/spec/backend/concurrency-guidelines.md", "reason": "并发安全规范，RknnSession Send/Sync 约束"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码质量规范，测试和 lint 要求"}

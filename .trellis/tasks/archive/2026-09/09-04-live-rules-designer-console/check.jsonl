@@ -1,5 +1,0 @@
-{"type":"check_step","step":"live_rules_studio","status":"passed","summary":"基于 prototype 打造 LiveRulesStudio 动态实时流矢量布防工作台，集成子码流实时播放器，支持多边形 ROI、越界绊线 Line、屏蔽遮罩 Mask 与局部特写 Pre-crop 的绘制、磁吸与顶点拖拽，坐标归一化 [0.0, 1.0]"}
-{"type":"check_step","step":"evidence_center_three_views","status":"passed","summary":"证据中心重构交付三重视图：违规告警列表（超清大图+特写框+灯箱查看）、行迹抓拍瀑布流（TrackID+质量分）、识别对账（现场抓拍特写 | 相似度分值 | 底库登记照 左右对比排版）"}
-{"type":"check_step","step":"algo_hub_management","status":"passed","summary":"算法包管理与参数配置侧滑抽屉上线，支持展示各平台已沙箱验证的算法元数据与目标类别过滤"}
-{"type":"check_step","step":"api_endpoints_expansion","status":"passed","summary":"后端口扩展完成：/evidence/captures、/evidence/recognitions、/evidence/image/*path、/algo/packages、/tasks/{camera_id}"}
-{"type":"check_step","step":"quality_gates","status":"passed","summary":"全链路门禁通过：web 端 pnpm typecheck, pnpm lint, pnpm test, pnpm build 全部绿灯；Rust 端 cargo fmt, cargo clippy, cargo test (82 项全部通过)；单二进制内置 web 产物编译成功"}

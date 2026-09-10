@@ -1,5 +1,0 @@
-{"file": ".trellis/spec/backend/detection-alarm-contract.md", "reason": "规范告警与证据生成契约，包含 eventId、双表三支柱落库与 WebSocket 广播格式"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "规范 SQLite 异步写入、仓储事务与存储生命周期保护规范"}
-{"file": ".trellis/spec/backend/api-guidelines.md", "reason": "规范 /api/v1 根信封、时间戳毫秒规范与 RESTful 接口约定"}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "规范前端 TypeScript 类型对齐与 WebSocket 消息类型守卫"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层端到端数据流转与闭环思维指南"}

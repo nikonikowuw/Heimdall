@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/backend/ffi-guidelines.md", "reason": "FFI boundaries, unsafe block documentation, ABI alignment, C ABI table design"}
-{"file": ".trellis/spec/backend/inference-backends.md", "reason": "Inference backend trait, FrameRef zero-copy passing, error handling"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust error handling, no unwrap, test coverage, clippy constraints"}

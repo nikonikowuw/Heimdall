@@ -1,6 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "后端质量门禁入口"}
-{"file": ".trellis/spec/backend/ffi-guidelines.md", "reason": "FFI 安全性检查：unsafe 块、SAFETY 注释、裸指针逃逸"}
-{"file": ".trellis/spec/backend/inference-backends.md", "reason": "推理后端合规性：资源生命周期、错误处理"}
-{"file": ".trellis/spec/backend/algo-sdk-guidelines.md", "reason": "algo-sdk 使用合规性：导出宏、插件 trait 实现"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误处理合规性：AlgoError 使用、不吞错误"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码质量检查：格式化、lint、测试覆盖率"}

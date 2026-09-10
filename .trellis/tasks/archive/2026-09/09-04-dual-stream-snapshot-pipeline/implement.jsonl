@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/backend/media-pipeline.md", "reason": "Zero-copy FrameRef, VideoToolbox / MPP hardware decoders, RingBuffer and PTS alignment"}
-{"file": ".trellis/spec/backend/concurrency-guidelines.md", "reason": "Bounded channels, blocking work outside tokio worker, decoder thread affinity"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust code quality, no unwrap, test coverage, clippy constraints"}
