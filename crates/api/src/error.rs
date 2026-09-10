@@ -46,6 +46,9 @@ pub enum ApiError {
     #[error("分析管线错误: {0}")]
     Pipeline(#[from] pipeline::PipelineError),
 
+    #[error("分析运行时协调错误: {0}")]
+    Coordinator(#[from] pipeline::CoordinatorError),
+
     #[error("内部服务器错误: {0}")]
     Internal(String),
 
@@ -108,6 +111,20 @@ impl IntoResponse for ApiError {
             Self::Media(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
             Self::Infer(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
             Self::Pipeline(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
+            Self::Coordinator(pipeline::CoordinatorError::TaskJoin(e)) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                50000,
+                format!("运行时停止任务异常: {e}"),
+            ),
+            Self::Coordinator(pipeline::CoordinatorError::Validation { reason }) => {
+                (StatusCode::BAD_REQUEST, 40001, reason.clone())
+            }
+            Self::Coordinator(pipeline::CoordinatorError::AlgorithmNotFound { algorithm_id }) => (
+                StatusCode::NOT_FOUND,
+                40401,
+                format!("算法未找到: {algorithm_id}"),
+            ),
+            Self::Coordinator(e) => (StatusCode::BAD_REQUEST, 40001, e.to_string()),
             Self::Db(db::DbError::BuiltinAlgoProtected(m)) => {
                 (StatusCode::FORBIDDEN, 40301, m.clone())
             }

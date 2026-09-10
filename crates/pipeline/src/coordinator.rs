@@ -237,7 +237,65 @@ impl TaskRuntimeCoordinator {
     pub fn algo_registry(&self) -> &Arc<infer::package::AlgoRegistry> {
         &self.algo_registry
     }
+}
 
+/// 视频分析任务运行时服务抽象接口 (支持依赖注入与 Mock 测试)
+#[async_trait::async_trait]
+pub trait TaskRuntimeService: Send + Sync + std::fmt::Debug {
+    /// 启动单路摄像机分析管线
+    async fn start_camera_pipeline(
+        &self,
+        params: StartCameraPipelineParams,
+    ) -> Result<u64, CoordinatorError>;
+
+    /// 停止单路摄像机分析管线。
+    /// `Ok(false)` 仅表示调用时没有已注册的运行时或分析泵。
+    async fn stop_camera_pipeline(&self, camera_id: &str) -> Result<bool, CoordinatorError>;
+
+    /// 停止所有活跃的分析管线
+    async fn stop_all(&self);
+
+    /// 查询单路摄像机运行时概要
+    async fn get_runtime_info(&self, camera_id: &str) -> Option<CameraPipelineRuntimeInfo>;
+
+    /// 列出所有摄像机的运行时概要
+    async fn list_runtime_infos(&self) -> Vec<CameraPipelineRuntimeInfo>;
+
+    /// 检查指定摄像机是否有活跃运行时
+    async fn has_active_runtime(&self, camera_id: &str) -> bool;
+}
+
+#[async_trait::async_trait]
+impl TaskRuntimeService for TaskRuntimeCoordinator {
+    async fn start_camera_pipeline(
+        &self,
+        params: StartCameraPipelineParams,
+    ) -> Result<u64, CoordinatorError> {
+        self.start_camera_pipeline(params).await
+    }
+
+    async fn stop_camera_pipeline(&self, camera_id: &str) -> Result<bool, CoordinatorError> {
+        self.stop_camera_pipeline_checked(camera_id).await
+    }
+
+    async fn stop_all(&self) {
+        self.stop_all().await
+    }
+
+    async fn get_runtime_info(&self, camera_id: &str) -> Option<CameraPipelineRuntimeInfo> {
+        self.get_runtime_info(camera_id).await
+    }
+
+    async fn list_runtime_infos(&self) -> Vec<CameraPipelineRuntimeInfo> {
+        self.list_runtime_infos().await
+    }
+
+    async fn has_active_runtime(&self, camera_id: &str) -> bool {
+        self.has_active_runtime(camera_id).await
+    }
+}
+
+impl TaskRuntimeCoordinator {
     async fn mark_starting(&self, camera_id: &str) {
         let mut starting = self.starting.write().await;
         *starting.entry(camera_id.to_string()).or_default() += 1;
@@ -568,12 +626,15 @@ impl TaskRuntimeCoordinator {
         result
     }
 
-    /// 停止指定摄像头的分析管线。状态转换在 detached task 中完成。
-    pub async fn stop_camera_pipeline(&self, camera_id: &str) -> bool {
+    /// 停止指定摄像头的分析管线，并保留停止任务的 JoinError。
+    pub async fn stop_camera_pipeline_checked(
+        &self,
+        camera_id: &str,
+    ) -> Result<bool, CoordinatorError> {
         let coordinator = self.clone();
         let camera_id = camera_id.to_string();
         let camera_id_for_task = camera_id.clone();
-        match tokio::spawn(async move {
+        tokio::spawn(async move {
             let _guard = coordinator
                 .camera_operation_guard(&camera_id_for_task)
                 .await;
@@ -582,7 +643,12 @@ impl TaskRuntimeCoordinator {
                 .await
         })
         .await
-        {
+        .map_err(CoordinatorError::TaskJoin)
+    }
+
+    /// 停止指定摄像头的分析管线。异常时记录日志并返回 false。
+    pub async fn stop_camera_pipeline(&self, camera_id: &str) -> bool {
+        match self.stop_camera_pipeline_checked(camera_id).await {
             Ok(stopped) => stopped,
             Err(err) => {
                 tracing::error!(camera_id = %camera_id, error = %err, "停止摄像头管线任务异常");

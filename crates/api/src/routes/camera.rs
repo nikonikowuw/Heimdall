@@ -192,19 +192,36 @@ async fn delete_camera(
     State(state): State<AppState>,
     Path(camera_id): Path<String>,
 ) -> Result<ApiResponse<()>, ApiError> {
-    let rows = db::CameraRepo::delete_by_camera_id(&state.db, &camera_id).await?;
-    if rows == 0 {
-        return Err(ApiError::NotFound(format!("摄像头未找到: {camera_id}")));
-    }
+    // 先确认资源存在，避免对不存在摄像头触发运行时副作用。
+    db::CameraRepo::find_by_camera_id(&state.db, &camera_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("摄像头未找到: {camera_id}")))?;
 
-    // 停止并清理流会话与任务流水线
-    state.stream_hub.remove_session(&camera_id).await;
-    let _ = state.pipeline.stop_task(&camera_id).await;
+    // 摄像头删除必须先停止 coordinator 管理的完整双流运行时。
+    state
+        .task_coordinator
+        .stop_camera_pipeline(&camera_id)
+        .await
+        .map_err(ApiError::Coordinator)?;
+
+    if let Err(err) = state.pipeline.stop_task(&camera_id).await {
+        if !matches!(err, pipeline::PipelineError::PipelineNotFound { .. }) {
+            return Err(ApiError::Pipeline(err));
+        }
+    }
     state
         .pipeline
         .set_camera_rules(&camera_id, Vec::new())
         .await;
     state.pipeline.set_ai_active(&camera_id, false).await;
+    state.stream_hub.remove_session(&camera_id).await;
+
+    // 任务及其主算法实例不能随着摄像头删除而成为孤儿记录。
+    db::TaskRepo::delete_task_and_instance(&state.db, &camera_id).await?;
+    let rows = db::CameraRepo::delete_by_camera_id(&state.db, &camera_id).await?;
+    if rows == 0 {
+        return Err(ApiError::NotFound(format!("摄像头未找到: {camera_id}")));
+    }
 
     Ok(ApiResponse::success(()))
 }

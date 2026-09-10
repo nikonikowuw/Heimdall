@@ -14,7 +14,7 @@ pub mod tracker;
 
 pub use coordinator::{
     ActiveRuntimeEntry, CameraPipelineRuntimeInfo, CoordinatorError, StartCameraPipelineParams,
-    TaskRuntimeCoordinator,
+    TaskRuntimeCoordinator, TaskRuntimeService,
 };
 pub use error::PipelineError;
 pub use events::{

@@ -216,6 +216,7 @@ async fn main() -> Result<()> {
     let shutdown_fut = async move {
         shutdown_signal().await;
         tracing::info!("正在广播全局停机通知，主动切断长连接流与后台巡检任务...");
+        state_shutdown.task_coordinator.stop_all().await;
         state_shutdown.notify_shutdown();
 
         // 兜底保护：若 2.5 秒内未完成退出，或用户再次按下 Ctrl+C，立即强制退出

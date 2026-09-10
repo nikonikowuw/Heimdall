@@ -11,6 +11,7 @@ pub mod routes;
 pub mod state;
 pub mod static_files;
 pub mod system_info;
+pub mod task_service;
 pub mod time_service;
 
 pub use camera_probe::CameraProbeService;
