@@ -36,6 +36,7 @@ pub struct AppState {
     pub max_upload_size_bytes: usize,
     pub algorithm_upload_semaphore: Arc<Semaphore>,
     pub storage_cleaner: Option<Arc<pipeline::storage_cleaner::StorageCleaner>>,
+    pub gallery_index: Arc<crate::gallery_index::FaceFeatureIndex>,
 }
 
 impl AppState {
@@ -52,6 +53,7 @@ impl AppState {
         let (shutdown_tx, _) = broadcast::channel(16);
         let stream_hub = Arc::new(StreamHub::new());
         let algo_registry = Arc::new(AlgoRegistry::new());
+        let gallery_index = Arc::new(crate::gallery_index::FaceFeatureIndex::new());
         let task_coordinator: Arc<dyn pipeline::TaskRuntimeService> =
             Arc::new(pipeline::TaskRuntimeCoordinator::new(
                 pipeline.clone(),
@@ -86,6 +88,7 @@ impl AppState {
                 DEFAULT_MAX_CONCURRENT_ALGORITHM_UPLOADS,
             )),
             storage_cleaner: None,
+            gallery_index,
         }
     }
 

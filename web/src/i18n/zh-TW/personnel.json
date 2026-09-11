@@ -1,0 +1,103 @@
+{
+  "title": "人員底庫管理",
+  "subtitle": "邊緣人臉底庫與特徵檢索服務，支援單人多視角樣本錄入",
+  "stats": {
+    "totalPersonnel": "在冊人員總數",
+    "totalFaces": "特徵人臉樣本",
+    "algoStatus": "人臉演算法狀態",
+    "algoReady": "演算法引擎已就緒",
+    "algoNotReady": "演算法未就緒 (請部署人臉包)"
+  },
+  "actions": {
+    "register": "錄入新人員",
+    "searchPlaceholder": "輸入姓名、工號或證件號搜尋...",
+    "viewDetails": "查看檔案 / 樣本",
+    "editInfo": "編輯檔案",
+    "delete": "刪除人員",
+    "addFaces": "追加照片樣本",
+    "addFacesShort": "追加人臉",
+    "manageOrAddFaces": "管理/追加照片",
+    "setPrimary": "設為主要頭像",
+    "deleteFace": "刪除樣本",
+    "refresh": "重新整理",
+    "cancel": "取消",
+    "confirm": "確定",
+    "saving": "儲存中...",
+    "uploading": "上傳擷取特徵中..."
+  },
+  "card": {
+    "subjectId": "人員編號",
+    "idCard": "證件號",
+    "remark": "備註",
+    "sampleCount": "人臉樣本數",
+    "primary": "主要頭像",
+    "isPrimary": "已是主要頭像",
+    "registeredAt": "錄入時間",
+    "noPhoto": "暫無照片"
+  },
+  "modal": {
+    "registerTitle": "錄入人員檔案",
+    "editTitle": "編輯人員資訊",
+    "addFacesTitle": "追加人臉樣本",
+    "name": "人員姓名",
+    "namePlaceholder": "請輸入姓名 (必填)",
+    "subjectId": "工號 / 自訂編號",
+    "subjectIdPlaceholder": "留空系統自動分配唯一 ID",
+    "idCard": "身分證 / 證件號",
+    "idCardPlaceholder": "可選，如身分證或工牌號",
+    "remark": "部門 / 備註",
+    "remarkPlaceholder": "可選，如部門或權限描述",
+    "photoUploadTitle": "人臉登記照 (1~5 張)",
+    "photoUploadDesc": "支援 JPG / PNG 格式正面清晰半身照，系統將自動進行品質門禁校驗與 512 維特徵擷取",
+    "faceSampleManagement": "人臉樣本管理",
+    "faceSampleManagementDesc": "系統支援單人錄入 1~5 張多視角照片以提升辨識穩健度。如需追加新照片或更換主頭像，請前往樣本庫抽屜。",
+    "dropzoneText": "點擊或拖曳照片至此處上傳",
+    "dropzoneHint": "支援單次上傳多張，單人上限 5 張",
+    "primaryBadge": "展示主要頭像",
+    "setAsPrimary": "點擊設為主要頭像",
+    "removePhoto": "移除照片",
+    "qualityScore": "品質分",
+    "detectionScore": "置信度"
+  },
+  "delete": {
+    "title": "確認刪除人員",
+    "desc": "確定要刪除人員「{{name}}」(編號: {{subjectId}}) 嗎？此操作將同步銷毀其關聯的所有人臉特徵向量與本機照片檔案，但不會影響歷史已歸檔的識別對賬憑證。",
+    "deleteFaceTitle": "確認刪除人臉樣本",
+    "deleteFaceDesc": "確定要刪除該張樣本照片嗎？如果該照片為主要頭像，系統將自動將剩餘樣本的第一張升級為主要頭像。"
+  },
+  "empty": {
+    "title": "暫無人員底庫記錄",
+    "desc": "點擊上方「錄入新人員」按鈕新增首位在冊人員及人臉特徵",
+    "noSearchResult": "未找到匹配的人員記錄"
+  },
+  "errors": {
+    "nameRequired": "請輸入人員姓名",
+    "photoRequired": "請至少選擇 1 張有效人臉照片",
+    "maxPhotosExceeded": "單個人員最多支援 5 張照片樣本",
+    "cannotDeleteLastFace": "人員至少保留 1 張樣本，無法刪除最後一張照片",
+    "failedToLoad": "載入人員底庫失敗",
+    "failedToSave": "儲存人員資訊失敗",
+    "failedToDelete": "刪除操作失敗"
+  },
+  "toast": {
+    "registered": "人員檔案及人臉特徵錄入成功",
+    "updated": "人員資訊已更新",
+    "deleted": "人員檔案已物理刪除",
+    "faceAdded": "人臉樣本追加成功",
+    "faceDeleted": "樣本照片已刪除",
+    "primarySet": "已成功更新主要頭像"
+  },
+  "drawer": {
+    "originalTab": "原始登記照",
+    "alignedTab": "112×112 對齊切片",
+    "samplesCount": "{{current}}/5 樣本"
+  },
+  "quality": {
+    "excellent": "優質",
+    "good": "良好",
+    "fair": "合格",
+    "sampleHealth": "主樣本質檢",
+    "scoreLabel": "品質評分",
+    "detectionLabel": "置信度"
+  }
+}

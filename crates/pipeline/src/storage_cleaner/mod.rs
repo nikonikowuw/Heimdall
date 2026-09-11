@@ -45,6 +45,9 @@ pub use tombstone::{
     ensure_tombstone_dir, quarantine_file, sweep_tombstones_sync, TOMBSTONE_DIR_NAME,
 };
 
+/// 永久性人脸特征底库证据目录（免受瞬态抓拍淘汰与孤儿对账清理影响）
+pub const GALLERIES_DIR_NAME: &str = "galleries";
+
 /// 存储淘汰数据库抽象接口
 #[async_trait]
 pub trait EvictionStore: Send + Sync {
@@ -771,7 +774,10 @@ impl StorageCleaner {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
 
-            if name_str.starts_with('.') || name_str == TOMBSTONE_DIR_NAME {
+            if name_str.starts_with('.')
+                || name_str == TOMBSTONE_DIR_NAME
+                || name_str == GALLERIES_DIR_NAME
+            {
                 continue;
             }
 

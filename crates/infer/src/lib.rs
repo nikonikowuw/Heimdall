@@ -9,6 +9,7 @@ pub mod worker;
 
 pub use backend::InferenceBackend;
 pub use backends::{CoreMlBackend, CpuBackend};
+pub use c_abi::loader::FaceExtraction;
 pub use error::InferError;
 pub use package::{
     compute_dir_size, discover_package_dirs, AlgoInstance, AlgoPackage, AlgoRegistry,

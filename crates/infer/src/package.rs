@@ -11,7 +11,7 @@ use tokio::sync::{Mutex, RwLock};
 use types::{BoundingBox, Detection, FrameHandle, FrameRef, PixelFormat};
 
 use crate::backend::InferenceBackend;
-use crate::c_abi::loader::{check_c_status, LoadedLib, RawAlgoLibrary};
+use crate::c_abi::loader::{check_c_status, FaceExtraction, LoadedLib, RawAlgoLibrary};
 use crate::c_abi::types::*;
 use crate::error::InferError;
 use crate::sandbox::{find_entry_library, AlgoManifest, AlgoSandbox};
@@ -60,6 +60,16 @@ impl AlgoPackage {
     #[inline]
     pub fn package_dir(&self) -> &Path {
         &self.package_dir
+    }
+
+    /// 检查该算法包是否支持人脸特征提取 C ABI
+    pub fn supports_face_extraction(&self) -> bool {
+        self.lib.get_extract_face_fn().is_some()
+    }
+
+    /// 调用该算法包提取人脸特征向量与对齐人脸切片
+    pub fn extract_face(&self, jpeg_bytes: &[u8]) -> Result<FaceExtraction, InferError> {
+        self.raw_lib.extract_face(jpeg_bytes)
     }
 
     /// 创建一个独立的推理实例
@@ -567,6 +577,47 @@ impl AlgoRegistry {
     pub async fn contains(&self, algorithm_id: &str) -> bool {
         let map = self.packages.read().await;
         map.contains_key(algorithm_id)
+    }
+
+    /// 调用已注册的人脸识别算法包执行人脸特征提取（基于专用阻塞线程池隔离 FFI 调用）
+    pub async fn extract_face(&self, jpeg_bytes: &[u8]) -> Result<FaceExtraction, InferError> {
+        let target_pkg = self
+            .get("face_recognition")
+            .await
+            .filter(|pkg| pkg.supports_face_extraction());
+
+        let pkg = match target_pkg {
+            Some(p) => p,
+            None => {
+                let packages = self.packages.read().await;
+                packages
+                    .values()
+                    .find(|p| p.supports_face_extraction())
+                    .cloned()
+                    .ok_or_else(|| InferError::Execution {
+                        reason: "当前系统未加载支持 av_algo_extract_face 的人脸识别算法包，请先部署人脸算法"
+                            .to_string(),
+                    })?
+            }
+        };
+
+        let bytes = jpeg_bytes.to_vec();
+        tokio::task::spawn_blocking(move || pkg.extract_face(&bytes))
+            .await
+            .map_err(|e| InferError::Execution {
+                reason: format!("人脸特征提取任务调度异常: {e}"),
+            })?
+    }
+
+    /// 检查当前是否有人脸特征提取算法包就绪
+    pub async fn is_face_extraction_ready(&self) -> bool {
+        if let Some(pkg) = self.get("face_recognition").await {
+            if pkg.supports_face_extraction() {
+                return true;
+            }
+        }
+        let packages = self.packages.read().await;
+        packages.values().any(|pkg| pkg.supports_face_extraction())
     }
 }
 

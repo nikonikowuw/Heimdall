@@ -193,6 +193,11 @@ async fn main() -> Result<()> {
     let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
     capture_svc.start_worker();
 
+    // 冷启动从 SQLite 全量载入人脸底库特征内存索引
+    if let Err(e) = state.gallery_index.reload(&state.db).await {
+        tracing::warn!(error = %e, "冷启动加载人脸底库内存索引失败");
+    }
+
     // 启动后台航迹实时流分发与节流工作线程
     let track_svc = Arc::new(api::TrackDispatchService::from_state(&state));
     track_svc.start_worker();

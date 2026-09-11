@@ -1,0 +1,103 @@
+{
+  "title": "Personnel Gallery",
+  "subtitle": "Edge face gallery and vector retrieval service with multi-angle sample support",
+  "stats": {
+    "totalPersonnel": "Total Registered",
+    "totalFaces": "Face Feature Samples",
+    "algoStatus": "Face Algo Status",
+    "algoReady": "Engine Ready",
+    "algoNotReady": "Engine Not Ready (Deploy Face Package)"
+  },
+  "actions": {
+    "register": "Register Person",
+    "searchPlaceholder": "Search by name, ID or card number...",
+    "viewDetails": "View Profile / Faces",
+    "editInfo": "Edit Info",
+    "delete": "Delete Person",
+    "addFaces": "Add Face Photos",
+    "addFacesShort": "Add Face",
+    "manageOrAddFaces": "Manage/Add Photos",
+    "setPrimary": "Set as Primary",
+    "deleteFace": "Delete Photo",
+    "refresh": "Refresh",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "saving": "Saving...",
+    "uploading": "Extracting features..."
+  },
+  "card": {
+    "subjectId": "Subject ID",
+    "idCard": "ID / Card",
+    "remark": "Remark",
+    "sampleCount": "Face Samples",
+    "primary": "Primary Avatar",
+    "isPrimary": "Primary Avatar",
+    "registeredAt": "Registered At",
+    "noPhoto": "No Photo"
+  },
+  "modal": {
+    "registerTitle": "Register Personnel",
+    "editTitle": "Edit Personnel Info",
+    "addFacesTitle": "Add Face Photos",
+    "name": "Full Name",
+    "namePlaceholder": "Enter name (required)",
+    "subjectId": "Subject ID / Employee ID",
+    "subjectIdPlaceholder": "Leave blank to auto-generate unique ID",
+    "idCard": "ID / Card Number",
+    "idCardPlaceholder": "Optional, e.g. ID card or badge number",
+    "remark": "Department / Remark",
+    "remarkPlaceholder": "Optional, department or role",
+    "photoUploadTitle": "Face Photos (1-5 photos)",
+    "photoUploadDesc": "Supports JPG / PNG frontal clear photos. Quality gate check and 512D feature extraction will be executed automatically",
+    "faceSampleManagement": "Face Sample Management",
+    "faceSampleManagementDesc": "Supports 1-5 multi-angle photos per person for robust matching. To add photos or switch primary avatar, open the sample drawer.",
+    "dropzoneText": "Click or drag photos here to upload",
+    "dropzoneHint": "Supports multi-photo selection, up to 5 per person",
+    "primaryBadge": "Primary Avatar",
+    "setAsPrimary": "Click to set as primary",
+    "removePhoto": "Remove photo",
+    "qualityScore": "Quality",
+    "detectionScore": "Confidence"
+  },
+  "delete": {
+    "title": "Confirm Delete Person",
+    "desc": "Are you sure you want to delete {{name}} (ID: {{subjectId}})? This will destroy all associated face vectors and local image files, but will not affect historical recognition records.",
+    "deleteFaceTitle": "Confirm Delete Face Photo",
+    "deleteFaceDesc": "Are you sure you want to delete this sample photo? If this is the primary avatar, the first remaining photo will become the new primary."
+  },
+  "empty": {
+    "title": "No Personnel Registered",
+    "desc": "Click \"Register Person\" above to add the first profile and face features",
+    "noSearchResult": "No matching personnel found"
+  },
+  "errors": {
+    "nameRequired": "Name is required",
+    "photoRequired": "Please select at least 1 valid face photo",
+    "maxPhotosExceeded": "Maximum 5 photos per person",
+    "cannotDeleteLastFace": "Each person must keep at least 1 face photo",
+    "failedToLoad": "Failed to load personnel gallery",
+    "failedToSave": "Failed to save personnel info",
+    "failedToDelete": "Failed to delete"
+  },
+  "toast": {
+    "registered": "Person profile and face features registered successfully",
+    "updated": "Personnel info updated",
+    "deleted": "Personnel profile deleted",
+    "faceAdded": "Face photos added successfully",
+    "faceDeleted": "Sample photo deleted",
+    "primarySet": "Primary avatar updated"
+  },
+  "drawer": {
+    "originalTab": "Original Photo",
+    "alignedTab": "112×112 Aligned Crop",
+    "samplesCount": "{{current}}/5 Samples"
+  },
+  "quality": {
+    "excellent": "Excellent",
+    "good": "Good",
+    "fair": "Fair",
+    "sampleHealth": "Primary Quality",
+    "scoreLabel": "Quality Score",
+    "detectionLabel": "Confidence"
+  }
+}

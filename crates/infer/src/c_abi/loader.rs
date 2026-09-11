@@ -94,6 +94,12 @@ impl LoadedLib {
     pub fn abi(&self) -> &AvAlgoAbi {
         &self.abi
     }
+
+    /// 尝试寻址人脸特征提取符号
+    pub fn get_extract_face_fn(&self) -> Option<Symbol<'_, AvAlgoExtractFaceFn>> {
+        // SAFETY: 寻址动态库代码段导出的 av_algo_extract_face 符号
+        unsafe { self._lib.get(AV_ALGO_EXTRACT_FACE_SYMBOL).ok() }
+    }
 }
 
 /// 算法库元数据信息（Rust 友好版）
@@ -215,6 +221,95 @@ impl RawAlgoLibrary {
     pub fn lib(&self) -> &Arc<LoadedLib> {
         &self.lib
     }
+
+    /// 调用底层 C ABI 进行单张人脸特征提取、对齐与质量评估
+    pub fn extract_face(&self, jpeg_bytes: &[u8]) -> Result<FaceExtraction, InferError> {
+        let extract_fn =
+            self.lib
+                .get_extract_face_fn()
+                .ok_or_else(|| InferError::SymbolLookup {
+                    symbol: "av_algo_extract_face".to_string(),
+                    reason: "当前算法库未导出 av_algo_extract_face 符号".to_string(),
+                })?;
+
+        let input = AvFaceExtractInput {
+            size: std::mem::size_of::<AvFaceExtractInput>() as u32,
+            api_version: AV_ALGO_API_VERSION,
+            image_bytes: jpeg_bytes.as_ptr(),
+            image_bytes_len: jpeg_bytes.len() as u32,
+        };
+
+        let mut output = AvFaceExtractOutput {
+            size: std::mem::size_of::<AvFaceExtractOutput>() as u32,
+            api_version: AV_ALGO_API_VERSION,
+            status_code: 0,
+            embedding: std::ptr::null(),
+            embedding_dim: 0,
+            aligned_jpeg: std::ptr::null(),
+            aligned_jpeg_len: 0,
+            quality_score: 0.0,
+            detection_score: 0.0,
+        };
+
+        // SAFETY: input/output 结构体满足 ABI 契约且在调用期间保持有效
+        let status = unsafe { extract_fn(self.raw, &input, &mut output) };
+        if status != AV_OK || output.status_code != 0 {
+            return Err(InferError::Execution {
+                reason: format!(
+                    "人脸特征提取失败: status={status}, code={}",
+                    output.status_code
+                ),
+            });
+        }
+
+        if output.embedding.is_null()
+            || output.embedding_dim != 512
+            || !(output.embedding as usize).is_multiple_of(std::mem::align_of::<f32>())
+        {
+            return Err(InferError::Execution {
+                reason: format!(
+                    "人脸特征向量无效: ptr={:?}, dim={}",
+                    output.embedding, output.embedding_dim
+                ),
+            });
+        }
+
+        // SAFETY: output.embedding 指向 output.embedding_dim 个连续浮点数
+        let embedding = unsafe {
+            std::slice::from_raw_parts(output.embedding, output.embedding_dim as usize).to_vec()
+        };
+
+        let aligned_jpeg = if !output.aligned_jpeg.is_null() && output.aligned_jpeg_len > 0 {
+            if output.aligned_jpeg_len > 32 * 1024 * 1024 {
+                return Err(InferError::Execution {
+                    reason: "人脸对齐切片尺寸异常超过 32MB 限制".to_string(),
+                });
+            }
+            // SAFETY: output.aligned_jpeg 指向 output.aligned_jpeg_len 个有效字节
+            unsafe {
+                std::slice::from_raw_parts(output.aligned_jpeg, output.aligned_jpeg_len as usize)
+                    .to_vec()
+            }
+        } else {
+            Vec::new()
+        };
+
+        Ok(FaceExtraction {
+            embedding,
+            quality_score: output.quality_score,
+            detection_score: output.detection_score,
+            aligned_jpeg,
+        })
+    }
+}
+
+/// 人脸特征提取输出结果（安全封装版）
+#[derive(Debug, Clone)]
+pub struct FaceExtraction {
+    pub embedding: Vec<f32>,
+    pub quality_score: f32,
+    pub detection_score: f32,
+    pub aligned_jpeg: Vec<u8>,
 }
 
 impl Drop for RawAlgoLibrary {

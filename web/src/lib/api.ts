@@ -20,6 +20,9 @@ import type {
   LoginResponse,
   OperationLog,
   PaginatedAlgorithms,
+  PersonnelDetail,
+  PersonnelItem,
+  PersonnelStats,
   RecognitionRecord,
   TaskConfigDto,
   TaskSummaryDto,
@@ -293,9 +296,67 @@ export const evidenceApi = {
   },
 }
 
-function uploadFormData<T>(endpoint: string, file: File): Promise<T> {
-  const formData = new FormData()
-  formData.append('file', file)
+export const personnelApi = {
+  list(params?: {
+    keyword?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ items: PersonnelItem[]; total: number }> {
+    const qs = toQueryString({
+      keyword: params?.keyword,
+      limit: params?.limit,
+      offset: params?.offset,
+    })
+    return api.get<{ items: PersonnelItem[]; total: number }>(`/personnel${qs}`)
+  },
+
+  getStats(): Promise<PersonnelStats> {
+    return api.get<PersonnelStats>('/personnel/stats')
+  },
+
+  getDetail(subjectId: string): Promise<PersonnelDetail> {
+    return api.get<PersonnelDetail>(`/personnel/${encodeURIComponent(subjectId)}`)
+  },
+
+  create(formData: FormData): Promise<PersonnelDetail> {
+    return postFormData<PersonnelDetail>('/personnel', formData)
+  },
+
+  update(
+    subjectId: string,
+    payload: { name?: string; idCard?: string; remark?: string },
+  ): Promise<PersonnelDetail> {
+    return api.put<PersonnelDetail>(`/personnel/${encodeURIComponent(subjectId)}`, payload)
+  },
+
+  delete(subjectId: string): Promise<{ subjectId: string; deleted: boolean }> {
+    return api.delete<{ subjectId: string; deleted: boolean }>(
+      `/personnel/${encodeURIComponent(subjectId)}`,
+    )
+  },
+
+  addFaces(subjectId: string, formData: FormData): Promise<PersonnelDetail> {
+    return postFormData<PersonnelDetail>(
+      `/personnel/${encodeURIComponent(subjectId)}/faces`,
+      formData,
+    )
+  },
+
+  deleteFace(subjectId: string, faceId: string): Promise<PersonnelDetail> {
+    return api.delete<PersonnelDetail>(
+      `/personnel/${encodeURIComponent(subjectId)}/faces/${encodeURIComponent(faceId)}`,
+    )
+  },
+
+  setPrimaryFace(subjectId: string, faceId: string): Promise<PersonnelDetail> {
+    return api.put<PersonnelDetail>(
+      `/personnel/${encodeURIComponent(subjectId)}/faces/${encodeURIComponent(faceId)}/primary`,
+      {},
+    )
+  },
+}
+
+function postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
   const token = useAuthStore.getState().token
   return fetch(`${BASE_URL}${endpoint}`, {
     method: 'POST',
@@ -308,13 +369,19 @@ function uploadFormData<T>(endpoint: string, file: File): Promise<T> {
       // 网络响应只在 API 边界解析一次，避免先 json() 后 text() 消费同一个 body。
       data = JSON.parse(raw) as { code: number; message?: string; data: T }
     } catch {
-      throw new Error(raw || `Upload failed with status ${res.status} (${res.statusText})`)
+      throw new Error(raw || `Request failed with status ${res.status} (${res.statusText})`)
     }
     if (!res.ok || data.code !== 0) {
-      throw new Error(data.message || 'Upload failed')
+      throw new Error(data.message || 'Request failed')
     }
     return data.data
   })
+}
+
+function uploadFormData<T>(endpoint: string, file: File): Promise<T> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return postFormData<T>(endpoint, formData)
 }
 
 export const algorithmApi = {

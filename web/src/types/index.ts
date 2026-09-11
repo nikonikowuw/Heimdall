@@ -200,6 +200,48 @@ export interface RecognitionRecord {
   createdAt: number
 }
 
+export interface PersonnelItem {
+  id: number
+  subjectId: string
+  name: string
+  idCard: string
+  remark: string
+  primaryPhotoPath: string
+  faceCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface GalleryFace {
+  id: number
+  faceId: string
+  subjectId: string
+  photoRelPath: string
+  alignedRelPath: string
+  qualityScore: number
+  detectionScore: number
+  isPrimary: boolean
+  createdAt: number
+}
+
+export interface PersonnelDetail {
+  id: number
+  subjectId: string
+  name: string
+  idCard: string
+  remark: string
+  primaryPhotoPath: string
+  faces: GalleryFace[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface PersonnelStats {
+  totalPersonnel: number
+  totalFaces: number
+  algoReady: boolean
+}
+
 export interface AlgoManifest {
   algorithmId: string
   name: string

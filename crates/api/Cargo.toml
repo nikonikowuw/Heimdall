@@ -37,6 +37,7 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1.0"
 libc = { workspace = true }
+image = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

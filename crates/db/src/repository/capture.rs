@@ -1,3 +1,4 @@
+use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -56,7 +57,7 @@ impl CaptureRepo {
         active_model.insert(db).await.map_err(DbError::from)
     }
 
-    /// 高频抓拍攒批写入（避免逐事件频繁开启单行 SQLite 事务）
+    /// 高频抓拍攒批写入（避免逐事件频繁开启单行 SQLite 事务，内置 ON CONFLICT DO NOTHING 幂等防重）
     pub async fn insert_batch(
         db: &DatabaseConnection,
         active_models: Vec<ActiveModel>,
@@ -66,6 +67,11 @@ impl CaptureRepo {
         }
         let count = active_models.len();
         Entity::insert_many(active_models)
+            .on_conflict(
+                OnConflict::column(Column::CaptureId)
+                    .do_nothing()
+                    .to_owned(),
+            )
             .exec(db)
             .await
             .map_err(DbError::from)?;

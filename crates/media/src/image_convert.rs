@@ -527,6 +527,10 @@ fn convert_dmabuf_to_rgb(
     // 1. 硬件栅障等待（Operation Ordering 证明）：等待硬件 Producer（VPU 或 RGA）彻底完成写入
     wait_dmabuf_readable(raw_fd, 100)?;
 
+    // 2. 检查底层 DMA-BUF 物理容量，防止破损帧或异常步长导致 mmap 越界在 CPU 读取时产生 SIGBUS/SIGSEGV
+    // SAFETY: lseek 读取底层合法 raw_fd 的物理显存容量，无内存副作用
+    let actual_size = unsafe { libc::lseek(raw_fd, 0, libc::SEEK_END) };
+
     let y_stride = stride.hor_stride.max(width) as usize;
     let uv_stride = stride.hor_stride.max(width) as usize;
     let ver_stride = stride.ver_stride.max(height) as usize;
@@ -537,6 +541,14 @@ fn convert_dmabuf_to_rgb(
         .ok_or_else(|| MediaError::Decode {
             reason: "步长乘法溢出".to_string(),
         })?;
+
+    if actual_size > 0 && (actual_size as usize) < total_size {
+        return Err(MediaError::Decode {
+            reason: format!(
+                "DMA-BUF 物理容量小于对齐要求: actual={actual_size}, required={total_size}"
+            ),
+        });
+    }
 
     // 2. Linux 内核级 mmap 映射 DMA-BUF 连续物理页
     // SAFETY: 基于具有生命周期的 OwnedFd 进行只读共享映射
@@ -580,10 +592,10 @@ fn convert_dmabuf_to_rgb(
     // 3. 启用带 EINTR/EAGAIN 循环重试与 RAII 自动回退的 CPU 缓存一致性同步 (Cache Coherency)
     let _sync_guard = DmaBufSyncGuard::acquire(raw_fd, DmaBufSyncDirection::Read)?;
 
-    // 4. 安全读取内存切片并转换为 RgbImage
+    // 4. 安全读取内存切片并转换为 RgbImage (遵循垂直步长 ver_stride 对齐 UV 偏移)
     // SAFETY: map_ptr 在 MmapGuard 存活期间为有效的映射内存地址，长度为 total_size
     let slice = unsafe { std::slice::from_raw_parts(map_ptr as *const u8, total_size) };
-    fast_nv12_to_rgb_image(slice, width, height, y_stride, uv_stride)
+    fast_nv12_to_rgb_image_with_ver_stride(slice, width, height, y_stride, uv_stride, ver_stride)
     // 析构顺序：
     // 1. _sync_guard Drop -> 自动调用 DMA_BUF_SYNC_END 结束读同步
     // 2. _guard Drop -> 自动调用 munmap 解除内存映射
@@ -669,11 +681,31 @@ pub fn fast_nv12_to_rgb_image(
     y_stride: usize,
     uv_stride: usize,
 ) -> Result<RgbImage, MediaError> {
+    fast_nv12_to_rgb_image_with_ver_stride(
+        data,
+        width,
+        height,
+        y_stride,
+        uv_stride,
+        height as usize,
+    )
+}
+
+/// 支持带硬件垂直步长 (ver_stride) 的高速 NV12 到 RGB 转换
+pub fn fast_nv12_to_rgb_image_with_ver_stride(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    y_stride: usize,
+    uv_stride: usize,
+    ver_stride: usize,
+) -> Result<RgbImage, MediaError> {
     let w = width as usize;
     let h = height as usize;
+    let v_stride = ver_stride.max(h);
     let mut rgb = vec![0u8; w * h * 3];
 
-    let uv_offset = y_stride * h;
+    let uv_offset = y_stride * v_stride;
     let data_len = data.len();
 
     for y in 0..h {

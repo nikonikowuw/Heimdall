@@ -28,6 +28,10 @@ pub struct CaptureDispatchService {
     pub shutdown_tx: broadcast::Sender<()>,
     pub batch_size: usize,
     pub flush_interval_ms: u64,
+    pub gallery_index: Option<Arc<crate::gallery_index::FaceFeatureIndex>>,
+    pub algo_registry: Option<Arc<infer::package::AlgoRegistry>>,
+    pub event_broadcaster: Option<broadcast::Sender<crate::state::WsBroadcastEvent>>,
+    recognition_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CaptureDispatchService {
@@ -39,6 +43,10 @@ impl CaptureDispatchService {
             shutdown_tx: state.shutdown_tx.clone(),
             batch_size: DEFAULT_CAPTURE_BATCH_SIZE,
             flush_interval_ms: DEFAULT_CAPTURE_FLUSH_INTERVAL_MS,
+            gallery_index: Some(state.gallery_index.clone()),
+            algo_registry: Some(state.algo_registry.clone()),
+            event_broadcaster: Some(state.event_broadcaster.clone()),
+            recognition_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -56,6 +64,10 @@ impl CaptureDispatchService {
             shutdown_tx,
             batch_size: batch_size.max(1),
             flush_interval_ms: flush_interval_ms.max(10),
+            gallery_index: None,
+            algo_registry: None,
+            event_broadcaster: None,
+            recognition_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -121,7 +133,138 @@ impl CaptureDispatchService {
             count = inserted,
             "客观通行抓拍凭证批量落库成功 (单事务攒批)"
         );
+
+        // 对人脸通行抓拍事件尝试触发 1:N 底库比对与识别对账（仅在底库存在特征时异步分发，且不阻塞抓拍落库）
+        if let Some(gallery_index) = &self.gallery_index {
+            if gallery_index.count().await > 0 {
+                for evt in events {
+                    let is_face = evt.tracked_object.label.eq_ignore_ascii_case("face")
+                        || evt.algorithm_id.contains("face");
+                    if is_face {
+                        let this = self.clone();
+                        let event = evt.clone();
+                        tokio::spawn(async move {
+                            this.try_match_and_record_recognition(&event).await;
+                        });
+                    }
+                }
+            }
+        }
+
         Ok(inserted)
+    }
+
+    /// 针对人脸通行抓拍尝试触发 1:N 底库特征检索并落地识别对账记录
+    async fn try_match_and_record_recognition(&self, event: &PipelineCaptureEvent) {
+        // 互斥保护：非阻塞单飞模式，已有比对在执行时跳过本次触发，杜绝并发冲击 NPU 硬件推理通道
+        let _lock = match self.recognition_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                tracing::debug!("已有在途人脸识别比对任务执行中，跳过本次抓拍比对以保护 NPU");
+                return;
+            }
+        };
+
+        let (Some(gallery_index), Some(algo_registry)) = (&self.gallery_index, &self.algo_registry)
+        else {
+            return;
+        };
+
+        let is_face = event.tracked_object.label.eq_ignore_ascii_case("face")
+            || event.algorithm_id.contains("face");
+        if !is_face {
+            return;
+        }
+
+        let Some(snap) = &event.snapshot else {
+            return;
+        };
+        if snap.crop_image_rel_path.is_empty() {
+            return;
+        }
+
+        if gallery_index.count().await == 0 {
+            return;
+        }
+
+        let base_dir = self.pipeline.snapshot_engine().base_evidence_dir();
+        let crop_path = base_dir.join(&snap.crop_image_rel_path);
+        let crop_bytes = match tokio::fs::read(&crop_path).await {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+
+        let extraction = match algo_registry.extract_face(&crop_bytes).await {
+            Ok(ext) => ext,
+            Err(_) => return,
+        };
+
+        // 遵循 docs/algo/EdgeFace.md 约定的自适应置信度动态微调
+        // 质量评分围绕 0.50 基准点浮动 ±0.05，质量越低门槛越高，抑制低质误报
+        let base_threshold: f32 = 0.75;
+        let quality_adjustment = (extraction.quality_score - 0.5) * 0.1;
+        let adaptive_threshold = (base_threshold + quality_adjustment).clamp(0.60, 0.90);
+
+        // 执行 1:N 余弦比对
+        if let Some(matched) = gallery_index
+            .search(&extraction.embedding, adaptive_threshold)
+            .await
+        {
+            let recognition_id = format!("rec_{}", uuid::Uuid::new_v4().simple());
+            let recognized_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
+                .unwrap_or_else(chrono::Utc::now);
+
+            // 遵循证据隔离原则：复制一份底库照片至 recognitions 目录
+            let reg_photo_src = base_dir.join(&matched.photo_rel_path);
+            let rec_gallery_rel = format!("recognitions/{recognition_id}_gallery.jpg");
+            let rec_gallery_dest = base_dir.join(&rec_gallery_rel);
+            if let Some(parent) = rec_gallery_dest.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            let _ = tokio::fs::copy(&reg_photo_src, &rec_gallery_dest).await;
+
+            let active_rec = db::entity::recognition::ActiveModel {
+                id: sea_orm::NotSet,
+                recognition_id: Set(recognition_id.clone()),
+                camera_id: Set(event.camera_id.clone()),
+                gallery_id: Set("default".to_string()),
+                subject_id: Set(matched.subject_id.clone()),
+                subject_name: Set(matched.subject_name.clone()),
+                similarity: Set(matched.similarity),
+                field_crop_path: Set(snap.crop_image_rel_path.clone()),
+                registered_photo_path: Set(rec_gallery_rel),
+                recognized_at: Set(recognized_at),
+                created_at: Set(chrono::Utc::now()),
+            };
+
+            if let Ok(saved) = db::RecognitionRepo::insert(&self.db, active_rec).await {
+                tracing::info!(
+                    recognition_id = %recognition_id,
+                    subject_id = %matched.subject_id,
+                    similarity = matched.similarity,
+                    camera_id = %event.camera_id,
+                    "1:N 人脸识别对账命中成功并已持久化"
+                );
+
+                if let Some(broadcaster) = &self.event_broadcaster {
+                    let _ = broadcaster.send(crate::state::WsBroadcastEvent {
+                        topic: types::TOPIC_RECOGNITION_MATCHED.to_string(),
+                        payload: serde_json::json!({
+                            "recognitionId": saved.recognition_id,
+                            "cameraId": saved.camera_id,
+                            "galleryId": saved.gallery_id,
+                            "subjectId": saved.subject_id,
+                            "subjectName": saved.subject_name,
+                            "similarity": saved.similarity,
+                            "fieldCropPath": saved.field_crop_path,
+                            "registeredPhotoPath": saved.registered_photo_path,
+                            "recognizedAt": saved.recognized_at.timestamp_millis(),
+                        }),
+                        timestamp: event.timestamp,
+                    });
+                }
+            }
+        }
     }
 
     /// 刷新当前缓冲区中的抓拍事件批次
@@ -189,8 +332,8 @@ impl CaptureDispatchService {
                     }
                     _ = ticker.tick() => {
                         self.flush_batch(&mut batch_buffer, "定时刷新").await;
-                        // 周期性检查是否有补偿队列积压
-                        self.drain_and_persist_pending().await;
+                        // 注意：严禁在此处无条件周期性调用 drain_and_persist_pending()！
+                        // 正常广播事件已在 analysis_rx 中接收；管线补偿队列仅在冷启动、RecvError::Lagged 或停机时才需排空。
                     }
                     recv_res = analysis_rx.recv() => {
                         match recv_res {

@@ -1,0 +1,103 @@
+{
+  "title": "人员底库管理",
+  "subtitle": "边缘人脸底库与特征检索服务，支持单人多视角样本录入",
+  "stats": {
+    "totalPersonnel": "在册人员总数",
+    "totalFaces": "特征人脸样本",
+    "algoStatus": "人脸算法状态",
+    "algoReady": "算法引擎已就绪",
+    "algoNotReady": "算法未就绪 (请部署人脸包)"
+  },
+  "actions": {
+    "register": "录入新人员",
+    "searchPlaceholder": "输入姓名、工号或证件号搜索...",
+    "viewDetails": "查看档案 / 样本",
+    "editInfo": "编辑档案",
+    "delete": "删除人员",
+    "addFaces": "追加照片样本",
+    "addFacesShort": "追加人脸",
+    "manageOrAddFaces": "管理/追加照片",
+    "setPrimary": "设为主头像",
+    "deleteFace": "删除样本",
+    "refresh": "刷新",
+    "cancel": "取消",
+    "confirm": "确定",
+    "saving": "保存中...",
+    "uploading": "上传提取特征中..."
+  },
+  "card": {
+    "subjectId": "人员编号",
+    "idCard": "证件号",
+    "remark": "备注",
+    "sampleCount": "人脸样本数",
+    "primary": "主头像",
+    "isPrimary": "已是主头像",
+    "registeredAt": "录入时间",
+    "noPhoto": "暂无照片"
+  },
+  "modal": {
+    "registerTitle": "录入人员档案",
+    "editTitle": "编辑人员信息",
+    "addFacesTitle": "追加人脸样本",
+    "name": "人员姓名",
+    "namePlaceholder": "请输入姓名 (必填)",
+    "subjectId": "工号 / 自定义编号",
+    "subjectIdPlaceholder": "留空系统自动分配唯一 ID",
+    "idCard": "身份证 / 证件号",
+    "idCardPlaceholder": "可选，如身份证或工牌号",
+    "remark": "部门 / 备注",
+    "remarkPlaceholder": "可选，如部门或权限描述",
+    "photoUploadTitle": "人脸登记照 (1~5 张)",
+    "photoUploadDesc": "支持 JPG / PNG 格式正面清晰半身照，系统将自动进行质量门禁校验与 512 维特征提取",
+    "faceSampleManagement": "人脸样本管理",
+    "faceSampleManagementDesc": "系统支持单人录入 1~5 张多视角照片以提升识别鲁棒性。如需追加新照片或更换主头像，请前往样本库抽屉。",
+    "dropzoneText": "点击或拖拽照片至此处上传",
+    "dropzoneHint": "支持单次上传多张，单人上限 5 张",
+    "primaryBadge": "展示主头像",
+    "setAsPrimary": "点击设为主头像",
+    "removePhoto": "移除照片",
+    "qualityScore": "质量分",
+    "detectionScore": "置信度"
+  },
+  "delete": {
+    "title": "确认删除人员",
+    "desc": "确定要删除人员「{{name}}」(编号: {{subjectId}}) 吗？此操作将同步销毁其关联的所有人脸特征向量与本地照片文件，但不会影响历史已归档的识别对账凭证。",
+    "deleteFaceTitle": "确认删除人脸样本",
+    "deleteFaceDesc": "确定要删除该张样本照片吗？如果该照片为主头像，系统将自动将剩余样本的第一张升级为主头像。"
+  },
+  "empty": {
+    "title": "暂无人员底库记录",
+    "desc": "点击上方「录入新人员」按钮添加首位在册人员及人脸特征",
+    "noSearchResult": "未找到匹配的人员记录"
+  },
+  "errors": {
+    "nameRequired": "请输入人员姓名",
+    "photoRequired": "请至少选择 1 张有效人脸照片",
+    "maxPhotosExceeded": "单个人员最多支持 5 张照片样本",
+    "cannotDeleteLastFace": "人员至少保留 1 张样本，无法删除最后一张照片",
+    "failedToLoad": "加载人员底库失败",
+    "failedToSave": "保存人员信息失败",
+    "failedToDelete": "删除操作失败"
+  },
+  "toast": {
+    "registered": "人员档案及人脸特征录入成功",
+    "updated": "人员信息已更新",
+    "deleted": "人员档案已物理删除",
+    "faceAdded": "人脸样本追加成功",
+    "faceDeleted": "样本照片已删除",
+    "primarySet": "已成功更新主头像"
+  },
+  "drawer": {
+    "originalTab": "原始登记照",
+    "alignedTab": "112×112 对齐切片",
+    "samplesCount": "{{current}}/5 样本"
+  },
+  "quality": {
+    "excellent": "优质",
+    "good": "良好",
+    "fair": "合格",
+    "sampleHealth": "主样本质检",
+    "scoreLabel": "质量评分",
+    "detectionLabel": "置信度"
+  }
+}

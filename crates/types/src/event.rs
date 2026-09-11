@@ -13,3 +13,6 @@ pub const TOPIC_ALARM_STATUS_CHANGED: &str = "alarm.status_changed";
 
 /// 摄像头实时 AI 航迹与目标框更新广播事件 (节流下发)
 pub const TOPIC_CAMERA_TRACKS: &str = "camera.tracks";
+
+/// 人脸 1:N 识别对账命中实时广播事件
+pub const TOPIC_RECOGNITION_MATCHED: &str = "recognition.matched";

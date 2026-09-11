@@ -6,6 +6,7 @@ pub mod error;
 pub mod event;
 pub mod frame;
 pub mod oplog;
+pub mod personnel;
 pub mod system;
 pub mod task;
 
@@ -25,10 +26,14 @@ pub use detection::{
 pub use error::{FrameError, TypeError};
 pub use event::{
     TOPIC_ALARM_STATUS_CHANGED, TOPIC_ALARM_TRIGGERED, TOPIC_CAMERA_PROBE_UPDATED,
-    TOPIC_CAMERA_TRACKS,
+    TOPIC_CAMERA_TRACKS, TOPIC_RECOGNITION_MATCHED,
 };
 pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
 pub use oplog::OperationLog;
+pub use personnel::{
+    FaceMatchResult, GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto, PersonnelStatsDto,
+    UpdatePersonnelRequest,
+};
 pub use system::{
     CoreMetrics, CpuMetrics, DiskMetrics, EvictionReport, ForceSyncResponse, InterfaceCapabilities,
     IpConfig, IpMethod, MemoryMetrics, NetworkChangeOperation, NetworkDiagnosticRequest,

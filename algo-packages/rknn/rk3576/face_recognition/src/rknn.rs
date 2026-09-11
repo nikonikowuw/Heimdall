@@ -1059,12 +1059,12 @@ fn map_dma_buf(fd: i32, size: usize) -> Result<(NonNull<c_void>, usize), AlgoErr
         return Err(AlgoError::OutOfMemory);
     }
     let map_size = size;
-    // SAFETY: fd 由当前 DMA-BUF lease 提供且保持有效；只建立只读共享映射。
+    // SAFETY: fd 由当前 DMA-BUF lease 提供且保持有效；映射为可读写共享内存以支持 rknn_create_mem_from_fd 及 rknn_inputs_set
     let mapped = unsafe {
         libc::mmap(
             null_mut(),
             map_size,
-            libc::PROT_READ,
+            libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_SHARED,
             fd,
             0,

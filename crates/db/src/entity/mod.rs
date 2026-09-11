@@ -6,6 +6,8 @@ pub mod algorithm_version;
 pub mod camera;
 pub mod capture;
 pub mod gallery;
+pub mod gallery_face;
 pub mod oplog;
+pub mod personnel;
 pub mod recognition;
 pub mod task;

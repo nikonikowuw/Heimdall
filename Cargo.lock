@@ -133,6 +133,7 @@ dependencies = [
  "db",
  "flate2",
  "hmac",
+ "image",
  "infer",
  "libc",
  "media",

@@ -5,7 +5,9 @@ pub mod algorithm_instance;
 pub mod camera;
 pub mod capture;
 pub mod gallery;
+pub mod gallery_face;
 pub mod oplog;
+pub mod personnel;
 pub mod recognition;
 pub mod system_config;
 pub mod task;
@@ -17,7 +19,9 @@ pub use algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, Update
 pub use camera::CameraRepo;
 pub use capture::CaptureRepo;
 pub use gallery::GalleryRepo;
+pub use gallery_face::GalleryFaceRepo;
 pub use oplog::OplogRepo;
+pub use personnel::PersonnelRepo;
 pub use recognition::RecognitionRepo;
 pub use system_config::SystemConfigRepo;
 pub use task::{

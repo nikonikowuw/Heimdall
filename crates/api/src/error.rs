@@ -52,6 +52,12 @@ pub enum ApiError {
     #[error("内部服务器错误: {0}")]
     Internal(String),
 
+    #[error("人脸识别算法包未就绪: {0}")]
+    FaceAlgorithmNotLoaded(String),
+
+    #[error("人脸质量不达标: {0}")]
+    FaceQualityRejected(String),
+
     // ─── 系统设置 51xxx ───
     #[error("网卡不存在: {0}")]
     NetworkInterfaceNotFound(String),
@@ -136,6 +142,8 @@ impl IntoResponse for ApiError {
             ),
             Self::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, 50001, e.to_string()),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, 50000, m.clone()),
+            Self::FaceAlgorithmNotLoaded(m) => (StatusCode::SERVICE_UNAVAILABLE, 50301, m.clone()),
+            Self::FaceQualityRejected(m) => (StatusCode::BAD_REQUEST, 40002, m.clone()),
             Self::NetworkInterfaceNotFound(m) => (StatusCode::NOT_FOUND, 51007, m.clone()),
             Self::NetworkInterfaceReadOnly(m) => (StatusCode::BAD_REQUEST, 51005, m.clone()),
             Self::NetworkPendingOperation => (StatusCode::CONFLICT, 51006, self.to_string()),
@@ -166,6 +174,12 @@ impl IntoResponse for ApiError {
         }));
 
         (status, body).into_response()
+    }
+}
+
+impl From<sea_orm::DbErr> for ApiError {
+    fn from(e: sea_orm::DbErr) -> Self {
+        ApiError::Db(db::DbError::from(e))
     }
 }
 

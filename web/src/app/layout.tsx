@@ -9,6 +9,7 @@ import {
   Settings,
   Sliders,
   Sun,
+  Users,
   Video,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -20,19 +21,22 @@ import { LoginPage } from '../features/auth'
 import { CamerasPage } from '../features/cameras'
 import { LivePage } from '../features/live/LivePage'
 import { OplogPage } from '../features/oplog/OplogPage'
+import { PersonnelPage } from '../features/personnel'
 import { SettingsPage } from '../features/system'
 import { TasksPage } from '../features/tasks/TasksPage'
 import { useTheme } from '../hooks/use-theme'
 import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
-export type NavTab = 'live' | 'cameras' | 'tasks' | 'algorithms' | 'alarms' | 'oplog' | 'system'
+export type NavTab =
+  'live' | 'cameras' | 'tasks' | 'algorithms' | 'personnel' | 'alarms' | 'oplog' | 'system'
 
 const NAV_ITEMS: { tab: NavTab; icon: typeof Monitor; labelKey: string }[] = [
   { tab: 'live', icon: Monitor, labelKey: 'nav.live' },
   { tab: 'cameras', icon: Video, labelKey: 'nav.cameras' },
   { tab: 'tasks', icon: Sliders, labelKey: 'nav.tasks' },
   { tab: 'algorithms', icon: Cpu, labelKey: 'nav.algorithms' },
+  { tab: 'personnel', icon: Users, labelKey: 'nav.personnel' },
   { tab: 'alarms', icon: AlertCircle, labelKey: 'nav.alarms' },
   { tab: 'oplog', icon: FileText, labelKey: 'nav.oplog' },
 ]
@@ -145,6 +149,7 @@ export function Layout() {
           />
         )}
         {currentTab === 'algorithms' && <AlgorithmsPage />}
+        {currentTab === 'personnel' && <PersonnelPage />}
         {currentTab === 'alarms' && <AlarmsPage />}
         {currentTab === 'oplog' && <OplogPage />}
         {currentTab === 'system' && (
