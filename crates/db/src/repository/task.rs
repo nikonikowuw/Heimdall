@@ -514,17 +514,31 @@ impl TaskRepo {
                 if let Some(pj) = params.params_json {
                     active.params_json = Set(pj);
                 }
-                if let Some(rj) = params.rules_json {
-                    active.rules_json = Set(rj);
+                if let Some(rj) = params.rules_json.as_ref() {
+                    active.rules_json = Set(rj.clone());
                 }
-                if let Some(mg) = params.motion_gate_json {
-                    active.motion_gate_json = Set(mg);
+                if let Some(mg) = params.motion_gate_json.as_ref() {
+                    active.motion_gate_json = Set(mg.clone());
                 }
                 if let Some(en) = params.enabled {
                     active.enabled = Set(en);
                 }
                 active.updated_at = Set(chrono::Utc::now());
                 let updated = active.update(txn).await?;
+
+                if params.rules_json.is_some() || params.motion_gate_json.is_some() {
+                    if let Some(task_model) = Entity::find_by_id(task_id).one(txn).await? {
+                        let mut task_active: ActiveModel = task_model.into();
+                        if let Some(rj) = params.rules_json {
+                            task_active.rules_json = Set(rj);
+                        }
+                        if let Some(mg) = params.motion_gate_json {
+                            task_active.motion_gate_json = Set(mg);
+                        }
+                        task_active.updated_at = Set(chrono::Utc::now());
+                        task_active.update(txn).await?;
+                    }
+                }
 
                 Self::sync_task_actual_status_txn(txn, task_id).await?;
 

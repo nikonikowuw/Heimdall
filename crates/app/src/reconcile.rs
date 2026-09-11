@@ -285,6 +285,20 @@ pub async fn recover_enabled_tasks(
 
         match runtime.start_camera_pipeline(params).await {
             Ok(generation) => {
+                // 冷启动自愈：成功拉起分析管线后，恢复并下发任务持久化的空间几何布防规则
+                let rules = match types::DetectionRule::parse_rules_json(&task.rules_json) {
+                    Ok(r) => r,
+                    Err(err) => {
+                        tracing::warn!(
+                            camera_id = %task.camera_id,
+                            error = %err,
+                            "冷启动任务布防规则解析失败，回退为空规则"
+                        );
+                        Vec::new()
+                    }
+                };
+                runtime.set_camera_rules(&task.camera_id, rules).await;
+
                 update_recovery_status(
                     db,
                     &task.camera_id,
@@ -366,6 +380,7 @@ mod tests {
         start_count: AtomicUsize,
         should_fail_start: AtomicBool,
         last_params: Mutex<Option<StartCameraPipelineParams>>,
+        recovered_rules: Mutex<HashMap<String, Vec<types::DetectionRule>>>,
     }
 
     #[async_trait::async_trait]
@@ -404,6 +419,13 @@ mod tests {
 
         async fn has_active_runtime(&self, _camera_id: &str) -> bool {
             false
+        }
+
+        async fn set_camera_rules(&self, camera_id: &str, rules: Vec<types::DetectionRule>) {
+            self.recovered_rules
+                .lock()
+                .unwrap()
+                .insert(camera_id.to_string(), rules);
         }
     }
 
@@ -459,13 +481,23 @@ mod tests {
         seed_test_camera(&db, "CAM_HEALTHY", "healthy").await;
         seed_test_algorithm(&db, "general_det").await;
 
+        let test_rules = vec![types::DetectionRule {
+            role: types::DetectionRuleRole::Line,
+            line_direction: types::DetectionLineDirection::AToB,
+            points: vec![
+                types::DetectionPoint::new(0.0, 0.5),
+                types::DetectionPoint::new(1.0, 0.5),
+            ],
+        }];
+        let test_rules_json = serde_json::to_string(&test_rules).unwrap();
+
         let _task = TaskRepo::save_task_with_instances(
             &db,
             SaveTaskWithInstancesParams {
                 camera_id: "CAM_HEALTHY".to_string(),
                 name: "健康任务".to_string(),
                 desired_enabled: true,
-                rules_json: "[]".to_string(),
+                rules_json: test_rules_json,
                 motion_gate_json: r#"{"enabled":true}"#.to_string(),
                 status_message: None,
                 instances: Some(vec![db::SaveTaskAlgorithmInstanceParams {
@@ -491,6 +523,13 @@ mod tests {
         );
         assert_eq!(runtime.start_count.load(Ordering::Relaxed), 1);
 
+        {
+            let recovered_rules = runtime.recovered_rules.lock().unwrap();
+            let cam_rules = recovered_rules.get("CAM_HEALTHY").expect("rules recovered");
+            assert_eq!(cam_rules.len(), 1, "冷启动必须恢复并下发空间几何布防规则");
+            assert_eq!(cam_rules[0].role, types::DetectionRuleRole::Line);
+        }
+
         let latest = TaskRepo::find_by_camera_id(&db, "CAM_HEALTHY")
             .await
             .unwrap()
@@ -498,6 +537,58 @@ mod tests {
         assert_eq!(latest.actual_status, TaskStatus::Running.as_i32());
         assert!(latest.desired_enabled);
         assert!(latest.status_message.contains("冷启动恢复成功"));
+    }
+
+    #[tokio::test]
+    async fn test_recover_enabled_tasks_falls_back_on_corrupted_rules() {
+        let db = init_test_db().await.expect("init db");
+        let runtime = MockTaskRuntime::default();
+
+        seed_test_camera(&db, "CAM_CORRUPT_RULES", "healthy").await;
+        seed_test_algorithm(&db, "general_det").await;
+
+        let _task = TaskRepo::save_task_with_instances(
+            &db,
+            SaveTaskWithInstancesParams {
+                camera_id: "CAM_CORRUPT_RULES".to_string(),
+                name: "异常规则任务".to_string(),
+                desired_enabled: true,
+                rules_json: "invalid-json-data".to_string(),
+                motion_gate_json: r#"{"enabled":true}"#.to_string(),
+                status_message: None,
+                instances: Some(vec![db::SaveTaskAlgorithmInstanceParams {
+                    algorithm_id: "general_det".to_string(),
+                    analysis_fps: 10,
+                    params_json: "{}".to_string(),
+                    enabled: Some(true),
+                }]),
+            },
+        )
+        .await
+        .unwrap();
+
+        let summary = recover_enabled_tasks(&db, &runtime).await.unwrap();
+        assert_eq!(
+            summary,
+            TaskRecoverySummary {
+                attempted: 1,
+                recovered: 1,
+                deferred: 0,
+                failed: 0,
+            }
+        );
+        assert_eq!(runtime.start_count.load(Ordering::Relaxed), 1);
+
+        {
+            let recovered_rules = runtime.recovered_rules.lock().unwrap();
+            let cam_rules = recovered_rules
+                .get("CAM_CORRUPT_RULES")
+                .expect("rules recorded");
+            assert!(
+                cam_rules.is_empty(),
+                "损坏规则必须安全降级为空规则下发，避免冷启动崩溃"
+            );
+        }
     }
 
     #[tokio::test]

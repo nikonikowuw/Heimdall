@@ -244,7 +244,7 @@ fn build_task_config_dto(
     task: &db::entity::task::Model,
     instances: &[db::entity::algorithm_instance::Model],
 ) -> TaskConfigDto {
-    let rules: Vec<DetectionRule> = serde_json::from_str(&task.rules_json).unwrap_or_default();
+    let rules = DetectionRule::parse_rules_json(&task.rules_json).unwrap_or_default();
     let motion_gate: Option<MotionGateConfig> = serde_json::from_str(&task.motion_gate_json).ok();
     let (algorithm_id, analysis_fps, algo_params) = extract_primary_instance_props(instances);
 
@@ -296,7 +296,7 @@ async fn list_tasks(
             .get(&task.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let rules: Vec<DetectionRule> = serde_json::from_str(&task.rules_json).unwrap_or_default();
+        let rules = DetectionRule::parse_rules_json(&task.rules_json).unwrap_or_default();
         let motion_gate: Option<MotionGateConfig> =
             serde_json::from_str(&task.motion_gate_json).ok();
         let motion_gate_enabled = motion_gate.as_ref().map(|mg| mg.enabled).unwrap_or(false);
@@ -413,9 +413,9 @@ async fn update_task(
 
     let saved_instances = AlgorithmInstanceRepo::list_by_camera_id(&state.db, &camera_id).await?;
 
-    // 2. 同步更新 PipelineManager 的空间几何规则
+    // 2. 经由 Coordinator 同步更新空间几何规则
     state
-        .pipeline
+        .task_coordinator
         .set_camera_rules(&camera_id, dto.rules.clone())
         .await;
 
@@ -773,7 +773,7 @@ async fn delete_task(
         }
     }
     state
-        .pipeline
+        .task_coordinator
         .set_camera_rules(&camera_id, Vec::new())
         .await;
     state.pipeline.set_ai_active(&camera_id, false).await;
@@ -913,19 +913,27 @@ async fn update_instance(
         other => ApiError::Internal(other.to_string()),
     })?;
 
+    let camera_id = updated.camera_id.clone();
+    sync_pipeline_for_camera(&state, &camera_id).await?;
+
     Ok(ApiResponse::success(AlgorithmInstanceDto::from(updated)))
 }
 
 async fn sync_pipeline_for_camera(state: &AppState, camera_id: &str) -> Result<(), ApiError> {
-    if !state.task_coordinator.has_active_runtime(camera_id).await {
-        return Ok(());
-    }
-
     let Some(task) = TaskRepo::find_by_camera_id(&state.db, camera_id).await? else {
         let _ = state.task_coordinator.stop_camera_pipeline(camera_id).await;
         state.pipeline.set_ai_active(camera_id, false).await;
+        state
+            .task_coordinator
+            .set_camera_rules(camera_id, Vec::new())
+            .await;
         return Ok(());
     };
+
+    let has_runtime = state.task_coordinator.has_active_runtime(camera_id).await;
+    if !task.desired_enabled && !has_runtime {
+        return Ok(());
+    }
 
     let Some(camera) = db::CameraRepo::find_by_camera_id(&state.db, camera_id)
         .await
@@ -933,6 +941,10 @@ async fn sync_pipeline_for_camera(state: &AppState, camera_id: &str) -> Result<(
     else {
         let _ = state.task_coordinator.stop_camera_pipeline(camera_id).await;
         state.pipeline.set_ai_active(camera_id, false).await;
+        state
+            .task_coordinator
+            .set_camera_rules(camera_id, Vec::new())
+            .await;
         return Ok(());
     };
 
@@ -957,6 +969,10 @@ async fn sync_pipeline_for_camera(state: &AppState, camera_id: &str) -> Result<(
     if !task.desired_enabled || launch_instances.is_empty() {
         let _ = state.task_coordinator.stop_camera_pipeline(camera_id).await;
         state.pipeline.set_ai_active(camera_id, false).await;
+        state
+            .task_coordinator
+            .set_camera_rules(camera_id, Vec::new())
+            .await;
         let msg = if !task.desired_enabled {
             ""
         } else {
@@ -982,6 +998,22 @@ async fn sync_pipeline_for_camera(state: &AppState, camera_id: &str) -> Result<(
             .await
             .map_err(ApiError::Coordinator)?;
         state.pipeline.set_ai_active(camera_id, true).await;
+
+        let rules = match DetectionRule::parse_rules_json(&task.rules_json) {
+            Ok(r) => r,
+            Err(err) => {
+                tracing::warn!(
+                    camera_id = %camera_id,
+                    error = %err,
+                    "任务空间布防规则解析失败，回退为空规则"
+                );
+                Vec::new()
+            }
+        };
+        state
+            .task_coordinator
+            .set_camera_rules(camera_id, rules)
+            .await;
     }
     Ok(())
 }
@@ -1058,6 +1090,7 @@ mod tests {
         active_cameras: Mutex<HashSet<String>>,
         started: Mutex<Vec<pipeline::StartCameraPipelineParams>>,
         stopped: Mutex<Vec<String>>,
+        camera_rules: Mutex<HashMap<String, Vec<types::DetectionRule>>>,
         should_fail: Mutex<Option<String>>,
         stop_should_fail: Mutex<Option<String>>,
     }
@@ -1085,6 +1118,10 @@ mod tests {
 
         fn stopped_cameras(&self) -> Vec<String> {
             self.stopped.lock().unwrap().clone()
+        }
+
+        fn camera_rules(&self, camera_id: &str) -> Option<Vec<types::DetectionRule>> {
+            self.camera_rules.lock().unwrap().get(camera_id).cloned()
         }
     }
 
@@ -1134,6 +1171,7 @@ mod tests {
                 .remove(camera_id)
                 .is_some();
             self.active_cameras.lock().unwrap().remove(camera_id);
+            self.camera_rules.lock().unwrap().remove(camera_id);
             self.stopped.lock().unwrap().push(camera_id.to_string());
             Ok(had_runtime)
         }
@@ -1141,6 +1179,7 @@ mod tests {
         async fn stop_all(&self) {
             self.active_params.lock().unwrap().clear();
             self.active_cameras.lock().unwrap().clear();
+            self.camera_rules.lock().unwrap().clear();
         }
 
         async fn get_runtime_info(
@@ -1194,6 +1233,13 @@ mod tests {
 
         async fn has_active_runtime(&self, camera_id: &str) -> bool {
             self.active_cameras.lock().unwrap().contains(camera_id)
+        }
+
+        async fn set_camera_rules(&self, camera_id: &str, rules: Vec<types::DetectionRule>) {
+            self.camera_rules
+                .lock()
+                .unwrap()
+                .insert(camera_id.to_string(), rules);
         }
     }
 
@@ -2367,5 +2413,170 @@ mod tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_task_instance_enable_and_rules_sync_pipeline_lifecycle() {
+        let (app, state, token, mock_coord) = setup_test_app().await;
+
+        let now = chrono::Utc::now();
+        let camera_model = db::entity::camera::ActiveModel {
+            id: sea_orm::ActiveValue::NotSet,
+            camera_id: Set("CAM-SYNC-01".to_string()),
+            name: Set("同步测试摄像头".to_string()),
+            protocol: Set("rtsp".to_string()),
+            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
+            sub_rtsp_url: Set("".to_string()),
+            remark: Set("".to_string()),
+            last_probe_status: Set("healthy".to_string()),
+            last_probe_at: Set(None),
+            last_probe_error_code: Set("".to_string()),
+            last_success_at: Set(None),
+            last_codec: Set("h264".to_string()),
+            last_width: Set(1920),
+            last_height: Set(1080),
+            last_fps: Set(25.0),
+            gb28181_device_id: Set(None),
+            gb28181_channel_id: Set(None),
+            created_at: Set(now),
+            updated_at: Set(now),
+        };
+        db::CameraRepo::insert(&state.db, camera_model)
+            .await
+            .unwrap();
+
+        db::AlgorithmRepo::upsert_algorithm(
+            &state.db,
+            db::UpsertAlgorithmParams {
+                algorithm_id: "general_detection".into(),
+                name: "通用检测".into(),
+                algorithm_type: "detection".into(),
+                alarm_type_id: "intrusion".into(),
+                active_version: "1.0.0".into(),
+                description: "test".into(),
+                is_builtin: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        // 1. 创建任务并配置 1 条绊线规则与 1 个启用实例
+        let initial_rule = serde_json::json!({
+            "role": "line",
+            "lineDirection": "a_to_b",
+            "points": [{"x": 0.0, "y": 0.5}, {"x": 1.0, "y": 0.5}]
+        });
+        let put_task_body = serde_json::json!({
+            "cameraId": "CAM-SYNC-01",
+            "name": "布防同步任务",
+            "desiredEnabled": true,
+            "rules": [initial_rule],
+            "algorithmInstances": [
+                {
+                    "algorithmId": "general_detection",
+                    "analysisFps": 15,
+                    "algoParams": { "confidence": 0.5 }
+                }
+            ]
+        });
+        let req = Request::builder()
+            .uri("/api/v1/tasks/CAM-SYNC-01")
+            .method("PUT")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&put_task_body).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 验证管线已启动，且规则已同步至 TaskRuntimeService
+        assert!(mock_coord.has_active_runtime("CAM-SYNC-01").await);
+        let rules = mock_coord
+            .camera_rules("CAM-SYNC-01")
+            .expect("rules present");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].role, types::DetectionRuleRole::Line);
+
+        let instances = db::AlgorithmInstanceRepo::list_by_camera_id(&state.db, "CAM-SYNC-01")
+            .await
+            .unwrap();
+        assert_eq!(instances.len(), 1);
+        let instance_id = &instances[0].instance_id;
+
+        // 2. 禁用实例 -> 管线由于无启用实例而停机，规则被清理
+        let req = Request::builder()
+            .uri(format!("/api/v1/tasks/instances/{instance_id}/enabled"))
+            .method("PUT")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({"enabled": false})).unwrap(),
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert!(!mock_coord.has_active_runtime("CAM-SYNC-01").await);
+        let rules_after_disable = mock_coord.camera_rules("CAM-SYNC-01").unwrap_or_default();
+        assert!(rules_after_disable.is_empty());
+
+        // 3. 停机状态下通过 update_instance 重新启用实例 -> 必须自愈唤醒拉起管线并恢复布防规则
+        let update_instance_body = serde_json::json!({
+            "analysisFps": 20,
+            "params": {"confidence": 0.8},
+            "enabled": true
+        });
+        let req = Request::builder()
+            .uri(format!("/api/v1/tasks/instances/{instance_id}"))
+            .method("PUT")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&update_instance_body).unwrap(),
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert!(
+            mock_coord.has_active_runtime("CAM-SYNC-01").await,
+            "启用实例后停机的任务必须被自愈拉起"
+        );
+        let rules_recovered = mock_coord
+            .camera_rules("CAM-SYNC-01")
+            .expect("rules recovered");
+        assert_eq!(rules_recovered.len(), 1);
+        assert_eq!(rules_recovered[0].role, types::DetectionRuleRole::Line);
+
+        // 4. 更新实例级规则 -> 原子同步到任务并热更新到管线
+        let new_polygon_rule = serde_json::json!({
+            "role": "roi",
+            "points": [
+                {"x": 0.1, "y": 0.1},
+                {"x": 0.9, "y": 0.1},
+                {"x": 0.9, "y": 0.9},
+                {"x": 0.1, "y": 0.9}
+            ]
+        });
+        let update_rules_body = serde_json::json!({
+            "rules": [new_polygon_rule],
+            "enabled": true
+        });
+        let req = Request::builder()
+            .uri(format!("/api/v1/tasks/instances/{instance_id}"))
+            .method("PUT")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(&update_rules_body).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let rules_updated = mock_coord
+            .camera_rules("CAM-SYNC-01")
+            .expect("rules updated");
+        assert_eq!(rules_updated.len(), 1);
+        assert_eq!(rules_updated[0].role, types::DetectionRuleRole::Roi);
+        assert_eq!(rules_updated[0].points.len(), 4);
     }
 }

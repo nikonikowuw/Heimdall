@@ -210,7 +210,7 @@ async fn delete_camera(
         }
     }
     state
-        .pipeline
+        .task_coordinator
         .set_camera_rules(&camera_id, Vec::new())
         .await;
     state.pipeline.set_ai_active(&camera_id, false).await;

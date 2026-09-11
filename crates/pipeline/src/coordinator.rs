@@ -374,6 +374,9 @@ pub trait TaskRuntimeService: Send + Sync + std::fmt::Debug {
 
     /// 检查指定摄像机是否有活跃运行时
     async fn has_active_runtime(&self, camera_id: &str) -> bool;
+
+    /// 为指定摄像机配置空间几何布防规则 (ROI 区域入侵、越界绊线、Mask 遮罩)
+    async fn set_camera_rules(&self, camera_id: &str, rules: Vec<types::DetectionRule>);
 }
 
 #[async_trait::async_trait]
@@ -403,6 +406,10 @@ impl TaskRuntimeService for TaskRuntimeCoordinator {
 
     async fn has_active_runtime(&self, camera_id: &str) -> bool {
         self.is_pipeline_running(camera_id).await
+    }
+
+    async fn set_camera_rules(&self, camera_id: &str, rules: Vec<types::DetectionRule>) {
+        self.pipeline_mgr.set_camera_rules(camera_id, rules).await;
     }
 }
 

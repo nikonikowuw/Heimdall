@@ -511,3 +511,64 @@ async fn test_update_task_runtime_state_granular() {
     );
     assert_eq!(instances_after[1].status_message, "模型加载失败");
 }
+
+#[tokio::test]
+async fn test_update_instance_and_sync_task_propagates_rules_and_motion_gate() {
+    let db = init_test_db().await.expect("init db");
+    setup_test_camera_and_algo(&db).await;
+
+    let saved = TaskRepo::save_task_with_instances(
+        &db,
+        SaveTaskWithInstancesParams {
+            camera_id: "CAM-001".to_string(),
+            name: "初始任务".to_string(),
+            desired_enabled: true,
+            rules_json: "[]".to_string(),
+            motion_gate_json: r#"{"enabled":false}"#.to_string(),
+            status_message: None,
+            instances: Some(vec![SaveTaskAlgorithmInstanceParams {
+                algorithm_id: "general_detection".to_string(),
+                analysis_fps: 10,
+                params_json: "{}".to_string(),
+                enabled: Some(true),
+            }]),
+        },
+    )
+    .await
+    .expect("save task");
+
+    let instances = TaskRepo::list_instances_by_task_id(&db, saved.id)
+        .await
+        .expect("list instances");
+    assert_eq!(instances.len(), 1);
+    let instance_id = &instances[0].instance_id;
+
+    // 更新实例时同步更新 rules_json 与 motion_gate_json
+    let updated_rules = r#"[{"role":"line","points":[{"x":0.0,"y":0.5},{"x":1.0,"y":0.5}]}]"#;
+    let updated_motion = r#"{"enabled":true,"threshold":30}"#;
+    let updated_instance = TaskRepo::update_instance_and_sync_task(
+        &db,
+        instance_id,
+        db::UpdateTaskInstanceParams {
+            analysis_fps: Some(20),
+            params_json: Some(r#"{"confidence":0.7}"#.to_string()),
+            rules_json: Some(updated_rules.to_string()),
+            motion_gate_json: Some(updated_motion.to_string()),
+            enabled: Some(true),
+        },
+    )
+    .await
+    .expect("update instance and sync task");
+
+    assert_eq!(updated_instance.analysis_fps, 20);
+    assert_eq!(updated_instance.rules_json, updated_rules);
+    assert_eq!(updated_instance.motion_gate_json, updated_motion);
+
+    // 验证父任务的 rules_json 与 motion_gate_json 也已原子同步
+    let parent_task = TaskRepo::find_by_camera_id(&db, "CAM-001")
+        .await
+        .expect("query task")
+        .expect("task exists");
+    assert_eq!(parent_task.rules_json, updated_rules);
+    assert_eq!(parent_task.motion_gate_json, updated_motion);
+}

@@ -19,7 +19,9 @@ pub enum DetectionRuleRole {
 pub enum DetectionLineDirection {
     #[default]
     Both,
+    #[serde(alias = "aToB")]
     AToB,
+    #[serde(alias = "bToA")]
     BToA,
 }
 
@@ -44,6 +46,18 @@ pub struct DetectionRule {
     #[serde(default, alias = "line_direction")]
     pub line_direction: DetectionLineDirection,
     pub points: Vec<DetectionPoint>,
+}
+
+impl DetectionRule {
+    /// 安全解析规则 JSON 字符串为 DetectionRule 列表。
+    /// 空字符串或 "[]" 返回空列表；反序列化失败返回 Err。
+    pub fn parse_rules_json(json_str: &str) -> Result<Vec<Self>, serde_json::Error> {
+        let trimmed = json_str.trim();
+        if trimmed.is_empty() || trimmed == "[]" {
+            return Ok(Vec::new());
+        }
+        serde_json::from_str(trimmed)
+    }
 }
 
 /// 运动门控配置参数
@@ -340,6 +354,34 @@ mod tests {
 
         let deserialized: TaskStatus = serde_json::from_str("\"running\"").expect("deserialize");
         assert_eq!(deserialized, TaskStatus::Running);
+    }
+
+    #[test]
+    fn test_detection_rule_parse_rules_json() {
+        // 空字符串或空数组返回空 Vec
+        assert!(DetectionRule::parse_rules_json("")
+            .expect("parse empty")
+            .is_empty());
+        assert!(DetectionRule::parse_rules_json("   ")
+            .expect("parse whitespace")
+            .is_empty());
+        assert!(DetectionRule::parse_rules_json("[]")
+            .expect("parse empty array")
+            .is_empty());
+        assert!(DetectionRule::parse_rules_json("  []  ")
+            .expect("parse whitespace array")
+            .is_empty());
+
+        // 正常解析
+        let valid_json = r#"[{"role":"line","lineDirection":"aToB","points":[{"x":0.1,"y":0.2},{"x":0.8,"y":0.9}]}]"#;
+        let rules = DetectionRule::parse_rules_json(valid_json).expect("parse valid");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].role, DetectionRuleRole::Line);
+        assert_eq!(rules[0].points.len(), 2);
+
+        // 损坏 JSON 返回 Err
+        assert!(DetectionRule::parse_rules_json("invalid json").is_err());
+        assert!(DetectionRule::parse_rules_json(r#"[{"role":"unknown"}]"#).is_err());
     }
 
     #[test]
