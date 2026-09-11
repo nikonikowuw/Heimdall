@@ -19,6 +19,29 @@ const DEFAULT_IPV4_DRAFT: IpConfig = {
   metric: null,
 }
 
+function isVirtualInterface(iface: NetworkInterface): boolean {
+  if (iface.type === 'virtual' || iface.type === 'loopback') {
+    return true
+  }
+  const lower = iface.name.toLowerCase()
+  return (
+    lower === 'lo' ||
+    lower === 'lo0' ||
+    lower.startsWith('docker') ||
+    lower.startsWith('br-') ||
+    lower.startsWith('veth') ||
+    lower.startsWith('virbr') ||
+    lower.startsWith('vmnet') ||
+    lower.startsWith('tun') ||
+    lower.startsWith('tap') ||
+    lower.startsWith('wg') ||
+    lower.startsWith('tailscale') ||
+    lower.startsWith('zt') ||
+    lower.startsWith('dummy') ||
+    lower.startsWith('p2p-dev-')
+  )
+}
+
 export function NetworkSettings(): React.ReactElement {
   const { t } = useTranslation('system')
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
@@ -45,7 +68,8 @@ export function NetworkSettings(): React.ReactElement {
       setLoading(true)
       setError(null)
       const result = await systemApi.getNetworkInterfaces()
-      setInterfaces(result.interfaces)
+      const physicalOnly = result.interfaces.filter((i) => !isVirtualInterface(i))
+      setInterfaces(physicalOnly)
       syncPendingOp(result.pendingOperation)
     } catch (err) {
       setError(
@@ -145,6 +169,10 @@ export function NetworkSettings(): React.ReactElement {
       <SettingsSection title={t('network.interfaces', { defaultValue: '网卡列表' })}>
         {loading && interfaces.length === 0 ? (
           <LoadingSkeleton rows={3} />
+        ) : interfaces.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-[var(--border)] py-8 text-center text-sm text-[var(--text-muted)]">
+            {t('network.noInterfaces', { defaultValue: '未检测到物理以太网卡' })}
+          </div>
         ) : (
           <div className="space-y-3">
             {interfaces.map((iface) => (
@@ -340,6 +368,15 @@ function NetworkCard({
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Unconfigured / Offline interface hint */}
+      {!iface.ipv4 && !isEditing && (
+        <div className="border-t border-[var(--border)]/50 px-5 py-3 text-[13px] text-[var(--text-muted)]">
+          {t('network.unconfigured', {
+            defaultValue: '未配置 IP（可点击右上角“编辑”预设静态 IP）',
+          })}
         </div>
       )}
 

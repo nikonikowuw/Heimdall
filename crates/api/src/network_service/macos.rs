@@ -5,7 +5,7 @@ use std::collections::HashMap;
 #[cfg(target_os = "macos")]
 use std::net::Ipv4Addr;
 
-use super::detector::run_command_with_c_locale;
+use super::detector::{is_virtual_interface, run_command_with_c_locale};
 use crate::error::ApiError;
 use types::system::{
     InterfaceCapabilities, IpConfig, IpMethod, NetworkInterface, NetworkInterfaceState,
@@ -32,6 +32,15 @@ pub async fn list_interfaces_macos() -> Result<Vec<NetworkInterface>, ApiError> 
             &record.name,
             hardware_by_device.get(&record.name).map(String::as_str),
         );
+
+        // 过滤本地回环及虚拟网卡
+        if interface_type == NetworkInterfaceType::Loopback
+            || interface_type == NetworkInterfaceType::Virtual
+            || is_virtual_interface(&record.name)
+        {
+            continue;
+        }
+
         let ipv4 = match (&record.ipv4, service_by_device.get(&record.name)) {
             (Some(observed), Some(service_name)) => {
                 Some(get_macos_ipv4_config(service_name, observed).await)
@@ -378,6 +387,10 @@ en1: flags=8963<UP,BROADCAST,SMART,PROMISC,SIMPLEX,MULTICAST> mtu 1500
         let interfaces = list_interfaces_macos()
             .await
             .expect("macOS ifconfig 网卡枚举失败");
-        assert!(interfaces.iter().any(|interface| interface.name == "lo0"));
+        assert!(interfaces.iter().all(|interface| interface.name != "lo0"));
+        assert!(interfaces.iter().all(|interface| {
+            interface.interface_type != NetworkInterfaceType::Loopback
+                && interface.interface_type != NetworkInterfaceType::Virtual
+        }));
     }
 }

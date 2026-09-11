@@ -23,7 +23,8 @@ impl NetworkCollector {
         if let Ok(mut entries) = tokio::fs::read_dir("/sys/class/net").await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name == "lo" {
+                // 仅统计物理网卡流量，排除虚拟与回环设备
+                if crate::network_service::detector::is_virtual_interface(&name) {
                     continue;
                 }
                 if let Some(m) = Self::collect_interface_linux(&name).await {

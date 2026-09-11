@@ -56,7 +56,9 @@
     "confirmMessage": "修改管理網路卡 IP 將導致當前連線立即中斷。請確認新 IP 在本地子網中可達，修改生效後請使用新 IP 重新登入 Web 控制台。",
     "confirmApply": "確認並套用",
     "ipAddress": "IP 位址",
-    "prefix": "前綴"
+    "prefix": "前綴",
+    "unconfigured": "未配置 IP（可點擊右上角「編輯」預設靜態 IP）",
+    "noInterfaces": "未檢測到物理乙太網路卡"
   },
   "storage": {
     "title": "儲存與保留策略",

@@ -142,7 +142,9 @@
     "confirmMessage": "Changing the management NIC IP will immediately disconnect the current connection. Please verify that the new IP is reachable on the local subnet, and log in to the Web Console using the new IP after applying.",
     "confirmApply": "Confirm & Apply",
     "ipAddress": "IP Address",
-    "prefix": "Prefix"
+    "prefix": "Prefix",
+    "unconfigured": "No IP configured (click Edit in the top right to configure static IP)",
+    "noInterfaces": "No physical network interfaces detected"
   },
   "storage": {
     "title": "Storage & Retention",

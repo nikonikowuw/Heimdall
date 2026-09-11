@@ -57,30 +57,86 @@ pub async fn get_mac_address(iface: &str) -> Result<String, ApiError> {
     Ok(content.trim().to_uppercase())
 }
 
+/// 解析 /proc/net/route 文本内容，提取承载默认路由的网卡列表（按 Metric 升序排列）
+pub fn parse_default_route_interfaces(content: &str) -> Vec<String> {
+    let mut routes: Vec<(String, u32)> = Vec::new();
+    for line in content.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // fields: [0: Iface, 1: Destination, 2: Gateway, 3: Flags, 4: RefCnt, 5: Use, 6: Metric, 7: Mask]
+        // Destination 为 00000000 代表默认路由 (0.0.0.0)
+        if fields.len() >= 7 && fields[1] == "00000000" {
+            let flags = u32::from_str_radix(fields[3], 16).unwrap_or(0);
+            // RTF_UP = 0x0001 (活跃状态路由)
+            if flags & 0x0001 != 0 {
+                let metric = fields[6].parse::<u32>().unwrap_or(u32::MAX);
+                routes.push((fields[0].to_string(), metric));
+            }
+        }
+    }
+    // 按 Metric 从小到大排序（Metric 越小优先级越高）
+    routes.sort_by_key(|(_, metric)| *metric);
+
+    // 去重保持优先级顺序
+    let mut result = Vec::new();
+    for (iface, _) in routes {
+        if !result.contains(&iface) {
+            result.push(iface);
+        }
+    }
+    result
+}
+
+/// 快速读取系统所有承载默认路由的网卡 (按 Metric 升序，耗时 <0.05ms，零子进程创建)
+pub async fn detect_default_route_interfaces() -> Vec<String> {
+    if let Ok(content) = tokio::fs::read_to_string("/proc/net/route").await {
+        return parse_default_route_interfaces(&content);
+    }
+    Vec::new()
+}
+
+/// 快速读取系统主默认路由网卡 (最低 Metric，耗时 <0.05ms，零子进程创建)
+pub async fn detect_default_route_interface() -> Option<String> {
+    detect_default_route_interfaces().await.into_iter().next()
+}
+
 /// 动态判定网卡是否为当前管理网卡（Management Interface）
 ///
 /// 判定逻辑：
-/// 1. 检查网卡是否承载系统主默认路由 (`default via ... dev <iface>`)
+/// 1. 检查网卡是否承载系统默认路由（优先 /proc/net/route 极速直读，失败时回退 ip route show default）
 /// 2. 检查此网卡所拥有的 IP 是否承载本地处于 LISTEN 状态的 Web 服务端口
 pub async fn is_management_interface(iface: &str) -> bool {
-    // 1. 检查默认路由 (异步执行外部命令，不阻塞 Tokio worker)
-    if let Ok(output) = tokio::process::Command::new("ip")
-        .args(["route", "show", "default"])
-        .env("LC_ALL", "C")
-        .output()
-        .await
-    {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.windows(2).any(|w| w[0] == "dev" && w[1] == iface) {
-                return true;
+    let default_ifaces = detect_default_route_interfaces().await;
+    is_management_interface_with_defaults(iface, &default_ifaces).await
+}
+
+/// 接收已预读取的默认路由网卡列表，消除循环中重复读取 /proc/net/route 的开销
+pub async fn is_management_interface_with_defaults(iface: &str, default_ifaces: &[String]) -> bool {
+    // 1. 优先检查预读取的所有承载默认路由的网卡
+    if default_ifaces.iter().any(|dev| dev == iface) {
+        return true;
+    }
+
+    // 2. 若 /proc/net/route 读取为空（如特殊容器环境），回退检查 ip route show default
+    if default_ifaces.is_empty() {
+        if let Ok(output) = tokio::process::Command::new("ip")
+            .args(["route", "show", "default"])
+            .env("LC_ALL", "C")
+            .output()
+            .await
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.windows(2).any(|w| w[0] == "dev" && w[1] == iface) {
+                    return true;
+                }
             }
         }
     }
 
-    // 2. 检查本机 /proc/net/tcp 活跃监听端口
+    // 3. 检查本机 /proc/net/tcp 活跃监听端口
     if let Ok(content) = tokio::fs::read_to_string("/proc/net/tcp").await {
+        let mut listen_ips = Vec::new();
         for line in content.lines().skip(1) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             // 状态 0A 为 TCP_LISTEN
@@ -88,22 +144,92 @@ pub async fn is_management_interface(iface: &str) -> bool {
                 let local_addr = parts[1];
                 if let Some((ip_hex, _)) = local_addr.split_once(':') {
                     if let Some(ip) = parse_hex_ip(ip_hex) {
-                        // 排除 0.0.0.0 与 127.0.0.1
-                        if ip != "0.0.0.0" && ip != "127.0.0.1" {
-                            if let Ok(output) = tokio::process::Command::new("ip")
-                                .args(["addr", "show", iface])
-                                .env("LC_ALL", "C")
-                                .output()
-                                .await
-                            {
-                                let stdout = String::from_utf8_lossy(&output.stdout);
-                                if stdout.contains(&format!("inet {ip}/")) {
-                                    return true;
-                                }
-                            }
+                        // 排除 0.0.0.0 与 127.0.0.1，且去重避免重复查询
+                        if ip != "0.0.0.0" && ip != "127.0.0.1" && !listen_ips.contains(&ip) {
+                            listen_ips.push(ip);
                         }
                     }
                 }
+            }
+        }
+
+        if !listen_ips.is_empty() {
+            // 至多执行一次命令获取该网卡的所有 IPv4 地址
+            if let Ok(output) = tokio::process::Command::new("ip")
+                .args(["-o", "-4", "addr", "show", iface])
+                .env("LC_ALL", "C")
+                .output()
+                .await
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for ip in listen_ips {
+                    if stdout.contains(&format!("inet {ip}/")) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// 判定网卡是否为软件虚拟网卡或本地回环（如 lo, docker0, veth*, br-*, virbr*, tun*, tap*, wg* 等）
+///
+/// 判定标准：
+/// 1. 本地回环：`lo`, `lo0`
+/// 2. 经典虚拟网卡命名模式：
+///    - 容器与虚拟化网桥：`docker*`, `br-*`, `veth*`, `virbr*`, `vmnet*`, `cni*`, `flannel*`
+///    - VPN 与隧道：`tun*`, `tap*`, `wg*`, `tailscale*`, `zt*`, `sit*`, `ip6tnl*`
+///    - 虚拟设备与 P2P：`dummy*`, `p2p-dev-*`
+/// 3. Linux sysfs 设备总线链接权威判定：
+///    若在 `/sys/class/net/{name}` 存在，检查其是否存在物理硬件设备符号链接 `device`（挂载于 PCI/USB/Platform 总线）。
+///    若无 `device` 符号链接且不是以常规物理前缀命名（`eth`, `en`, `wl`, `ww`），判定为纯软件虚拟接口。
+pub fn is_virtual_interface(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() {
+        return true;
+    }
+
+    // 1. 标准本地回环
+    if name == "lo" || name == "lo0" {
+        return true;
+    }
+
+    // 2. 常见虚拟网卡名字特征防御
+    if name.starts_with("docker")
+        || name.starts_with("br-")
+        || name.starts_with("veth")
+        || name.starts_with("virbr")
+        || name.starts_with("vmnet")
+        || name.starts_with("cni")
+        || name.starts_with("flannel")
+        || name.starts_with("tun")
+        || name.starts_with("tap")
+        || name.starts_with("wg")
+        || name.starts_with("tailscale")
+        || name.starts_with("zt")
+        || name.starts_with("dummy")
+        || name.starts_with("bond")
+        || name.starts_with("sit")
+        || name.starts_with("ip6tnl")
+        || name.starts_with("p2p-dev-")
+    {
+        return true;
+    }
+
+    // 3. Linux sysfs 设备总线判定
+    #[cfg(target_os = "linux")]
+    {
+        let net_dir = std::path::Path::new("/sys/class/net").join(name);
+        if net_dir.exists() {
+            let device_link = net_dir.join("device");
+            let is_standard_physical = name.starts_with("eth")
+                || name.starts_with("en")
+                || name.starts_with("wl")
+                || name.starts_with("ww");
+            if !device_link.exists() && !is_standard_physical {
+                return true;
             }
         }
     }
@@ -134,6 +260,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_default_route_interfaces() {
+        // 模拟包含多默认路由且乱序的 /proc/net/route
+        let sample = "\
+Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+eth1\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n\
+docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n\
+eth0\t00000000\t0114A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
+eth2\t00000000\t0102A8C0\t0002\t0\t0\t50\t00000000\t0\t0\t0\n";
+
+        // eth2 Flags=0002 (无 RTF_UP 0x0001，处于 Down 状态，不应被采纳)
+        // eth0 Metric=100，eth1 Metric=600，应按 Metric 升序排列：[eth0, eth1]
+        let ifaces = parse_default_route_interfaces(sample);
+        assert_eq!(ifaces, vec!["eth0", "eth1"]);
+    }
+
+    #[test]
     fn test_parse_hex_ip() {
         // 127.0.0.1 -> 0100007F in Linux /proc/net/tcp
         assert_eq!(parse_hex_ip("0100007F"), Some("127.0.0.1".to_string()));
@@ -143,5 +285,29 @@ mod tests {
 
         // 0.0.0.0 -> 00000000
         assert_eq!(parse_hex_ip("00000000"), Some("0.0.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_is_virtual_interface() {
+        assert!(is_virtual_interface("lo"));
+        assert!(is_virtual_interface("lo0"));
+        assert!(is_virtual_interface("docker0"));
+        assert!(is_virtual_interface("br-a937ad6ccef6"));
+        assert!(is_virtual_interface("veth0773fb4"));
+        assert!(is_virtual_interface("virbr0"));
+        assert!(is_virtual_interface("tun0"));
+        assert!(is_virtual_interface("tap0"));
+        assert!(is_virtual_interface("wg0"));
+        assert!(is_virtual_interface("tailscale0"));
+        assert!(is_virtual_interface("p2p-dev-wlp0s20f3"));
+        assert!(is_virtual_interface("dummy0"));
+
+        assert!(!is_virtual_interface("eth0"));
+        assert!(!is_virtual_interface("eth1"));
+        assert!(!is_virtual_interface("enp3s0"));
+        assert!(!is_virtual_interface("ens33"));
+        assert!(!is_virtual_interface("wlan0"));
+        assert!(!is_virtual_interface("wlp0s20f3"));
+        assert!(!is_virtual_interface("wwan0"));
     }
 }

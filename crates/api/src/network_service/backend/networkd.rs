@@ -3,8 +3,8 @@
 use super::nm::verify_ip_applied;
 use crate::error::ApiError;
 use crate::network_service::detector::{
-    detect_carrier, detect_link_speed_and_duplex, get_mac_address, is_management_interface,
-    run_command_with_c_locale,
+    detect_carrier, detect_default_route_interfaces, detect_link_speed_and_duplex, get_mac_address,
+    is_management_interface_with_defaults, is_virtual_interface, run_command_with_c_locale,
 };
 use tokio::io::AsyncWriteExt;
 use types::system::{
@@ -15,6 +15,7 @@ use types::system::{
 /// 枚举由 systemd-networkd 管理的所有网卡
 pub async fn list_interfaces_networkd() -> Result<Vec<NetworkInterface>, ApiError> {
     let output = run_command_with_c_locale("networkctl", &["status", "--no-pager"]).await?;
+    let default_route_ifaces = detect_default_route_interfaces().await;
 
     let mut interfaces = Vec::new();
     for line in output.lines() {
@@ -23,6 +24,12 @@ pub async fn list_interfaces_networkd() -> Result<Vec<NetworkInterface>, ApiErro
             let parts: Vec<&str> = rest.split_whitespace().collect();
             if parts.len() >= 2 {
                 let name = parts[0].to_string();
+
+                // 过滤回环、网桥、虚拟接口及容器虚拟网卡
+                if is_virtual_interface(&name) {
+                    continue;
+                }
+
                 let state = if line.contains("routable") || line.contains("configured") {
                     NetworkInterfaceState::Up
                 } else {
@@ -31,7 +38,8 @@ pub async fn list_interfaces_networkd() -> Result<Vec<NetworkInterface>, ApiErro
 
                 let mac = get_mac_address(&name).await.unwrap_or_default();
                 let ipv4 = get_ipv4_config_networkd(&name).await.ok().flatten();
-                let is_mgmt = is_management_interface(&name).await;
+                let is_mgmt =
+                    is_management_interface_with_defaults(&name, &default_route_ifaces).await;
                 let carrier = detect_carrier(&name).await;
                 let (speed, duplex) = detect_link_speed_and_duplex(&name).await;
 

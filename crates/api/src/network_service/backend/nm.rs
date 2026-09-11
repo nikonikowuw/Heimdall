@@ -2,8 +2,8 @@
 
 use crate::error::ApiError;
 use crate::network_service::detector::{
-    detect_carrier, detect_link_speed_and_duplex, get_mac_address, is_management_interface,
-    run_command_with_c_locale,
+    detect_carrier, detect_default_route_interfaces, detect_link_speed_and_duplex, get_mac_address,
+    is_management_interface_with_defaults, is_virtual_interface, run_command_with_c_locale,
 };
 use types::system::{
     InterfaceCapabilities, IpConfig, IpMethod, NetworkInterface, NetworkInterfaceState,
@@ -25,6 +25,9 @@ pub async fn list_interfaces_nm() -> Result<Vec<NetworkInterface>, ApiError> {
     )
     .await?;
 
+    // 批量预读取系统默认路由网卡列表，避免循环中重复探测
+    let default_route_ifaces = detect_default_route_interfaces().await;
+
     let mut interfaces = Vec::new();
     for line in output.lines() {
         let parts: Vec<&str> = line.split(':').collect();
@@ -32,11 +35,18 @@ pub async fn list_interfaces_nm() -> Result<Vec<NetworkInterface>, ApiError> {
             continue;
         }
         let name = parts[0].to_string();
+
+        // 工业级过滤：跳过回环、网桥、虚拟隧道及所有容器虚拟网卡 (docker/veth/br-/tun 等)
+        if matches!(parts[1], "loopback" | "bridge" | "tun" | "tap" | "wifi-p2p")
+            || is_virtual_interface(&name)
+        {
+            continue;
+        }
+
         let iface_type = match parts[1] {
             "ethernet" => NetworkInterfaceType::Ethernet,
             "wifi" | "wireless" => NetworkInterfaceType::Wifi,
-            "loopback" | "lo" => NetworkInterfaceType::Loopback,
-            _ => NetworkInterfaceType::Virtual,
+            _ => continue,
         };
         let state = match parts[2] {
             "connected" => NetworkInterfaceState::Up,
@@ -45,8 +55,16 @@ pub async fn list_interfaces_nm() -> Result<Vec<NetworkInterface>, ApiError> {
         };
 
         let mac = get_mac_address(&name).await.unwrap_or_default();
-        let ipv4 = get_ipv4_config_nm(&name).await.ok().flatten();
-        let is_mgmt = is_management_interface(&name).await;
+
+        // 直接复用 device status 中已激活的连接名读取 IPv4 配置
+        let active_conn = parts[3].trim();
+        let ipv4 = if !active_conn.is_empty() && active_conn != "--" {
+            get_ipv4_config_by_conn(active_conn).await.ok().flatten()
+        } else {
+            None
+        };
+
+        let is_mgmt = is_management_interface_with_defaults(&name, &default_route_ifaces).await;
         let carrier = detect_carrier(&name).await;
         let (speed, duplex) = detect_link_speed_and_duplex(&name).await;
 
@@ -109,22 +127,26 @@ pub async fn get_active_connection_nm(iface: &str) -> Result<String, ApiError> {
     )))
 }
 
-/// 读取 IPv4 当前配置
+/// 读取 IPv4 当前配置（按网卡名称）
 pub async fn get_ipv4_config_nm(iface: &str) -> Result<Option<IpConfig>, ApiError> {
     let conn_name = match get_active_connection_nm(iface).await {
         Ok(c) => c,
         Err(_) => return Ok(None),
     };
+    get_ipv4_config_by_conn(&conn_name).await
+}
 
+/// 读取指定连接名称的 IPv4 配置（单次调用提取地址、网关、DNS 及方式，避免重复 fork）
+pub async fn get_ipv4_config_by_conn(conn_name: &str) -> Result<Option<IpConfig>, ApiError> {
     let output = run_command_with_c_locale(
         "nmcli",
         &[
             "-t",
             "-f",
-            "IP4.ADDRESS,IP4.GATEWAY,IP4.DNS,ipv4.route-metric",
+            "IP4.ADDRESS,IP4.GATEWAY,IP4.DNS,ipv4.route-metric,ipv4.method",
             "connection",
             "show",
-            &conn_name,
+            conn_name,
         ],
     )
     .await?;
@@ -134,6 +156,7 @@ pub async fn get_ipv4_config_nm(iface: &str) -> Result<Option<IpConfig>, ApiErro
     let mut gateway = None;
     let mut dns = Vec::new();
     let mut metric = None;
+    let mut is_dhcp = false;
 
     for line in output.lines() {
         if let Some(val) = line.strip_prefix("IP4.ADDRESS[1]:") {
@@ -142,35 +165,37 @@ pub async fn get_ipv4_config_nm(iface: &str) -> Result<Option<IpConfig>, ApiErro
                 address = Some(addr.to_string());
                 prefix = pfx.parse().ok();
             }
-        } else if let Some(val) = line.strip_prefix("IP4.GATEWAY[1]:") {
+        } else if let Some(val) = line
+            .strip_prefix("IP4.GATEWAY:")
+            .or_else(|| line.strip_prefix("IP4.GATEWAY[1]:"))
+        {
             let gw = val.trim();
-            if !gw.is_empty() {
+            if !gw.is_empty() && gw != "--" {
                 gateway = Some(gw.to_string());
             }
-        } else if let Some(val) = line.strip_prefix("IP4.DNS[1]:") {
-            dns.push(val.trim().to_string());
-        } else if let Some(val) = line.strip_prefix("IP4.DNS[2]:") {
-            dns.push(val.trim().to_string());
+        } else if let Some(val) = line.strip_prefix("IP4.DNS") {
+            // 兼容 IP4.DNS[1]: 8.8.8.8 与 IP4.DNS: 8.8.8.8 格式
+            let dns_str = if let Some((_, ip_part)) = val.split_once(':') {
+                ip_part.trim()
+            } else {
+                val.trim_start_matches(':').trim()
+            };
+            if !dns_str.is_empty() && dns_str != "--" && !dns.contains(&dns_str.to_string()) {
+                dns.push(dns_str.to_string());
+            }
         } else if let Some(val) = line.strip_prefix("ipv4.route-metric:") {
             metric = val.trim().parse::<u32>().ok();
+        } else if let Some(val) = line.strip_prefix("ipv4.method:") {
+            if val.trim() == "auto" {
+                is_dhcp = true;
+            }
         }
     }
 
-    // 判断 DHCP 还是 static
-    let method = if address.is_some() {
-        let is_dhcp = run_command_with_c_locale(
-            "nmcli",
-            &["-t", "-f", "ipv4.method", "connection", "show", &conn_name],
-        )
-        .await
-        .map(|o| o.contains("auto"))
-        .unwrap_or(false);
-
-        if is_dhcp {
-            IpMethod::Dhcp
-        } else {
-            IpMethod::Static
-        }
+    let method = if is_dhcp {
+        IpMethod::Dhcp
+    } else if address.is_some() {
+        IpMethod::Static
     } else {
         IpMethod::None
     };

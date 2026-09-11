@@ -115,7 +115,9 @@
     "confirmMessage": "修改管理网卡 IP 将导致当前连接立即中断。请确认新 IP 在本地子网中可达，修改生效后请使用新 IP 重新登录 Web 控制台。",
     "confirmApply": "确认并应用",
     "ipAddress": "IP 地址",
-    "prefix": "前缀"
+    "prefix": "前缀",
+    "unconfigured": "未配置 IP（可点击右上角“编辑”预设静态 IP）",
+    "noInterfaces": "未检测到物理以太网卡"
   },
   "thermal": {
     "noData": "暂无温度传感器数据",
