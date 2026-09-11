@@ -463,16 +463,155 @@ pub fn discover_package_dirs(search_dirs: &[PathBuf]) -> Vec<PathBuf> {
     results
 }
 
-/// 全局可用算法包注册表
-#[derive(Debug, Default)]
-pub struct AlgoRegistry {
+/// 默认算法租约空闲退火冷却时间（60 秒）
+pub const DEFAULT_ALGO_COOLDOWN_SECS: u64 = 60;
+
+/// 单个算法包的活跃算力租约与常驻退火状态
+#[derive(Debug)]
+struct LeaseState {
+    /// 当前活跃租约持有者计数（运行中摄像头实例 + 离线短租任务）
+    ref_count: usize,
+    /// 算力保活实例句柄（持有期间确保底层 NPU Context / Shared Worker 保持常驻预热）
+    warm_instance: Option<AlgoInstance>,
+    /// 冷却任务世代号（用于取消先前安排的延迟退火任务）
+    cooldown_generation: u64,
+    /// 是否正在执行后台异步预热
+    is_warming_up: bool,
+    /// 并发预热完成唤醒通知
+    warmup_notify: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Debug)]
+struct AlgoRegistryInner {
     packages: RwLock<HashMap<String, Arc<AlgoPackage>>>,
+    leases: std::sync::Mutex<HashMap<String, LeaseState>>,
+    cooldown_duration: std::time::Duration,
+    runtime_handle: Option<tokio::runtime::Handle>,
+}
+
+impl AlgoRegistryInner {
+    fn release_lease(self: &Arc<Self>, algorithm_id: &str) {
+        let mut state = self.leases.lock().expect("algo lease state lock poisoned");
+        if let Some(entry) = state.get_mut(algorithm_id) {
+            if entry.ref_count > 0 {
+                entry.ref_count -= 1;
+                if entry.ref_count == 0 {
+                    entry.cooldown_generation += 1;
+                    let gen = entry.cooldown_generation;
+                    let cooldown = self.cooldown_duration;
+                    let inner = Arc::clone(self);
+                    let aid = algorithm_id.to_string();
+
+                    tracing::debug!(
+                        algorithm_id = %aid,
+                        cooldown_secs = cooldown.as_secs(),
+                        "算法所有活跃租约均已释放，启动算力退火延迟冷却定时器"
+                    );
+
+                    let handle = self
+                        .runtime_handle
+                        .clone()
+                        .or_else(|| tokio::runtime::Handle::try_current().ok());
+
+                    if let Some(h) = handle {
+                        h.spawn(async move {
+                            tokio::time::sleep(cooldown).await;
+                            inner.check_cooldown_expired(&aid, gen);
+                        });
+                    } else {
+                        // 脱离任何 Tokio Runtime 上下文（如独立媒体 OS 线程同步析构），执行即时退火防显存泄露
+                        inner.check_cooldown_expired(&aid, gen);
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_cooldown_expired(&self, algorithm_id: &str, generation: u64) {
+        // 1. 锁内仅做轻量内存状态检测与所有权移出，严禁在锁内调用 FFI 或硬件析构
+        let inst_to_drop = {
+            let mut state = self.leases.lock().expect("algo lease state lock poisoned");
+            if let Some(entry) = state.get_mut(algorithm_id) {
+                if entry.ref_count == 0 && entry.cooldown_generation == generation {
+                    entry.warm_instance.take()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        // 2. 将耗时的 NPU / C ABI 销毁调度到阻塞线程池，避免堵塞 Tokio Reactor 任务调度
+        if let Some(inst) = inst_to_drop {
+            tracing::info!(
+                algorithm_id = %algorithm_id,
+                "算法租约冷却期结束且无新任务介入，执行显式退火回收 NPU 显存"
+            );
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn_blocking(move || drop(inst));
+            } else if let Some(handle) = &self.runtime_handle {
+                handle.spawn_blocking(move || drop(inst));
+            } else {
+                drop(inst);
+            }
+        }
+    }
+}
+
+/// 算法算力租约：持有该租约期间，对应算法保持热就绪（Hot）状态。
+/// 当所有租约释放且超出冷却期（Grace Period）时，常驻暖机资源被安全回收（Cold）。
+#[derive(Debug)]
+pub struct AlgoLease {
+    algorithm_id: String,
+    package: Arc<AlgoPackage>,
+    inner: Arc<AlgoRegistryInner>,
+}
+
+impl AlgoLease {
+    #[inline]
+    pub fn algorithm_id(&self) -> &str {
+        &self.algorithm_id
+    }
+
+    #[inline]
+    pub fn package(&self) -> &Arc<AlgoPackage> {
+        &self.package
+    }
+}
+
+impl Drop for AlgoLease {
+    fn drop(&mut self) {
+        self.inner.release_lease(&self.algorithm_id);
+    }
+}
+
+/// 全局可用算法包注册表
+#[derive(Debug, Clone)]
+pub struct AlgoRegistry {
+    inner: Arc<AlgoRegistryInner>,
+}
+
+impl Default for AlgoRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AlgoRegistry {
     pub fn new() -> Self {
+        Self::with_cooldown(std::time::Duration::from_secs(DEFAULT_ALGO_COOLDOWN_SECS))
+    }
+
+    pub fn with_cooldown(cooldown: std::time::Duration) -> Self {
+        let runtime_handle = tokio::runtime::Handle::try_current().ok();
         Self {
-            packages: RwLock::new(HashMap::new()),
+            inner: Arc::new(AlgoRegistryInner {
+                packages: RwLock::new(HashMap::new()),
+                leases: std::sync::Mutex::new(HashMap::new()),
+                cooldown_duration: cooldown,
+                runtime_handle,
+            }),
         }
     }
 
@@ -540,19 +679,19 @@ impl AlgoRegistry {
 
     /// 注册一个已验证的算法包
     pub async fn register(&self, pkg: Arc<AlgoPackage>) {
-        let mut map = self.packages.write().await;
+        let mut map = self.inner.packages.write().await;
         map.insert(pkg.manifest().algorithm_id.clone(), pkg);
     }
 
     /// 获取算法包
     pub async fn get(&self, algorithm_id: &str) -> Option<Arc<AlgoPackage>> {
-        let map = self.packages.read().await;
+        let map = self.inner.packages.read().await;
         map.get(algorithm_id).cloned()
     }
 
     /// 列出所有当前已注册的算法包清单
     pub async fn list(&self) -> Vec<AlgoManifest> {
-        let map = self.packages.read().await;
+        let map = self.inner.packages.read().await;
         map.values().map(|p| p.manifest().clone()).collect()
     }
 
@@ -567,20 +706,164 @@ impl AlgoRegistry {
         Ok(pkg)
     }
 
-    /// 注销指定算法包
+    /// 注销指定算法包并释放其算力资源
     pub async fn unregister(&self, algorithm_id: &str) -> Option<Arc<AlgoPackage>> {
-        let mut map = self.packages.write().await;
+        let inst_to_drop = {
+            let mut state = self
+                .inner
+                .leases
+                .lock()
+                .expect("algo lease state lock poisoned");
+            state
+                .remove(algorithm_id)
+                .and_then(|mut entry| entry.warm_instance.take())
+        };
+        if let Some(inst) = inst_to_drop {
+            let _ = tokio::task::spawn_blocking(move || drop(inst)).await;
+        }
+        let mut map = self.inner.packages.write().await;
         map.remove(algorithm_id)
     }
 
     /// 检查是否已包含指定算法包
     pub async fn contains(&self, algorithm_id: &str) -> bool {
-        let map = self.packages.read().await;
+        let map = self.inner.packages.read().await;
         map.contains_key(algorithm_id)
     }
 
-    /// 调用已注册的人脸识别算法包执行人脸特征提取（基于专用阻塞线程池隔离 FFI 调用）
+    /// 获取算法算力租约：持有期间维持常驻热就绪（Hot）
+    pub async fn acquire_lease(&self, algorithm_id: &str) -> Result<AlgoLease, InferError> {
+        let pkg = self
+            .get(algorithm_id)
+            .await
+            .ok_or_else(|| InferError::Execution {
+                reason: format!("算法未在注册中心就绪: {algorithm_id}"),
+            })?;
+
+        let (need_warmup, wait_notify) = {
+            let mut state = self
+                .inner
+                .leases
+                .lock()
+                .expect("algo lease state lock poisoned");
+            let entry = state
+                .entry(algorithm_id.to_string())
+                .or_insert_with(|| LeaseState {
+                    ref_count: 0,
+                    warm_instance: None,
+                    cooldown_generation: 0,
+                    is_warming_up: false,
+                    warmup_notify: Arc::new(tokio::sync::Notify::new()),
+                });
+            entry.ref_count += 1;
+            entry.cooldown_generation += 1; // 世代号自增使先前的延迟退火任务作废
+
+            if entry.warm_instance.is_some() {
+                (false, None)
+            } else if entry.is_warming_up {
+                (false, Some(Arc::clone(&entry.warmup_notify)))
+            } else {
+                entry.is_warming_up = true;
+                (true, None)
+            }
+        };
+
+        if need_warmup {
+            tracing::info!(
+                algorithm_id = %algorithm_id,
+                "算法从冷态激活借出租约，预热 NPU 模型上下文"
+            );
+            let pkg_clone = pkg.clone();
+            let inst_id = format!("warm-lease-{algorithm_id}");
+            let warm_inst_res =
+                tokio::task::spawn_blocking(move || pkg_clone.create_instance(&inst_id, None))
+                    .await;
+
+            let inst_opt = match warm_inst_res {
+                Ok(Ok(inst)) => Some(inst),
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        algorithm_id = %algorithm_id,
+                        error = %e,
+                        "预热暖机实例创建产生告警，降级为按需即时推理模式"
+                    );
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        algorithm_id = %algorithm_id,
+                        error = %e,
+                        "预热暖机调度异常，降级为按需即时推理模式"
+                    );
+                    None
+                }
+            };
+
+            let inst_to_drop = {
+                let mut state = self
+                    .inner
+                    .leases
+                    .lock()
+                    .expect("algo lease state lock poisoned");
+                if let Some(entry) = state.get_mut(algorithm_id) {
+                    entry.is_warming_up = false;
+                    entry.warmup_notify.notify_waiters();
+                    if let Some(inst) = inst_opt {
+                        if entry.ref_count > 0 {
+                            entry.warm_instance = Some(inst);
+                            None
+                        } else {
+                            // 预热异步执行期间租约已被全部释放，无需常驻，直接异步退火回收
+                            Some(inst)
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    inst_opt
+                }
+            };
+
+            if let Some(inst) = inst_to_drop {
+                tokio::task::spawn_blocking(move || drop(inst));
+            }
+        } else if let Some(notify) = wait_notify {
+            notify.notified().await;
+        }
+
+        Ok(AlgoLease {
+            algorithm_id: algorithm_id.to_string(),
+            package: pkg,
+            inner: self.inner.clone(),
+        })
+    }
+
+    /// 查询当前算法活跃租约持有者计数
+    pub fn active_lease_count(&self, algorithm_id: &str) -> usize {
+        let state = self
+            .inner
+            .leases
+            .lock()
+            .expect("algo lease state lock poisoned");
+        state.get(algorithm_id).map(|e| e.ref_count).unwrap_or(0)
+    }
+
+    /// 查询当前算法是否处于常驻热就绪（Hot）状态
+    pub fn is_algorithm_hot(&self, algorithm_id: &str) -> bool {
+        let state = self
+            .inner
+            .leases
+            .lock()
+            .expect("algo lease state lock poisoned");
+        state
+            .get(algorithm_id)
+            .map(|e| e.warm_instance.is_some())
+            .unwrap_or(false)
+    }
+
+    /// 调用已注册的人脸识别算法包执行人脸特征提取（受算力租约与自动冷却保护）
     pub async fn extract_face(&self, jpeg_bytes: &[u8]) -> Result<FaceExtraction, InferError> {
+        let _lease = self.acquire_lease("face_recognition").await?;
         let target_pkg = self
             .get("face_recognition")
             .await
@@ -589,7 +872,7 @@ impl AlgoRegistry {
         let pkg = match target_pkg {
             Some(p) => p,
             None => {
-                let packages = self.packages.read().await;
+                let packages = self.inner.packages.read().await;
                 packages
                     .values()
                     .find(|p| p.supports_face_extraction())
@@ -616,7 +899,7 @@ impl AlgoRegistry {
                 return true;
             }
         }
-        let packages = self.packages.read().await;
+        let packages = self.inner.packages.read().await;
         packages.values().any(|pkg| pkg.supports_face_extraction())
     }
 }
@@ -735,5 +1018,19 @@ mod tests {
         // 8. 坐标包含 NaN
         let nan_bbox = r#"{"objects": [{"label": "person", "confidence": 0.9, "bbox": [0.1, 0.1, null, 0.2]}]}"#;
         assert!(parse_alarm_objects(nan_bbox).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_algo_lease_lifecycle_and_cooldown() {
+        let registry = AlgoRegistry::with_cooldown(std::time::Duration::from_millis(50));
+        assert_eq!(registry.active_lease_count("non_existent"), 0);
+        assert!(!registry.is_algorithm_hot("non_existent"));
+
+        // 未注册的算法借出直接返回错误
+        let err = registry
+            .acquire_lease("non_existent")
+            .await
+            .expect_err("non existent algorithm should fail to acquire lease");
+        assert!(err.to_string().contains("未在注册中心就绪"));
     }
 }

@@ -12,8 +12,8 @@ pub use backends::{CoreMlBackend, CpuBackend};
 pub use c_abi::loader::FaceExtraction;
 pub use error::InferError;
 pub use package::{
-    compute_dir_size, discover_package_dirs, AlgoInstance, AlgoPackage, AlgoRegistry,
-    ALGO_MANIFEST_FILENAME, DEFAULT_ALGO_PACKAGES_DIR,
+    compute_dir_size, discover_package_dirs, AlgoInstance, AlgoLease, AlgoPackage, AlgoRegistry,
+    ALGO_MANIFEST_FILENAME, DEFAULT_ALGO_COOLDOWN_SECS, DEFAULT_ALGO_PACKAGES_DIR,
 };
 pub use sandbox::{
     current_platform_id, normalize_platform_id, AlgoManifest, AlgoSandbox, VERIFY_ALGO_ARG,

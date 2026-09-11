@@ -252,6 +252,7 @@ pub struct ActiveRuntimeEntry {
     pub sub_session: Arc<media::stream_hub::CameraStreamSession>,
     pub worker_handle: infer::InferenceWorkerHandle,
     pub worker_handles: Vec<(String, infer::InferenceWorkerHandle)>,
+    pub algo_leases: Vec<infer::AlgoLease>,
     pub started_at_ms: i64,
 }
 
@@ -538,17 +539,27 @@ impl TaskRuntimeCoordinator {
 
         let mut instance_configs = Vec::with_capacity(params.instances.len());
         let mut workers = Vec::with_capacity(params.instances.len());
+        let mut leases = Vec::with_capacity(params.instances.len());
 
         for inst in &params.instances {
-            let pkg = match self.algo_registry.get(&inst.algorithm_id).await {
-                Some(pkg) => pkg,
-                None => {
+            let lease = match self.algo_registry.acquire_lease(&inst.algorithm_id).await {
+                Ok(lease) => lease,
+                Err(err) => {
                     shutdown_workers(workers).await;
-                    return Err(CoordinatorError::AlgorithmNotFound {
-                        algorithm_id: inst.algorithm_id.clone(),
+                    let msg = err.to_string();
+                    if msg.contains("未在注册中心就绪") {
+                        return Err(CoordinatorError::AlgorithmNotFound {
+                            algorithm_id: inst.algorithm_id.clone(),
+                        });
+                    }
+                    return Err(CoordinatorError::AlgorithmInstance {
+                        reason: format!("获取算法算力租约失败 ({}): {err}", inst.algorithm_id),
                     });
                 }
             };
+            let pkg = lease.package().clone();
+            leases.push(lease);
+
             let camera_id = params.camera_id.clone();
             let algo_params = if inst.algo_params.is_null() {
                 None
@@ -602,7 +613,7 @@ impl TaskRuntimeCoordinator {
             }
         };
 
-        self.start_resources_locked(params, decoder, instance_configs, workers)
+        self.start_resources_locked(params, decoder, instance_configs, workers, leases)
             .await
     }
 
@@ -680,7 +691,7 @@ impl TaskRuntimeCoordinator {
             }
         }
 
-        self.start_resources_locked(params, decoder, instance_configs, workers)
+        self.start_resources_locked(params, decoder, instance_configs, workers, vec![])
             .await
     }
 
@@ -695,6 +706,7 @@ impl TaskRuntimeCoordinator {
             infer::InferenceWorkerHandle,
             Option<infer::InferenceWorker>,
         )>,
+        algo_leases: Vec<infer::AlgoLease>,
     ) -> Result<u64, CoordinatorError> {
         let camera_id = params.camera_id.clone();
         let main_stream_key = format!("{camera_id}:main");
@@ -783,6 +795,7 @@ impl TaskRuntimeCoordinator {
                 sub_session,
                 worker_handle: primary_handle,
                 worker_handles,
+                algo_leases,
                 started_at_ms: chrono::Utc::now().timestamp_millis(),
             };
             self.runtimes.write().await.insert(camera_id.clone(), entry);
