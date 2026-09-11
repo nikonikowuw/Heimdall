@@ -44,6 +44,7 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false)
   const [cameraToEdit, setCameraToEdit] = useState<Camera | null>(null)
   const [cameraToDelete, setCameraToDelete] = useState<Camera | null>(null)
+  const [probeFeedback, setProbeFeedback] = useState<Record<string, 'success' | 'failed'>>({})
   const [toast, setToast] = useState<{
     id: number
     type: 'success' | 'error'
@@ -95,6 +96,15 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             : c,
         ),
       )
+      setProbeFeedback((prev) => ({ ...prev, [camera.cameraId]: 'success' }))
+      setTimeout(() => {
+        setProbeFeedback((prev) => {
+          const next = { ...prev }
+          delete next[camera.cameraId]
+          return next
+        })
+      }, 3000)
+
       const details = [
         res.codec ? res.codec.toUpperCase() : null,
         res.width && res.height ? `${res.width}x${res.height}` : null,
@@ -114,6 +124,15 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
       setCameras((prev) =>
         prev.map((c) => (c.cameraId === camera.cameraId ? { ...c, lastProbeStatus: 'failed' } : c)),
       )
+      setProbeFeedback((prev) => ({ ...prev, [camera.cameraId]: 'failed' }))
+      setTimeout(() => {
+        setProbeFeedback((prev) => {
+          const next = { ...prev }
+          delete next[camera.cameraId]
+          return next
+        })
+      }, 3000)
+
       showToast(
         'error',
         t('manage.probeFailed', { defaultValue: '探活失败' }),
@@ -522,21 +541,42 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
                       <span className="font-mono text-[11px] text-[var(--text-muted)]">
                         {camera.remark || camera.protocol?.toUpperCase() || 'RTSP'}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleManualProbe(camera)}
-                        disabled={isProbing}
-                        className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-50"
-                      >
-                        <Radio
-                          className={`h-3 w-3 ${isProbing ? 'animate-pulse text-cyan-400' : ''}`}
-                        />
-                        <span>
-                          {isProbing
-                            ? t('manage.probing', { defaultValue: '探活中...' })
-                            : t('manage.probeAction', { defaultValue: '探活' })}
-                        </span>
-                      </button>
+                      {(() => {
+                        const feedback = probeFeedback[camera.cameraId]
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => handleManualProbe(camera)}
+                            disabled={isProbing}
+                            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all ${
+                              feedback === 'success'
+                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                                : feedback === 'failed'
+                                  ? 'border-rose-500/30 bg-rose-500/10 text-rose-400'
+                                  : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]'
+                            } disabled:opacity-50`}
+                          >
+                            {isProbing ? (
+                              <RefreshCw className="h-3 w-3 animate-spin text-[var(--accent)]" />
+                            ) : feedback === 'success' ? (
+                              <Check className="h-3 w-3 text-emerald-400" />
+                            ) : feedback === 'failed' ? (
+                              <AlertCircle className="h-3 w-3 text-rose-400" />
+                            ) : (
+                              <Radio className="h-3 w-3" />
+                            )}
+                            <span>
+                              {isProbing
+                                ? t('manage.probing', { defaultValue: '探活中...' })
+                                : feedback === 'success'
+                                  ? t('manage.probeSuccess', { defaultValue: '探活成功' })
+                                  : feedback === 'failed'
+                                    ? t('manage.probeFailed', { defaultValue: '探活失败' })
+                                    : t('manage.probeAction', { defaultValue: '探活' })}
+                            </span>
+                          </button>
+                        )
+                      })()}
                     </div>
                   </motion.div>
                 )
@@ -565,31 +605,35 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
         onSuccess={handleCameraDeleted}
       />
 
-      {/* 探活结果悬浮 Toast 提示 */}
+      {/* 探活结果悬浮 Toast 提示 (顶部居中 + 100% 纯色不透光，杜绝右上角遮挡按钮与底色穿透) */}
       <AnimatePresence>
         {toast && (
           <motion.div
             key={toast.id}
-            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            initial={{ opacity: 0, y: -20, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
-            className="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-surface-elevated)] p-4 shadow-xl backdrop-blur-md"
+            exit={{ opacity: 0, y: -20, scale: 0.96 }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="fixed top-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-zinc-100 shadow-2xl ring-1 ring-white/10 dark:border-zinc-700 dark:bg-zinc-900"
           >
             {toast.type === 'success' ? (
-              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400">
+                <CheckCircle2 className="h-4 w-4" />
+              </div>
             ) : (
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-400" />
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-rose-500/20 text-rose-400">
+                <AlertCircle className="h-4 w-4" />
+              </div>
             )}
-            <div className="flex-1 space-y-0.5">
-              <div className="text-sm font-semibold text-[var(--text-primary)]">{toast.title}</div>
-              <div className="text-xs text-[var(--text-secondary)]">{toast.message}</div>
+            <div className="flex flex-col">
+              <span className="text-xs font-bold tracking-tight text-white">{toast.title}</span>
+              <span className="font-mono text-xs text-zinc-400">{toast.message}</span>
             </div>
             <button
               onClick={() => setToast(null)}
-              className="text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+              className="ml-2 rounded-lg p-1 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </button>
           </motion.div>
         )}
