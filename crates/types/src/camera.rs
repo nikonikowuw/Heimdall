@@ -184,6 +184,16 @@ pub enum StreamMode {
     Sub,
 }
 
+/// 判断已决议的分析流是否实际使用主码流。
+///
+/// `analysis_url` 是任务启动前已经完成模式选择、探活和降级后的有效 URL，
+/// 因此该函数也覆盖 Auto/Sub 模式在无可用子码流时回退到主码流的情况。
+pub fn is_effective_main_stream(main_url: &str, analysis_url: &str) -> bool {
+    let main_url = main_url.trim();
+    let analysis_url = analysis_url.trim();
+    analysis_url.is_empty() || main_url == analysis_url
+}
+
 impl StreamMode {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -228,6 +238,19 @@ pub struct Camera {
     pub gb28181_channel_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+impl Camera {
+    /// 判定该摄像头是否实质采用主码流进行常驻 AI 分析。
+    ///
+    /// 满足以下任一条件即视为主码流分析模式：
+    /// - 用户显式指定 `StreamMode::Main`
+    /// - 子码流 URL 为空（无子码流可用）
+    /// - 子码流 URL 与主码流 URL 相同（实质单流）
+    pub fn is_main_stream_analysis(&self) -> bool {
+        self.stream_mode == StreamMode::Main
+            || is_effective_main_stream(&self.rtsp_url, &self.sub_rtsp_url)
+    }
 }
 
 /// 创建摄像头请求参数
@@ -336,6 +359,46 @@ mod tests {
         assert_eq!(req.protocol, None);
     }
 
+    #[test]
+    fn test_effective_main_stream_selection() {
+        assert!(is_effective_main_stream(
+            " rtsp://camera/main ",
+            "rtsp://camera/main"
+        ));
+        assert!(is_effective_main_stream("rtsp://camera/main", ""));
+        assert!(!is_effective_main_stream(
+            "rtsp://camera/main",
+            "rtsp://camera/sub"
+        ));
+
+        let mut camera = Camera {
+            id: 1,
+            camera_id: "cam".to_string(),
+            name: "cam".to_string(),
+            protocol: "rtsp".to_string(),
+            rtsp_url: "rtsp://camera/main".to_string(),
+            sub_rtsp_url: "rtsp://camera/sub".to_string(),
+            stream_mode: StreamMode::Main,
+            remark: String::new(),
+            transport_policy: TransportPolicy::Auto,
+            last_probe_status: ProbeStatus::Healthy,
+            last_probe_at: None,
+            last_probe_error_code: String::new(),
+            last_success_at: None,
+            last_codec: "h264".to_string(),
+            last_width: 1920,
+            last_height: 1080,
+            last_fps: 25.0,
+            gb28181_device_id: None,
+            gb28181_channel_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        assert!(camera.is_main_stream_analysis());
+
+        camera.stream_mode = StreamMode::Auto;
+        assert!(!camera.is_main_stream_analysis());
+    }
     #[test]
     fn test_encoded_packet_creation() {
         let packet = EncodedPacket {

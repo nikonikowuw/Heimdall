@@ -13,12 +13,13 @@ use types::{
     TrackedObject,
 };
 
+use crate::decoded_ring::DecodedFrameRingBuffer;
 use crate::error::PipelineError;
 use crate::events::{
     PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
     DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
 };
-use crate::pump::{PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig};
+use crate::pump::{AnalysisPump, AnalysisPumpConfig, PumpMetrics};
 use crate::roi::RoiAffineMapper;
 use crate::rules::{RuleEvaluator, TriggeredAlarm};
 use crate::snapshot::{SnapshotConfig, SnapshotEngine, SnapshotResult};
@@ -29,7 +30,11 @@ pub struct CameraPipelineContext {
     pub camera_id: String,
     /// 主码流高分辨率 NALU 内存环形队列 (2~3.5s GOP)
     pub ring_buffer: Arc<MainStreamRingBuffer>,
-    /// 子码流最新解码帧（保底快照候选）
+    /// 已解码原生高保真帧环形队列 (方案三：用于零解码瞬时直通抓拍与精确时标索引)
+    pub decoded_ring: TokioRwLock<DecodedFrameRingBuffer>,
+    /// 是否为主码流直接进行 AI 分析 (StreamMode::Main 模式)
+    pub is_main_stream_analysis: AtomicBool,
+    /// 最近一帧已解码候选帧（兼容旧的子码流保底字段名）
     pub sub_stream_fallback: TokioRwLock<Option<FrameRef>>,
     /// 是否有活跃的 AI 分析规则订阅
     pub ai_active: AtomicBool,
@@ -67,6 +72,8 @@ impl CameraPipelineContext {
         Self {
             camera_id: camera_id.into(),
             ring_buffer: Arc::new(MainStreamRingBuffer::new(RingBufferConfig::default())),
+            decoded_ring: TokioRwLock::new(DecodedFrameRingBuffer::default()),
+            is_main_stream_analysis: AtomicBool::new(false),
             sub_stream_fallback: TokioRwLock::new(None),
             ai_active: AtomicBool::new(false),
             preview_count: AtomicUsize::new(0),
@@ -111,7 +118,7 @@ pub const DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS: u64 = 100;
 pub struct PipelineManager {
     tasks: Arc<TokioRwLock<HashMap<String, AnalysisTask>>>,
     pipelines: Arc<TokioRwLock<HashMap<String, Arc<CameraPipelineContext>>>>,
-    pumps: Arc<TokioRwLock<HashMap<String, SubStreamAnalysisPump>>>,
+    pumps: Arc<TokioRwLock<HashMap<String, AnalysisPump>>>,
     snapshot_engine: Arc<SnapshotEngine>,
     snapshot_semaphore: Arc<tokio::sync::Semaphore>,
     permit_timeout_ms: u64,
@@ -304,6 +311,10 @@ impl PipelineManager {
 
     /// 注册或获取某路摄像头的分析管线上下文
     pub async fn get_or_create_context(&self, camera_id: &str) -> Arc<CameraPipelineContext> {
+        if let Some(ctx) = self.get_pipeline_context(camera_id).await {
+            return ctx;
+        }
+
         let mut pipelines = self.pipelines.write().await;
         if let Some(ctx) = pipelines.get(camera_id) {
             return ctx.clone();
@@ -354,11 +365,49 @@ impl PipelineManager {
         ctx.ring_buffer.push(packet);
     }
 
-    /// 更新子码流最新解码帧 (用作平滑降级快拍源)
-    pub async fn update_sub_stream_frame(&self, camera_id: &str, frame: FrameRef) {
+    /// 更新最新解码帧 (统一用于保底快照与方案三零解码直通缓存)
+    pub async fn update_decoded_frame(&self, camera_id: &str, frame: FrameRef) {
         let ctx = self.get_or_create_context(camera_id).await;
-        let mut fallback = ctx.sub_stream_fallback.write().await;
-        *fallback = Some(frame);
+        {
+            let mut ring = ctx.decoded_ring.write().await;
+            ring.push(frame.clone());
+        }
+        {
+            let mut fallback = ctx.sub_stream_fallback.write().await;
+            *fallback = Some(frame);
+        }
+    }
+
+    /// 兼容旧命名接口：更新子码流最新解码帧
+    #[inline]
+    pub async fn update_sub_stream_frame(&self, camera_id: &str, frame: FrameRef) {
+        self.update_decoded_frame(camera_id, frame).await;
+    }
+
+    /// 清空某路摄像头的已解码帧环形队列并释放显存/DMA-BUF 租约
+    pub async fn clear_decoded_ring(&self, camera_id: &str) {
+        if let Some(ctx) = self.get_pipeline_context(camera_id).await {
+            {
+                let mut ring = ctx.decoded_ring.write().await;
+                ring.clear();
+            }
+            {
+                let mut fallback = ctx.sub_stream_fallback.write().await;
+                *fallback = None;
+            }
+        }
+    }
+
+    /// 标记该路摄像头是否为主码流直接进行 AI 分析 (StreamMode::Main 模式)
+    pub async fn set_main_stream_analysis(&self, camera_id: &str, is_main: bool) {
+        let ctx = self.get_or_create_context(camera_id).await;
+        ctx.is_main_stream_analysis
+            .store(is_main, Ordering::Release);
+        tracing::info!(
+            camera_id = %camera_id,
+            is_main,
+            "摄像头主码流分析模式状态已更新"
+        );
     }
 
     /// 标记 AI 分析激活状态（按需解码开关）
@@ -466,11 +515,56 @@ impl PipelineManager {
         bbox: Option<BoundingBox>,
     ) -> Result<SnapshotResult, PipelineError> {
         let ctx = self.get_or_create_context(camera_id).await;
-        let fallback_frame = ctx.sub_stream_fallback.read().await.clone();
+        let is_main_stream = ctx.is_main_stream_analysis.load(Ordering::Acquire);
+
+        // 【方案三：零解码瞬时直通】
+        // 若当前摄像头采用主码流分析模式，分析泵已在常驻解码 1080P/4K 高清主码流！
+        // 优先在 decoded_ring 中以时标检索目标帧（容差对齐环形缓冲的时间窗口上限，覆盖推理全过程），
+        // 命中即可零解码直通，杜绝大 GOP 从 I 帧重新追解 98+ 包造成的 VPU 争抢与算力雪崩！
+        if is_main_stream {
+            let matched_opt = {
+                let ring = ctx.decoded_ring.read().await;
+                ring.find_by_pts(target_pts_ms, ring.window_duration_ms())
+            };
+
+            if let Some((frame, diff_ms)) = matched_opt {
+                tracing::debug!(
+                    camera_id = %camera_id,
+                    target_pts = target_pts_ms,
+                    frame_pts = frame.timestamp,
+                    diff_ms,
+                    width = frame.width,
+                    height = frame.height,
+                    "零解码直通命中，复用主码流常驻解码高保真帧"
+                );
+                return self
+                    .snapshot_engine
+                    .save_snapshot_async(camera_id, frame, bbox, false)
+                    .await;
+            }
+        }
+
+        // 次选与保底帧获取：优先在已解码环中查找最接近目标时标的候选帧。
+        // 元组中的布尔值记录候选帧是否来自子码流，避免主流 decoded_ring 帧被误标为子流降级。
+        let fallback_frame = {
+            let ring = ctx.decoded_ring.read().await;
+            ring.find_by_pts(target_pts_ms, 500)
+                .map(|(f, _)| (f, !is_main_stream))
+                .or_else(|| ring.latest_frame().map(|f| (f, !is_main_stream)))
+        };
+        let fallback_frame = match fallback_frame {
+            Some(f) => Some(f),
+            None => ctx
+                .sub_stream_fallback
+                .read()
+                .await
+                .clone()
+                .map(|frame| (frame, !is_main_stream)),
+        };
 
         // 工业级全局 VPU 抓拍通道配额管控：
         // 尝试在限时内获取全局 VPU 硬解信号量许可，若瞬时并发告警超限或排队超时，
-        // 自动无缝降级使用子码流当前帧，彻底防止瞬时并发告警打爆硬件 VPU 通道上限！
+        // 自动无缝降级使用已解码备用帧，彻底防止瞬时并发告警打爆硬件 VPU 通道上限！
         let permit_res = tokio::time::timeout(
             std::time::Duration::from_millis(self.permit_timeout_ms),
             self.snapshot_semaphore.acquire(),
@@ -495,27 +589,36 @@ impl PipelineManager {
                             camera_id,
                             target_pts_ms,
                             Some(&ctx.ring_buffer),
-                            fallback_frame.as_ref(),
+                            fallback_frame.as_ref().map(|(frame, _)| frame),
                             decoder_guard.as_deref_mut(),
                         )
                         .await?
                 };
                 drop(permit); // 解码完成后显式归还配额
-                res
+                let (frame, used_fallback) = res;
+                let is_sub_fallback = if used_fallback {
+                    fallback_frame
+                        .as_ref()
+                        .map(|(_, is_sub_stream)| *is_sub_stream)
+                        .unwrap_or(true)
+                } else {
+                    false
+                };
+                (frame, is_sub_fallback)
             }
             _ => {
-                // 配额满载或获取超时，自适应降级复用子码流帧
-                if let Some(fallback) = fallback_frame {
+                // 配额满载或获取超时，自适应降级复用已解码候选帧
+                if let Some((fallback, is_sub_stream)) = fallback_frame {
                     tracing::warn!(
                         camera_id = %camera_id,
                         target_pts = target_pts_ms,
                         timeout_ms = self.permit_timeout_ms,
-                        "全局 VPU 硬件抓拍解码配额满载或等待超时，自适应无缝降级复用子码流解码帧"
+                        "全局 VPU 硬件抓拍解码配额满载或等待超时，自适应无缝复用已解码候选帧"
                     );
-                    (fallback, true)
+                    (fallback, is_sub_stream)
                 } else {
                     return Err(PipelineError::Snapshot(format!(
-                        "全局 VPU 抓拍通道配额耗尽且子码流无有效备用帧 ({camera_id})"
+                        "全局 VPU 抓拍通道配额耗尽且无有效备用帧 ({camera_id})"
                     )));
                 }
             }
@@ -555,6 +658,12 @@ impl PipelineManager {
 
         // 同步任务定义的空间几何布防规则至管线上下文
         *ctx.rules.write().await = rules;
+
+        // 同步设置主码流分析模式状态 (方案三：零解码瞬时直通)
+        // 注意：生产环境统一由 TaskRuntimeCoordinator 依据网络动态探活决议生效模式；
+        // 此处为独立管理任务或单测运行提供基于摄像头静态契约的初始同步。
+        self.set_main_stream_analysis(&camera.camera_id, camera.is_main_stream_analysis())
+            .await;
 
         let mut dec_guard = ctx.snapshot_decoder.lock().await;
         if dec_guard.is_none() {
@@ -672,7 +781,7 @@ impl PipelineManager {
         (outcome.tracked, outcome.alarms)
     }
 
-    async fn mount_pump(&self, camera_id: &str, pump: SubStreamAnalysisPump) {
+    async fn mount_pump(&self, camera_id: &str, pump: AnalysisPump) {
         let old_pump = {
             let mut pumps = self.pumps.write().await;
             pumps.remove(camera_id)
@@ -683,31 +792,30 @@ impl PipelineManager {
         self.pumps.write().await.insert(camera_id.to_string(), pump);
     }
 
-    /// 启动某路摄像头的子码流分析驱动泵
+    /// 启动某路摄像头的有效分析码流驱动泵
     pub async fn start_analysis_pump(
         self: &Arc<Self>,
         camera_id: &str,
         session: Arc<media::CameraStreamSession>,
         decoder: Box<dyn VideoDecoder + Send>,
         worker: infer::InferenceWorkerHandle,
-        config: SubStreamPumpConfig,
+        config: AnalysisPumpConfig,
     ) {
-        let pump =
-            SubStreamAnalysisPump::start(camera_id, session, decoder, worker, self.clone(), config);
+        let pump = AnalysisPump::start(camera_id, session, decoder, worker, self.clone(), config);
         self.mount_pump(camera_id, pump).await;
-        tracing::info!(camera_id = %camera_id, "子码流驱动泵已挂载至管线管理器");
+        tracing::info!(camera_id = %camera_id, "分析码流驱动泵已挂载至管线管理器");
     }
 
-    /// 启动某路摄像头的子码流分析驱动泵 (全量托管 InferenceWorker 运行周期)
+    /// 启动某路摄像头的有效分析码流驱动泵 (全量托管 InferenceWorker 运行周期)
     pub async fn start_analysis_pump_with_worker(
         self: &Arc<Self>,
         camera_id: &str,
         session: Arc<media::CameraStreamSession>,
         decoder: Box<dyn VideoDecoder + Send>,
         worker: infer::InferenceWorker,
-        config: SubStreamPumpConfig,
+        config: AnalysisPumpConfig,
     ) {
-        let pump = SubStreamAnalysisPump::start_with_worker(
+        let pump = AnalysisPump::start_with_worker(
             camera_id,
             session,
             decoder,
@@ -716,10 +824,10 @@ impl PipelineManager {
             config,
         );
         self.mount_pump(camera_id, pump).await;
-        tracing::info!(camera_id = %camera_id, "子码流驱动泵 (含常驻工作线程) 已挂载至管线管理器");
+        tracing::info!(camera_id = %camera_id, "分析码流驱动泵 (含常驻工作线程) 已挂载至管线管理器");
     }
 
-    /// 启动某路摄像头的多算法实例子码流分析驱动泵
+    /// 启动某路摄像头的多算法实例有效分析码流驱动泵
     pub async fn start_analysis_pump_multi_worker(
         self: &Arc<Self>,
         camera_id: &str,
@@ -733,7 +841,7 @@ impl PipelineManager {
         )>,
         motion_gate_enabled: bool,
     ) {
-        let pump = SubStreamAnalysisPump::start_multi_worker(
+        let pump = AnalysisPump::start_multi_worker(
             camera_id,
             session,
             decoder,
@@ -743,10 +851,10 @@ impl PipelineManager {
             motion_gate_enabled,
         );
         self.mount_pump(camera_id, pump).await;
-        tracing::info!(camera_id = %camera_id, "子码流多算法驱动泵已挂载至管线管理器");
+        tracing::info!(camera_id = %camera_id, "多算法分析驱动泵已挂载至管线管理器");
     }
 
-    /// 停止某路摄像头的子码流分析驱动泵
+    /// 停止某路摄像头的有效分析码流驱动泵
     pub async fn stop_analysis_pump(&self, camera_id: &str) -> bool {
         let old_pump = {
             let mut pumps = self.pumps.write().await;
@@ -754,7 +862,8 @@ impl PipelineManager {
         };
         if let Some(mut pump) = old_pump {
             pump.stop().await;
-            tracing::info!(camera_id = %camera_id, "子码流驱动泵已停止并从管理器注销");
+            self.clear_decoded_ring(camera_id).await;
+            tracing::info!(camera_id = %camera_id, "分析码流驱动泵已停止并从管理器注销");
             true
         } else {
             false
@@ -765,12 +874,13 @@ impl PipelineManager {
     pub async fn stop_all_pumps(&self) {
         let old_pumps = {
             let mut pumps = self.pumps.write().await;
-            pumps.drain().map(|(_, p)| p).collect::<Vec<_>>()
+            pumps.drain().collect::<Vec<_>>()
         };
-        for mut pump in old_pumps {
+        for (cam_id, mut pump) in old_pumps {
             pump.stop().await;
+            self.clear_decoded_ring(&cam_id).await;
         }
-        tracing::info!("已停止所有子码流分析驱动泵并回收资源");
+        tracing::info!("已停止所有分析驱动泵并回收资源");
     }
 
     /// 查询某路摄像头的驱动泵是否正在运行
@@ -1193,6 +1303,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_main_decoded_ring_fallback_is_not_marked_as_sub_stream() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_main_ring_fallback_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let manager =
+            PipelineManager::with_all_options(&temp_dir, SnapshotConfig::default(), 1, 10);
+        let cam_id = "cam_main_ring_fallback";
+
+        let held_permit = manager
+            .snapshot_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("获取测试许可应成功");
+        manager.set_main_stream_analysis(cam_id, true).await;
+
+        let frame = FrameRef::new(
+            cam_id.to_string(),
+            1000,
+            1920,
+            1080,
+            types::StrideInfo::new(1920, 1080),
+            types::PixelFormat::Nv12,
+            types::FrameHandle::Host(vec![128u8; 1920 * 1080 * 3 / 2].into()),
+        );
+        manager.update_decoded_frame(cam_id, frame).await;
+
+        // 目标偏差超过精确匹配容差，配额占满后复用主流环中的最近帧。
+        let snapshot = manager
+            .trigger_snapshot(
+                cam_id,
+                2000,
+                Some(types::BoundingBox::new(0.1, 0.1, 0.3, 0.3)),
+            )
+            .await
+            .expect("主流环帧复用应成功");
+
+        assert!(!snapshot.is_fallback_sub_stream);
+        assert_eq!(snapshot.width, 1920);
+        assert_eq!(snapshot.height, 1080);
+
+        drop(held_permit);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+    #[tokio::test]
     async fn test_pipeline_manager_pump_lifecycle_and_cascade_stop() {
         use async_trait::async_trait;
         use infer::InferenceBackend;
@@ -1233,7 +1389,7 @@ mod tests {
                 session,
                 decoder,
                 worker.handle(),
-                SubStreamPumpConfig::default(),
+                AnalysisPumpConfig::default(),
             )
             .await;
 
@@ -1284,7 +1440,7 @@ mod tests {
                     session,
                     decoder,
                     worker.handle(),
-                    SubStreamPumpConfig::default(),
+                    AnalysisPumpConfig::default(),
                 )
                 .await;
 
@@ -1529,5 +1685,63 @@ mod tests {
             rec_outcome.alarms.is_empty(),
             "face_recognition 类别算法绝不产生违规告警"
         );
+    }
+
+    #[tokio::test]
+    async fn test_decoded_frame_update_and_clear_lifecycle() {
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_ring_lifecycle_test";
+
+        let frame = FrameRef::new(
+            cam_id.to_string(),
+            1000,
+            1920,
+            1080,
+            types::StrideInfo::new(1920, 1080),
+            types::PixelFormat::Nv12,
+            types::FrameHandle::Host(vec![0u8; 100].into()),
+        );
+
+        manager.update_decoded_frame(cam_id, frame.clone()).await;
+
+        let ctx = manager.get_or_create_context(cam_id).await;
+        {
+            let ring = ctx.decoded_ring.read().await;
+            assert_eq!(ring.len(), 1);
+            assert_eq!(
+                ring.latest_frame()
+                    .expect("ring should have latest frame")
+                    .timestamp,
+                1000
+            );
+        }
+        {
+            let fallback = ctx.sub_stream_fallback.read().await;
+            assert!(fallback.is_some());
+            assert_eq!(
+                fallback
+                    .as_ref()
+                    .expect("fallback frame should exist")
+                    .timestamp,
+                1000
+            );
+        }
+
+        manager.set_main_stream_analysis(cam_id, true).await;
+        assert!(ctx.is_main_stream_analysis.load(Ordering::Relaxed));
+
+        // 清空环形队列并回收资源
+        manager.clear_decoded_ring(cam_id).await;
+        {
+            let ring = ctx.decoded_ring.read().await;
+            assert!(ring.is_empty());
+        }
+        {
+            let fallback = ctx.sub_stream_fallback.read().await;
+            assert!(fallback.is_none());
+        }
+
+        manager.set_main_stream_analysis(cam_id, false).await;
+        assert!(!ctx.is_main_stream_analysis.load(Ordering::Relaxed));
     }
 }

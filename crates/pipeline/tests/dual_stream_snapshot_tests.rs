@@ -459,10 +459,105 @@ async fn test_large_gop_burst_timeout_budget_fuse() {
         .await
         .expect("熔断抓拍应成功");
 
-    // 触发延时熔断，直接优雅回退至子码流当前帧
+    // 触发延时熔断，直接优雅回退至已解码备用帧
     assert!(snapshot.is_fallback_sub_stream);
     assert_eq!(snapshot.width, 640);
     assert_eq!(snapshot.height, 360);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_scheme3_main_stream_zero_decode_direct_passthrough() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_scheme3_zero_decode_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let manager = PipelineManager::with_evidence_dir(&temp_dir);
+    let cam_id = "cam_scheme3_main_direct";
+
+    // 1. 标记当前摄像头为主流分析模式 (StreamMode::Main)
+    manager.set_main_stream_analysis(cam_id, true).await;
+
+    // 2. 模拟分析泵连续硬解主码流 1080P 帧并推入 decoded_ring
+    //    故意不配置 ctx.snapshot_decoder，且 ring_buffer 为空，
+    //    证明零解码直通完全无需启动独立的快照硬解器！
+    // 目标时标取 2026 年附近的真实 UTC 毫秒，验证大数值 PTS 不会溢出
+    let target_pts: i64 = 1_789_121_628_156;
+    for offset in [-80, -40, 0, 40] {
+        let pts = target_pts + offset;
+        let frame_nv12 = vec![128u8; (1920 * 1080 * 3 / 2) as usize].into();
+        let frame = FrameRef::new(
+            cam_id.to_string(),
+            pts,
+            1920,
+            1080,
+            StrideInfo::new(1920, 1080),
+            PixelFormat::Nv12,
+            FrameHandle::Host(frame_nv12),
+        );
+        manager.update_decoded_frame(cam_id, frame).await;
+    }
+
+    // 3. 触发告警抓拍 (目标时标 target_pts)
+    let bbox = BoundingBox::new(0.2, 0.2, 0.5, 0.6);
+    let snapshot = manager
+        .trigger_snapshot(cam_id, target_pts, Some(bbox))
+        .await
+        .expect("方案三零解码直通抓拍应成功");
+
+    // 4. 验证零解码瞬时直通效果
+    assert!(
+        !snapshot.is_fallback_sub_stream,
+        "主流常驻解码帧直通，不应标记为降级"
+    );
+    assert_eq!(snapshot.width, 1920, "必须为 1080P 原生高保真大图");
+    assert_eq!(snapshot.height, 1080);
+    assert!(snapshot.file_size_bytes > 0);
+
+    let full_img_path = temp_dir.join(&snapshot.image_rel_path);
+    assert!(
+        full_img_path.is_file(),
+        "全景 JPEG 必须生成: {:?}",
+        full_img_path
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_scheme3_tolerance_matching_and_fallback() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_scheme3_tolerance_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let manager = PipelineManager::with_evidence_dir(&temp_dir);
+    let cam_id = "cam_scheme3_tol";
+
+    manager.set_main_stream_analysis(cam_id, true).await;
+
+    // 模拟推入 1080P 帧 (时标 1000ms)
+    let frame_nv12 = vec![128u8; (1920 * 1080 * 3 / 2) as usize].into();
+    let frame = FrameRef::new(
+        cam_id.to_string(),
+        1000,
+        1920,
+        1080,
+        StrideInfo::new(1920, 1080),
+        PixelFormat::Nv12,
+        FrameHandle::Host(frame_nv12),
+    );
+    manager.update_sub_stream_frame(cam_id, frame).await;
+
+    // 目标时标 1150ms (模拟 NPU 推理排队延时 150ms，与 1000ms 偏差 150ms <= 300ms 窗口容差)，应成功容差命中零解码
+    let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
+    let snapshot = manager
+        .trigger_snapshot(cam_id, 1150, Some(target))
+        .await
+        .expect("容差范围内零解码直通应成功");
+
+    assert!(!snapshot.is_fallback_sub_stream);
+    assert_eq!(snapshot.width, 1920);
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

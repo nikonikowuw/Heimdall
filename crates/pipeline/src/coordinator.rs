@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tokio::sync::{Mutex as TokioMutex, OwnedMutexGuard, RwLock as TokioRwLock};
 use tokio_util::task::AbortOnDropHandle;
-use types::{CodecType, TransportPolicy};
+use types::{is_effective_main_stream, CodecType, TransportPolicy};
 
 use crate::error::PipelineError;
 use crate::manager::PipelineManager;
@@ -93,9 +93,9 @@ pub struct StartCameraPipelineParams {
     pub main_rtsp_url: String,
     /// 主码流视频编码格式
     pub main_codec: CodecType,
-    /// 子码流 RTSP 拉流地址 (用于常驻硬件解码与 NPU 推理)
+    /// 已决议的分析码流 RTSP 地址（可以是子码流，也可以是主码流降级/显式主流）
     pub sub_rtsp_url: String,
-    /// 子码流视频编码格式
+    /// 已决议的分析码流视频编码格式
     pub sub_codec: CodecType,
     /// 网络流传输协议策略 (Auto / TCP / UDP)
     pub transport_policy: TransportPolicy,
@@ -155,6 +155,14 @@ impl StartCameraPipelineParams {
             .first()
             .map(|i| i.algo_params.clone())
             .unwrap_or_else(|| serde_json::json!({}))
+    }
+
+    /// 判定已决议的分析流是否为主码流。
+    ///
+    /// `sub_rtsp_url` 在进入协调器前已完成 StreamMode 选择和 Auto 探活降级，
+    /// 此处不再重新解释用户原始模式。
+    pub fn is_main_stream_analysis(&self) -> bool {
+        is_effective_main_stream(&self.main_rtsp_url, &self.sub_rtsp_url)
     }
 
     /// 校验启动参数合法性，并在进入媒体/FFI 层前拒绝明显无效输入。
@@ -769,6 +777,11 @@ impl TaskRuntimeCoordinator {
                 .take()
                 .expect("workers are owned by startup transaction");
 
+            // 在 pump 接收首个解码帧前设置有效分析流状态，避免首帧告警误走 VPU 追帧。
+            self.pipeline_mgr
+                .set_main_stream_analysis(&camera_id, params.is_main_stream_analysis())
+                .await;
+
             self.pipeline_mgr
                 .start_analysis_pump_multi_worker(
                     &camera_id,
@@ -838,6 +851,11 @@ impl TaskRuntimeCoordinator {
             }
             self.pipeline_mgr.set_ai_active(&camera_id, false).await;
             self.pipeline_mgr
+                .set_main_stream_analysis(&camera_id, false)
+                .await;
+            // pump 退出时已自清理，此处为幂等双保险确保管线停止后资源干净
+            self.pipeline_mgr.clear_decoded_ring(&camera_id).await;
+            self.pipeline_mgr
                 .remove_pipeline_context_if_idle(&camera_id)
                 .await;
         }
@@ -900,6 +918,11 @@ impl TaskRuntimeCoordinator {
             abort_join_handle(entry.main_attach_handle).await;
             self.stream_hub.unsubscribe(&entry.main_stream_key).await;
             self.pipeline_mgr.set_ai_active(camera_id, false).await;
+            self.pipeline_mgr
+                .set_main_stream_analysis(camera_id, false)
+                .await;
+            // pump 退出时已自清理，此处为幂等双保险确保管线停止后资源干净
+            self.pipeline_mgr.clear_decoded_ring(camera_id).await;
             if let Some(ctx) = self.pipeline_mgr.get_pipeline_context(camera_id).await {
                 ctx.release_decoder_if_idle().await;
             }
@@ -914,6 +937,11 @@ impl TaskRuntimeCoordinator {
             }
             let stopped = self.pipeline_mgr.stop_analysis_pump(camera_id).await;
             self.pipeline_mgr.set_ai_active(camera_id, false).await;
+            self.pipeline_mgr
+                .set_main_stream_analysis(camera_id, false)
+                .await;
+            // pump 退出时已自清理，此处为幂等双保险确保管线停止后资源干净
+            self.pipeline_mgr.clear_decoded_ring(camera_id).await;
             if let Some(ctx) = self.pipeline_mgr.get_pipeline_context(camera_id).await {
                 ctx.release_decoder_if_idle().await;
             }

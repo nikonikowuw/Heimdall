@@ -9,6 +9,6 @@ pub trait InferenceBackend: Send + Sync + 'static {
     /// 获取后端名称（如 "CoreML-ANE", "CPU-ORT"）
     fn name(&self) -> &'static str;
 
-    /// 输入零拷贝 FrameRef，执行 NPU/ANE 目标检测推理
+    /// 将解码后的原生 `FrameRef` 交给算法后端；算法后端自行完成模型输入所需的预处理。
     async fn detect(&self, frame: &FrameRef) -> Result<Vec<Detection>, InferError>;
 }

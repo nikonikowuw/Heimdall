@@ -104,7 +104,7 @@ pub fn build_start_params(
 }
 
 /// 自适应探测并决议适用的分析流 URL 与对应编解码格式：
-/// - StreamMode::Main: 显式指定主码流，直接使用主码流进行高精度常驻分析（高清原画下采样，小目标最清晰）；
+/// - StreamMode::Main: 显式指定主码流，直接向算法包下发主码流原生帧；算法包自行完成模型所需预处理；
 /// - StreamMode::Sub: 显式指定子码流，使用配置或推导的子码流（超高路数并发低功耗），同时探活获取子流真实编码；
 /// - StreamMode::Auto: 自动探测协商，探活成功用子流及其实际编码，探活失败或无子流自适应回退到主流。
 pub async fn resolve_effective_sub_stream(
@@ -122,7 +122,7 @@ pub async fn resolve_effective_sub_stream(
         types::StreamMode::Main => {
             tracing::info!(
                 camera_id = %camera_id,
-                "用户指定主码流分析模式 (StreamMode::Main)，常驻硬解主码流并通过硬件下采样送入推理"
+                "用户指定主码流分析模式 (StreamMode::Main)，常驻硬解主码流并将原生帧直接下发至算法包"
             );
             (main_trimmed.to_string(), main_codec)
         }
@@ -270,6 +270,7 @@ mod tests {
         let cam = mock_camera("rtsp://127.0.0.1:28554/Streaming/Channels/101", "");
         let params = build_start_params_async("test_cam", &cam, vec![], None).await;
         assert_eq!(params.main_rtsp_url, params.sub_rtsp_url);
+        assert!(params.is_main_stream_analysis());
         assert_eq!(
             params.sub_rtsp_url,
             "rtsp://127.0.0.1:28554/Streaming/Channels/101"
@@ -284,6 +285,7 @@ mod tests {
         );
         let params = build_start_params("test_cam", &cam, vec![], None);
         assert_ne!(params.main_rtsp_url, params.sub_rtsp_url);
+        assert!(!params.is_main_stream_analysis());
         assert_eq!(
             params.sub_rtsp_url,
             "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/102"
@@ -320,6 +322,7 @@ mod tests {
 
         let params = build_start_params_async("test_cam", &cam, vec![], None).await;
         assert_eq!(params.main_rtsp_url, params.sub_rtsp_url);
+        assert!(params.is_main_stream_analysis());
         assert_eq!(
             params.sub_rtsp_url,
             "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/101"

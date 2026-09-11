@@ -4,13 +4,13 @@
 
 ## 权威定义
 
-| 内容                   | 源文件                                                                                                                                                         |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SDK / 宿主 C ABI       | [c_abi.rs](../../../crates/algo-sdk/src/c_abi.rs)、[types.rs](../../../crates/infer/src/c_abi/types.rs)                                                        |
-| 插件 trait / 导出宏    | [plugin.rs](../../../crates/algo-sdk/src/plugin.rs)、[macros.rs](../../../crates/algo-sdk/src/macros.rs)                                                       |
+| 内容             | 源文件                                                                                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SDK / 宿主 C ABI | [c_abi.rs](../../../crates/algo-sdk/src/c_abi.rs)、[types.rs](../../../crates/infer/src/c_abi/types.rs)                                                       |
+| 插件 trait / 导出宏 | [plugin.rs](../../../crates/algo-sdk/src/plugin.rs)、[macros.rs](../../../crates/algo-sdk/src/macros.rs)                                                      |
 | 帧 / 预处理 / 模型会话 | [frame.rs](../../../crates/algo-sdk/src/frame.rs)、[cv](../../../crates/algo-sdk/src/cv/mod.rs)、[model.rs](../../../crates/algo-sdk/src/model.rs)             |
-| 结果 / 坐标反算        | [emitter.rs](../../../crates/algo-sdk/src/emitter.rs)、[math.rs](../../../crates/algo-sdk/src/math.rs)                                                         |
-| 加载 / 沙箱 / 注册表   | [loader.rs](../../../crates/infer/src/c_abi/loader.rs)、[sandbox.rs](../../../crates/infer/src/sandbox.rs)、[package.rs](../../../crates/infer/src/package.rs) |
+| 结果 / 坐标反算      | [emitter.rs](../../../crates/algo-sdk/src/emitter.rs)、[math.rs](../../../crates/algo-sdk/src/math.rs)                                                        |
+| 加载 / 沙箱 / 注册表  | [loader.rs](../../../crates/infer/src/c_abi/loader.rs)、[sandbox.rs](../../../crates/infer/src/sandbox.rs)、[package.rs](../../../crates/infer/src/package.rs) |
 
 完整声明以双侧源码和布局测试为准；以下保留调用约束，不复制结构体实现。
 
@@ -44,9 +44,9 @@ export_algo!(
 
 可选 `library_open_hook` / `library_close_hook` 管理库级资源；导出 `algorithm_id` 必须与 manifest 一致。
 
-| `AvAlgoAbi` 方法                                                 | 要求                           |
-| ---------------------------------------------------------------- | ------------------------------ |
-| `library_open/query/close`、`instance_create/process/destroy`    | 必填，缺任一函数指针拒绝加载   |
+| `AvAlgoAbi` 方法                                                  | 要求              |
+| --------------------------------------------------------------- | --------------- |
+| `library_open/query/close`、`instance_create/process/destroy`    | 必填，缺任一函数指针拒绝加载  |
 | `instance_negotiate/update_config/set_rules/flush`、`last_error` | 按能力处理，不假定可选方法存在 |
 
 - ABI 版本为 `AV_ALGO_API_VERSION = 1`，64 位 `AvAlgoAbi` 大小为 96 字节。
@@ -66,32 +66,32 @@ export_algo!(
 - 算法按 stride/offset/alloc 尺寸寻址，不以可见 width 替代行跨度。
 - `SafeFrame` 只借用当前调用期的帧；需要延长生命周期时走 `AvFrameOps.retain/release`，不保存裸指针。`frame_token` 由宿主管理。
 
-| `opaque_kind`                    | 值       | 载体                                      |
-| -------------------------------- | -------- | ----------------------------------------- |
-| `AV_OPAQUE_NONE`                 | `0`      | Host 像素指针，调用方保证内存范围有效     |
-| `AV_OPAQUE_CVPIXELBUFFER`        | `0x1001` | CVPixelBufferRef                          |
+| `opaque_kind`                    | 值        | 载体                         |
+| -------------------------------- | -------- | -------------------------- |
+| `AV_OPAQUE_NONE`                 | `0`      | Host 像素指针，调用方保证内存范围有效      |
+| `AV_OPAQUE_CVPIXELBUFFER`        | `0x1001` | CVPixelBufferRef           |
 | `AV_OPAQUE_DMABUF`               | `0x2001` | fd 编码到指针宽度整数；fd 0 不等于无效 fd |
-| `AV_OPAQUE_ASCEND_DEVICE_MEMORY` | `0x3001` | Ascend 设备指针                           |
+| `AV_OPAQUE_ASCEND_DEVICE_MEMORY` | `0x3001` | Ascend 设备指针                |
 
 像素枚举为 `NV12=1`、`BGRA=2`、`RGB24=3`、`I420=4`，使用 `AV_PIX_*` 常量。
 `AvFrameCaps` 的格式/内存数组最多 8/4 项；默认 `instance_negotiate` 透传 offered→accepted，不代表已校验所有硬件约束。
 
 ## 状态码
 
-| 状态                        | 值  | 含义                |
-| --------------------------- | --- | ------------------- |
-| `AV_OK`                     | 0   | 成功                |
-| `AV_ERR_UNSUPPORTED_API`    | -1  | 版本不支持          |
+| 状态                          | 值   | 含义         |
+| --------------------------- | --- | ---------- |
+| `AV_OK`                     | 0   | 成功         |
+| `AV_ERR_UNSUPPORTED_API`    | -1  | 版本不支持      |
 | `AV_ERR_INVALID_ARG`        | -2  | 参数/预处理输入无效 |
-| `AV_ERR_INCOMPATIBLE_FRAME` | -3  | 帧不兼容            |
-| `AV_ERR_CONFIG_INVALID`     | -4  | 配置错误            |
-| `AV_ERR_MODEL_LOAD_FAILED`  | -5  | 模型加载失败        |
-| `AV_ERR_INFERENCE_FAILED`   | -6  | 推理失败            |
-| `AV_ERR_OUT_OF_MEMORY`      | -7  | 资源不足            |
-| `AV_ERR_NOT_IMPLEMENTED`    | -8  | 能力未实现          |
-| `AV_ERR_TIMEOUT`            | -9  | 超时                |
-| `AV_ERR_RETRY`              | -10 | 可重试              |
-| `AV_ERR_INTERNAL`           | -99 | 内部错误/panic      |
+| `AV_ERR_INCOMPATIBLE_FRAME` | -3  | 帧不兼容       |
+| `AV_ERR_CONFIG_INVALID`     | -4  | 配置错误       |
+| `AV_ERR_MODEL_LOAD_FAILED`  | -5  | 模型加载失败     |
+| `AV_ERR_INFERENCE_FAILED`   | -6  | 推理失败       |
+| `AV_ERR_OUT_OF_MEMORY`      | -7  | 资源不足       |
+| `AV_ERR_NOT_IMPLEMENTED`    | -8  | 能力未实现      |
+| `AV_ERR_TIMEOUT`            | -9  | 超时         |
+| `AV_ERR_RETRY`              | -10 | 可重试        |
+| `AV_ERR_INTERNAL`           | -99 | 内部错误/panic |
 
 `AlgoError` 映射见 [error.rs](../../../crates/algo-sdk/src/error.rs)；`last_error` 使用线程局部错误缓存提供详情，安全层不传播 C 整数错误码。
 
@@ -107,10 +107,10 @@ unsafe extern "C" fn(
 ) -> c_int;
 ```
 
-| 参数              | 契约                                                                                                                                |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `lib`             | 来自本插件 `library_open`，同步调用期有效                                                                                           |
-| input（24 字节）  | `size/api_version/image_bytes/image_bytes_len`；当前接受压缩图像字节，非裸 RGB/实时帧描述符；上限 32 MiB                            |
+| 参数            | 契约                                                                                                  |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| `lib`         | 来自本插件 `library_open`，同步调用期有效                                                                        |
+| input（24 字节）  | `size/api_version/image_bytes/image_bytes_len`；当前接受压缩图像字节，非裸 RGB/实时帧描述符；上限 32 MiB                   |
 | output（56 字节） | 调用方提供完整可写 ABI 结构并初始化版本头；返回 `status_code`、embedding 指针/维度、aligned JPEG 指针/长度、quality/detection score |
 
 - 输出向量和 JPEG 借用插件缓存，宿主不释放；在下次提取、线程结束或卸载前复制需要保留的结果，不能把缓存指针交给异步消费者。
@@ -120,6 +120,8 @@ unsafe extern "C" fn(
 - 当前实现：[macOS](../../../algo-packages/macos/arm64/face_recognition/src/lib.rs)、[RK3576](../../../algo-packages/rknn/rk3576/face_recognition/src/lib.rs)。
 
 ## 硬件预处理与会话
+
+宿主向算法实例提供解码后的原生 `FrameRef`/`AvFrameDesc`，不为所有算法强制设定统一模型输入尺寸。当前默认由算法包自行选择预处理尺寸、裁切、色彩格式和归一化方式；若后续启用宿主预处理，算法包必须先通过 `instance_negotiate` 声明可接受的帧能力，宿主再按实例约束执行，不能用单一目标尺寸覆盖所有模型。
 
 - `CvEngine::letterbox/resize` 返回 `(CvBuffer, PreprocessMode)`；宿主 `AvImageOps` 注入优先，未注入时使用平台引擎。
 - 平台默认：macOS→AppleCvEngine，Linux+rga→RgaCvEngine，其他→CpuCvEngine；生产 CPU 回退仍受 [三路径边界](./media-pipeline.md#三条路径) 限制。
@@ -135,12 +137,12 @@ unsafe extern "C" fn(
 
 结果字段、坐标、告警/证据职责与迁移要求统一见 [检测结果、告警与证据契约](./detection-alarm-contract.md)。下表描述当前实现；`emit_detections` 尚未按新检测协议迁移。
 
-| 方法                                   | 当前行为                                |
-| -------------------------------------- | --------------------------------------- |
+| 方法                                     | 当前行为                          |
+| -------------------------------------- | ----------------------------- |
 | `emit_detections(&[NormBox])`          | 发射 `AV_RESULT_ALARM` 并附全景抓拍请求 |
-| `emit_recognition_json(&[u8])`         | 发射识别结果，不自动附图片请求          |
-| `emit_self_test(count)`                | 自检信号                                |
-| `emit_json_result(kind, json, images)` | 通用结果与图片请求                      |
+| `emit_recognition_json(&[u8])`         | 发射识别结果，不自动附图片请求               |
+| `emit_self_test(count)`                | 自检信号                          |
+| `emit_json_result(kind, json, images)` | 通用结果与图片请求                     |
 
 `BoxesSerializer` 直接写字节序列，避免中间字符串；当前 emitter 仍分配 JSON Vec/CString，不能声称完全零分配。
 结果、JSON 和图片请求指针仅在同步回调期有效；长度不含尾部 NUL，JSON 内嵌 NUL 返回错误，消费者不能保存裸指针。
@@ -154,8 +156,8 @@ unsafe extern "C" fn(
 - `algorithm_id` 与库元数据一致，version 使用语义化版本；模型文件按平台交付。
 - 标准平台与别名：
 
-| 标准 ID        | 兼容别名                             |
-| -------------- | ------------------------------------ |
+| 标准 ID          | 兼容别名                                |
+| -------------- | ----------------------------------- |
 | `macos-arm64`  | `macos-arm64-coreml`、`darwin-arm64` |
 | `linux-rknn`   | `linux-arm64-rknn`、`rknn`           |
 | `linux-ascend` | `linux-arm64-ascend`、`ascend`       |
@@ -164,14 +166,14 @@ unsafe extern "C" fn(
 归档由 [archive.rs](../../../crates/api/src/algo/archive.rs) 识别 `.tar.gz/.tgz/.tar/.zip`，拒绝绝对路径、`..` 和逃逸目标目录的条目。
 生产/上传必须启用子进程自检，失败拒绝加载。算法包必须完整通过以下**六步沙箱物理自检**：
 
-| 检查            | 失败条件                                          |
-| --------------- | ------------------------------------------------- |
-| 1. 路径与结构   | canonicalize 失败，缺 manifest/lib/testimage      |
-| 2. Manifest 与平台 | 解析/版本/平台匹配失败                         |
-| 3. Config Schema | 存在但不是合法 JSON                              |
-| 4. 子进程隔离   | 派生或监控失败                                    |
-| 5. 元数据一致性 | library_query 的 algorithm_id 与 manifest 不同    |
-| 6. 真实前向自检 | 原生测试帧处理失败，回调结果不合格，超时/异常退出 |
+| 检查               | 失败条件                                       |
+| ---------------- | ------------------------------------------ |
+| 1. 路径与结构         | canonicalize 失败，缺 manifest/lib/testimage   |
+| 2. Manifest 与平台  | 解析/版本/平台匹配失败                               |
+| 3. Config Schema | 存在但不是合法 JSON                               |
+| 4. 子进程隔离         | 派生或监控失败                                    |
+| 5. 元数据一致性        | library_query 的 algorithm_id 与 manifest 不同 |
+| 6. 真实前向自检        | 原生测试帧处理失败，回调结果不合格，超时/异常退出                  |
 
 子进程使用当前可执行文件的 `__verify-algo <package_dir>`，看门狗 **10000ms**；超时终止，非零退出或 SIGSEGV 等信号均失败。
 库查找顺序：`lib/lib{algorithm_id}.{本机扩展名}` → 异构扩展名 → lib 目录按扩展名扫描；不能因此跳过平台匹配。
@@ -203,10 +205,10 @@ unsafe extern "C" fn(
 
 本次文档整理确认的差异，不能视作已完成能力：
 
-| 旧描述                                                         | 当前事实 / 待对齐点                                                                     |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| SafeFrame 强制 `<16384` 尺寸上限                               | 当前检查非零尺寸与内存布局，尚无该上限检查；不能依赖草案常量                            |
-| 宿主所有停止/重置路径均 flush                                  | SDK 已提供入口，`RawAlgoInstance::drop` 当前直接 destroy；调用接线仍需验证/补齐         |
-| `instance_update_config` 更新离线提取阈值                      | 库级提取当前使用自身阈值，不能推断与实例配置自动联动；模型由 `shared_models` 惰性初始化 |
-| Manifest runtime_constraints/resource_profile/self_test 已生效 | 当前 `AlgoManifest` 未建模这些扩展字段；不能据此声称 OS、资源或自检超时限制已执行       |
-| config.schema 必填且六步全部实现                               | 交付要求保留，但当前校验允许 schema 缺失，沙箱为上述六项                                |
+| 旧描述                                                         | 当前事实 / 待对齐点                                                |
+| ----------------------------------------------------------- | ---------------------------------------------------------- |
+| SafeFrame 强制 `<16384` 尺寸上限                                  | 当前检查非零尺寸与内存布局，尚无该上限检查；不能依赖草案常量                             |
+| 宿主所有停止/重置路径均 flush                                          | SDK 已提供入口，`RawAlgoInstance::drop` 当前直接 destroy；调用接线仍需验证/补齐 |
+| `instance_update_config` 更新离线提取阈值                           | 库级提取当前使用自身阈值，不能推断与实例配置自动联动；模型由 `shared_models` 惰性初始化       |
+| Manifest runtime_constraints/resource_profile/self_test 已生效 | 当前 `AlgoManifest` 未建模这些扩展字段；不能据此声称 OS、资源或自检超时限制已执行         |
+| config.schema 必填且六步全部实现                                     | 交付要求保留，但当前校验允许 schema 缺失，沙箱为上述六项                           |

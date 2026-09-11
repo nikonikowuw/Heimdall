@@ -1,7 +1,7 @@
 //! 靶向精准高清抽帧与异步 JPEG 编码引擎
 //!
 //! 1. 告警触发时，按时标 T 从 MainStreamRingBuffer 索引前置 I 帧并快进解码出单帧 1080P/4K 原图；
-//! 2. 若主码流断线或无可用 GOP，自动平滑降级抓取子码流当前帧，保证 100% 不漏图；
+//! 2. 若主码流断线、无可用 GOP 或 VPU 配额不足，自动平滑复用已解码候选帧，保证 100% 不漏图；
 //! 3. 将图像色彩空间转换、扩边裁剪、JPEG 压缩与文件落盘卸载至 Dedicated Blocking 线程池，杜绝阻塞 Tokio Worker；
 //! 4. 产物落盘至 `var/data/evidence/{camera_id}/`。
 
@@ -27,6 +27,7 @@ pub struct SnapshotResult {
     pub file_size_bytes: usize,
     pub width: u32,
     pub height: u32,
+    /// 是否使用了子码流候选帧（历史字段名；主码流 decoded_ring 复用不会置 true）
     pub is_fallback_sub_stream: bool,
 }
 
@@ -202,13 +203,13 @@ impl SnapshotEngine {
                                     if let Some(fallback) = sub_stream_fallback {
                                         tracing::info!(
                                             camera_id = %camera_id,
-                                            "追帧解码超时熔断，已排空解码器并优雅回退至子码流当前帧"
+                                            "追帧解码超时熔断，已排空解码器并优雅回退至已解码候选帧"
                                         );
                                         return Ok((fallback.clone(), true));
                                     }
                                 }
                             } else if let Some(fallback) = sub_stream_fallback {
-                                // 3. 精准追帧模式 (子码流直接复用)：前向追解包数超限，直接复用子码流当时检测命中的那张真实解码帧
+                                // 3. 精准追帧模式 (已解帧直接复用)：前向追解包数超限，直接复用当时检测命中的那张真实解码候选帧
                                 tracing::warn!(
                                     camera_id = %camera_id,
                                     target_pts = target_pts_ms,
@@ -216,18 +217,18 @@ impl SnapshotEngine {
                                     phase_diff_ms,
                                     packet_count,
                                     max_burst = config.max_burst_packets,
-                                    "大 GOP 前向追解包数超限，精准追帧模式直接复用子码流检测命中的真实解码帧 (时标零偏差)"
+                                    "大 GOP 前向追解包数超限，精准追帧模式直接复用已解码候选帧 (时标零偏差)"
                                 );
                                 return Ok((fallback.clone(), true));
                             } else {
-                                // 子码流不可用，尽力而为前向硬解
+                                // 候选帧不可用，尽力而为前向硬解
                                 tracing::warn!(
                                     camera_id = %camera_id,
                                     target_pts = target_pts_ms,
                                     keyframe_pts,
                                     phase_diff_ms,
                                     packet_count,
-                                    "子码流未就绪，尽力而为前向硬解"
+                                    "已解码候选帧未就绪，尽力而为前向硬解"
                                 );
                                 let burst_start = std::time::Instant::now();
                                 let mut timed_out = false;
@@ -272,13 +273,13 @@ impl SnapshotEngine {
                                     decoded_frame = Some(frame);
                                 }
                             } else if let Some(fallback) = sub_stream_fallback {
-                                // 精准追帧模式：偏差较大，直接复用子码流当时检测命中的真实解码帧 (0延迟/100%时标精准)
+                                // 精准追帧模式：偏差较大，直接复用当时检测命中的真实解码候选帧 (0延迟/100%时标精准)
                                 tracing::info!(
                                     camera_id = %camera_id,
                                     target_pts = target_pts_ms,
                                     keyframe_pts,
                                     phase_diff_ms,
-                                    "大 GOP 相位偏差较大 (>= 500ms)，直接复用子码流检测命中的真实解码帧 (时标零偏差)"
+                                    "大 GOP 相位偏差较大 (>= 500ms)，直接复用已解码候选帧 (时标零偏差)"
                                 );
                                 return Ok((fallback.clone(), true));
                             } else {
@@ -330,14 +331,14 @@ impl SnapshotEngine {
             }
         }
 
-        // 2. 若主流未能解码出有效帧，自动回退借用子码流当前帧
+        // 2. 若主流未能解码出有效帧，自动回退借用已解码备用帧
         if let Some(frame) = decoded_frame {
             Ok((frame, false))
         } else if let Some(fallback) = sub_stream_fallback {
             tracing::warn!(
                 camera_id = %camera_id,
                 target_pts = target_pts_ms,
-                "主码流靶向抽帧未就绪，平滑降级使用子码流当前帧"
+                "主码流靶向抽帧未就绪，平滑降级使用已解码备用帧"
             );
             Ok((fallback.clone(), true))
         } else {

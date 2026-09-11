@@ -32,7 +32,7 @@ Heimdall 仓库级协作入口，适用于 AI 智能体与工程师。本文只�
 - Rust workspace 是核心；职责依次收敛于 `types`、`db`、`media`、`infer`、`pipeline`、`api` 和 `app`。依赖保持单向，`media` 与 `infer` 通过 `types::FrameRef` 交汇且互不依赖。
 - `pipeline` 负责管线编排、规则判定、后处理和跟踪；`api` 只处理协议适配和控制句柄；`app` 负责装配与生命周期。上层不得直接接触数据库 DSL、媒体驱动或平台 SDK。
 - 平台差异只允许收敛在 `media` / `infer` 及其 FFI 实现内；上层禁止出现平台 feature 分支。`native/` 只保留必要的极薄 C/C++ 硬件垫片。
-- **码流分析模式用户可控与高能效分工（Analysis Stream Selection Policy）**：将分析流选择权完全交由用户或按场景配置（`main` 高清分析、`sub` 低能耗、`auto` 智能自适应）。用户选择主码流时，系统常驻硬解主码流并通过硬件加速单元（RGA/VPC/AIPP）下采样至模型目标尺寸送入推理，保留高清细节并天然支持抓拍零解码；选择子码流时走双流低能耗分工，主码流入 RingBuffer 按需解码；选择自动模式时，若无子码流或探测不可达则自适应降级主流，底层均通过 `StreamHub` 单条物理连接复用，杜绝重复拉流带宽。
+- **分析码流选择与算法输入契约**：系统支持 `main`、`sub`、`auto` 三种分析模式。默认/`auto` 优先常驻解码低分辨率子码流，主码流以裸 NALU 写入有界 `RingBuffer`；显式 `main` 或 Auto 无可用子码流时，常驻解码主码流。分析泵将解码后的原生 `FrameRef` 直接交给各算法实例，由算法包自行选择预处理尺寸、裁切、色彩格式和归一化；若宿主承担预处理，必须先按算法实例能力协商，不能使用全局固定尺寸。双流告警时主码流按需单帧解码，单流/主流常驻模式则可从已解码帧环按 PTS 零解码复用；底层由 `StreamHub` 复用单条物理连接，杜绝重复拉流带宽。
 - 生产交付保持单二进制：前端 SPA 构建产物由 Rust 后端通过 `rust-embed` 提供；开发模式的外挂资源或 HMR 不得改变生产交付约束。
 
 ### 帧、并发与资源
@@ -42,6 +42,7 @@ Heimdall 仓库级协作入口，适用于 AI 智能体与工程师。本文只�
   - **常驻推理主路径 (`infer_fast_path`)**：生产媒体管线必须沿 `FrameRef` 传递平台原生 buffer（如 DMA-BUF、CVPixelBuffer 或 device memory），解码输出到推理输入严格维持纯设备侧零拷贝（VPU/DVPP -> RGA/VPC/AIPP -> RKNN/ACL），严禁在常驻推理流水线上发生任何 CPU 像素拷贝、CPU 色彩转换或 CPU 软解；
   - **低频证据生成路径 (`snapshot_readback_path`)**：作为显式特例，仅在告警触发或人工抓拍时按需单帧触发，允许将物理设备帧执行 Device-to-Host readback（如 `aclrtMemcpy(D2H)`、`mmap` cache sync）并交由 CPU 转为 RGB / JPEG 存盘；
   - **开发调试回退路径 (`debug_cpu_fallback_path`)**：仅在目标环境物理上确无硬件加速单元时作为保底，严禁伪装为硬件加速。
+- **算法实例帧输入契约**：常驻分析泵将解码后的平台原生 `FrameRef`（如 DMA-BUF、CVPixelBuffer 或 device memory）直接交给各算法实例；算法包自行选择输入尺寸、裁切、色彩转换和归一化，并在支持的平台上使用 RGA/VPC/AIPP 等设备侧能力。若宿主未来承担预处理，必须先按算法实例能力协商格式与尺寸，禁止用一个全局模型尺寸覆盖不同算法。
 - 所有帧队列、事件缓冲、批处理和缓存必须有固定上限及明确丢弃/降级策略；帧路径禁止无界 channel。优先丢弃旧帧，不能用阻塞发送反压硬件解码。
 - 任何平台 SDK、FFI 或超过约 1 ms 的 CPU 密集工作都不得直接运行在 Tokio worker 中。使用启动时确定数量的专用线程和有界通道；模型/硬件上下文应在线程内常驻。
 - 不持锁执行 IO、FFI 或 `.await`；跨线程转移帧所有权，不复制帧。文件、fd、buffer pool 租约和模型句柄必须有 RAII 生命周期。

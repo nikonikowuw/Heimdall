@@ -1,4 +1,5 @@
 pub mod coordinator;
+pub mod decoded_ring;
 pub mod error;
 pub mod events;
 pub mod geometry;
@@ -16,6 +17,7 @@ pub use coordinator::{
     ActiveRuntimeEntry, CameraPipelineRuntimeInfo, CoordinatorError, InstanceLaunchConfig,
     InstanceRuntimeInfo, StartCameraPipelineParams, TaskRuntimeCoordinator, TaskRuntimeService,
 };
+pub use decoded_ring::{DecodedFrameRingBuffer, DecodedRingConfig};
 pub use error::PipelineError;
 pub use events::{
     EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
@@ -28,8 +30,8 @@ pub use manager::{
 };
 pub use motion_gate::MotionGate;
 pub use pump::{
-    AnalysisFpsGovernor, InstanceMetrics, PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig,
-    WorkerInstanceConfig,
+    AnalysisFpsGovernor, AnalysisPump, AnalysisPumpConfig, InstanceMetrics, PumpMetrics,
+    SubStreamAnalysisPump, SubStreamPumpConfig, WorkerInstanceConfig,
 };
 pub use roi::RoiAffineMapper;
 pub use rules::{RuleEvaluator, RuleIdentifier, TriggeredAlarm, DEFAULT_FULLSCREEN_RULE_INDEX};

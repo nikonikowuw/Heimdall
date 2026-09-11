@@ -1,9 +1,9 @@
-//! 子码流分析驱动泵 (Sub-Stream Analysis Pump)
+//! 分析码流驱动泵 (Analysis Pump)
 //!
 //! 核心职责：
-//! 1. 订阅指定摄像机子码流广播包，维持 H.264/H.265 解码器完整参考帧链；
+//! 1. 订阅已决议的分析码流广播包，维持 H.264/H.265 解码器完整参考帧链；
 //! 2. 抽帧节流器 (Analysis FPS Governor) 按需抽帧，降低 NPU 负载；
-//! 3. 每帧解码结果实时同步更新至管线保底快照源 (sub_stream_fallback)；
+//! 3. 每帧解码结果实时同步更新至管线快照直通与保底队列；
 //! 4. 抽帧通过单槽 Drop-Oldest 缓冲区送入专用常驻推理线程池 (InferenceWorkerHandle)，防范超载；
 //! 5. 串行将推理结果输送至 `PipelineManager::process_detections`，规则触发告警时自动闭环执行靶向高清快照落地。
 
@@ -60,16 +60,16 @@ pub struct WorkerInstanceConfig {
     pub config_json: Option<String>,
 }
 
-/// 子码流分析驱动泵配置
+/// 有效分析码流驱动泵配置
 #[derive(Debug, Clone)]
-pub struct SubStreamPumpConfig {
+pub struct AnalysisPumpConfig {
     /// 目标分析抽帧率 (0 表示不限帧率全量抽帧)
     pub target_fps: u32,
     /// 是否启用简易帧差运动门控 (静止场景跳过推理)
     pub motion_gate_enabled: bool,
 }
 
-impl Default for SubStreamPumpConfig {
+impl Default for AnalysisPumpConfig {
     fn default() -> Self {
         Self {
             target_fps: 10,
@@ -77,6 +77,9 @@ impl Default for SubStreamPumpConfig {
         }
     }
 }
+
+/// 历史公共名称，保留源码兼容性；新的代码应使用 [`AnalysisPumpConfig`]。
+pub type SubStreamPumpConfig = AnalysisPumpConfig;
 
 /// pump 任务停止等待上限；超时后后台任务继续持有硬件句柄，避免控制面被拖死。
 pub const DEFAULT_PUMP_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(3000);
@@ -320,8 +323,8 @@ async fn trigger_target_snapshot(
     }
 }
 
-/// 子码流分析驱动泵
-pub struct SubStreamAnalysisPump {
+/// 有效分析码流驱动泵
+pub struct AnalysisPump {
     camera_id: String,
     cancel_token: CancellationToken,
     decode_handle: Option<tokio::task::JoinHandle<()>>,
@@ -329,9 +332,9 @@ pub struct SubStreamAnalysisPump {
     control_slots: Arc<SharedControlSlots>,
 }
 
-impl std::fmt::Debug for SubStreamAnalysisPump {
+impl std::fmt::Debug for AnalysisPump {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SubStreamAnalysisPump")
+        f.debug_struct("AnalysisPump")
             .field("camera_id", &self.camera_id)
             .field("is_running", &self.is_running())
             .field(
@@ -358,15 +361,15 @@ impl std::fmt::Debug for SubStreamAnalysisPump {
     }
 }
 
-impl SubStreamAnalysisPump {
-    /// 启动子码流分析驱动泵 (使用外部推理 Handle，向后兼容单 worker 模式)
+impl AnalysisPump {
+    /// 启动有效分析码流驱动泵 (使用外部推理 Handle，向后兼容单 worker 模式)
     pub fn start(
         camera_id: impl Into<String>,
         session: Arc<CameraStreamSession>,
         decoder: Box<dyn VideoDecoder + Send>,
         worker: InferenceWorkerHandle,
         pipeline_mgr: Arc<PipelineManager>,
-        config: SubStreamPumpConfig,
+        config: AnalysisPumpConfig,
     ) -> Self {
         Self::start_multi_worker(
             camera_id,
@@ -384,14 +387,14 @@ impl SubStreamAnalysisPump {
         )
     }
 
-    /// 启动子码流分析驱动泵并由驱动泵托管 InferenceWorker 运行周期 (向后兼容)
+    /// 启动有效分析码流驱动泵并由驱动泵托管 InferenceWorker 运行周期 (向后兼容)
     pub fn start_with_worker(
         camera_id: impl Into<String>,
         session: Arc<CameraStreamSession>,
         decoder: Box<dyn VideoDecoder + Send>,
         worker: infer::InferenceWorker,
         pipeline_mgr: Arc<PipelineManager>,
-        config: SubStreamPumpConfig,
+        config: AnalysisPumpConfig,
     ) -> Self {
         let handle = worker.handle();
         Self::start_multi_worker(
@@ -410,7 +413,7 @@ impl SubStreamAnalysisPump {
         )
     }
 
-    /// 启动多算法实例子码流驱动泵
+    /// 启动多算法实例有效分析码流驱动泵
     pub fn start_multi_worker(
         camera_id: impl Into<String>,
         session: Arc<CameraStreamSession>,
@@ -457,7 +460,7 @@ impl SubStreamAnalysisPump {
                 tracing::info!(
                     camera_id = %cam_id_infer,
                     algorithm_id = %algorithm_id_infer,
-                    "子码流多算法实例推理循环已启动"
+                    "多算法实例推理循环已启动"
                 );
 
                 loop {
@@ -468,7 +471,7 @@ impl SubStreamAnalysisPump {
                             tracing::info!(
                                 camera_id = %cam_id_infer,
                                 algorithm_id = %algorithm_id_infer,
-                                "子码流多算法实例推理循环收到关停信号"
+                                "多算法实例推理循环收到关停信号"
                             );
                             break;
                         }
@@ -614,7 +617,7 @@ impl SubStreamAnalysisPump {
                 tracing::info!(
                     camera_id = %cam_id_infer,
                     algorithm_id = %algorithm_id_infer,
-                    "子码流多算法实例推理循环已平稳退出"
+                    "多算法实例推理循环已平稳退出"
                 );
             });
 
@@ -643,7 +646,7 @@ impl SubStreamAnalysisPump {
             tracing::info!(
                 camera_id = %cam_id,
                 slot_count,
-                "子码流多算法驱动泵解码循环已启动"
+                "多算法驱动泵解码循环已启动"
             );
 
             let mut motion_gate =
@@ -654,7 +657,7 @@ impl SubStreamAnalysisPump {
                     biased;
 
                     _ = decode_cancel.cancelled() => {
-                        tracing::info!(camera_id = %cam_id, "子码流解码驱动循环收到关停信号");
+                        tracing::info!(camera_id = %cam_id, "分析码流解码驱动循环收到关停信号");
                         break;
                     }
 
@@ -669,12 +672,12 @@ impl SubStreamAnalysisPump {
                                 tracing::warn!(
                                     camera_id = %cam_id,
                                     skipped,
-                                    "子码流分析驱动泵数据包积压掉队 (Lagged)，继续处理后续数据包"
+                                    "分析码流驱动泵数据包积压掉队 (Lagged)，继续处理后续数据包"
                                 );
                                 continue;
                             }
                             Err(broadcast::error::RecvError::Closed) => {
-                                tracing::info!(camera_id = %cam_id, "子码流数据广播通道已关闭，解码循环退出");
+                                tracing::info!(camera_id = %cam_id, "分析码流数据广播通道已关闭，解码循环退出");
                                 break;
                             }
                         };
@@ -683,8 +686,10 @@ impl SubStreamAnalysisPump {
                             Ok(Some(frame)) => {
                                 metrics_clone.frames_decoded.fetch_add(1, Ordering::Relaxed);
 
-                                // 1. 实时更新管线保底快照候选帧
-                                pipeline_mgr_decode.update_sub_stream_frame(&cam_id, frame.clone()).await;
+                                // 1. 实时更新管线保底快照与零解码直通候选帧
+                                pipeline_mgr_decode
+                                    .update_decoded_frame(&cam_id, frame.clone())
+                                    .await;
 
                                 // 2. 运动门控过滤：静止帧跳过所有槽位推理，节省算力
                                 if let Some(gate) = motion_gate.as_mut() {
@@ -717,7 +722,7 @@ impl SubStreamAnalysisPump {
                             Ok(None) => {}
                             Err(e) => {
                                 metrics_clone.decode_errors.fetch_add(1, Ordering::Relaxed);
-                                tracing::warn!(camera_id = %cam_id, error = %e, "解码子码流数据包失败");
+                                tracing::warn!(camera_id = %cam_id, error = %e, "解码分析码流数据包失败");
                             }
                         }
                     }
@@ -733,17 +738,19 @@ impl SubStreamAnalysisPump {
             {
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => {
-                    tracing::warn!(camera_id = %cam_id, error = %err, "子码流解码器 flush 失败")
+                    tracing::warn!(camera_id = %cam_id, error = %err, "分析码流解码器 flush 失败")
                 }
                 Err(_) => tracing::error!(
                     camera_id = %cam_id,
                     timeout_ms = media::decoder::DEFAULT_THREAD_SHUTDOWN_TIMEOUT.as_millis() as u64,
-                    "子码流解码器 flush 超时，隔离硬件句柄"
+                    "分析码流解码器 flush 超时，隔离硬件句柄"
                 ),
             }
+            // 退出前清空已解码缓冲队列，提前释放硬件池租约 (DMA-BUF / 显存)
+            pipeline_mgr_decode.clear_decoded_ring(&cam_id).await;
             decoder.dispose().await;
 
-            tracing::info!(camera_id = %cam_id, "子码流分析驱动泵解码循环已完全停止并清理资源");
+            tracing::info!(camera_id = %cam_id, "分析码流驱动泵解码循环已完全停止并清理资源");
         });
 
         Self {
@@ -844,12 +851,12 @@ impl SubStreamAnalysisPump {
             match tokio::time::timeout(DEFAULT_PUMP_SHUTDOWN_TIMEOUT, handle).await {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
-                    tracing::warn!(camera_id = %self.camera_id, error = %err, "子码流解码任务异常退出")
+                    tracing::warn!(camera_id = %self.camera_id, error = %err, "分析码流解码任务异常退出")
                 }
                 Err(_) => tracing::error!(
                     camera_id = %self.camera_id,
                     timeout_ms = DEFAULT_PUMP_SHUTDOWN_TIMEOUT.as_millis() as u64,
-                    "子码流解码任务停止超时，保留后台句柄隔离"
+                    "分析码流解码任务停止超时，保留后台句柄隔离"
                 ),
             }
         }
@@ -895,13 +902,16 @@ impl SubStreamAnalysisPump {
     }
 }
 
-impl Drop for SubStreamAnalysisPump {
+impl Drop for AnalysisPump {
     fn drop(&mut self) {
         if !self.cancel_token.is_cancelled() {
             self.cancel_token.cancel();
         }
     }
 }
+
+/// 历史公共名称，保留源码兼容性；新的代码应使用 [`AnalysisPump`]。
+pub type SubStreamAnalysisPump = AnalysisPump;
 
 #[cfg(test)]
 mod tests {

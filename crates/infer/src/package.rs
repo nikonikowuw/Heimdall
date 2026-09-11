@@ -213,7 +213,9 @@ impl InferenceBackend for AlgoInstance {
             _ => desc.pixel_format = AV_PIX_UNKNOWN,
         }
 
-        // 适配原生平台帧零拷贝句柄直通 (infer_fast_path) 与调试回退路径 (debug_cpu_fallback_path)
+        // 宿主只传递解码后的原生帧描述，不假设所有算法拥有相同的模型输入尺寸。
+        // 算法包在自己的硬件/CPU 适配层完成缩放、裁切、色彩转换和归一化。
+        // 下面的句柄适配保持 infer_fast_path 的设备侧零拷贝边界；Host 仅用于显式调试回退。
         #[allow(unreachable_patterns)]
         match frame.handle() {
             #[cfg(target_os = "macos")]
