@@ -10,6 +10,12 @@ pub struct SystemOverview {
     pub os_info: String,
     pub kernel_version: String,
     pub uptime_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_interface: Option<String>,
     // === 保留旧字段以向后兼容 ===
     pub cpu_usage_percent: f64,
     pub memory_usage_percent: f64,

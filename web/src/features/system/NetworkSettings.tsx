@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Wifi, WifiOff, Shield, Pencil, Check, X, Cable } from 'lucide-react'
+import { Wifi, WifiOff, Shield, Pencil, Check, X, Cable, Network, Globe, Radio } from 'lucide-react'
 import { systemApi } from '../../lib/system-api'
 import { RefreshButton } from '../../components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
@@ -40,6 +40,21 @@ function isVirtualInterface(iface: NetworkInterface): boolean {
     lower.startsWith('dummy') ||
     lower.startsWith('p2p-dev-')
   )
+}
+
+function isCurrentAccessIface(iface: NetworkInterface): boolean {
+  if (typeof window === 'undefined') return false
+  const host = window.location.hostname
+  if (iface.ipv4?.address && iface.ipv4.address === host) {
+    return true
+  }
+  if (
+    (host === 'localhost' || host === '127.0.0.1' || host === '::1') &&
+    iface.capabilities.isManagementInterface
+  ) {
+    return true
+  }
+  return false
 }
 
 export function NetworkSettings(): React.ReactElement {
@@ -143,6 +158,11 @@ export function NetworkSettings(): React.ReactElement {
     if (pendingIface && draft) executeSave(pendingIface, draft)
   }
 
+  const currentAccessIface =
+    interfaces.find(isCurrentAccessIface) ||
+    interfaces.find((i) => i.capabilities.isManagementInterface) ||
+    interfaces[0]
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -166,6 +186,77 @@ export function NetworkSettings(): React.ReactElement {
         <ErrorBanner message={error || trialError!} onRetry={() => loadData()} />
       )}
 
+      {/* 当前连接与主网卡全局概览 */}
+      {currentAccessIface && (
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-green)]/10 text-[var(--accent-green)]">
+                <Radio className="h-5 w-5 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-[var(--text-muted)]">
+                    {t('network.currentActiveCard', { defaultValue: '当前活动网卡' })}
+                  </span>
+                  <span className="font-mono text-[14px] font-semibold text-[var(--text-primary)]">
+                    {currentAccessIface.name}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-green)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-green)]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-green)]" />
+                    {t('network.online', { defaultValue: '在线通信中' })}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
+                  <span>
+                    IP:{' '}
+                    <strong className="font-mono font-medium text-[var(--text-primary)]">
+                      {currentAccessIface.ipv4?.address ||
+                        t('network.notAssigned', { defaultValue: '未分配' })}
+                    </strong>
+                    {currentAccessIface.ipv4?.prefix ? `/${currentAccessIface.ipv4.prefix}` : ''}
+                  </span>
+                  {currentAccessIface.ipv4?.gateway && (
+                    <span>
+                      {t('network.gateway', { defaultValue: '网关' })}:{' '}
+                      <span className="font-mono text-[var(--text-secondary)]">
+                        {currentAccessIface.ipv4.gateway}
+                      </span>
+                    </span>
+                  )}
+                  {currentAccessIface.ipv4?.dns && currentAccessIface.ipv4.dns.length > 0 && (
+                    <span>
+                      DNS:{' '}
+                      <span className="font-mono text-[var(--text-secondary)]">
+                        {currentAccessIface.ipv4.dns[0]}
+                      </span>
+                    </span>
+                  )}
+                  <span>
+                    MAC:{' '}
+                    <span className="font-mono text-[var(--text-secondary)]">
+                      {currentAccessIface.mac}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 rounded-lg bg-[var(--bg-secondary)] px-3 py-1.5 text-xs text-[var(--text-muted)]">
+              <Globe className="h-4 w-4 text-[var(--accent)]" />
+              <span>
+                {t('network.currentAccess', { defaultValue: '当前访问口' })}:{' '}
+                <span className="font-mono font-medium text-[var(--text-primary)]">
+                  {typeof window !== 'undefined'
+                    ? `${window.location.protocol}//${window.location.host}`
+                    : ''}
+                </span>
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <SettingsSection title={t('network.interfaces', { defaultValue: '网卡列表' })}>
         {loading && interfaces.length === 0 ? (
           <LoadingSkeleton rows={3} />
@@ -179,6 +270,7 @@ export function NetworkSettings(): React.ReactElement {
               <NetworkCard
                 key={iface.name}
                 iface={iface}
+                isCurrentAccess={isCurrentAccessIface(iface)}
                 isEditing={editingIface === iface.name}
                 draft={editingIface === iface.name ? draft : null}
                 saving={saving}
@@ -221,6 +313,7 @@ export function NetworkSettings(): React.ReactElement {
 
 interface NetworkCardProps {
   iface: NetworkInterface
+  isCurrentAccess?: boolean
   isEditing: boolean
   draft: IpConfig | null
   saving: boolean
@@ -233,6 +326,7 @@ interface NetworkCardProps {
 
 function NetworkCard({
   iface,
+  isCurrentAccess = false,
   isEditing,
   draft,
   saving,
@@ -251,7 +345,9 @@ function NetworkCard({
       className={`rounded-xl border transition-all ${
         isEditing
           ? 'border-[var(--accent)]/30 bg-[var(--accent)]/5'
-          : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]'
+          : isCurrentAccess
+            ? 'border-[var(--accent-green)]/40 bg-[var(--bg-surface)] hover:border-[var(--accent-green)]/60'
+            : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]'
       }`}
     >
       {/* Header */}
@@ -262,10 +358,16 @@ function NetworkCard({
               isUp ? 'bg-[var(--accent-green)]/10' : 'bg-[var(--bg-secondary)]'
             }`}
           >
-            {isUp ? (
-              <Wifi className="h-5 w-5 text-[var(--accent-green)]" />
+            {iface.type === 'wifi' ? (
+              isUp ? (
+                <Wifi className="h-5 w-5 text-[var(--accent-green)]" />
+              ) : (
+                <WifiOff className="h-5 w-5 text-[var(--text-muted)]" />
+              )
+            ) : isUp ? (
+              <Network className="h-5 w-5 text-[var(--accent-green)]" />
             ) : (
-              <WifiOff className="h-5 w-5 text-[var(--text-muted)]" />
+              <Network className="h-5 w-5 text-[var(--text-muted)] opacity-50" />
             )}
           </div>
           <div>
@@ -276,6 +378,12 @@ function NetworkCard({
               <span className="rounded-md bg-[var(--bg-secondary)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-muted)]">
                 {iface.type}
               </span>
+              {isCurrentAccess && (
+                <span className="flex items-center gap-1 rounded-md bg-[var(--accent-green)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-green)]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-green)]" />
+                  {t('network.currentAccess', { defaultValue: '当前访问口' })}
+                </span>
+              )}
               {isMgmt && (
                 <span className="flex items-center gap-1 rounded-md bg-[var(--accent-amber)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-amber)]">
                   <Shield className="h-3 w-3" />
@@ -291,10 +399,18 @@ function NetworkCard({
                       : 'bg-[var(--text-muted)]/10 text-[var(--text-muted)]'
                   }`}
                 >
-                  <Cable className="h-3 w-3" />
-                  {iface.carrier
-                    ? t('network.carrierUp', { defaultValue: '网线已插' })
-                    : t('network.carrierDown', { defaultValue: '网线未插' })}
+                  {iface.type === 'wifi' ? (
+                    <Wifi className="h-3 w-3" />
+                  ) : (
+                    <Cable className="h-3 w-3" />
+                  )}
+                  {iface.type === 'wifi'
+                    ? iface.carrier
+                      ? t('network.wifiConnected', { defaultValue: '无线已连' })
+                      : t('network.wifiDisconnected', { defaultValue: '无线未连' })
+                    : iface.carrier
+                      ? t('network.carrierUp', { defaultValue: '网线已插' })
+                      : t('network.carrierDown', { defaultValue: '网线未插' })}
                 </span>
               )}
               {/* 协商速率 */}

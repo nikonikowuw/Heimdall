@@ -99,6 +99,134 @@ pub async fn detect_default_route_interface() -> Option<String> {
     detect_default_route_interfaces().await.into_iter().next()
 }
 
+/// 读取系统默认网关与对应网卡 (耗时 <0.05ms，直接读取 /proc/net/route)
+pub async fn detect_default_gateway() -> Option<(String, String)> {
+    if let Ok(content) = tokio::fs::read_to_string("/proc/net/route").await {
+        for line in content.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 3 && fields[1] == "00000000" {
+                let iface = fields[0].to_string();
+                if let Some(gw_ip) = parse_hex_ip(fields[2]) {
+                    if gw_ip != "0.0.0.0" {
+                        return Some((iface, gw_ip));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 读取宿主系统 DNS 配置列表
+pub async fn read_system_dns() -> Vec<String> {
+    let candidate_paths = ["/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"];
+    let mut dns = Vec::new();
+    for path in candidate_paths {
+        if let Ok(content) = tokio::fs::read_to_string(path).await {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("nameserver") {
+                    let ip = rest.trim();
+                    if !ip.is_empty() && !ip.starts_with("127.") && !dns.contains(&ip.to_string()) {
+                        dns.push(ip.to_string());
+                    }
+                }
+            }
+            if !dns.is_empty() {
+                break;
+            }
+        }
+    }
+    dns
+}
+
+/// 从内核直接读取网卡当前实时生效的 IPv4 与掩码（作为 NetworkManager 等 Profile 缺失时的安全兜底）
+pub async fn get_runtime_ipv4_config(iface: &str) -> Option<types::system::IpConfig> {
+    let output = tokio::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show", iface])
+        .env("LC_ALL", "C")
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if line.contains("inet ") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            for pair in parts.windows(2) {
+                if pair[0] == "inet" {
+                    if let Some((addr, pfx)) = pair[1].split_once('/') {
+                        let is_dhcp = line.contains(" dynamic");
+                        let gateway =
+                            if let Some((gw_iface, gw_ip)) = detect_default_gateway().await {
+                                if gw_iface == iface {
+                                    Some(gw_ip)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                        return Some(types::system::IpConfig {
+                            method: if is_dhcp {
+                                types::system::IpMethod::Dhcp
+                            } else {
+                                types::system::IpMethod::Static
+                            },
+                            address: Some(addr.to_string()),
+                            prefix: pfx.parse().ok(),
+                            gateway,
+                            dns: read_system_dns().await,
+                            metric: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 快速识别系统当前主网卡网络身份（网卡名、IP、MAC 地址）
+pub async fn detect_primary_network_identity() -> (Option<String>, Option<String>, Option<String>) {
+    let primary_iface = detect_default_route_interface().await;
+
+    if let Some(ref iface) = primary_iface {
+        let mac = get_mac_address(iface).await.ok();
+        let ip = get_runtime_ipv4_config(iface)
+            .await
+            .and_then(|cfg| cfg.address);
+        return (Some(iface.clone()), ip, mac);
+    }
+
+    // 若无默认路由，尝试在 /sys/class/net 寻找第一个非虚拟且处于 UP 状态的物理网卡
+    if let Ok(mut entries) = tokio::fs::read_dir("/sys/class/net").await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !is_virtual_interface(&name) {
+                let operstate =
+                    tokio::fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
+                        .await
+                        .unwrap_or_default();
+                if operstate.trim() == "up" {
+                    let mac = get_mac_address(&name).await.ok();
+                    let ip = get_runtime_ipv4_config(&name)
+                        .await
+                        .and_then(|cfg| cfg.address);
+                    return (Some(name), ip, mac);
+                }
+            }
+        }
+    }
+
+    (None, None, None)
+}
+
 /// 动态判定网卡是否为当前管理网卡（Management Interface）
 ///
 /// 判定逻辑：

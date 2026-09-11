@@ -6,6 +6,9 @@ export interface SystemOverview {
   osInfo: string
   kernelVersion: string
   uptimeSeconds: number
+  ipAddress?: string | null
+  macAddress?: string | null
+  primaryInterface?: string | null
   // === 旧字段（向后兼容） ===
   cpuUsagePercent: number
   memoryUsagePercent: number

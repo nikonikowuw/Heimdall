@@ -23,6 +23,8 @@
     "model": "设备型号",
     "os": "操作系统",
     "kernel": "内核版本",
+    "ipAddress": "IPv4 地址",
+    "macAddress": "MAC 地址",
     "uptime": "运行时间",
     "days": "天",
     "hours": "小时",
@@ -117,7 +119,13 @@
     "ipAddress": "IP 地址",
     "prefix": "前缀",
     "unconfigured": "未配置 IP（可点击右上角“编辑”预设静态 IP）",
-    "noInterfaces": "未检测到物理以太网卡"
+    "noInterfaces": "未检测到物理以太网卡",
+    "currentActiveCard": "当前活动网卡",
+    "online": "在线通信中",
+    "notAssigned": "未分配",
+    "currentAccess": "当前访问口",
+    "wifiConnected": "无线已连",
+    "wifiDisconnected": "无线未连"
   },
   "thermal": {
     "noData": "暂无温度传感器数据",

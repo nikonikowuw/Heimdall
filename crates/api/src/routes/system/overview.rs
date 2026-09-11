@@ -111,12 +111,18 @@ pub async fn get_overview(
         0.0
     };
 
+    let (primary_interface, ip_address, mac_address) =
+        crate::network_service::detector::detect_primary_network_identity().await;
+
     Ok(ApiResponse::success(types::SystemOverview {
         software_version: env!("CARGO_PKG_VERSION").to_string(),
         device_model: host_info.device_model,
         os_info: host_info.os_info,
         kernel_version: host_info.kernel_version,
         uptime_seconds: host_info.uptime_seconds,
+        ip_address,
+        mac_address,
+        primary_interface,
         cpu_usage_percent: cpu_overview.overall_percent,
         memory_usage_percent: round_1dp(memory_usage_percent),
         memory_used_mb: memory_metrics.used_mb,

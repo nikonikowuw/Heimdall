@@ -8,7 +8,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
-import { Server, Cpu, HardDrive, Camera, AlertTriangle, Activity, Clock } from 'lucide-react'
+import {
+  Server,
+  Cpu,
+  HardDrive,
+  Camera,
+  AlertTriangle,
+  Activity,
+  Clock,
+  Network,
+} from 'lucide-react'
 import { systemApi } from '../../lib/system-api'
 import { RefreshButton } from '../../components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
@@ -330,6 +339,20 @@ export function SystemOverview(): React.ReactElement {
                 label={t('overview.version', { defaultValue: '软件版本' })}
                 value={data.softwareVersion}
               />
+              {data.ipAddress && (
+                <InfoRow
+                  icon={Network}
+                  label={t('overview.ipAddress', { defaultValue: 'IPv4 地址' })}
+                  value={`${data.ipAddress}${data.primaryInterface ? ` (${data.primaryInterface})` : ''}`}
+                />
+              )}
+              {data.macAddress && (
+                <InfoRow
+                  icon={Network}
+                  label={t('overview.macAddress', { defaultValue: 'MAC 地址' })}
+                  value={data.macAddress}
+                />
+              )}
               <InfoRow
                 icon={Server}
                 label={t('overview.model', { defaultValue: '设备型号' })}

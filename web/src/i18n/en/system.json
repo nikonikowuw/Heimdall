@@ -23,6 +23,8 @@
     "model": "Device Model",
     "os": "Operating System",
     "kernel": "Kernel Version",
+    "ipAddress": "IPv4 Address",
+    "macAddress": "MAC Address",
     "uptime": "Uptime",
     "days": "d",
     "hours": "h",
@@ -144,7 +146,13 @@
     "ipAddress": "IP Address",
     "prefix": "Prefix",
     "unconfigured": "No IP configured (click Edit in the top right to configure static IP)",
-    "noInterfaces": "No physical network interfaces detected"
+    "noInterfaces": "No physical network interfaces detected",
+    "currentActiveCard": "Active Network Interface",
+    "online": "Online & Communicating",
+    "notAssigned": "Not Assigned",
+    "currentAccess": "Current Access",
+    "wifiConnected": "Wi-Fi Connected",
+    "wifiDisconnected": "Wi-Fi Disconnected"
   },
   "storage": {
     "title": "Storage & Retention",

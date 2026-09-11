@@ -21,6 +21,8 @@
     "model": "裝置型號",
     "os": "作業系統",
     "kernel": "核心版本",
+    "ipAddress": "IPv4 位址",
+    "macAddress": "MAC 位址",
     "uptime": "運行時間",
     "days": "天",
     "hours": "小時",
@@ -58,7 +60,13 @@
     "ipAddress": "IP 位址",
     "prefix": "前綴",
     "unconfigured": "未配置 IP（可點擊右上角「編輯」預設靜態 IP）",
-    "noInterfaces": "未檢測到物理乙太網路卡"
+    "noInterfaces": "未檢測到物理乙太網路卡",
+    "currentActiveCard": "目前活動網路卡",
+    "online": "在線通訊中",
+    "notAssigned": "未分配",
+    "currentAccess": "目前存取埠",
+    "wifiConnected": "無線已連",
+    "wifiDisconnected": "無線未連"
   },
   "storage": {
     "title": "儲存與保留策略",

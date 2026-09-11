@@ -3,7 +3,8 @@
 use crate::error::ApiError;
 use crate::network_service::detector::{
     detect_carrier, detect_default_route_interfaces, detect_link_speed_and_duplex, get_mac_address,
-    is_management_interface_with_defaults, is_virtual_interface, run_command_with_c_locale,
+    get_runtime_ipv4_config, is_management_interface_with_defaults, is_virtual_interface,
+    run_command_with_c_locale,
 };
 use types::system::{
     InterfaceCapabilities, IpConfig, IpMethod, NetworkInterface, NetworkInterfaceState,
@@ -58,11 +59,18 @@ pub async fn list_interfaces_nm() -> Result<Vec<NetworkInterface>, ApiError> {
 
         // 直接复用 device status 中已激活的连接名读取 IPv4 配置
         let active_conn = parts[3].trim();
-        let ipv4 = if !active_conn.is_empty() && active_conn != "--" {
+        let mut ipv4 = if !active_conn.is_empty() && active_conn != "--" {
             get_ipv4_config_by_conn(active_conn).await.ok().flatten()
         } else {
             None
         };
+
+        // 内核运行时地址安全兜底：若 NM 连接未输出可用 IPv4，从系统内核直读
+        if ipv4.as_ref().and_then(|ip| ip.address.as_ref()).is_none() {
+            if let Some(runtime_ip) = get_runtime_ipv4_config(&name).await {
+                ipv4 = Some(runtime_ip);
+            }
+        }
 
         let is_mgmt = is_management_interface_with_defaults(&name, &default_route_ifaces).await;
         let carrier = detect_carrier(&name).await;
