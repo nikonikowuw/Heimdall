@@ -34,6 +34,35 @@ impl From<SpsInfo> for StreamInfo {
     }
 }
 
+/// 将 Retina / VUI 解析得出的有理数帧时间或帧率解析为工业级 FPS
+///
+/// Retina 的 `VideoParameters::frame_rate` 返回以秒为单位的单帧周期 (num 秒, den 帧)。
+/// 即每帧耗时 `num / den` 秒，真实的每秒帧率 (FPS) 为 `den / num`。
+///
+/// 本函数提供严格的工业级防御性校验：
+/// 1. 除零与非法浮点防护 (NaN / Inf / <= 0)
+/// 2. 合理工业监控帧率区间校验 `[1.0, 240.0]`
+/// 3. 双向自适应容错：优先按标准单帧周期 `den / num` 解析；若异常则尝试兼容 `num / den`
+/// 4. 四舍五入到两位小数以消除 IEEE-754 浮点微小抖动（如 29.97002997 -> 29.97，25.000000004 -> 25.0）
+pub fn sanitize_rational_fps(num: u32, den: u32) -> Option<f64> {
+    if num == 0 || den == 0 {
+        return None;
+    }
+    // 优先：Retina 标准语义 (num 秒 / den 帧)，FPS = den / num (例如 25 / 1 = 25.0)
+    let fps_standard = den as f64 / num as f64;
+    if fps_standard.is_finite() && (1.0..=240.0).contains(&fps_standard) {
+        return Some((fps_standard * 100.0).round() / 100.0);
+    }
+
+    // 防御性兼容：若外部元组反向以 (den 秒, num 帧) 形式给出 (例如 25 / 1)
+    let fps_inverted = num as f64 / den as f64;
+    if fps_inverted.is_finite() && (1.0..=240.0).contains(&fps_inverted) {
+        return Some((fps_inverted * 100.0).round() / 100.0);
+    }
+
+    None
+}
+
 /// 摄像头码流测活探针
 #[derive(Debug, Default)]
 pub struct StreamProber;
@@ -72,18 +101,23 @@ impl StreamProber {
                     "h264".to_string()
                 };
 
-                let mut fps = stream.framerate().map(|f| f as f64).unwrap_or(0.0);
+                let mut fps = stream
+                    .framerate()
+                    .map(|f| f as f64)
+                    .filter(|&f| f.is_finite() && (1.0..=240.0).contains(&f))
+                    .map(|f| (f * 100.0).round() / 100.0)
+                    .unwrap_or(0.0);
                 let mut width = 0u32;
                 let mut height = 0u32;
 
-                // 1. 优先从 Retina 解析出的 VideoParameters 中读取分辨率
+                // 1. 优先从 Retina 解析出的 VideoParameters 中读取分辨率与帧率
                 if let Some(retina::codec::ParametersRef::Video(v)) = stream.parameters() {
                     let (w, h) = v.pixel_dimensions();
                     width = w;
                     height = h;
                     if let Some((num, den)) = v.frame_rate() {
-                        if den > 0 {
-                            fps = num as f64 / den as f64;
+                        if let Some(v_fps) = sanitize_rational_fps(num, den) {
+                            fps = v_fps;
                         }
                     }
                 }
@@ -94,7 +128,7 @@ impl StreamProber {
                     if let Some(info) = Self::parse_sdp(&sdp_str) {
                         width = info.width;
                         height = info.height;
-                        if fps <= 0.0 {
+                        if fps <= 0.0 && info.fps > 0.0 {
                             fps = info.fps;
                         }
                     }
@@ -151,12 +185,20 @@ impl StreamProber {
                     {
                         width = w;
                         height = h;
-                        if fps <= 0.0 {
+                        if fps <= 0.0 && f > 0.0 {
                             fps = f;
                         }
                     }
                 }
             }
+        }
+
+        // 4. 工业级默认保底：安防监控 IPC 绝大多数默认帧率为 25.0 fps（PAL/GB28181 标准工业帧率）。
+        // 若码流中完全未配置 VUI 时钟或 SDP framerate 属性，给予可信的缺省 25.0 保底。
+        if fps <= 0.0 || !fps.is_finite() {
+            fps = 25.0;
+        } else {
+            fps = (fps * 100.0).round() / 100.0;
         }
 
         tracing::info!(
@@ -406,5 +448,42 @@ a=fmtp:96 sprop-sps=QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDllmZpJMreEAAAAEAg;sprop-pps=R
     fn test_parse_sdp_rejects_audio_only() {
         let sdp = "v=0\r\nm=audio 0 RTP/AVP 0\r\n";
         assert!(!sdp.contains("m=video"));
+    }
+
+    #[test]
+    fn test_sanitize_rational_fps_standard_and_ntsc() {
+        // 1. 标准安防 25 fps: Retina 返回 (1, 25) -> 25.0
+        assert_eq!(sanitize_rational_fps(1, 25), Some(25.0));
+
+        // 2. 标准 15 fps: (1, 15) 或 (2, 30) -> 15.0
+        assert_eq!(sanitize_rational_fps(1, 15), Some(15.0));
+        assert_eq!(sanitize_rational_fps(2, 30), Some(15.0));
+
+        // 3. 标准 30 fps: (2_000, 60_000) -> 30.0
+        assert_eq!(sanitize_rational_fps(2_000, 60_000), Some(30.0));
+
+        // 4. 标准 24 fps: (2, 48) -> 24.0
+        assert_eq!(sanitize_rational_fps(2, 48), Some(24.0));
+
+        // 5. NTSC 29.97 fps: (1001, 30000) -> 29.97
+        assert_eq!(sanitize_rational_fps(1001, 30000), Some(29.97));
+
+        // 6. NTSC 59.94 fps: (1001, 60000) -> 59.94
+        assert_eq!(sanitize_rational_fps(1001, 60000), Some(59.94));
+    }
+
+    #[test]
+    fn test_sanitize_rational_fps_defensive_fallbacks() {
+        // 1. 防御性自适应：若外部输入为倒置的 (25, 1) -> 25.0
+        assert_eq!(sanitize_rational_fps(25, 1), Some(25.0));
+
+        // 2. 除零与非法输入防护
+        assert_eq!(sanitize_rational_fps(0, 25), None);
+        assert_eq!(sanitize_rational_fps(25, 0), None);
+        assert_eq!(sanitize_rational_fps(0, 0), None);
+
+        // 3. 越界异常值防护 (超出 [1.0, 240.0])
+        assert_eq!(sanitize_rational_fps(1, 1000), None);
+        assert_eq!(sanitize_rational_fps(10000, 1), None);
     }
 }
