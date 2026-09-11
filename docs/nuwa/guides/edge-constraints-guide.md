@@ -17,6 +17,8 @@
 ## 检查点
 
 - [ ] 帧数据沿平台原生句柄传递；使用真实 stride/分配尺寸，读回只出现在允许的路径。见 [媒体管线](../backend/media-pipeline.md)。
+- [ ] 受限平台（如 RK3568）评估物理连续内存（CMA），多模型算法通过单例 Actor 或算力租约（`AlgoLease`）复用常驻上下文，杜绝频繁 `rknn_init`/`rknn_destroy` 造成的 CMA 碎片化。
+- [ ] DMA-BUF 映射为张量虚拟地址时配置读写权限（`PROT_READ | PROT_WRITE`），防止 `rknn_inputs_set` 发生页写保护致命崩溃。
 - [ ] 热路径缓冲已预分配复用，避免逐帧 `format!`、临时像素容器与模型重载。
 - [ ] 队列、缓存、录像环和批处理有条数/字节/时长上限；满载策略可观测且不阻塞解码。
 - [ ] FFI 与超过约 1ms 的计算进入固定 Worker；锁、停机与超时见 [并发模型](../backend/concurrency-guidelines.md)。
