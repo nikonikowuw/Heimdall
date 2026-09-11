@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
+  AlertCircle,
   Check,
+  CheckCircle2,
   Copy,
   Pencil,
   Plus,
@@ -11,6 +13,7 @@ import {
   ShieldCheck,
   Trash2,
   Video,
+  X,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -41,6 +44,20 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false)
   const [cameraToEdit, setCameraToEdit] = useState<Camera | null>(null)
   const [cameraToDelete, setCameraToDelete] = useState<Camera | null>(null)
+  const [toast, setToast] = useState<{
+    id: number
+    type: 'success' | 'error'
+    title: string
+    message: string
+  } | null>(null)
+
+  const showToast = (type: 'success' | 'error', title: string, message: string) => {
+    const id = Date.now()
+    setToast({ id, type, title, message })
+    setTimeout(() => {
+      setToast((curr) => (curr?.id === id ? null : curr))
+    }, 4000)
+  }
 
   const loadData = async (): Promise<void> => {
     setIsLoading(true)
@@ -78,9 +95,29 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             : c,
         ),
       )
+      const details = [
+        res.codec ? res.codec.toUpperCase() : null,
+        res.width && res.height ? `${res.width}x${res.height}` : null,
+        res.fps && res.fps > 0 ? `${res.fps} FPS` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+
+      showToast(
+        'success',
+        t('manage.probeSuccess', { defaultValue: '探活成功' }),
+        details
+          ? `${camera.name} (${details})`
+          : `${camera.name} ${t('status.healthy', { defaultValue: '正常在线' })}`,
+      )
     } catch {
       setCameras((prev) =>
         prev.map((c) => (c.cameraId === camera.cameraId ? { ...c, lastProbeStatus: 'failed' } : c)),
+      )
+      showToast(
+        'error',
+        t('manage.probeFailed', { defaultValue: '探活失败' }),
+        `${camera.name}: ${t('manage.probeFailedDesc', { defaultValue: 'RTSP 连接超时或鉴权失败，请检查网络与流地址' })}`,
       )
     } finally {
       setProbingCameraId(null)
@@ -527,6 +564,36 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
         onClose={() => setCameraToDelete(null)}
         onSuccess={handleCameraDeleted}
       />
+
+      {/* 探活结果悬浮 Toast 提示 */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            key={toast.id}
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            className="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-surface-elevated)] p-4 shadow-xl backdrop-blur-md"
+          >
+            {toast.type === 'success' ? (
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
+            ) : (
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-400" />
+            )}
+            <div className="flex-1 space-y-0.5">
+              <div className="text-sm font-semibold text-[var(--text-primary)]">{toast.title}</div>
+              <div className="text-xs text-[var(--text-secondary)]">{toast.message}</div>
+            </div>
+            <button
+              onClick={() => setToast(null)}
+              className="text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

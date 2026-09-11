@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use sea_orm::Set;
-use types::{Camera, CreateCameraRequest, ProbeResult, UpdateCameraRequest};
+use types::{Camera, CodecType, CreateCameraRequest, ProbeResult, UpdateCameraRequest};
 
 use crate::camera_probe::CameraProbeService;
 use crate::error::ApiError;
@@ -237,7 +237,44 @@ async fn probe_camera_manual(
 
     tracing::info!(camera_id = %camera_id, rtsp_url = %media::mask_rtsp_url(&camera.rtsp_url), "收到手动探活请求");
 
-    match media::StreamProber::probe(&camera.rtsp_url, Duration::from_secs(5)).await {
+    // 1. 若当前摄像头已有活跃流会话，优先复用已缓存的关键帧参数集 (0 额外网络开销)
+    let cached_info = {
+        let mut found = None;
+        for key in [
+            &format!("{camera_id}:main"),
+            &format!("{camera_id}:sub"),
+            &camera.rtsp_url,
+        ] {
+            if let Some(cache) = state.stream_hub.get_keyframe_cache(key).await {
+                if let Some(sps) = &cache.sps {
+                    let info = match cache.codec {
+                        Some(CodecType::H265) => media::sps::parse_h265_sps(sps).ok(),
+                        Some(CodecType::H264) => media::sps::parse_h264_sps(sps).ok(),
+                        _ => None,
+                    };
+                    if let Some(sps_info) = info {
+                        if sps_info.width > 0 && sps_info.height > 0 {
+                            found = Some(media::StreamInfo {
+                                codec: sps_info.codec,
+                                width: sps_info.width,
+                                height: sps_info.height,
+                                fps: sps_info.fps,
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        found
+    };
+
+    let probe_res = match cached_info {
+        Some(info) => Ok(info),
+        None => media::StreamProber::probe(&camera.rtsp_url, Duration::from_secs(5)).await,
+    };
+
+    match probe_res {
         Ok(probe_info) => {
             tracing::info!(
                 camera_id = %camera_id,

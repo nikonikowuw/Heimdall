@@ -1,10 +1,11 @@
 use base64::Engine;
+use futures::StreamExt;
 use std::time::Duration;
 
 use crate::error::MediaError;
 use crate::retina_ingest::sanitize_rtsp_url_and_credentials;
 use crate::rtsp::mask_rtsp_url;
-use crate::sps::{parse_h264_sps, parse_h265_sps, SpsInfo};
+use crate::sps::{parse_h264_sps, parse_h265_sps, split_annex_b_nalus, SpsInfo};
 
 /// 视频流探活信息
 #[derive(Debug, Clone, PartialEq)]
@@ -61,7 +62,8 @@ impl StreamProber {
             })?;
 
         // 严格检索视频轨 (video track)
-        for stream in session.streams() {
+        let mut video_track: Option<(usize, String, u32, u32, f64)> = None;
+        for (idx, stream) in session.streams().iter().enumerate() {
             if stream.media() == "video" {
                 let encoding = stream.encoding_name().to_lowercase();
                 let codec = if encoding.contains("h265") || encoding.contains("hevc") {
@@ -98,27 +100,79 @@ impl StreamProber {
                     }
                 }
 
-                tracing::info!(
-                    url = %masked_url,
-                    codec = %codec,
-                    width,
-                    height,
-                    fps,
-                    "Retina 统一探活完成"
-                );
-
-                return Ok(StreamInfo {
-                    codec,
-                    width,
-                    height,
-                    fps,
-                });
+                video_track = Some((idx, codec, width, height, fps));
+                break;
             }
         }
 
-        Err(MediaError::RtspConnect {
-            url: masked_url,
-            reason: "SDP 描述中缺少视频轨 (m=video)".into(),
+        let (video_idx, codec, mut width, mut height, mut fps) = match video_track {
+            Some(track) => track,
+            None => {
+                return Err(MediaError::RtspConnect {
+                    url: masked_url,
+                    reason: "SDP 描述中缺少视频轨 (m=video)".into(),
+                });
+            }
+        };
+
+        // 3. 若通过 SDP 仍无法获取宽/高（安防 IPC 绝大多数场景：SPS/PPS 仅在媒体流带内随关键帧下发），
+        //    则发起轻量 PLAY 抓取首批包含带内 SPS 的视频切片以提取真实物理尺寸与帧率
+        if width == 0 || height == 0 {
+            if let Ok(playing) = session.play(retina::client::PlayOptions::default()).await {
+                if let Ok(mut demuxed) = playing.demuxed() {
+                    let play_codec = codec.clone();
+                    let extract_future = async {
+                        while let Some(Ok(item)) = demuxed.next().await {
+                            if let retina::codec::CodecItem::VideoFrame(frame) = item {
+                                if frame.stream_id() == video_idx {
+                                    let data = frame.into_data();
+                                    for nalu in split_annex_b_nalus(&data) {
+                                        if play_codec == "h265" {
+                                            if nalu.len() >= 2 && ((nalu[0] >> 1) & 0x3F) == 33 {
+                                                if let Ok(sps) = parse_h265_sps(nalu) {
+                                                    return Some((sps.width, sps.height, sps.fps));
+                                                }
+                                            }
+                                        } else if !nalu.is_empty() && (nalu[0] & 0x1F) == 7 {
+                                            if let Ok(sps) = parse_h264_sps(nalu) {
+                                                return Some((sps.width, sps.height, sps.fps));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        None
+                    };
+
+                    // 最多等待 2.5 秒（涵盖一个完整 GOP），提取后立即关闭连接
+                    if let Ok(Some((w, h, f))) =
+                        tokio::time::timeout(Duration::from_millis(2500), extract_future).await
+                    {
+                        width = w;
+                        height = h;
+                        if fps <= 0.0 {
+                            fps = f;
+                        }
+                    }
+                }
+            }
+        }
+
+        tracing::info!(
+            url = %masked_url,
+            codec = %codec,
+            width,
+            height,
+            fps,
+            "Retina 统一探活完成"
+        );
+
+        Ok(StreamInfo {
+            codec,
+            width,
+            height,
+            fps,
         })
     }
 

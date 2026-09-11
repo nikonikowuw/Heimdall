@@ -65,6 +65,7 @@
     "probing": "探活中...",
     "probeSuccess": "探活成功",
     "probeFailed": "探活失败",
+    "probeFailedDesc": "RTSP 连接超时或鉴权失败，请检查网络连通性与流地址",
     "searchPlaceholder": "按设备名称、ID 或 RTSP 地址搜索...",
     "filterAll": "全部状态",
     "aiTaskBound": "已配置布防任务",

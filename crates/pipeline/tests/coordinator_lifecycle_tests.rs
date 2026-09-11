@@ -410,12 +410,12 @@ async fn test_coordinator_alarm_trigger_and_event_broadcast() {
     // 移动目标至 Y = 0.55 (穿过绊线，维持 IoU=0.5 航迹关联)，推送第 2 帧
     backend.set_y(0.55);
     let _ = sub_session.broadcast_tx.send(create_packet(1040, false));
-    tokio::time::sleep(Duration::from_millis(150)).await;
 
-    // 验证是否收到告警事件
+    // 验证是否收到告警事件 (异步落盘证据可能需要一定时间，采用有界轮询等待)
     let mut received_alarm = false;
-    while let Ok(evt) = event_rx.try_recv() {
-        if let PipelineAnalysisEvent::Alarm(alarm_evt) = evt {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(PipelineAnalysisEvent::Alarm(alarm_evt)) = event_rx.try_recv() {
             if alarm_evt.camera_id == cam_id {
                 received_alarm = true;
                 assert!(!alarm_evt.event_id.is_empty());
@@ -433,6 +433,7 @@ async fn test_coordinator_alarm_trigger_and_event_broadcast() {
                 break;
             }
         }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
     assert!(

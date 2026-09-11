@@ -65,6 +65,7 @@
     "probing": "Probing...",
     "probeSuccess": "Probe Succeeded",
     "probeFailed": "Probe Failed",
+    "probeFailedDesc": "RTSP connection timed out or authentication failed. Please check network connectivity and credentials.",
     "searchPlaceholder": "Search by device name, ID, or RTSP URL...",
     "filterAll": "All Status",
     "aiTaskBound": "AI Task Deployed",

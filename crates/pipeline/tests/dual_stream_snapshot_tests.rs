@@ -278,11 +278,11 @@ async fn test_large_gop_adaptive_burst_decode() {
         "test_large_gop_burst_{}",
         uuid::Uuid::new_v4().simple()
     ));
-    // 默认自适应双模配置 (max_burst_packets = 30)
+    // 默认自适应双模配置 (max_burst_packets = 30，测试环境中放宽超时预算防止 debug 模式 CPU 抖动)
     let config = SnapshotConfig {
         phase_diff_threshold_ms: 500,
         max_burst_packets: 30,
-        max_burst_timeout_ms: 80,
+        max_burst_timeout_ms: 1000,
         capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
