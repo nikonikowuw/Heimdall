@@ -40,6 +40,8 @@
   "drawLine": "画绊线 Line",
   "canvasPlaceholder": "视频帧交互布防画板",
   "saveRules": "保存布防规则",
+  "taskName": "任务名称:",
+  "clickToEditName": "点击可原地快速修改任务名称",
   "actions": {
     "enterStudio": "进入动态矢量布防工作台",
     "configureRules": "配置算法与布防规则",
@@ -120,7 +122,15 @@
     "motionGateDesc": "无像素变动时跳过 NPU 推理",
     "viewSandbox": "沙箱详情与参数",
     "uploadAlgo": "上传新算法包",
-    "noAlgo": "暂未加载算法包"
+    "noAlgo": "暂未加载算法包",
+    "algoRackTitle": "AI 智能检测引擎 (Smart Detections)",
+    "rackTip": "点击方块直接启闭 · 启用后点齿轮调参",
+    "zonesSectionTitle": "空间活动防区 (Activity Zones)",
+    "activeZonesCount": "项防区",
+    "enterCalibration": "绘制 / 编辑活动防区 ↗",
+    "calibratingActive": "正在标定中 (点击画面绘制)",
+    "doneCalibration": "完成标定 (ESC)",
+    "noZonesHint": "当前画面尚未划定局部防区，已启用的算法将在全画幅范围内生效并判定告警。"
   },
   "tools": {
     "select": "选择与位移",
@@ -145,8 +155,10 @@
     "items": "项",
     "shortcuts": "快捷键",
     "save": "保存布防规则",
+    "saveTask": "保存配置",
     "saving": "正在保存...",
-    "saveSuccess": "布防规则已成功同步并生效！"
+    "saveSuccess": "布防规则已成功同步并生效！",
+    "saveFailed": "保存失败，请检查网络或后端状态"
   },
   "layers": {
     "title": "布防规则图层",

@@ -89,8 +89,7 @@ export function TaskCameraCard({
     algoParams.confidence_threshold ??
     algoParams.confidenceThreshold ??
     algoParams.detection_confidence_threshold
-  const confDisplay =
-    typeof rawConf === 'number' ? `${(rawConf * 100).toFixed(0)}%` : null
+  const confDisplay = typeof rawConf === 'number' ? `${(rawConf * 100).toFixed(0)}%` : null
   const rawClasses = algoParams.target_classes ?? algoParams.targetClasses
   const classesCount = Array.isArray(rawClasses) ? rawClasses.length : null
 
@@ -382,7 +381,10 @@ export function TaskCameraCard({
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
             <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-            <span className="truncate font-mono font-semibold text-[var(--text-primary)]" title={algorithmId || undefined}>
+            <span
+              className="truncate font-mono font-semibold text-[var(--text-primary)]"
+              title={algorithmId || undefined}
+            >
               {algorithmId || t('card.algorithmUnbound', { defaultValue: '未绑定算法' })}
             </span>
           </span>
@@ -409,7 +411,9 @@ export function TaskCameraCard({
             {classesCount !== null && (
               <span className="flex items-center gap-1">
                 <span>警戒类别:</span>
-                <span className="font-semibold text-[var(--text-secondary)]">{classesCount} 类</span>
+                <span className="font-semibold text-[var(--text-secondary)]">
+                  {classesCount} 类
+                </span>
               </span>
             )}
           </div>

@@ -40,6 +40,8 @@
   "drawLine": "畫絆線 Line",
   "canvasPlaceholder": "視頻幀交互布防畫板",
   "saveRules": "保存布防規則",
+  "taskName": "任務名稱:",
+  "clickToEditName": "點擊可原地快速修改任務名稱",
   "actions": {
     "enterStudio": "進入動態矢量布防工作台",
     "configureRules": "配置演算法與布防規則",
@@ -120,7 +122,15 @@
     "motionGateDesc": "無像素變動時跳過 NPU 推理",
     "viewSandbox": "沙箱詳情與參數",
     "uploadAlgo": "上傳新演算法包",
-    "noAlgo": "暫未載入演算法包"
+    "noAlgo": "暫未載入演算法包",
+    "algoRackTitle": "AI 智慧檢測引擎 (Smart Detections)",
+    "rackTip": "點擊方塊直接啟閉 · 啟用後點齒輪調參",
+    "zonesSectionTitle": "空間活動防區 (Activity Zones)",
+    "activeZonesCount": "項防區",
+    "enterCalibration": "繪製 / 編輯活動防區 ↗",
+    "calibratingActive": "正在標定中 (點擊畫面繪製)",
+    "doneCalibration": "完成標定 (ESC)",
+    "noZonesHint": "當前畫面尚未劃定局部防區，已啟用的演算法將在全畫幅範圍內生效並判定告警。"
   },
   "tools": {
     "select": "選擇與位移",
@@ -145,8 +155,10 @@
     "items": "項",
     "shortcuts": "快捷鍵",
     "save": "保存布防規則",
+    "saveTask": "儲存配置",
     "saving": "正在保存...",
-    "saveSuccess": "布防規則已成功同步並生效！"
+    "saveSuccess": "布防規則已成功同步並生效！",
+    "saveFailed": "保存失敗，請檢查網路或後端狀態"
   },
   "layers": {
     "title": "布防規則圖層",

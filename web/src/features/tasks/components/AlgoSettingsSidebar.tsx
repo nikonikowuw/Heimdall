@@ -202,9 +202,7 @@ export function AlgoSettingsSidebar({
         {hasConfidenceParam && (
           <div className="space-y-2 border-t border-[var(--border)] pt-3">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-[var(--text-primary)]">
-                {confidenceTitle}
-              </span>
+              <span className="font-semibold text-[var(--text-primary)]">{confidenceTitle}</span>
               <span className="font-mono font-bold text-[var(--accent)]">
                 {(confidenceThreshold * 100).toFixed(0)}%
               </span>
@@ -271,8 +269,7 @@ export function AlgoSettingsSidebar({
                   (prop.maximum as number) <= 1
 
                 if (hasMinMax) {
-                  const numVal =
-                    typeof val === 'number' ? val : Number(prop.default ?? 0.5)
+                  const numVal = typeof val === 'number' ? val : Number(prop.default ?? 0.5)
                   return (
                     <div key={key} className="space-y-1">
                       <div className="flex items-center justify-between">
@@ -287,9 +284,7 @@ export function AlgoSettingsSidebar({
                         max={Number(prop.maximum ?? 1)}
                         step={prop.type === 'integer' ? 1 : 0.05}
                         value={numVal}
-                        onChange={(e) =>
-                          onCustomAlgoParamChange?.(key, parseFloat(e.target.value))
-                        }
+                        onChange={(e) => onCustomAlgoParamChange?.(key, parseFloat(e.target.value))}
                         className="w-full cursor-pointer accent-[var(--accent)]"
                       />
                       {desc && <p className="text-[10px] text-[var(--text-muted)]">{desc}</p>}
@@ -316,9 +311,7 @@ export function AlgoSettingsSidebar({
                             ? val
                             : ((prop.default as number | undefined) ?? 0)
                         }
-                        onChange={(e) =>
-                          onCustomAlgoParamChange?.(key, Number(e.target.value))
-                        }
+                        onChange={(e) => onCustomAlgoParamChange?.(key, Number(e.target.value))}
                         className="w-20 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                       />
                     </div>
@@ -330,16 +323,12 @@ export function AlgoSettingsSidebar({
                     <div key={key} className="flex items-center justify-between gap-2">
                       <div>
                         <span className="font-medium text-[var(--text-secondary)]">{title}</span>
-                        {desc && (
-                          <p className="text-[10px] text-[var(--text-muted)]">{desc}</p>
-                        )}
+                        {desc && <p className="text-[10px] text-[var(--text-muted)]">{desc}</p>}
                       </div>
                       <input
                         type="checkbox"
                         checked={Boolean(val)}
-                        onChange={(e) =>
-                          onCustomAlgoParamChange?.(key, e.target.checked)
-                        }
+                        onChange={(e) => onCustomAlgoParamChange?.(key, e.target.checked)}
                         className="h-3.5 w-3.5 cursor-pointer rounded accent-[var(--accent)]"
                       />
                     </div>
@@ -353,9 +342,7 @@ export function AlgoSettingsSidebar({
                       <span className="font-medium text-[var(--text-secondary)]">{title}</span>
                       <select
                         value={String(val ?? '')}
-                        onChange={(e) =>
-                          onCustomAlgoParamChange?.(key, e.target.value)
-                        }
+                        onChange={(e) => onCustomAlgoParamChange?.(key, e.target.value)}
                         className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                       >
                         {enumItems.map((opt) => (
@@ -375,9 +362,7 @@ export function AlgoSettingsSidebar({
                       <input
                         type="text"
                         value={String(val ?? '')}
-                        onChange={(e) =>
-                          onCustomAlgoParamChange?.(key, e.target.value)
-                        }
+                        onChange={(e) => onCustomAlgoParamChange?.(key, e.target.value)}
                         placeholder={desc}
                         className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                       />

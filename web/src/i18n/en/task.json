@@ -40,6 +40,8 @@
   "drawLine": "Draw Line",
   "canvasPlaceholder": "Interactive Rule Canvas",
   "saveRules": "Save Rules",
+  "taskName": "Task Name:",
+  "clickToEditName": "Click to edit task name directly",
   "actions": {
     "enterStudio": "Open Vector Rules Studio",
     "configureRules": "Configure Algo & Rules",
@@ -120,7 +122,15 @@
     "motionGateDesc": "Skip NPU inference on static frames",
     "viewSandbox": "Sandbox Details & Params",
     "uploadAlgo": "Upload Algorithm Package",
-    "noAlgo": "No algorithm packages loaded"
+    "noAlgo": "No algorithm packages loaded",
+    "algoRackTitle": "Smart Detections",
+    "rackTip": "Click tile to toggle · Click gear to configure",
+    "zonesSectionTitle": "Activity Zones",
+    "activeZonesCount": "zones",
+    "enterCalibration": "Draw / Edit Zones ↗",
+    "calibratingActive": "Calibrating (Click video to draw)",
+    "doneCalibration": "Done Calibration (ESC)",
+    "noZonesHint": "No spatial zones defined yet. Active algorithms will apply across the entire frame."
   },
   "tools": {
     "select": "Select & Move",
@@ -145,8 +155,10 @@
     "items": "items",
     "shortcuts": "Shortcuts",
     "save": "Save Rules",
+    "saveTask": "Save Config",
     "saving": "Saving...",
-    "saveSuccess": "Rules successfully synchronized and applied!"
+    "saveSuccess": "Rules successfully synchronized and applied!",
+    "saveFailed": "Failed to save configuration, please check network or server status"
   },
   "layers": {
     "title": "Rule Layers",

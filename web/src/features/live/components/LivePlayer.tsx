@@ -48,6 +48,7 @@ export interface LivePlayerProps {
   stream?: 'main' | 'sub'
   telemetry?: CameraTelemetry
   trackedObjects?: TrackedBBox[]
+  fitMode?: 'contain' | 'cover' | 'fill'
   onSpotlight?: () => void
   onClose?: () => void
   onTogglePause?: () => void
@@ -64,6 +65,7 @@ export function LivePlayer({
   stream,
   telemetry,
   trackedObjects,
+  fitMode = 'contain',
   onSpotlight,
   onClose,
   onTogglePause,
@@ -404,7 +406,13 @@ export function LivePlayer({
       {/* 底层 WebCodecs 零拷贝低延迟渲染画布 */}
       <canvas
         ref={videoCanvasRef}
-        className={`h-full w-full object-contain ${
+        className={`h-full w-full ${
+          fitMode === 'fill'
+            ? 'object-fill'
+            : fitMode === 'cover'
+              ? 'object-cover'
+              : 'object-contain'
+        } ${
           activeProtocol === 'webcodecs' && connectionStatus === 'connected' ? 'block' : 'hidden'
         }`}
       />
@@ -415,9 +423,13 @@ export function LivePlayer({
         autoPlay
         playsInline
         muted
-        className={`h-full w-full object-contain ${
-          activeProtocol === 'flv' || connectionStatus !== 'connected' ? 'block' : 'hidden'
-        }`}
+        className={`h-full w-full ${
+          fitMode === 'fill'
+            ? 'object-fill'
+            : fitMode === 'cover'
+              ? 'object-cover'
+              : 'object-contain'
+        } ${activeProtocol === 'flv' || connectionStatus !== 'connected' ? 'block' : 'hidden'}`}
       />
 
       {/* 顶层透明 Canvas 2D 识别框图层 */}

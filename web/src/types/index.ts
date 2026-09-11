@@ -207,6 +207,7 @@ export interface AlgoManifest {
   author: string
   description: string
   category: string
+  algorithmType?: string
   supportedPlatforms: string[]
   classes: string[]
   license?: string

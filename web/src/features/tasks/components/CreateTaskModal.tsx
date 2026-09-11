@@ -36,9 +36,7 @@ export function CreateTaskModal({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  const selectedAlgo = availableAlgorithms.find(
-    (item) => item.algorithmId === selectedAlgorithmId,
-  )
+  const selectedAlgo = availableAlgorithms.find((item) => item.algorithmId === selectedAlgorithmId)
   const activeVersion =
     selectedAlgo?.versions.find((v) => v.isActive) ||
     selectedAlgo?.versions.find((v) => v.version === selectedAlgo.activeVersion) ||
@@ -402,12 +400,13 @@ export function CreateTaskModal({
                       (prop.maximum as number) <= 1
 
                     if (hasMinMax) {
-                      const numVal =
-                        typeof val === 'number' ? val : Number(prop.default ?? 0.5)
+                      const numVal = typeof val === 'number' ? val : Number(prop.default ?? 0.5)
                       return (
                         <div key={key} className="space-y-1">
                           <div className="flex items-center justify-between">
-                            <span className="font-medium text-[var(--text-secondary)]">{title}</span>
+                            <span className="font-medium text-[var(--text-secondary)]">
+                              {title}
+                            </span>
                             <span className="font-mono font-semibold text-[var(--accent)]">
                               {(numVal * 100).toFixed(0)}%
                             </span>
@@ -435,9 +434,13 @@ export function CreateTaskModal({
                       return (
                         <div key={key} className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <span className="font-medium text-[var(--text-secondary)]">{title}</span>
+                            <span className="font-medium text-[var(--text-secondary)]">
+                              {title}
+                            </span>
                             {desc && (
-                              <p className="truncate text-[10px] text-[var(--text-muted)]">{desc}</p>
+                              <p className="truncate text-[10px] text-[var(--text-muted)]">
+                                {desc}
+                              </p>
                             )}
                           </div>
                           <input
@@ -466,10 +469,10 @@ export function CreateTaskModal({
                       return (
                         <div key={key} className="flex items-center justify-between gap-2">
                           <div>
-                            <span className="font-medium text-[var(--text-secondary)]">{title}</span>
-                            {desc && (
-                              <p className="text-[10px] text-[var(--text-muted)]">{desc}</p>
-                            )}
+                            <span className="font-medium text-[var(--text-secondary)]">
+                              {title}
+                            </span>
+                            {desc && <p className="text-[10px] text-[var(--text-muted)]">{desc}</p>}
                           </div>
                           <input
                             type="checkbox"
@@ -489,7 +492,9 @@ export function CreateTaskModal({
                       return (
                         <div key={key} className="space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <span className="font-medium text-[var(--text-secondary)]">{title}</span>
+                            <span className="font-medium text-[var(--text-secondary)]">
+                              {title}
+                            </span>
                             <div className="flex gap-1 text-[10px]">
                               <button
                                 type="button"
@@ -525,7 +530,7 @@ export function CreateTaskModal({
                                       return { ...p, [key]: next }
                                     })
                                   }
-                                  className={`rounded px-2 py-0.5 font-mono text-[11px] border transition-all ${
+                                  className={`rounded border px-2 py-0.5 font-mono text-[11px] transition-all ${
                                     isSelected
                                       ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
                                       : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]'
