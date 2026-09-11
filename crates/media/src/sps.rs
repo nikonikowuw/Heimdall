@@ -321,7 +321,7 @@ pub fn parse_h264_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
             if num_units_in_tick > 0 && time_scale > 0 {
                 let calculated_fps = (time_scale as f64) / (2.0 * num_units_in_tick as f64);
                 if calculated_fps > 1.0 && calculated_fps < 240.0 {
-                    fps = calculated_fps;
+                    fps = (calculated_fps * 100.0).round() / 100.0;
                 }
             }
         }
