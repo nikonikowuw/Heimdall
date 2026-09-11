@@ -22,6 +22,8 @@ pub struct PipelineAlarmEvent {
     pub event_id: String,
     /// 触发告警的摄像头 ID
     pub camera_id: String,
+    /// 产生告警的算法实例标识 (如 "builtin-yolo26", "general_detection")
+    pub algorithm_id: String,
     /// 规则引擎判定的告警上下文
     pub alarm: TriggeredAlarm,
     /// 靶向抓拍结果；证据失败时为 None，但告警事实仍然保留。

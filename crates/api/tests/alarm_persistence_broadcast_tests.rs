@@ -80,6 +80,7 @@ fn create_mock_alarm_event(
     PipelineAlarmEvent {
         event_id: event_id.to_string(),
         camera_id: camera_id.to_string(),
+        algorithm_id: "mock_algo".to_string(),
         alarm: TriggeredAlarm {
             rule_index: 0,
             role: DetectionRuleRole::Roi,
@@ -132,6 +133,22 @@ async fn test_alarm_persistence_and_ws_broadcast_flow() {
     .await
     .unwrap();
 
+    // 注册测试算法以验证 alarm_type_id 从算法库解析
+    db::AlgorithmRepo::upsert_algorithm(
+        &state.db,
+        db::UpsertAlgorithmParams {
+            algorithm_id: "mock_algo".to_string(),
+            name: "入侵检测算法".to_string(),
+            algorithm_type: "detection".to_string(),
+            alarm_type_id: "INTRUSION".to_string(),
+            active_version: "1.0.0".to_string(),
+            description: "测试算法".to_string(),
+            is_builtin: true,
+        },
+    )
+    .await
+    .unwrap();
+
     // 2. 启动后台告警持久化 Worker 并订阅 WebSocket 广播
     let alarm_svc = Arc::new(AlarmDispatchService::from_state(&state));
     let _worker_handle = alarm_svc.clone().start_worker();
@@ -156,6 +173,8 @@ async fn test_alarm_persistence_and_ws_broadcast_flow() {
     assert_eq!(payload["eventId"], event_id);
     assert_eq!(payload["cameraId"], "CAM-01");
     assert_eq!(payload["cameraName"], "东大门通道");
+    assert_eq!(payload["algorithmId"], "mock_algo");
+    assert_eq!(payload["alarmTypeId"], "INTRUSION");
     assert_eq!(payload["targetLabel"], "person");
     assert_eq!(payload["ruleType"], "roi");
     assert_eq!(payload["severity"], "warning");
@@ -172,6 +191,7 @@ async fn test_alarm_persistence_and_ws_broadcast_flow() {
         .expect("数据库中未找到告警记录");
 
     assert_eq!(alarm_record.camera_id, "CAM-01");
+    assert_eq!(alarm_record.alarm_type_id, "INTRUSION");
     assert_eq!(alarm_record.status, "unprocessed");
     assert_eq!(alarm_record.target_label, "person");
     assert_eq!(alarm_record.confidence, 0.95);

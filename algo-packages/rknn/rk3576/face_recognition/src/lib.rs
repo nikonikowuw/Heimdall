@@ -763,8 +763,8 @@ unsafe fn extract_face_impl(
     let Some((best_face, quality)) = raw_faces
         .into_iter()
         .filter_map(|face| {
-            let face_width = face.bbox[2] * orig_w as f32;
-            let face_height = face.bbox[3] * orig_h as f32;
+            let face_width = face.width() * orig_w as f32;
+            let face_height = face.height() * orig_h as f32;
             let quality = quality::compute_quality(
                 &face.landmarks,
                 &face.landmark_scores,

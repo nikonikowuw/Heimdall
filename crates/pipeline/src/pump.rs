@@ -518,6 +518,7 @@ impl SubStreamAnalysisPump {
                                                         PipelineAlarmEvent {
                                                             event_id,
                                                             camera_id: cam_id_infer.clone(),
+                                                            algorithm_id: algorithm_id_infer.clone(),
                                                             alarm,
                                                             snapshot,
                                                             evidence_status,

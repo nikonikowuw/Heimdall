@@ -282,12 +282,47 @@ impl InferenceBackend for AlgoInstance {
         // 解析回调产出的检测框 JSON
         let mut detections = Vec::new();
         for json_str in collected_results {
-            if let Ok(parsed) = parse_alarm_objects(&json_str) {
-                detections.extend(parsed);
-            }
+            let parsed = parse_alarm_objects(&json_str)?;
+            detections.extend(parsed);
         }
 
         Ok(detections)
+    }
+}
+
+/// 算法包目标检测框反序列化辅助类型
+///
+/// 全系统统一遵循对角两点归一化坐标 [x1, y1, x2, y2] 规范 (0.0..=1.0)。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawBBox {
+    /// 契约规范具名两点式: { "x1": 0.1, "y1": 0.2, "x2": 0.4, "y2": 0.6 }
+    Named { x1: f32, y1: f32, x2: f32, y2: f32 },
+    /// 全局标准归一化对角两点式数组: [x1, y1, x2, y2]
+    Array([f32; 4]),
+}
+
+impl RawBBox {
+    fn coords(&self) -> (f32, f32, f32, f32) {
+        match *self {
+            RawBBox::Named { x1, y1, x2, y2 } | RawBBox::Array([x1, y1, x2, y2]) => {
+                (x1, y1, x2, y2)
+            }
+        }
+    }
+
+    fn to_bounding_box(&self) -> Result<BoundingBox, InferError> {
+        let (x1, y1, x2, y2) = self.coords();
+        if !x1.is_finite() || !y1.is_finite() || !x2.is_finite() || !y2.is_finite() {
+            return Err(InferError::JsonParse {
+                reason: format!("检测框坐标包含非有限值 (NaN/Inf): [{x1}, {y1}, {x2}, {y2}]"),
+            });
+        }
+        let min_x = x1.min(x2).clamp(0.0, 1.0);
+        let max_x = x1.max(x2).clamp(0.0, 1.0);
+        let min_y = y1.min(y2).clamp(0.0, 1.0);
+        let max_y = y1.max(y2).clamp(0.0, 1.0);
+        Ok(BoundingBox::new(min_x, min_y, max_x, max_y))
     }
 }
 
@@ -297,35 +332,66 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
     struct RawObject {
         #[serde(default)]
         class_id: usize,
-        #[serde(default)]
         label: String,
-        #[serde(default)]
         confidence: f32,
         #[serde(default)]
-        box_coords: Option<[f32; 4]>,
+        box_coords: Option<RawBBox>,
         #[serde(default)]
-        bbox: Option<[f32; 4]>,
+        bbox: Option<RawBBox>,
     }
 
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| InferError::JsonParse {
-            reason: e.to_string(),
+            reason: format!("JSON 语法错误: {e}"),
         })?;
 
-    let objects = val.get("objects").unwrap_or(&val);
-    let raw_list: Vec<RawObject> = serde_json::from_value(objects.clone()).unwrap_or_default();
+    // 校验 schema_version（若提供，需校验版本为 1）
+    if let Some(ver_num) = val.get("schema_version").and_then(|v| v.as_u64()) {
+        if ver_num != 1 {
+            return Err(InferError::JsonParse {
+                reason: format!("不支持的 schema_version: {ver_num}，当前仅支持版本 1"),
+            });
+        }
+    }
+
+    let objects_val = match val.get("objects") {
+        Some(objs) => objs,
+        None if val.is_array() => &val,
+        None => {
+            return Err(InferError::JsonParse {
+                reason: "检测结果缺少 objects 数组字段且根节点非数组".to_string(),
+            });
+        }
+    };
+
+    let raw_list: Vec<RawObject> =
+        serde_json::from_value(objects_val.clone()).map_err(|e| InferError::JsonParse {
+            reason: format!("解析 objects 目标列表失败: {e}"),
+        })?;
+
     let mut detections = Vec::with_capacity(raw_list.len());
 
     for item in raw_list {
-        let coords = item
+        if !item.confidence.is_finite() || !(0.0..=1.0).contains(&item.confidence) {
+            return Err(InferError::JsonParse {
+                reason: format!("置信度非法或超出 [0.0, 1.0]: {}", item.confidence),
+            });
+        }
+
+        let raw_bbox = item
             .bbox
             .or(item.box_coords)
-            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+            .ok_or_else(|| InferError::JsonParse {
+                reason: "目标对象缺少有效的 bbox / box_coords 坐标字段".to_string(),
+            })?;
+
+        let bbox = raw_bbox.to_bounding_box()?;
+
         detections.push(Detection {
             class_id: item.class_id,
             label: item.label,
             confidence: item.confidence,
-            bbox: BoundingBox::new(coords[0], coords[1], coords[2], coords[3]),
+            bbox,
         });
     }
 
@@ -501,5 +567,122 @@ impl AlgoRegistry {
     pub async fn contains(&self, algorithm_id: &str) -> bool {
         let map = self.packages.read().await;
         map.contains_key(algorithm_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_alarm_objects_xyxy_standards() {
+        // 1. 全局标准对角两点式数组 [x1, y1, x2, y2]: [0.6, 0.5, 0.7, 0.7]
+        let json_xyxy = r#"{
+            "objects": [
+                {
+                    "class_id": 0,
+                    "label": "face",
+                    "confidence": 0.95,
+                    "bbox": [0.6, 0.5, 0.7, 0.7]
+                }
+            ]
+        }"#;
+        let dets = parse_alarm_objects(json_xyxy).expect("parse xyxy");
+        assert_eq!(dets.len(), 1);
+        assert!((dets[0].bbox.x1 - 0.6).abs() < 1e-4);
+        assert!((dets[0].bbox.y1 - 0.5).abs() < 1e-4);
+        assert!((dets[0].bbox.x2 - 0.7).abs() < 1e-4);
+        assert!((dets[0].bbox.y2 - 0.7).abs() < 1e-4);
+
+        // 2. 契约规范具名两点式 { "x1": 0.2, "y1": 0.2, "x2": 0.9, "y2": 0.95 }
+        let json_named_xyxy = r#"{
+            "objects": [
+                {
+                    "class_id": 1,
+                    "label": "car",
+                    "confidence": 0.88,
+                    "bbox": {
+                        "x1": 0.2,
+                        "y1": 0.2,
+                        "x2": 0.9,
+                        "y2": 0.95
+                    }
+                }
+            ]
+        }"#;
+        let dets2 = parse_alarm_objects(json_named_xyxy).expect("parse named xyxy");
+        assert_eq!(dets2.len(), 1);
+        assert!((dets2[0].bbox.x1 - 0.2).abs() < 1e-4);
+        assert!((dets2[0].bbox.y1 - 0.2).abs() < 1e-4);
+        assert!((dets2[0].bbox.x2 - 0.9).abs() < 1e-4);
+        assert!((dets2[0].bbox.y2 - 0.95).abs() < 1e-4);
+
+        // 3. 边界与倒置防御测试 [0.8, 0.9, 0.2, 0.1] 自动修正为 [0.2, 0.1, 0.8, 0.9]
+        let json_inverted = r#"{
+            "objects": [
+                {
+                    "class_id": 0,
+                    "label": "person",
+                    "confidence": 0.9,
+                    "bbox": [0.8, 0.9, 0.2, 0.1]
+                }
+            ]
+        }"#;
+        let dets3 = parse_alarm_objects(json_inverted).expect("parse inverted");
+        assert_eq!(dets3.len(), 1);
+        assert!((dets3[0].bbox.x1 - 0.2).abs() < 1e-4);
+        assert!((dets3[0].bbox.y1 - 0.1).abs() < 1e-4);
+        assert!((dets3[0].bbox.x2 - 0.8).abs() < 1e-4);
+        assert!((dets3[0].bbox.y2 - 0.9).abs() < 1e-4);
+
+        // 4. 支持 box_coords 降级字段
+        let json_box_coords = r#"{
+            "objects": [
+                {
+                    "class_id": 2,
+                    "label": "plate",
+                    "confidence": 0.85,
+                    "box_coords": [0.3, 0.4, 0.5, 0.5]
+                }
+            ]
+        }"#;
+        let dets4 = parse_alarm_objects(json_box_coords).expect("parse box_coords");
+        assert_eq!(dets4.len(), 1);
+        assert!((dets4[0].bbox.x1 - 0.3).abs() < 1e-4);
+        assert!((dets4[0].bbox.y1 - 0.4).abs() < 1e-4);
+        assert!((dets4[0].bbox.x2 - 0.5).abs() < 1e-4);
+        assert!((dets4[0].bbox.y2 - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_parse_alarm_objects_error_matrix_and_guards() {
+        // 1. 合法空目标
+        let empty = r#"{"schema_version": 1, "objects": []}"#;
+        assert_eq!(parse_alarm_objects(empty).expect("valid empty").len(), 0);
+
+        // 2. 非法 JSON
+        assert!(parse_alarm_objects("{ bad json }").is_err());
+
+        // 3. 缺失 objects 且非数组
+        assert!(parse_alarm_objects(r#"{"other": 123}"#).is_err());
+
+        // 4. 损坏的 objects（非数组）
+        assert!(parse_alarm_objects(r#"{"objects": "not-an-array"}"#).is_err());
+
+        // 5. 缺失 bbox
+        let missing_bbox = r#"{"objects": [{"label": "person", "confidence": 0.9}]}"#;
+        assert!(parse_alarm_objects(missing_bbox).is_err());
+
+        // 6. 置信度越界
+        let bad_conf = r#"{"objects": [{"label": "person", "confidence": 1.5, "bbox": [0.1, 0.1, 0.2, 0.2]}]}"#;
+        assert!(parse_alarm_objects(bad_conf).is_err());
+
+        // 7. 不支持的 schema_version
+        let bad_version = r#"{"schema_version": 2, "objects": []}"#;
+        assert!(parse_alarm_objects(bad_version).is_err());
+
+        // 8. 坐标包含 NaN
+        let nan_bbox = r#"{"objects": [{"label": "person", "confidence": 0.9, "bbox": [0.1, 0.1, null, 0.2]}]}"#;
+        assert!(parse_alarm_objects(nan_bbox).is_err());
     }
 }

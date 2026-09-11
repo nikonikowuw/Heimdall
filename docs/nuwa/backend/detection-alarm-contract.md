@@ -8,18 +8,18 @@
 
 | 边界                                                                                                   | 当前实现                                                                                                                            |
 | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| [SDK emitter](../../../crates/algo-sdk/src/emitter.rs)                                                 | 每次检测发射 `AV_RESULT_ALARM=1`、新 UUID、`bbox: [x,y,w,h]` 和全景抓拍请求                                                         |
-| [宿主解析](../../../crates/infer/src/package.rs) / [回调](../../../crates/infer/src/c_abi/loader.rs)   | 仅收集 JSON、提取 `objects`；未保留 `kind/frame_id/images`、忽略 `event_id`，将 xywh 直接传给 xyxy 构造器，部分解析错误被当作空结果 |
-| [规则引擎](../../../crates/pipeline/src/rules.rs) / [管线](../../../crates/pipeline/src/pump.rs)       | 跟踪和规则触发后执行抓拍；规则关联仍用 `rule_index`，不是稳定规则 ID                                                                |
+| [SDK emitter](../../../crates/algo-sdk/src/emitter.rs)                                                 | 统一发射归一化对角两点式 `bbox: [x1, y1, x2, y2]`，消除 xywh 歧义                                                                 |
+| [宿主解析](../../../crates/infer/src/package.rs) / [回调](../../../crates/infer/src/c_abi/loader.rs)   | 收集 JSON、提取 `objects`；严格统一按归一化对角两点式 `[x1, y1, x2, y2]` 与具名 `{x1, y1, x2, y2}` 解析构造 BoundingBox 并提供倒置防御 |
+| [规则引擎](../../../crates/pipeline/src/rules.rs) / [管线](../../../crates/pipeline/src/pump.rs)       | 跟踪和规则触发后执行抓拍；未配置正向规则时支持全屏 ROI 感知兜底                                                                     |
 | [AlarmDto](../../../crates/api/src/routes/alarm.rs) / [entity](../../../crates/db/src/entity/alarm.rs) | 图片字段平铺，尚无 `ruleId` / `evidenceStatus`；不能假定下述异步证据状态已落地                                                      |
 
 ## 2. 接口与兼容迁移
 
-- SDK 保留 `emit_detections(&mut self, boxes: &[NormBox]) -> Result<(), AlgoError>`；目标协议新增 `AV_RESULT_DETECTIONS: u32 = 4`，现有 `ALARM=1`、`SELF_TEST=2`、`RECOGNITION=3` 的数值不重用，旧检测载荷通过适配器接入。
+- SDK `emit_detections(&mut self, boxes: &[NormBox]) -> Result<(), AlgoError>` 内部统一将 `NormBox` 转换为归一化对角两点式 `[x1, y1, x2, y2]` 发射。
 - 外层沿用 [AvAlgoResult](../../../crates/algo-sdk/src/c_abi.rs) 的 `kind`、`frame_id`、JSON 长度与版本头；新检测结果 `image_count=0`、`images=null`。JSON 的 `schema_version` 管理载荷契约，`api_version` 管理二进制 ABI。
-- 宿主先校验 ABI 与长度，再按 `kind` 分流；检测、识别、自检不能混用解析器。回调借用与指针生命周期遵循 [SDK 规范](./algo-sdk-guidelines.md#结果发射)，进入队列的元数据必须由宿主持有。
-- 先升级宿主以同时支持旧格式与新版本，再升级 SDK/算法包。新包加载前验证宿主能力/最低版本；不能仅凭 manifest 中存在版本字段就认为校验已生效。
-- 已确认的旧 SDK `AV_RESULT_ALARM + objects` 只适配为检测数据，忽略逐帧 `event_id` 与自动全景请求；其中 `bbox` 数组明确按 xywh 转换。其他旧包按已确认的生产者协议适配，未知版本拒绝处理，禁止根据四个数的大小猜格式。
+- 全系统上下一律采用 `[x1, y1, x2, y2]` 作为唯一坐标契约，取值区间限制在 `[0.0, 1.0]`，满足 `0.0 <= x1 <= x2 <= 1.0` 且 `0.0 <= y1 <= y2 <= 1.0`。禁止再在链路中使用 `[x, y, w, h]`。
+- 宿主支持数组 `[x1, y1, x2, y2]` 与具名 `{ "x1": ..., "y1": ..., "x2": ..., "y2": ... }` 两种合法形式，自动实施坐标边界 clamp 与防倒置校准。
+- 人脸识别等特定算法插件独立输出的检测目标标签为其实际检测类别（如 `"face"`），禁止随意伪装为 `"person"`，确保前后端与告警展示名副其实。
 - 告警 HTTP/WS 通过现有 DTO 与共享类型映射；遵循 [API 规范](./api-guidelines.md)，保留 `/api/v1` 根信封、已有字段及类型。新字段需要同步迁移、DTO、WS 类型与消费者。
 
 ## 3. 字段与生命周期
@@ -36,7 +36,7 @@
       "class_id": 0,
       "label": "person",
       "confidence": 0.95,
-      "bbox": { "x1": 0.1, "y1": 0.2, "x2": 0.4, "y2": 0.6 }
+      "bbox": [0.1, 0.2, 0.4, 0.6]
     }
   ]
 }
@@ -44,8 +44,8 @@
 
 - `schema_version` 为整数 `1`；`objects` 必须为数组，`[]` 表示检测成功且无目标。错误不能伪装为 `[]`，缺字段不能默认成类别 0 或零面积框。
 - `class_id` 为 `u32`；`label` 为非空稳定类别键，二者的映射在算法包版本内固定。类别 ID 不跨模型通用；展示名称由 i18n 提供。
-- `confidence` 为有限数且在 `[0,1]`。`bbox` 固定为具名 xyxy，所有坐标有限，满足 `0 <= x1 < x2 <= 1`、`0 <= y1 < y2 <= 1`。
-- 坐标相对原始输入帧的有效画面归一化；先用 `unmap_box` 去除模型 letterbox padding/逆缩放。SDK 从 `NormBox` 转为 `x2=x+w`、`y2=y+h`，再发射；宿主使用同语义的 [BoundingBox](../../../crates/types/src/detection.rs)。
+- `confidence` 为有限数且在 `[0, 1]`。`bbox` 支持对角两点式数组 `[x1, y1, x2, y2]` 或具名对象 `{ "x1": ..., "y1": ..., "x2": ..., "y2": ... }`，所有坐标有限且满足 `0 <= x1 <= x2 <= 1`、`0 <= y1 <= y2 <= 1`。
+- 坐标相对原始输入帧的有效画面归一化；先用 `unmap_box` 去除模型 letterbox padding/逆缩放。SDK 从 `NormBox` 转换为对角两点式再发射；宿主使用同语义的 [BoundingBox](../../../crates/types/src/detection.rs)。
 - 宿主保留 `(实例/流会话, frame_id)` 关联，补齐摄像头、算法包版本与源帧 UTC 毫秒时间。不得用回调到达时间或最新帧替代源帧；重连后的新会话不能复用旧帧关联。
 - JSON 字节数、目标数量、回调缓冲与帧上下文缓存均设固定有限上限；在复制前检查字节数、解析时检查数量。具体预算在实现任务中确定并覆盖边界测试，超限不静默截断或无限扩容。
 

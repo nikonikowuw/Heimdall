@@ -69,7 +69,7 @@ pub fn emit_tracked_results(
         objects.push(CompatibleObject {
             track_id: t.track_id,
             class_id: 0,
-            label: "person".to_string(),
+            label: "face".to_string(),
             confidence: t.person_score,
             bbox: t.person_bbox,
         });
@@ -160,7 +160,7 @@ mod tests {
         };
 
         let faces = vec![FaceDetection {
-            bbox: [0.1, 0.2, 0.3, 0.4],
+            bbox: [0.1, 0.2, 0.4, 0.6],
             landmarks: [[0.15, 0.25]; 5],
             detection_score: 0.95,
             quality: FaceQuality {

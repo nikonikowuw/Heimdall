@@ -76,24 +76,22 @@ impl AlgoPlugin for FaceRecognizer {
         let detections: Vec<FaceDetection> = faces
             .into_iter()
             .filter_map(|face| {
-                let face_width_pixels = face.bbox[2] * orig_w as f32;
-                let face_height_pixels = face.bbox[3] * orig_h as f32;
+                let face_width_pixels = face.width() * orig_w as f32;
+                let face_height_pixels = face.height() * orig_h as f32;
                 let quality = compute_quality(
                     &face.landmarks,
                     &face.landmark_scores,
                     face_width_pixels.min(face_height_pixels),
                     &self.config.quality_thresholds,
                 );
-                if quality.accepted(&self.config.quality_thresholds, self.config.min_face_size) {
-                    Some(FaceDetection {
+                quality
+                    .accepted(&self.config.quality_thresholds, self.config.min_face_size)
+                    .then_some(FaceDetection {
                         bbox: face.bbox,
                         landmarks: face.landmarks,
                         detection_score: face.score,
                         quality,
                     })
-                } else {
-                    None
-                }
             })
             .collect();
 

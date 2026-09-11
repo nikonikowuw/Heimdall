@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use db::{AlarmRepo, CameraRepo, DbError};
+use db::{AlarmRepo, AlgorithmRepo, CameraRepo, DbError};
 use pipeline::{PipelineAlarmEvent, PipelineAnalysisEvent, PipelineManager};
 use sea_orm::Set;
 use types::{AlarmSeverity, AlarmStatus, DetectionRuleRole, TOPIC_ALARM_TRIGGERED};
@@ -68,12 +68,30 @@ impl AlarmDispatchService {
         let bbox_json = serde_json::to_string(&event.alarm.tracked_object.bbox)
             .unwrap_or_else(|_| "{}".to_string());
 
+        // 解析触发告警的算法业务告警类型 alarm_type_id（优先从算法库获取真实契约，如 "object_detect", "face_recognize", "intrusion"）
+        let alarm_type_id = if event.algorithm_id.trim().is_empty() {
+            "intrusion".to_string()
+        } else {
+            match AlgorithmRepo::find_by_algorithm_id(&self.db, &event.algorithm_id).await {
+                Ok(Some(algo)) if !algo.alarm_type_id.trim().is_empty() => algo.alarm_type_id,
+                Ok(_) => event.algorithm_id.clone(),
+                Err(err) => {
+                    tracing::warn!(
+                        algorithm_id = %event.algorithm_id,
+                        error = %err,
+                        "根据 algorithm_id 查询算法库 alarm_type_id 失败，降级回退至 algorithm_id"
+                    );
+                    event.algorithm_id.clone()
+                }
+            }
+        };
+
         // 2. 构建违规告警记录 (alarm_records)
         let active_alarm = db::entity::alarm::ActiveModel {
             id: sea_orm::NotSet,
             event_id: Set(event.event_id.clone()),
             camera_id: Set(event.camera_id.clone()),
-            alarm_type_id: Set(format!("rule_{}", event.alarm.rule_index)),
+            alarm_type_id: Set(alarm_type_id),
             occurred_at: Set(occurred_at),
             target_label: Set(event.alarm.tracked_object.label.clone()),
             confidence: Set(event.alarm.tracked_object.confidence),
@@ -130,6 +148,8 @@ impl AlarmDispatchService {
                 "eventId": saved_alarm.event_id,
                 "cameraId": saved_alarm.camera_id,
                 "cameraName": camera_name,
+                "algorithmId": event.algorithm_id,
+                "alarmTypeId": saved_alarm.alarm_type_id,
                 "targetLabel": saved_alarm.target_label,
                 "ruleType": saved_alarm.rule_type,
                 "severity": saved_alarm.severity,

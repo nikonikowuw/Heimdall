@@ -1279,6 +1279,7 @@ mod tests {
         let event = PipelineAlarmEvent {
             event_id: "evt_123".to_string(),
             camera_id: cam_id.to_string(),
+            algorithm_id: "test_algo".to_string(),
             alarm: dummy_alarm,
             snapshot: None,
             evidence_status: EvidenceStatus::Ready,

@@ -5,7 +5,6 @@
 
 use algo_sdk::cv::LetterboxLayout;
 use algo_sdk::error::AlgoError;
-use algo_sdk::math::clamp_bbox;
 
 /// 每个尺度的输出分支数
 const BRANCHES_PER_SCALE: usize = 4;
@@ -19,7 +18,7 @@ pub const NUM_LANDMARKS: usize = 5;
 /// YOLOv8n-face 单候选框
 #[derive(Debug, Clone)]
 pub struct RawFace {
-    /// `[x, y, w, h]` 左上角格式，归一化到 [0, 1]
+    /// `[x1, y1, x2, y2]` 对角线坐标格式，归一化到 [0, 1]
     pub bbox: [f32; 4],
     /// 5 个关键点坐标，归一化到 [0, 1]
     pub landmarks: [[f32; 2]; NUM_LANDMARKS],
@@ -30,19 +29,28 @@ pub struct RawFace {
 }
 
 impl RawFace {
+    #[inline]
+    pub fn width(&self) -> f32 {
+        (self.bbox[2] - self.bbox[0]).max(0.0)
+    }
+
+    #[inline]
+    pub fn height(&self) -> f32 {
+        (self.bbox[3] - self.bbox[1]).max(0.0)
+    }
+
+    #[inline]
+    pub fn area(&self) -> f32 {
+        self.width() * self.height()
+    }
+
     fn iou(&self, other: &Self) -> f32 {
-        let ax2 = self.bbox[0] + self.bbox[2];
-        let ay2 = self.bbox[1] + self.bbox[3];
-        let bx2 = other.bbox[0] + other.bbox[2];
-        let by2 = other.bbox[1] + other.bbox[3];
         let ix1 = self.bbox[0].max(other.bbox[0]);
         let iy1 = self.bbox[1].max(other.bbox[1]);
-        let ix2 = ax2.min(bx2);
-        let iy2 = ay2.min(by2);
-        let iw = (ix2 - ix1).max(0.0);
-        let ih = (iy2 - iy1).max(0.0);
-        let intersection = iw * ih;
-        let union = self.bbox[2] * self.bbox[3] + other.bbox[2] * other.bbox[3] - intersection;
+        let ix2 = self.bbox[2].min(other.bbox[2]);
+        let iy2 = self.bbox[3].min(other.bbox[3]);
+        let intersection = (ix2 - ix1).max(0.0) * (iy2 - iy1).max(0.0);
+        let union = self.area() + other.area() - intersection;
         if union > 0.0 {
             intersection / union
         } else {
@@ -153,15 +161,13 @@ fn decode_scale(
                 *offset_val = compute_dfl(&logits)?;
             }
 
-            // 还原为原图像素坐标
+            // 还原为原图像素坐标 (x1, y1, x2, y2)
             let x1 = (-box_offset[0] + gx as f32 + 0.5) * stride as f32;
             let y1 = (-box_offset[1] + gy as f32 + 0.5) * stride as f32;
             let x2 = (box_offset[2] + gx as f32 + 0.5) * stride as f32;
             let y2 = (box_offset[3] + gy as f32 + 0.5) * stride as f32;
-            let w = (x2 - x1).max(0.0);
-            let h = (y2 - y1).max(0.0);
 
-            if w <= 0.0 || h <= 0.0 {
+            if x2 <= x1 || y2 <= y1 {
                 continue;
             }
 
@@ -194,7 +200,7 @@ fn decode_scale(
                 continue;
             }
             faces.push(RawFace {
-                bbox: [x1, y1, w, h],
+                bbox: [x1, y1, x2, y2],
                 landmarks,
                 landmark_scores,
                 score: cls_score,
@@ -224,6 +230,7 @@ pub fn nms(faces: &mut Vec<RawFace>, iou_threshold: f32) {
 }
 
 /// 将 bbox 和 landmarks 从模型输入画布像素坐标根据 Letterbox 布局反算并归一化到原图 [0, 1]
+/// 全系统统一遵循 [x1, y1, x2, y2] 规范
 pub fn normalize_to_relative(faces: &mut [RawFace], layout: &LetterboxLayout) {
     let eff_w = layout.scaled_w as f32;
     let eff_h = layout.scaled_h as f32;
@@ -234,15 +241,13 @@ pub fn normalize_to_relative(faces: &mut [RawFace], layout: &LetterboxLayout) {
     let pad_top = layout.pad_top as f32;
 
     for face in faces {
-        // bbox 反算黑边并归一化到原图
-        let x = (face.bbox[0] - pad_left) / eff_w;
-        let y = (face.bbox[1] - pad_top) / eff_h;
-        let w = face.bbox[2] / eff_w;
-        let h = face.bbox[3] / eff_h;
+        // bbox 反算黑边并归一化到原图 [0, 1] (x1, y1, x2, y2)
+        let x1 = ((face.bbox[0] - pad_left) / eff_w).clamp(0.0, 1.0);
+        let y1 = ((face.bbox[1] - pad_top) / eff_h).clamp(0.0, 1.0);
+        let x2 = ((face.bbox[2] - pad_left) / eff_w).clamp(0.0, 1.0);
+        let y2 = ((face.bbox[3] - pad_top) / eff_h).clamp(0.0, 1.0);
 
-        let mut norm_box = algo_sdk::math::NormBox::new(x, y, w, h, face.score, 0);
-        clamp_bbox(&mut norm_box);
-        face.bbox = [norm_box.x, norm_box.y, norm_box.w, norm_box.h];
+        face.bbox = [x1, y1, x2.max(x1), y2.max(y1)];
 
         // landmarks 反算黑边并归一化到原图
         for point in &mut face.landmarks {
@@ -359,13 +364,13 @@ mod tests {
     fn test_nms_removes_overlapping() {
         let mut faces = vec![
             RawFace {
-                bbox: [0.1, 0.1, 0.3, 0.3],
+                bbox: [0.1, 0.1, 0.4, 0.4],
                 landmarks: [[0.0; 2]; 5],
                 landmark_scores: [0.0; 5],
                 score: 0.9,
             },
             RawFace {
-                bbox: [0.12, 0.12, 0.3, 0.3],
+                bbox: [0.12, 0.12, 0.42, 0.42],
                 landmarks: [[0.0; 2]; 5],
                 landmark_scores: [0.0; 5],
                 score: 0.8,
@@ -404,7 +409,7 @@ mod tests {
             scaled_h: 360,
         };
         let mut faces = vec![RawFace {
-            bbox: [320.0, 192.0, 133.33334, 133.33334],
+            bbox: [320.0, 192.0, 453.33334, 325.33334],
             landmarks: [[320.0, 192.0]; 5],
             landmark_scores: [0.9; 5],
             score: 0.95,
@@ -413,6 +418,8 @@ mod tests {
         let f = &faces[0];
         assert!((f.bbox[0] - 0.5).abs() < 1e-4);
         assert!((f.bbox[1] - 0.5).abs() < 1e-4);
+        assert!((f.bbox[2] - 0.70833).abs() < 1e-4);
+        assert!((f.bbox[3] - 0.87037).abs() < 1e-4);
         assert!((f.landmarks[0][0] - 0.5).abs() < 1e-4);
         assert!((f.landmarks[0][1] - 0.5).abs() < 1e-4);
     }

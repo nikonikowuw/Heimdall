@@ -34,11 +34,20 @@ impl<'a> Serialize for BoxesSerializer<'a> {
     {
         let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
         for b in self.0 {
+            let x1 = b.x.clamp(0.0, 1.0);
+            let y1 = b.y.clamp(0.0, 1.0);
+            let x2 = (b.x + b.w).clamp(0.0, 1.0).max(x1);
+            let y2 = (b.y + b.h).clamp(0.0, 1.0).max(y1);
+            let confidence = if b.confidence.is_finite() {
+                b.confidence.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             seq.serialize_element(&JsonAlarmObject {
                 class_id: b.class_id,
                 label: b.label.unwrap_or(""),
-                confidence: b.confidence,
-                bbox: [b.x, b.y, b.w, b.h],
+                confidence,
+                bbox: [x1, y1, x2, y2],
             })?;
         }
         seq.end()
@@ -48,6 +57,7 @@ impl<'a> Serialize for BoxesSerializer<'a> {
 /// 内部告警事件根信封
 #[derive(Debug, Serialize)]
 struct JsonAlarmEnvelope<'a> {
+    schema_version: u32,
     event_id: Uuid,
     objects: BoxesSerializer<'a>,
 }
@@ -133,6 +143,7 @@ impl<'a> ResultEmitter<'a> {
     /// 发射告警检测结果，并自动请求全景大图抓拍
     pub fn emit_detections(&mut self, boxes: &[NormBox]) -> Result<(), AlgoError> {
         let envelope = JsonAlarmEnvelope {
+            schema_version: 1,
             event_id: Uuid::new_v4(),
             objects: BoxesSerializer(boxes),
         };
@@ -191,6 +202,7 @@ mod tests {
             let json_str = json_cstr.to_str().expect("合法 UTF-8");
 
             let parsed: serde_json::Value = serde_json::from_str(json_str).expect("合法 JSON");
+            assert_eq!(parsed["schema_version"], 1);
             assert!(parsed.get("event_id").is_some());
             let objs = parsed
                 .get("objects")
@@ -199,6 +211,12 @@ mod tests {
             assert_eq!(objs.len(), 1);
             assert_eq!(objs[0]["label"], "person");
             assert_eq!(objs[0]["confidence"], 0.95);
+            // 契约强制验证为 [x1, y1, x2, y2] 两点归一化坐标
+            let bbox = objs[0]["bbox"].as_array().expect("bbox 数组");
+            assert!((bbox[0].as_f64().expect("f64") - 0.1).abs() < 1e-5);
+            assert!((bbox[1].as_f64().expect("f64") - 0.2).abs() < 1e-5);
+            assert!((bbox[2].as_f64().expect("f64") - 0.4).abs() < 1e-5);
+            assert!((bbox[3].as_f64().expect("f64") - 0.6).abs() < 1e-5);
 
             CALL_COUNT.fetch_add(1, Ordering::SeqCst);
         }
@@ -211,5 +229,32 @@ mod tests {
         emitter.emit_detections(&boxes).expect("发射成功");
 
         assert_eq!(CALL_COUNT.load(Ordering::SeqCst), 1);
+
+        // 验证边界与防倒置 clamp
+        // SAFETY: 测试中传入合法的静态 mock_cb_edge 回调函数
+        let mut emitter_edge =
+            unsafe { ResultEmitter::from_raw(1002, Some(mock_cb_edge), std::ptr::null_mut()) };
+        let edge_boxes = [NormBox::new(-0.2, -0.1, -0.5, 2.0, 1.5, 0).with_label("edge")];
+        emitter_edge.emit_detections(&edge_boxes).expect("发射成功");
+
+        unsafe extern "C" fn mock_cb_edge(result: *const AvAlgoResult, _user: *mut c_void) {
+            // SAFETY: result 在同步回调期间有效
+            let res = unsafe { &*result };
+            // SAFETY: res.json 指针有效且包含 NUL 结尾字符串
+            let json_cstr = unsafe { CStr::from_ptr(res.json) };
+            let parsed: serde_json::Value =
+                serde_json::from_str(json_cstr.to_str().expect("valid utf-8")).expect("valid json");
+            let bbox = parsed["objects"][0]["bbox"].as_array().expect("bbox array");
+            assert_eq!(bbox[0].as_f64().expect("x1 f64"), 0.0);
+            assert_eq!(bbox[1].as_f64().expect("y1 f64"), 0.0);
+            assert_eq!(bbox[2].as_f64().expect("x2 f64"), 0.0);
+            assert_eq!(bbox[3].as_f64().expect("y2 f64"), 1.0);
+            assert_eq!(
+                parsed["objects"][0]["confidence"]
+                    .as_f64()
+                    .expect("confidence f64"),
+                1.0
+            );
+        }
     }
 }

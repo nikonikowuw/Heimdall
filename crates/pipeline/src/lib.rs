@@ -31,7 +31,7 @@ pub use pump::{
     WorkerInstanceConfig,
 };
 pub use roi::RoiAffineMapper;
-pub use rules::{RuleEvaluator, TriggeredAlarm};
+pub use rules::{RuleEvaluator, RuleIdentifier, TriggeredAlarm, DEFAULT_FULLSCREEN_RULE_INDEX};
 pub use snapshot::{SnapshotCaptureMode, SnapshotConfig, SnapshotEngine, SnapshotResult};
 pub use storage_cleaner::{
     detect_emmc_health, get_disk_free_ratio, get_sqlite_wal_size, stat_fs, EmmcHealthInfo,
