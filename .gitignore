@@ -51,5 +51,9 @@ __pycache__/
 *.db-wal
 config.toml
 !.cargo/config.toml
+
+# SDK 库文件 (通过 make sdk-sync 从设备同步)
+.rk-sdk-libs/**/*.so
+
 # Temporary files
 *.tmp

@@ -1,0 +1,3 @@
+# Rockchip SDK 库文件目录
+# 通过 `make sdk-sync` 从目标设备同步
+# 详见 README.md 交叉编译章节

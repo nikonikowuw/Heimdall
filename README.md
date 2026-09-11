@@ -160,6 +160,71 @@ http://localhost:8080
 
 ---
 
+## 🔧 交叉编译 (Rockchip RK3576 / RK3568)
+
+Heimdall 支持从 macOS/Linux 开发机交叉编译到 Rockchip ARM64 设备。
+
+### 前置条件
+
+```bash
+# 1. 安装 Rust 目标
+rustup target add aarch64-unknown-linux-gnu
+
+# 2. 安装 cargo-zigbuild (交叉编译链接器)
+cargo install cargo-zigbuild
+
+# 3. 安装 zig (C/C++ 交叉编译工具链)
+brew install zig  # macOS
+# 或 apt install zig  # Linux
+
+# 4. 一键检测并安装依赖
+make setup-cross
+```
+
+### 同步 SDK 库
+
+交叉编译需要目标设备的 Rockchip SDK 库文件（保证版本与设备 BSP 完全匹配）：
+
+```bash
+# 从目标设备同步 SDK 库到 .rk-sdk-libs/
+make sdk-sync RKNN_HOST=root@192.168.1.100
+
+# 同步 RK3568 设备
+make sdk-sync RKNN_HOST=root@192.168.1.100 RKNN_DEVICE=rk3568
+
+# 检查 SDK 库是否就绪
+make sdk-check
+```
+
+### 交叉编译与部署
+
+```bash
+# 交叉编译 (默认 RK3576)
+make cross
+
+# 交叉编译 RK3568 版本
+make cross-rk3568
+
+# 部署到设备
+make deploy                      # 默认 RK3576
+make deploy-rk3568               # RK3568 版本
+
+# 一键编译+部署
+make deploy RKNN_HOST=root@192.168.1.100
+```
+
+### 配置项
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `RKNN_HOST` | `root@192.168.1.100` | 设备 SSH 地址 |
+| `RKNN_DEVICE` | `rk3576` | 目标设备型号 |
+| `RKNN_DEPLOY_PATH` | `/opt/heimdall` | 设备部署路径 |
+| `RKNN_SSH_PORT` | `22` | SSH 端口 |
+| `RK_MPP_LIB_DIR` | `.rk-sdk-libs/<device>` | 手动指定 SDK 库路径 |
+
+---
+
 ## 🧪 验证门禁与质量检查
 
 根据项目规范，提交代码前需运行质量门禁：
