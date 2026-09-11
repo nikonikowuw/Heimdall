@@ -74,7 +74,17 @@ async fn resolve_camera_and_subscribe(
         Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     };
 
-    let stream_kind = StreamType::from_str_loose(stream_type.unwrap_or("main"));
+    let stream_mode = types::StreamMode::from_str_loose(&camera.stream_mode);
+    let requested_kind = StreamType::from_str_loose(stream_type.unwrap_or("main"));
+    // 若客户端请求子码流，但在主码流模式且未配置子码流时，自适应回退为主码流
+    let stream_kind = if requested_kind == StreamType::Sub
+        && stream_mode == types::StreamMode::Main
+        && camera.sub_rtsp_url.trim().is_empty()
+    {
+        StreamType::Main
+    } else {
+        requested_kind
+    };
     let stream_key = StreamKey::new(&clean_camera_id, stream_kind);
 
     let target_url = if stream_kind == StreamType::Sub {

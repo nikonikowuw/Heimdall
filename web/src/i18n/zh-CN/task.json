@@ -25,6 +25,7 @@
   "selectChannelPlaceholder": "请选择要分配任务的摄像头通道...",
   "taskName": "任务名称",
   "taskNamePlaceholder": "例如：周界防范 - 库房正门",
+  "enableArmImmediatelyDesc": "开启后系统将启动该路摄像头的分析码流解码并在后台调度 NPU 规则判定。",
   "allCamerasAssigned": "所有已接入的摄像头均已建立布防任务",
   "deleteTask": "删除任务",
   "deleteTaskTitle": "删除布防任务确认",
@@ -40,7 +41,6 @@
   "drawLine": "画绊线 Line",
   "canvasPlaceholder": "视频帧交互布防画板",
   "saveRules": "保存布防规则",
-  "taskName": "任务名称:",
   "clickToEditName": "点击可原地快速修改任务名称",
   "actions": {
     "enterStudio": "进入动态矢量布防工作台",
@@ -77,7 +77,16 @@
     "onlineStatus": "在线运行",
     "offlineStatus": "设备离线",
     "degradedStatus": "码流抖动",
-    "unprobedStatus": "待探活"
+    "unprobedStatus": "待探活",
+    "pipelineStarting": "启动中",
+    "pipelineRunning": "运行中",
+    "pipelineDegraded": "重连中",
+    "pipelineError": "异常",
+    "pipelineStopped": "已停止",
+    "clickToSwitchStreamMode": "点击可快捷切换分析码流 (主码流 / 子码流 / 自动)",
+    "confidence": "置信度:",
+    "targetClasses": "警戒类别:",
+    "classesCount": "{{count}} 类"
   },
   "sandbox": {
     "title": "六步沙箱安全自检",
@@ -130,7 +139,29 @@
     "enterCalibration": "绘制 / 编辑活动防区 ↗",
     "calibratingActive": "正在标定中 (点击画面绘制)",
     "doneCalibration": "完成标定 (ESC)",
-    "noZonesHint": "当前画面尚未划定局部防区，已启用的算法将在全画幅范围内生效并判定告警。"
+    "noZonesHint": "当前画面尚未划定局部防区，已启用的算法将在全画幅范围内生效并判定告警。",
+    "fitModeFillTitle": "铺满全视口：画面撑满视口，消除上下左右所有空隙黑边",
+    "fitModeFill": "撑满无留白",
+    "fitModeFitTitle": "等比保真：严格保持原始 16:9 物理像素比例",
+    "fitModeFit": "等比保真",
+    "layoutOverlayTitle": "沉浸全景画板 (UniFi 风格，16:9 全幅撑满视口，消除上下黑边)",
+    "layoutOverlay": "沉浸全屏",
+    "layoutDockedTitle": "双栏并排视图 (Verkada 风格，左侧视频与硬件遥测，右侧参数停靠)",
+    "layoutDocked": "双栏并排",
+    "collapsePanel": "收起配置面板",
+    "expandPanel": "展开配置面板",
+    "snapMagnet": "磁吸吸附",
+    "telemetryZeroCopy": "硬件零拷贝解码: VPU DMA-BUF",
+    "telemetryInferEngine": "推理核心: RKNN NPU 2.0",
+    "telemetryResolution": "源分辨率:",
+    "telemetryLatency": "流延迟:",
+    "telemetryFps": "实时帧率:",
+    "motionGateTitle": "运动检测门控 (Motion Gating)",
+    "motionGateSensitivity": "灵敏度阈值:",
+    "polygonVertices": "{{count}} 顶点多边形",
+    "sensitivityHigh": "10% (敏锐/多报)",
+    "sensitivityNormal": "50% (标准推荐)",
+    "sensitivityLow": "95% (严苛/防误报)"
   },
   "tools": {
     "select": "选择与位移",
@@ -163,7 +194,10 @@
   "layers": {
     "title": "布防规则图层",
     "empty": "暂无布防规则",
-    "emptyTip": "请在左侧或上方选择工具绘制"
+    "emptyTip": "请在左侧或上方选择工具绘制",
+    "hideRule": "隐藏该规则",
+    "showRule": "显示该规则",
+    "deleteRule": "删除该规则"
   },
   "inspector": {
     "title": "属性检查器",
@@ -181,11 +215,31 @@
     "inheritGlobal": "继承全局目标",
     "customTargets": "自定义目标"
   },
+  "rules": {
+    "defaultRoiName": "入侵防区 {{index}}",
+    "defaultLineName": "越界绊线 {{index}}",
+    "defaultMaskName": "屏蔽遮罩 {{index}}",
+    "defaultRuleName": "规则 {{index}}"
+  },
   "algoDrawer": {
     "id": "算法标识",
     "version": "版本与作者",
     "platforms": "支持平台",
     "classes": "目标类别过滤",
     "done": "完成"
+  },
+  "streamMode": {
+    "title": "AI 分析码流选择",
+    "main": "主码流 (高清分析·推荐)",
+    "mainDesc": "全高清原图硬件下采样，小目标与远距离识别最清晰，快照零延迟",
+    "sub": "子码流 (低能耗)",
+    "subDesc": "低码率子流推理，节约 VPU 算力，适合超多路密集布防",
+    "auto": "自动适配 (自适应)",
+    "autoDesc": "自动探活子码流，若无子流或不可用则自适应降级主码流"
+  },
+  "cardStream": {
+    "main": "主码流·高清",
+    "sub": "子码流·低能耗",
+    "auto": "自动码流"
   }
 }

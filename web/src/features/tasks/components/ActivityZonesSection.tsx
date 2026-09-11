@@ -113,8 +113,17 @@ export function ActivityZonesSection({
                     </span>
                     <span className="font-mono text-[10px] text-[var(--text-muted)]">
                       {isLine
-                        ? `绊线 · ${rule.lineDirection === 'both' ? '双向 ⇄' : rule.lineDirection === 'a_to_b' ? 'A→B →' : 'B→A ←'}`
-                        : `${rule.points.length} 顶点多边形`}
+                        ? `${t('tools.line', { defaultValue: '绊线' })} · ${
+                            rule.lineDirection === 'both'
+                              ? t('inspector.dirBoth', { defaultValue: '双向 ⇄' })
+                              : rule.lineDirection === 'a_to_b'
+                                ? t('inspector.dirAtoB', { defaultValue: 'A→B →' })
+                                : t('inspector.dirBtoA', { defaultValue: 'B→A ←' })
+                          }`
+                        : t('studio.polygonVertices', {
+                            count: rule.points.length,
+                            defaultValue: `${rule.points.length} 顶点多边形`,
+                          })}
                     </span>
                   </div>
                 </div>
@@ -127,7 +136,11 @@ export function ActivityZonesSection({
                       e.stopPropagation()
                       onToggleRuleVisible(rule.id)
                     }}
-                    title={rule.visible ? '隐藏该规则' : '显示该规则'}
+                    title={
+                      rule.visible
+                        ? t('layers.hideRule', { defaultValue: '隐藏该规则' })
+                        : t('layers.showRule', { defaultValue: '显示该规则' })
+                    }
                     className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
                   >
                     {rule.visible ? (
@@ -142,7 +155,7 @@ export function ActivityZonesSection({
                       e.stopPropagation()
                       onDeleteRule(rule.id)
                     }}
-                    title="删除该规则"
+                    title={t('layers.deleteRule', { defaultValue: '删除该规则' })}
                     className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-rose-500/15 hover:text-rose-500"
                   >
                     <Trash2 className="h-3.5 w-3.5" />

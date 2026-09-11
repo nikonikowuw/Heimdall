@@ -29,6 +29,7 @@ import type {
   DetectionLineDirection,
   DetectionPoint,
   DetectionRuleRole,
+  StreamMode,
   TaskAlgorithmInstanceDto,
   TaskConfigDto,
 } from '@/types'
@@ -63,8 +64,16 @@ export function LiveRulesStudio({
   const { t } = useTranslation('task')
 
   const [taskName, setTaskName] = useState<string>('')
+  const [streamMode, setStreamMode] = useState<StreamMode>(camera.streamMode || 'auto')
   const [isEditingTaskName, setIsEditingTaskName] = useState<boolean>(false)
   const [isArmed, setIsArmed] = useState<boolean>(true)
+
+  // 计算当前画布视频流实际应拉取的码流类型：
+  // 1. 若配置为 'main'，使用主码流预览
+  // 2. 若配置为 'auto' 且摄像头未配置子码流 (subRtspUrl 为空)，自适应回退到主码流预览
+  // 3. 否则请求子码流预览
+  const effectivePreviewStream: 'main' | 'sub' =
+    streamMode === 'main' || (streamMode === 'auto' && !camera.subRtspUrl?.trim()) ? 'main' : 'sub'
 
   // 算法池与多实例状态
   const [availableAlgos, setAvailableAlgos] = useState<AlgoManifest[]>([])
@@ -209,6 +218,9 @@ export function LiveRulesStudio({
       .then((dto) => {
         setTaskName(dto.name || camera.name || `Task-${camera.cameraId}`)
         setIsArmed(dto.desiredEnabled)
+        if (dto.streamMode) {
+          setStreamMode(dto.streamMode)
+        }
 
         // 恢复所有已绑定的算法实例
         const instancesMap: Record<string, AlgorithmInstanceItem> = {}
@@ -255,7 +267,7 @@ export function LiveRulesStudio({
               (r as unknown as { line_direction?: DetectionLineDirection }).line_direction ||
               'both',
             id: `rule_${idx}_${Date.now()}`,
-            name: getDefaultRuleName(r.role, idx + 1),
+            name: getDefaultRuleName(r.role, idx + 1, t),
             visible: true,
             color,
           }
@@ -268,7 +280,7 @@ export function LiveRulesStudio({
       .catch(() => {
         setTaskName(camera.name || `Task-${camera.cameraId}`)
       })
-  }, [camera])
+  }, [camera, t])
 
   // 3. 算法启闭切换操作
   const handleToggleAlgo = (algoId: string) => {
@@ -419,7 +431,7 @@ export function LiveRulesStudio({
 
       const newRule: ExtendedRule = {
         id: `rule_${Date.now()}`,
-        name: getDefaultRuleName(role, rules.length + 1),
+        name: getDefaultRuleName(role, rules.length + 1, t),
         role,
         lineDirection: role === 'line' ? 'both' : undefined,
         points: [...points],
@@ -432,7 +444,7 @@ export function LiveRulesStudio({
       setCurrentPoints([])
       setTool('select')
     },
-    [rules, tool],
+    [rules, t, tool],
   )
 
   const finishDrawing = useCallback(() => {
@@ -620,6 +632,7 @@ export function LiveRulesStudio({
         cameraId: camera.cameraId,
         name: finalName,
         desiredEnabled: isArmed,
+        streamMode,
         rules: rules.map((r) => ({
           role: r.role,
           lineDirection: r.lineDirection,
@@ -636,6 +649,9 @@ export function LiveRulesStudio({
 
       const updated = await taskApi.updateTask(camera.cameraId, payloadDto)
       setTaskName(updated.name || finalName)
+      if (updated.streamMode) {
+        setStreamMode(updated.streamMode)
+      }
       setSaveToast(t('footer.saveSuccess', { defaultValue: '任务配置已保存并生效！' }))
       setTimeout(() => setSaveToast(null), 3000)
     } catch {
@@ -734,10 +750,14 @@ export function LiveRulesStudio({
                   ? 'bg-[var(--accent)] text-white shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
-              title="铺满全视口：画面撑满视口，消除上下左右所有空隙黑边"
+              title={t('studio.fitModeFillTitle', {
+                defaultValue: '铺满全视口：画面撑满视口，消除上下左右所有空隙黑边',
+              })}
             >
               <Maximize2 className="h-3.5 w-3.5" />
-              <span className="hidden xl:inline">撑满无留白</span>
+              <span className="hidden xl:inline">
+                {t('studio.fitModeFill', { defaultValue: '撑满无留白' })}
+              </span>
             </button>
             <button
               type="button"
@@ -747,10 +767,14 @@ export function LiveRulesStudio({
                   ? 'bg-[var(--accent)] text-white shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
-              title="等比保真：严格保持原始 16:9 物理像素比例"
+              title={t('studio.fitModeFitTitle', {
+                defaultValue: '等比保真：严格保持原始 16:9 物理像素比例',
+              })}
             >
               <Ratio className="h-3.5 w-3.5" />
-              <span className="hidden xl:inline">等比保真</span>
+              <span className="hidden xl:inline">
+                {t('studio.fitModeFit', { defaultValue: '等比保真' })}
+              </span>
             </button>
           </div>
 
@@ -764,10 +788,14 @@ export function LiveRulesStudio({
                   ? 'bg-[var(--accent)] text-white shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
-              title="沉浸全景画板 (UniFi 风格，16:9 全幅撑满视口，消除上下黑边)"
+              title={t('studio.layoutOverlayTitle', {
+                defaultValue: '沉浸全景画板 (UniFi 风格，16:9 全幅撑满视口，消除上下黑边)',
+              })}
             >
               <Layers className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">沉浸全屏</span>
+              <span className="hidden sm:inline">
+                {t('studio.layoutOverlay', { defaultValue: '沉浸全屏' })}
+              </span>
             </button>
             <button
               type="button"
@@ -777,10 +805,60 @@ export function LiveRulesStudio({
                   ? 'bg-[var(--accent)] text-white shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
-              title="双栏并排视图 (Verkada 风格，左侧视频与硬件遥测，右侧参数停靠)"
+              title={t('studio.layoutDockedTitle', {
+                defaultValue: '双栏并排视图 (Verkada 风格，左侧视频与硬件遥测，右侧参数停靠)',
+              })}
             >
               <Columns className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">双栏并排</span>
+              <span className="hidden sm:inline">
+                {t('studio.layoutDocked', { defaultValue: '双栏并排' })}
+              </span>
+            </button>
+          </div>
+
+          {/* AI 分析码流选择切换 */}
+          <div className="hidden items-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs sm:flex">
+            <button
+              type="button"
+              onClick={() => setStreamMode('main')}
+              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
+                streamMode === 'main'
+                  ? 'bg-cyan-500 font-semibold text-black shadow-2xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t('streamMode.mainDesc', {
+                defaultValue: '全高清原图硬件下采样，小目标与远距离识别最清晰，快照零延迟',
+              })}
+            >
+              <span>{t('cardStream.main', { defaultValue: '主码流·高清' })}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setStreamMode('sub')}
+              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
+                streamMode === 'sub'
+                  ? 'bg-amber-500 font-semibold text-black shadow-2xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t('streamMode.subDesc', {
+                defaultValue: '低码率子流推理，节约 VPU 算力，适合超多路密集布防',
+              })}
+            >
+              <span>{t('cardStream.sub', { defaultValue: '子码流·低能耗' })}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setStreamMode('auto')}
+              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
+                streamMode === 'auto'
+                  ? 'bg-[var(--accent)] font-semibold text-white shadow-2xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t('streamMode.autoDesc', {
+                defaultValue: '自动探活子码流，若无子流或不可用则自适应降级主码流',
+              })}
+            >
+              <span>{t('cardStream.auto', { defaultValue: '自动码流' })}</span>
             </button>
           </div>
 
@@ -825,7 +903,11 @@ export function LiveRulesStudio({
           <button
             type="button"
             onClick={() => setIsPanelOpen(!isPanelOpen)}
-            title={isPanelOpen ? '收起配置面板' : '展开配置面板'}
+            title={
+              isPanelOpen
+                ? t('studio.collapsePanel', { defaultValue: '收起配置面板' })
+                : t('studio.expandPanel', { defaultValue: '展开配置面板' })
+            }
             className={`hidden h-8 w-8 items-center justify-center rounded-lg border transition-colors lg:flex ${
               isPanelOpen
                 ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
@@ -883,11 +965,11 @@ export function LiveRulesStudio({
                       }
               }
             >
-              {/* 真实子码流播放器 */}
+              {/* 实时分析源预览播放器 (主码流或子码流) */}
               <LivePlayer
                 cameraId={camera.cameraId}
                 cameraName={camera.name}
-                stream="sub"
+                stream={effectivePreviewStream}
                 fitMode={fitMode === 'fill' ? 'fill' : 'contain'}
                 className="pointer-events-none h-full w-full"
               />
@@ -1085,7 +1167,7 @@ export function LiveRulesStudio({
                     className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
                       snapEnabled ? 'text-cyan-400' : 'text-white/50'
                     }`}
-                    title="磁吸吸附"
+                    title={t('studio.snapMagnet', { defaultValue: '磁吸吸附' })}
                   >
                     <Magnet className="h-3.5 w-3.5" />
                   </button>
@@ -1119,7 +1201,7 @@ export function LiveRulesStudio({
                     {/* 若为绊线，提供方向切换 */}
                     {selectedRule.role === 'line' && (
                       <div className="flex items-center justify-between gap-1 pt-1 font-mono text-[11px]">
-                        <span>方向:</span>
+                        <span>{t('inspector.lineDirection', { defaultValue: '方向:' })}</span>
                         <select
                           value={selectedRule.lineDirection || 'both'}
                           onChange={(e) => {
@@ -1132,9 +1214,15 @@ export function LiveRulesStudio({
                           }}
                           className="rounded border border-white/20 bg-black/60 px-1.5 py-0.5 text-white outline-none"
                         >
-                          <option value="both">双向 ⇄</option>
-                          <option value="a_to_b">A → B</option>
-                          <option value="b_to_a">B → A</option>
+                          <option value="both">
+                            {t('inspector.dirBoth', { defaultValue: '双向 ⇄' })}
+                          </option>
+                          <option value="a_to_b">
+                            {t('inspector.dirAtoB', { defaultValue: 'A → B' })}
+                          </option>
+                          <option value="b_to_a">
+                            {t('inspector.dirBtoA', { defaultValue: 'B → A' })}
+                          </option>
                         </select>
                       </div>
                     )}
@@ -1149,7 +1237,7 @@ export function LiveRulesStudio({
                         className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300"
                       >
                         <Trash2 className="h-3 w-3" />
-                        <span>删除防区</span>
+                        <span>{t('inspector.delete', { defaultValue: '删除防区' })}</span>
                       </button>
                     </div>
                   </div>
@@ -1164,19 +1252,28 @@ export function LiveRulesStudio({
               <div className="flex items-center gap-3">
                 <span className="flex items-center gap-1.5 font-semibold text-emerald-400">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-                  <span>硬件零拷贝解码: VPU DMA-BUF</span>
+                  <span>
+                    {t('studio.telemetryZeroCopy', {
+                      defaultValue: '硬件零拷贝解码: VPU DMA-BUF',
+                    })}
+                  </span>
                 </span>
                 <span>·</span>
-                <span>推理核心: RKNN NPU 2.0</span>
+                <span>
+                  {t('studio.telemetryInferEngine', { defaultValue: '推理核心: RKNN NPU 2.0' })}
+                </span>
                 <span>·</span>
                 <span>
-                  源分辨率: {camera.lastWidth || 1920}×{camera.lastHeight || 1080}
+                  {t('studio.telemetryResolution', { defaultValue: '源分辨率:' })}{' '}
+                  {camera.lastWidth || 1920}×{camera.lastHeight || 1080}
                 </span>
               </div>
               <div className="flex items-center gap-3">
-                <span className="font-semibold text-cyan-300">流延迟: ~106ms</span>
+                <span className="font-semibold text-cyan-300">
+                  {t('studio.telemetryLatency', { defaultValue: '流延迟:' })} ~106ms
+                </span>
                 <span>·</span>
-                <span>实时帧率: 25.0 FPS</span>
+                <span>{t('studio.telemetryFps', { defaultValue: '实时帧率:' })} 25.0 FPS</span>
               </div>
             </div>
           )}
@@ -1227,7 +1324,7 @@ export function LiveRulesStudio({
                 <div className="flex items-center gap-2">
                   <Activity className="h-4 w-4 text-[var(--accent)]" />
                   <span className="text-xs font-bold text-[var(--text-primary)]">
-                    运动检测门控 (Motion Gating)
+                    {t('studio.motionGateTitle', { defaultValue: '运动检测门控 (Motion Gating)' })}
                   </span>
                 </div>
                 <button
@@ -1245,12 +1342,17 @@ export function LiveRulesStudio({
                 </button>
               </div>
               <p className="text-[11px] leading-relaxed text-[var(--text-muted)]">
-                画面静止无像素变动时跳过 NPU 深度推理，极大降低芯片能耗与总线发热。
+                {t('studio.motionGateDesc', {
+                  defaultValue:
+                    '画面静止无像素变动时跳过 NPU 深度推理，极大降低芯片能耗与总线发热。',
+                })}
               </p>
               {motionGateEnabled && (
                 <div className="space-y-1.5 border-t border-[var(--border)] pt-2">
                   <div className="flex items-center justify-between text-[11px]">
-                    <span className="text-[var(--text-secondary)]">灵敏度阈值:</span>
+                    <span className="text-[var(--text-secondary)]">
+                      {t('studio.motionGateSensitivity', { defaultValue: '灵敏度阈值:' })}
+                    </span>
                     <span className="font-mono font-semibold text-[var(--accent)]">
                       {motionGateThreshold}%
                     </span>

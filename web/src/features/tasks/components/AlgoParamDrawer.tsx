@@ -269,9 +269,9 @@ export function AlgoParamDrawer({
                     className="w-full cursor-pointer accent-[var(--accent)]"
                   />
                   <div className="flex justify-between font-mono text-[10px] text-[var(--text-muted)]">
-                    <span>10% (敏锐/多报)</span>
-                    <span>50% (标准推荐)</span>
-                    <span>95% (严苛/防误报)</span>
+                    <span>{t('studio.sensitivityHigh', { defaultValue: '10% (敏锐/多报)' })}</span>
+                    <span>{t('studio.sensitivityNormal', { defaultValue: '50% (标准推荐)' })}</span>
+                    <span>{t('studio.sensitivityLow', { defaultValue: '95% (严苛/防误报)' })}</span>
                   </div>
                 </div>
               )}

@@ -112,4 +112,23 @@ impl CameraRepo {
         }
         Ok(())
     }
+
+    pub async fn update_stream_mode(
+        db: &DatabaseConnection,
+        camera_id: &str,
+        stream_mode: &str,
+    ) -> Result<Option<Model>, DbError> {
+        if let Some(model) = Self::find_by_camera_id(db, camera_id).await? {
+            if model.stream_mode == stream_mode {
+                return Ok(Some(model));
+            }
+            let mut active: ActiveModel = model.into();
+            active.stream_mode = Set(stream_mode.to_string());
+            active.updated_at = Set(chrono::Utc::now());
+            let updated = active.update(db).await?;
+            Ok(Some(updated))
+        } else {
+            Ok(None)
+        }
+    }
 }

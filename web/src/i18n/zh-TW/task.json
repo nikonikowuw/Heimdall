@@ -25,6 +25,7 @@
   "selectChannelPlaceholder": "請選擇要分配任務的攝影機通道...",
   "taskName": "任務名稱",
   "taskNamePlaceholder": "例如：周界防範 - 庫房正門",
+  "enableArmImmediatelyDesc": "開啟後系統將啟動該路攝影機的分析碼流解碼並在後台調度 NPU 規則判定。",
   "allCamerasAssigned": "所有已接入的攝影機均已建立布防任務",
   "deleteTask": "刪除任務",
   "deleteTaskTitle": "刪除布防任務確認",
@@ -40,7 +41,6 @@
   "drawLine": "畫絆線 Line",
   "canvasPlaceholder": "視頻幀交互布防畫板",
   "saveRules": "保存布防規則",
-  "taskName": "任務名稱:",
   "clickToEditName": "點擊可原地快速修改任務名稱",
   "actions": {
     "enterStudio": "進入動態矢量布防工作台",
@@ -77,7 +77,16 @@
     "onlineStatus": "在線運行",
     "offlineStatus": "設備離線",
     "degradedStatus": "碼流抖動",
-    "unprobedStatus": "待探活"
+    "unprobedStatus": "待探活",
+    "pipelineStarting": "啟動中",
+    "pipelineRunning": "運行中",
+    "pipelineDegraded": "重連中",
+    "pipelineError": "異常",
+    "pipelineStopped": "已停止",
+    "clickToSwitchStreamMode": "點擊可快捷切換分析碼流 (主碼流 / 子碼流 / 自動)",
+    "confidence": "置信度:",
+    "targetClasses": "警戒類別:",
+    "classesCount": "{{count}} 類"
   },
   "sandbox": {
     "title": "六步沙箱安全自檢",
@@ -130,7 +139,29 @@
     "enterCalibration": "繪製 / 編輯活動防區 ↗",
     "calibratingActive": "正在標定中 (點擊畫面繪製)",
     "doneCalibration": "完成標定 (ESC)",
-    "noZonesHint": "當前畫面尚未劃定局部防區，已啟用的演算法將在全畫幅範圍內生效並判定告警。"
+    "noZonesHint": "當前畫面尚未劃定局部防區，已啟用的演算法將在全畫幅範圍內生效並判定告警。",
+    "fitModeFillTitle": "鋪滿全視口：畫面撐滿視口，消除上下左右所有空隙黑邊",
+    "fitModeFill": "撐滿無留白",
+    "fitModeFitTitle": "等比保真：嚴格保持原始 16:9 物理像素比例",
+    "fitModeFit": "等比保真",
+    "layoutOverlayTitle": "沉浸全景畫板 (UniFi 風格，16:9 全幅撐滿視口，消除上下黑邊)",
+    "layoutOverlay": "沉浸全屏",
+    "layoutDockedTitle": "雙欄並排視圖 (Verkada 風格，左側視訊與硬體遙測，右側參數停靠)",
+    "layoutDocked": "雙欄並排",
+    "collapsePanel": "收起配置面板",
+    "expandPanel": "展開配置面板",
+    "snapMagnet": "磁吸吸附",
+    "telemetryZeroCopy": "硬體零拷貝解碼: VPU DMA-BUF",
+    "telemetryInferEngine": "推理核心: RKNN NPU 2.0",
+    "telemetryResolution": "源解析度:",
+    "telemetryLatency": "串流延遲:",
+    "telemetryFps": "即時幀率:",
+    "motionGateTitle": "運動檢測門控 (Motion Gating)",
+    "motionGateSensitivity": "靈敏度閾值:",
+    "polygonVertices": "{{count}} 頂點多邊形",
+    "sensitivityHigh": "10% (敏銳/多報)",
+    "sensitivityNormal": "50% (標準推薦)",
+    "sensitivityLow": "95% (嚴苛/防誤報)"
   },
   "tools": {
     "select": "選擇與位移",
@@ -163,7 +194,10 @@
   "layers": {
     "title": "布防規則圖層",
     "empty": "暫無布防規則",
-    "emptyTip": "請在左側或上方選擇工具繪製"
+    "emptyTip": "請在左側或上方選擇工具繪製",
+    "hideRule": "隱藏該規則",
+    "showRule": "顯示該規則",
+    "deleteRule": "刪除該規則"
   },
   "inspector": {
     "title": "屬性檢查器",
@@ -181,11 +215,31 @@
     "inheritGlobal": "繼承全域目標",
     "customTargets": "自訂目標"
   },
+  "rules": {
+    "defaultRoiName": "入侵防區 {{index}}",
+    "defaultLineName": "越界絆線 {{index}}",
+    "defaultMaskName": "屏蔽遮罩 {{index}}",
+    "defaultRuleName": "規則 {{index}}"
+  },
   "algoDrawer": {
     "id": "演算法標識",
     "version": "版本與作者",
     "platforms": "支持平台",
     "classes": "目標類別過濾",
     "done": "完成"
+  },
+  "streamMode": {
+    "title": "AI 分析碼流選擇",
+    "main": "主碼流 (高畫質分析·推薦)",
+    "mainDesc": "全高畫質原圖硬體下採樣，小目標與遠距離識別最清晰，快照零延遲",
+    "sub": "子碼流 (低能耗)",
+    "subDesc": "低碼率子流推理，節約 VPU 算力，適合超多路密集布防",
+    "auto": "自動適配 (自適應)",
+    "autoDesc": "自動探活子碼流，若無子流或不可用則自適應降級主碼流"
+  },
+  "cardStream": {
+    "main": "主碼流·高畫質",
+    "sub": "子碼流·低能耗",
+    "auto": "自動碼流"
   }
 }

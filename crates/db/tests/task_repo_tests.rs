@@ -17,6 +17,7 @@ async fn setup_test_camera_and_algo(db: &db::DatabaseConnection) {
         protocol: sea_orm::ActiveValue::Set("rtsp".to_string()),
         rtsp_url: sea_orm::ActiveValue::Set("rtsp://127.0.0.1:8554/live".to_string()),
         sub_rtsp_url: sea_orm::ActiveValue::Set("".to_string()),
+        stream_mode: sea_orm::ActiveValue::Set("auto".to_string()),
         remark: sea_orm::ActiveValue::Set("".to_string()),
         last_probe_status: sea_orm::ActiveValue::Set("healthy".to_string()),
         last_probe_at: sea_orm::ActiveValue::Set(None),
@@ -571,4 +572,38 @@ async fn test_update_instance_and_sync_task_propagates_rules_and_motion_gate() {
         .expect("task exists");
     assert_eq!(parent_task.rules_json, updated_rules);
     assert_eq!(parent_task.motion_gate_json, updated_motion);
+}
+
+#[tokio::test]
+async fn test_camera_repo_update_stream_mode() {
+    let db = init_test_db().await.expect("init db");
+    setup_test_camera_and_algo(&db).await;
+
+    // 初始 stream_mode 为 auto
+    let initial = CameraRepo::find_by_camera_id(&db, "CAM-001")
+        .await
+        .expect("find camera")
+        .expect("camera exists");
+    assert_eq!(initial.stream_mode, "auto");
+
+    // 更新为 main
+    let updated = CameraRepo::update_stream_mode(&db, "CAM-001", "main")
+        .await
+        .expect("update stream mode")
+        .expect("camera updated");
+    assert_eq!(updated.stream_mode, "main");
+
+    // 再次查询校验持久化结果
+    let reloaded = CameraRepo::find_by_camera_id(&db, "CAM-001")
+        .await
+        .expect("find camera")
+        .expect("camera exists");
+    assert_eq!(reloaded.stream_mode, "main");
+
+    // 重复更新相同值应幂等安全返回
+    let no_op = CameraRepo::update_stream_mode(&db, "CAM-001", "main")
+        .await
+        .expect("no-op update")
+        .expect("camera exists");
+    assert_eq!(no_op.stream_mode, "main");
 }

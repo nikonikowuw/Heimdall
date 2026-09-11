@@ -199,6 +199,8 @@ pub struct TaskConfigDto {
     #[serde(default)]
     pub motion_gate: Option<MotionGateConfig>,
     #[serde(default)]
+    pub stream_mode: Option<types::StreamMode>,
+    #[serde(default)]
     pub algorithm_instances: Option<Vec<TaskAlgorithmInstanceDto>>,
 }
 
@@ -243,6 +245,7 @@ fn extract_primary_instance_props(
 fn build_task_config_dto(
     task: &db::entity::task::Model,
     instances: &[db::entity::algorithm_instance::Model],
+    stream_mode: Option<types::StreamMode>,
 ) -> TaskConfigDto {
     let rules = DetectionRule::parse_rules_json(&task.rules_json).unwrap_or_default();
     let motion_gate: Option<MotionGateConfig> = serde_json::from_str(&task.motion_gate_json).ok();
@@ -259,6 +262,7 @@ fn build_task_config_dto(
         status_message: task.status_message.clone(),
         rules,
         motion_gate,
+        stream_mode,
         algorithm_instances: Some(
             instances
                 .iter()
@@ -337,10 +341,17 @@ async fn get_task(
     State(state): State<AppState>,
     Path(camera_id): Path<String>,
 ) -> Result<ApiResponse<TaskConfigDto>, ApiError> {
+    let camera = db::CameraRepo::find_by_camera_id(&state.db, &camera_id).await?;
+    let stream_mode = camera
+        .as_ref()
+        .map(|c| types::StreamMode::from_str_loose(&c.stream_mode));
+
     if let Some(task) = TaskRepo::find_by_camera_id(&state.db, &camera_id).await? {
         let instances = AlgorithmInstanceRepo::list_by_camera_id(&state.db, &camera_id).await?;
         Ok(ApiResponse::success(build_task_config_dto(
-            &task, &instances,
+            &task,
+            &instances,
+            stream_mode,
         )))
     } else {
         // 未配置时返回默认结构
@@ -355,6 +366,7 @@ async fn get_task(
             status_message: String::new(),
             rules: Vec::new(),
             motion_gate: Some(MotionGateConfig::default()),
+            stream_mode,
             algorithm_instances: Some(Vec::new()),
         }))
     }
@@ -376,10 +388,23 @@ async fn update_task(
         ));
     }
 
-    let camera = db::CameraRepo::find_by_camera_id(&state.db, &camera_id)
+    let mut camera = db::CameraRepo::find_by_camera_id(&state.db, &camera_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound(format!("关联摄像头未找到: {camera_id}")))?;
+
+    // 若请求中指定了 stream_mode 且与当前摄像头不一致，则经由 CameraRepo 仓储原子更新
+    if let Some(mode) = dto.stream_mode {
+        if mode.as_str() != camera.stream_mode {
+            if let Some(updated_cam) =
+                db::CameraRepo::update_stream_mode(&state.db, &camera_id, mode.as_str())
+                    .await
+                    .map_err(|e| ApiError::Internal(e.to_string()))?
+            {
+                camera = updated_cam;
+            }
+        }
+    }
 
     // 实例列表解析与合法性校验
     let instances = resolve_task_instances_for_save(&state, &camera_id, &dto).await?;
@@ -474,12 +499,13 @@ async fn update_task(
                 state.pipeline.set_ai_active(&camera_id, false).await;
                 (types::TaskStatus::Error.as_i32(), err_msg)
             } else {
-                let params = task_service::build_start_params(
+                let params = task_service::build_start_params_async(
                     &camera_id,
                     &camera,
                     launch_instances,
                     dto.motion_gate.as_ref(),
-                );
+                )
+                .await;
 
                 match state.task_coordinator.start_camera_pipeline(params).await {
                     Ok(_) => {
@@ -613,9 +639,11 @@ async fn update_task(
         .await?
         .unwrap_or(saved_task);
     let latest_instances = AlgorithmInstanceRepo::list_by_camera_id(&state.db, &camera_id).await?;
+    let final_stream_mode = types::StreamMode::from_str_loose(&camera.stream_mode);
     Ok(ApiResponse::success(build_task_config_dto(
         &latest_task,
         &latest_instances,
+        Some(final_stream_mode),
     )))
 }
 
@@ -919,7 +947,10 @@ async fn update_instance(
     Ok(ApiResponse::success(AlgorithmInstanceDto::from(updated)))
 }
 
-async fn sync_pipeline_for_camera(state: &AppState, camera_id: &str) -> Result<(), ApiError> {
+pub(crate) async fn sync_pipeline_for_camera(
+    state: &AppState,
+    camera_id: &str,
+) -> Result<(), ApiError> {
     let Some(task) = TaskRepo::find_by_camera_id(&state.db, camera_id).await? else {
         let _ = state.task_coordinator.stop_camera_pipeline(camera_id).await;
         state.pipeline.set_ai_active(camera_id, false).await;
@@ -986,12 +1017,13 @@ async fn sync_pipeline_for_camera(state: &AppState, camera_id: &str) -> Result<(
         TaskRepo::update_status(&state.db, camera_id, status.as_i32(), msg).await?;
     } else {
         let motion_gate = serde_json::from_str::<MotionGateConfig>(&task.motion_gate_json).ok();
-        let params = task_service::build_start_params(
+        let params = task_service::build_start_params_async(
             camera_id,
             &camera,
             launch_instances,
             motion_gate.as_ref(),
-        );
+        )
+        .await;
         state
             .task_coordinator
             .start_camera_pipeline(params)
@@ -1270,18 +1302,15 @@ mod tests {
         (app, state, token, mock_coord)
     }
 
-    #[tokio::test]
-    async fn test_task_crud_lifecycle() {
-        let (app, state, token, _mock_coord) = setup_test_app().await;
-
-        // 1. 创建关联摄像头
-        let camera_model = db::entity::camera::ActiveModel {
+    fn test_camera_model(camera_id: &str, rtsp_url: &str) -> db::entity::camera::ActiveModel {
+        db::entity::camera::ActiveModel {
             id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-TASK-01".to_string()),
+            camera_id: Set(camera_id.to_string()),
             name: Set("测试摄像头".to_string()),
             protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
+            rtsp_url: Set(rtsp_url.to_string()),
             sub_rtsp_url: Set("".to_string()),
+            stream_mode: Set("auto".to_string()),
             remark: Set("".to_string()),
             last_probe_status: Set("healthy".to_string()),
             last_probe_at: Set(None),
@@ -1295,7 +1324,15 @@ mod tests {
             gb28181_channel_id: Set(None),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn test_task_crud_lifecycle() {
+        let (app, state, token, _mock_coord) = setup_test_app().await;
+
+        // 1. 创建关联摄像头
+        let camera_model = test_camera_model("CAM-TASK-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();
@@ -1353,6 +1390,7 @@ mod tests {
             "cameraId": "CAM-TASK-01",
             "name": "周界入侵防护",
             "desiredEnabled": true,
+            "streamMode": "main",
             "algorithmId": "crud_algo",
             "rules": [
                 {
@@ -1376,6 +1414,18 @@ mod tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let update_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(update_json["data"]["streamMode"], "main");
+
+        // 验证摄像头实体的 stream_mode 也被原子更新
+        let updated_camera = db::CameraRepo::find_by_camera_id(&state.db, "CAM-TASK-01")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated_camera.stream_mode, "main");
 
         // 4. 列出全部任务
         let req = Request::builder()
@@ -1421,27 +1471,7 @@ mod tests {
         let (app, state, token, mock_coord) = setup_test_app().await;
 
         // 创建关联摄像头
-        let camera_model = db::entity::camera::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-ALGO-01".to_string()),
-            name: Set("测试摄像头".to_string()),
-            protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
-            sub_rtsp_url: Set("".to_string()),
-            remark: Set("".to_string()),
-            last_probe_status: Set("healthy".to_string()),
-            last_probe_at: Set(None),
-            last_probe_error_code: Set("".to_string()),
-            last_success_at: Set(None),
-            last_codec: Set("h264".to_string()),
-            last_width: Set(1920),
-            last_height: Set(1080),
-            last_fps: Set(25.0),
-            gb28181_device_id: Set(None),
-            gb28181_channel_id: Set(None),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
-        };
+        let camera_model = test_camera_model("CAM-ALGO-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();
@@ -1623,27 +1653,7 @@ mod tests {
         let (app, state, token, mock_coord) = setup_test_app().await;
 
         // 1. 预置摄像头与算法
-        let camera_model = db::entity::camera::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-FAIL-01".to_string()),
-            name: Set("异常测试摄像头".to_string()),
-            protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
-            sub_rtsp_url: Set("".to_string()),
-            remark: Set("".to_string()),
-            last_probe_status: Set("healthy".to_string()),
-            last_probe_at: Set(None),
-            last_probe_error_code: Set("".to_string()),
-            last_success_at: Set(None),
-            last_codec: Set("h264".to_string()),
-            last_width: Set(1920),
-            last_height: Set(1080),
-            last_fps: Set(25.0),
-            gb28181_device_id: Set(None),
-            gb28181_channel_id: Set(None),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
-        };
+        let camera_model = test_camera_model("CAM-FAIL-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();
@@ -1720,27 +1730,7 @@ mod tests {
     async fn test_task_disable_stops_pipeline_and_sets_stopped() {
         let (app, state, token, mock_coord) = setup_test_app().await;
 
-        let camera_model = db::entity::camera::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-STOP-01".to_string()),
-            name: Set("启停测试摄像头".to_string()),
-            protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
-            sub_rtsp_url: Set("".to_string()),
-            remark: Set("".to_string()),
-            last_probe_status: Set("healthy".to_string()),
-            last_probe_at: Set(None),
-            last_probe_error_code: Set("".to_string()),
-            last_success_at: Set(None),
-            last_codec: Set("h264".to_string()),
-            last_width: Set(1920),
-            last_height: Set(1080),
-            last_fps: Set(25.0),
-            gb28181_device_id: Set(None),
-            gb28181_channel_id: Set(None),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
-        };
+        let camera_model = test_camera_model("CAM-STOP-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();
@@ -1847,27 +1837,7 @@ mod tests {
     async fn test_task_idempotent_enable() {
         let (app, state, token, mock_coord) = setup_test_app().await;
 
-        let camera_model = db::entity::camera::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-IDEMP-01".to_string()),
-            name: Set("幂等摄像头".to_string()),
-            protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
-            sub_rtsp_url: Set("".to_string()),
-            remark: Set("".to_string()),
-            last_probe_status: Set("healthy".to_string()),
-            last_probe_at: Set(None),
-            last_probe_error_code: Set("".to_string()),
-            last_success_at: Set(None),
-            last_codec: Set("h264".to_string()),
-            last_width: Set(1920),
-            last_height: Set(1080),
-            last_fps: Set(25.0),
-            gb28181_device_id: Set(None),
-            gb28181_channel_id: Set(None),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
-        };
+        let camera_model = test_camera_model("CAM-IDEMP-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();
@@ -1958,27 +1928,7 @@ mod tests {
     async fn test_task_delete_stops_pipeline_before_db_removal() {
         let (app, state, token, mock_coord) = setup_test_app().await;
 
-        let camera_model = db::entity::camera::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-DEL-01".to_string()),
-            name: Set("删除测试摄像头".to_string()),
-            protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
-            sub_rtsp_url: Set("".to_string()),
-            remark: Set("".to_string()),
-            last_probe_status: Set("healthy".to_string()),
-            last_probe_at: Set(None),
-            last_probe_error_code: Set("".to_string()),
-            last_success_at: Set(None),
-            last_codec: Set("h264".to_string()),
-            last_width: Set(1920),
-            last_height: Set(1080),
-            last_fps: Set(25.0),
-            gb28181_device_id: Set(None),
-            gb28181_channel_id: Set(None),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
-        };
+        let camera_model = test_camera_model("CAM-DEL-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();
@@ -2076,27 +2026,7 @@ mod tests {
     async fn test_task_empty_rtsp_url_records_error_status() {
         let (app, state, token, _mock_coord) = setup_test_app().await;
 
-        let camera_model = db::entity::camera::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-EMPTY-URL".to_string()),
-            name: Set("空地址摄像头".to_string()),
-            protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("".to_string()), // 空主码流地址
-            sub_rtsp_url: Set("".to_string()),
-            remark: Set("".to_string()),
-            last_probe_status: Set("healthy".to_string()),
-            last_probe_at: Set(None),
-            last_probe_error_code: Set("".to_string()),
-            last_success_at: Set(None),
-            last_codec: Set("h264".to_string()),
-            last_width: Set(1920),
-            last_height: Set(1080),
-            last_fps: Set(25.0),
-            gb28181_device_id: Set(None),
-            gb28181_channel_id: Set(None),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
-        };
+        let camera_model = test_camera_model("CAM-EMPTY-URL", "");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();
@@ -2157,28 +2087,7 @@ mod tests {
     async fn test_task_multi_instance_api_full_flow() {
         let (app, state, token, _mock_coord) = setup_test_app().await;
 
-        let now = chrono::Utc::now();
-        let camera_model = db::entity::camera::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-MULTI-01".to_string()),
-            name: Set("多实例测试摄像头".to_string()),
-            protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
-            sub_rtsp_url: Set("".to_string()),
-            remark: Set("".to_string()),
-            last_probe_status: Set("healthy".to_string()),
-            last_probe_at: Set(None),
-            last_probe_error_code: Set("".to_string()),
-            last_success_at: Set(None),
-            last_codec: Set("h264".to_string()),
-            last_width: Set(1920),
-            last_height: Set(1080),
-            last_fps: Set(25.0),
-            gb28181_device_id: Set(None),
-            gb28181_channel_id: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
+        let camera_model = test_camera_model("CAM-MULTI-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();
@@ -2419,28 +2328,7 @@ mod tests {
     async fn test_task_instance_enable_and_rules_sync_pipeline_lifecycle() {
         let (app, state, token, mock_coord) = setup_test_app().await;
 
-        let now = chrono::Utc::now();
-        let camera_model = db::entity::camera::ActiveModel {
-            id: sea_orm::ActiveValue::NotSet,
-            camera_id: Set("CAM-SYNC-01".to_string()),
-            name: Set("同步测试摄像头".to_string()),
-            protocol: Set("rtsp".to_string()),
-            rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
-            sub_rtsp_url: Set("".to_string()),
-            remark: Set("".to_string()),
-            last_probe_status: Set("healthy".to_string()),
-            last_probe_at: Set(None),
-            last_probe_error_code: Set("".to_string()),
-            last_success_at: Set(None),
-            last_codec: Set("h264".to_string()),
-            last_width: Set(1920),
-            last_height: Set(1080),
-            last_fps: Set(25.0),
-            gb28181_device_id: Set(None),
-            gb28181_channel_id: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
+        let camera_model = test_camera_model("CAM-SYNC-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
             .await
             .unwrap();

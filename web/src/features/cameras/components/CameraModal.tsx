@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { AlertCircle, Check, Loader2, Sparkles, Video, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { StreamModeSelector } from '@/components/StreamModeSelector'
 import { cameraApi } from '@/lib/api'
-import type { Camera, SubStreamCandidate } from '@/types'
+import type { Camera, SubStreamCandidate, StreamMode } from '@/types'
 
 export interface CameraModalProps {
   isOpen: boolean
@@ -25,6 +26,7 @@ export function CameraModal({
   const [name, setName] = useState('')
   const [mainUrl, setMainUrl] = useState('')
   const [subUrl, setSubUrl] = useState('')
+  const [streamMode, setStreamMode] = useState<StreamMode>('auto')
   const [remark, setRemark] = useState('')
   const [subCandidates, setSubCandidates] = useState<SubStreamCandidate[]>([])
   const [isDeducing, setIsDeducing] = useState(false)
@@ -38,11 +40,13 @@ export function CameraModal({
         setName(camera.name || '')
         setMainUrl(camera.rtspUrl || '')
         setSubUrl(camera.subRtspUrl || '')
+        setStreamMode(camera.streamMode || 'auto')
         setRemark(camera.remark || '')
       } else {
         setName('')
         setMainUrl('')
         setSubUrl('')
+        setStreamMode('auto')
         setRemark('')
       }
       setSubCandidates([])
@@ -105,16 +109,20 @@ export function CameraModal({
         const updated = await cameraApi.update(camera.cameraId, {
           name: trimmedName,
           rtspUrl: trimmedMainUrl,
-          subRtspUrl: trimmedSubUrl || undefined,
+          subRtspUrl: trimmedSubUrl,
+          streamMode,
           remark: trimmedRemark || undefined,
         })
         onSuccess(updated)
         onClose()
       } else {
+        const subRtspUrl =
+          trimmedSubUrl !== '' ? trimmedSubUrl : streamMode === 'main' ? '' : undefined
         const created = await cameraApi.create({
           name: trimmedName,
           rtspUrl: trimmedMainUrl,
-          subRtspUrl: trimmedSubUrl || undefined,
+          subRtspUrl,
+          streamMode,
           remark: trimmedRemark || undefined,
         })
         onSuccess(created)
@@ -234,6 +242,7 @@ export function CameraModal({
               placeholder={t('manage.subRtspPlaceholder')}
               className="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-colors focus:border-[var(--accent)] focus:outline-hidden"
             />
+            <p className="mt-1 text-[11px] text-[var(--text-muted)]">{t('manage.subRtspHint')}</p>
 
             {/* 子码流候选芯片预设 */}
             {subCandidates.length > 0 && (
@@ -262,6 +271,9 @@ export function CameraModal({
               </div>
             )}
           </div>
+
+          {/* AI 分析码流偏好选择 */}
+          <StreamModeSelector value={streamMode} onChange={setStreamMode} />
 
           {/* 备注说明 */}
           <div>

@@ -171,6 +171,37 @@ pub struct EncodedPacket {
     pub payload: Bytes,
 }
 
+/// 分析码流选择偏好
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamMode {
+    /// 自动探测：优先尝试子码流，若无子码流或不可用则自适应回退到主码流
+    #[default]
+    Auto,
+    /// 强制使用主码流进行高精度常驻 AI 分析（画面清晰，细节完整，推荐中小路数）
+    Main,
+    /// 强制使用子码流进行低能耗常驻 AI 分析（节约算力，超多路并发）
+    Sub,
+}
+
+impl StreamMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Main => "main",
+            Self::Sub => "sub",
+        }
+    }
+
+    pub fn from_str_loose(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "main" => Self::Main,
+            "sub" => Self::Sub,
+            _ => Self::Auto,
+        }
+    }
+}
+
 /// 摄像头核心领域模型
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -181,6 +212,8 @@ pub struct Camera {
     pub protocol: String,
     pub rtsp_url: String,
     pub sub_rtsp_url: String,
+    #[serde(default)]
+    pub stream_mode: StreamMode,
     pub remark: String,
     pub transport_policy: TransportPolicy,
     pub last_probe_status: ProbeStatus,
@@ -205,6 +238,7 @@ pub struct CreateCameraRequest {
     pub protocol: Option<CameraProtocol>,
     pub rtsp_url: String,
     pub sub_rtsp_url: Option<String>,
+    pub stream_mode: Option<StreamMode>,
     pub remark: Option<String>,
     pub transport_policy: Option<TransportPolicy>,
     pub gb28181_device_id: Option<String>,
@@ -218,6 +252,7 @@ pub struct UpdateCameraRequest {
     pub name: Option<String>,
     pub rtsp_url: Option<String>,
     pub sub_rtsp_url: Option<String>,
+    pub stream_mode: Option<StreamMode>,
     pub remark: Option<String>,
     pub transport_policy: Option<TransportPolicy>,
     pub gb28181_device_id: Option<String>,

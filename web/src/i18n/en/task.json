@@ -25,6 +25,7 @@
   "selectChannelPlaceholder": "Choose a camera channel...",
   "taskName": "Task Name",
   "taskNamePlaceholder": "e.g. Perimeter Guard - Warehouse East",
+  "enableArmImmediatelyDesc": "When enabled, the system immediately starts hardware decoding of the camera stream and schedules NPU inference in the background.",
   "allCamerasAssigned": "All connected cameras have already been assigned to tasks.",
   "deleteTask": "Delete Task",
   "deleteTaskTitle": "Confirm Task Deletion",
@@ -40,7 +41,6 @@
   "drawLine": "Draw Line",
   "canvasPlaceholder": "Interactive Rule Canvas",
   "saveRules": "Save Rules",
-  "taskName": "Task Name:",
   "clickToEditName": "Click to edit task name directly",
   "actions": {
     "enterStudio": "Open Vector Rules Studio",
@@ -77,7 +77,16 @@
     "onlineStatus": "Online",
     "offlineStatus": "Offline",
     "degradedStatus": "Degraded",
-    "unprobedStatus": "Pending"
+    "unprobedStatus": "Pending",
+    "pipelineStarting": "Starting",
+    "pipelineRunning": "Running",
+    "pipelineDegraded": "Reconnecting",
+    "pipelineError": "Error",
+    "pipelineStopped": "Stopped",
+    "clickToSwitchStreamMode": "Click to cycle inference stream mode (Main / Sub / Auto)",
+    "confidence": "Confidence:",
+    "targetClasses": "Target Classes:",
+    "classesCount": "{{count}} Classes"
   },
   "sandbox": {
     "title": "6-Step Sandbox Self-Test",
@@ -130,7 +139,29 @@
     "enterCalibration": "Draw / Edit Zones ↗",
     "calibratingActive": "Calibrating (Click video to draw)",
     "doneCalibration": "Done Calibration (ESC)",
-    "noZonesHint": "No spatial zones defined yet. Active algorithms will apply across the entire frame."
+    "noZonesHint": "No spatial zones defined yet. Active algorithms will apply across the entire frame.",
+    "fitModeFillTitle": "Fill viewport: fills available space, eliminating surrounding letterboxing",
+    "fitModeFill": "Fill",
+    "fitModeFitTitle": "Keep aspect ratio: preserves original 16:9 physical pixel ratio",
+    "fitModeFit": "Fit (16:9)",
+    "layoutOverlayTitle": "Immersive Canvas (UniFi style: full-viewport coverage)",
+    "layoutOverlay": "Immersive",
+    "layoutDockedTitle": "Docked View (Verkada style: video telemetry on left, settings on right)",
+    "layoutDocked": "Docked",
+    "collapsePanel": "Collapse Panel",
+    "expandPanel": "Expand Panel",
+    "snapMagnet": "Snap to Grid/Vertices",
+    "telemetryZeroCopy": "Zero-Copy Decode: VPU DMA-BUF",
+    "telemetryInferEngine": "Inference Core: RKNN NPU 2.0",
+    "telemetryResolution": "Resolution:",
+    "telemetryLatency": "Latency:",
+    "telemetryFps": "Framerate:",
+    "motionGateTitle": "Motion Gating",
+    "motionGateSensitivity": "Sensitivity Threshold:",
+    "polygonVertices": "{{count}}-point Polygon",
+    "sensitivityHigh": "10% (High Sensitivity)",
+    "sensitivityNormal": "50% (Standard)",
+    "sensitivityLow": "95% (Strict)"
   },
   "tools": {
     "select": "Select & Move",
@@ -163,7 +194,10 @@
   "layers": {
     "title": "Rule Layers",
     "empty": "No Rules Defined",
-    "emptyTip": "Use the tools above to draw zones"
+    "emptyTip": "Use the tools above to draw zones",
+    "hideRule": "Hide Rule",
+    "showRule": "Show Rule",
+    "deleteRule": "Delete Rule"
   },
   "inspector": {
     "title": "Property Inspector",
@@ -181,11 +215,31 @@
     "inheritGlobal": "Inherit Global Targets",
     "customTargets": "Custom Targets"
   },
+  "rules": {
+    "defaultRoiName": "Intrusion Zone {{index}}",
+    "defaultLineName": "Tripwire {{index}}",
+    "defaultMaskName": "Privacy Mask {{index}}",
+    "defaultRuleName": "Rule {{index}}"
+  },
   "algoDrawer": {
     "id": "Algorithm ID",
     "version": "Version & Author",
     "platforms": "Supported Platforms",
     "classes": "Class Filter",
     "done": "Done"
+  },
+  "streamMode": {
+    "title": "AI Inference Stream Source",
+    "main": "Main Stream (High Quality · Recommended)",
+    "mainDesc": "Hardware downsampling from 1080P/4K hero stream; highest accuracy for small/distant objects",
+    "sub": "Sub Stream (Low Power)",
+    "subDesc": "Low-bitrate sub-stream; saves VPU compute for high-density multi-channel deployments",
+    "auto": "Auto (Adaptive)",
+    "autoDesc": "Automatically probes sub-stream; falls back to main stream if unavailable"
+  },
+  "cardStream": {
+    "main": "Main (HD)",
+    "sub": "Sub (Eco)",
+    "auto": "Auto Stream"
   }
 }

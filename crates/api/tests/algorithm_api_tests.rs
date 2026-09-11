@@ -119,6 +119,7 @@ async fn test_algorithms_and_instances_api_endpoints() {
         protocol: Set("rtsp".to_string()),
         rtsp_url: Set("rtsp://127.0.0.1:8554/live".to_string()),
         sub_rtsp_url: Set("".to_string()),
+        stream_mode: Set("auto".to_string()),
         remark: Set("".to_string()),
         last_probe_status: Set("healthy".to_string()),
         last_probe_at: Set(None),

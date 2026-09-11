@@ -31,6 +31,7 @@ fn model_to_camera_dto(m: db::entity::camera::Model) -> Camera {
         protocol: m.protocol,
         rtsp_url: m.rtsp_url,
         sub_rtsp_url: m.sub_rtsp_url,
+        stream_mode: types::StreamMode::from_str_loose(&m.stream_mode),
         remark: m.remark,
         transport_policy: types::TransportPolicy::Auto,
         last_probe_status: types::ProbeStatus::from_str_loose(&m.last_probe_status),
@@ -86,11 +87,18 @@ async fn create_camera(
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| "rtsp".to_string());
 
-    // 自动推导子码流候选（若用户未手动指定）
+    // 若请求显式提供了 sub_rtsp_url（包含传空字符串表示明确使用单码流模式），则遵从用户设定；
+    // 仅在完全未提供该字段 (None) 时才尝试自动推导候选子码流
     let sub_rtsp_url = match req.sub_rtsp_url {
-        Some(ref s) if !s.trim().is_empty() => s.trim().to_string(),
-        _ => media::deduce_primary_sub_stream(rtsp_url).unwrap_or_default(),
+        Some(ref s) => s.trim().to_string(),
+        None => media::deduce_primary_sub_stream(rtsp_url).unwrap_or_default(),
     };
+
+    let stream_mode = req
+        .stream_mode
+        .unwrap_or(types::StreamMode::Auto)
+        .as_str()
+        .to_string();
 
     let active_model = db::entity::camera::ActiveModel {
         camera_id: Set(camera_id.clone()),
@@ -98,6 +106,7 @@ async fn create_camera(
         protocol: Set(protocol),
         rtsp_url: Set(rtsp_url.to_string()),
         sub_rtsp_url: Set(sub_rtsp_url),
+        stream_mode: Set(stream_mode),
         remark: Set(req.remark.unwrap_or_default()),
         last_probe_status: Set("never".to_string()),
         last_probe_at: Set(None),
@@ -137,7 +146,7 @@ async fn update_camera(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("摄像头未找到: {camera_id}")))?;
 
-    let mut active: db::entity::camera::ActiveModel = camera.into();
+    let mut active: db::entity::camera::ActiveModel = camera.clone().into();
     let mut rtsp_url_changed = false;
     let mut new_url = String::new();
 
@@ -149,14 +158,27 @@ async fn update_camera(
     }
     if let Some(url) = req.rtsp_url {
         let trimmed = url.trim();
-        if !trimmed.is_empty() {
+        if !trimmed.is_empty() && trimmed != camera.rtsp_url {
             active.rtsp_url = Set(trimmed.to_string());
             rtsp_url_changed = true;
             new_url = trimmed.to_string();
         }
     }
+    let mut stream_mode_changed = false;
+    let mut sub_rtsp_changed = false;
+
     if let Some(sub_url) = req.sub_rtsp_url {
-        active.sub_rtsp_url = Set(sub_url);
+        let trimmed = sub_url.trim();
+        if trimmed != camera.sub_rtsp_url {
+            active.sub_rtsp_url = Set(trimmed.to_string());
+            sub_rtsp_changed = true;
+        }
+    }
+    if let Some(mode) = req.stream_mode {
+        if mode.as_str() != camera.stream_mode {
+            active.stream_mode = Set(mode.as_str().to_string());
+            stream_mode_changed = true;
+        }
     }
     if let Some(remark) = req.remark {
         active.remark = Set(remark);
@@ -179,9 +201,20 @@ async fn update_camera(
         CameraProbeService::spawn_probe_and_broadcast(
             state.db.clone(),
             state.event_broadcaster.clone(),
-            camera_id,
+            camera_id.clone(),
             new_url,
         );
+    }
+
+    // 若 RTSP 地址或码流模式变更，联动同步已启用的 AI 分析管线
+    if rtsp_url_changed || stream_mode_changed || sub_rtsp_changed {
+        if let Err(err) = crate::routes::task::sync_pipeline_for_camera(&state, &camera_id).await {
+            tracing::warn!(
+                camera_id = %camera_id,
+                error = %err,
+                "摄像头码流配置变更后同步分析管线失败"
+            );
+        }
     }
 
     Ok(ApiResponse::success(model_to_camera_dto(updated)))
@@ -387,6 +420,7 @@ mod tests {
             protocol: "rtsp".to_string(),
             rtsp_url: "rtsp://127.0.0.1:8554/live".to_string(),
             sub_rtsp_url: "".to_string(),
+            stream_mode: "auto".to_string(),
             remark: "Entrance".to_string(),
             last_probe_status: "healthy".to_string(),
             last_probe_at: None,
@@ -534,5 +568,114 @@ mod tests {
             .unwrap();
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_camera_explicit_empty_sub_stream_preserved_for_single_stream_mode() {
+        let (app, _state, token) = setup_test_app().await;
+
+        // 包含海康匹配模式的 URL，但用户明确显式传空字符串表示无子码流（单码流）
+        let create_body = serde_json::json!({
+            "name": "Hik Single Stream Camera",
+            "rtspUrl": "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/101",
+            "subRtspUrl": ""
+        });
+        let req = Request::builder()
+            .uri("/api/v1/cameras")
+            .method("POST")
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created_res: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(created_res["code"], 0);
+        // 验证用户显式设置的空字符串得到尊重，未被推导覆盖
+        assert_eq!(created_res["data"]["subRtspUrl"], "");
+
+        // 仅在未提供 subRtspUrl 字段时，才自动推导建议
+        let create_body_auto = serde_json::json!({
+            "name": "Hik Auto Deduce Camera",
+            "rtspUrl": "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/101"
+        });
+        let req_auto = Request::builder()
+            .uri("/api/v1/cameras")
+            .method("POST")
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&create_body_auto).unwrap()))
+            .unwrap();
+        let res_auto = app.clone().oneshot(req_auto).await.unwrap();
+        assert_eq!(res_auto.status(), StatusCode::OK);
+        let bytes_auto = axum::body::to_bytes(res_auto.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created_res_auto: serde_json::Value = serde_json::from_slice(&bytes_auto).unwrap();
+        assert_eq!(
+            created_res_auto["data"]["subRtspUrl"],
+            "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/102"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_camera_update_stream_mode_invokes_pipeline_sync() {
+        let (app, state, token) = setup_test_app().await;
+
+        // 1. 创建摄像头
+        let cam_model = db::entity::camera::ActiveModel {
+            id: sea_orm::ActiveValue::NotSet,
+            camera_id: sea_orm::ActiveValue::Set("CAM-SYNC-TEST".to_string()),
+            name: sea_orm::ActiveValue::Set("Sync Cam".to_string()),
+            protocol: sea_orm::ActiveValue::Set("rtsp".to_string()),
+            rtsp_url: sea_orm::ActiveValue::Set("rtsp://127.0.0.1:8554/live".to_string()),
+            sub_rtsp_url: sea_orm::ActiveValue::Set("rtsp://127.0.0.1:8554/sub".to_string()),
+            stream_mode: sea_orm::ActiveValue::Set("auto".to_string()),
+            remark: sea_orm::ActiveValue::Set("".to_string()),
+            last_probe_status: sea_orm::ActiveValue::Set("healthy".to_string()),
+            last_probe_at: sea_orm::ActiveValue::Set(None),
+            last_probe_error_code: sea_orm::ActiveValue::Set("".to_string()),
+            last_success_at: sea_orm::ActiveValue::Set(None),
+            last_codec: sea_orm::ActiveValue::Set("h264".to_string()),
+            last_width: sea_orm::ActiveValue::Set(1920),
+            last_height: sea_orm::ActiveValue::Set(1080),
+            last_fps: sea_orm::ActiveValue::Set(25.0),
+            gb28181_device_id: sea_orm::ActiveValue::Set(None),
+            gb28181_channel_id: sea_orm::ActiveValue::Set(None),
+            created_at: sea_orm::ActiveValue::Set(chrono::Utc::now()),
+            updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now()),
+        };
+        db::CameraRepo::insert(&state.db, cam_model).await.unwrap();
+
+        // 2. 更新摄像头 stream_mode 为 main
+        let update_body = serde_json::json!({
+            "streamMode": "main"
+        });
+        let req = Request::builder()
+            .uri("/api/v1/cameras/CAM-SYNC-TEST")
+            .method("PUT")
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&update_body).unwrap()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["code"], 0);
+        assert_eq!(json["data"]["streamMode"], "main");
+
+        // 3. 验证数据库中 stream_mode 已成功变为 main
+        let reloaded = db::CameraRepo::find_by_camera_id(&state.db, "CAM-SYNC-TEST")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.stream_mode, "main");
     }
 }

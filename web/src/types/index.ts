@@ -50,6 +50,8 @@ export type AlarmSeverity = 'warning' | 'critical'
 
 export type ProbeStatus = 'never' | 'healthy' | 'success' | 'degraded' | 'reconnecting' | 'failed'
 
+export type StreamMode = 'auto' | 'main' | 'sub'
+
 export interface Camera {
   id: number
   cameraId: string
@@ -57,6 +59,7 @@ export interface Camera {
   protocol: string
   rtspUrl: string
   subRtspUrl: string
+  streamMode: StreamMode
   remark: string
   lastProbeStatus: ProbeStatus
   lastProbeAt?: number | null
@@ -77,6 +80,7 @@ export interface CreateCameraRequest {
   protocol?: 'rtsp' | 'gb28181'
   rtspUrl: string
   subRtspUrl?: string
+  streamMode?: StreamMode
   remark?: string
   transportPolicy?: 'auto' | 'tcp' | 'udp'
   gb28181DeviceId?: string
@@ -87,6 +91,7 @@ export interface UpdateCameraRequest {
   name?: string
   rtspUrl?: string
   subRtspUrl?: string
+  streamMode?: StreamMode
   remark?: string
   transportPolicy?: 'auto' | 'tcp' | 'udp'
   gb28181DeviceId?: string
@@ -317,6 +322,7 @@ export interface TaskConfigDto {
   cameraId: string
   name: string
   desiredEnabled: boolean
+  streamMode?: StreamMode
   algorithmId?: string
   analysisFps?: number
   algoParams?: Record<string, unknown>

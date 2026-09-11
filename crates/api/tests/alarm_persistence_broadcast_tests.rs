@@ -116,6 +116,7 @@ async fn test_alarm_persistence_and_ws_broadcast_flow() {
             protocol: Set("rtsp".to_string()),
             rtsp_url: Set("rtsp://127.0.0.1/live/main".to_string()),
             sub_rtsp_url: Set("".to_string()),
+            stream_mode: Set("auto".to_string()),
             remark: Set("".to_string()),
             last_probe_status: Set("healthy".to_string()),
             last_probe_at: Set(None),

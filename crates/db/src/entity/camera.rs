@@ -14,6 +14,8 @@ pub struct Model {
     pub rtsp_url: String,
     #[sea_orm(column_type = "Text")]
     pub sub_rtsp_url: String,
+    #[sea_orm(column_type = "Text")]
+    pub stream_mode: String,
     pub remark: String,
     pub last_probe_status: String,
     pub last_probe_at: Option<DateTimeUtc>,

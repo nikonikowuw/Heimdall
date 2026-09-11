@@ -444,7 +444,7 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
                       </div>
 
                       {/* 规格参数胶囊 */}
-                      <div className="mt-3 flex items-center gap-2 font-mono text-xs">
+                      <div className="mt-3 flex flex-wrap items-center gap-1.5 font-mono text-xs">
                         <span className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 font-bold text-[var(--accent)]">
                           {camera.lastCodec?.toUpperCase() || 'H.264'}
                         </span>
@@ -455,6 +455,21 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
                         </span>
                         <span className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 text-emerald-500">
                           {camera.lastFps ? camera.lastFps.toFixed(1) : '25.0'} FPS
+                        </span>
+                        <span
+                          className={`rounded-md border px-2 py-0.5 font-sans text-[11px] font-medium ${
+                            camera.streamMode === 'main'
+                              ? 'border-cyan-500/40 bg-cyan-500/10 font-semibold text-cyan-400'
+                              : camera.streamMode === 'sub'
+                                ? 'border-amber-500/40 bg-amber-500/10 font-semibold text-amber-400'
+                                : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]'
+                          }`}
+                        >
+                          {camera.streamMode === 'main'
+                            ? t('manage.streamModeMainBadge', { defaultValue: '主码流分析' })
+                            : camera.streamMode === 'sub'
+                              ? t('manage.streamModeSubBadge', { defaultValue: '子码流分析' })
+                              : t('manage.streamModeAutoBadge', { defaultValue: '自动码流' })}
                         </span>
                       </div>
 

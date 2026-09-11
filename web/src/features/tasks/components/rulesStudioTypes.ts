@@ -198,7 +198,23 @@ export function getInitialRuleColor(role: DetectionRuleRole, roiIndex: number): 
   }
 }
 
-export function getDefaultRuleName(role: DetectionRuleRole, index: number): string {
+export function getDefaultRuleName(
+  role: DetectionRuleRole,
+  index: number,
+  t?: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (t) {
+    switch (role) {
+      case 'roi':
+        return t('rules.defaultRoiName', { index, defaultValue: `入侵防区 ${index}` })
+      case 'line':
+        return t('rules.defaultLineName', { index, defaultValue: `越界绊线 ${index}` })
+      case 'mask':
+        return t('rules.defaultMaskName', { index, defaultValue: `屏蔽遮罩 ${index}` })
+      default:
+        return t('rules.defaultRuleName', { index, defaultValue: `规则 ${index}` })
+    }
+  }
   switch (role) {
     case 'roi':
       return `入侵防区 ${index}`

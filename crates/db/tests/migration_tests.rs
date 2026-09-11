@@ -145,3 +145,39 @@ fn test_v5_to_v6_migration_upgrade_and_deduplication() {
         .expect("count remaining");
     assert_eq!(remaining_instances_cam1, 0);
 }
+
+#[test]
+fn test_v8_migration_adds_stream_mode_with_default_auto() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    let v1 = include_str!("../src/migration/migrations/V1__init_schema.sql");
+    let v8 = include_str!("../src/migration/migrations/V8__add_camera_stream_mode.sql");
+
+    conn.execute_batch(v1).expect("apply V1");
+
+    // 插入迁移前（无 stream_mode 列）的旧摄像头数据
+    conn.execute(
+        r#"
+        INSERT INTO cameras (
+            camera_id, name, protocol, rtsp_url, sub_rtsp_url, remark,
+            last_probe_status, last_probe_error_code, last_codec, last_width, last_height, last_fps
+        ) VALUES
+        ('CAM_TEST', 'Test Old Cam', 'rtsp', 'rtsp://127.0.0.1/live/1', '', '', 'healthy', '', 'h264', 1920, 1080, 25.0);
+        "#,
+        [],
+    )
+    .expect("insert camera before V8");
+
+    // 应用 V8 迁移
+    conn.execute_batch(v8).expect("apply V8");
+
+    // 查询 stream_mode，必须为默认值 'auto'
+    let stream_mode: String = conn
+        .query_row(
+            "SELECT stream_mode FROM cameras WHERE camera_id = 'CAM_TEST';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query stream_mode");
+    assert_eq!(stream_mode, "auto");
+}

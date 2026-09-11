@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { motionTokens } from '@/lib/motionTokens'
 import { cameraApi, taskApi } from '../../lib/api'
-import type { Camera, TaskConfigDto } from '../../types'
+import type { Camera, TaskConfigDto, StreamMode } from '../../types'
 import { CreateTaskModal } from './components/CreateTaskModal'
 import { DeleteTaskModal } from './components/DeleteTaskModal'
 import { LiveRulesStudio } from './components/LiveRulesStudio'
@@ -115,6 +115,19 @@ export function TasksPage({
       delete copy[deletedCameraId]
       return copy
     })
+  }
+
+  const handleStreamModeChange = async (camera: Camera, nextMode: StreamMode) => {
+    try {
+      const updated = await cameraApi.update(camera.cameraId, { streamMode: nextMode })
+      setCameras((prev) =>
+        prev.map((c) =>
+          c.cameraId === camera.cameraId ? { ...c, streamMode: updated.streamMode } : c,
+        ),
+      )
+    } catch {
+      // 容错处理
+    }
   }
 
   // 真正绑定了 AI 任务的摄像头通道
@@ -256,6 +269,7 @@ export function TasksPage({
                     config={taskConfigs[camera.cameraId]}
                     onToggleArm={() => handleToggleArm(camera)}
                     onConfigure={() => setSelectedCameraForConfig(camera)}
+                    onStreamModeChange={(nextMode) => handleStreamModeChange(camera, nextMode)}
                     onDelete={() =>
                       setTaskToDelete({
                         cameraId: camera.cameraId,

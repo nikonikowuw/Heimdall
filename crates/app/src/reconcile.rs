@@ -217,7 +217,16 @@ pub async fn recover_enabled_tasks(
         .map(|camera| (camera.camera_id.clone(), camera))
         .collect();
 
+    struct PreparedTask {
+        task: db::entity::task::Model,
+        camera: db::entity::camera::Model,
+        launch_instances: Vec<pipeline::InstanceLaunchConfig>,
+        motion_gate: Option<types::MotionGateConfig>,
+    }
+
     let mut summary = TaskRecoverySummary::default();
+    let mut recoverable_tasks = Vec::new();
+
     for task in tasks.into_iter().filter(|task| task.desired_enabled) {
         summary.attempted += 1;
 
@@ -276,12 +285,39 @@ pub async fn recover_enabled_tasks(
 
         let motion_gate =
             serde_json::from_str::<types::MotionGateConfig>(&task.motion_gate_json).ok();
-        let params = api::task_service::build_start_params(
-            &task.camera_id,
-            camera,
+
+        recoverable_tasks.push(PreparedTask {
+            task,
+            camera: camera.clone(),
             launch_instances,
-            motion_gate.as_ref(),
-        );
+            motion_gate,
+        });
+    }
+
+    // 针对所有通过健康检查且具备有效实例的任务，并发异步决议启动参数（包含候选子码流探活）
+    let mut param_futures = tokio::task::JoinSet::new();
+    for prepared in recoverable_tasks {
+        param_futures.spawn(async move {
+            let params = api::task_service::build_start_params_async(
+                &prepared.task.camera_id,
+                &prepared.camera,
+                prepared.launch_instances,
+                prepared.motion_gate.as_ref(),
+            )
+            .await;
+            (prepared.task, params)
+        });
+    }
+
+    while let Some(res) = param_futures.join_next().await {
+        let (task, params) = match res {
+            Ok(pair) => pair,
+            Err(join_err) => {
+                tracing::error!(error = %join_err, "任务启动参数并发决议异常");
+                summary.failed += 1;
+                continue;
+            }
+        };
 
         match runtime.start_camera_pipeline(params).await {
             Ok(generation) => {

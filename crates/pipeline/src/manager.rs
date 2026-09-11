@@ -1032,6 +1032,7 @@ mod tests {
             protocol: "rtsp".to_string(),
             rtsp_url: "rtsp://127.0.0.1/live/main".to_string(),
             sub_rtsp_url: "".to_string(),
+            stream_mode: types::StreamMode::Auto,
             remark: "".to_string(),
             transport_policy: types::TransportPolicy::Auto,
             last_probe_status: types::ProbeStatus::Healthy,

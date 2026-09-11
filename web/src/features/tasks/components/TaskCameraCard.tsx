@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import {
   Activity,
+  ArrowLeftRight,
   ArrowRight,
   Check,
   Copy,
@@ -17,13 +18,14 @@ import { motion } from 'motion/react'
 import { getProbeBadge } from '@/features/cameras'
 import { motionTokens } from '@/lib/motionTokens'
 import { copyToClipboard } from '@/lib/utils'
-import type { Camera, DetectionRule, TaskConfigDto } from '@/types'
+import type { Camera, DetectionRule, TaskConfigDto, StreamMode } from '@/types'
 
 export interface TaskCameraCardProps {
   camera: Camera
   config?: TaskConfigDto
   onToggleArm: () => void
   onConfigure: () => void
+  onStreamModeChange?: (mode: StreamMode) => void
   onDelete: () => void
   t: (key: string, options?: Record<string, unknown>) => string
 }
@@ -67,6 +69,7 @@ export function TaskCameraCard({
   config,
   onToggleArm,
   onConfigure,
+  onStreamModeChange,
   onDelete,
   t,
 }: TaskCameraCardProps): React.ReactElement {
@@ -306,13 +309,50 @@ export function TaskCameraCard({
           </div>
         )}
 
-        {/* 视口左上角：规格与编码 */}
-        <div className="absolute top-2 left-2 z-10 flex items-center gap-1 rounded bg-black/75 px-2 py-0.5 font-mono text-[11px] text-white/90 backdrop-blur-xs">
-          <span className="font-semibold text-cyan-400">
-            {camera.lastCodec?.toUpperCase() || 'H264'}
-          </span>
-          <span className="opacity-40">/</span>
-          <span>{camera.lastWidth ? `${camera.lastWidth}x${camera.lastHeight}` : '1080P'}</span>
+        {/* 视口左上角：规格与编码 + 码流模式 */}
+        <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 font-mono text-[11px] backdrop-blur-xs">
+          <div className="flex items-center gap-1 rounded bg-black/75 px-2 py-0.5 text-white/90">
+            <span className="font-semibold text-cyan-400">
+              {camera.lastCodec?.toUpperCase() || 'H264'}
+            </span>
+            <span className="opacity-40">/</span>
+            <span>{camera.lastWidth ? `${camera.lastWidth}x${camera.lastHeight}` : '1080P'}</span>
+          </div>
+          {/* 码流切换按钮：点击可快捷循环切换 */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (onStreamModeChange) {
+                const nextMode: StreamMode =
+                  camera.streamMode === 'main'
+                    ? 'sub'
+                    : camera.streamMode === 'sub'
+                      ? 'auto'
+                      : 'main'
+                onStreamModeChange(nextMode)
+              }
+            }}
+            title={t('card.clickToSwitchStreamMode', {
+              defaultValue: '点击可快捷切换分析码流 (主码流 / 子码流 / 自动)',
+            })}
+            className={`cursor-pointer rounded px-1.5 py-0.5 font-sans text-[10px] font-semibold shadow-xs transition-all hover:scale-105 active:scale-95 ${
+              camera.streamMode === 'main'
+                ? 'border border-cyan-500/60 bg-cyan-500/90 text-black hover:bg-cyan-400'
+                : camera.streamMode === 'sub'
+                  ? 'border border-amber-500/60 bg-amber-500/90 text-black hover:bg-amber-400'
+                  : 'border border-white/30 bg-white/20 text-white hover:bg-white/30'
+            }`}
+          >
+            <span className="inline-flex items-center gap-1">
+              {camera.streamMode === 'main'
+                ? t('cardStream.main', { defaultValue: '主码流·高清' })
+                : camera.streamMode === 'sub'
+                  ? t('cardStream.sub', { defaultValue: '子码流·低能耗' })
+                  : t('cardStream.auto', { defaultValue: '自动码流' })}
+              <ArrowLeftRight className="h-2.5 w-2.5 opacity-70" />
+            </span>
+          </button>
         </div>
 
         {/* 视口右上角：FPS 实时帧率 */}
@@ -402,16 +442,19 @@ export function TaskCameraCard({
           <div className="flex items-center gap-2 border-t border-[var(--border)]/50 pt-1.5 font-mono text-[10px] text-[var(--text-muted)]">
             {confDisplay && (
               <span className="flex items-center gap-1">
-                <span>置信度:</span>
+                <span>{t('card.confidence', { defaultValue: '置信度:' })}</span>
                 <span className="font-semibold text-[var(--accent)]">{confDisplay}</span>
               </span>
             )}
             {confDisplay && classesCount !== null && <span>·</span>}
             {classesCount !== null && (
               <span className="flex items-center gap-1">
-                <span>警戒类别:</span>
+                <span>{t('card.targetClasses', { defaultValue: '警戒类别:' })}</span>
                 <span className="font-semibold text-[var(--text-secondary)]">
-                  {classesCount} 类
+                  {t('card.classesCount', {
+                    count: classesCount,
+                    defaultValue: `${classesCount} 类`,
+                  })}
                 </span>
               </span>
             )}

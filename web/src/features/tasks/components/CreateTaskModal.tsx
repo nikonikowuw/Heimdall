@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { AlertCircle, Check, Loader2, Plus, Sliders, Video, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { taskApi, algorithmApi } from '@/lib/api'
-import type { AlgorithmItem, Camera, TaskConfigDto } from '@/types'
+import { StreamModeSelector } from '@/components/StreamModeSelector'
+import type { AlgorithmItem, Camera, TaskConfigDto, StreamMode } from '@/types'
 
 export interface CreateTaskModalProps {
   isOpen: boolean
@@ -28,6 +29,7 @@ export function CreateTaskModal({
 
   const [selectedCameraId, setSelectedCameraId] = useState<string>('')
   const [taskName, setTaskName] = useState<string>('')
+  const [streamMode, setStreamMode] = useState<StreamMode>('auto')
   const [desiredEnabled, setDesiredEnabled] = useState<boolean>(true)
   const [availableAlgorithms, setAvailableAlgorithms] = useState<AlgorithmItem[]>([])
   const [selectedAlgorithmId, setSelectedAlgorithmId] = useState<string>('')
@@ -108,9 +110,11 @@ export function CreateTaskModal({
       if (defaultCam) {
         setSelectedCameraId(defaultCam.cameraId)
         setTaskName(`Task-${defaultCam.name || defaultCam.cameraId}`)
+        setStreamMode(defaultCam.streamMode || 'auto')
       } else {
         setSelectedCameraId('')
         setTaskName('')
+        setStreamMode('auto')
       }
       setDesiredEnabled(true)
       setAnalysisFps(10)
@@ -138,6 +142,7 @@ export function CreateTaskModal({
     const cam = cameras.find((c) => c.cameraId === camId)
     if (cam) {
       setTaskName(`Task-${cam.name || cam.cameraId}`)
+      setStreamMode(cam.streamMode || 'auto')
     }
   }
 
@@ -168,6 +173,7 @@ export function CreateTaskModal({
         cameraId: selectedCameraId,
         name: trimmedName,
         desiredEnabled,
+        streamMode,
         rules: [],
         motionGate: {
           enabled: true,
@@ -188,7 +194,7 @@ export function CreateTaskModal({
       }
 
       const created = await taskApi.updateTask(selectedCameraId, payload)
-      onSuccess(cam, created)
+      onSuccess({ ...cam, streamMode }, created)
       onClose()
     } catch (err) {
       const msg =
@@ -313,6 +319,13 @@ export function CreateTaskModal({
                 </div>
               )}
             </div>
+
+            {/* AI 分析码流来源偏好 */}
+            <StreamModeSelector
+              value={streamMode}
+              onChange={setStreamMode}
+              labelClassName="mb-1.5 block font-semibold text-[var(--text-primary)]"
+            />
 
             {/* 2. 任务名称 */}
             <div>
@@ -597,7 +610,10 @@ export function CreateTaskModal({
                   {t('enableArmImmediately', { defaultValue: '创建后立即启动布防' })}
                 </span>
                 <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-                  开启后系统将启动该路摄像头的子码流解码并在后台调度 NPU 规则判定。
+                  {t('enableArmImmediatelyDesc', {
+                    defaultValue:
+                      '开启后系统将启动该路摄像头的分析码流解码并在后台调度 NPU 规则判定。',
+                  })}
                 </p>
               </div>
               <button
