@@ -3,6 +3,7 @@ import { Code2, Copy, FileJson, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { motionTokens } from '@/lib/motionTokens'
+import { copyToClipboard } from '@/lib/utils'
 import type { AlgorithmItem } from '@/types'
 
 export interface SchemaModalProps {
@@ -42,10 +43,12 @@ export const SchemaModal: React.FC<SchemaModalProps> = ({ isOpen, algorithm, onC
 
   const rawJsonString = JSON.stringify(schemaObj, null, 2)
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(rawJsonString)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+  const handleCopy = async () => {
+    const success = await copyToClipboard(rawJsonString)
+    if (success) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
   }
 
   return (

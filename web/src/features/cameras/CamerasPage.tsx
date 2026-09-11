@@ -23,6 +23,7 @@ import type { Camera, TaskSummaryDto } from '../../types'
 import { getProbeBadge, normalizeProbeStatus } from './cameraStatus'
 import { CameraModal } from './components/CameraModal'
 import { DeleteCameraModal } from './components/DeleteCameraModal'
+import { copyToClipboard } from '../../lib/utils'
 
 export interface CamerasPageProps {
   onNavigateToTasks?: (camera: Camera) => void
@@ -143,10 +144,13 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
     }
   }
 
-  const handleCopyRtsp = (cameraId: string, url: string) => {
-    navigator.clipboard.writeText(url)
-    setCopiedCameraId(cameraId)
-    setTimeout(() => setCopiedCameraId(null), 2000)
+  const handleCopyRtsp = async (cameraId: string, url: string) => {
+    if (!url) return
+    const success = await copyToClipboard(url)
+    if (success) {
+      setCopiedCameraId(cameraId)
+      setTimeout(() => setCopiedCameraId(null), 2000)
+    }
   }
 
   const handleCameraSaved = (saved: Camera) => {
@@ -463,7 +467,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
                             </span>
                             <button
                               type="button"
-                              onClick={() => handleCopyRtsp(camera.cameraId, camera.rtspUrl)}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void handleCopyRtsp(camera.cameraId, camera.rtspUrl)
+                              }}
                               className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
                             >
                               {isCopied ? (

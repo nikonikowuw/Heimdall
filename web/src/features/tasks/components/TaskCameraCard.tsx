@@ -16,6 +16,7 @@ import {
 import { motion } from 'motion/react'
 import { getProbeBadge } from '@/features/cameras'
 import { motionTokens } from '@/lib/motionTokens'
+import { copyToClipboard } from '@/lib/utils'
 import type { Camera, DetectionRule, TaskConfigDto } from '@/types'
 
 export interface TaskCameraCardProps {
@@ -98,12 +99,10 @@ export function TaskCameraCard({
 
   const handleCopyRtsp = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    try {
-      await navigator.clipboard.writeText(camera.rtspUrl)
+    const success = await copyToClipboard(camera.rtspUrl)
+    if (success) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // 容错处理
     }
   }
 
