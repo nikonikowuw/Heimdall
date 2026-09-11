@@ -20,10 +20,12 @@ use types::{FrameRef, MotionGateConfig};
 use infer::{InferenceWorker, InferenceWorkerHandle};
 
 use crate::events::{
-    EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineTrackEvent,
+    EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
+    PipelineTrackEvent,
 };
 use crate::manager::PipelineManager;
 use crate::motion_gate::MotionGate;
+use crate::snapshot::SnapshotResult;
 
 /// 向后兼容单 Worker 模式使用的伪算法 ID
 pub(crate) const LEGACY_SINGLE_WORKER_ID: &str = "__legacy_single__";
@@ -50,6 +52,8 @@ pub struct InstanceMetrics {
 pub struct WorkerInstanceConfig {
     /// 算法 ID
     pub algorithm_id: String,
+    /// 算法类型 (如 "detection", "recognition")
+    pub algorithm_type: String,
     /// 目标分析 FPS (0 表示不限帧率)
     pub target_fps: u32,
     /// 创建算法实例时使用的 JSON 配置
@@ -271,6 +275,51 @@ impl SharedControlSlots {
     }
 }
 
+/// 辅助执行单目标快照抓拍并统一累加指标与记录结构化日志
+#[allow(clippy::too_many_arguments)]
+async fn trigger_target_snapshot(
+    pipeline_mgr: &PipelineManager,
+    camera_id: &str,
+    algorithm_id: &str,
+    timestamp: i64,
+    bbox: types::BoundingBox,
+    context_desc: &str,
+    infer_metrics: &InstanceMetrics,
+    pump_metrics: &PumpMetrics,
+) -> Result<SnapshotResult, String> {
+    match pipeline_mgr
+        .trigger_snapshot(camera_id, timestamp, Some(bbox))
+        .await
+    {
+        Ok(snapshot_res) => {
+            infer_metrics
+                .snapshots_saved
+                .fetch_add(1, Ordering::Relaxed);
+            pump_metrics.snapshots_saved.fetch_add(1, Ordering::Relaxed);
+            tracing::info!(
+                camera_id = %camera_id,
+                algorithm_id = %algorithm_id,
+                target_pts = timestamp,
+                path = %snapshot_res.image_rel_path,
+                is_fallback = snapshot_res.is_fallback_sub_stream,
+                "{context_desc}快照落地成功"
+            );
+            Ok(snapshot_res)
+        }
+        Err(err) => {
+            let err_str = err.to_string();
+            tracing::error!(
+                camera_id = %camera_id,
+                algorithm_id = %algorithm_id,
+                target_pts = timestamp,
+                error = %err,
+                "{context_desc}快照捕获失败"
+            );
+            Err(err_str)
+        }
+    }
+}
+
 /// 子码流分析驱动泵
 pub struct SubStreamAnalysisPump {
     camera_id: String,
@@ -325,6 +374,7 @@ impl SubStreamAnalysisPump {
             decoder,
             vec![WorkerInstanceConfig {
                 algorithm_id: LEGACY_SINGLE_WORKER_ID.to_string(),
+                algorithm_type: "detection".to_string(),
                 target_fps: config.target_fps,
                 config_json: None,
             }],
@@ -350,6 +400,7 @@ impl SubStreamAnalysisPump {
             decoder,
             vec![WorkerInstanceConfig {
                 algorithm_id: LEGACY_SINGLE_WORKER_ID.to_string(),
+                algorithm_type: "detection".to_string(),
                 target_fps: config.target_fps,
                 config_json: None,
             }],
@@ -400,6 +451,7 @@ impl SubStreamAnalysisPump {
             let cam_id_infer = camera_id.clone();
             let pipeline_mgr_infer = pipeline_mgr.clone();
             let algorithm_id_infer = alg_id.clone();
+            let algorithm_type_infer = cfg.algorithm_type.clone();
 
             let infer_handle = tokio::spawn(async move {
                 tracing::info!(
@@ -436,81 +488,89 @@ impl SubStreamAnalysisPump {
                                             .fetch_add(1, Ordering::Relaxed);
 
                                         // 驱动管线执行独立算法实例的航迹跟踪与几何规则判定 (保序执行)
-                                        let (tracked, alarms) = pipeline_mgr_infer
+                                        let outcome = pipeline_mgr_infer
                                             .process_detections_for_algo(
                                                 &cam_id_infer,
                                                 &algorithm_id_infer,
+                                                &algorithm_type_infer,
                                                 detections,
                                                 timestamp,
                                             )
                                             .await;
 
-                                        // 广播航迹追踪事件
+                                        // 广播航迹追踪事件 (供前端低延迟实时绘制元数据)
                                         pipeline_mgr_infer.publish_analysis_event(
                                             PipelineAnalysisEvent::Tracks(PipelineTrackEvent {
                                                 camera_id: cam_id_infer.clone(),
                                                 algorithm_id: algorithm_id_infer.clone(),
                                                 timestamp,
-                                                tracks: tracked,
+                                                tracks: outcome.tracked,
                                             }),
                                         );
 
-                                        // 告警触发时，自动联动快照抓拍落地并广播告警事件
-                                        if !alarms.is_empty() {
+                                        // 识别类算法：通行抓拍处理 (不产生告警，直接落地 capture_records)
+                                        if !outcome.captures.is_empty() {
+                                            for target in outcome.captures {
+                                                let capture_id = uuid::Uuid::new_v4().to_string();
+                                                let snapshot = trigger_target_snapshot(
+                                                    &pipeline_mgr_infer,
+                                                    &cam_id_infer,
+                                                    &algorithm_id_infer,
+                                                    timestamp,
+                                                    target.bbox,
+                                                    "通行识别抓拍",
+                                                    &infer_metrics,
+                                                    &pump_metrics,
+                                                )
+                                                .await
+                                                .ok();
+
+                                                pipeline_mgr_infer.publish_analysis_event(
+                                                    PipelineAnalysisEvent::Capture(Box::new(
+                                                        PipelineCaptureEvent {
+                                                            capture_id,
+                                                            camera_id: cam_id_infer.clone(),
+                                                            algorithm_id: algorithm_id_infer.clone(),
+                                                            tracked_object: target,
+                                                            snapshot,
+                                                            timestamp,
+                                                        },
+                                                    )),
+                                                );
+                                            }
+                                        }
+
+                                        // 检测类算法：安全防范规则告警处理 (联动高清快照与 alarm.triggered 广播)
+                                        if !outcome.alarms.is_empty() {
                                             infer_metrics
                                                 .alarms_triggered
-                                                .fetch_add(alarms.len() as u64, Ordering::Relaxed);
+                                                .fetch_add(outcome.alarms.len() as u64, Ordering::Relaxed);
                                             pump_metrics
                                                 .alarms_triggered
-                                                .fetch_add(alarms.len() as u64, Ordering::Relaxed);
-                                            for alarm in alarms {
-                                                let bbox = Some(alarm.tracked_object.bbox);
+                                                .fetch_add(outcome.alarms.len() as u64, Ordering::Relaxed);
+                                            for alarm in outcome.alarms {
                                                 let event_id = uuid::Uuid::new_v4().to_string();
                                                 let (snapshot, evidence_status, evidence_error) =
-                                                    match pipeline_mgr_infer
-                                                        .trigger_snapshot(
-                                                            &cam_id_infer,
-                                                            timestamp,
-                                                            bbox,
-                                                        )
-                                                        .await
+                                                    match trigger_target_snapshot(
+                                                        &pipeline_mgr_infer,
+                                                        &cam_id_infer,
+                                                        &algorithm_id_infer,
+                                                        timestamp,
+                                                        alarm.tracked_object.bbox,
+                                                        "规则引擎告警",
+                                                        &infer_metrics,
+                                                        &pump_metrics,
+                                                    )
+                                                    .await
                                                     {
-                                                        Ok(snapshot_res) => {
-                                                            infer_metrics
-                                                                .snapshots_saved
-                                                                .fetch_add(1, Ordering::Relaxed);
-                                                            pump_metrics
-                                                                .snapshots_saved
-                                                                .fetch_add(1, Ordering::Relaxed);
-                                                            tracing::info!(
-                                                                camera_id = %cam_id_infer,
-                                                                algorithm_id = %algorithm_id_infer,
-                                                                target_pts = timestamp,
-                                                                rule_index = alarm.rule_index,
-                                                                path = %snapshot_res.image_rel_path,
-                                                                is_fallback = snapshot_res.is_fallback_sub_stream,
-                                                                "规则引擎告警触发高清快照落地成功"
-                                                            );
-                                                            (
-                                                                Some(snapshot_res),
-                                                                EvidenceStatus::Ready,
-                                                                None,
-                                                            )
+                                                        Ok(res) => {
+                                                            (Some(res), EvidenceStatus::Ready, None)
                                                         }
-                                                        Err(err) => {
-                                                            tracing::error!(
-                                                                camera_id = %cam_id_infer,
-                                                                algorithm_id = %algorithm_id_infer,
-                                                                target_pts = timestamp,
-                                                                error = %err,
-                                                                "规则引擎告警触发快照捕获失败"
-                                                            );
-                                                            (
-                                                                None,
-                                                                EvidenceStatus::Failed,
-                                                                Some(err.to_string()),
-                                                            )
-                                                        }
+                                                        Err(err_str) => (
+                                                            None,
+                                                            EvidenceStatus::Failed,
+                                                            Some(err_str),
+                                                        ),
                                                     };
 
                                                 pipeline_mgr_infer.publish_analysis_event(

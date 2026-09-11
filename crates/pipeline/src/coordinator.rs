@@ -555,6 +555,7 @@ impl TaskRuntimeCoordinator {
             } else {
                 Some(inst.algo_params.to_string())
             };
+            let algorithm_type = pkg.manifest().algorithm_type.clone();
             let instance_result = tokio::task::spawn_blocking(move || {
                 pkg.create_instance(&camera_id, algo_params.as_deref())
             })
@@ -576,6 +577,7 @@ impl TaskRuntimeCoordinator {
             let handle = worker.handle();
             instance_configs.push(crate::pump::WorkerInstanceConfig {
                 algorithm_id: inst.algorithm_id.clone(),
+                algorithm_type,
                 target_fps: inst.target_fps,
                 config_json: if inst.algo_params.is_null() {
                     None
@@ -657,6 +659,7 @@ impl TaskRuntimeCoordinator {
         if params.instances.is_empty() {
             instance_configs.push(crate::pump::WorkerInstanceConfig {
                 algorithm_id: "default".to_string(),
+                algorithm_type: "detection".to_string(),
                 target_fps: 0,
                 config_json: None,
             });
@@ -665,6 +668,7 @@ impl TaskRuntimeCoordinator {
             for inst in &params.instances {
                 instance_configs.push(crate::pump::WorkerInstanceConfig {
                     algorithm_id: inst.algorithm_id.clone(),
+                    algorithm_type: "detection".to_string(),
                     target_fps: inst.target_fps,
                     config_json: None,
                 });

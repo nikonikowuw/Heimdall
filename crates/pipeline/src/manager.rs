@@ -15,7 +15,8 @@ use types::{
 
 use crate::error::PipelineError;
 use crate::events::{
-    PipelineAlarmEvent, PipelineAnalysisEvent, DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
+    PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
+    DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
 };
 use crate::pump::{PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig};
 use crate::roi::RoiAffineMapper;
@@ -117,12 +118,66 @@ pub struct PipelineManager {
     analysis_event_tx: tokio::sync::broadcast::Sender<PipelineAnalysisEvent>,
     pending_alarm_events: Arc<Mutex<VecDeque<PipelineAlarmEvent>>>,
     dropped_pending_alarm_events: AtomicU64,
+    pending_capture_events: Arc<Mutex<VecDeque<PipelineCaptureEvent>>>,
+    dropped_pending_capture_events: AtomicU64,
 }
 
 impl Default for PipelineManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 算法分析单帧处理结果
+#[derive(Debug, Clone, Default)]
+pub struct AnalysisOutcome {
+    /// 当前活跃航迹对象
+    pub tracked: Vec<TrackedObject>,
+    /// 触发的违规告警集合 (针对 detection 类防范算法)
+    pub alarms: Vec<TriggeredAlarm>,
+    /// 触发的客观通行抓拍目标 (针对 recognition 类识别算法)
+    pub captures: Vec<TrackedObject>,
+}
+
+#[inline]
+fn push_bounded<T>(
+    queue: &Mutex<VecDeque<T>>,
+    dropped_counter: &AtomicU64,
+    item: T,
+    item_desc: &str,
+) {
+    let mut pending = queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if pending.len() >= DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY {
+        pending.pop_front();
+        dropped_counter.fetch_add(1, Ordering::Relaxed);
+        tracing::error!(
+            capacity = DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
+            "待持久化{item_desc}队列已满，丢弃最旧{item_desc}并记录溢出计数"
+        );
+    }
+    pending.push_back(item);
+}
+
+#[inline]
+fn drain_bounded<T>(queue: &Mutex<VecDeque<T>>, max_events: usize) -> Vec<T> {
+    if max_events == 0 {
+        return Vec::new();
+    }
+    let mut pending = queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let take = max_events.min(pending.len());
+    pending.drain(..take).collect()
+}
+
+#[inline]
+fn bounded_len<T>(queue: &Mutex<VecDeque<T>>) -> usize {
+    queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .len()
 }
 
 impl PipelineManager {
@@ -170,6 +225,10 @@ impl PipelineManager {
                 DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
             ))),
             dropped_pending_alarm_events: AtomicU64::new(0),
+            pending_capture_events: Arc::new(Mutex::new(VecDeque::with_capacity(
+                DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
+            ))),
+            dropped_pending_capture_events: AtomicU64::new(0),
         }
     }
 
@@ -187,24 +246,27 @@ impl PipelineManager {
 
     /// 向管线分析事件通道发布事件。
     ///
-    /// Tracks 走实时 broadcast；Alarm 额外进入有界内存补偿缓冲（有界 1024 槽位），
+    /// Tracks 走实时 broadcast；Alarm 与 Capture 额外进入有界内存补偿缓冲（有界 1024 槽位），
     /// 仅用于在下游持久化 Worker 启动前或广播 Lagged 时提供无损补偿读取，不包含任何数据库或外部持久化逻辑。
     pub fn publish_analysis_event(&self, event: PipelineAnalysisEvent) {
-        if let PipelineAnalysisEvent::Alarm(alarm) = &event {
-            let mut pending = self
-                .pending_alarm_events
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if pending.len() >= DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY {
-                pending.pop_front();
-                self.dropped_pending_alarm_events
-                    .fetch_add(1, Ordering::Relaxed);
-                tracing::error!(
-                    capacity = DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
-                    "待持久化告警队列已满，丢弃最旧告警并记录溢出计数"
+        match &event {
+            PipelineAnalysisEvent::Alarm(alarm) => {
+                push_bounded(
+                    &self.pending_alarm_events,
+                    &self.dropped_pending_alarm_events,
+                    (**alarm).clone(),
+                    "告警",
                 );
             }
-            pending.push_back((**alarm).clone());
+            PipelineAnalysisEvent::Capture(capture) => {
+                push_bounded(
+                    &self.pending_capture_events,
+                    &self.dropped_pending_capture_events,
+                    (**capture).clone(),
+                    "抓拍",
+                );
+            }
+            PipelineAnalysisEvent::Tracks(_) => {}
         }
 
         let _ = self.analysis_event_tx.send(event);
@@ -212,28 +274,32 @@ impl PipelineManager {
 
     /// 取出待持久化告警。返回值有界，调用方应在独立 Worker 中处理。
     pub fn drain_pending_alarm_events(&self, max_events: usize) -> Vec<PipelineAlarmEvent> {
-        if max_events == 0 {
-            return Vec::new();
-        }
-        let mut pending = self
-            .pending_alarm_events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let take = max_events.min(pending.len());
-        pending.drain(..take).collect()
+        drain_bounded(&self.pending_alarm_events, max_events)
     }
 
     /// 当前待持久化告警数量。
     pub fn pending_alarm_event_count(&self) -> usize {
-        self.pending_alarm_events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .len()
+        bounded_len(&self.pending_alarm_events)
     }
 
     /// 累计因待持久化队列满而淘汰的告警数量。
     pub fn dropped_pending_alarm_event_count(&self) -> u64 {
         self.dropped_pending_alarm_events.load(Ordering::Relaxed)
+    }
+
+    /// 取出待持久化客观通行抓拍。返回值有界，调用方应在独立 Capture Worker 中处理。
+    pub fn drain_pending_capture_events(&self, max_events: usize) -> Vec<PipelineCaptureEvent> {
+        drain_bounded(&self.pending_capture_events, max_events)
+    }
+
+    /// 当前待持久化通行抓拍数量。
+    pub fn pending_capture_event_count(&self) -> usize {
+        bounded_len(&self.pending_capture_events)
+    }
+
+    /// 累计因待持久化队列满而淘汰的通行抓拍数量。
+    pub fn dropped_pending_capture_event_count(&self) -> u64 {
+        self.dropped_pending_capture_events.load(Ordering::Relaxed)
     }
 
     /// 注册或获取某路摄像头的分析管线上下文
@@ -519,15 +585,18 @@ impl PipelineManager {
     /// 统一处理算法推理输出的检测结果并执行指定算法实例的航迹跟踪与几何规则判定：
     /// 1. 执行 Pre-crop ROI 线性仿射坐标还原（将局部归一化 [0,1] 映射至全景大图 [0,1]）；
     /// 2. 独立算法实例的航迹关联更新（按 algorithm_id 隔离 Tracker，避免航迹冲刷）；
-    /// 3. 几何规则判定与 5 秒防刷屏冷却；
-    /// 4. 返回当前活跃 TrackedObject 与触发的 TriggeredAlarm 集合。
+    /// 3. 根据 algorithm_kind 自动区分责任流向：
+    ///    - `AlgorithmKind::Recognition`：客观通行抓拍流，默认全屏捕获/ROI/Line判定，绝不误报入侵；
+    ///    - `AlgorithmKind::Detection`：安全防范告警流，触犯空间规则（或全屏布防）触发告警；
+    /// 4. 返回包含活跃航迹、违规告警与客观抓拍的 AnalysisOutcome。
     pub async fn process_detections_for_algo(
         &self,
         camera_id: &str,
         algorithm_id: &str,
+        algorithm_kind: impl Into<types::AlgorithmKind>,
         detections: Vec<Detection>,
         timestamp_ms: i64,
-    ) -> (Vec<TrackedObject>, Vec<TriggeredAlarm>) {
+    ) -> AnalysisOutcome {
         let ctx = self.get_or_create_context(camera_id).await;
 
         // 1. 局部仿射映射至全景坐标系
@@ -557,13 +626,31 @@ impl PipelineManager {
             }
         }
 
-        // 3. 几何规则评估与 5 秒告警防刷屏冷却
+        // 3. 根据 algorithm_kind 区分责任流向
         let rules = ctx.rules.read().await;
-        let alarms =
-            ctx.rule_evaluator
-                .evaluate(&rules, &tracked_objects, tracker, timestamp_ms, 5000);
+        let kind = algorithm_kind.into();
 
-        (tracked_objects, alarms)
+        let (alarms, captures) = if kind.is_recognition() {
+            let captures = ctx.rule_evaluator.evaluate_captures(
+                &rules,
+                &tracked_objects,
+                tracker,
+                timestamp_ms,
+                5000,
+            );
+            (Vec::new(), captures)
+        } else {
+            let alarms =
+                ctx.rule_evaluator
+                    .evaluate(&rules, &tracked_objects, tracker, timestamp_ms, 5000);
+            (alarms, Vec::new())
+        };
+
+        AnalysisOutcome {
+            tracked: tracked_objects,
+            alarms,
+            captures,
+        }
     }
 
     /// 驱动管线执行航迹跟踪与几何规则判定 (向后兼容单算法入口)
@@ -573,8 +660,16 @@ impl PipelineManager {
         detections: Vec<Detection>,
         timestamp_ms: i64,
     ) -> (Vec<TrackedObject>, Vec<TriggeredAlarm>) {
-        self.process_detections_for_algo(camera_id, "default", detections, timestamp_ms)
-            .await
+        let outcome = self
+            .process_detections_for_algo(
+                camera_id,
+                "default",
+                types::AlgorithmKind::Detection,
+                detections,
+                timestamp_ms,
+            )
+            .await;
+        (outcome.tracked, outcome.alarms)
     }
 
     async fn mount_pump(&self, camera_id: &str, pump: SubStreamAnalysisPump) {
@@ -1298,6 +1393,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pending_capture_events_and_drain() {
+        use crate::events::PipelineCaptureEvent;
+
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_capture_queue_test";
+
+        assert_eq!(manager.pending_capture_event_count(), 0);
+
+        let event = PipelineCaptureEvent {
+            capture_id: "cap_123".to_string(),
+            camera_id: cam_id.to_string(),
+            algorithm_id: "face_recognition".to_string(),
+            tracked_object: types::TrackedObject {
+                track_id: 10,
+                class_id: 0,
+                label: "face".to_string(),
+                confidence: 0.98,
+                bbox: types::BoundingBox::new(0.2, 0.2, 0.5, 0.5),
+                trajectory: vec![],
+            },
+            snapshot: None,
+            timestamp: 2000,
+        };
+
+        manager.publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(event)));
+
+        assert_eq!(manager.pending_capture_event_count(), 1);
+
+        let drained = manager.drain_pending_capture_events(10);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].capture_id, "cap_123");
+        assert_eq!(manager.pending_capture_event_count(), 0);
+    }
+
+    #[tokio::test]
     async fn test_remove_pipeline_context_if_idle() {
         let manager = Arc::new(PipelineManager::new());
         let cam_id = "cam_context_idle_test";
@@ -1358,10 +1488,10 @@ mod tests {
             bbox: types::BoundingBox::new(0.1, 0.2, 0.3, 0.4),
         };
 
-        let (tracked, _) = manager
-            .process_detections_for_algo(cam_id, "algo_1", vec![det], 1000)
+        let outcome = manager
+            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det], 1000)
             .await;
-        assert_eq!(tracked.len(), 1);
+        assert_eq!(outcome.tracked.len(), 1);
 
         let current = manager.get_current_tracks(cam_id).await;
         assert_eq!(current.len(), 1);
@@ -1369,8 +1499,34 @@ mod tests {
 
         // 空帧更新该算法，应自动清除
         manager
-            .process_detections_for_algo(cam_id, "algo_1", vec![], 2000)
+            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![], 2000)
             .await;
         assert!(manager.get_current_tracks(cam_id).await.is_empty());
+
+        // 测试 recognition / face_recognition 算法产出 captures 而非 alarms
+        let face_det = Detection {
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.95,
+            bbox: types::BoundingBox::new(0.2, 0.2, 0.4, 0.4),
+        };
+        let rec_outcome = manager
+            .process_detections_for_algo(
+                cam_id,
+                "face_algo",
+                "face_recognition",
+                vec![face_det],
+                3000,
+            )
+            .await;
+        assert_eq!(
+            rec_outcome.captures.len(),
+            1,
+            "face_recognition 类别算法必须产生抓拍凭证"
+        );
+        assert!(
+            rec_outcome.alarms.is_empty(),
+            "face_recognition 类别算法绝不产生违规告警"
+        );
     }
 }

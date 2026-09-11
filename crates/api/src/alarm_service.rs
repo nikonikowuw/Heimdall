@@ -239,6 +239,9 @@ impl AlarmDispatchService {
                                     }
                                 }
                             }
+                            Ok(PipelineAnalysisEvent::Capture(_)) => {
+                                // 客观通行抓拍凭证由 CaptureDispatchService 独立持久化
+                            }
                             Ok(PipelineAnalysisEvent::Tracks(_)) => {
                                 // 实时航迹流不在此处理
                             }

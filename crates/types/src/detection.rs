@@ -50,6 +50,68 @@ pub struct TrackedObject {
     pub trajectory: Vec<(f64, f64)>,
 }
 
+/// 算法分类与执行责任流向
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlgorithmKind {
+    /// 目标检测类 (防范告警流：触犯空间规则/全屏布防产生违规告警)
+    #[default]
+    Detection,
+    /// 目标识别类 (客观通行抓拍流：如人脸、车牌识别，无违规属性，产出通行抓拍凭证)
+    Recognition,
+}
+
+impl AlgorithmKind {
+    /// 从原始算法类型字符串稳健推断算法流向分类（支持 "recognition", "face_recognition" 等变体）
+    pub fn parse(raw: &str) -> Self {
+        let lower = raw.trim().to_ascii_lowercase();
+        if lower.contains("recognition") || lower.contains("recognize") {
+            AlgorithmKind::Recognition
+        } else {
+            AlgorithmKind::Detection
+        }
+    }
+
+    pub fn is_recognition(&self) -> bool {
+        matches!(self, AlgorithmKind::Recognition)
+    }
+
+    pub fn is_detection(&self) -> bool {
+        matches!(self, AlgorithmKind::Detection)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AlgorithmKind::Detection => "detection",
+            AlgorithmKind::Recognition => "recognition",
+        }
+    }
+}
+
+impl From<&str> for AlgorithmKind {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for AlgorithmKind {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for AlgorithmKind {
+    fn from(s: &String) -> Self {
+        Self::parse(s.as_str())
+    }
+}
+
+impl std::fmt::Display for AlgorithmKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// 实时推送给前端播放器的目标检测框与航迹 DTO (采用扁平数组降低高频传输开销)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,5 +190,46 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn test_algorithm_kind_parsing_and_conversions() {
+        assert_eq!(AlgorithmKind::parse("detection"), AlgorithmKind::Detection);
+        assert_eq!(
+            AlgorithmKind::parse("general_detection"),
+            AlgorithmKind::Detection
+        );
+        assert_eq!(
+            AlgorithmKind::parse("face_recognition"),
+            AlgorithmKind::Recognition
+        );
+        assert_eq!(
+            AlgorithmKind::parse("plate_recognize"),
+            AlgorithmKind::Recognition
+        );
+        assert_eq!(
+            AlgorithmKind::parse("  RECOGNITION  "),
+            AlgorithmKind::Recognition
+        );
+        assert_eq!(
+            AlgorithmKind::parse("unknown_algo"),
+            AlgorithmKind::Detection
+        );
+
+        assert!(AlgorithmKind::Detection.is_detection());
+        assert!(!AlgorithmKind::Detection.is_recognition());
+        assert!(AlgorithmKind::Recognition.is_recognition());
+        assert!(!AlgorithmKind::Recognition.is_detection());
+
+        assert_eq!(
+            AlgorithmKind::from("face_recognition"),
+            AlgorithmKind::Recognition
+        );
+        let s = "recognition".to_string();
+        assert_eq!(AlgorithmKind::from(&s), AlgorithmKind::Recognition);
+        assert_eq!(AlgorithmKind::from(s), AlgorithmKind::Recognition);
+        assert_eq!(AlgorithmKind::default(), AlgorithmKind::Detection);
+        assert_eq!(AlgorithmKind::Recognition.to_string(), "recognition");
+        assert_eq!(AlgorithmKind::Detection.to_string(), "detection");
     }
 }

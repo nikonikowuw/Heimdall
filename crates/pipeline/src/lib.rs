@@ -18,12 +18,13 @@ pub use coordinator::{
 };
 pub use error::PipelineError;
 pub use events::{
-    EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineTrackEvent,
-    DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
+    EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
+    PipelineTrackEvent, DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
 };
 pub use geometry::{check_line_crossing, point_in_polygon};
 pub use manager::{
-    PipelineManager, DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS, DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,
+    AnalysisOutcome, PipelineManager, DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS,
+    DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,
 };
 pub use motion_gate::MotionGate;
 pub use pump::{

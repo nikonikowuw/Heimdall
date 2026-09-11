@@ -175,6 +175,9 @@ impl TrackDispatchService {
                             Ok(PipelineAnalysisEvent::Alarm(_)) => {
                                 // 告警事件由 AlarmDispatchService 处理
                             }
+                            Ok(PipelineAnalysisEvent::Capture(_)) => {
+                                // 客观通行抓拍事件由 CaptureDispatchService 处理
+                            }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                                 tracing::debug!(skipped, "分析事件广播通道滞后，跳过过旧航迹帧");
                             }

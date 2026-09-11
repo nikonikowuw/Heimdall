@@ -56,6 +56,22 @@ impl CaptureRepo {
         active_model.insert(db).await.map_err(DbError::from)
     }
 
+    /// 高频抓拍攒批写入（避免逐事件频繁开启单行 SQLite 事务）
+    pub async fn insert_batch(
+        db: &DatabaseConnection,
+        active_models: Vec<ActiveModel>,
+    ) -> Result<usize, DbError> {
+        if active_models.is_empty() {
+            return Ok(0);
+        }
+        let count = active_models.len();
+        Entity::insert_many(active_models)
+            .exec(db)
+            .await
+            .map_err(DbError::from)?;
+        Ok(count)
+    }
+
     pub async fn find_oldest_batch(
         db: &DatabaseConnection,
         limit: u64,

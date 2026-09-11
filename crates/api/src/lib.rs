@@ -1,6 +1,7 @@
 pub mod alarm_service;
 pub mod algo;
 pub mod camera_probe;
+pub mod capture_service;
 pub mod crypto;
 pub mod error;
 pub mod i18n;
@@ -18,6 +19,7 @@ pub mod track_service;
 
 pub use alarm_service::AlarmDispatchService;
 pub use camera_probe::CameraProbeService;
+pub use capture_service::CaptureDispatchService;
 pub use error::ApiError;
 pub use network_service::NetworkService;
 pub use response::ApiResponse;

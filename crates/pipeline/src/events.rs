@@ -36,6 +36,23 @@ pub struct PipelineAlarmEvent {
     pub timestamp: i64,
 }
 
+/// 管线客观通行抓拍事件载荷 (针对识别类算法如人脸识别、车牌识别)
+#[derive(Debug, Clone)]
+pub struct PipelineCaptureEvent {
+    /// 抓拍唯一事件 ID (UUID v4)
+    pub capture_id: String,
+    /// 触发抓拍的摄像头 ID
+    pub camera_id: String,
+    /// 产生抓拍的算法实例标识
+    pub algorithm_id: String,
+    /// 抓拍目标对象
+    pub tracked_object: TrackedObject,
+    /// 靶向快照抓拍结果
+    pub snapshot: Option<SnapshotResult>,
+    /// 抓拍时刻的 13 位 UTC Unix 毫秒时间戳
+    pub timestamp: i64,
+}
+
 /// 管线实时航迹跟踪更新事件载荷
 #[derive(Debug, Clone)]
 pub struct PipelineTrackEvent {
@@ -52,8 +69,10 @@ pub struct PipelineTrackEvent {
 /// 管线分析事件统一出口枚举
 #[derive(Debug, Clone)]
 pub enum PipelineAnalysisEvent {
-    /// 规则告警事件 (稀疏触发)
+    /// 规则告警事件 (稀疏触发，违规事实)
     Alarm(Box<PipelineAlarmEvent>),
+    /// 客观通行抓拍事件 (通行事实，无违规属性)
+    Capture(Box<PipelineCaptureEvent>),
     /// 航迹跟踪元数据更新事件 (高频流式)
     Tracks(PipelineTrackEvent),
 }

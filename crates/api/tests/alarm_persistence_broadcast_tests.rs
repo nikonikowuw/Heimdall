@@ -8,7 +8,8 @@ use axum::http::{Request, StatusCode};
 use db::{AlarmRepo, CameraRepo, CaptureRepo};
 use pipeline::snapshot::SnapshotResult;
 use pipeline::{
-    EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineManager, TriggeredAlarm,
+    EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
+    PipelineManager, TriggeredAlarm,
 };
 use sea_orm::Set;
 use tower::ServiceExt;
@@ -352,4 +353,144 @@ async fn test_update_alarm_status_and_ws_broadcast() {
     assert_eq!(ws_event.payload["eventId"], "evt-status-test-1");
     assert_eq!(ws_event.payload["status"], "processed");
     assert!(ws_event.payload["handledAt"].is_number());
+}
+
+#[tokio::test]
+async fn test_recognition_capture_event_persistence_without_alarm() {
+    let (_app, state, _token) = setup_test_app().await;
+
+    let alarm_svc = Arc::new(AlarmDispatchService::from_state(&state));
+    let _alarm_worker = alarm_svc.clone().start_worker();
+
+    let capture_svc = Arc::new(api::CaptureDispatchService::with_options(
+        state.db.clone(),
+        state.pipeline.clone(),
+        state.shutdown_tx.clone(),
+        1,  // 批量大小设为 1，即刻落库便于测试断言
+        50, // 50ms 刷新周期
+    ));
+    let _capture_worker = capture_svc.clone().start_worker();
+
+    let mut ws_rx = state.event_broadcaster.subscribe();
+
+    // 构建一个识别类客观通行抓拍事件
+    let capture_id = uuid::Uuid::new_v4().to_string();
+    let mock_capture = PipelineCaptureEvent {
+        capture_id: capture_id.clone(),
+        camera_id: "CAM-01".to_string(),
+        algorithm_id: "face_recognition".to_string(),
+        tracked_object: TrackedObject {
+            track_id: 301,
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.98,
+            bbox: BoundingBox::new(0.3, 0.3, 0.5, 0.5),
+            trajectory: vec![(0.4, 0.4)],
+        },
+        snapshot: Some(SnapshotResult {
+            image_id: "snap_full_301".to_string(),
+            image_rel_path: "2026/03/04/CAM-01/full_301.jpg".to_string(),
+            crop_image_id: "snap_crop_301".to_string(),
+            crop_image_rel_path: "2026/03/04/CAM-01/crop_301.jpg".to_string(),
+            file_size_bytes: 10240,
+            width: 1920,
+            height: 1080,
+            is_fallback_sub_stream: false,
+        }),
+        timestamp: 1741100060000,
+    };
+
+    // 发布客观通行抓拍事件
+    state
+        .pipeline
+        .publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(mock_capture)));
+
+    // 等待 Capture Worker 异步落库
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // 1. 断言 SQLite capture_records 表写入了行迹抓拍凭证
+    let captures = CaptureRepo::list_recent(&state.db, Some("CAM-01"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(captures.len(), 1, "通行抓拍凭证必须成功落库");
+    let cap = &captures[0];
+    assert_eq!(cap.capture_id, capture_id);
+    assert_eq!(cap.camera_id, "CAM-01");
+    assert_eq!(cap.target_label, "face");
+    assert_eq!(cap.track_id, 301);
+    assert_eq!(cap.image_rel_path, "2026/03/04/CAM-01/full_301.jpg");
+    assert_eq!(cap.crop_image_rel_path, "2026/03/04/CAM-01/crop_301.jpg");
+
+    // 2. 关键核心断言：alarm_records 表绝对不能产生虚假违规告警！
+    let alarms = AlarmRepo::list_recent(&state.db, Some("CAM-01"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(alarms.len(), 0, "识别类通行抓拍绝对不能产生违规告警记录");
+
+    // 3. 断言 WebSocket 未广播 alarm.triggered 报警
+    let timeout_res = tokio::time::timeout(Duration::from_millis(100), ws_rx.recv()).await;
+    assert!(timeout_res.is_err(), "通行抓拍绝对不能向客户端广播报警弹窗");
+}
+
+#[tokio::test]
+async fn test_cold_start_pending_capture_drain_and_batch_persistence() {
+    let (_app, state, _token) = setup_test_app().await;
+
+    // 1. 在 Capture Worker 启动之前，管线已经触发并积压了 3 个通行抓拍事件
+    let mut capture_ids = Vec::new();
+    for i in 0..3 {
+        let capture_id = format!("cold-cap-{i}");
+        capture_ids.push(capture_id.clone());
+        let mock_capture = PipelineCaptureEvent {
+            capture_id: capture_id.clone(),
+            camera_id: "CAM-01".to_string(),
+            algorithm_id: "face_recognition".to_string(),
+            tracked_object: TrackedObject {
+                track_id: 400 + i as u64,
+                class_id: 0,
+                label: "face".to_string(),
+                confidence: 0.95,
+                bbox: BoundingBox::new(0.2, 0.2, 0.4, 0.4),
+                trajectory: vec![],
+            },
+            snapshot: Some(SnapshotResult {
+                image_id: format!("img_{i}"),
+                image_rel_path: format!("2026/03/04/CAM-01/face_{i}.jpg"),
+                crop_image_id: format!("crop_{i}"),
+                crop_image_rel_path: format!("2026/03/04/CAM-01/crop_{i}.jpg"),
+                file_size_bytes: 1024,
+                width: 1920,
+                height: 1080,
+                is_fallback_sub_stream: false,
+            }),
+            timestamp: 1741100200000 + (i as i64) * 1000,
+        };
+        state
+            .pipeline
+            .publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(mock_capture)));
+    }
+
+    assert_eq!(state.pipeline.pending_capture_event_count(), 3);
+
+    // 2. 启动 Capture Worker，应当自动触发 drain_and_persist_pending 批量补偿入库
+    let capture_svc = Arc::new(api::CaptureDispatchService::with_options(
+        state.db.clone(),
+        state.pipeline.clone(),
+        state.shutdown_tx.clone(),
+        10,
+        100,
+    ));
+    let _capture_worker = capture_svc.clone().start_worker();
+
+    // 等待 Worker 补偿处理完成
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // 3. 验证内存补偿队列已被完全排空
+    assert_eq!(state.pipeline.pending_capture_event_count(), 0);
+
+    // 4. 验证积压的 3 条抓拍均已成功批量写入 capture_records
+    let captures = CaptureRepo::list_recent(&state.db, Some("CAM-01"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(captures.len(), 3, "所有冷启动积压通行抓拍必须全部落库");
 }

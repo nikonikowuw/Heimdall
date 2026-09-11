@@ -189,6 +189,10 @@ async fn main() -> Result<()> {
     let alarm_svc = Arc::new(api::AlarmDispatchService::from_state(&state));
     alarm_svc.start_worker();
 
+    // 启动后台客观通行抓拍异步持久化工作线程 (三支柱职责独立，攒批入库)
+    let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
+    capture_svc.start_worker();
+
     // 启动后台航迹实时流分发与节流工作线程
     let track_svc = Arc::new(api::TrackDispatchService::from_state(&state));
     track_svc.start_worker();
