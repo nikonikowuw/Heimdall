@@ -84,4 +84,40 @@ describe('trackStore', () => {
     unsubscribe()
     vi.useRealTimers()
   })
+
+  it('should support PTS-aligned track lookup via ring buffer', () => {
+    const trackT1: TrackedBBox[] = [
+      {
+        trackId: 10,
+        label: 'face',
+        confidence: 0.96,
+        bbox: [0.1, 0.1, 0.2, 0.2],
+      },
+    ]
+    const trackT2: TrackedBBox[] = [
+      {
+        trackId: 10,
+        label: 'face',
+        confidence: 0.98,
+        bbox: [0.3, 0.3, 0.4, 0.4],
+      },
+    ]
+
+    // 写入带 PTS 的航迹流 (pts = 1000ms 与 1040ms)
+    trackStore.setTracks('CAM-PTS', trackT1, 1000)
+    trackStore.setTracks('CAM-PTS', trackT2, 1040)
+
+    // 1. 根据当前视频帧的 PTS (1002ms) 查找：匹配 trackT1
+    expect(trackStore.getTracks('CAM-PTS', 1002)).toEqual(trackT1)
+
+    // 2. 根据当前视频帧的 PTS (1038ms) 查找：匹配 trackT2
+    expect(trackStore.getTracks('CAM-PTS', 1038)).toEqual(trackT2)
+
+    // 3. 不带 PTS 查询时回退到最新快照
+    expect(trackStore.getTracks('CAM-PTS')).toEqual(trackT2)
+
+    // 4. 清除后查询为空
+    trackStore.clear('CAM-PTS')
+    expect(trackStore.getTracks('CAM-PTS', 1040)).toEqual([])
+  })
 })

@@ -24,10 +24,10 @@ class WsClient {
     if (this.isInitialized) return
     this.isInitialized = true
 
-    // 默认全局订阅：实时航迹流直接流向 trackStore (零组件重排)
+    // 默认全局订阅：实时航迹流直接流向 trackStore (零组件重排，支持源帧 PTS 时空对齐)
     this.subscribe<CameraTracksPayload>(WS_TOPICS.CAMERA_TRACKS, (payload) => {
       if (payload?.cameraId) {
-        trackStore.setTracks(payload.cameraId, payload.tracks || [])
+        trackStore.setTracks(payload.cameraId, payload.tracks ?? [], payload.timestamp)
       }
     })
 

@@ -96,6 +96,7 @@ export class WebCodecsPlayer {
   private currentCodec: 'h264' | 'h265' | null = null
   private options: WebCodecsPlayerOptions
   private hasRenderedFirstFrame = false
+  private currentPtsMs: number | null = null
 
   constructor(options: WebCodecsPlayerOptions) {
     this.options = options
@@ -223,6 +224,7 @@ export class WebCodecsPlayer {
       // 计算并回传渲染延迟估算 (毫秒)
       const now = Date.now()
       const frameTimestampMs = Math.floor(frame.timestamp / 1000)
+      this.currentPtsMs = frameTimestampMs
       const latency = Math.max(35, Math.min(300, Math.abs(now - frameTimestampMs)))
       this.options.onPlaying?.(latency)
     } finally {
@@ -231,8 +233,17 @@ export class WebCodecsPlayer {
     }
   }
 
+  /**
+   * 获取当前最新渲染帧的 13 位源帧毫秒 PTS 时间戳
+   * 用于实时驱动 Canvas 离屏目标检测框的时空对齐
+   */
+  public getCurrentPts(): number | null {
+    return this.currentPtsMs
+  }
+
   public destroy() {
     this.isDestroyed = true
+    this.currentPtsMs = null
     if (this.ws) {
       this.ws.onclose = null
       this.ws.onerror = null

@@ -77,19 +77,13 @@ export function LivePlayer({
   const videoRef = useRef<HTMLVideoElement>(null)
   const videoCanvasRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const trackedObjectsRef = useRef<TrackedBBox[]>(trackedObjects ?? [])
+  const wcPlayerRef = useRef<WebCodecsPlayer | null>(null)
+  const externalTracksRef = useRef<TrackedBBox[] | undefined>(trackedObjects)
 
-  // 同步目标检测框：外部显式传入时直接同步；未传入时自动从实时航迹总线订阅 (零 React 重排开销)
+  // 外部显式传入目标检测框时同步至 ref，零 React 重排与零 RAF 重启开销
   useEffect(() => {
-    if (trackedObjects !== undefined) {
-      trackedObjectsRef.current = trackedObjects
-      return
-    }
-
-    return trackStore.subscribe(cameraId, (newTracks) => {
-      trackedObjectsRef.current = newTracks
-    })
-  }, [cameraId, trackedObjects])
+    externalTracksRef.current = trackedObjects
+  }, [trackedObjects])
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(
     isPaused ? 'paused' : 'connecting',
@@ -237,6 +231,7 @@ export function LivePlayer({
                 wcPlayer.destroy()
                 wcPlayer = null
               }
+              wcPlayerRef.current = null
               startFlvPlayer()
             },
             onClose: () => {
@@ -245,6 +240,7 @@ export function LivePlayer({
               scheduleRetry()
             },
           })
+          wcPlayerRef.current = wcPlayer
           return
         } catch {
           // 初始化失败，直接执行 FLV 降级
@@ -296,6 +292,7 @@ export function LivePlayer({
         wcPlayer.destroy()
         wcPlayer = null
       }
+      wcPlayerRef.current = null
       if (flvPlayer) {
         try {
           flvPlayer.pause()
@@ -340,7 +337,11 @@ export function LivePlayer({
         const h = canvas.height
         ctx.clearRect(0, 0, w, h)
 
-        const tracks = trackedObjectsRef.current
+        // 基于源帧 PTS 环形队列实现毫秒级时空对齐 (消除解码渲染缓冲与推理耗时漂移)
+        // 若外部显式传入目标框 (如录像回放/规则标注模式) 则优先使用外部 ref，否则自适应按视频 PTS 对齐
+        const currentVideoPts = wcPlayerRef.current?.getCurrentPts() ?? null
+        const tracks = externalTracksRef.current ?? trackStore.getTracks(cameraId, currentVideoPts)
+
         for (const item of tracks) {
           const [nx1, ny1, nx2, ny2] = item.bbox
           const x = nx1 * w
@@ -383,7 +384,7 @@ export function LivePlayer({
 
     animId = requestAnimationFrame(render)
     return () => cancelAnimationFrame(animId)
-  }, [isHero, isPaused])
+  }, [cameraId, isHero, isPaused])
 
   // 监听画布尺寸自适应
   useEffect(() => {
