@@ -8,6 +8,8 @@ pub enum CodecType {
     #[default]
     H264,
     H265,
+    /// AAC 音频编码 (安防摄像头最常见音频格式)
+    Aac,
 }
 
 impl CodecType {
@@ -15,8 +17,29 @@ impl CodecType {
         match self {
             Self::H264 => "h264",
             Self::H265 => "h265",
+            Self::Aac => "aac",
         }
     }
+
+    /// 是否为视频编码类型
+    pub fn is_video(&self) -> bool {
+        matches!(self, Self::H264 | Self::H265)
+    }
+
+    /// 是否为音频编码类型
+    pub fn is_audio(&self) -> bool {
+        matches!(self, Self::Aac)
+    }
+}
+
+/// 数据流中的包类型标识，用于区分同一 EncodedPacket 通道中的音频与视频帧
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamTag {
+    /// 视频帧 (NALU / IDR / P/B 帧)
+    #[default]
+    Video,
+    /// 音频帧 (AAC ADTS / G.711 等)
+    Audio,
 }
 
 /// 摄像头接入协议
@@ -158,17 +181,19 @@ impl TransportPolicy {
     }
 }
 
-/// 跨组件流转的压缩视频数据包
-#[derive(Debug, Clone)]
+/// 跨组件流转的压缩音视频数据包
+#[derive(Debug, Clone, Default)]
 pub struct EncodedPacket {
     /// 13 位 UTC Unix 毫秒时间戳
     pub pts_ms: i64,
-    /// 是否为关键帧 (IDR/I-Frame)
+    /// 是否为关键帧 (IDR/I-Frame)；音频帧始终为 false
     pub is_keyframe: bool,
-    /// 编码格式
+    /// 编码格式 (视频: H264/H265, 音频: Aac)
     pub codec: CodecType,
-    /// 包含 NALU 头或完整切片的原始字节
+    /// 包含 NALU 头或完整切片的原始字节；音频帧为 ADTS 封装的 AAC 数据
     pub payload: Bytes,
+    /// 数据流类型标识 (视频/音频)，默认 Video 以兼容现有仅视频路径
+    pub stream_tag: StreamTag,
 }
 
 /// 分析码流选择偏好
@@ -406,6 +431,7 @@ mod tests {
             is_keyframe: true,
             codec: CodecType::H264,
             payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f]),
+            stream_tag: StreamTag::Video,
         };
 
         assert!(packet.is_keyframe);

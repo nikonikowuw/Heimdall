@@ -35,13 +35,20 @@ pub struct WebCodecsFrameHeader {
 }
 
 /// 将内部 EncodedPacket 序列化为 12 字节二进制帧头的 WebCodecs 传输包
+///
+/// 若传入音频包或非视频包，安全返回空 `Bytes`。
 pub fn pack_webcodecs_frame(packet: &EncodedPacket) -> Bytes {
+    if !packet.codec.is_video() || packet.stream_tag == types::StreamTag::Audio {
+        return Bytes::new();
+    }
     let mut buf = BytesMut::with_capacity(WEBCODECS_FRAME_HEADER_LEN + packet.payload.len());
     buf.put_u8(WEBCODECS_PROTOCOL_VERSION);
-    buf.put_u8(match packet.codec {
+    let codec_byte = match packet.codec {
         CodecType::H264 => 0x01,
         CodecType::H265 => 0x02,
-    });
+        CodecType::Aac => return Bytes::new(),
+    };
+    buf.put_u8(codec_byte);
     buf.put_u8(if packet.is_keyframe { 0x01 } else { 0x00 });
     buf.put_u8(0x00);
     buf.put_i64(packet.pts_ms);
@@ -94,6 +101,7 @@ mod tests {
             is_keyframe: true,
             codec: CodecType::H264,
             payload: payload.clone(),
+            ..Default::default()
         };
 
         let packed = pack_webcodecs_frame(&packet);
@@ -117,6 +125,7 @@ mod tests {
             is_keyframe: false,
             codec: CodecType::H265,
             payload: payload.clone(),
+            ..Default::default()
         };
 
         let packed = pack_webcodecs_frame(&packet);

@@ -18,7 +18,7 @@ use retina::client::{
 };
 use retina::codec::{CodecItem, FrameFormat};
 use tokio::sync::broadcast;
-use types::{CodecType, EncodedPacket, TransportPolicy};
+use types::{CodecType, EncodedPacket, StreamTag, TransportPolicy};
 
 use crate::error::MediaError;
 use crate::probe::StreamProber;
@@ -317,6 +317,63 @@ impl RetinaIngestor {
             }
         }
 
+        // 4b. 发现并 SETUP 音频轨道 (严格仅支持 AAC / mpeg4-generic)，音频轨道为可选，缺失或非 AAC 格式时不报错
+        let audio_idx = session
+            .streams()
+            .iter()
+            .enumerate()
+            .find(|(_, s)| {
+                s.media() == "audio"
+                    && (s.encoding_name().eq_ignore_ascii_case("mpeg4-generic")
+                        || s.encoding_name().eq_ignore_ascii_case("aac")
+                        || s.encoding_name().eq_ignore_ascii_case("mp4a-latm"))
+            })
+            .map(|(idx, _)| idx);
+
+        let mut audio_track_active = false;
+        if let Some(a_idx) = audio_idx {
+            let audio_transport = match transport_mode {
+                TransportMode::Tcp => Transport::Tcp(TcpTransportOptions::default()),
+                TransportMode::Udp => Transport::Udp(UdpTransportOptions::default()),
+            };
+            let audio_setup = SetupOptions::default()
+                .transport(audio_transport)
+                .frame_format(FrameFormat::SIMPLE);
+
+            match tokio::time::timeout(self.handshake_timeout, session.setup(a_idx, audio_setup))
+                .await
+            {
+                Ok(Ok(())) => {
+                    audio_track_active = true;
+                    tracing::info!(
+                        camera_id = %self.camera_id,
+                        audio_track = a_idx,
+                        "Retina 成功 SETUP 音频轨道，将输出 AAC 音频数据"
+                    );
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        camera_id = %self.camera_id,
+                        audio_track = a_idx,
+                        error = %e,
+                        "Retina 音频轨道 SETUP 失败，将忽略音频数据"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        camera_id = %self.camera_id,
+                        audio_track = a_idx,
+                        "Retina 音频轨道 SETUP 超时，将忽略音频数据"
+                    );
+                }
+            }
+        } else {
+            tracing::debug!(
+                camera_id = %self.camera_id,
+                "Retina SDP 中未发现音频轨道"
+            );
+        }
+
         // 工业级加固：在进入 PLAY 之前从 SDP 提取带外参数集（Extradata）
         let sdp_text = String::from_utf8_lossy(session.sdp());
         let sdp_extradata = StreamProber::extract_sdp_extradata(&sdp_text);
@@ -380,7 +437,8 @@ impl RetinaIngestor {
         );
 
         let base_timestamp_ms = chrono::Utc::now().timestamp_millis();
-        let mut last_emitted_pts = 0i64;
+        let mut last_emitted_video_pts = 0i64;
+        let mut last_emitted_audio_pts = 0i64;
         let mut frames_received: u64 = 0;
 
         // 清理伪唤醒
@@ -400,6 +458,7 @@ impl RetinaIngestor {
                 is_keyframe: true,
                 codec,
                 payload: Bytes::from(extradata),
+                ..Default::default()
             });
             let _ = self.tx.send(packet);
         }
@@ -460,8 +519,8 @@ impl RetinaIngestor {
                     frames_received += 1;
                     let elapsed_ms = (frame.timestamp().elapsed_secs() * 1000.0) as i64;
                     let calculated_pts = base_timestamp_ms + elapsed_ms;
-                    let pts_ms = calculated_pts.max(last_emitted_pts);
-                    last_emitted_pts = pts_ms;
+                    let pts_ms = calculated_pts.max(last_emitted_video_pts);
+                    last_emitted_video_pts = pts_ms;
 
                     let is_keyframe = frame.is_random_access_point();
                     // 零拷贝借出底层 Vec<u8> 生成 Bytes，已包含 Annex B 0x00000001
@@ -472,10 +531,36 @@ impl RetinaIngestor {
                         is_keyframe,
                         codec,
                         payload,
+                        ..Default::default()
                     });
 
                     // 广播分发至所有订阅者（StreamHub / RingBuffer / FlvPipeline）
                     let _ = self.tx.send(packet);
+                }
+            } else if audio_track_active {
+                if let CodecItem::AudioFrame(frame) = item {
+                    // 仅处理已成功 SETUP 的音频轨道
+                    if let Some(target_idx) = audio_idx {
+                        if frame.stream_id() == target_idx {
+                            let elapsed_ms = (frame.timestamp().elapsed_secs() * 1000.0) as i64;
+                            let calculated_pts = base_timestamp_ms + elapsed_ms;
+                            let pts_ms = calculated_pts.max(last_emitted_audio_pts);
+                            last_emitted_audio_pts = pts_ms;
+
+                            // ADTS 封装的 AAC 音频数据 (FrameFormat::SIMPLE 输出)
+                            let payload = Bytes::copy_from_slice(frame.data());
+
+                            let packet = Arc::new(EncodedPacket {
+                                pts_ms,
+                                is_keyframe: false,
+                                codec: CodecType::Aac,
+                                payload,
+                                stream_tag: StreamTag::Audio,
+                            });
+
+                            let _ = self.tx.send(packet);
+                        }
+                    }
                 }
             }
         }

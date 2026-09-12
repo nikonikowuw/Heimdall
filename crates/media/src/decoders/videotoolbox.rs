@@ -313,6 +313,12 @@ impl VideoToolboxDecoder {
                     });
                 }
             }
+            CodecType::Aac => {
+                return Err(MediaError::DecoderInit {
+                    codec: "AAC".to_string(),
+                    reason: "VideoToolbox 视频解码器不支持音频流解码".to_string(),
+                });
+            }
         }
 
         let cb_record = VTDecompressionOutputCallbackRecord {
@@ -372,6 +378,7 @@ impl VideoToolboxDecoder {
                 let t = (nalu[0] >> 1) & 0x3F;
                 t == 32 || t == 33 || t == 34
             }
+            CodecType::Aac => false,
         }
     }
 
@@ -433,6 +440,7 @@ impl VideoToolboxDecoder {
                     }
                     _ => {}
                 },
+                CodecType::Aac => {}
             }
         }
     }

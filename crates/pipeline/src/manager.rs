@@ -369,8 +369,11 @@ impl PipelineManager {
         pipelines.remove(camera_id).is_some()
     }
 
-    /// 向摄像机主码流环形队列压入压缩 NALU 包
+    /// 向摄像机主码流环形队列压入压缩 NALU 包（严格仅接收视频包，忽略音频）
     pub async fn push_main_packet(&self, camera_id: &str, packet: Arc<EncodedPacket>) {
+        if !packet.codec.is_video() || packet.stream_tag == types::StreamTag::Audio {
+            return;
+        }
         let ctx = self.get_or_create_context(camera_id).await;
         ctx.ring_buffer.push(packet);
     }
@@ -1104,6 +1107,7 @@ mod tests {
             is_keyframe: true,
             codec: CodecType::H264,
             payload: Bytes::from_static(b"\x00\x00\x00\x01\x67fake"),
+            ..Default::default()
         });
         manager.push_main_packet(cam_id, dummy_pkt).await;
         assert_eq!(ctx.ring_buffer.len(), 1);
@@ -1481,6 +1485,7 @@ mod tests {
                 is_keyframe: key,
                 codec: CodecType::H264,
                 payload: Bytes::from_static(b"\x00\x00\x00\x01\x65idr"),
+                ..Default::default()
             })
         };
 

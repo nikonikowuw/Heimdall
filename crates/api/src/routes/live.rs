@@ -17,6 +17,8 @@ pub struct LiveQuery {
     pub stream: Option<String>, // "main" | "sub"
     pub token: Option<String>,
     pub format: Option<String>, // "flv" | "webcodecs"
+    /// 是否包含音频数据；默认 false，仅 Hero 主预览窗口按需开启
+    pub audio: Option<bool>,
 }
 
 /// 客户端预览会话 RAII 守护者，确保在任何断开、异常中止或被 Drop 场景下安全注销订阅并扣减按需预览计数
@@ -134,6 +136,7 @@ async fn handle_http_flv(
     let mut shutdown_rx = state.shutdown_tx.subscribe();
     let is_main_stream = stream_key.stream_type == StreamType::Main;
     let cam_id_for_stream = camera.camera_id.clone();
+    let include_audio = query.audio.unwrap_or(false);
 
     // 活跃预览计数增加 (按需激活相关资源)
     pipeline_mgr.increment_preview(&camera.camera_id).await;
@@ -141,6 +144,7 @@ async fn handle_http_flv(
     tracing::info!(
         camera_id = %camera.camera_id,
         stream_key = %str_key,
+        include_audio,
         "启动 HTTP-FLV 实时流传输 (带 Sequence Header 优先与时间戳单调滤波)"
     );
 
@@ -160,9 +164,9 @@ async fn handle_http_flv(
         };
 
         // ① 发送 13 字节 FLV Header
-        yield Ok::<Bytes, std::convert::Infallible>(FlvMuxer::flv_header());
+        yield Ok::<Bytes, std::convert::Infallible>(FlvMuxer::flv_header(include_audio));
 
-        let mut flv_pipe = FlvStreamPipeline::new();
+        let mut flv_pipe = FlvStreamPipeline::new(include_audio);
 
         // ② 尝试注入缓存中的 Sequence Header 与完整 GOP 关键帧序列
         if let Some(cache) = stream_hub.get_keyframe_cache(&str_key_clone).await {
@@ -196,13 +200,23 @@ async fn handle_http_flv(
                 }
             };
 
-            // 若为主码流，同步推入内存 Ring Buffer 供告警瞬时靶向精准抽帧
-            if is_main_stream {
+            // 若为主码流且为视频帧，同步推入内存 Ring Buffer 供告警瞬时靶向精准抽帧
+            if is_main_stream && pkt.stream_tag == types::StreamTag::Video {
                 pipeline_mgr.push_main_packet(&cam_id_for_stream, pkt.clone()).await;
             }
 
-            for tag in flv_pipe.process_packet(&pkt) {
-                yield Ok(tag);
+            // 视频帧：标准 FLV Video Tag 封装
+            if pkt.stream_tag == types::StreamTag::Video {
+                for tag in flv_pipe.process_packet(&pkt) {
+                    yield Ok(tag);
+                }
+            }
+
+            // 音频帧：FLV Audio Tag 封装 (仅 include_audio 时有效，且待视频关键帧就绪后对齐发送)
+            if include_audio && pkt.stream_tag == types::StreamTag::Audio && flv_pipe.has_first_keyframe {
+                for tag in flv_pipe.process_audio_packet(&pkt) {
+                    yield Ok(tag);
+                }
             }
         }
     };
@@ -261,6 +275,7 @@ async fn handle_ws_flv(
 
     let str_key = stream_key.as_str_key();
     let is_main_stream = stream_key.stream_type == StreamType::Main;
+    let include_audio = query.audio.unwrap_or(false);
 
     tracing::info!(
         camera_id = %camera.camera_id,
@@ -269,7 +284,15 @@ async fn handle_ws_flv(
     );
 
     ws.on_upgrade(move |socket| {
-        serve_ws_flv(socket, state, str_key, is_main_stream, camera, packet_rx)
+        serve_ws_flv(
+            socket,
+            state,
+            str_key,
+            is_main_stream,
+            camera,
+            packet_rx,
+            include_audio,
+        )
     })
 }
 
@@ -280,6 +303,7 @@ async fn serve_ws_flv(
     is_main_stream: bool,
     camera: db::entity::camera::Model,
     mut packet_rx: tokio::sync::broadcast::Receiver<std::sync::Arc<types::EncodedPacket>>,
+    include_audio: bool,
 ) {
     let mut shutdown_rx = state.shutdown_tx.subscribe();
     let stream_hub = state.stream_hub.clone();
@@ -302,12 +326,12 @@ async fn serve_ws_flv(
         CodecType::H264
     };
 
-    let mut flv_pipe = FlvStreamPipeline::new();
+    let mut flv_pipe = FlvStreamPipeline::new(include_audio);
 
     // ① 发送 13 字节 FLV Header 与缓存中的 Sequence Header / GOP 序列
     let init_success = async {
         if socket
-            .send(Message::Binary(FlvMuxer::flv_header()))
+            .send(Message::Binary(FlvMuxer::flv_header(include_audio)))
             .await
             .is_err()
         {
@@ -349,15 +373,30 @@ async fn serve_ws_flv(
                 }
             };
 
-            if is_main_stream {
+            if is_main_stream && pkt.stream_tag == types::StreamTag::Video {
                 pipeline_mgr
                     .push_main_packet(&camera.camera_id, pkt.clone())
                     .await;
             }
 
-            for tag in flv_pipe.process_packet(&pkt) {
-                if socket.send(Message::Binary(tag)).await.is_err() {
-                    break;
+            // 视频帧
+            if pkt.stream_tag == types::StreamTag::Video {
+                for tag in flv_pipe.process_packet(&pkt) {
+                    if socket.send(Message::Binary(tag)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+
+            // 音频帧 (仅 include_audio 时有效，且待视频关键帧就绪后对齐发送)
+            if include_audio
+                && pkt.stream_tag == types::StreamTag::Audio
+                && flv_pipe.has_first_keyframe
+            {
+                for tag in flv_pipe.process_audio_packet(&pkt) {
+                    if socket.send(Message::Binary(tag)).await.is_err() {
+                        return;
+                    }
                 }
             }
         }
@@ -459,6 +498,11 @@ async fn serve_ws_webcodecs(
             }
         };
 
+        // WebCodecs 仅传输视频通道数据，忽略音频
+        if pkt.stream_tag == types::StreamTag::Audio || !pkt.codec.is_video() {
+            continue;
+        }
+
         // 若网络发生积压丢包，主动丢弃非关键帧直到收到完整关键帧
         if awaiting_keyframe_after_lag {
             if pkt.is_keyframe {
@@ -475,7 +519,7 @@ async fn serve_ws_webcodecs(
         }
 
         let bin = media::pack_webcodecs_frame(&pkt);
-        if socket.send(Message::Binary(bin)).await.is_err() {
+        if !bin.is_empty() && socket.send(Message::Binary(bin)).await.is_err() {
             break;
         }
     }
@@ -499,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_lagged_resilience_logic() {
-        let mut pipeline = FlvStreamPipeline::new();
+        let mut pipeline = FlvStreamPipeline::new(false);
         pipeline.handle_lagged();
         assert!(!pipeline.has_first_keyframe);
     }
@@ -511,6 +555,7 @@ mod tests {
             is_keyframe: true,
             codec: CodecType::H265,
             payload: Bytes::from_static(b"\x00\x00\x00\x01\x40\x01"),
+            ..Default::default()
         };
         let frame = media::pack_webcodecs_frame(&packet);
         let (header, payload) = media::unpack_webcodecs_frame(&frame).unwrap();

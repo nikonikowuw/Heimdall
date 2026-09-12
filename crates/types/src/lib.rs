@@ -18,7 +18,7 @@ pub use auth::{
 pub use camera::{
     is_effective_main_stream, Camera, CameraProbeEvent, CameraProtocol, CameraTelemetryEvent,
     CodecType, CreateCameraRequest, EncodedPacket, ProbeResult, ProbeStatus, StreamKey, StreamMode,
-    StreamType, TransportPolicy, UpdateCameraRequest,
+    StreamTag, StreamType, TransportPolicy, UpdateCameraRequest,
 };
 pub use detection::{
     AlgorithmKind, BoundingBox, CameraTracksPayload, Detection, TrackDto, TrackedObject,

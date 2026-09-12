@@ -1,5 +1,5 @@
 use bytes::{BufMut, Bytes, BytesMut};
-use types::{CodecType, EncodedPacket};
+use types::{CodecType, EncodedPacket, StreamTag};
 
 use crate::stream_hub::KeyframeCache;
 
@@ -14,20 +14,32 @@ pub fn strip_nalu_start_code(data: &[u8]) -> &[u8] {
     }
 }
 
-/// FLV 容器封装器（支持标准 H.264 与 Enhanced FLV H.265 / HEVC）
+/// FLV 容器封装器（支持标准 H.264 与 Enhanced FLV H.265 / HEVC，以及 AAC 音频）
 #[derive(Debug)]
 pub struct FlvMuxer;
 
 impl FlvMuxer {
     /// 生成标准 9 字节 FLV 文件头 + 4 字节 PreviousTagSize0
-    pub fn flv_header() -> Bytes {
+    ///
+    /// `include_audio` 为 `true` 时设置 TypeFlags = 0x11 (Audio + Video)，
+    /// 否则为 0x01 (Video Only)，与前端 `hasAudio` 配置对应。
+    pub fn flv_header(include_audio: bool) -> Bytes {
         let mut b = BytesMut::with_capacity(13);
-        // "FLV" + version 1 + Flags (0x01 = Video only) + DataOffset (9) + PreviousTagSize0 (0)
+        // "FLV" + version 1 + Flags + DataOffset (9) + PreviousTagSize0 (0)
         b.extend_from_slice(&[
-            b'F', b'L', b'V', 0x01, // Signature & Version
-            0x01, // TypeFlags (Video Only)
-            0x00, 0x00, 0x00, 0x09, // DataOffset
-            0x00, 0x00, 0x00, 0x00, // PreviousTagSize0
+            b'F',
+            b'L',
+            b'V',
+            0x01,                                    // Signature & Version
+            if include_audio { 0x11 } else { 0x01 }, // TypeFlags: 0x11=Audio+Video, 0x01=Video Only
+            0x00,
+            0x00,
+            0x00,
+            0x09, // DataOffset
+            0x00,
+            0x00,
+            0x00,
+            0x00, // PreviousTagSize0
         ]);
         b.freeze()
     }
@@ -188,15 +200,19 @@ impl FlvMuxer {
         match codec {
             CodecType::H264 => Self::build_h264_sequence_header(sps, pps),
             CodecType::H265 => Self::build_h265_sequence_header(cache.vps.as_deref(), sps, pps),
+            CodecType::Aac => None,
         }
     }
 
-    /// 将单个 EncodedPacket 封装为 FLV Video Tag（内置 Annex B 拆分、4 字节大端长度前缀与时间戳单调递增看门狗）
     /// 将单个 EncodedPacket 按照指定的 DTS 与 CTS 封装为 FLV Video Tag
     ///
     /// - `dts_ms`: FLV Tag Header 记录的解码时间戳（单调递增）
     /// - `cts_ms`: FLV Video Header 记录的合成时间偏移（CTS = PTS - DTS，必须 >= 0）
     pub fn packet_to_flv_tag_with_dts_cts(pkt: &EncodedPacket, dts_ms: u32, cts_ms: u32) -> Bytes {
+        if !pkt.codec.is_video() || pkt.stream_tag == StreamTag::Audio {
+            return Bytes::new();
+        }
+
         let nalus = crate::sps::split_annex_b_nalus(&pkt.payload);
         if nalus.is_empty() {
             return Bytes::new();
@@ -205,6 +221,7 @@ impl FlvMuxer {
         let is_vcl = |nalu: &[u8]| match pkt.codec {
             CodecType::H264 => !nalu.is_empty() && !matches!(nalu[0] & 0x1F, 7..=9),
             CodecType::H265 => nalu.len() >= 2 && !(32..=35).contains(&((nalu[0] >> 1) & 0x3F)),
+            CodecType::Aac => false,
         };
 
         let vcl_nalus: Vec<&[u8]> = nalus.into_iter().filter(|n| is_vcl(n)).collect();
@@ -237,6 +254,7 @@ impl FlvMuxer {
                 b.put_u8((cts_ms & 0xFF) as u8);
                 b
             }
+            CodecType::Aac => return Bytes::new(),
         };
 
         for nalu in vcl_nalus {
@@ -263,6 +281,142 @@ impl FlvMuxer {
     pub fn packet_to_flv_tag(pkt: &EncodedPacket, base_pts_ms: i64) -> Bytes {
         let mut dummy_ts = 0;
         Self::packet_to_flv_tag_with_filter(pkt, base_pts_ms, &mut dummy_ts)
+    }
+
+    /// 从 ADTS 帧头解析采样率索引 (4-bit SampleRateIndex)
+    ///
+    /// ADTS 频率索引映射 (ISO 14496-3 Table 1.16):
+    /// 0=96kHz, 1=88.2kHz, 2=64kHz, 3=48kHz, 4=44.1kHz,
+    /// 5=32kHz, 6=24kHz, 7=22.05kHz, 8=16kHz, 9=12kHz,
+    /// 10=11.025kHz, 11=8kHz, 12=7.35kHz
+    fn adts_sampling_freq_index(sampling_freq: u32) -> u8 {
+        match sampling_freq {
+            96000 => 0,
+            88200 => 1,
+            64000 => 2,
+            48000 => 3,
+            44100 => 4,
+            32000 => 5,
+            24000 => 6,
+            22050 => 7,
+            16000 => 8,
+            12000 => 9,
+            11025 => 10,
+            8000 => 11,
+            7350 => 12,
+            _ => 4, // 默认 44.1kHz
+        }
+    }
+
+    /// 构建 AAC AudioSpecificConfig (2 字节，用于 FLV AudioSequenceHeader)
+    ///
+    /// AAC-LC (AudioObjectType=2) 编码为 5 bit:
+    /// ```text
+    /// bits:   [audioObjectType 5bit][sampleRateIndex 4bit][channelConfig 4bit][padding 3bit]
+    /// ```
+    fn build_aac_audio_specific_config(sample_rate: u32, channels: u8) -> [u8; 2] {
+        let aot: u8 = 2; // AAC-LC (most common in surveillance cameras)
+        let freq_idx = Self::adts_sampling_freq_index(sample_rate);
+        let chan_config = channels.min(7); // FLV channel config: 1-7
+
+        // 5-bit AudioObjectType + 4-bit SampleRateIndex = 9 bits across 2 bytes
+        // Byte 0: AOT[4:0] (5 bits) + FreqIdx[3:1] (3 bits)
+        // Byte 1: FreqIdx[0] (1 bit) + ChanConfig[3:0] (4 bits) + padding[2:0] (3 bits)
+        let byte0 = (aot << 3) | (freq_idx >> 1);
+        let byte1 = ((freq_idx & 0x01) << 7) | (chan_config << 3);
+        [byte0, byte1]
+    }
+
+    /// 从 ADTS 帧头 (7 字节) 解析采样率与声道数
+    ///
+    /// ADTS 头部关键字段布局 (ISO 14496-3 AudioTransport / ISO 13818-7):
+    /// ```text
+    /// Byte 0: [sync_word:8=0xFF]
+    /// Byte 1: [sync_word:4=0xF][ID:1][Layer:2][ProtectionAbsent:1]
+    /// Byte 2: [Profile:2][SamplingFreqIndex:4][Private:1][ChannelConfig_high:1]
+    /// Byte 3: [ChannelConfig_low:2][Original:1][Home:1][CopyrightID:1][CopyrightStart:1][FrameLength_high:2]
+    /// ```
+    fn parse_adts_header(adts: &[u8]) -> Option<(u32, u8)> {
+        if adts.len() < 7 || (adts[0] != 0xFF || (adts[1] & 0xF0) != 0xF0) {
+            return None;
+        }
+        // SamplingFreqIndex: bits 5..=2 of byte 2 (4 bits)
+        let freq_idx = (adts[2] >> 2) & 0x0F;
+        // ChannelConfiguration: bit 0 of byte 2 (MSB) + bits 7..=6 of byte 3 (2 LSBs) = 3 bits total
+        let channels = ((adts[2] & 0x01) << 2) | ((adts[3] >> 6) & 0x03);
+
+        let sample_rate = match freq_idx {
+            0 => 96000,
+            1 => 88200,
+            2 => 64000,
+            3 => 48000,
+            4 => 44100,
+            5 => 32000,
+            6 => 24000,
+            7 => 22050,
+            8 => 16000,
+            9 => 12000,
+            10 => 11025,
+            11 => 8000,
+            12 => 7350,
+            _ => 44100,
+        };
+        Some((sample_rate, channels))
+    }
+
+    /// 构建 AAC Audio Sequence Header FLV Tag
+    ///
+    /// FLV AudioSequenceHeader 包含 AudioSpecificConfig，
+    /// 供 mpegts.js / flv.js 初始化 AAC 解码器。
+    ///
+    /// Audio Tag Header (2 bytes):
+    /// - Byte 0: SoundFormat(4bit=10=AAC) | SoundRate(2bit=3=44kHz) | SoundSize(1bit=1=16bit) | SoundType(1bit=1=Stereo)
+    ///   注：依据 Adobe Flash Video Spec v10.1 (Annex E.4.2.1)，对于 AAC 编码，
+    ///   SoundFormat 必须为 10，SoundRate/SoundSize/SoundType 固定为 3/1/1（0xAF 占位符），
+    ///   真实采样率与声道数由后续的 AudioSpecificConfig 权威指定。
+    /// - Byte 1: AACPacketType (0 = AAC sequence header)
+    pub fn build_aac_sequence_header(sample_rate: u32, channels: u8, timestamp_ms: u32) -> Bytes {
+        let asc = Self::build_aac_audio_specific_config(sample_rate, channels);
+        let mut body = BytesMut::with_capacity(4);
+        // Audio Tag Header: AAC(10) | 44kHz(3) | 16bit(1) | Stereo(1) = 0xAF (Adobe FLV 规范占位符)
+        body.put_u8(0xAF);
+        // AACPacketType = 0 (AAC sequence header)
+        body.put_u8(0x00);
+        // AudioSpecificConfig (2 bytes)
+        body.put_slice(&asc);
+
+        Self::wrap_tag(0x08, timestamp_ms, &body)
+    }
+
+    /// 将一帧 ADTS 封装的 AAC 音频数据转换为 FLV Audio Tag
+    ///
+    /// 1. 解析 ADTS 帧头获取采样率/声道数 (校验 ADTS 同步字有效性)
+    /// 2. 依据 ProtectionAbsent 标志剥离 7 或 9 字节 ADTS 头部，提取原始 AAC 帧数据
+    /// 3. 封装为 FLV Audio Tag: [AudioTagHeader(2B)] + [Raw AAC Frame Data]
+    ///
+    /// 返回 `None` 表示 ADTS 帧头无效，应静默丢弃。
+    pub fn adts_to_flv_audio_tag(adts_data: &[u8], timestamp_ms: u32) -> Option<Bytes> {
+        if adts_data.len() < 7 {
+            return None;
+        }
+
+        let (_sample_rate, _channels) = Self::parse_adts_header(adts_data)?;
+
+        // ADTS 头部长度：bit 0 of byte 1 为 protection_absent: 1=7字节(无CRC), 0=9字节(带CRC)
+        let header_len = if adts_data[1] & 0x01 == 0 { 9 } else { 7 };
+        if adts_data.len() <= header_len {
+            return None;
+        }
+        let raw_aac = &adts_data[header_len..];
+
+        let mut body = BytesMut::with_capacity(2 + raw_aac.len());
+        // Audio Tag Header: AAC(10) | 44kHz(3) | 16bit(1) | Stereo(1) = 0xAF (Adobe FLV 规范占位符)
+        body.put_u8(0xAF);
+        // AACPacketType = 1 (AAC raw data)
+        body.put_u8(0x01);
+        body.put_slice(raw_aac);
+
+        Some(Self::wrap_tag(0x08, timestamp_ms, &body))
     }
 }
 
@@ -390,11 +544,59 @@ pub struct FlvStreamPipeline {
     pub active_vps: Option<Bytes>,
     pub frame_count: u64,
     pub bframe_mgr: BFrameTimeManager,
+    /// 是否向此通道输出音频帧；仅 Hero 主预览窗口开启，避免多路声音污染
+    pub include_audio: bool,
+    /// 已发送 AAC Audio Sequence Header，防止重复发送
+    pub sent_audio_header: bool,
+    /// 缓存从首个音频帧 ADTS 头部解析出的采样率 (Hz)，用于后续帧的 AudioSpecificConfig
+    pub audio_sample_rate: Option<u32>,
+    /// 缓存声道数
+    pub audio_channels: Option<u8>,
+    /// 上一次输出的音频时间戳 (FLV DTS，毫秒)，用于确保音频时间戳单调非递减
+    pub last_audio_pts: u32,
 }
 
 impl FlvStreamPipeline {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(include_audio: bool) -> Self {
+        Self {
+            include_audio,
+            ..Default::default()
+        }
+    }
+
+    /// 处理音频帧：首次解析 ADTS 头部并发送 AAC Sequence Header，后续直接封装为 FLV Audio Tag
+    ///
+    /// 仅在 `include_audio = true` 时有效；否则直接返回空 Vec。
+    /// 音频时间戳严格对齐 `base_pts_ms`，且保持单调非递减。
+    pub fn process_audio_packet(&mut self, pkt: &EncodedPacket) -> Vec<Bytes> {
+        if !self.include_audio || pkt.stream_tag != StreamTag::Audio || !pkt.codec.is_audio() {
+            return Vec::new();
+        }
+
+        let adts_data = pkt.payload.as_ref();
+        let base_pts = *self.base_pts_ms.get_or_insert(pkt.pts_ms);
+        let raw_rel_pts = (pkt.pts_ms.saturating_sub(base_pts)).max(0) as u32;
+        let dts = raw_rel_pts.max(self.last_audio_pts);
+        self.last_audio_pts = dts;
+
+        // 1. 首帧：解析 ADTS 头部获取采样率与声道数，发送 AAC Sequence Header
+        if !self.sent_audio_header {
+            if let Some((sample_rate, channels)) = FlvMuxer::parse_adts_header(adts_data) {
+                self.audio_sample_rate = Some(sample_rate);
+                self.audio_channels = Some(channels);
+                let seq_tag = FlvMuxer::build_aac_sequence_header(sample_rate, channels, dts);
+                self.sent_audio_header = true;
+                return vec![seq_tag];
+            }
+            // ADTS 帧头无效，静默丢弃
+            return Vec::new();
+        }
+
+        // 2. 后续帧：直接封装为 FLV Audio Tag
+        match FlvMuxer::adts_to_flv_audio_tag(adts_data, dts) {
+            Some(tag) => vec![tag],
+            None => Vec::new(),
+        }
     }
 
     /// 从 KeyframeCache 注入首屏 Sequence Header 与完整 GOP 关键帧包
@@ -432,14 +634,21 @@ impl FlvStreamPipeline {
         tags
     }
 
-    /// 处理消费端 Lagged 事件（重置关键帧对齐标记）
+    /// 处理消费端 Lagged 事件（重置关键帧对齐与音频序列头标记）
     pub fn handle_lagged(&mut self) {
         self.has_first_keyframe = false;
+        self.last_audio_pts = 0;
+        self.sent_audio_header = false;
         self.bframe_mgr.reset();
     }
 
     /// 处理实时收到的单个 EncodedPacket，返回待下发的 FLV Tags（可能包含 Sequence Header + 视频帧 Tag）
     pub fn process_packet(&mut self, pkt: &EncodedPacket) -> Vec<Bytes> {
+        // 过滤音频包或非视频包
+        if pkt.stream_tag == StreamTag::Audio || !pkt.codec.is_video() {
+            return Vec::new();
+        }
+
         // 过滤 GOP 缓存中已发送的历史帧
         if pkt.pts_ms <= self.last_gop_pts {
             return Vec::new();
@@ -478,6 +687,7 @@ impl FlvStreamPipeline {
                     }
                 }
             }
+            CodecType::Aac => return Vec::new(),
         }
 
         // 2. 检测参数集指纹是否发生动态突变 (如安防 IPC 白天/黑夜模式切换、分辨率 1080P -> 720P 切换)
@@ -485,7 +695,7 @@ impl FlvStreamPipeline {
         let pps_changed = self.pps_buf.is_some() && self.pps_buf != self.active_pps;
         let vps_changed = match pkt.codec {
             CodecType::H265 => self.vps_buf.is_some() && self.vps_buf != self.active_vps,
-            CodecType::H264 => false,
+            CodecType::H264 | CodecType::Aac => false,
         };
 
         let is_mutation = self.sent_sequence_header && (sps_changed || pps_changed || vps_changed);
@@ -500,6 +710,7 @@ impl FlvStreamPipeline {
                     CodecType::H265 => {
                         FlvMuxer::build_h265_sequence_header(self.vps_buf.as_deref(), sps, pps)
                     }
+                    CodecType::Aac => None,
                 };
 
                 if let Some(tag) = seq_tag {
@@ -540,6 +751,7 @@ impl FlvStreamPipeline {
                         pps,
                         dts,
                     ),
+                    CodecType::Aac => None,
                 };
 
                 if let Some(tag) = seq_tag {
@@ -570,6 +782,7 @@ impl FlvStreamPipeline {
                                 _ => "参数变更".to_string(),
                             }
                         }
+                        CodecType::Aac => "音频".to_string(),
                     };
 
                     tracing::info!(
@@ -606,10 +819,13 @@ mod tests {
 
     #[test]
     fn test_flv_header_structure() {
-        let header = FlvMuxer::flv_header();
+        let header = FlvMuxer::flv_header(false);
         assert_eq!(header.len(), 13);
         assert_eq!(&header[..3], b"FLV");
         assert_eq!(header[4], 0x01); // Video only
+
+        let header_audio = FlvMuxer::flv_header(true);
+        assert_eq!(header_audio[4], 0x11); // Audio + Video
     }
 
     #[test]
@@ -642,12 +858,14 @@ mod tests {
             is_keyframe: true,
             codec: CodecType::H264,
             payload: Bytes::from_static(&[0x65, 0x88]),
+            ..Default::default()
         };
         let pkt2 = EncodedPacket {
             pts_ms: 900, // 异常回退时间戳
             is_keyframe: false,
             codec: CodecType::H264,
             payload: Bytes::from_static(&[0x41, 0x00]),
+            ..Default::default()
         };
 
         let mut last_ts = 0u32;
@@ -661,7 +879,7 @@ mod tests {
 
     #[test]
     fn test_flv_stream_pipeline_lifecycle() {
-        let mut pipeline = FlvStreamPipeline::new();
+        let mut pipeline = FlvStreamPipeline::new(false);
         let cache = KeyframeCache {
             codec: Some(CodecType::H264),
             sps: Some(Bytes::from_static(&[0x67, 0x42, 0x00, 0x1E])),
@@ -671,6 +889,7 @@ mod tests {
                 is_keyframe: true,
                 codec: CodecType::H264,
                 payload: Bytes::from_static(&[0x65, 0x88]),
+                ..Default::default()
             })],
             ..Default::default()
         };
@@ -685,6 +904,7 @@ mod tests {
             is_keyframe: false,
             codec: CodecType::H264,
             payload: Bytes::from_static(&[0x41, 0x01]),
+            ..Default::default()
         };
         let live_tags = pipeline.process_packet(&new_pkt);
         assert_eq!(live_tags.len(), 1);
@@ -692,7 +912,7 @@ mod tests {
 
     #[test]
     fn test_flv_stream_pipeline_compound_annex_b_keyframe() {
-        let mut pipeline = FlvStreamPipeline::new();
+        let mut pipeline = FlvStreamPipeline::new(false);
         // 模拟 Retina 输出的复合关键帧（包含 Annex B SPS + PPS + IDR）
         let compound_payload = [
             // SPS (Type 7)
@@ -705,6 +925,7 @@ mod tests {
             is_keyframe: true,
             codec: CodecType::H264,
             payload: Bytes::copy_from_slice(&compound_payload),
+            ..Default::default()
         };
 
         let tags = pipeline.process_packet(&compound_pkt);
@@ -800,6 +1021,7 @@ mod tests {
             is_keyframe: false,
             codec: CodecType::H264,
             payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x01]),
+            ..Default::default()
         };
 
         // 指定 DTS = 40ms, CTS = 80ms
@@ -823,7 +1045,7 @@ mod tests {
 
     #[test]
     fn test_dynamic_sps_mutation_resolution_switch() {
-        let mut pipeline = FlvStreamPipeline::new();
+        let mut pipeline = FlvStreamPipeline::new(false);
 
         // 真实 1080P SPS
         let sps_1080p = [
@@ -856,6 +1078,7 @@ mod tests {
                 is_keyframe: true,
                 codec: CodecType::H264,
                 payload: Bytes::from(payload),
+                ..Default::default()
             }
         };
 
@@ -878,6 +1101,7 @@ mod tests {
             is_keyframe: false,
             codec: CodecType::H264,
             payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x01]),
+            ..Default::default()
         };
         let p_tags = pipeline.process_packet(&p_pkt);
         assert_eq!(p_tags.len(), 1); // 仅视频帧
@@ -942,7 +1166,7 @@ mod tests {
 
     #[test]
     fn test_inject_cache_mutation_flow() {
-        let mut pipeline = FlvStreamPipeline::new();
+        let mut pipeline = FlvStreamPipeline::new(false);
 
         let sps_v1 = Bytes::from_static(&[0x67, 0x42, 0x00, 0x1E]);
         let pps = Bytes::from_static(&[0x68, 0xCE]);
@@ -967,6 +1191,7 @@ mod tests {
                 0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
                 0x00, 0x00, 0x00, 0x01, 0x65, 0x88,
             ]),
+            ..Default::default()
         };
         let tags_same = pipeline.process_packet(&pkt_same);
         assert_eq!(tags_same.len(), 1); // 仅视频帧
@@ -981,6 +1206,7 @@ mod tests {
                 0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x28, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
                 0x00, 0x00, 0x00, 0x01, 0x65, 0x88,
             ]),
+            ..Default::default()
         };
         let tags_mutated = pipeline.process_packet(&pkt_mutated);
         assert_eq!(tags_mutated.len(), 2);
@@ -990,7 +1216,7 @@ mod tests {
 
     #[test]
     fn test_dynamic_h265_vps_sps_pps_mutation() {
-        let mut pipeline = FlvStreamPipeline::new();
+        let mut pipeline = FlvStreamPipeline::new(false);
 
         // 构造两个不同 SPS 的 H.265 复合关键帧
         let vps = [0x40, 0x01, 0x0c, 0x01, 0xff];
@@ -1021,6 +1247,7 @@ mod tests {
                 is_keyframe: true,
                 codec: CodecType::H265,
                 payload: Bytes::from(payload),
+                ..Default::default()
             }
         };
 
@@ -1040,5 +1267,243 @@ mod tests {
         assert_eq!(tags_mutated.len(), 2);
         assert_eq!(tags_mutated[0][11], 0x90);
         assert_eq!(pipeline.active_sps.as_deref(), Some(&sps_v2[..]));
+    }
+
+    #[test]
+    fn test_aac_audio_specific_config_44100_stereo() {
+        let asc = FlvMuxer::build_aac_audio_specific_config(44100, 2);
+        // AAC-LC (AOT=2) -> 5-bit: 00010
+        // SampleRateIndex(44100)=4 -> 4-bit: 0100
+        // ChannelConfig(2) -> 4-bit: 0010
+        // Bits: 00010_0100_0010_000
+        // Byte 0: 00010_010 = 0x12
+        // Byte 1: 0_0010_000 = 0x10
+        assert_eq!(asc[0], 0x12);
+        assert_eq!(asc[1], 0x10);
+    }
+
+    #[test]
+    fn test_aac_audio_specific_config_48000_mono() {
+        let asc = FlvMuxer::build_aac_audio_specific_config(48000, 1);
+        // AOT=2 -> 00010, FreqIdx(48kHz)=3 -> 0011, Chan(1) -> 0001
+        // Bits: 00010_0011_0001_000
+        // Byte 0: 00010_001 = 0x11
+        // Byte 1: 1_0001_000 = 0x88
+        assert_eq!(asc[0], 0x11);
+        assert_eq!(asc[1], 0x88);
+    }
+
+    #[test]
+    fn test_parse_adts_header_valid() {
+        // Valid ADTS frame: sync word 0xFFF, AAC-LC, 44100Hz, Stereo
+        let mut adts = vec![0xFF, 0xF1]; // MPEG-4, Layer 0, no CRC
+                                         // Byte 2: profile(1=01), freq_idx(4=0100), private(0), chan_config_high(0)
+                                         // = 0b01_0100_0_0 = 0x50
+        adts.push(0x50);
+        // Byte 3: chan_config_low(10 for channel 2), orig(0), home(0), copyright(0), start(0), frame_len_high(00)
+        // = 0b10_0_0_0_0_00 = 0x80
+        adts.push(0x80);
+        adts.extend_from_slice(&[0x00, 0x00, 0x00]); // rest of header
+        let (sr, ch) = FlvMuxer::parse_adts_header(&adts).expect("parse adts");
+        assert_eq!(sr, 44100);
+        assert_eq!(ch, 2);
+    }
+
+    #[test]
+    fn test_parse_adts_header_invalid_sync() {
+        let bad = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert!(FlvMuxer::parse_adts_header(&bad).is_none());
+    }
+
+    #[test]
+    fn test_adts_to_flv_audio_tag_roundtrip() {
+        // Construct a minimal valid ADTS header (7 bytes) + 2 bytes raw AAC
+        let mut adts = vec![0xFF, 0xF1]; // MPEG-4, no CRC
+        adts.push(0x50); // profile=1(AAC-LC), freq_idx=4(44100Hz), private=0, chan_high=0
+        adts.push(0x80); // chan_config_low=10(stereo), orig/home/copyright=0
+        adts.push(0x00);
+        adts.push(0x02); // frame_length = 9 (7 header + 2 data)
+        adts.push(0x00);
+        adts.extend_from_slice(&[0xDE, 0x02]); // raw AAC payload
+
+        let tag = FlvMuxer::adts_to_flv_audio_tag(&adts, 1000).expect("build audio tag");
+        // FLV Tag: TagType(1B=0x08) + DataSize(3B) + Timestamp(4B) + StreamID(3B) + Payload + PrevTagSize(4B)
+        assert_eq!(tag[0], 0x08); // Audio tag
+        assert_eq!(tag[11], 0xAF); // AAC + 44kHz + 16bit + Stereo
+        assert_eq!(tag[12], 0x01); // AACPacketType = 1 (raw)
+        assert_eq!(&tag[13..tag.len() - 4], &[0xDE, 0x02]); // raw AAC data
+    }
+
+    #[test]
+    fn test_flv_stream_pipeline_audio() {
+        let mut pipeline = FlvStreamPipeline::new(true);
+        assert!(pipeline.include_audio);
+
+        // 模拟一个 ADTS 帧
+        let mut adts = vec![0xFF, 0xF1];
+        adts.push(0x50); // profile=1(AAC-LC), freq_idx=4(44100Hz), private=0, chan_high=0
+        adts.push(0x80); // chan_config_low=10(stereo), orig/home/copyright=0
+        adts.push(0x00);
+        adts.push(0x09);
+        adts.push(0x00);
+        adts.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+        let pkt = EncodedPacket {
+            pts_ms: 1000,
+            is_keyframe: false,
+            codec: CodecType::Aac,
+            payload: Bytes::from(adts.clone()),
+            stream_tag: StreamTag::Audio,
+        };
+
+        let tags = pipeline.process_audio_packet(&pkt);
+        assert_eq!(tags.len(), 1); // AAC Sequence Header
+        assert_eq!(tags[0][0], 0x08); // Audio tag
+        assert_eq!(tags[0][11], 0xAF);
+        assert_eq!(tags[0][12], 0x00); // AACPacketType = 0 (sequence header)
+        assert!(pipeline.sent_audio_header);
+
+        // 第二帧：应发送 raw audio tag
+        let pkt2 = EncodedPacket {
+            pts_ms: 1040,
+            is_keyframe: false,
+            codec: CodecType::Aac,
+            payload: Bytes::from(adts.clone()),
+            stream_tag: StreamTag::Audio,
+        };
+        let tags2 = pipeline.process_audio_packet(&pkt2);
+        assert_eq!(tags2.len(), 1);
+        assert_eq!(tags2[0][12], 0x01); // AACPacketType = 1 (raw)
+    }
+
+    #[test]
+    fn test_flv_stream_pipeline_audio_disabled() {
+        let mut pipeline = FlvStreamPipeline::new(false);
+        let pkt = EncodedPacket {
+            pts_ms: 1000,
+            is_keyframe: false,
+            codec: CodecType::Aac,
+            payload: Bytes::from_static(&[0xFF, 0xF1, 0x50, 0x00, 0x00, 0x09, 0x00, 0xAA, 0xBB]),
+            stream_tag: StreamTag::Audio,
+        };
+        let tags = pipeline.process_audio_packet(&pkt);
+        assert!(tags.is_empty()); // 音频关闭时不应产生任何 tag
+    }
+
+    #[test]
+    fn test_parse_adts_header_9byte_crc() {
+        // protection_absent = 0 (byte 1 bit 0 = 0 -> 9 bytes header with CRC)
+        let mut adts = vec![0xFF, 0xF0]; // ID=0, layer=0, protection_absent=0
+        adts.push(0x50); // profile=1, freq_idx=4 (44.1kHz), private=0, chan_high=0
+        adts.push(0x80); // chan_low=2
+        adts.extend_from_slice(&[0x00, 0x00, 0x00]); // bytes 4-6
+        adts.extend_from_slice(&[0x12, 0x34]); // 2 bytes CRC (bytes 7-8)
+        adts.extend_from_slice(&[0xAA, 0xBB]); // raw AAC data
+
+        let (sr, ch) = FlvMuxer::parse_adts_header(&adts).expect("parse 9-byte adts header");
+        assert_eq!(sr, 44100);
+        assert_eq!(ch, 2);
+
+        let tag = FlvMuxer::adts_to_flv_audio_tag(&adts, 500).expect("tag with 9-byte header");
+        // Tag payload should skip 9 bytes of ADTS header and contain only raw AAC [0xAA, 0xBB]
+        assert_eq!(&tag[13..tag.len() - 4], &[0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn test_flv_stream_pipeline_audio_video_time_sync() {
+        let mut pipeline = FlvStreamPipeline::new(true);
+
+        // 先来一个视频关键帧，确定 base_pts_ms
+        let base_pts = 1_700_000_000_000i64;
+        let video_pkt = EncodedPacket {
+            pts_ms: base_pts,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[
+                0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, // SPS
+                0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, // PPS
+                0x00, 0x00, 0x00, 0x01, 0x65, 0x88, // IDR
+            ]),
+            stream_tag: StreamTag::Video,
+        };
+        let _ = pipeline.process_packet(&video_pkt);
+        assert_eq!(pipeline.base_pts_ms, Some(base_pts));
+
+        // 后续音频包的 DTS 必须相对于 base_pts 计算，而不是绝对大整数
+        let mut adts = vec![0xFF, 0xF1, 0x50, 0x80, 0x00, 0x09, 0x00];
+        adts.extend_from_slice(&[0xAA, 0xBB]);
+        let audio_pkt = EncodedPacket {
+            pts_ms: base_pts + 40, // +40ms
+            is_keyframe: false,
+            codec: CodecType::Aac,
+            payload: Bytes::from(adts),
+            stream_tag: StreamTag::Audio,
+        };
+        let audio_tags = pipeline.process_audio_packet(&audio_pkt);
+        assert_eq!(audio_tags.len(), 1); // 首帧 sequence header
+                                         // FLV Tag Header bytes 4..7 为 24位 timestamp + 8位 extended timestamp
+        let tag = &audio_tags[0];
+        let tag_dts = (tag[4] as u32) << 16 | (tag[5] as u32) << 8 | (tag[6] as u32);
+        assert_eq!(tag_dts, 40); // 相对 base_pts_ms 偏移 40ms，而非 1_700_000_000_040 溢出值
+    }
+
+    #[test]
+    fn test_process_packet_ignores_audio() {
+        let mut pipeline = FlvStreamPipeline::new(true);
+        let audio_pkt = EncodedPacket {
+            pts_ms: 1000,
+            is_keyframe: false,
+            codec: CodecType::Aac,
+            payload: Bytes::from_static(b"fake audio data"),
+            stream_tag: StreamTag::Audio,
+        };
+        // 传入音频包绝不应 panic，必须安全返回空
+        let tags = pipeline.process_packet(&audio_pkt);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_adts_header_various_frequencies_and_channels() {
+        // Profile 1 (AAC-LC, 0b01)
+        // 48000 Hz: freq_idx = 3 (0b0011) -> byte 2: (0b01 << 6) | (0b0011 << 2) = 0x40 | 0x0C = 0x4C
+        // Mono: channel 1 -> byte 2 bit 0 = 0, byte 3 bits 7..6 = 0b01 -> byte 3 = 0x40
+        let adts_48k_mono = [0xFF, 0xF1, 0x4C, 0x40, 0x00, 0x09, 0x00];
+        let (sr, ch) = FlvMuxer::parse_adts_header(&adts_48k_mono).expect("parse 48k mono");
+        assert_eq!(sr, 48000);
+        assert_eq!(ch, 1);
+
+        // 16000 Hz: freq_idx = 8 (0b1000) -> byte 2: (0b01 << 6) | (0b1000 << 2) = 0x40 | 0x20 = 0x60
+        // Stereo: channel 2 -> byte 2 bit 0 = 0, byte 3 bits 7..6 = 0b10 -> byte 3 = 0x80
+        let adts_16k_stereo = [0xFF, 0xF1, 0x60, 0x80, 0x00, 0x09, 0x00];
+        let (sr, ch) = FlvMuxer::parse_adts_header(&adts_16k_stereo).expect("parse 16k stereo");
+        assert_eq!(sr, 16000);
+        assert_eq!(ch, 2);
+    }
+
+    #[test]
+    fn test_handle_lagged_resets_audio_state() {
+        let mut pipeline = FlvStreamPipeline::new(true);
+        let mut adts = vec![0xFF, 0xF1, 0x50, 0x80, 0x00, 0x09, 0x00];
+        adts.extend_from_slice(&[0xAA, 0xBB]);
+        let pkt = EncodedPacket {
+            pts_ms: 1000,
+            is_keyframe: false,
+            codec: CodecType::Aac,
+            payload: Bytes::from(adts.clone()),
+            stream_tag: StreamTag::Audio,
+        };
+
+        let tags = pipeline.process_audio_packet(&pkt);
+        assert_eq!(tags.len(), 1);
+        assert!(pipeline.sent_audio_header);
+
+        pipeline.handle_lagged();
+        assert!(!pipeline.sent_audio_header);
+        assert_eq!(pipeline.last_audio_pts, 0);
+
+        // 重置后下一帧应重新生成 AAC sequence header
+        let tags2 = pipeline.process_audio_packet(&pkt);
+        assert_eq!(tags2.len(), 1);
+        assert_eq!(tags2[0][12], 0x00); // AAC Sequence Header
     }
 }

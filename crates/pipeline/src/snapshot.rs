@@ -1074,9 +1074,11 @@ mod tests {
 
     #[test]
     fn test_atomic_snapshot_config_never_returns_mixed_versions() {
-        let mut first = SnapshotConfig::default();
-        first.main_stream_panoramic_quality = 11;
-        first.main_stream_crop_quality = 12;
+        let first = SnapshotConfig {
+            main_stream_panoramic_quality: 11,
+            main_stream_crop_quality: 12,
+            ..Default::default()
+        };
         let mut second = first.clone();
         second.main_stream_panoramic_quality = 91;
         second.main_stream_crop_quality = 92;

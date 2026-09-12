@@ -201,6 +201,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selectedHeroId, setSelectedHeroId] = useState<string>('')
   const [heroStream, setHeroStream] = useState<'main' | 'sub'>('main')
+  const [heroAudioEnabled, setHeroAudioEnabled] = useState<boolean>(false)
   const [viewMode, setViewMode] = useState<'hero_rail' | 'bento_grid'>('hero_rail')
   const [autoSpotlight, setAutoSpotlight] = useState<boolean>(true)
   const [isCameraModalOpen, setIsCameraModalOpen] = useState<boolean>(false)
@@ -428,6 +429,8 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   showHud={true}
                   isHero={true}
                   stream={heroStream}
+                  audioEnabled={heroAudioEnabled}
+                  onToggleAudio={() => setHeroAudioEnabled((prev) => !prev)}
                   onClose={() => setSelectedHeroId('')}
                   onSwitchStream={(s) => setHeroStream(s)}
                 />

@@ -30,6 +30,8 @@
     "closePreview": "關閉預覽",
     "openPreview": "開啟預覽",
     "closeAll": "關閉全部",
+    "enableAudio": "開啟音訊",
+    "muteAudio": "關閉音訊",
     "playAll": "全部播放",
     "streamType": "碼流",
     "mainStream": "主碼流",

@@ -514,6 +514,7 @@ impl H264Depacketizer {
                     is_keyframe,
                     codec: CodecType::H264,
                     payload: Bytes::copy_from_slice(payload),
+                    ..Default::default()
                 });
             }
             // STAP-A 组合包 (Aggregation Packet)
@@ -536,6 +537,7 @@ impl H264Depacketizer {
                             is_keyframe,
                             codec: CodecType::H264,
                             payload: Bytes::copy_from_slice(nalu),
+                            ..Default::default()
                         });
                     }
                 }
@@ -574,6 +576,7 @@ impl H264Depacketizer {
                             is_keyframe: self.fu_is_keyframe,
                             codec: CodecType::H264,
                             payload: full_nalu,
+                            ..Default::default()
                         });
                     }
                 }
@@ -640,6 +643,7 @@ impl H265Depacketizer {
                     is_keyframe,
                     codec: CodecType::H265,
                     payload: Bytes::copy_from_slice(payload),
+                    ..Default::default()
                 });
             }
             // AP 组合包 (Aggregation Packet, Type 48)
@@ -662,6 +666,7 @@ impl H265Depacketizer {
                             is_keyframe,
                             codec: CodecType::H265,
                             payload: Bytes::copy_from_slice(nalu),
+                            ..Default::default()
                         });
                     }
                 }
@@ -704,6 +709,7 @@ impl H265Depacketizer {
                             is_keyframe: self.fu_is_keyframe,
                             codec: CodecType::H265,
                             payload: full_nalu,
+                            ..Default::default()
                         });
                     }
                 }

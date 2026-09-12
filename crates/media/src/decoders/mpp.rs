@@ -280,6 +280,12 @@ impl MppDecoderInner {
         let coding_type = match self.codec {
             CodecType::H264 => ffi::MPP_VIDEO_CODING_AVC,
             CodecType::H265 => ffi::MPP_VIDEO_CODING_HEVC,
+            CodecType::Aac => {
+                return Err(MediaError::DecoderInit {
+                    codec: format!("{:?}", self.codec),
+                    reason: "MPP 硬件解码器不支持音频流解码".to_string(),
+                });
+            }
         };
 
         let mut ctx: *mut c_void = std::ptr::null_mut();

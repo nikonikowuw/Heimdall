@@ -95,6 +95,7 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
         is_keyframe: true,
         codec: CodecType::H264,
         payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f]),
+        ..Default::default()
     });
     let _ = broadcast_tx.send(pkt1);
 
@@ -109,13 +110,24 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
         assert_eq!(fallback.as_ref().unwrap().timestamp, 1000);
     }
 
-    // 6. 移动目标至 Y = 0.55 (跨越 Y = 0.5 绊线，且与前一帧维持 IoU=0.5 关联)，发送第 2 帧
+    // 6. 模拟发送音频包，验证驱动泵解码循环严格忽略音频包，不污染视频解码器
+    let audio_pkt = Arc::new(EncodedPacket {
+        pts_ms: 1020,
+        is_keyframe: false,
+        codec: CodecType::Aac,
+        payload: Bytes::from_static(&[0xFF, 0xF1, 0x50, 0x80, 0x00, 0x09, 0x00, 0xAA, 0xBB]),
+        stream_tag: types::StreamTag::Audio,
+    });
+    let _ = broadcast_tx.send(audio_pkt);
+
+    // 移动目标至 Y = 0.55 (跨越 Y = 0.5 绊线，且与前一帧维持 IoU=0.5 关联)，发送第 2 帧
     *infer_backend.current_y.lock().unwrap() = 0.55;
     let pkt2 = Arc::new(EncodedPacket {
         pts_ms: 1040,
         is_keyframe: false,
         codec: CodecType::H264,
         payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x9a]),
+        ..Default::default()
     });
     let _ = broadcast_tx.send(pkt2);
 
@@ -345,6 +357,7 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
         is_keyframe: true,
         codec: CodecType::H264,
         payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f]),
+        ..Default::default()
     });
     let _ = broadcast_tx.send(pkt);
 

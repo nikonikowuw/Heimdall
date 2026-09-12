@@ -454,6 +454,8 @@ pub fn is_keyframe_or_parameter_set(data: &[u8], codec: CodecType) -> bool {
                 CodecType::H264 => matches!(first & 0x1F, 5 | 7 | 8),
                 // 16..=21: IRAP (BLA/IDR/CRA), 32: VPS, 33: SPS, 34: PPS
                 CodecType::H265 => matches!((first >> 1) & 0x3F, 16..=21 | 32..=34),
+                // AAC 音频帧不参与视频帧类型判定
+                CodecType::Aac => false,
             };
             if matches_header {
                 return true;

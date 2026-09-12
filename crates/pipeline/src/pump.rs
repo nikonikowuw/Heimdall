@@ -15,7 +15,7 @@ use media::decoder::VideoDecoder;
 use media::stream_hub::CameraStreamSession;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use types::{FrameRef, MotionGateConfig};
+use types::{FrameRef, MotionGateConfig, StreamTag};
 
 use infer::{InferenceWorker, InferenceWorkerHandle};
 
@@ -663,10 +663,7 @@ impl AnalysisPump {
 
                     recv_res = packet_rx.recv() => {
                         let pkt = match recv_res {
-                            Ok(p) => {
-                                metrics_clone.packets_received.fetch_add(1, Ordering::Relaxed);
-                                p
-                            }
+                            Ok(p) => p,
                             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                                 metrics_clone.frames_dropped_lagged.fetch_add(skipped, Ordering::Relaxed);
                                 tracing::warn!(
@@ -681,6 +678,13 @@ impl AnalysisPump {
                                 break;
                             }
                         };
+
+                        // 严格仅处理视频包，忽略音频包与非视频数据
+                        if pkt.stream_tag == StreamTag::Audio || !pkt.codec.is_video() {
+                            continue;
+                        }
+
+                        metrics_clone.packets_received.fetch_add(1, Ordering::Relaxed);
 
                         match decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
                             Ok(Some(frame)) => {

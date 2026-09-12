@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use tokio::sync::{broadcast, Mutex, RwLock};
-use types::{CodecType, EncodedPacket, TransportPolicy};
+use types::{CodecType, EncodedPacket, StreamTag, TransportPolicy};
 
 use crate::error::MediaError;
 use crate::retina_ingest::RetinaIngestor;
@@ -475,6 +475,9 @@ impl StreamHub {
                             match recv_res {
                                 Ok(pkt) => {
                                     last_pkt_time.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
+                                    if pkt.stream_tag == StreamTag::Audio || !pkt.codec.is_video() {
+                                        continue;
+                                    }
                                     let nalus = crate::sps::split_annex_b_nalus(&pkt.payload);
                                     if nalus.is_empty() {
                                         continue;
@@ -645,6 +648,7 @@ mod tests {
             is_keyframe: true,
             codec: CodecType::H264,
             payload: Bytes::copy_from_slice(&compound_payload),
+            ..Default::default()
         });
 
         session.broadcast_tx.send(pkt).expect("send packet");
@@ -656,6 +660,38 @@ mod tests {
         assert_eq!(cache.pps.as_deref(), Some(&[0x68, 0xCE][..]));
         assert_eq!(cache.last_keyframe_pts, 1000);
         assert_eq!(cache.gop_packets.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_stream_hub_audio_packet_does_not_pollute_keyframe_cache() {
+        let hub = StreamHub::new();
+        let session = hub
+            .get_or_create_session(
+                "cam-audio-ignore:main",
+                "rtsp://127.0.0.1:8554/live",
+                TransportPolicy::Tcp,
+            )
+            .await;
+
+        StreamHub::ensure_ingestor_started(&session);
+
+        // 模拟音频包（故意包含 00 00 01 Annex B 标记）
+        let audio_pkt = Arc::new(EncodedPacket {
+            pts_ms: 1000,
+            is_keyframe: false,
+            codec: CodecType::Aac,
+            payload: Bytes::from_static(&[0xFF, 0xF1, 0x50, 0x80, 0x00, 0x00, 0x01, 0xAA]),
+            stream_tag: StreamTag::Audio,
+        });
+        session
+            .broadcast_tx
+            .send(audio_pkt)
+            .expect("send audio packet");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let cache = session.keyframe_cache.read().await;
+        assert_eq!(cache.codec, None, "音频包绝不能覆盖视频编解码器缓存");
+        assert!(cache.gop_packets.is_empty());
     }
 
     #[test]

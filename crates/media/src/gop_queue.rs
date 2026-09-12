@@ -207,6 +207,7 @@ mod tests {
             is_keyframe,
             codec: CodecType::H264,
             payload: Bytes::from_static(b"\x00\x00\x00\x01\x65fake_data"),
+            ..Default::default()
         })
     }
 

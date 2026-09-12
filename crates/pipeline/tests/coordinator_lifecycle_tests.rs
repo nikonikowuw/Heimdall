@@ -71,6 +71,7 @@ fn create_packet(pts_ms: i64, is_keyframe: bool) -> Arc<EncodedPacket> {
         is_keyframe,
         codec: CodecType::H264,
         payload: Bytes::from(payload),
+        ..Default::default()
     })
 }
 

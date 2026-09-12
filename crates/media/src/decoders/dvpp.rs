@@ -889,6 +889,12 @@ impl DvppDecoderInner {
         let stream_format = match self.codec {
             CodecType::H264 => ffi::H264_MAIN_LEVEL,
             CodecType::H265 => ffi::H265_MAIN_LEVEL,
+            CodecType::Aac => {
+                return Err(MediaError::DecoderInit {
+                    codec: format!("{:?}", self.codec),
+                    reason: "DVPP 硬件解码器不支持音频流解码".to_string(),
+                });
+            }
         };
 
         let block_size = calculate_dvpp_nv12_size(self.width, self.height);
@@ -1289,6 +1295,7 @@ impl DvppDecoderInner {
                         }
                     }
                 }
+                CodecType::Aac => {}
             }
         }
     }
@@ -1459,6 +1466,11 @@ impl DvppDecoderInner {
         let stream_format = match self.codec {
             CodecType::H264 => ffi::H264_MAIN_LEVEL,
             CodecType::H265 => ffi::H265_MAIN_LEVEL,
+            CodecType::Aac => {
+                error!(camera_id = %self.camera_id, "DVPP 硬件解码器不支持音频重配置");
+                self.is_degraded = true;
+                return;
+            }
         };
 
         // SAFETY: 创建新通道描述符

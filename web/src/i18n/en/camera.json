@@ -30,6 +30,8 @@
     "closePreview": "Close Preview",
     "openPreview": "Start Preview",
     "closeAll": "Close All",
+    "enableAudio": "Enable Audio",
+    "muteAudio": "Mute Audio",
     "playAll": "Play All",
     "streamType": "Stream",
     "mainStream": "Main Stream",

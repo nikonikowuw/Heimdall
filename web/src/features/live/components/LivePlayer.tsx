@@ -8,6 +8,8 @@ import {
   Play,
   RefreshCw,
   User,
+  Volume2,
+  VolumeX,
   Wifi,
   WifiOff,
   X,
@@ -53,6 +55,9 @@ export interface LivePlayerProps {
   onClose?: () => void
   onTogglePause?: () => void
   onSwitchStream?: (stream: 'main' | 'sub') => void
+  /** 是否启用音频输出；仅 Hero 主预览窗口可开启，避免多路声音污染 */
+  audioEnabled?: boolean
+  onToggleAudio?: () => void
 }
 
 export function LivePlayer({
@@ -70,6 +75,8 @@ export function LivePlayer({
   onClose,
   onTogglePause,
   onSwitchStream,
+  audioEnabled = false,
+  onToggleAudio,
 }: LivePlayerProps) {
   const { t } = useTranslation('camera')
   const streamType = stream || (isHero ? 'main' : 'sub')
@@ -129,7 +136,7 @@ export function LivePlayer({
       setActiveProtocol('flv')
       setConnectionStatus('connecting')
 
-      const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType)
+      const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType, audioEnabled)
 
       if (!mpegts.isSupported()) {
         setConnectionStatus('failed')
@@ -144,7 +151,7 @@ export function LivePlayer({
             type: 'flv',
             isLive: true,
             url: flvUrl,
-            hasAudio: false,
+            hasAudio: audioEnabled,
             cors: true,
           },
           {
@@ -314,7 +321,7 @@ export function LivePlayer({
         }
       }
     }
-  }, [cameraId, streamType, isPaused, retryKey])
+  }, [cameraId, streamType, isPaused, retryKey, audioEnabled])
 
   // Canvas 2D 离屏 60fps 绘制循环（零 React 状态开销）
   useEffect(() => {
@@ -423,7 +430,7 @@ export function LivePlayer({
         ref={videoRef}
         autoPlay
         playsInline
-        muted
+        muted={!audioEnabled}
         className={`h-full w-full ${
           fitMode === 'fill'
             ? 'object-fill'
@@ -550,6 +557,24 @@ export function LivePlayer({
             title={isPaused ? t('live.openPreview') : t('live.closePreview')}
           >
             {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+          </button>
+        )}
+
+        {/* 音频开关 (仅 Hero 主预览窗口显示) */}
+        {onToggleAudio && isHero && (
+          <button
+            type="button"
+            onClick={onToggleAudio}
+            className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-black/80 hover:text-white"
+            title={
+              audioEnabled ? t('live.muteAudio', '关闭音频') : t('live.enableAudio', '开启音频')
+            }
+          >
+            {audioEnabled ? (
+              <Volume2 className="h-3.5 w-3.5" />
+            ) : (
+              <VolumeX className="h-3.5 w-3.5 opacity-50" />
+            )}
           </button>
         )}
 
