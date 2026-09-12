@@ -29,7 +29,7 @@
 ```
 
 - 所有 REST JSON 响应复用根信封；失败时 `code != 0`、`data: null`，禁止另造包装。
-- 字段为 camelCase。绝对时间为 13 位 UTC Unix 毫秒：Rust `i64`、TypeScript `number`；相对时长带 `Ms` 后缀。
+- 字段与时间约定见 [全局约定](../guides/conventions.md)。
 - 错误码为稳定的 5 位模块码，`0` 成功；沿用领域 `error_code()` 和 `ApiError` 的既有映射，不在文档另建错误码副本。
 - HTTP 状态与业务码都需正确。客户端按码分支，不匹配消息文本；内部错误细节只记录到日志。
 - [i18n 中间件](../../../crates/api/src/middleware/i18n.rs) 读取 `Accept-Language`，支持 `zh-CN` / `zh-TW` / `en`，返回 `Content-Language`；字典按业务模块拆分。

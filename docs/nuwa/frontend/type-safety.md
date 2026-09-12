@@ -14,9 +14,9 @@
 | 内容      | 约定                                                    |
 | --------- | ------------------------------------------------------- |
 | 字段      | 与 Rust serde 的 camelCase 名称逐字对齐                 |
-| 绝对时间  | `number`，UTC Unix 毫秒；不声明为 `Date/string`         |
+| 绝对时间  | `number`，UTC Unix 毫秒；不声明为 `Date/string`（见 [全局约定](../guides/conventions.md#时间)） |
 | 可空字段  | Rust `Option<T>` 对应 `T \| null`，不擅自改为 undefined |
-| 几何坐标  | `[0, 1]` 浮点，边界校验后交给渲染层                     |
+| 几何坐标  | `[0, 1]` 浮点（见 [全局约定](../guides/conventions.md#坐标)），边界校验后交给渲染层 |
 | 信封/分页 | 导入共享类型，按具体端点形状解包，不重复定义            |
 
 共享 DTO 放 `types/`，feature 私有类型放本域，Props 放组件附近。

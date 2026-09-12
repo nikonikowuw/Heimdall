@@ -20,7 +20,7 @@
 ## 表与查询
 
 - 表名单数 snake_case；主键 `id`，事件保留唯一 `event_id: TEXT` 用于幂等。
-- 绝对时间用 UTC 毫秒 `INTEGER/i64`，布尔用 0/1；图片/视频存文件，库内只保存相对路径，不存 BLOB。
+- 绝对时间用 `INTEGER/i64` UTC 毫秒（见 [全局约定](../guides/conventions.md#时间)），布尔用 0/1；图片/视频存文件，库内只保存相对路径。
 - Alarms、Captures、Recognitions 分开管理；告警支持待处理/已核验状态流转。
 - 查询封装在 Repository，`api` / `pipeline` 不直接使用 SeaORM DSL；列表必须有 `limit`。
 - 时间范围与摄像头过滤建立对应复合索引，例如 `(camera_id, timestamp)`；分页遵循 [API 契约](./api-guidelines.md#分页)。
@@ -35,9 +35,8 @@
 
 ## 写入与存储保护
 
-- 高频写入经过有界通道攒批提交，例如 32 条或 1000ms 到期；满载丢旧并计数告警，禁止逐事件单事务刷盘。
-- 写盘前通过 `statvfs` 检查容量、inode 与只读状态，按高低水位清理/停写；禁止用 `du` 递归扫描。
-- 先淘汰无告警的普通抓拍；物理文件与 DB 记录在同一清理事务内配套删除，杜绝孤儿文件与死记录。
+- 高频写入经过有界通道攒批提交（例如 32 条或 1000ms），满载丢旧并计数告警。
+- 存储保护规则见 [全局约定](../guides/conventions.md#存储保护)。
 - SQLite 回滚不等于文件恢复；清理验证必须覆盖文件删除失败、DB 失败及中断后的恢复行为。
 - 保留天数/容量必须有限；配置 `auto_vacuum = INCREMENTAL` 并定期 `incremental_vacuum` 回收删除页面。
 - [StorageCleaner](../../../crates/pipeline/src/storage_cleaner/mod.rs) 与 Pipeline 使用同一证据目录，在应用启动时注入，不在 Handler 临时创建。

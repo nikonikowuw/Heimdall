@@ -51,7 +51,7 @@ export_algo!(
 | `instance_negotiate/update_config/set_rules/flush`、`last_error` | 按能力处理，不假定可选方法存在 |
 
 - ABI 版本为 `AV_ALGO_API_VERSION = 1`，64 位 `AvAlgoAbi` 大小为 96 字节。
-- 每个 C ABI 入口隔离 panic，失败返回 `AV_ERR_INTERNAL`，不向 C 栈 unwind。
+- 每个 C ABI 入口隔离 panic，失败返回 `AV_ERR_INTERNAL`（panic 隔离规则见 [全局约定](../guides/conventions.md#防御性错误处理)）。
 - `AlgoPlugin: Sized + Send + 'static`，配置为 `DeserializeOwned + Default`；必需实现 `init(ctx, config)` 和同步 `process(SafeFrame, &mut ResultEmitter)`。
 - `InitContext` 提供 `package_root/platform_id/instance_id/is_self_test`。默认 `flush/set_rules` 返回成功，`update_config` 返回 `NotImplemented`，不能误报配置已应用。
 
@@ -214,10 +214,10 @@ unsafe extern "C" fn(
 
 [testing.rs](../../../crates/algo-sdk/src/testing.rs) 提供 `MockFrameBuilder`、`MockEmitter`、`MockWeights/MockSession`；图片/硬件辅助分别由 `testing-image/testing-hardware` 启用。
 
-- 验证合法帧、负 stride/重叠 offset、无效句柄/版本、配置更新、flush、panic 隔离及资源释放。
-- `MockFrameBuilder::to_nv12(64)` 覆盖对齐；`from_image_hardware` 仅用于目标平台自检，真机测试标记 `#[ignore]`。
+- 验证合法帧、负 stride/重叠 offset、无效句柄/版本、配置更新、flush 及资源释放。
+- `MockFrameBuilder::to_nv12(64)` 覆盖对齐；真机测试标记 `#[ignore]`（见 [全局约定](../guides/conventions.md#测试)）。
 - ABI 双侧 [SDK 布局测试](../../../crates/algo-sdk/tests/c_abi_layout_tests.rs) / [宿主布局测试](../../../crates/infer/tests/c_abi_layout_tests.rs) 同步；另见 [插件生命周期](../../../crates/algo-sdk/tests/plugin_lifecycle.rs)、[CV](../../../crates/algo-sdk/tests/cv_tests.rs)、[沙箱](../../../crates/infer/tests/algo_sandbox_tests.rs)。
-- 验证三路径隔离、池上限、坐标往返、回调借用期、子进程崩溃/超时以及归档越界拒绝。
+- 验证三路径隔离、池上限、坐标往返、回调借用期与归档越界拒绝。
 
 本次文档整理确认的差异，不能视作已完成能力：
 

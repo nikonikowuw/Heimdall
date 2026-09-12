@@ -13,7 +13,7 @@
 - 15～30fps 检测元数据放 `useRef`/Worker，通过 `requestAnimationFrame` 绘制透明 Canvas；不使用 React state 驱动高频 DOM。
 - Zustand 按字段订阅，见 [状态规范](./state-management.md)；事件缓冲有界。
 - 常态监控保持低噪，违规时通过稀疏事件显示轻量告警卡片与声音，不持续展示无违规噪点框。
-- ROI / Mask / Line 编辑叠加在动态子码流上，传输与落库坐标保持 `[0, 1]`。
+- ROI / Mask / Line 编辑叠加在动态子码流上，坐标规范见 [全局约定](../guides/conventions.md#坐标)。
 
 ## 播放器生命周期
 

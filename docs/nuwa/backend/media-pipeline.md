@@ -28,15 +28,15 @@
 - `FrameRef` 跨线程转移所有权，RAII 持有设备句柄/池租约；不得用像素 Vec 替代硬件帧。
 - 有效宽高、分配宽高、各平面 stride/offset 分开使用；不能假设 `stride == width`。
 - MPP 常见横向 16/64、纵向 16 对齐（1080 可能分配为 1088）；DVPP 宽 16、高 2、行跨度 128 等约束以具体接口为准。
-- 时间统一到帧的 UTC 毫秒基准；插件 ABI 的纳秒转换仅在 [适配边界](./algo-sdk-guidelines.md#帧契约) 进行。
+- 时间基准见 [全局约定](../guides/conventions.md#时间)；插件 ABI 纳秒转换仅在 [适配边界](./algo-sdk-guidelines.md#帧契约) 进行。
 - 允许的 CPU readback 前后执行 DMA-BUF cache sync START/END；常驻推理不得为 CPU 门控额外读回像素。
 
 ## 接入与分发
 
 - [Retina 接入](../../../crates/media/src/rtsp.rs) 使用 SIMPLE/Annex B 格式，`VideoFrame::into_data()` → `Bytes/EncodedPacket`，避免重复复制压缩包。
-- 通过单调时钟与帧增量映射 UTC 毫秒，检测时间戳回跳和静默超时。
+- 通过单调时钟与帧增量映射时间戳，检测回跳和静默超时。
 - 缓存最新 H.264 SPS/PPS/IDR、H.265 VPS/SPS/PPS/IRAP，客户端接入时先发参数集与关键帧。
-- 强密码 URL 复用现有解析器：从最后一个 `@` 定位主机，分离凭据，通过 Retina `Credentials` 传入；日志统一 `mask_rtsp_url()`。
+- 强密码 URL 复用现有解析器，日志统一 `mask_rtsp_url()`。
 - HTTP-FLV 支持 AVC 与 Enhanced FLV HEVC（`hvc1`）；端点见 [API](./api-guidelines.md#路由)，浏览器能力需实测。
 - 帧/压缩包队列、GOP 丢弃及 500ms 解码停机超时见 [并发模型](./concurrency-guidelines.md)，不阻塞下游反压硬解。
 

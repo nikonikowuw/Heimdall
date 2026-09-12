@@ -13,7 +13,7 @@
 | `trace` | 帧细节，必须采样或在生产裁剪             |
 
 - 固定中文短消息，变量放英文 snake_case 结构化字段；不逐帧 `format!` 或 `info!`。
-- 统一字段：`camera`、`event_id`、`backend`、`model`、`frame_ts`（UTC 毫秒）、`elapsed_ms`（耗时毫秒）、`error`。
+- 统一字段：`camera`、`event_id`、`backend`、`model`、`frame_ts`（UTC 毫秒，见 [全局约定](../guides/conventions.md#时间)）、`elapsed_ms`、`error`。
 - 错误只在最终处理处记录一次，必要时用 `format_error_chain` 展开 `source()`。
 
 ```rust
