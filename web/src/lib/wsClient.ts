@@ -1,5 +1,6 @@
 import { useAuthStore } from '../stores/auth'
-import { type CameraTracksPayload, WS_TOPICS } from '../types'
+import { isCameraTelemetry, telemetryStore } from './telemetryStore'
+import { type CameraTelemetry, type CameraTracksPayload, WS_TOPICS } from '../types'
 import { trackStore } from './trackStore'
 
 export type WsEventHandler<T = unknown> = (payload: T, timestamp: number) => void
@@ -28,6 +29,12 @@ class WsClient {
     this.subscribe<CameraTracksPayload>(WS_TOPICS.CAMERA_TRACKS, (payload) => {
       if (payload?.cameraId) {
         trackStore.setTracks(payload.cameraId, payload.tracks ?? [], payload.timestamp)
+      }
+    })
+
+    this.subscribe<CameraTelemetry>(WS_TOPICS.CAMERA_TELEMETRY, (payload) => {
+      if (isCameraTelemetry(payload)) {
+        telemetryStore.setTelemetry(payload)
       }
     })
 

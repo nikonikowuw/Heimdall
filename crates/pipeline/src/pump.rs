@@ -16,7 +16,7 @@ use media::decoder::VideoDecoder;
 use media::stream_hub::CameraStreamSession;
 use media::{ConsumerKind, StreamItem};
 use tokio_util::sync::CancellationToken;
-use types::{FrameRef, MotionGateConfig, StreamTag};
+use types::{DetectionRule, FrameRef, MotionGateConfig, StreamTag};
 
 use infer::{InferenceWorker, InferenceWorkerHandle};
 
@@ -66,15 +66,33 @@ pub struct WorkerInstanceConfig {
 pub struct AnalysisPumpConfig {
     /// 目标分析抽帧率 (0 表示不限帧率全量抽帧)
     pub target_fps: u32,
-    /// 是否启用简易帧差运动门控 (静止场景跳过推理)
-    pub motion_gate_enabled: bool,
+    /// 完整运动门控配置；`None` 表示不启用门控
+    pub motion_gate: Option<MotionGateConfig>,
+}
+
+/// 解码泵运行时所需的运动门控与动态空间规则句柄。
+#[derive(Debug, Clone)]
+pub struct MotionGateRuntimeConfig {
+    pub gate: Option<MotionGateConfig>,
+    pub rules: Arc<tokio::sync::RwLock<Vec<DetectionRule>>>,
+    pub rules_version: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Default for MotionGateRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            gate: None,
+            rules: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            rules_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
 }
 
 impl Default for AnalysisPumpConfig {
     fn default() -> Self {
         Self {
             target_fps: 10,
-            motion_gate_enabled: false,
+            motion_gate: None,
         }
     }
 }
@@ -394,7 +412,10 @@ impl AnalysisPump {
             }],
             vec![(LEGACY_SINGLE_WORKER_ID.to_string(), worker, None)],
             pipeline_mgr,
-            config.motion_gate_enabled,
+            MotionGateRuntimeConfig {
+                gate: config.motion_gate,
+                ..Default::default()
+            },
         )
     }
 
@@ -420,7 +441,10 @@ impl AnalysisPump {
             }],
             vec![(LEGACY_SINGLE_WORKER_ID.to_string(), handle, Some(worker))],
             pipeline_mgr,
-            config.motion_gate_enabled,
+            MotionGateRuntimeConfig {
+                gate: config.motion_gate,
+                ..Default::default()
+            },
         )
     }
 
@@ -432,7 +456,7 @@ impl AnalysisPump {
         instance_configs: Vec<WorkerInstanceConfig>,
         workers: Vec<(String, InferenceWorkerHandle, Option<InferenceWorker>)>,
         pipeline_mgr: Arc<PipelineManager>,
-        motion_gate_enabled: bool,
+        motion: MotionGateRuntimeConfig,
     ) -> Self {
         let mut decoder = BlockingDecoder::new(decoder);
         let camera_id = camera_id.into();
@@ -669,8 +693,10 @@ impl AnalysisPump {
                 "多算法驱动泵解码循环已启动"
             );
 
-            let mut motion_gate =
-                motion_gate_enabled.then(|| MotionGate::new(MotionGateConfig::default()));
+            let mut motion_gate = motion.gate.map(MotionGate::new);
+            let motion_rules = motion.rules;
+            let motion_rules_version = motion.rules_version;
+            let mut applied_rules_version: u64 = 0;
 
             let mut replay_queue: VecDeque<Arc<types::EncodedPacket>> = VecDeque::new();
 
@@ -739,7 +765,28 @@ impl AnalysisPump {
 
                             // 2. 运动门控过滤：静止帧跳过所有槽位推理，节省算力
                             if let Some(gate) = motion_gate.as_mut() {
-                                if gate.should_skip_frame(&frame) {
+                                let current_rules_ver =
+                                    motion_rules_version.load(Ordering::Acquire);
+                                if current_rules_ver != applied_rules_version {
+                                    let latest_rules = motion_rules.read().await.clone();
+                                    gate.update_rules(
+                                        &latest_rules,
+                                        frame.width as usize,
+                                        frame.height as usize,
+                                    );
+                                    applied_rules_version = current_rules_ver;
+                                }
+
+                                let decision = gate.evaluate_frame(&frame, frame.timestamp);
+                                pipeline_mgr_decode
+                                    .report_motion_telemetry(
+                                        &cam_id,
+                                        frame.timestamp,
+                                        decision.motion_score,
+                                        decision.should_skip,
+                                    )
+                                    .await;
+                                if decision.should_skip {
                                     metrics_clone
                                         .frames_skipped_motion
                                         .fetch_add(1, Ordering::Relaxed);

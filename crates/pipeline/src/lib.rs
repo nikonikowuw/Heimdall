@@ -29,10 +29,11 @@ pub use manager::{
     AnalysisOutcome, PipelineManager, DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS,
     DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,
 };
-pub use motion_gate::MotionGate;
+pub use motion_gate::{MaskBitmap, MotionGate, MotionGateDecision};
 pub use pump::{
-    AnalysisFpsGovernor, AnalysisPump, AnalysisPumpConfig, InstanceMetrics, PumpMetrics,
-    SubStreamAnalysisPump, SubStreamPumpConfig, WorkerInstanceConfig,
+    AnalysisFpsGovernor, AnalysisPump, AnalysisPumpConfig, InstanceMetrics,
+    MotionGateRuntimeConfig, PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig,
+    WorkerInstanceConfig,
 };
 pub use roi::RoiAffineMapper;
 pub use rules::{RuleEvaluator, RuleIdentifier, TriggeredAlarm, DEFAULT_FULLSCREEN_RULE_INDEX};

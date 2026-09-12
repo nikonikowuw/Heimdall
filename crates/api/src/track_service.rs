@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
 use pipeline::{PipelineAnalysisEvent, PipelineManager, PipelineTrackEvent};
-use types::{CameraTracksPayload, TrackDto, TOPIC_CAMERA_TRACKS};
+use types::{
+    CameraTelemetryEvent, CameraTracksPayload, TrackDto, TOPIC_CAMERA_TELEMETRY,
+    TOPIC_CAMERA_TRACKS,
+};
 
 use crate::state::{AppState, WsBroadcastEvent};
 
@@ -14,6 +17,7 @@ pub const DEFAULT_TRACK_BROADCAST_INTERVAL_MS: u64 = 66;
 #[derive(Debug, Default)]
 struct CameraTrackState {
     last_broadcast_ms: i64,
+    last_telemetry_broadcast_ms: i64,
     last_had_tracks: bool,
     instance_tracks: HashMap<String, Vec<TrackDto>>,
 }
@@ -153,6 +157,69 @@ impl TrackDispatchService {
         false
     }
 
+    /// 处理单次运动遥测事件并以固定频率广播。
+    pub async fn handle_telemetry_event(&self, event: &CameraTelemetryEvent) -> bool {
+        if !self
+            .pipeline
+            .has_preview_subscribers(&event.camera_id)
+            .await
+        {
+            return false;
+        }
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let telemetry = {
+            let mut states = self.camera_states.lock().unwrap_or_else(|p| p.into_inner());
+            let state = states.entry(event.camera_id.clone()).or_default();
+            let elapsed = now_ms.saturating_sub(state.last_telemetry_broadcast_ms) as u64;
+            if state.last_telemetry_broadcast_ms != 0 && elapsed < self.min_broadcast_interval_ms {
+                return false;
+            }
+            state.last_telemetry_broadcast_ms = now_ms;
+
+            let tracks: Vec<&TrackDto> = state.instance_tracks.values().flatten().collect();
+            let active_tracks = tracks.len();
+            let person_count = tracks
+                .iter()
+                .filter(|track| {
+                    let label = track.label.to_ascii_lowercase();
+                    label.contains("person") || label.contains("human") || label.contains("人")
+                })
+                .count();
+            let car_count = tracks
+                .iter()
+                .filter(|track| {
+                    let label = track.label.to_ascii_lowercase();
+                    label.contains("car")
+                        || label.contains("truck")
+                        || label.contains("vehicle")
+                        || label.contains("车辆")
+                })
+                .count();
+
+            CameraTelemetryEvent {
+                camera_id: event.camera_id.clone(),
+                timestamp: event.timestamp,
+                active_tracks,
+                person_count,
+                car_count,
+                motion_score: event.motion_score.clamp(0.0, 1.0),
+                is_motion_gated: event.is_motion_gated,
+            }
+        };
+
+        let Ok(payload) = serde_json::to_value(telemetry) else {
+            return false;
+        };
+        let ws_event = WsBroadcastEvent {
+            topic: TOPIC_CAMERA_TELEMETRY.to_string(),
+            payload,
+            timestamp: now_ms,
+        };
+        let _ = self.event_broadcaster.send(ws_event);
+        true
+    }
+
     /// 启动后台常驻工作线程
     pub fn start_worker(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         let mut analysis_rx = self.pipeline.subscribe_analysis_events();
@@ -177,6 +244,9 @@ impl TrackDispatchService {
                             }
                             Ok(PipelineAnalysisEvent::Capture(_)) => {
                                 // 客观通行抓拍事件由 CaptureDispatchService 处理
+                            }
+                            Ok(PipelineAnalysisEvent::Telemetry(telemetry_evt)) => {
+                                self.handle_telemetry_event(&telemetry_evt).await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                                 tracing::debug!(skipped, "分析事件广播通道滞后，跳过过旧航迹帧");

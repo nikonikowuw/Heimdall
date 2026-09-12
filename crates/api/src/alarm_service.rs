@@ -242,8 +242,8 @@ impl AlarmDispatchService {
                             Ok(PipelineAnalysisEvent::Capture(_)) => {
                                 // 客观通行抓拍凭证由 CaptureDispatchService 独立持久化
                             }
-                            Ok(PipelineAnalysisEvent::Tracks(_)) => {
-                                // 实时航迹流不在此处理
+                            Ok(PipelineAnalysisEvent::Tracks(_)) | Ok(PipelineAnalysisEvent::Telemetry(_)) => {
+                                // 实时航迹流与遥测不在此处理
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                                 tracing::warn!(skipped, "分析事件广播落后，触发全量待持久化补偿排空");

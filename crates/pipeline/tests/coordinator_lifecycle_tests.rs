@@ -134,7 +134,7 @@ async fn test_coordinator_full_lifecycle_and_events() {
             algo_params: serde_json::json!({ "threshold": 0.5 }),
             target_fps: 25,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     // 1. 启动分析管线
@@ -226,7 +226,7 @@ async fn test_coordinator_idempotency_and_reconfiguration() {
             algo_params: serde_json::json!({}),
             target_fps: 15,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     let backend = Arc::new(MockInferBackend::new(0.5));
@@ -314,7 +314,7 @@ async fn test_coordinator_validation_and_rollback() {
             algo_params: serde_json::json!({}),
             target_fps: 20,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
     let err = coordinator
         .start_camera_pipeline(invalid_params)
@@ -335,7 +335,7 @@ async fn test_coordinator_validation_and_rollback() {
             algo_params: serde_json::json!({}),
             target_fps: 20,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
     let err = coordinator
         .start_camera_pipeline(non_existent_algo_params)
@@ -406,7 +406,7 @@ async fn test_coordinator_alarm_trigger_and_event_broadcast() {
             algo_params: serde_json::json!({}),
             target_fps: 25,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     coordinator
@@ -479,7 +479,7 @@ async fn test_coordinator_validation_detailed() {
             algo_params: serde_json::json!({}),
             target_fps: 25,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     // 1. target_fps > 60
@@ -569,7 +569,7 @@ async fn test_coordinator_concurrent_starts_serialized() {
             algo_params: serde_json::json!({}),
             target_fps: 20,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     let backend = Arc::new(MockInferBackend::new(0.5));
@@ -661,7 +661,7 @@ async fn test_coordinator_start_cancellation_safety() {
             algo_params: serde_json::json!({}),
             target_fps: 20,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     let backend = Arc::new(MockInferBackend::new(0.5));
@@ -746,7 +746,7 @@ async fn test_coordinator_alarm_evidence_failure_preserves_alarm() {
             algo_params: serde_json::json!({}),
             target_fps: 25,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     coordinator
@@ -856,7 +856,7 @@ async fn test_coordinator_empty_tracks_broadcast() {
             algo_params: serde_json::json!({}),
             target_fps: 20,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     coordinator
@@ -949,7 +949,7 @@ async fn test_coordinator_startup_failure_disposes_decoder_on_rollback() {
             algo_params: serde_json::json!({}),
             target_fps: 25,
         }],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     // 1. 正常启动管线
@@ -1036,7 +1036,7 @@ async fn test_coordinator_stop_all_parallel_and_worker_handle() {
                 algo_params: serde_json::json!({}),
                 target_fps: 20,
             }],
-            motion_gate_enabled: false,
+            motion_gate: None,
         };
 
         coordinator
@@ -1133,7 +1133,7 @@ async fn test_coordinator_multi_algorithm_instances() {
                 target_fps: 10,
             },
         ],
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
 
     // 启动多算法实例管线

@@ -180,6 +180,7 @@ export function CreateTaskModal({
           threshold: 25,
           contourArea: 100,
           keepaliveIntervalMs: 2000,
+          motionHoldFrames: 10,
         },
         algorithmInstances: selectedAlgorithmId
           ? [

@@ -335,6 +335,8 @@ pub struct CameraProbeEvent {
 #[serde(rename_all = "camelCase")]
 pub struct CameraTelemetryEvent {
     pub camera_id: String,
+    /// 与解码帧/检测结果相同的 13 位 UTC Unix 毫秒时间戳
+    pub timestamp: i64,
     pub active_tracks: usize,
     pub person_count: usize,
     pub car_count: usize,

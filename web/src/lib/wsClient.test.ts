@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAuthStore } from '../stores/auth'
-import { type CameraTracksPayload, WS_TOPICS } from '../types'
+import { type CameraTelemetry, type CameraTracksPayload, WS_TOPICS } from '../types'
+import { telemetryStore } from './telemetryStore'
 import { trackStore } from './trackStore'
 import { wsClient } from './wsClient'
 
 describe('wsClient', () => {
   beforeEach(() => {
     trackStore.clear()
+    telemetryStore.clear()
     useAuthStore.setState({
       token: null,
       username: null,
@@ -44,6 +46,24 @@ describe('wsClient', () => {
     wsClient.dispatch(WS_TOPICS.CAMERA_TRACKS, mockTracksPayload, 1741100000000)
 
     expect(trackStore.getTracks('CAM-WS-01')).toEqual(mockTracksPayload.tracks)
+  })
+
+  it('should automatically feed camera.telemetry into telemetryStore', () => {
+    wsClient.init()
+
+    const payload: CameraTelemetry = {
+      cameraId: 'CAM-WS-02',
+      timestamp: 1741100000000,
+      activeTracks: 1,
+      personCount: 1,
+      carCount: 0,
+      motionScore: 0.4,
+      isMotionGated: false,
+    }
+
+    wsClient.dispatch(WS_TOPICS.CAMERA_TELEMETRY, payload, payload.timestamp)
+
+    expect(telemetryStore.getTelemetry('CAM-WS-02')).toEqual(payload)
   })
 
   it('should isolate subscriber callback errors and continue dispatching', () => {

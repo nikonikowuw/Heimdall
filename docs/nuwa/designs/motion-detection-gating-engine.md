@@ -1,6 +1,6 @@
 # Design: 运动检测与前置门控引擎 (Motion Detection & Gating Engine)
 
-> **状态**: Draft  
+> **状态**: Milestone 1/2 已实现（Host 帧与 Apple Unified Memory 路径）；Milestone 3 嵌入式硬件缩略图（RK3588 RGA / 昇腾 VPC）待接入
 > **作者**: Heimdall Engineering  
 > **日期**: 2025-07-25  
 > **关联规范**: [媒体管线](../nuwa/backend/media-pipeline.md)、[算法 SDK](../nuwa/backend/algo-sdk-guidelines.md)、[并发模型](../nuwa/backend/concurrency-guidelines.md)、[FFI 边界](../nuwa/backend/ffi-guidelines.md)
@@ -219,7 +219,7 @@ pub enum YPlaneSource<'a> {
 
 ```rust
 /// 运动门控配置参数
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MotionGateConfig {
     /// 是否启用运动门控
@@ -332,7 +332,13 @@ match decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
             motion_score = decision.motion_score;
 
             // 实时向遥测管道广播运动热度状态
-            pipeline_mgr_decode.report_motion_telemetry(&cam_id, motion_score, should_skip);
+            pipeline_mgr_decode.report_motion_telemetry(
+                &cam_id,
+                frame.timestamp,
+                motion_score,
+                should_skip,
+            )
+            .await;
 
             if should_skip {
                 metrics_clone.frames_skipped_motion.fetch_add(1, Ordering::Relaxed);
@@ -378,16 +384,17 @@ match decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
 ## 8. 实施计划与演进路线图
 
 ### 阶段一：纯 Rust 算法升级与配置遥测闭环（Milestone 1）
-- [ ] 重写 `crates/pipeline/src/motion_gate.rs`：废弃脆弱的 `DefaultHasher`，实现 SIMD 向量化 Y 通道 SAD 差分与网格聚合；
-- [ ] 增加 `motion_hold_frames` 余晖机制，支持保活平滑；
-- [ ] 改造 `StartCameraPipelineParams` 与 `AnalysisPump`：由 `motion_gate_enabled: bool` 升级为透传完整的 `Option<MotionGateConfig>`，彻底打通数据库与前端配置链；
-- [ ] 闭环遥测数据：计算 `motion_score` 并接入 `CameraTelemetryEvent`，驱动 Web 端 `LivePlayer` 动态热度条展示。
+- [x] 重写 `crates/pipeline/src/motion_gate.rs`：废弃脆弱的 `DefaultHasher`，实现 Y 通道差分与 $8\times 8$ 网格聚合；当前 Host 路径由编译器负责自动向量化，显式 NEON/AVX2 优化留作后续性能迭代；
+- [x] 增加 `motion_hold_frames` 余晖机制，支持保活平滑；
+- [x] 改造 `StartCameraPipelineParams` 与 `AnalysisPump`：由 `motion_gate_enabled: bool` 升级为透传完整的 `Option<MotionGateConfig>`，彻底打通数据库与前端配置链；
+- [x] 闭环遥测数据：计算 `motion_score` 并通过 `camera.telemetry` 接入 `CameraTelemetryEvent`，驱动 Web 端 `LivePlayer` 动态热度条展示。
 
 ### 阶段二：空间遮罩（Mask）与多防区联动（Milestone 2）
-- [ ] 实现 `MaskBitmap` 快速光栅化，在差分计算中跳过配置了 `DetectionRuleRole::Mask` 的区域；
-- [ ] 支持按任务布防的 `DetectionRuleRole::Roi` 执行正向过滤，防区外运动直接抑制，杜绝无效唤醒。
+- [x] 实现 `MaskBitmap` 快速光栅化，在差分计算中跳过配置了 `DetectionRuleRole::Mask` 的区域；
+- [x] 支持按任务布防的 `DetectionRuleRole::Roi` 执行正向过滤，防区外运动直接抑制，杜绝无效唤醒。
 
 ### 阶段三：硬件设备帧微缩支持（Milestone 3）
+- [x] 针对 macOS Apple Silicon 平台的 `CVPixelBuffer` 硬件帧，打通 Unified Memory 零拷贝只读 Y 平面直通；
 - [ ] 针对 Linux RK3588 平台的 DMA-BUF 物理帧，接入 RGA 异步微缩图流程；
 - [ ] 针对华为昇腾平台，接入 VPC 异步下采样流程，实现嵌入式硬解路径下的原生节能闭环。
 

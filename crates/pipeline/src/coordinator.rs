@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tokio::sync::{Mutex as TokioMutex, OwnedMutexGuard, RwLock as TokioRwLock};
 use tokio_util::task::AbortOnDropHandle;
-use types::{is_effective_main_stream, CodecType, TransportPolicy};
+use types::{is_effective_main_stream, CodecType, MotionGateConfig, TransportPolicy};
 
 use crate::error::PipelineError;
 use crate::manager::PipelineManager;
@@ -101,8 +101,8 @@ pub struct StartCameraPipelineParams {
     pub transport_policy: TransportPolicy,
     /// 绑定的算法实例集合
     pub instances: Vec<InstanceLaunchConfig>,
-    /// 是否启用简易帧差运动门控 (静止场景跳过推理)
-    pub motion_gate_enabled: bool,
+    /// 运动门控配置；`None` 表示不启用门控
+    pub motion_gate: Option<MotionGateConfig>,
 }
 
 impl StartCameraPipelineParams {
@@ -127,7 +127,7 @@ impl StartCameraPipelineParams {
             sub_rtsp_url: sub_rtsp_url.into(),
             sub_codec,
             transport_policy,
-            motion_gate_enabled,
+            motion_gate: motion_gate_enabled.then(MotionGateConfig::default),
             instances: vec![InstanceLaunchConfig {
                 algorithm_id: algorithm_id.into(),
                 algo_params,
@@ -787,7 +787,7 @@ impl TaskRuntimeCoordinator {
                     active_decoder,
                     instance_configs,
                     active_workers,
-                    params.motion_gate_enabled,
+                    params.motion_gate.clone(),
                 )
                 .await;
             pump_started = true;
@@ -1023,7 +1023,10 @@ impl TaskRuntimeCoordinator {
             algorithm_id: primary_algo,
             target_fps: primary_fps,
             instances,
-            motion_gate_enabled: params.motion_gate_enabled,
+            motion_gate_enabled: params
+                .motion_gate
+                .as_ref()
+                .is_some_and(|config| config.enabled),
             is_pump_running,
             frames_decoded,
             frames_inferred,

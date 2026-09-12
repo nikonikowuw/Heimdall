@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use pipeline::{PipelineAnalysisEvent, PipelineManager, PipelineTrackEvent};
 use tokio::sync::broadcast;
-use types::{BoundingBox, CameraTracksPayload, TrackedObject, TOPIC_CAMERA_TRACKS};
+use types::{
+    BoundingBox, CameraTelemetryEvent, CameraTracksPayload, TrackedObject, TOPIC_CAMERA_TELEMETRY,
+    TOPIC_CAMERA_TRACKS,
+};
 
 use api::TrackDispatchService;
 
@@ -211,4 +214,33 @@ async fn test_track_dispatch_multi_instance_aggregation() {
     let msg4 = rx.recv().await.unwrap();
     let payload4: CameraTracksPayload = serde_json::from_value(msg4.payload).unwrap();
     assert!(payload4.tracks.is_empty());
+}
+
+#[tokio::test]
+async fn test_telemetry_dispatch_broadcasts_motion_state() {
+    let pipeline = Arc::new(PipelineManager::new());
+    let (tx, mut rx) = broadcast::channel(16);
+    let (shutdown_tx, _) = broadcast::channel(16);
+    let service = TrackDispatchService::new(pipeline.clone(), tx, shutdown_tx);
+    pipeline.increment_preview("CAM-TELEMETRY").await;
+
+    let event = CameraTelemetryEvent {
+        camera_id: "CAM-TELEMETRY".to_string(),
+        timestamp: 1741100000000,
+        active_tracks: 0,
+        person_count: 0,
+        car_count: 0,
+        motion_score: 0.75,
+        is_motion_gated: false,
+    };
+
+    assert!(service.handle_telemetry_event(&event).await);
+    let ws_event = rx.recv().await.expect("应收到遥测广播");
+    assert_eq!(ws_event.topic, TOPIC_CAMERA_TELEMETRY);
+    let payload: CameraTelemetryEvent =
+        serde_json::from_value(ws_event.payload).expect("遥测 payload 应可反序列化");
+    assert_eq!(payload.camera_id, "CAM-TELEMETRY");
+    assert_eq!(payload.timestamp, 1741100000000);
+    assert_eq!(payload.motion_score, 0.75);
+    assert!(!payload.is_motion_gated);
 }

@@ -75,4 +75,6 @@ pub enum PipelineAnalysisEvent {
     Capture(Box<PipelineCaptureEvent>),
     /// 航迹跟踪元数据更新事件 (高频流式)
     Tracks(PipelineTrackEvent),
+    /// 摄像头高频遥测状态事件 (包含运动热度与门控状态)
+    Telemetry(Box<types::CameraTelemetryEvent>),
 }

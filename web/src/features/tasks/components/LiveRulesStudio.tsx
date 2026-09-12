@@ -643,6 +643,7 @@ export function LiveRulesStudio({
           threshold: motionGateThreshold,
           contourArea: 100,
           keepaliveIntervalMs: 2000,
+          motionHoldFrames: 10,
         },
         algorithmInstances: payloadInstances,
       }

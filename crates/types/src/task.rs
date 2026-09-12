@@ -39,7 +39,7 @@ impl DetectionPoint {
 }
 
 /// 任务级空间几何布防规则
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectionRule {
     pub role: DetectionRuleRole,
@@ -61,12 +61,12 @@ impl DetectionRule {
 }
 
 /// 运动门控配置参数
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MotionGateConfig {
     pub enabled: bool,
     #[serde(default = "default_threshold")]
-    pub threshold: u32,
+    pub threshold: u8,
     #[serde(default = "default_contour_area")]
     pub contour_area: u32,
     #[serde(
@@ -74,9 +74,11 @@ pub struct MotionGateConfig {
         alias = "keepalive_interval_ms"
     )]
     pub keepalive_interval_ms: u64,
+    #[serde(default = "default_motion_hold_frames", alias = "motion_hold_frames")]
+    pub motion_hold_frames: u32,
 }
 
-fn default_threshold() -> u32 {
+fn default_threshold() -> u8 {
     25
 }
 fn default_contour_area() -> u32 {
@@ -84,6 +86,9 @@ fn default_contour_area() -> u32 {
 }
 fn default_keepalive_interval_ms() -> u64 {
     2000
+}
+fn default_motion_hold_frames() -> u32 {
+    10
 }
 
 impl Default for MotionGateConfig {
@@ -93,6 +98,7 @@ impl Default for MotionGateConfig {
             threshold: default_threshold(),
             contour_area: default_contour_area(),
             keepalive_interval_ms: default_keepalive_interval_ms(),
+            motion_hold_frames: default_motion_hold_frames(),
         }
     }
 }
@@ -317,6 +323,18 @@ pub struct AnalysisTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_motion_gate_config_defaults_and_backward_compatibility() {
+        let config: MotionGateConfig = serde_json::from_str(
+            r#"{"enabled":true,"threshold":25,"contourArea":100,"keepaliveIntervalMs":2000}"#,
+        )
+        .expect("legacy motion gate config should deserialize");
+        assert_eq!(config, MotionGateConfig::default());
+
+        let json = serde_json::to_value(&config).expect("motion gate config should serialize");
+        assert_eq!(json["motionHoldFrames"], 10);
+    }
 
     #[test]
     fn test_task_status_representation_and_conversions() {

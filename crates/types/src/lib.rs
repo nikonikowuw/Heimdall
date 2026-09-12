@@ -26,7 +26,7 @@ pub use detection::{
 pub use error::{FrameError, TypeError};
 pub use event::{
     TOPIC_ALARM_STATUS_CHANGED, TOPIC_ALARM_TRIGGERED, TOPIC_CAMERA_PROBE_UPDATED,
-    TOPIC_CAMERA_TRACKS, TOPIC_RECOGNITION_MATCHED,
+    TOPIC_CAMERA_TELEMETRY, TOPIC_CAMERA_TRACKS, TOPIC_RECOGNITION_MATCHED,
 };
 pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
 pub use oplog::{OpEvent, OperationLog};

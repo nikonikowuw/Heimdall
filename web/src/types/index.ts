@@ -41,6 +41,7 @@ export const WS_TOPICS = {
   ALARM_TRIGGERED: 'alarm.triggered',
   ALARM_STATUS_CHANGED: 'alarm.status_changed',
   CAMERA_TRACKS: 'camera.tracks',
+  CAMERA_TELEMETRY: 'camera.telemetry',
 } as const
 
 export type WsTopic = (typeof WS_TOPICS)[keyof typeof WS_TOPICS]
@@ -120,6 +121,7 @@ export interface CameraTracksPayload {
 
 export interface CameraTelemetry {
   cameraId: string
+  timestamp: number
   activeTracks: number
   personCount: number
   carCount: number
@@ -275,6 +277,7 @@ export interface MotionGateConfig {
   threshold?: number
   contourArea?: number
   keepaliveIntervalMs?: number
+  motionHoldFrames?: number
 }
 
 export interface TaskAlgorithmInstanceDto {

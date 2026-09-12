@@ -20,7 +20,7 @@ use crate::events::{
     PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
     DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
 };
-use crate::pump::{AnalysisPump, AnalysisPumpConfig, PumpMetrics};
+use crate::pump::{AnalysisPump, AnalysisPumpConfig, MotionGateRuntimeConfig, PumpMetrics};
 use crate::roi::RoiAffineMapper;
 use crate::rules::{RuleEvaluator, TriggeredAlarm};
 use crate::snapshot::{SnapshotConfig, SnapshotEngine, SnapshotResult};
@@ -52,7 +52,9 @@ pub struct CameraPipelineContext {
     /// 局部特写预裁剪仿射变换映射器
     pub roi_mapper: TokioRwLock<RoiAffineMapper>,
     /// 任务级空间几何规则
-    pub rules: TokioRwLock<Vec<DetectionRule>>,
+    pub rules: Arc<TokioRwLock<Vec<DetectionRule>>>,
+    /// 规则版本递增计数器，供解码泵做无锁变更探测
+    pub rules_version: Arc<std::sync::atomic::AtomicU64>,
     /// 统一空间几何规则引擎
     pub rule_evaluator: RuleEvaluator,
 }
@@ -83,7 +85,8 @@ impl CameraPipelineContext {
             trackers: TokioMutex::new(HashMap::new()),
             current_tracks: TokioRwLock::new(HashMap::new()),
             roi_mapper: TokioRwLock::new(RoiAffineMapper::identity()),
-            rules: TokioRwLock::new(Vec::new()),
+            rules: Arc::new(TokioRwLock::new(Vec::new())),
+            rules_version: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             rule_evaluator: RuleEvaluator::new(),
         }
     }
@@ -284,7 +287,7 @@ impl PipelineManager {
                     "抓拍",
                 );
             }
-            PipelineAnalysisEvent::Tracks(_) => {}
+            PipelineAnalysisEvent::Tracks(_) | PipelineAnalysisEvent::Telemetry(_) => {}
         }
 
         let _ = self.analysis_event_tx.send(event);
@@ -396,6 +399,30 @@ impl PipelineManager {
     #[inline]
     pub async fn update_sub_stream_frame(&self, camera_id: &str, frame: FrameRef) {
         self.update_decoded_frame(camera_id, frame).await;
+    }
+
+    /// 上报运动门控热度与状态遥测数据 (只在有预览客户端时广播)
+    pub async fn report_motion_telemetry(
+        &self,
+        camera_id: &str,
+        timestamp: i64,
+        motion_score: f32,
+        is_motion_gated: bool,
+    ) {
+        if !self.has_preview_subscribers(camera_id).await {
+            return;
+        }
+
+        let event = types::CameraTelemetryEvent {
+            camera_id: camera_id.to_string(),
+            timestamp,
+            active_tracks: 0,
+            person_count: 0,
+            car_count: 0,
+            motion_score: motion_score.clamp(0.0, 1.0),
+            is_motion_gated,
+        };
+        self.publish_analysis_event(PipelineAnalysisEvent::Telemetry(Box::new(event)));
     }
 
     /// 清空某路摄像头的已解码帧环形队列并释放显存/DMA-BUF 租约
@@ -682,6 +709,7 @@ impl PipelineManager {
 
         // 同步任务定义的空间几何布防规则至管线上下文
         *ctx.rules.write().await = rules;
+        ctx.rules_version.fetch_add(1, Ordering::Release);
 
         // 同步设置主码流分析模式状态 (方案三：零解码瞬时直通)
         // 注意：生产环境统一由 TaskRuntimeCoordinator 依据网络动态探活决议生效模式；
@@ -712,6 +740,7 @@ impl PipelineManager {
         let ctx = self.get_or_create_context(camera_id).await;
         let mut r = ctx.rules.write().await;
         *r = rules;
+        ctx.rules_version.fetch_add(1, Ordering::Release);
         tracing::info!(camera_id = %camera_id, count = r.len(), "已更新摄像头空间几何布防规则");
     }
 
@@ -863,8 +892,11 @@ impl PipelineManager {
             infer::InferenceWorkerHandle,
             Option<infer::InferenceWorker>,
         )>,
-        motion_gate_enabled: bool,
+        motion_gate: Option<types::MotionGateConfig>,
     ) {
+        let ctx = self.get_or_create_context(camera_id).await;
+        let rules = ctx.rules.clone();
+        let rules_version = ctx.rules_version.clone();
         let pump = AnalysisPump::start_multi_worker(
             camera_id,
             session,
@@ -872,7 +904,11 @@ impl PipelineManager {
             instance_configs,
             workers,
             self.clone(),
-            motion_gate_enabled,
+            MotionGateRuntimeConfig {
+                gate: motion_gate,
+                rules,
+                rules_version,
+            },
         );
         self.mount_pump(camera_id, pump).await;
         tracing::info!(camera_id = %camera_id, "多算法分析驱动泵已挂载至管线管理器");

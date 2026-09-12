@@ -47,6 +47,8 @@
     "standby": "節能中",
     "targetCount": "{{count}} 目標",
     "liveTelemetry": "即時遙測",
+    "tracks": "航跡目標",
+    "motionHeat": "運動熱度",
     "pending": "攝影機 #{{id}} 待接入"
   },
   "status": {

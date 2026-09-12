@@ -346,8 +346,8 @@ impl CaptureDispatchService {
                             Ok(PipelineAnalysisEvent::Alarm(_)) => {
                                 // 违规告警由 AlarmDispatchService 处理
                             }
-                            Ok(PipelineAnalysisEvent::Tracks(_)) => {
-                                // 航迹由 TrackDispatchService 处理
+                            Ok(PipelineAnalysisEvent::Tracks(_)) | Ok(PipelineAnalysisEvent::Telemetry(_)) => {
+                                // 航迹与遥测由 TrackDispatchService 处理
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                                 tracing::warn!(

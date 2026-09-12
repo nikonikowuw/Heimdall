@@ -99,7 +99,7 @@ pub fn build_start_params(
         sub_codec,
         transport_policy: TransportPolicy::Auto,
         instances,
-        motion_gate_enabled: motion_gate.map(|config| config.enabled).unwrap_or(true),
+        motion_gate: motion_gate.cloned().filter(|config| config.enabled),
     }
 }
 
@@ -230,7 +230,7 @@ pub async fn build_start_params_async(
         sub_codec,
         transport_policy: TransportPolicy::Auto,
         instances,
-        motion_gate_enabled: motion_gate.map(|config| config.enabled).unwrap_or(true),
+        motion_gate: motion_gate.cloned().filter(|config| config.enabled),
     }
 }
 
@@ -275,6 +275,39 @@ mod tests {
             params.sub_rtsp_url,
             "rtsp://127.0.0.1:28554/Streaming/Channels/101"
         );
+    }
+
+    #[test]
+    fn test_motion_gate_configuration_is_preserved_in_start_params() {
+        let cam = mock_camera(
+            "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/101",
+            "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/102",
+        );
+        let config = MotionGateConfig {
+            enabled: true,
+            threshold: 37,
+            contour_area: 321,
+            keepalive_interval_ms: 4_500,
+            motion_hold_frames: 17,
+        };
+
+        let params = build_start_params("test_cam", &cam, vec![], Some(&config));
+        assert_eq!(params.motion_gate, Some(config));
+    }
+
+    #[test]
+    fn test_disabled_motion_gate_is_not_started() {
+        let cam = mock_camera(
+            "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/101",
+            "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/102",
+        );
+        let config = MotionGateConfig {
+            enabled: false,
+            ..MotionGateConfig::default()
+        };
+
+        let params = build_start_params("test_cam", &cam, vec![], Some(&config));
+        assert!(params.motion_gate.is_none());
     }
 
     #[test]

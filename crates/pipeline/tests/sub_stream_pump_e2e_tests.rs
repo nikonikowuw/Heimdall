@@ -18,7 +18,7 @@ use media::stream_hub::CameraStreamSession;
 use pipeline::{PipelineManager, SubStreamPumpConfig};
 use types::{
     BoundingBox, CodecType, Detection, DetectionLineDirection, DetectionPoint, DetectionRule,
-    DetectionRuleRole, EncodedPacket, FrameRef, TransportPolicy,
+    DetectionRuleRole, EncodedPacket, FrameRef, MotionGateConfig, TransportPolicy,
 };
 
 /// 测试专用模拟推理后端
@@ -77,7 +77,7 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
     // 4. 挂载并启动子码流驱动泵
     let config = SubStreamPumpConfig {
         target_fps: 25, // 全采样
-        motion_gate_enabled: false,
+        motion_gate: None,
     };
     manager
         .start_analysis_pump(cam_id, session.clone(), decoder, worker.handle(), config)
@@ -184,6 +184,67 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
         "停止驱动泵后，StreamHub 会话 AI 活跃标记必须重置为 false"
     );
 
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_sub_stream_pump_motion_gate_skips_static_host_frames() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_pump_motion_gate_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let manager = Arc::new(PipelineManager::with_evidence_dir(&temp_dir));
+    let cam_id = "cam_motion_gate_test";
+    let session = CameraStreamSession::mock(cam_id, "rtsp://mock-sub/live", TransportPolicy::Tcp);
+    let worker = InferenceWorker::new(Arc::new(E2eMockInferBackend {
+        current_y: std::sync::Mutex::new(0.45),
+    }));
+    let decoder: Box<dyn VideoDecoder + Send> =
+        Box::new(MockDecoder::new(cam_id, CodecType::H264, 64, 64));
+
+    manager
+        .start_analysis_pump(
+            cam_id,
+            session.clone(),
+            decoder,
+            worker.handle(),
+            SubStreamPumpConfig {
+                target_fps: 25,
+                motion_gate: Some(MotionGateConfig {
+                    enabled: true,
+                    threshold: 25,
+                    contour_area: 16,
+                    keepalive_interval_ms: 60_000,
+                    motion_hold_frames: 0,
+                }),
+            },
+        )
+        .await;
+
+    let dispatcher = session.dispatcher.clone();
+    for (pts_ms, is_keyframe) in [(1000, true), (1040, false)] {
+        dispatcher.publish(Arc::new(EncodedPacket {
+            pts_ms,
+            is_keyframe,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41]),
+            ..Default::default()
+        }));
+    }
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let metrics = manager
+        .get_analysis_pump_metrics(cam_id)
+        .await
+        .expect("驱动泵指标必须可读取");
+    assert_eq!(metrics.frames_decoded.load(Ordering::Relaxed), 2);
+    assert_eq!(metrics.frames_skipped_motion.load(Ordering::Relaxed), 1);
+    assert_eq!(metrics.frames_inferred.load(Ordering::Relaxed), 1);
+
+    assert!(manager.stop_analysis_pump(cam_id).await);
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 

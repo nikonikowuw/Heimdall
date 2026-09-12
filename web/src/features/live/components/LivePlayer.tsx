@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Activity,
   Car,
@@ -18,6 +18,7 @@ import {
 import mpegts from 'mpegts.js'
 import { useTranslation } from 'react-i18next'
 import { cameraApi } from '@/lib/api'
+import { telemetryStore } from '@/lib/telemetryStore'
 import { trackStore } from '@/lib/trackStore'
 import { isWebCodecsSupported, WebCodecsPlayer } from '@/lib/webcodecs'
 import { useAuthStore } from '@/stores/auth'
@@ -93,6 +94,20 @@ export function LivePlayer({
 }: LivePlayerProps) {
   const { t } = useTranslation('camera')
   const streamType = stream || (isHero ? 'main' : 'sub')
+
+  const telemetrySubscriptionCameraId = isHero ? cameraId : ''
+  const subscribedTelemetry = useSyncExternalStore(
+    useCallback(
+      (onStoreChange) => telemetryStore.subscribe(telemetrySubscriptionCameraId, onStoreChange),
+      [telemetrySubscriptionCameraId],
+    ),
+    useCallback(
+      () => telemetryStore.getTelemetry(telemetrySubscriptionCameraId),
+      [telemetrySubscriptionCameraId],
+    ),
+    () => undefined,
+  )
+  const displayTelemetry = telemetry ?? (isHero ? subscribedTelemetry : undefined)
 
   const [internalAudioEnabled, setInternalAudioEnabled] = useState<boolean>(false)
   const isAudioActive = audioEnabled !== undefined ? audioEnabled : internalAudioEnabled
@@ -822,29 +837,31 @@ export function LivePlayer({
       </div>
 
       {/* 底部遥测状态栏 (仅在主大屏展示) */}
-      {isHero && telemetry && (
+      {isHero && displayTelemetry && (
         <div className="absolute right-2.5 bottom-2.5 left-2.5 z-20 flex items-center justify-between rounded-lg bg-black/60 px-3 py-1.5 font-mono text-[11px] text-white/80 backdrop-blur-md">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1.5 text-emerald-400">
               <Activity className="h-3.5 w-3.5" />
-              <span>TRACKS: {telemetry.activeTracks}</span>
+              <span>
+                {t('live.tracks', 'TRACKS')}: {displayTelemetry.activeTracks}
+              </span>
             </span>
             <span className="flex items-center gap-1 text-cyan-300">
               <User className="h-3.5 w-3.5" />
-              <span>{telemetry.personCount}</span>
+              <span>{displayTelemetry.personCount}</span>
             </span>
             <span className="flex items-center gap-1 text-amber-300">
               <Car className="h-3.5 w-3.5" />
-              <span>{telemetry.carCount}</span>
+              <span>{displayTelemetry.carCount}</span>
             </span>
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="text-[10px] text-white/50">MOTION HEAT</span>
+            <span className="text-[10px] text-white/50">{t('live.motionHeat', 'MOTION HEAT')}</span>
             <div className="h-1.5 w-16 overflow-hidden rounded-full bg-white/20">
               <div
                 className="h-full bg-gradient-to-r from-emerald-400 to-cyan-400 transition-all duration-300"
-                style={{ width: `${Math.min(100, (telemetry.motionScore || 0) * 100)}%` }}
+                style={{ width: `${Math.min(100, displayTelemetry.motionScore * 100)}%` }}
               />
             </div>
           </div>

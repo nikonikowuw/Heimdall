@@ -47,6 +47,8 @@
     "standby": "Power Saving",
     "targetCount": "{{count}} targets",
     "liveTelemetry": "LIVE TELEMETRY",
+    "tracks": "TRACKS",
+    "motionHeat": "MOTION HEAT",
     "pending": "Camera #{{id}} Pending"
   },
   "status": {
