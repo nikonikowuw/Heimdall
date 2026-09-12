@@ -227,7 +227,8 @@ echo ""
 if [[ ${#MISSING[@]} -eq 0 ]]; then
     ok "${BOLD}所有依赖已就绪！可以开始交叉编译:${RESET}"
     echo ""
-    echo "    make rknn           # 交叉编译主程序"
+    echo "    make cross          # 交叉编译主程序 (默认 RK3576)"
+    echo "    make cross-rk3568   # 交叉编译 RK3568 版本"
     echo ""
     exit 0
 fi

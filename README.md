@@ -181,22 +181,36 @@ brew install zig  # macOS
 make setup-cross
 ```
 
-### 同步 SDK 库
+### 目标设备配置 (推荐使用 .env)
 
-交叉编译需要目标设备的 Rockchip SDK 库文件（保证版本与设备 BSP 完全匹配）：
+复制根目录的 `.env.example` 为 `.env`，即可配置各芯片设备 IP，**无需修改系统 `~/.ssh/config`**：
 
 ```bash
-# 从目标设备同步 SDK 库到 .rk-sdk-libs/
-make sdk-sync RKNN_HOST=root@192.168.1.100
+cp .env.example .env
+# 在 .env 中填入对应设备 IP：
+# RK3568_HOST=192.168.19.69
+# RK3576_HOST=192.168.18.229
+```
 
-# 同步 RK3568 设备
-make sdk-sync RKNN_HOST=root@192.168.1.100 RKNN_DEVICE=rk3568
+### 同步 SDK 库
+
+首次交叉编译前，从目标设备提取最小动态库集合（保存至本地 `.rk-sdk-libs/`）：
+
+```bash
+# 自动根据 .env 中的配置或传入 IP 同步（脚本自动识别板端芯片型号并分类存放）
+make sdk-sync-rk3568
+make sdk-sync-rk3576
+
+# 或直接指定 IP 同步（支持纯 IP，自动使用 root 登录）
+make sdk-sync RKNN_HOST=192.168.19.69
 
 # 检查 SDK 库是否就绪
-make sdk-check
+make sdk-check RKNN_DEVICE=rk3568
 ```
 
 ### 交叉编译与部署
+
+- **交叉编译（纯本地执行，零网络/零 SSH 依赖）**：
 
 ```bash
 # 交叉编译 (默认 RK3576)
@@ -204,21 +218,29 @@ make cross
 
 # 交叉编译 RK3568 版本
 make cross-rk3568
+```
 
-# 部署到设备
-make deploy                      # 默认 RK3576
-make deploy-rk3568               # RK3568 版本
+- **部署到设备**：
 
-# 一键编译+部署
-make deploy RKNN_HOST=root@192.168.1.100
+```bash
+# 部署（若配置了 .env，会自动路由到对应芯片的目标设备）
+make deploy-rk3568
+make deploy-rk3576
+
+# 或临时指定目标 IP 部署
+make deploy-rk3568 RKNN_HOST=192.168.19.69
 ```
 
 ### 配置项
 
-| 环境变量 | 默认值 | 说明 |
+支持在 `.env`、环境变量或命令行中指定：
+
+| 配置项 | 默认值 | 说明 |
 |---------|--------|------|
-| `RKNN_HOST` | `root@192.168.1.100` | 设备 SSH 地址 |
-| `RKNN_DEVICE` | `rk3576` | 目标设备型号 |
+| `RK3568_HOST` | 空 | RK3568 设备地址（支持纯 IP 如 `192.168.19.69`） |
+| `RK3576_HOST` | 空 | RK3576 设备地址 |
+| `RKNN_HOST` | `root@192.168.1.100` | 全局设备地址（未指定芯片专属时生效） |
+| `RKNN_DEVICE` | `rk3576` | 目标设备型号 (`rk3568` / `rk3576`) |
 | `RKNN_DEPLOY_PATH` | `/opt/heimdall` | 设备部署路径 |
 | `RKNN_SSH_PORT` | `22` | SSH 端口 |
 | `RK_MPP_LIB_DIR` | `.rk-sdk-libs/<device>` | 手动指定 SDK 库路径 |

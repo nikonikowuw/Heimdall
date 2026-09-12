@@ -18,6 +18,9 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
+# 确保 ~/.cargo/bin 在 PATH 最前列 (确保优先使用 rustup 的 toolchain 与 cargo-zigbuild)
+export PATH := $(HOME)/.cargo/bin:$(PATH)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 项目路径
 # ──────────────────────────────────────────────────────────────────────────────
@@ -26,14 +29,31 @@ WEB_DIR        := $(WORKSPACE_ROOT)/web
 WEB_DIST       := $(WEB_DIR)/dist
 SDK_LIBS_DIR   := $(WORKSPACE_ROOT)/.rk-sdk-libs
 
+# 支持加载项目本地可选环境变量 (.env)
+-include .env
+
 # ──────────────────────────────────────────────────────────────────────────────
-# 交叉编译配置 (可通过环境变量覆盖)
+# 交叉编译与板端连接配置
 # ──────────────────────────────────────────────────────────────────────────────
 RKNN_TARGET       ?= aarch64-unknown-linux-gnu
 RKNN_DEVICE       ?= rk3576
-RKNN_HOST         ?= root@192.168.1.100
 RKNN_DEPLOY_PATH  ?= /opt/heimdall
 RKNN_SSH_PORT     ?= 22
+
+# 芯片专属板端主机 (可在 .env 或环境变量中指定，直接填 IP 如 192.168.1.100)
+RK3568_HOST       ?=
+RK3576_HOST       ?=
+
+# 目标设备主机 (优先级: 命令行显式指定 > 芯片专属配置 > .env 中的全局 RKNN_HOST > 默认回退值)
+ifeq ($(origin RKNN_HOST),undefined)
+  ifeq ($(RKNN_DEVICE),rk3568)
+    RKNN_HOST := $(if $(RK3568_HOST),$(RK3568_HOST),root@192.168.1.100)
+  else ifeq ($(RKNN_DEVICE),rk3576)
+    RKNN_HOST := $(if $(RK3576_HOST),$(RK3576_HOST),root@192.168.1.100)
+  else
+    RKNN_HOST := root@192.168.1.100
+  endif
+endif
 
 # SDK 库路径：优先使用环境变量，否则从 .rk-sdk-libs/<device>/ 读取
 RK_MPP_LIB_DIR    ?= $(SDK_LIBS_DIR)/$(RKNN_DEVICE)
@@ -76,9 +96,10 @@ help: ## 显示此帮助信息
 	@echo "    make fmt-check          格式化检查 (CI)"
 	@echo ""
 	@echo "  $(GREEN)SDK 库管理:$(RESET)"
-	@echo "    make sdk-sync           从设备同步 Rockchip SDK 库"
+	@echo "    make sdk-sync           从设备同步 Rockchip SDK 库 (自动识别芯片型号)"
+	@echo "    make sdk-sync-rk3568    从 RK3568 设备同步 SDK 库"
+	@echo "    make sdk-sync-rk3576    从 RK3576 设备同步 SDK 库"
 	@echo "    make sdk-sync RKNN_HOST=root@192.168.1.100   指定设备 IP"
-	@echo "    make sdk-sync RKNN_DEVICE=rk3568             指定设备型号"
 	@echo ""
 	@echo "  $(GREEN)交叉编译 ($(RKNN_TARGET)):$(RESET)"
 	@echo "    make cross              交叉编译主程序 (默认 RK3576)"
@@ -134,11 +155,19 @@ ensure-web-dist: $(WEB_DIST)/index.html
 # ============================================================================
 
 .PHONY: sdk-sync
-sdk-sync: ## 从设备同步 Rockchip SDK 库到 .rk-sdk-libs/
+sdk-sync: ## 从设备同步 Rockchip SDK 库到 .rk-sdk-libs/ (自动识别芯片型号)
 	@$(WORKSPACE_ROOT)/scripts/sdk-sync.sh \
 		--host "$(RKNN_HOST)" \
-		--device "$(RKNN_DEVICE)" \
+		$(if $(filter command line environment environment\ override,$(origin RKNN_DEVICE)),--device "$(RKNN_DEVICE)",) \
 		--port "$(RKNN_SSH_PORT)"
+
+.PHONY: sdk-sync-rk3576
+sdk-sync-rk3576: ## 从 RK3576 设备同步 SDK 库
+	$(MAKE) sdk-sync RKNN_DEVICE=rk3576
+
+.PHONY: sdk-sync-rk3568
+sdk-sync-rk3568: ## 从 RK3568 设备同步 SDK 库
+	$(MAKE) sdk-sync RKNN_DEVICE=rk3568
 
 .PHONY: sdk-check
 sdk-check: ## 检查 SDK 库是否就绪
@@ -236,12 +265,16 @@ cross-check: verify-cross sdk-check ## 交叉编译语法检查
 # 内部目标：执行部署
 .PHONY: _deploy
 _deploy: _cross
-	@echo -e "$(CYAN)[deploy]$(RESET) 部署到 $(RKNN_HOST):$(RKNN_DEPLOY_PATH)..."
-	@ssh -p $(RKNN_SSH_PORT) $(RKNN_HOST) "mkdir -p $(RKNN_DEPLOY_PATH)/bin"
-	@scp -P $(RKNN_SSH_PORT) \
+	@TARGET_HOST="$(RKNN_HOST)"; \
+	if echo "$$TARGET_HOST" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+		TARGET_HOST="root@$$TARGET_HOST"; \
+	fi; \
+	echo -e "$(CYAN)[deploy]$(RESET) 部署到 $$TARGET_HOST:$(RKNN_DEPLOY_PATH)..."; \
+	ssh -p $(RKNN_SSH_PORT) $$TARGET_HOST "mkdir -p $(RKNN_DEPLOY_PATH)/bin" && \
+	scp -P $(RKNN_SSH_PORT) \
 		$(WORKSPACE_ROOT)/target/$(RKNN_TARGET)/release/heimdall \
-		$(RKNN_HOST):$(RKNN_DEPLOY_PATH)/bin/
-	@echo -e "$(GREEN)[deploy]$(RESET) 部署完成: $(RKNN_HOST):$(RKNN_DEPLOY_PATH)/bin/heimdall"
+		$$TARGET_HOST:$(RKNN_DEPLOY_PATH)/bin/ && \
+	echo -e "$(GREEN)[deploy]$(RESET) 部署完成: $$TARGET_HOST:$(RKNN_DEPLOY_PATH)/bin/heimdall"
 
 # 用户命令
 .PHONY: deploy

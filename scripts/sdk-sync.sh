@@ -24,11 +24,12 @@ SDK_LIBS_DIR="${WORKSPACE_ROOT}/.rk-sdk-libs"
 
 # 默认设备配置（可通过参数覆盖）
 RKNN_HOST="${RKNN_HOST:-root@192.168.1.100}"
-RKNN_DEVICE="${RKNN_DEVICE:-rk3576}"
+RKNN_DEVICE=""
+EXPLICIT_DEVICE=""
 RKNN_SSH_PORT="${RKNN_SSH_PORT:-22}"
 
-# 设备上的库文件路径
-DEVICE_LIB_PATH="/usr/lib/aarch64-linux-gnu"
+# 候选搜索目录列表（板端搜索）
+SEARCH_DIRS="/usr/lib/aarch64-linux-gnu /usr/lib /usr/local/lib /usr/lib64 /lib/aarch64-linux-gnu /lib /vendor/lib64 /vendor/lib /oem/usr/lib"
 
 # 需要提取的最小库文件列表
 REQUIRED_LIBS=(
@@ -64,7 +65,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --device)
-            RKNN_DEVICE="$2"
+            EXPLICIT_DEVICE="$2"
             shift 2
             ;;
         --port)
@@ -90,6 +91,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# 若传入纯 IP 地址且未指定用户名，默认使用 root 用户
+if echo "${RKNN_HOST}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    RKNN_HOST="root@${RKNN_HOST}"
+fi
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 前置检查
@@ -127,30 +133,94 @@ fi
 ok "连接成功: ${RKNN_HOST}"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 检测设备型号
+# 检测设备型号与 SoC
 # ──────────────────────────────────────────────────────────────────────────────
 step "3. 检测设备信息"
 
+detect_soc() {
+    local text="$1"
+    local lower
+    lower=$(echo "$text" | tr '[:upper:]' '[:lower:]')
+    case "$lower" in
+        *rk3588*|*3588*) echo "rk3588" ;;
+        *rk3576*|*3576*) echo "rk3576" ;;
+        *rk3568*|*3568*) echo "rk3568" ;;
+        *rk3566*|*3566*) echo "rk3566" ;;
+        *rk3562*|*3562*) echo "rk3562" ;;
+        *rv1126*|*1126*) echo "rv1126" ;;
+        *rv1109*|*1109*) echo "rv1109" ;;
+        *) echo "" ;;
+    esac
+}
+
 info "检测设备型号..."
-DEVICE_MODEL=$(ssh -p "${RKNN_SSH_PORT}" "${RKNN_HOST}" "cat /proc/device-tree/model 2>/dev/null || echo unknown" | tr -d '\0')
+DEVICE_MODEL=$(ssh -p "${RKNN_SSH_PORT}" "${RKNN_HOST}" "cat /proc/device-tree/model 2>/dev/null || cat /sys/firmware/devicetree/base/model 2>/dev/null || echo unknown" | tr -d '\0')
+DEVICE_COMPAT=$(ssh -p "${RKNN_SSH_PORT}" "${RKNN_HOST}" "cat /proc/device-tree/compatible 2>/dev/null | tr '\0' ' ' || true")
 ok "设备型号: ${DEVICE_MODEL}"
+
+DETECTED_SOC=$(detect_soc "${DEVICE_MODEL} ${DEVICE_COMPAT}")
+if [ -n "${DETECTED_SOC}" ]; then
+    ok "识别芯片: ${DETECTED_SOC}"
+fi
+
+# 确定存储子目录：若未显式指定则优先使用检测到的 SoC 型号
+if [ -n "${EXPLICIT_DEVICE}" ] && [ "${EXPLICIT_DEVICE}" != "auto" ]; then
+    RKNN_DEVICE="${EXPLICIT_DEVICE}"
+    if [ -n "${DETECTED_SOC}" ] && [ "${DETECTED_SOC}" != "${EXPLICIT_DEVICE}" ]; then
+        warn "指定的型号 [${EXPLICIT_DEVICE}] 与硬件识别型号 [${DETECTED_SOC}] 不一致！"
+    fi
+elif [ -n "${DETECTED_SOC}" ]; then
+    RKNN_DEVICE="${DETECTED_SOC}"
+    ok "目标目录使用自动检测型号: ${RKNN_DEVICE}"
+else
+    RKNN_DEVICE="rk3576"
+    warn "未能自动检测 SoC 型号，回退至默认配置: ${RKNN_DEVICE}"
+fi
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 检查库文件是否存在
 # ──────────────────────────────────────────────────────────────────────────────
 step "4. 检查设备库文件"
 
-MISSING_LIBS=()
-for lib in "${REQUIRED_LIBS[@]}"; do
-    if ssh -p "${RKNN_SSH_PORT}" "${RKNN_HOST}" "test -f ${DEVICE_LIB_PATH}/${lib}" 2>/dev/null; then
-        ok "${lib}"
+REMOTE_CHECK_SCRIPT="
+for lib in ${REQUIRED_LIBS[*]}; do
+    found=\"\"
+    for dir in ${SEARCH_DIRS}; do
+        if [ -e \"\$dir/\$lib\" ]; then
+            found=\"\$dir/\$lib\"
+            break
+        fi
+    done
+    if [ -z \"\$found\" ]; then
+        found=\$(find /usr/lib /usr/local/lib /lib /vendor /oem -name \"\$lib\" 2>/dev/null | head -n 1)
+    fi
+    if [ -n \"\$found\" ]; then
+        echo \"\$lib:\$found\"
     else
-        warn "${lib} — 未找到"
-        MISSING_LIBS+=("${lib}")
+        echo \"\$lib:NOT_FOUND\"
     fi
 done
+"
 
-if [[ ${#MISSING_LIBS[@]} -gt 0 ]]; then
+REMOTE_RESULT=$(ssh -p "${RKNN_SSH_PORT}" "${RKNN_HOST}" "${REMOTE_CHECK_SCRIPT}")
+
+FOUND_LIBS=()
+FOUND_PATHS=()
+MISSING_LIBS=()
+
+while IFS=":" read -r lib_name lib_path; do
+    [ -z "$lib_name" ] && continue
+    if [ "$lib_path" = "NOT_FOUND" ]; then
+        warn "${lib_name} — 未找到"
+        MISSING_LIBS=("${MISSING_LIBS[@]}" "$lib_name")
+    else
+        ok "${lib_name} (${lib_path})"
+        FOUND_LIBS=("${FOUND_LIBS[@]}" "$lib_name")
+        FOUND_PATHS=("${FOUND_PATHS[@]}" "$lib_path")
+    fi
+done <<< "${REMOTE_RESULT}"
+
+if [ ${#MISSING_LIBS[@]} -gt 0 ]; then
     echo ""
     warn "部分库文件未找到，但将继续同步已存在的文件"
     warn "缺失: ${MISSING_LIBS[*]}"
@@ -171,18 +241,23 @@ ok "目标目录: ${TARGET_DIR}"
 SYNCED=0
 FAILED=0
 
-for lib in "${REQUIRED_LIBS[@]}"; do
+i=0
+while [ $i -lt ${#FOUND_LIBS[@]} ]; do
+    lib="${FOUND_LIBS[$i]}"
+    rpath="${FOUND_PATHS[$i]}"
     info "同步 ${lib}..."
-    if scp -P "${RKNN_SSH_PORT}" -q "${RKNN_HOST}:${DEVICE_LIB_PATH}/${lib}" "${TARGET_DIR}/" 2>/dev/null; then
-        # 获取文件大小
+    if scp -P "${RKNN_SSH_PORT}" -q "${RKNN_HOST}:${rpath}" "${TARGET_DIR}/${lib}" 2>/dev/null; then
         SIZE=$(stat -f%z "${TARGET_DIR}/${lib}" 2>/dev/null || stat -c%s "${TARGET_DIR}/${lib}" 2>/dev/null || echo "unknown")
         ok "${lib} (${SIZE} bytes)"
-        ((SYNCED++))
+        SYNCED=$((SYNCED + 1))
     else
         warn "${lib} — 同步失败"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
+    i=$((i + 1))
 done
+
+FAILED=$((FAILED + ${#MISSING_LIBS[@]}))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 结果汇总
@@ -206,6 +281,13 @@ fi
 ok "${BOLD}SDK 库文件同步完成！${RESET}"
 echo ""
 echo -e "  ${CYAN}下一步:${RESET}"
-echo "    make cross              # 交叉编译（默认 RK3576）"
-echo "    make cross-rk3568       # 交叉编译 RK3568 版本"
+if [ "${RKNN_DEVICE}" = "rk3568" ]; then
+    echo "    make cross-rk3568       # 交叉编译 RK3568 版本"
+    echo "    make deploy-rk3568      # 部署到 RK3568 设备"
+elif [ "${RKNN_DEVICE}" = "rk3576" ]; then
+    echo "    make cross              # 交叉编译（默认 RK3576）"
+    echo "    make deploy             # 部署到 RK3576 设备"
+else
+    echo "    make cross RKNN_DEVICE=${RKNN_DEVICE}   # 交叉编译"
+fi
 echo ""
