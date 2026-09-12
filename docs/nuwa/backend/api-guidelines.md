@@ -40,6 +40,13 @@
 当前 [AlarmDto](../../../crates/api/src/routes/alarm.rs) 使用平铺的 `imageId` / `cropImageId` 与 `bboxJson` 字符串；不要求改成 `evidence` / `target` 包装。
 稳定 `ruleId` 与 `evidenceStatus` 是待实现的增量字段，接入时同步持久化、DTO、WS 类型和消费者；图片生成状态不能复用人工处理的 `status`。
 
+## 快照编码系统配置
+
+快照编码质量与裁剪参数统一由 `GET/PUT /api/v1/system/snapshot/config` 管理：
+- DTO 采用 camelCase，按主码流/子码流双流区分全景与特写质量：`mainStreamPanoramicQuality`、`mainStreamCropQuality`、`subStreamPanoramicQuality`、`subStreamCropQuality` (范围 1-100)，以及 `cropPaddingRatio` (范围 0.0-0.5)；
+- 配置变更由 SQLite 持久化并由 `SnapshotEngine` 执行无锁原子热更新，下次抓拍即刻生效；
+- 前端设置页面统一收敛在存储设置页的「图片编码」分区，不创建独立 Tab。
+
 ## 分页
 
 | 数据                     | 约定                                                                   |

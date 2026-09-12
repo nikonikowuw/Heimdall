@@ -7,7 +7,7 @@
 | 路径                      | 允许的处理                                                                       |
 | ------------------------- | -------------------------------------------------------------------------------- |
 | `infer_fast_path`         | 硬解输出 → 设备预处理 → NPU；原生 buffer 传递，不做 CPU 像素复制、色彩转换或软解 |
-| `snapshot_readback_path`  | 告警/人工抓拍时按需单帧 Device→Host，再由 CPU 转 RGB/JPEG 存盘                   |
+| `snapshot_readback_path`  | 告警/人工抓拍时按需触发，优先在设备侧完成裁剪与硬件 JPEG 编码（MPP/VT/DVPP），仅压缩后 bitstream 执行 Device→Host 回读写盘；硬件不可用时逐级平滑降级至 CPU 路径 |
 | `debug_cpu_fallback_path` | 仅物理无硬件单元时 CPU 保底，显式日志标明回退                                    |
 
 压缩网络输入仍有一次 Host→Device DMA，不能宣称“全链路零拷贝”。设备侧零拷贝仅指解码输出到推理输入。
@@ -59,5 +59,15 @@
 | Critical     | 75% 削峰，阻断新任务                        |
 | Emergency    | 切断非关键辅流、暂停高负载推理              |
 | Conservative | 传感器失败时 50% 限流、阻断准入并报维护告警 |
+
+## 快照硬件编码与设备侧裁剪
+
+低频证据路径（`snapshot_readback_path`）全面推行设备侧全链路硬件加速：
+
+- **统一抽象**：通过 `media::DeviceSnapEncoder` 封装全景大图编码与设备侧裁剪特写编码，业务层统一面向 Trait 编程，底层屏蔽各平台差异。
+- **单实例串行调度**：快照编码器常驻单实例（由 `SnapEncoder` 互斥锁保护排队），严禁按摄像头或并发请求创建多上下文，避免硬件单通道争抢与 CMA 内存耗尽；失败时逐级降级至 CPU。
+- **几何与对齐规范**：裁剪参数统一经由 `compute_crop_roi` 纯数学算法计算，严格保障 NV12 起点与宽高偶数对齐、硬件 16 字节 Stride 对齐、硬件下限防溢出（$\ge 16\times 16$）以及向左上平移的防越界补偿。
+- **Scratchpad 单画板机制**：RGA 等设备侧裁剪输出采用单块最大分辨率（如 1080P/4K）常驻预分配 DMA-BUF，严禁根据目标 BBox 动态分配，杜绝 CMA 连续内存碎片化与系统崩溃。
+- **色彩空间防发灰**：硬件 JPEG 编码必须显式声明 BT.601 Full Range（如 `MPP_FRAME_RANGE_JPEG`），杜绝因未映射 Limited Range 导致暗部泛白与对比度下降。
 
 验证 stride/offset、URL 特殊字符脱敏、GOP 丢帧恢复、重配 drain、时间戳回跳、健康防抖、温控恢复与停机超时。

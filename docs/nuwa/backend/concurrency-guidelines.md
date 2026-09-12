@@ -10,6 +10,7 @@
 
 线程数量在启动装配时确定，不按帧创建线程；模型、会话及硬件上下文在所属 Worker 常驻。
 常驻推理不使用逐次 `spawn_blocking`；对外 async 方法通过有界通道调度同步硬件工作。
+低频快照证据任务（裁剪、JPEG 压缩与文件落盘）通过固定容量队列提交到专用 OS Worker，不能为每次请求调用 `spawn_blocking`。
 实现参考 [InferenceWorker](../../../crates/infer/src/worker.rs) 和 [解码器](../../../crates/media/src/decoder.rs)。
 
 ## 通道
@@ -30,6 +31,7 @@
 - 锁内仅做短时内存操作，不跨 IO、FFI 或 `.await`；异步上下文与阻塞线程按需选 Tokio/parking_lot 锁。
 - 简单计数器用 `AtomicU64`；帧所有权跨线程转移，不复制像素。
 - 同一硬件实例不并发调用；插件状态与 Pipeline 全局状态隔离，见 [算法 SDK](./algo-sdk-guidelines.md#状态与生命周期)。
+- 硬件快照编码器采用单实例串行模型：硬件上下文在固定 OS Worker 内常驻，由有界通道排队；队列满时立即拒绝/丢弃当前低频任务并记录指标，禁止按路创建多实例以保护 CMA 连续物理内存；失败时自动降级到 CPU。
 
 ## 停机
 

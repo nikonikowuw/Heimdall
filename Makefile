@@ -45,7 +45,7 @@ CARGO       := cargo
 RELEASE     := --release
 
 # 主程序交叉编译 feature 组合 (RKNN 平台)
-RKNN_APP_FEATURES := media/mpp,infer/backend-rknn
+RKNN_APP_FEATURES := hw-snap-mpp,infer/backend-rknn
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 颜色输出
