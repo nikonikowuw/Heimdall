@@ -9,6 +9,7 @@
 | SDK / 宿主 C ABI | [c_abi.rs](../../../crates/algo-sdk/src/c_abi.rs)、[types.rs](../../../crates/infer/src/c_abi/types.rs)                                                       |
 | 插件 trait / 导出宏 | [plugin.rs](../../../crates/algo-sdk/src/plugin.rs)、[macros.rs](../../../crates/algo-sdk/src/macros.rs)                                                      |
 | 帧 / 预处理 / 模型会话 | [frame.rs](../../../crates/algo-sdk/src/frame.rs)、[cv](../../../crates/algo-sdk/src/cv/mod.rs)、[model.rs](../../../crates/algo-sdk/src/model.rs)             |
+| 后处理工具库 | [cv::postprocess](../../../crates/algo-sdk/src/cv/postprocess/mod.rs)（quantize / dfl / yolov8_rknn）                                                  |
 | 结果 / 坐标反算      | [emitter.rs](../../../crates/algo-sdk/src/emitter.rs)、[math.rs](../../../crates/algo-sdk/src/math.rs)                                                        |
 | 加载 / 沙箱 / 注册表  | [loader.rs](../../../crates/infer/src/c_abi/loader.rs)、[sandbox.rs](../../../crates/infer/src/sandbox.rs)、[package.rs](../../../crates/infer/src/package.rs) |
 
@@ -185,13 +186,28 @@ unsafe extern "C" fn(
 - 模型初始化时缓存 `objc_getClass/sel_registerName`，热路径不重复查选择器。
 - Float16 输出转换使用 Accelerate `vImageConvert_Planar16FtoPlanarF` 批量处理，不逐元素标量位移。
 
+## 后处理工具库 (cv::postprocess)
+
+算法包通用后处理逻辑集中在 `algo_sdk::cv::postprocess`，避免各包重复实现量化、DFL 解码和多分支解析。
+
+| 模块 | 职责 | 复用范围 |
+|------|------|----------|
+| `quantize` | `dequant_i8` / `quant_f32` INT8 量化反量化 | 任何量化模型 |
+| `dfl` | `decode_dfl` DFL softmax 加权求和解码 | YOLOv8 系列（支持任意 bin 数） |
+| `yolov8_rknn` | `parse_yolov8_int8` 多分支 INT8 解析 + score_sum 快筛 + NMS | RKNN 优化版 YOLOv8 |
+
+- 算法包通过 `Yolov8RknnConfig` 参数驱动（输入尺寸、DFL bins、类别数、score_sum 开关），不需要为每个模型重写后处理。
+- 扩展新模型（YOLOv11、RT-DETR 等）在 `postprocess/` 下新增文件，组合现有原语或实现新的解码逻辑。
+- `RknnTensorOutput` 类型定义在 `postprocess::yolov8_rknn`，各算法包通过 re-export 使用，不在本地重复定义。
+- 自定义标签覆盖在算法包 plugin 层完成（`parse_yolov8_int8` 返回后 `.label = Some(custom)`），不耦合到通用解析器。
+
 ## Rockchip RKNN
 
 - RK3576 双核用 `RKNN_NPU_CORE_0_1=3`，RK3588 三核用 `RKNN_NPU_CORE_0_1_2=7`；不把 AUTO 当已启用多核。
 - 本项目 BSP 的 `rknn_create_mem_from_fd` 需要有效 `virt_addr`；`dma_mem_cache` 持有映射，禁止逐帧 mmap/munmap。
 - **DMA-BUF 映射权限硬性约束**：使用 `mmap` 将输入 DMA-BUF 映射为虚拟地址供 `rknn_create_mem_from_fd` 使用时，必须声明为 `libc::PROT_READ | libc::PROT_WRITE`。严禁仅使用只读 `PROT_READ`，否则后续调用 `rknn_inputs_set` 执行 Host 内存拷贝时，`librknnrt` 向该张量虚拟地址写入数据将立即触发 Linux 内核缺页写保护致命段错误（SIGSEGV）。
 - **受限 CMA 内存下的会话复用**：在 RK3568 等物理连续内存紧缺平台（如 `CmaTotal: 16MB`），两阶段算法（检测+识别）必须通过 `SharedModels` 弱引用单例 Actor 模式统一管理底层 RKNN Context，禁止按摄像头重复初始化导致 CMA OOM。
-- INT8 DFL 路径保持 `want_float=0`，先按 `(raw_cls-zp)*scale >= conf_thresh` 剪枝，只对候选网格执行 16-bin softmax；模型输出布局须匹配，不能套用于所有模型。
+- INT8 DFL 路径保持 `want_float=0`，先按 `(raw_cls-zp)*scale >= conf_thresh` 剪枝，只对候选网格执行 16-bin softmax；通用解析器通过 `Yolov8RknnConfig.dfl_bins` 和 `num_classes` 参数化，不硬编码为特定模型。
 - `RknnOutputsGuard` 在所有退出路径调用 `rknn_outputs_release`；同一 context 非线程安全，必须绑定所属 Worker。
 
 ## 验证与已知差异

@@ -12,6 +12,8 @@
 
 ## 高风险重复
 
+> **已实践案例**：`dequant_i8`、`quant_f32`、DFL 解码、score_sum 快筛曾分别在 `general_detection`、`safetyhelmet_detection`、`fire_smoke_detection` 三个算法包中独立实现。提取到 `algo_sdk::cv::postprocess` 后，各包只需声明 `Yolov8RknnConfig` 参数即可复用完整后处理链路，包内代码量从 ~280 行降至 ~50 行（仅保留 fallback 路径）。
+
 | 对象                         | 必须一起检查                                              |
 | ---------------------------- | --------------------------------------------------------- |
 | 模型输入尺寸、类别、量化参数 | 算法包元数据、转换脚本、预处理与后处理                    |

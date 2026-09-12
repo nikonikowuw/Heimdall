@@ -1,6 +1,16 @@
 //! Heimdall 独立 Rust 算法包开发套件 (`algo-sdk`)
 //!
 //! 提供纯 Rust 编写算法插件的轻量 SDK，零依赖主工程业务 crate，支持在独立仓库闭环开发与测试。
+//!
+//! # 快速开始
+//!
+//! 1. 实现 [`plugin::AlgoPlugin`] trait（`init` + `process`）
+//! 2. 使用 [`cv::letterbox`] / [`cv::resize`] 做预处理
+//! 3. 使用 [`cv::postprocess`] 的后处理工具解析模型输出
+//! 4. 通过 [`emitter::ResultEmitter`] 发射检测结果
+//! 5. 使用 [`export_algo!`] 宏导出 C ABI 虚表
+//!
+//! 详见 [` GUIDE.md`](https://github.com/) 开发指南。
 
 pub mod c_abi;
 pub mod cv;
