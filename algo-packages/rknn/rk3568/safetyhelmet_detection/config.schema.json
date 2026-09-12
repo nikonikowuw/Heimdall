@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "安全帽检测配置 (RK3568)",
+  "description": "安全帽检测算法配置 (Rockchip RK3568)，检测 Hardhat / NO-Hardhat 两类目标",
+  "additionalProperties": false,
+  "required": [
+    "confidence_threshold",
+    "iou_threshold"
+  ],
+  "properties": {
+    "confidence_threshold": {
+      "type": "number",
+      "title": "置信度阈值",
+      "description": "检测框置信度低于该值的结果将被过滤",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.45
+    },
+    "iou_threshold": {
+      "type": "number",
+      "title": "IoU 阈值",
+      "description": "非极大值抑制使用的交并比阈值",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.45
+    },
+    "custom_alarm_label": {
+      "type": "string",
+      "title": "自定义业务标签",
+      "description": "为告警附加自定义场景标识或业务备注（可选，留空则使用模型原生类别名）",
+      "maxLength": 64,
+      "default": ""
+    }
+  }
+}

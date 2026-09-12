@@ -1,0 +1,35 @@
+{
+  "manifest_version": 1,
+  "algorithm_id": "safetyhelmet_detection",
+  "version": "1.0.0",
+  "name": "Safety Helmet Detection (RK3568 RKNN)",
+  "description": "YOLOv8n-based safety helmet detection model powered by RKNN on Rockchip RK3568. Detects Hardhat (wearing) and NO-Hardhat (not wearing) for construction site safety compliance.",
+  "algorithm_type": "object_detection",
+  "alarm_type_id": "safety_violation",
+  "platform_id": "linux-rknn",
+  "min_adapter_version": "1.0.0",
+  "runtime_constraints": {
+    "target_soc": "rk3568"
+  },
+  "resource_profile": {
+    "min_free_memory_mb": 128,
+    "fps_tiers": [
+      {
+        "fps": 5,
+        "units": 50
+      },
+      {
+        "fps": 15,
+        "units": 150
+      },
+      {
+        "fps": 30,
+        "units": 300
+      }
+    ]
+  },
+  "self_test": {
+    "timeout_ms": 10000,
+    "input_mode": "test_image"
+  }
+}

@@ -2,6 +2,8 @@
 
 本目录包含适用于 Rockchip RK3568 平台的 NPU 模型权重（由 RKNN-Toolkit2 编译）。
 
+> **模型转换记录**: 详见 [CONVERSION.md](CONVERSION.md)
+
 ## 模型列表
 
 | 模型文件名 | 任务 | 输入尺寸 | 格式 / 精度 | 来源 |

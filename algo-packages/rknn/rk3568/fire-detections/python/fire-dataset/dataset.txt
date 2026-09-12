@@ -1,0 +1,13 @@
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.103.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.109.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.111.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.117.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.120.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.121.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.124.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.125.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.136.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.144.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.149.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/fire.150.png
+/home/nikoniko/work/tentcoo/rknn_model_zoo/datasets/fire-dataset/images1.jpeg
