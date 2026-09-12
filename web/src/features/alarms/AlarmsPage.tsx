@@ -83,6 +83,7 @@ interface AlarmCardItemProps {
   alarm: AlarmRecord
   cameraName?: string
   onSelect: () => void
+  onSelectCrop: () => void
   onToggleStatus: () => void
   t: (key: string) => string
 }
@@ -91,6 +92,7 @@ function AlarmCardItem({
   alarm,
   cameraName,
   onSelect,
+  onSelectCrop,
   onToggleStatus,
   t,
 }: AlarmCardItemProps): React.ReactElement {
@@ -119,13 +121,21 @@ function AlarmCardItem({
         )}
 
         {alarm.cropImageRelPath && (
-          <div className="absolute right-2 bottom-2 h-14 w-14 overflow-hidden rounded-lg border border-white/40 bg-black/80 p-0.5 shadow-md backdrop-blur-xs">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSelectCrop()
+            }}
+            className="absolute right-2 bottom-2 z-20 h-14 w-14 overflow-hidden rounded-lg border border-white/40 bg-black/80 p-0.5 shadow-md backdrop-blur-xs transition-all duration-200 hover:border-white/70 hover:shadow-lg hover:shadow-black/40"
+
+          >
             <img
               src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
               alt="Crop"
               className="h-full w-full rounded object-cover"
             />
-          </div>
+          </button>
         )}
 
         <div className="absolute top-2 left-2 flex items-center gap-1.5">
@@ -194,6 +204,7 @@ interface AlarmTableRowProps {
   alarm: AlarmRecord
   cameraName?: string
   onSelect: () => void
+  onSelectCrop: () => void
   onToggleStatus: () => void
   t: (key: string) => string
 }
@@ -202,6 +213,7 @@ function AlarmTableRow({
   alarm,
   cameraName,
   onSelect,
+  onSelectCrop,
   onToggleStatus,
   t,
 }: AlarmTableRowProps): React.ReactElement {
@@ -213,19 +225,27 @@ function AlarmTableRow({
       className="cursor-pointer transition-colors hover:bg-[var(--accent-soft)]/20"
     >
       <td className="px-3 py-2">
-        <div className="h-10 w-16 shrink-0 overflow-hidden rounded border border-[var(--border)] bg-black/80">
-          {alarm.cropImageRelPath || alarm.imageRelPath ? (
+        {(alarm.cropImageRelPath || alarm.imageRelPath) ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (alarm.cropImageRelPath) onSelectCrop()
+            }}
+            className="h-10 w-16 shrink-0 overflow-hidden rounded border border-[var(--border)] bg-black/80 transition-all duration-200 hover:border-[var(--accent)]/50 hover:shadow-md"
+
+          >
             <img
               src={evidenceApi.getImageUrl(alarm.cropImageRelPath || alarm.imageRelPath)}
               alt="Thumb"
               className="h-full w-full object-cover"
             />
-          ) : (
-            <div className="flex h-full items-center justify-center font-mono text-[9px] text-slate-500">
-              N/A
-            </div>
-          )}
-        </div>
+          </button>
+        ) : (
+          <div className="flex h-10 w-16 items-center justify-center rounded border border-[var(--border)] bg-black/80 font-mono text-[9px] text-slate-500">
+            N/A
+          </div>
+        )}
       </td>
       <td className="px-3 py-2 font-mono text-[11px] text-[var(--text-primary)]">
         {alarm.eventId.slice(0, 12)}...
@@ -296,6 +316,7 @@ function AlarmsContent({
   viewMode,
   cameraNameMap,
   onSelect,
+  onSelectCrop,
   onToggleStatus,
   t,
 }: AlarmsContentProps): React.ReactElement {
@@ -350,6 +371,7 @@ function AlarmsContent({
               alarm={alarm}
               cameraName={cameraNameMap?.[alarm.cameraId]}
               onSelect={() => onSelect(alarm)}
+              onSelectCrop={() => onSelectCrop(alarm)}
               onToggleStatus={() => onToggleStatus(alarm)}
               t={t}
             />
@@ -701,6 +723,81 @@ function CaptureLightboxModal({
   )
 }
 
+interface CropLightboxModalProps {
+  alarm: AlarmRecord
+  onClose: () => void
+  t: (key: string) => string
+}
+
+function CropLightboxModal({
+  alarm,
+  onClose,
+  t,
+}: CropLightboxModalProps): React.ReactElement {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="relative flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-black shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/15">
+              <ShieldAlert className="h-4 w-4 text-rose-500" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-white">
+                {alarm.targetLabel}
+              </h3>
+              <span className="font-mono text-[11px] text-white/50">
+                #{alarm.trackId} · {alarm.cameraId}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-xl p-1.5 text-white/50 transition-all hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto p-4">
+          <div className="flex items-center justify-center overflow-hidden rounded-2xl bg-black">
+            {alarm.cropImageRelPath ? (
+              <img
+                src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
+                alt="Crop full"
+                className="max-h-[78vh] w-full object-contain"
+              />
+            ) : (
+              <div className="flex h-64 items-center justify-center text-white/30">
+                {t('modal.noImage')}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between border-t border-white/10 px-6 py-3">
+          <div className="flex items-center gap-3 font-mono text-[11px] text-white/50">
+            <span>{t('modal.channel')}: {alarm.cameraId}</span>
+            <span className="text-white/20">|</span>
+            <span>{t('modal.trackId')}: #{alarm.trackId}</span>
+            <span className="text-white/20">|</span>
+            <span>{formatTimestamp(alarm.occurredAt)}</span>
+          </div>
+          <span className="rounded-md bg-white/10 px-2 py-0.5 font-mono text-[10px] text-white/60">
+            {((alarm.confidence ?? 0) * 100).toFixed(0)}% {t('card.confidence')}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function AlarmsPage(): React.ReactElement {
   const { t } = useTranslation('alarm')
   const [activeTab, setActiveTab] = useState<EvidenceTab>('alarms')
@@ -723,6 +820,7 @@ export function AlarmsPage(): React.ReactElement {
 
   const [lightboxAlarm, setLightboxAlarm] = useState<AlarmRecord | null>(null)
   const [lightboxCapture, setLightboxCapture] = useState<CaptureRecord | null>(null)
+  const [cropPreviewAlarm, setCropPreviewAlarm] = useState<AlarmRecord | null>(null)
 
   useEffect(() => {
     let isMounted = true
@@ -1040,6 +1138,7 @@ export function AlarmsPage(): React.ReactElement {
             viewMode={viewMode}
             cameraNameMap={cameraNameMap}
             onSelect={setLightboxAlarm}
+            onSelectCrop={setCropPreviewAlarm}
             onToggleStatus={handleToggleAlarmStatus}
             t={t}
           />
@@ -1089,6 +1188,15 @@ export function AlarmsPage(): React.ReactElement {
         <CaptureLightboxModal
           capture={lightboxCapture}
           onClose={() => setLightboxCapture(null)}
+          t={t}
+        />
+      )}
+
+      {/* 特写大图灯箱 Modal */}
+      {cropPreviewAlarm && (
+        <CropLightboxModal
+          alarm={cropPreviewAlarm}
+          onClose={() => setCropPreviewAlarm(null)}
           t={t}
         />
       )}
