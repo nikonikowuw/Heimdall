@@ -227,6 +227,7 @@ struct MppBufferLease {
 // SAFETY: MppBuffer 内部具有线程安全的引用计数机制（MPP 内部加锁互斥），
 // Lease 仅在 Drop 时调用 mpp_buffer_put 减计数，因此满足跨线程传递与共享。
 unsafe impl Send for MppBufferLease {}
+// SAFETY: MppBufferLease 仅通过 MPP 内部引用计数句柄共享，Drop 只递减引用。
 unsafe impl Sync for MppBufferLease {}
 
 impl Drop for MppBufferLease {
@@ -309,6 +310,7 @@ impl MppDecoderInner {
         // 开启内部流切分器 (MPP_DEC_SET_PARSER_SPLIT_MODE)
         // 使 MPP 能够自动从复合 Annex-B 包 (VPS/SPS/PPS/IDR) 中切出独立 Access Unit 喂入硬件
         let mut split_mode: std::os::raw::c_uint = 1;
+        // SAFETY: mpi 是 mpp_create 返回的有效虚表，split_mode 在调用期间保持有效。
         unsafe {
             if let Some(ctrl_fn) = (*mpi).control {
                 let ret_split = ctrl_fn(
@@ -402,12 +404,14 @@ impl MppDecoderInner {
             ffi::mpp_packet_set_pts(packet, pts);
         }
 
+        // SAFETY: self.mpi 来自同一 MPP context，读取 decode_put_packet 函数指针。
         let put_fn =
             unsafe { (*self.mpi).decode_put_packet }.ok_or_else(|| MediaError::Decode {
                 reason: "MPP decode_put_packet 函数指针无效".to_string(),
             })?;
 
         // 工业级加固：带背压流控重试机制（若 MPP 内部缓冲队列满，先 poll 抽取已解帧以腾出硬件槽位再重试）
+        // SAFETY: packet 已初始化，put_fn 属于同一 MPP context。
         let mut ret = unsafe { put_fn(self.ctx, packet) };
         let mut retry_count = 0;
         let mut pending_frame: Option<FrameRef> = None;
@@ -427,6 +431,7 @@ impl MppDecoderInner {
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(3));
+            // SAFETY: packet 重试仍属于同一 MPP context，put_fn 未失效。
             ret = unsafe { put_fn(self.ctx, packet) };
         }
 
@@ -452,6 +457,7 @@ impl MppDecoderInner {
     }
 
     fn poll_frame(&mut self, pts: i64) -> Result<Option<FrameRef>, MediaError> {
+        // SAFETY: self.mpi 来自同一 MPP context，读取 decode_get_frame 函数指针。
         let get_fn = unsafe { (*self.mpi).decode_get_frame }.ok_or_else(|| MediaError::Decode {
             reason: "MPP decode_get_frame 函数指针无效".to_string(),
         })?;
@@ -476,9 +482,13 @@ impl MppDecoderInner {
         if info_change != 0 {
             // SAFETY: 读取流真实分辨率、步长跨度与所需显存大小
             let w = unsafe { ffi::mpp_frame_get_width(frame) };
+            // SAFETY: frame 已由 get_fn 返回且经过非空校验。
             let h = unsafe { ffi::mpp_frame_get_height(frame) };
+            // SAFETY: frame 已由 get_fn 返回且经过非空校验。
             let hor_s = unsafe { ffi::mpp_frame_get_hor_stride(frame) };
+            // SAFETY: frame 已由 get_fn 返回且经过非空校验。
             let ver_s = unsafe { ffi::mpp_frame_get_ver_stride(frame) };
+            // SAFETY: frame 已由 get_fn 返回且经过非空校验。
             let raw_buf_size = unsafe { ffi::mpp_frame_get_buf_size(frame) };
 
             let is_first_config = self.width == 0 && self.height == 0;
@@ -505,6 +515,7 @@ impl MppDecoderInner {
             // 若不配置外部缓冲池 (MPP_DEC_SET_EXT_BUF_GROUP)，硬件 VPU 将因无处存放解码帧而完全停转，
             // 进而导致输入任务队列打满并持续报 MPP_ERR_BUFFER_FULL (-1012)。
             let optimal_count = calculate_optimal_buffer_count(w, h);
+            // SAFETY: buf_group 是 mpp_buffer_group_get 返回的有效句柄，control 参数为栈上有效值。
             unsafe {
                 if !self.buf_group.is_null() {
                     if resolution_changed {
@@ -630,6 +641,7 @@ impl MppDecoderInner {
         // 检查受损与丢弃标记
         // SAFETY: frame 指针有效
         let err = unsafe { ffi::mpp_frame_get_errinfo(frame) };
+        // SAFETY: frame 已由 get_fn 返回且经过非空校验。
         let discard = unsafe { ffi::mpp_frame_get_discard(frame) };
         if err != 0 || discard != 0 {
             warn!(camera_id = %self.camera_id, err, discard, "MPP 返回受损帧或丢弃帧");
@@ -722,7 +734,9 @@ impl MppDecoderInner {
         let final_pts = if frame_pts != 0 { frame_pts } else { pts };
 
         // 动态查询该帧的真实硬件步长（Runtime Stride Query），杜绝动态切片或固件对齐漂移
+        // SAFETY: frame 属于当前 MPP context，查询真实硬件 horizontal stride。
         let frame_hor_s = unsafe { ffi::mpp_frame_get_hor_stride(frame) as u32 };
+        // SAFETY: frame 属于当前 MPP context，查询真实硬件 vertical stride。
         let frame_ver_s = unsafe { ffi::mpp_frame_get_ver_stride(frame) as u32 };
         let final_hor_stride = if frame_hor_s > 0 {
             frame_hor_s

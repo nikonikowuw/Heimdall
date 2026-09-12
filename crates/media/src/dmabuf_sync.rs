@@ -276,6 +276,25 @@ impl DmaBufSyncGuard {
         })
     }
 
+    /// 显式结束 CPU 访问并传播 END 阶段错误；调用后守卫不再重复执行 END。
+    pub fn finish(mut self) -> Result<(), MediaError> {
+        self.finish_in_place()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn finish_in_place(&mut self) -> Result<(), MediaError> {
+        if !self.active {
+            return Ok(());
+        }
+        self.active = false;
+        dmabuf_sync_cpu(self.fd, false, self.dir)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn finish_in_place(&mut self) -> Result<(), MediaError> {
+        self.active = false;
+        Ok(())
+    }
     #[cfg(not(target_os = "linux"))]
     pub fn acquire(_fd: c_int, _dir: DmaBufSyncDirection) -> Result<Self, MediaError> {
         Ok(Self { active: true })
@@ -284,18 +303,11 @@ impl DmaBufSyncGuard {
 
 impl Drop for DmaBufSyncGuard {
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
         if self.active {
-            let _ = dmabuf_sync_cpu(self.fd, false, self.dir);
+            let _ = self.finish_in_place();
         }
-        #[cfg(not(target_os = "linux"))]
-        let _ = self.active;
     }
 }
-
-// ============================================================================
-// 单元测试（全平台可运行的契约验证）
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

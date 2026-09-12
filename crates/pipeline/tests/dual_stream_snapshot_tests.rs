@@ -152,6 +152,7 @@ async fn test_large_gop_fast_mode_within_threshold() {
         max_burst_packets: 30,
         max_burst_timeout_ms: 80,
         capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+        ..Default::default()
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_fast";
@@ -217,6 +218,7 @@ async fn test_large_gop_sub_stream_reuse_on_large_gap() {
         max_burst_packets: 30,
         max_burst_timeout_ms: 80,
         capture_mode: SnapshotCaptureMode::SubStreamOnLargeGap,
+        ..Default::default()
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_sub_reuse";
@@ -284,6 +286,7 @@ async fn test_large_gop_adaptive_burst_decode() {
         max_burst_packets: 30,
         max_burst_timeout_ms: 1000,
         capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+        ..Default::default()
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_burst";
@@ -349,6 +352,7 @@ async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
         max_burst_packets: 15,
         max_burst_timeout_ms: 80,
         capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+        ..Default::default()
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_overflow";
@@ -414,6 +418,7 @@ async fn test_large_gop_burst_timeout_budget_fuse() {
         max_burst_packets: 30,
         max_burst_timeout_ms: 0,
         capture_mode: SnapshotCaptureMode::AdaptiveDualMode,
+        ..Default::default()
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_fuse";

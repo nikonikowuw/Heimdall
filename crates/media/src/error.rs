@@ -18,6 +18,12 @@ pub enum MediaError {
     #[error("视频帧解码失败: {reason}")]
     Decode { reason: String },
 
+    #[error("视频帧编码失败: {reason}")]
+    Encode { reason: String },
+
+    #[error("硬件编码器初始化失败: {codec}")]
+    EncoderInit { codec: String, reason: String },
+
     #[error("不支持的编解码格式: {0}")]
     UnsupportedCodec(String),
 
@@ -47,6 +53,8 @@ impl MediaError {
             Self::ProbeTimeout(_) => 20004,
             Self::DecoderInit { .. } => 20005,
             Self::Decode { .. } => 20006,
+            Self::Encode { .. } => 20012,
+            Self::EncoderInit { .. } => 20013,
             Self::UnsupportedCodec(_) => 20007,
             Self::SessionNotFound(_) => 20008,
             Self::Frame(_) => 20009,

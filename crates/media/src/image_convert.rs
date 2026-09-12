@@ -595,10 +595,11 @@ fn convert_dmabuf_to_rgb(
     // 4. 安全读取内存切片并转换为 RgbImage (遵循垂直步长 ver_stride 对齐 UV 偏移)
     // SAFETY: map_ptr 在 MmapGuard 存活期间为有效的映射内存地址，长度为 total_size
     let slice = unsafe { std::slice::from_raw_parts(map_ptr as *const u8, total_size) };
-    fast_nv12_to_rgb_image_with_ver_stride(slice, width, height, y_stride, uv_stride, ver_stride)
-    // 析构顺序：
-    // 1. _sync_guard Drop -> 自动调用 DMA_BUF_SYNC_END 结束读同步
-    // 2. _guard Drop -> 自动调用 munmap 解除内存映射
+    let conversion = fast_nv12_to_rgb_image_with_ver_stride(
+        slice, width, height, y_stride, uv_stride, ver_stride,
+    );
+    _sync_guard.finish()?;
+    conversion
 }
 
 // ============================================================================

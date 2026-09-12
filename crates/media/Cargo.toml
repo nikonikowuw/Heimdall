@@ -11,6 +11,10 @@ workspace = true
 default = []
 mpp = []
 dvpp = []
+rga = []
+hw-snap-mpp = ["mpp", "rga"]
+hw-snap-vt = []
+hw-snap-dvpp = ["dvpp"]
 
 [dependencies]
 types = { workspace = true }

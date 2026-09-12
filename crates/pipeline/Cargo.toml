@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+hw-snap-mpp = ["media/hw-snap-mpp"]
+
 [lints]
 workspace = true
 
