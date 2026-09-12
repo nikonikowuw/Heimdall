@@ -15,7 +15,7 @@ use {
     crate::rknn::{RknnRuntime, RknnSession},
     algo_sdk::cv::engine::CvEngine,
     algo_sdk::cv::platforms::rockchip::RgaCvEngine,
-    std::path::Path,
+    std::path::{Path, PathBuf},
 };
 
 /// 算法包内有效的 RKNN 模型文件查找

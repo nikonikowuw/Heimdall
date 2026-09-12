@@ -8,6 +8,7 @@ pub mod buffer;
 pub mod engine;
 pub mod layout;
 pub mod platforms;
+pub mod postprocess;
 pub mod types;
 
 pub use buffer::{CvBuffer, DmaBufLayout};

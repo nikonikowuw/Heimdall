@@ -20,7 +20,7 @@ use {
     algo_sdk::cv::engine::CvEngine,
     algo_sdk::cv::platforms::rockchip::RgaCvEngine,
     algo_sdk::cv::postprocess::{parse_yolov8_int8, Yolov8ParseContext, Yolov8RknnConfig},
-    std::path::Path,
+    std::path::{Path, PathBuf},
 };
 
 /// 寻找算法包内有效的 RKNN 模型文件路径

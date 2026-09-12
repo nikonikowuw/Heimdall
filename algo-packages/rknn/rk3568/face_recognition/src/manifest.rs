@@ -236,8 +236,16 @@ impl LoadedPackage {
             &["nc", "nchw"],
         )?;
 
-        let detector_path = verify_model(&root, &manifest.models.detector, Some("DETECTOR_MODEL_PATH"))?;
-        let embedder_path = verify_model(&root, &manifest.models.embedder, Some("EMBEDDER_MODEL_PATH"))?;
+        let detector_path = verify_model(
+            &root,
+            &manifest.models.detector,
+            Some("DETECTOR_MODEL_PATH"),
+        )?;
+        let embedder_path = verify_model(
+            &root,
+            &manifest.models.embedder,
+            Some("EMBEDDER_MODEL_PATH"),
+        )?;
         Ok(Self {
             root,
             manifest,
@@ -319,7 +327,11 @@ fn validate_model_outputs(
     }
     Ok(())
 }
-fn verify_model(root: &Path, model: &ModelManifest, env_var_name: Option<&str>) -> Result<PathBuf, AlgoError> {
+fn verify_model(
+    root: &Path,
+    model: &ModelManifest,
+    env_var_name: Option<&str>,
+) -> Result<PathBuf, AlgoError> {
     let relative = Path::new(&model.path);
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
@@ -334,26 +346,30 @@ fn verify_model(root: &Path, model: &ModelManifest, env_var_name: Option<&str>) 
             reason: format!("模型路径不安全: {}", model.path),
         });
     }
-    
+
     // 优先使用环境变量（如果指定）
     if let Some(env_name) = env_var_name {
         if let Ok(env_path) = std::env::var(env_name) {
             let env_path_obj = Path::new(&env_path);
             let path = if env_path_obj.is_absolute() {
-                env_path_obj.canonicalize().map_err(|error| AlgoError::ModelLoad {
-                    reason: format!("环境变量 {env_name} 指向的模型文件无法规范化: {error}"),
-                })?
+                env_path_obj
+                    .canonicalize()
+                    .map_err(|error| AlgoError::ModelLoad {
+                        reason: format!("环境变量 {env_name} 指向的模型文件无法规范化: {error}"),
+                    })?
             } else {
-                root.join(env_path_obj).canonicalize().map_err(|error| AlgoError::ModelLoad {
-                    reason: format!("环境变量 {env_name} 指向的模型文件无法规范化: {error}"),
-                })?
+                root.join(env_path_obj)
+                    .canonicalize()
+                    .map_err(|error| AlgoError::ModelLoad {
+                        reason: format!("环境变量 {env_name} 指向的模型文件无法规范化: {error}"),
+                    })?
             };
             if path.is_file() {
                 return Ok(path);
             }
         }
     }
-    
+
     let path = root
         .join(relative)
         .canonicalize()
