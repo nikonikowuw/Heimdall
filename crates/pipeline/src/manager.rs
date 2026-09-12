@@ -244,6 +244,16 @@ impl PipelineManager {
         &self.snapshot_engine
     }
 
+    /// 获取当前快照配置拷贝
+    pub fn snapshot_config(&self) -> SnapshotConfig {
+        self.snapshot_engine.config()
+    }
+
+    /// 热更新快照配置
+    pub fn update_snapshot_config(&self, new_config: SnapshotConfig) -> Result<(), String> {
+        self.snapshot_engine.update_config(new_config)
+    }
+
     /// 订阅管线统一分析事件（实时航迹与规则告警）
     pub fn subscribe_analysis_events(
         &self,
