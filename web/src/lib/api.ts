@@ -135,11 +135,19 @@ export const cameraApi = {
     })
   },
 
-  getLiveStreamUrl(cameraId: string, stream: 'main' | 'sub' = 'main', audio = false): string {
+  getLiveStreamUrl(
+    cameraId: string,
+    stream: 'main' | 'sub' = 'main',
+    audio = false,
+    video = true,
+  ): string {
     const token = useAuthStore.getState().token || ''
     const params = new URLSearchParams({ stream, token })
     if (audio) {
       params.set('audio', 'true')
+    }
+    if (!video) {
+      params.set('video', 'false')
     }
     const path = `${BASE_URL}/live/${encodeURIComponent(cameraId)}.flv?${params.toString()}`
     if (typeof window !== 'undefined' && window.location?.origin) {

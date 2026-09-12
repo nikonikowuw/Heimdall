@@ -6,6 +6,7 @@
 //! 3. 自动将音视频流解包为标准 Annex B NALU 序列 (`FrameFormat::SIMPLE`)；
 //! 4. 将网络数据流转化为系统统一的 `types::EncodedPacket`，交给 StreamHub 分发器的独立消费者 mailbox。
 
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,6 +56,240 @@ pub fn map_transport_policy(policy: TransportPolicy) -> Transport {
 pub enum TransportMode {
     Tcp,
     Udp,
+}
+
+impl TransportMode {
+    fn toggled(self) -> Self {
+        match self {
+            Self::Tcp => Self::Udp,
+            Self::Udp => Self::Tcp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RtspPhase {
+    Describe,
+    Setup,
+    Play,
+    Receive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RtspFailureClass {
+    Authentication,
+    Authorization,
+    NotFound,
+    SessionExpired,
+    UnsupportedTransport,
+    Timeout,
+    Connection,
+    Inactivity,
+    Protocol,
+}
+
+const MAX_RTP_TIMESTAMP_JUMP_SECS: u32 = 10;
+const TIMESTAMP_DISCONTINUITY_WARN_MS: i64 = 5_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimestampMapping {
+    source_timestamp: i64,
+    source_elapsed_ticks: i64,
+    clock_rate_hz: u32,
+    source_delta_ticks: Option<i64>,
+    source_delta_ms: Option<i64>,
+    calculated_pts_ms: i64,
+    pts_ms: i64,
+    was_clamped: bool,
+    large_jump: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct RtpDiagnostics {
+    video_loss_packets: u64,
+    video_loss_events: u64,
+    audio_loss_packets: u64,
+    audio_loss_events: u64,
+}
+
+impl RtpDiagnostics {
+    fn record_video_loss(&mut self, loss_packets: u16) -> bool {
+        if loss_packets == 0 {
+            return false;
+        }
+        self.video_loss_packets += u64::from(loss_packets);
+        self.video_loss_events += 1;
+        true
+    }
+
+    fn record_audio_loss(&mut self, loss_packets: u16) -> bool {
+        if loss_packets == 0 {
+            return false;
+        }
+        self.audio_loss_packets += u64::from(loss_packets);
+        self.audio_loss_events += 1;
+        true
+    }
+}
+
+#[derive(Debug, Default)]
+struct TrackTimestampMapper {
+    last_elapsed_ticks: Option<i64>,
+    last_pts_ms: Option<i64>,
+}
+
+impl TrackTimestampMapper {
+    fn map(&mut self, timestamp: retina::Timestamp, base_timestamp_ms: i64) -> TimestampMapping {
+        let source_elapsed_ticks = timestamp.elapsed();
+        let clock_rate_hz = timestamp.clock_rate().get();
+        let elapsed_ms = ticks_to_ms(source_elapsed_ticks, clock_rate_hz);
+        let calculated_pts_ms =
+            clamp_i128_to_i64(i128::from(base_timestamp_ms) + i128::from(elapsed_ms));
+        let source_delta_ticks = self
+            .last_elapsed_ticks
+            .map(|last| source_elapsed_ticks.saturating_sub(last));
+        let source_delta_ms = source_delta_ticks.map(|delta| ticks_to_ms(delta, clock_rate_hz));
+        let pts_ms = self
+            .last_pts_ms
+            .map_or(calculated_pts_ms, |last| calculated_pts_ms.max(last));
+        let was_clamped = pts_ms != calculated_pts_ms;
+        let large_jump = source_delta_ms
+            .map(|delta| {
+                delta >= TIMESTAMP_DISCONTINUITY_WARN_MS
+                    || delta <= -TIMESTAMP_DISCONTINUITY_WARN_MS
+            })
+            .unwrap_or(false);
+
+        self.last_elapsed_ticks = Some(source_elapsed_ticks);
+        self.last_pts_ms = Some(pts_ms);
+
+        TimestampMapping {
+            source_timestamp: timestamp.timestamp(),
+            source_elapsed_ticks,
+            clock_rate_hz,
+            source_delta_ticks,
+            source_delta_ms,
+            calculated_pts_ms,
+            pts_ms,
+            was_clamped,
+            large_jump,
+        }
+    }
+}
+
+fn ticks_to_ms(ticks: i64, clock_rate_hz: u32) -> i64 {
+    debug_assert!(clock_rate_hz > 0);
+    clamp_i128_to_i64(i128::from(ticks) * 1_000 / i128::from(clock_rate_hz))
+}
+
+fn clamp_i128_to_i64(value: i128) -> i64 {
+    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+#[derive(Debug)]
+struct SessionFailure {
+    error: MediaError,
+    frames_streamed: u64,
+    phase: RtspPhase,
+    class: RtspFailureClass,
+}
+
+impl SessionFailure {
+    fn new(
+        error: MediaError,
+        frames_streamed: u64,
+        phase: RtspPhase,
+        class: RtspFailureClass,
+    ) -> Self {
+        Self {
+            error,
+            frames_streamed,
+            phase,
+            class,
+        }
+    }
+
+    /// 媒体传输切换只允许发生在 SETUP 阶段超时/不支持，或接收阶段的静默超时。
+    /// DESCRIBE 与 PLAY 控制阶段始终走 TCP；已成功产出帧的正常断开（EOF / Connection error）
+    /// 说明当前 transport 功能正常，保持原 transport 进行退避重连，杜绝误切 transport。
+    fn should_switch_transport(&self) -> bool {
+        match self.phase {
+            RtspPhase::Setup => matches!(
+                self.class,
+                RtspFailureClass::UnsupportedTransport | RtspFailureClass::Timeout
+            ),
+            RtspPhase::Receive => {
+                if self.class == RtspFailureClass::Inactivity {
+                    return true;
+                }
+                self.frames_streamed == 0
+                    && matches!(
+                        self.class,
+                        RtspFailureClass::Timeout | RtspFailureClass::UnsupportedTransport
+                    )
+            }
+            RtspPhase::Describe | RtspPhase::Play => false,
+        }
+    }
+}
+
+fn classify_retina_status(status_code: Option<u16>) -> RtspFailureClass {
+    match status_code {
+        Some(401) => RtspFailureClass::Authentication,
+        Some(403) => RtspFailureClass::Authorization,
+        Some(404) => RtspFailureClass::NotFound,
+        Some(454) => RtspFailureClass::SessionExpired,
+        Some(461) => RtspFailureClass::UnsupportedTransport,
+        Some(_) => RtspFailureClass::Protocol,
+        None => RtspFailureClass::Protocol,
+    }
+}
+
+fn classify_retina_error(error: &retina::Error) -> RtspFailureClass {
+    use std::error::Error;
+
+    if error.status_code().is_some() {
+        return classify_retina_status(error.status_code());
+    }
+
+    // 优先通过 Error source 链路精确匹配底层标准类型 (std::io::Error / tokio::time::Elapsed)
+    let mut curr: Option<&(dyn Error + 'static)> = Some(error);
+    while let Some(e) = curr {
+        if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+            match io_err.kind() {
+                std::io::ErrorKind::TimedOut => return RtspFailureClass::Timeout,
+                std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::NotConnected
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionRefused => return RtspFailureClass::Connection,
+                _ => {}
+            }
+        }
+        if e.is::<tokio::time::error::Elapsed>() {
+            return RtspFailureClass::Timeout;
+        }
+        curr = e.source();
+    }
+
+    let description = error.to_string();
+    let desc_lower = description.to_lowercase();
+    if desc_lower.contains("timeout") || desc_lower.contains("timed out") {
+        RtspFailureClass::Timeout
+    } else if desc_lower.contains("unable to connect")
+        || desc_lower.contains("connection refused")
+        || desc_lower.contains("connection reset")
+        || desc_lower.contains("broken pipe")
+        || desc_lower.contains("error reading from rtsp peer")
+        || desc_lower.contains("error writing to rtsp peer")
+        || desc_lower.contains("error receiving udp packet")
+        || desc_lower.contains("eof")
+    {
+        RtspFailureClass::Connection
+    } else {
+        RtspFailureClass::Protocol
+    }
 }
 
 /// 从 SDP 编码名称推导 CodecType（严格白名单校验 H.264 与 H.265，拒绝未知编码）
@@ -137,6 +372,71 @@ impl RetinaIngestor {
         self.dispatcher.publish(packet);
     }
 
+    fn log_timestamp_discontinuity(&self, stream: &'static str, mapping: TimestampMapping) {
+        if !mapping.large_jump {
+            return;
+        }
+
+        tracing::warn!(
+            camera_id = %self.camera_id,
+            stream,
+            source_timestamp = mapping.source_timestamp,
+            source_elapsed_ticks = mapping.source_elapsed_ticks,
+            source_delta_ticks = ?mapping.source_delta_ticks,
+            source_delta_ms = ?mapping.source_delta_ms,
+            clock_rate_hz = mapping.clock_rate_hz,
+            calculated_pts_ms = mapping.calculated_pts_ms,
+            output_pts_ms = mapping.pts_ms,
+            pts_was_clamped = mapping.was_clamped,
+            "Retina 媒体源时间戳出现大幅跳变，已记录并保持对外 PTS 单调"
+        );
+    }
+
+    fn process_track_frame(
+        &self,
+        stream: &'static str,
+        mapper: &mut TrackTimestampMapper,
+        diagnostics: &mut RtpDiagnostics,
+        timestamp: retina::Timestamp,
+        loss: u16,
+        base_timestamp_ms: i64,
+    ) -> i64 {
+        let (lost_packets, total_packets, loss_events) = match stream {
+            "video" => {
+                let has_loss = diagnostics.record_video_loss(loss);
+                (
+                    has_loss,
+                    diagnostics.video_loss_packets,
+                    diagnostics.video_loss_events,
+                )
+            }
+            _ => {
+                let has_loss = diagnostics.record_audio_loss(loss);
+                (
+                    has_loss,
+                    diagnostics.audio_loss_packets,
+                    diagnostics.audio_loss_events,
+                )
+            }
+        };
+
+        if lost_packets {
+            tracing::warn!(
+                camera_id = %self.camera_id,
+                stream,
+                lost_packets_before_frame = loss,
+                total_lost_packets = total_packets,
+                loss_events,
+                source_timestamp = timestamp.timestamp(),
+                "Retina 检测到 RTP 丢包，当前帧可能包含不完整分片"
+            );
+        }
+
+        let mapping = mapper.map(timestamp, base_timestamp_ms);
+        self.log_timestamp_discontinuity(stream, mapping);
+        mapping.pts_ms
+    }
+
     /// 设置流静默看门狗超时时间（连续未收到任何音视频数据包的判定阈值）
     pub fn with_inactivity_timeout(mut self, timeout: Duration) -> Self {
         self.inactivity_timeout = timeout;
@@ -179,7 +479,7 @@ impl RetinaIngestor {
                     tracing::info!(camera_id = %self.camera_id, "Retina RTSP 拉流会话正常关闭或退出");
                     break;
                 }
-                Err((err, frames_streamed)) => {
+                Err(failure) => {
                     if cancel_signal.load(Ordering::Relaxed) || *cancel_rx.borrow() {
                         break;
                     }
@@ -191,35 +491,37 @@ impl RetinaIngestor {
                         count.fetch_add(1, Ordering::Relaxed);
                     }
                     if let Some(last_err) = &self.last_error {
-                        *last_err.lock() = Some(err.to_string());
+                        *last_err.lock() = Some(failure.error.to_string());
                     }
 
                     // 经历过稳定流数据接收后发生的断开，代表长连接中途网络波动，重置退避时间为 1 秒
-                    if frames_streamed > 0 {
+                    if failure.frames_streamed > 0 {
                         backoff = Duration::from_secs(1);
                     }
 
-                    // Auto 模式下若初始连接/握手阶段失败（未成功产生帧），自适应降级至 UDP 模式尝试拉流
-                    if self.transport_policy == TransportPolicy::Auto && frames_streamed == 0 {
-                        if current_transport == TransportMode::Tcp {
-                            tracing::warn!(
-                                camera_id = %self.camera_id,
-                                "TransportPolicy::Auto: TCP 传输建立失败，自适应降级切换至 UDP 模式尝试拉流"
-                            );
-                            current_transport = TransportMode::Udp;
-                        } else {
-                            current_transport = TransportMode::Tcp;
-                        }
-                    }
+                    let attempted_transport = current_transport;
+                    let transport_switched = self.transport_policy == TransportPolicy::Auto
+                        && failure.should_switch_transport();
+                    let next_transport = if transport_switched {
+                        attempted_transport.toggled()
+                    } else {
+                        attempted_transport
+                    };
+                    current_transport = next_transport;
 
                     let jitter_ms = crate::dispatcher::monotonic_ms() % 500;
                     let wait_duration = backoff + Duration::from_millis(jitter_ms);
 
                     tracing::warn!(
                         camera_id = %self.camera_id,
-                        error = %err,
-                        transport = ?current_transport,
-                        retry_after_secs = backoff.as_secs(),
+                        error = %failure.error,
+                        error_class = ?failure.class,
+                        phase = ?failure.phase,
+                        frames_streamed = failure.frames_streamed,
+                        attempted_transport = ?attempted_transport,
+                        next_transport = ?next_transport,
+                        transport_switched,
+                        retry_after_ms = wait_duration.as_millis() as u64,
                         jitter_ms,
                         "Retina RTSP 连接异常中断，准备指数退避重连"
                     );
@@ -246,10 +548,12 @@ impl RetinaIngestor {
         transport_mode: TransportMode,
         cancel_signal: Arc<AtomicBool>,
         mut cancel_rx: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<(), (MediaError, u64)> {
+    ) -> Result<(), SessionFailure> {
         let masked_url = mask_rtsp_url(&self.rtsp_url);
         let (clean_url, creds) =
-            sanitize_rtsp_url_and_credentials(&self.rtsp_url).map_err(|e| (e, 0))?;
+            sanitize_rtsp_url_and_credentials(&self.rtsp_url).map_err(|e| {
+                SessionFailure::new(e, 0, RtspPhase::Describe, RtspFailureClass::Protocol)
+            })?;
 
         // 1. 配置 Retina Session 参数（注入凭证与 User-Agent）
         let session_options = SessionOptions::default()
@@ -274,7 +578,7 @@ impl RetinaIngestor {
                 Session::describe(clean_url, session_options),
             ) => {
                 res.map_err(|_| {
-                    (
+                    SessionFailure::new(
                         MediaError::RtspConnect {
                             url: masked_url.clone(),
                             reason: format!(
@@ -283,15 +587,20 @@ impl RetinaIngestor {
                             ),
                         },
                         0,
+                        RtspPhase::Describe,
+                        RtspFailureClass::Timeout,
                     )
                 })?
                 .map_err(|e| {
-                    (
+                    let class = classify_retina_error(&e);
+                    SessionFailure::new(
                         MediaError::RtspConnect {
                             url: masked_url.clone(),
                             reason: format!("Retina DESCRIBE 握手失败: {e}"),
                         },
                         0,
+                        RtspPhase::Describe,
+                        class,
                     )
                 })?
             }
@@ -303,19 +612,20 @@ impl RetinaIngestor {
             .iter()
             .enumerate()
             .find(|(_, s)| s.media() == "video")
-            .map(|(idx, s)| {
-                parse_video_codec(s.encoding_name())
-                    .map(|c| (idx, c))
-                    .map_err(|e| (e, 0))
-            })
+            .map(|(idx, s)| parse_video_codec(s.encoding_name()).map(|c| (idx, c)))
             .ok_or_else(|| {
-                (
+                SessionFailure::new(
                     MediaError::Protocol(
                         "Retina SDP 响应中未找到有效的视频轨道 (video track)".into(),
                     ),
                     0,
+                    RtspPhase::Describe,
+                    RtspFailureClass::Protocol,
                 )
-            })??;
+            })?
+            .map_err(|error| {
+                SessionFailure::new(error, 0, RtspPhase::Describe, RtspFailureClass::Protocol)
+            })?;
 
         tracing::info!(
             camera_id = %self.camera_id,
@@ -344,18 +654,23 @@ impl RetinaIngestor {
                 session.setup(video_idx, setup_options),
             ) => {
                 res.map_err(|_| {
-                    (
+                    SessionFailure::new(
                         MediaError::Protocol(format!(
                             "Retina SETUP 阶段超时 (超过 {}s 未收到响应)",
                             self.handshake_timeout.as_secs()
                         )),
                         0,
+                        RtspPhase::Setup,
+                        RtspFailureClass::Timeout,
                     )
                 })?
                 .map_err(|e| {
-                    (
+                    let class = classify_retina_error(&e);
+                    SessionFailure::new(
                         MediaError::Protocol(format!("Retina SETUP 阶段失败: {e}")),
                         0,
+                        RtspPhase::Setup,
+                        class,
                     )
                 })?;
             }
@@ -423,6 +738,10 @@ impl RetinaIngestor {
         let sdp_extradata = StreamProber::extract_sdp_extradata(&sdp_text);
 
         // 5. 执行 PLAY 握手并获取解复用流
+        let play_options = PlayOptions::default().enforce_timestamps_with_max_jump_secs(
+            NonZeroU32::new(MAX_RTP_TIMESTAMP_JUMP_SECS)
+                .expect("MAX_RTP_TIMESTAMP_JUMP_SECS must be non-zero"),
+        );
         let playing_session = tokio::select! {
             biased;
             _ = cancel_rx.wait_for(|&c| c) => {
@@ -430,21 +749,26 @@ impl RetinaIngestor {
             }
             res = tokio::time::timeout(
                 self.handshake_timeout,
-                session.play(PlayOptions::default()),
+                session.play(play_options),
             ) => {
                 res.map_err(|_| {
-                    (
+                    SessionFailure::new(
                         MediaError::Protocol(format!(
                             "Retina PLAY 阶段超时 (超过 {}s 未收到响应)",
                             self.handshake_timeout.as_secs()
                         )),
                         0,
+                        RtspPhase::Play,
+                        RtspFailureClass::Timeout,
                     )
                 })?
                 .map_err(|e| {
-                    (
+                    let class = classify_retina_error(&e);
+                    SessionFailure::new(
                         MediaError::Protocol(format!("Retina PLAY 阶段失败: {e}")),
                         0,
+                        RtspPhase::Play,
+                        class,
                     )
                 })?
             }
@@ -469,9 +793,11 @@ impl RetinaIngestor {
         });
 
         let mut demuxed = playing_session.demuxed().map_err(|e| {
-            (
+            SessionFailure::new(
                 MediaError::Protocol(format!("Retina demuxed 初始化失败: {e}")),
                 0,
+                RtspPhase::Play,
+                RtspFailureClass::Protocol,
             )
         })?;
 
@@ -481,8 +807,9 @@ impl RetinaIngestor {
         );
 
         let base_timestamp_ms = chrono::Utc::now().timestamp_millis();
-        let mut last_emitted_video_pts = 0i64;
-        let mut last_emitted_audio_pts = 0i64;
+        let mut video_timestamps = TrackTimestampMapper::default();
+        let mut audio_timestamps = TrackTimestampMapper::default();
+        let mut rtp_diagnostics = RtpDiagnostics::default();
         let mut frames_received: u64 = 0;
 
         // 清理伪唤醒
@@ -522,11 +849,17 @@ impl RetinaIngestor {
                                 camera_id = %self.camera_id,
                                 timeout_secs = self.inactivity_timeout.as_secs(),
                                 frames_received,
+                                video_loss_packets = rtp_diagnostics.video_loss_packets,
+                                video_loss_events = rtp_diagnostics.video_loss_events,
+                                audio_loss_packets = rtp_diagnostics.audio_loss_packets,
+                                audio_loss_events = rtp_diagnostics.audio_loss_events,
                                 "Retina RTSP 数据流静默超时（未收到数据包，判定为 TCP 半开或网络假死），主动触发清理与重连"
                             );
-                            return Err((
+                            return Err(SessionFailure::new(
                                 MediaError::InactivityTimeout(self.inactivity_timeout),
                                 frames_received,
+                                RtspPhase::Receive,
+                                RtspFailureClass::Inactivity,
                             ));
                         }
                     }
@@ -536,24 +869,43 @@ impl RetinaIngestor {
             let item = match next_item {
                 Some(Ok(it)) => it,
                 Some(Err(e)) => {
+                    let class = classify_retina_error(&e);
                     tracing::warn!(
                         camera_id = %self.camera_id,
                         error = %e,
                         frames_received,
+                        video_loss_packets = rtp_diagnostics.video_loss_packets,
+                        video_loss_events = rtp_diagnostics.video_loss_events,
+                        audio_loss_packets = rtp_diagnostics.audio_loss_packets,
+                        audio_loss_events = rtp_diagnostics.audio_loss_events,
+                        error_class = ?class,
                         "Retina 解复用读取错误，准备重连"
                     );
-                    return Err((
+                    return Err(SessionFailure::new(
                         MediaError::Protocol(format!("Retina 数据流错误: {e}")),
                         frames_received,
+                        RtspPhase::Receive,
+                        class,
                     ));
                 }
                 None => {
-                    return Err((
+                    tracing::warn!(
+                        camera_id = %self.camera_id,
+                        frames_received,
+                        video_loss_packets = rtp_diagnostics.video_loss_packets,
+                        video_loss_events = rtp_diagnostics.video_loss_events,
+                        audio_loss_packets = rtp_diagnostics.audio_loss_packets,
+                        audio_loss_events = rtp_diagnostics.audio_loss_events,
+                        "Retina 数据流已到达 EOF (对端已关闭)"
+                    );
+                    return Err(SessionFailure::new(
                         MediaError::RtspConnect {
                             url: masked_url.clone(),
                             reason: "Retina 数据流已到达 EOF (对端已关闭)".into(),
                         },
                         frames_received,
+                        RtspPhase::Receive,
+                        RtspFailureClass::Connection,
                     ));
                 }
             };
@@ -561,10 +913,14 @@ impl RetinaIngestor {
             if let CodecItem::VideoFrame(frame) = item {
                 if frame.stream_id() == video_idx {
                     frames_received += 1;
-                    let elapsed_ms = (frame.timestamp().elapsed_secs() * 1000.0) as i64;
-                    let calculated_pts = base_timestamp_ms + elapsed_ms;
-                    let pts_ms = calculated_pts.max(last_emitted_video_pts);
-                    last_emitted_video_pts = pts_ms;
+                    let pts_ms = self.process_track_frame(
+                        "video",
+                        &mut video_timestamps,
+                        &mut rtp_diagnostics,
+                        frame.timestamp(),
+                        frame.loss(),
+                        base_timestamp_ms,
+                    );
 
                     let is_keyframe = frame.is_random_access_point();
                     // 零拷贝借出底层 Vec<u8> 生成 Bytes，已包含 Annex B 0x00000001
@@ -586,10 +942,14 @@ impl RetinaIngestor {
                     // 仅处理已成功 SETUP 的音频轨道
                     if let Some(target_idx) = audio_idx {
                         if frame.stream_id() == target_idx {
-                            let elapsed_ms = (frame.timestamp().elapsed_secs() * 1000.0) as i64;
-                            let calculated_pts = base_timestamp_ms + elapsed_ms;
-                            let pts_ms = calculated_pts.max(last_emitted_audio_pts);
-                            last_emitted_audio_pts = pts_ms;
+                            let pts_ms = self.process_track_frame(
+                                "audio",
+                                &mut audio_timestamps,
+                                &mut rtp_diagnostics,
+                                frame.timestamp(),
+                                frame.loss(),
+                                base_timestamp_ms,
+                            );
 
                             // ADTS 封装的 AAC 音频数据 (FrameFormat::SIMPLE 输出)
                             let payload = Bytes::copy_from_slice(frame.data());
@@ -616,6 +976,76 @@ impl RetinaIngestor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn timestamp(value: i64, clock_rate_hz: u32) -> retina::Timestamp {
+        retina::Timestamp::new(
+            value,
+            NonZeroU32::new(clock_rate_hz).expect("test clock rate must be non-zero"),
+            0,
+        )
+        .expect("test timestamp must not underflow")
+    }
+
+    #[test]
+    fn test_track_timestamp_mapper_uses_clock_rate_and_preserves_monotonic_pts() {
+        let base_timestamp_ms = 1_700_000_000_000;
+        let mut mapper = TrackTimestampMapper::default();
+
+        let first = mapper.map(timestamp(0, 90_000), base_timestamp_ms);
+        assert_eq!(first.pts_ms, base_timestamp_ms);
+
+        let next = mapper.map(timestamp(3_600, 90_000), base_timestamp_ms);
+        assert_eq!(next.pts_ms, base_timestamp_ms + 40);
+        assert_eq!(next.source_delta_ms, Some(40));
+
+        let reordered = mapper.map(timestamp(1_800, 90_000), base_timestamp_ms);
+        assert_eq!(reordered.calculated_pts_ms, base_timestamp_ms + 20);
+        assert_eq!(reordered.pts_ms, next.pts_ms);
+        assert!(reordered.was_clamped);
+    }
+
+    #[test]
+    fn test_track_timestamp_mapper_handles_rtp_wrap_after_retina_unwrap() {
+        let base_timestamp_ms = 1_700_000_000_000;
+        let mut mapper = TrackTimestampMapper::default();
+        let before_wrap = i64::from(u32::MAX) - 45_000;
+        let after_wrap = before_wrap + 90_000;
+
+        let first = mapper.map(timestamp(before_wrap, 90_000), base_timestamp_ms);
+        let next = mapper.map(timestamp(after_wrap, 90_000), base_timestamp_ms);
+
+        assert_eq!(next.source_delta_ticks, Some(90_000));
+        assert_eq!(next.source_delta_ms, Some(1_000));
+        assert_eq!(next.pts_ms - first.pts_ms, 1_000);
+    }
+
+    #[test]
+    fn test_track_timestamp_mapper_maps_audio_clock_rate_without_float_rounding() {
+        let base_timestamp_ms = 1_700_000_000_000;
+        let mut mapper = TrackTimestampMapper::default();
+
+        let first = mapper.map(timestamp(0, 48_000), base_timestamp_ms);
+        let next = mapper.map(timestamp(1_024, 48_000), base_timestamp_ms);
+
+        assert_eq!(first.pts_ms, base_timestamp_ms);
+        assert_eq!(next.pts_ms, base_timestamp_ms + 21);
+        assert_eq!(next.source_delta_ms, Some(21));
+    }
+
+    #[test]
+    fn test_rtp_diagnostics_accumulates_loss_events() {
+        let mut diagnostics = RtpDiagnostics::default();
+
+        assert!(!diagnostics.record_video_loss(0));
+        assert!(diagnostics.record_video_loss(2));
+        assert!(diagnostics.record_video_loss(3));
+        assert!(diagnostics.record_audio_loss(1));
+
+        assert_eq!(diagnostics.video_loss_packets, 5);
+        assert_eq!(diagnostics.video_loss_events, 2);
+        assert_eq!(diagnostics.audio_loss_packets, 1);
+        assert_eq!(diagnostics.audio_loss_events, 1);
+    }
 
     #[test]
     fn test_sanitize_rtsp_url_with_credentials() {
@@ -667,6 +1097,79 @@ mod tests {
 
         let auto_transport = map_transport_policy(TransportPolicy::Auto);
         assert!(matches!(auto_transport, Transport::Tcp(_)));
+    }
+
+    #[test]
+    fn test_rtsp_failure_classification_and_transport_switching() {
+        assert_eq!(
+            classify_retina_status(Some(401)),
+            RtspFailureClass::Authentication
+        );
+        assert_eq!(
+            classify_retina_status(Some(461)),
+            RtspFailureClass::UnsupportedTransport
+        );
+        assert_eq!(classify_retina_status(None), RtspFailureClass::Protocol);
+
+        let describe_auth = SessionFailure::new(
+            MediaError::Protocol("401 Unauthorized".into()),
+            0,
+            RtspPhase::Describe,
+            RtspFailureClass::Authentication,
+        );
+        assert!(!describe_auth.should_switch_transport());
+
+        let setup_auth = SessionFailure::new(
+            MediaError::Protocol("401 Unauthorized".into()),
+            0,
+            RtspPhase::Setup,
+            RtspFailureClass::Authentication,
+        );
+        assert!(!setup_auth.should_switch_transport());
+
+        let setup_unsupported = SessionFailure::new(
+            MediaError::Protocol("461 Unsupported Transport".into()),
+            0,
+            RtspPhase::Setup,
+            RtspFailureClass::UnsupportedTransport,
+        );
+        assert!(setup_unsupported.should_switch_transport());
+
+        let receive_inactivity = SessionFailure::new(
+            MediaError::InactivityTimeout(Duration::from_secs(6)),
+            12,
+            RtspPhase::Receive,
+            RtspFailureClass::Inactivity,
+        );
+        assert!(receive_inactivity.should_switch_transport());
+
+        let receive_eof_after_streaming = SessionFailure::new(
+            MediaError::RtspConnect {
+                url: "rtsp://example/live".into(),
+                reason: "Retina 数据流已到达 EOF (对端已关闭)".into(),
+            },
+            100,
+            RtspPhase::Receive,
+            RtspFailureClass::Connection,
+        );
+        assert!(
+            !receive_eof_after_streaming.should_switch_transport(),
+            "稳定拉流产出帧后发生的连接断开/EOF 不得盲目切换 transport"
+        );
+
+        let play_protocol = SessionFailure::new(
+            MediaError::Protocol("PLAY failed".into()),
+            0,
+            RtspPhase::Play,
+            RtspFailureClass::Protocol,
+        );
+        assert!(!play_protocol.should_switch_transport());
+    }
+
+    #[test]
+    fn test_transport_mode_toggle() {
+        assert_eq!(TransportMode::Tcp.toggled(), TransportMode::Udp);
+        assert_eq!(TransportMode::Udp.toggled(), TransportMode::Tcp);
     }
 
     #[test]
@@ -777,15 +1280,75 @@ mod tests {
         );
 
         match res {
-            Err((MediaError::RtspConnect { reason, .. }, frames)) => {
-                assert_eq!(frames, 0);
-                assert!(
-                    reason.contains("超时"),
-                    "错误原因应明确标注握手超时: {reason}"
-                );
+            Err(failure) => {
+                match &failure.error {
+                    MediaError::RtspConnect { reason, .. } => {
+                        assert!(
+                            reason.contains("超时"),
+                            "错误原因应明确标注握手超时: {reason}"
+                        );
+                    }
+                    other => panic!("期望 RTSP 连接错误，实际收到: {other:?}"),
+                }
+                assert_eq!(failure.frames_streamed, 0);
+                assert_eq!(failure.phase, RtspPhase::Describe);
+                assert_eq!(failure.class, RtspFailureClass::Timeout);
+                assert!(!failure.should_switch_transport());
             }
-            other => panic!("期望超时错误，实际收到: {:?}", other),
+            other => panic!("期望握手失败，实际收到: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_setup_auth_failure_does_not_switch_transport() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock listener");
+        let port = listener.local_addr().expect("local addr").port();
+
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                assert!(n > 0, "mock server should receive DESCRIBE");
+                let sdp = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=Test\r\nt=0 0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=control:trackID=0\r\n";
+                let describe_response = format!(
+                    "RTSP/1.0 200 OK\r\nCSeq: 1\r\nContent-Type: application/sdp\r\nContent-Length: {}\r\n\r\n{}",
+                    sdp.len(),
+                    sdp
+                );
+                let _ = sock.write_all(describe_response.as_bytes()).await;
+
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                assert!(n > 0, "mock server should receive SETUP");
+                let setup_response = "RTSP/1.0 401 Unauthorized\r\nCSeq: 2\r\nWWW-Authenticate: Digest realm=\"Test\", nonce=\"nonce\"\r\n\r\n";
+                let _ = sock.write_all(setup_response.as_bytes()).await;
+            }
+        });
+
+        let dispatcher = Arc::new(PacketDispatcher::new(Default::default()));
+        let ingestor = RetinaIngestor::new(
+            "cam-setup-auth".into(),
+            format!("rtsp://127.0.0.1:{port}/live"),
+            TransportPolicy::Auto,
+            dispatcher,
+        )
+        .with_handshake_timeout(Duration::from_millis(500));
+
+        let cancel_signal = Arc::new(AtomicBool::new(false));
+        let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let failure = ingestor
+            .stream_session(TransportMode::Tcp, cancel_signal, cancel_rx)
+            .await
+            .expect_err("SETUP authentication should fail");
+
+        assert_eq!(failure.phase, RtspPhase::Setup);
+        assert_eq!(failure.class, RtspFailureClass::Authentication);
+        assert!(!failure.should_switch_transport());
+        assert_eq!(failure.frames_streamed, 0);
     }
 
     #[tokio::test]
@@ -860,14 +1423,17 @@ mod tests {
         );
 
         match res {
-            Err((MediaError::InactivityTimeout(dur), frames)) => {
-                assert_eq!(dur, Duration::from_millis(150));
-                assert_eq!(frames, 0);
+            Err(failure) => {
+                assert!(matches!(
+                    failure.error,
+                    MediaError::InactivityTimeout(dur) if dur == Duration::from_millis(150)
+                ));
+                assert_eq!(failure.frames_streamed, 0);
+                assert_eq!(failure.phase, RtspPhase::Receive);
+                assert_eq!(failure.class, RtspFailureClass::Inactivity);
+                assert!(failure.should_switch_transport());
             }
-            other => panic!(
-                "期望返回 MediaError::InactivityTimeout，实际收到: {:?}",
-                other
-            ),
+            other => panic!("期望返回媒体流静默超时，实际收到: {:?}", other),
         }
     }
 

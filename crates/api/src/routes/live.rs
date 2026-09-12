@@ -19,6 +19,8 @@ pub struct LiveQuery {
     pub format: Option<String>, // "flv" | "webcodecs"
     /// 是否包含音频数据；默认 false，仅 Hero 主预览窗口按需开启
     pub audio: Option<bool>,
+    /// 是否包含视频数据；默认 true。H.265 WebCodecs 视频可配合 audio-only FLV 使用
+    pub video: Option<bool>,
 }
 
 /// 客户端预览会话 RAII 守护者，确保在任何断开、异常中止或被 Drop 场景下安全注销订阅并扣减按需预览计数
@@ -61,6 +63,21 @@ fn append_flv_tag(buffer: &mut BytesMut, tag: Bytes, max_bytes: usize) -> Vec<By
     }
     buffer.extend_from_slice(&tag);
     if buffer.len() == max_bytes {
+        chunks.push(buffer.split().freeze());
+    }
+    chunks
+}
+
+fn flush_flv_tags(
+    buffer: &mut BytesMut,
+    tags: impl IntoIterator<Item = Bytes>,
+    max_bytes: usize,
+) -> Vec<Bytes> {
+    let mut chunks = Vec::new();
+    for tag in tags {
+        chunks.extend(append_flv_tag(buffer, tag, max_bytes));
+    }
+    if !buffer.is_empty() {
         chunks.push(buffer.split().freeze());
     }
     chunks
@@ -141,6 +158,12 @@ async fn handle_http_flv(
     Path(camera_id): Path<String>,
     Query(query): Query<LiveQuery>,
 ) -> Response {
+    let include_audio = query.audio.unwrap_or(false);
+    let include_video = query.video.unwrap_or(true);
+    if !include_audio && !include_video {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
     let (camera, stream_key, subscription) = match resolve_camera_and_subscribe(
         &state,
         &camera_id,
@@ -159,7 +182,6 @@ async fn handle_http_flv(
     let str_key_clone = str_key.clone();
     let mut shutdown_rx = state.shutdown_tx.subscribe();
     let cam_id_for_stream = camera.camera_id.clone();
-    let include_audio = query.audio.unwrap_or(false);
     let http_merge_flush_ms = state.stream_hub.preview_config().http_merge_flush_ms.max(1);
     let http_merge_max_bytes = state
         .stream_hub
@@ -174,6 +196,7 @@ async fn handle_http_flv(
         camera_id = %camera.camera_id,
         stream_key = %str_key,
         include_audio,
+        include_video,
         "启动 HTTP-FLV 实时流传输 (带 Sequence Header 优先与时间戳单调滤波)"
     );
 
@@ -193,7 +216,7 @@ async fn handle_http_flv(
         };
 
         // ① 发送 13 字节 FLV Header
-        yield Ok::<Bytes, std::convert::Infallible>(FlvMuxer::flv_header(include_audio));
+        yield Ok::<Bytes, std::convert::Infallible>(FlvMuxer::flv_header_tracks(include_audio, include_video));
 
         let mut flv_pipe = FlvStreamPipeline::new(include_audio);
         let mut flv_merge = BytesMut::with_capacity(http_merge_max_bytes);
@@ -206,18 +229,15 @@ async fn handle_http_flv(
         let mut max_buffer_depth: usize = 0;
 
         // ② 尝试注入缓存中的 Sequence Header 与完整 GOP 关键帧序列
-        if let Some(cache) = stream_hub.get_keyframe_cache(&str_key_clone).await {
-            let init_tags = flv_pipe.inject_cache(&cache, fallback_codec);
-            for tag in init_tags {
-                for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
+        if include_video {
+            if let Some(cache) = stream_hub.get_keyframe_cache(&str_key_clone).await {
+                let init_tags = flv_pipe.inject_cache(&cache, fallback_codec);
+                for chunk in flush_flv_tags(&mut flv_merge, init_tags, http_merge_max_bytes) {
                     flv_chunks_merged += 1;
+                    flv_flush_count += 1;
                     yield Ok(chunk);
                 }
-            }
-            max_buffer_depth = max_buffer_depth.max(flv_merge.len());
-            if !flv_merge.is_empty() {
-                flv_flush_count += 1;
-                yield Ok(flv_merge.split().freeze());
+                max_buffer_depth = max_buffer_depth.max(flv_merge.len());
             }
         }
 
@@ -242,17 +262,15 @@ async fn handle_http_flv(
                         Some(StreamItem::Packet(packet)) => packet,
                         Some(StreamItem::Replay(snapshot)) => {
                             flv_pipe.reset_after_discontinuity();
-                            let replay_cache = snapshot.to_keyframe_cache();
-                            for tag in flv_pipe.inject_cache(&replay_cache, snapshot.codec) {
-                                for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
+                            if include_video {
+                                let replay_cache = snapshot.to_keyframe_cache();
+                                let replay_tags = flv_pipe.inject_cache(&replay_cache, snapshot.codec);
+                                for chunk in flush_flv_tags(&mut flv_merge, replay_tags, http_merge_max_bytes) {
                                     flv_chunks_merged += 1;
+                                    flv_flush_count += 1;
                                     yield Ok(chunk);
                                 }
-                            }
-                            max_buffer_depth = max_buffer_depth.max(flv_merge.len());
-                            if !flv_merge.is_empty() {
-                                flv_flush_count += 1;
-                                yield Ok(flv_merge.split().freeze());
+                                max_buffer_depth = max_buffer_depth.max(flv_merge.len());
                             }
                             continue;
                         }
@@ -277,7 +295,7 @@ async fn handle_http_flv(
             };
 
             // 视频帧：标准 FLV Video Tag 封装
-            if pkt.stream_tag == types::StreamTag::Video {
+            if include_video && pkt.stream_tag == types::StreamTag::Video {
                 for tag in flv_pipe.process_packet(&pkt) {
                     for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
                         flv_chunks_merged += 1;
@@ -286,8 +304,11 @@ async fn handle_http_flv(
                 }
             }
 
-            // 音频帧：FLV Audio Tag 封装 (仅 include_audio 时有效，且待视频关键帧就绪后对齐发送)
-            if include_audio && pkt.stream_tag == types::StreamTag::Audio && flv_pipe.has_first_keyframe {
+            // 音频帧：FLV Audio Tag 封装。audio-only 通道不需要等待视频关键帧。
+            if include_audio
+                && pkt.stream_tag == types::StreamTag::Audio
+                && (flv_pipe.has_first_keyframe || !include_video)
+            {
                 for tag in flv_pipe.process_audio_packet(&pkt) {
                     for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
                         flv_chunks_merged += 1;
@@ -353,6 +374,12 @@ async fn handle_ws_flv(
     Query(query): Query<LiveQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let include_audio = query.audio.unwrap_or(false);
+    let include_video = query.video.unwrap_or(true);
+    if !include_audio && !include_video {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
     let (camera, stream_key, subscription) = match resolve_camera_and_subscribe(
         &state,
         &camera_id,
@@ -638,6 +665,33 @@ async fn serve_ws_webcodecs(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_live_flv_rejects_empty_tracks() {
+        let db = db::init_test_db().await.unwrap();
+        let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
+        let state = AppState::new(db, pipeline);
+
+        let user = AuthUser {
+            username: "admin".into(),
+        };
+
+        let response = handle_http_flv(
+            State(state),
+            user,
+            Path("any-cam".into()),
+            Query(LiveQuery {
+                stream: None,
+                token: None,
+                format: None,
+                audio: Some(false),
+                video: Some(false),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     #[tokio::test]
     async fn test_live_flv_nonexistent_camera() {

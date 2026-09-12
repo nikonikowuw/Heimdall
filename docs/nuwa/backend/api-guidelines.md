@@ -14,7 +14,7 @@
 
 | 通路               | 当前入口                                                                    |
 | ------------------ | --------------------------------------------------------------------------- |
-| HTTP-FLV           | `GET /api/v1/live/{id}.flv?stream=main\|sub&token={jwt}&audio=true\|false`，也支持 `{id}/flv`（`audio` 默认 false） |
+| HTTP-FLV           | `GET /api/v1/live/{id}.flv?stream=main\|sub&token={jwt}&audio=true\|false&video=true\|false`，也支持 `{id}/flv`；`audio` 默认 false，`video` 默认 true，H.265 WebCodecs 回退时可用 `audio=true&video=false` 请求 AAC-only 音轨 |
 | WS-FLV / WebCodecs | `/api/v1/live/{id}/ws`、`/api/v1/live/{id}/webcodecs?stream=main\|sub&token={jwt}`                       |
 | 媒体流健康快照     | `GET /api/v1/system/media/streams/{stream_key}`，返回 `StreamHealthSnapshot`                |
 | 业务事件 WS        | `/api/v1/ws/events`                                                         |

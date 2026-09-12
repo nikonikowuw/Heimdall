@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity,
   Car,
@@ -55,7 +55,9 @@ export interface LivePlayerProps {
   onClose?: () => void
   onTogglePause?: () => void
   onSwitchStream?: (stream: 'main' | 'sub') => void
-  /** 是否启用音频输出；当开启时将自动切换至具备音视频时钟同步的 FLV (MSE) 通道并请求后端携带 ?audio=true */
+  /** 当前目标码流编码；用于判断是否需要 WebCodecs 视频 + audio-only FLV 双通道 */
+  videoCodec?: string
+  /** 是否启用音频输出；H.264 使用音视频 FLV，H.265 在 MSE 不支持时使用独立 AAC 通道 */
   audioEnabled?: boolean
   onToggleAudio?: () => void
 }
@@ -71,6 +73,7 @@ export function LivePlayer({
   telemetry,
   trackedObjects,
   fitMode = 'contain',
+  videoCodec,
   onSpotlight,
   onClose,
   onTogglePause,
@@ -93,6 +96,7 @@ export function LivePlayer({
   }
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
   const videoCanvasRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wcPlayerRef = useRef<WebCodecsPlayer | null>(null)
@@ -103,6 +107,9 @@ export function LivePlayer({
     externalTracksRef.current = trackedObjects
   }, [trackedObjects])
 
+  const preferredVideoCodec: 'h264' | 'h265' = /h\.?265|hevc/i.test(videoCodec ?? '')
+    ? 'h265'
+    : 'h264'
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(
     isPaused ? 'paused' : 'connecting',
   )
@@ -112,6 +119,111 @@ export function LivePlayer({
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryAttemptRef = useRef<number>(0)
   const stableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const audioPlayerRef = useRef<mpegts.Player | null>(null)
+  const isAudioActiveRef = useRef(isAudioActive)
+  isAudioActiveRef.current = isAudioActive
+
+  const destroyAudioPlayer = useCallback(() => {
+    if (audioPlayerRef.current) {
+      try {
+        audioPlayerRef.current.pause()
+        audioPlayerRef.current.unload()
+        audioPlayerRef.current.detachMediaElement()
+        audioPlayerRef.current.destroy()
+      } catch {
+        // ignore teardown errors
+      }
+      audioPlayerRef.current = null
+    }
+    const audioEl = audioRef.current
+    if (audioEl) {
+      try {
+        audioEl.pause()
+        audioEl.removeAttribute('src')
+        audioEl.load()
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+  }, [])
+
+  const startAudioOnlyPlayer = useCallback(() => {
+    destroyAudioPlayer()
+    const audioEl = audioRef.current
+    if (!audioEl || !isAudioActiveRef.current || !mpegts.isSupported()) return
+
+    const audioUrl = cameraApi.getLiveStreamUrl(cameraId, streamType, true, false)
+    mpegts.LoggingControl.enableAll = false
+
+    try {
+      audioEl.muted = false
+      audioEl.volume = 1.0
+      const audioPlayer = mpegts.createPlayer(
+        {
+          type: 'flv',
+          isLive: true,
+          url: audioUrl,
+          hasAudio: true,
+          hasVideo: false,
+          cors: true,
+        },
+        {
+          enableWorker: false,
+          lazyLoad: false,
+          enableStashBuffer: true,
+          stashInitialSize: 128,
+          liveBufferLatencyChasing: true,
+          autoCleanupSourceBuffer: true,
+          autoCleanupMaxBackwardDuration: 10,
+          autoCleanupMinBackwardDuration: 5,
+        },
+      )
+      audioPlayerRef.current = audioPlayer
+      audioPlayer.attachMediaElement(audioEl)
+      audioPlayer.load()
+      const playPromise = audioPlayer.play()
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {
+          // 浏览器禁止带声音自动播放时保留视频画面，等待用户再次操作音频开关。
+          if (audioEl) {
+            audioEl.muted = true
+            const retryPlay = audioPlayer.play()
+            if (retryPlay && typeof retryPlay.catch === 'function') {
+              void retryPlay.catch(() => undefined)
+            }
+          }
+        })
+      }
+      audioPlayer.on(mpegts.Events.ERROR, (_type: string, detail: string, info: unknown) => {
+        const httpCode = (info as { code?: number })?.code
+        if (detail === 'HttpStatusCodeInvalid' && httpCode === 401) {
+          useAuthStore.getState().logout()
+        }
+      })
+    } catch {
+      destroyAudioPlayer()
+    }
+  }, [cameraId, streamType, destroyAudioPlayer])
+
+  // WebCodecs 模式下，音频独立启停 AAC-only FLV 播放器，避免重新握手视频 WebSocket 导致画面重排闪烁
+  useEffect(() => {
+    if (activeProtocol !== 'webcodecs' || isPaused) return
+    if (isAudioActive) {
+      startAudioOnlyPlayer()
+    } else {
+      destroyAudioPlayer()
+    }
+  }, [activeProtocol, isAudioActive, isPaused, startAudioOnlyPlayer, destroyAudioPlayer])
+
+  // FLV 模式下音频状态变更需要重协商 FLV 流参数 (?audio=true|false)
+  const prevAudioActiveRef = useRef(isAudioActive)
+  useEffect(() => {
+    if (prevAudioActiveRef.current === isAudioActive) return
+    prevAudioActiveRef.current = isAudioActive
+    if (activeProtocol === 'flv' && !isPaused) {
+      setRetryKey((k) => k + 1)
+    }
+  }, [isAudioActive, activeProtocol, isPaused])
 
   useEffect(() => {
     if (isPaused) {
@@ -148,6 +260,18 @@ export function LivePlayer({
       }, delayMs)
     }
 
+    function canUseMseVideo() {
+      if (!mpegts.isSupported()) return false
+      if (preferredVideoCodec === 'h265') {
+        try {
+          return mpegts.getFeatureList().mseH265Playback
+        } catch {
+          return false
+        }
+      }
+      return true
+    }
+
     const handlePlaying = () => {
       if (!isCancelled) {
         setConnectionStatus('connected')
@@ -168,12 +292,13 @@ export function LivePlayer({
 
     function startFlvPlayer() {
       if (isCancelled || !videoEl || !cameraId) return
+      destroyAudioPlayer()
       setActiveProtocol('flv')
       setConnectionStatus('connecting')
 
-      const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType, isAudioActive)
+      const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType, isAudioActiveRef.current)
 
-      if (!mpegts.isSupported()) {
+      if (!canUseMseVideo()) {
         setConnectionStatus('failed')
         return
       }
@@ -181,8 +306,8 @@ export function LivePlayer({
       mpegts.LoggingControl.enableAll = false
 
       try {
-        videoEl.muted = !isAudioActive
-        if (isAudioActive) {
+        videoEl.muted = !isAudioActiveRef.current
+        if (isAudioActiveRef.current) {
           videoEl.volume = 1.0
         }
 
@@ -191,7 +316,8 @@ export function LivePlayer({
             type: 'flv',
             isLive: true,
             url: flvUrl,
-            hasAudio: isAudioActive,
+            hasAudio: isAudioActiveRef.current,
+            hasVideo: true,
             cors: true,
           },
           {
@@ -213,7 +339,7 @@ export function LivePlayer({
         if (playPromise && typeof playPromise.catch === 'function') {
           playPromise.catch(() => {
             // 当非静音自动播放受限于浏览器策略时，自动降级为静音播放
-            if (videoEl && isAudioActive && !isCancelled) {
+            if (videoEl && isAudioActiveRef.current && !isCancelled) {
               videoEl.muted = true
               flvPlayer?.play()
             }
@@ -255,52 +381,69 @@ export function LivePlayer({
       }
     }
 
+    async function startWebCodecsPlayer(withAudio: boolean) {
+      if (!videoCanvas || isCancelled) return false
+
+      try {
+        const wsUrl = cameraApi.getWebCodecsWsUrl(cameraId, streamType)
+        wcPlayer = new WebCodecsPlayer({
+          wsUrl,
+          canvas: videoCanvas,
+          onPlaying: (lat) => {
+            if (isCancelled) return
+            setActiveProtocol('webcodecs')
+            setConnectionStatus('connected')
+            setLatencyMs(lat)
+          },
+          onError: () => {
+            if (isCancelled) return
+            if (wcPlayer) {
+              wcPlayer.destroy()
+              wcPlayer = null
+            }
+            wcPlayerRef.current = null
+            destroyAudioPlayer()
+            if (canUseMseVideo()) {
+              startFlvPlayer()
+            } else {
+              setConnectionStatus('failed')
+            }
+          },
+          onClose: () => {
+            if (isCancelled) return
+            setConnectionStatus('reconnecting')
+            scheduleRetry()
+          },
+        })
+        wcPlayerRef.current = wcPlayer
+        if (withAudio) {
+          startAudioOnlyPlayer()
+        }
+        return true
+      } catch {
+        destroyAudioPlayer()
+        return false
+      }
+    }
+
     async function startPlayer() {
       if (!cameraId) return
       setConnectionStatus('connecting')
 
-      // ① 仅在未开启音频且浏览器支持 WebCodecs 时，优先使用 WebCodecs 进行超低延迟画面渲染。
-      // WebCodecs 暂无 AudioDecoder / Web Audio 同步实现，开启音频时直通 FLV (MSE) 保证音画同步
-      const canWebCodecs =
-        !isAudioActive &&
-        ((await isWebCodecsSupported('h265')) || (await isWebCodecsSupported('h264')))
+      // 精确探测当前目标码流编码的 WebCodecs 支持度，杜绝跨编码短路
+      const canWebCodecs = await isWebCodecsSupported(preferredVideoCodec)
 
-      if (canWebCodecs && videoCanvas && !isCancelled) {
-        try {
-          const wsUrl = cameraApi.getWebCodecsWsUrl(cameraId, streamType)
-          wcPlayer = new WebCodecsPlayer({
-            wsUrl,
-            canvas: videoCanvas,
-            onPlaying: (lat) => {
-              if (isCancelled) return
-              setActiveProtocol('webcodecs')
-              setConnectionStatus('connected')
-              setLatencyMs(lat)
-            },
-            onError: () => {
-              if (isCancelled) return
-              // 若 WebCodecs 连接或解码出现异常，平滑降级至 FLV (mpegts.js)
-              if (wcPlayer) {
-                wcPlayer.destroy()
-                wcPlayer = null
-              }
-              wcPlayerRef.current = null
-              startFlvPlayer()
-            },
-            onClose: () => {
-              if (isCancelled) return
-              setConnectionStatus('reconnecting')
-              scheduleRetry()
-            },
-          })
-          wcPlayerRef.current = wcPlayer
-          return
-        } catch {
-          // 初始化失败，直接执行 FLV 降级
-        }
+      // H.264 可直接由 MSE 同步解码音视频；浏览器不支持 H.265 MSE 时，
+      // 保留 WebCodecs 视频并通过独立 audio-only FLV 播放 AAC。
+      if (isAudioActiveRef.current && !canUseMseVideo() && canWebCodecs && !isCancelled) {
+        if (await startWebCodecsPlayer(true)) return
       }
 
-      // ② 若浏览器未支持 WebCodecs，降级至 FLV (MSE)
+      if (!isAudioActiveRef.current && canWebCodecs && !isCancelled) {
+        if (await startWebCodecsPlayer(false)) return
+      }
+
+      // 浏览器未支持 WebCodecs，或当前编码可由 MSE 直接承载时，使用合并 FLV。
       startFlvPlayer()
     }
 
@@ -311,8 +454,8 @@ export function LivePlayer({
     }
 
     if (videoEl) {
-      videoEl.muted = !isAudioActive
-      if (isAudioActive) {
+      videoEl.muted = !isAudioActiveRef.current
+      if (isAudioActiveRef.current) {
         videoEl.volume = 1.0
       }
       videoEl.addEventListener('loadstart', handleVideoEvent)
@@ -354,6 +497,7 @@ export function LivePlayer({
         wcPlayer = null
       }
       wcPlayerRef.current = null
+      destroyAudioPlayer()
       if (flvPlayer) {
         try {
           flvPlayer.pause()
@@ -375,7 +519,15 @@ export function LivePlayer({
         }
       }
     }
-  }, [cameraId, streamType, isPaused, retryKey, isAudioActive])
+  }, [
+    cameraId,
+    streamType,
+    isPaused,
+    retryKey,
+    preferredVideoCodec,
+    destroyAudioPlayer,
+    startAudioOnlyPlayer,
+  ])
 
   // Canvas 2D 离屏 60fps 绘制循环（零 React 状态开销）
   useEffect(() => {
@@ -478,6 +630,9 @@ export function LivePlayer({
           activeProtocol === 'webcodecs' && connectionStatus === 'connected' ? 'block' : 'hidden'
         }`}
       />
+
+      {/* H.265 WebCodecs fallback 使用隐藏的独立 AAC FLV 音频元素 */}
+      <audio ref={audioRef} autoPlay aria-hidden="true" className="hidden" />
 
       {/* 底层硬件解码视频渲染层 (FLV / MSE 兼容通道) */}
       <video

@@ -429,6 +429,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   showHud={true}
                   isHero={true}
                   stream={heroStream}
+                  videoCodec={heroCamera.lastCodec}
                   audioEnabled={heroAudioEnabled}
                   onToggleAudio={() => setHeroAudioEnabled((prev) => !prev)}
                   onClose={() => setSelectedHeroId('')}

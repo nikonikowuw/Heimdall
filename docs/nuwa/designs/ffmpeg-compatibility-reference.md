@@ -1,6 +1,6 @@
 # FFmpeg 兼容性参考与媒体协议增强设计
 
-> **状态**：提案；RTSP userinfo percent-decoding 已在当前实现中落地
+> **状态**：持续实施中；Phase 0、Phase 1 的错误分类/transport 策略，以及 Phase 2 的时间戳映射与跳变约束已落地
 >
 > **目标**：以 FFmpeg 的摄像机兼容性行为作为参考，增强 Heimdall 的 RTSP/RTP 接入、时间戳处理、压缩封装与验证体系，同时保持 Retina 主导的 Rust 异步接入和平台原生硬件零拷贝管线。
 >
@@ -155,8 +155,8 @@ connect TCP
 | `404 Not Found` | 记录 URL/track 错误，等待配置变化 | 否 |
 | `454 Session Not Found` | 重建 RTSP session | 否 |
 | `461 Unsupported Transport` | 尝试另一种媒体传输 | 是 |
-| TCP connect timeout/refused | 退避重连 | 可切换 |
-| SETUP transport timeout | 退避并尝试另一种传输 | 可切换 |
+| TCP connect timeout/refused | 退避重连，RTSP 控制连接始终使用 TCP | 否 |
+| SETUP transport timeout | 退避并尝试另一种媒体传输 | 是 |
 | PLAY 成功后 RTP 静默 | 清理 session，按策略重连 | 可切换 |
 | RTP sequence gap | 丢弃当前不完整 FU，继续等待下一帧 | 否 |
 
@@ -215,7 +215,7 @@ SDP 解析必须验证：
 IdrWRadl -> FdNut
 ```
 
-应丢弃当前不一致的 FU，不把不同 NAL 类型拼接成一个输出包，并增加计数指标：
+应丢弃当前不一致的 FU，不把不同 NAL 类型拼接成一个输出包。当前生产路径由 Retina 负责 FU 重组；Heimdall 在 Retina 公共 API 边界已落地视频/音频 frame loss 统计，并在丢包、静默、EOF 和 demux 错误日志中记录累计值。Retina 0.4.20 未向上层暴露 FU header mismatch 与 RTP marker 统计，因此以下计数仍需 Retina 升级、补丁或脱离生产路径的协议 fixture 支持：
 
 ```text
 rtp_packet_loss_total
@@ -348,18 +348,18 @@ ffmpeg -hide_banner -loglevel warning \
 
 ### Phase 1：RTSP 错误分类和重试
 
-- [ ] 定义内部错误分类，不再以 `frames_streamed == 0` 代替错误类型；
+- [x] 定义内部错误分类，不再以 `frames_streamed == 0` 代替错误类型；
 - [ ] 401 nonce/stale 有限重试；
-- [ ] 记录 attempted/next transport；
-- [ ] 只有 transport 类错误才触发 TCP/UDP 切换；
+- [x] 记录 attempted/next transport；
+- [x] 只有 transport 类错误才触发 TCP/UDP 切换；
 - [ ] 增加 OPTIONS、GET_PARAMETER、SET_PARAMETER 兼容策略。
 
 ### Phase 2：RTP 和时间戳稳健性
 
 - [ ] 补齐 H.264/H.265 RTP vector fixtures；
 - [ ] FU mismatch、sequence gap、marker 边界统计；
-- [ ] RTP timestamp 回绕和大跳变处理；
-- [ ] 明确音频/视频 track 的时钟和 PTS 映射。
+- [x] RTP timestamp 回绕和大跳变处理；
+- [x] 明确音频/视频 track 的时钟和 PTS 映射。
 
 ### Phase 3：封装与浏览器输出
 

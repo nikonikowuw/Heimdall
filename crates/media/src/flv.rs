@@ -21,27 +21,27 @@ pub fn strip_nalu_start_code(data: &[u8]) -> &[u8] {
 pub struct FlvMuxer;
 
 impl FlvMuxer {
-    /// 生成标准 9 字节 FLV 文件头 + 4 字节 PreviousTagSize0
+    /// 生成标准 9 字节 FLV 文件头 + 4 字节 PreviousTagSize0。
     ///
-    /// `include_audio` 为 `true` 时设置 TypeFlags = 0x11 (Audio + Video)，
-    /// 否则为 0x01 (Video Only)，与前端 `hasAudio` 配置对应。
+    /// 默认生成视频流；`include_audio` 为 `true` 时同时声明音频轨道。
     pub fn flv_header(include_audio: bool) -> Bytes {
+        Self::flv_header_tracks(include_audio, true)
+    }
+
+    /// 生成指定音视频轨道的 FLV 文件头。
+    ///
+    /// FLV TypeFlags 的 bit 2 表示音频、bit 0 表示视频。音频-only
+    /// 通道用于在 WebCodecs 渲染 H.265 视频时独立播放 AAC 音轨。
+    pub fn flv_header_tracks(include_audio: bool, include_video: bool) -> Bytes {
         let mut b = BytesMut::with_capacity(13);
+        let type_flags =
+            (if include_audio { 0x04 } else { 0x00 }) | (if include_video { 0x01 } else { 0x00 });
+
         // "FLV" + version 1 + Flags + DataOffset (9) + PreviousTagSize0 (0)
         b.extend_from_slice(&[
-            b'F',
-            b'L',
-            b'V',
-            0x01,                                    // Signature & Version
-            if include_audio { 0x11 } else { 0x01 }, // TypeFlags: 0x11=Audio+Video, 0x01=Video Only
-            0x00,
-            0x00,
-            0x00,
-            0x09, // DataOffset
-            0x00,
-            0x00,
-            0x00,
-            0x00, // PreviousTagSize0
+            b'F', b'L', b'V', 0x01, // Signature & Version
+            type_flags, 0x00, 0x00, 0x00, 0x09, // DataOffset
+            0x00, 0x00, 0x00, 0x00, // PreviousTagSize0
         ]);
         b.freeze()
     }
@@ -866,7 +866,10 @@ mod tests {
         assert_eq!(header[4], 0x01); // Video only
 
         let header_audio = FlvMuxer::flv_header(true);
-        assert_eq!(header_audio[4], 0x11); // Audio + Video
+        assert_eq!(header_audio[4], 0x05); // Audio + Video (bit 2 + bit 0)
+
+        let header_audio_only = FlvMuxer::flv_header_tracks(true, false);
+        assert_eq!(header_audio_only[4], 0x04); // Audio only
     }
 
     #[test]
