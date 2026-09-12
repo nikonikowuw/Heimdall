@@ -1,6 +1,7 @@
 pub mod buffer_pool;
 pub mod decoder;
 pub mod decoders;
+pub mod dispatcher;
 pub mod dmabuf_sync;
 pub mod encoders;
 pub mod error;
@@ -24,6 +25,11 @@ pub use decoder::{DecodeDeliveryPolicy, VideoDecoder};
 #[cfg(target_os = "macos")]
 pub use decoders::VideoToolboxDecoder;
 pub use decoders::{create_decoder, MockDecoder};
+pub use dispatcher::{
+    ConsumerHealthSnapshot, ConsumerId, ConsumerKind, DispatcherError, DispatcherMetrics,
+    DispatcherMetricsSnapshot, GopSnapshot, KeyframeCache, KeyframeCacheStore, MediaSubscription,
+    PacketDispatcher, PreviewDistributionConfig, StreamHealthSnapshot, StreamItem,
+};
 pub use dmabuf_sync::{DmaBufSyncDirection, DmaBufSyncGuard};
 pub use encoders::{
     compute_crop_roi, crop_rgb_with_padding, encode_jpeg_from_rgb, CpuSnapEncoder,
@@ -49,9 +55,10 @@ pub use rtsp::{mask_rtsp_url, RtspIngestor};
 pub use sps::{
     is_keyframe_or_parameter_set, parse_h264_sps, parse_h265_sps, split_annex_b_nalus, SpsInfo,
 };
-pub use stream_hub::{AiTaskLease, CameraStreamSession, KeyframeCache, StreamHub};
+pub use stream_hub::{AiTaskLease, CameraStreamSession, StreamHub, StreamSubscription};
 pub use sub_stream::{deduce_primary_sub_stream, deduce_sub_stream, SubStreamCandidate};
 pub use webcodecs::{
-    pack_webcodecs_frame, unpack_webcodecs_frame, WebCodecsFrameHeader, WEBCODECS_FRAME_HEADER_LEN,
+    pack_webcodecs_frame, pack_webcodecs_frame_with_flags, unpack_webcodecs_frame,
+    WebCodecsFrameHeader, WEBCODECS_FLAG_DISCONTINUITY, WEBCODECS_FRAME_HEADER_LEN,
     WEBCODECS_PROTOCOL_VERSION,
 };

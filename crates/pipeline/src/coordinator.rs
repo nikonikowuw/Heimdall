@@ -719,7 +719,6 @@ impl TaskRuntimeCoordinator {
         let camera_id = params.camera_id.clone();
         let main_stream_key = format!("{camera_id}:main");
         let sub_stream_key = format!("{camera_id}:sub");
-        let mut main_subscribed = false;
         let mut main_attach_handle: Option<AbortOnDropHandle<()>> = None;
         let mut sub_ai_enabled = false;
         let mut pump_started = false;
@@ -746,7 +745,6 @@ impl TaskRuntimeCoordinator {
                     params.transport_policy,
                 )
                 .await?;
-            main_subscribed = true;
 
             main_attach_handle = Some(AbortOnDropHandle::new(
                 self.pipeline_mgr.attach_main_stream(&camera_id, main_rx),
@@ -846,9 +844,6 @@ impl TaskRuntimeCoordinator {
             if let Some(handle) = main_attach_handle.take() {
                 abort_join_handle(handle).await;
             }
-            if main_subscribed {
-                self.stream_hub.unsubscribe(&main_stream_key).await;
-            }
             self.pipeline_mgr.set_ai_active(&camera_id, false).await;
             self.pipeline_mgr
                 .set_main_stream_analysis(&camera_id, false)
@@ -916,7 +911,6 @@ impl TaskRuntimeCoordinator {
                 )
                 .await;
             abort_join_handle(entry.main_attach_handle).await;
-            self.stream_hub.unsubscribe(&entry.main_stream_key).await;
             self.pipeline_mgr.set_ai_active(camera_id, false).await;
             self.pipeline_mgr
                 .set_main_stream_analysis(camera_id, false)

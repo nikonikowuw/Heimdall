@@ -11,7 +11,7 @@
 //! - [0..1]   Magic / Protocol Version (0x01)
 //! - [1..2]   Codec (0x01 = H264, 0x02 = H265)
 //! - [2..3]   Frame Type (0x01 = Keyframe / IDR, 0x00 = Delta / P / B)
-//! - [3..4]   Flags (0x00 保留)
+//! - [3..4]   Flags (bit 0 = discontinuity, consumer resets decoder before frame)
 //! - [4..12]  PTS_MS (8 字节大端整数，毫秒时间戳)
 //! - [12..]   Payload (Annex B NALU 原始数据，包含 00 00 00 01 起始码)
 
@@ -23,6 +23,9 @@ pub const WEBCODECS_FRAME_HEADER_LEN: usize = 12;
 
 /// WebCodecs 传输协议版本号
 pub const WEBCODECS_PROTOCOL_VERSION: u8 = 0x01;
+
+/// Flags bit 0 marks that the consumer must reset its decoder before this frame.
+pub const WEBCODECS_FLAG_DISCONTINUITY: u8 = 0x01;
 
 /// 解析出的 WebCodecs 二进制帧头元数据
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +41,11 @@ pub struct WebCodecsFrameHeader {
 ///
 /// 若传入音频包或非视频包，安全返回空 `Bytes`。
 pub fn pack_webcodecs_frame(packet: &EncodedPacket) -> Bytes {
+    pack_webcodecs_frame_with_flags(packet, 0)
+}
+
+/// 将视频帧序列化并携带显式控制 flags（例如 Replay/SourceReset 后的不连续点）。
+pub fn pack_webcodecs_frame_with_flags(packet: &EncodedPacket, flags: u8) -> Bytes {
     if !packet.codec.is_video() || packet.stream_tag == types::StreamTag::Audio {
         return Bytes::new();
     }
@@ -50,7 +58,7 @@ pub fn pack_webcodecs_frame(packet: &EncodedPacket) -> Bytes {
     };
     buf.put_u8(codec_byte);
     buf.put_u8(if packet.is_keyframe { 0x01 } else { 0x00 });
-    buf.put_u8(0x00);
+    buf.put_u8(flags);
     buf.put_i64(packet.pts_ms);
     buf.put_slice(&packet.payload);
     buf.freeze()

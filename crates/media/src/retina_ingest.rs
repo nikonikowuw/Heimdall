@@ -4,9 +4,9 @@
 //! 1. 深度抗非标安防摄像头畸形 SDP 与异常握手报文；
 //! 2. 原生支持 TCP (Interleaved) 与 UDP RTP 传输策略；
 //! 3. 自动将音视频流解包为标准 Annex B NALU 序列 (`FrameFormat::SIMPLE`)；
-//! 4. 将网络数据流转化为系统统一的 `types::EncodedPacket`，无缝送入 StreamHub 广播分发。
+//! 4. 将网络数据流转化为系统统一的 `types::EncodedPacket`，交给 StreamHub 分发器的独立消费者 mailbox。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,9 +17,9 @@ use retina::client::{
     Transport, UdpTransportOptions,
 };
 use retina::codec::{CodecItem, FrameFormat};
-use tokio::sync::broadcast;
 use types::{CodecType, EncodedPacket, StreamTag, TransportPolicy};
 
+use crate::dispatcher::PacketDispatcher;
 use crate::error::MediaError;
 use crate::probe::StreamProber;
 use crate::rtsp::{mask_rtsp_url, parse_and_clean_rtsp_url};
@@ -83,7 +83,10 @@ pub struct RetinaIngestor {
     pub camera_id: String,
     pub rtsp_url: String,
     pub transport_policy: TransportPolicy,
-    pub tx: broadcast::Sender<Arc<EncodedPacket>>,
+    pub dispatcher: Arc<PacketDispatcher>,
+    pub last_packet_time: Option<Arc<AtomicI64>>,
+    pub reconnect_count: Option<Arc<std::sync::atomic::AtomicU64>>,
+    pub last_error: Option<Arc<parking_lot::Mutex<Option<String>>>>,
     pub is_running: Arc<AtomicBool>,
     pub inactivity_timeout: Duration,
     pub handshake_timeout: Duration,
@@ -94,17 +97,44 @@ impl RetinaIngestor {
         camera_id: String,
         rtsp_url: String,
         transport_policy: TransportPolicy,
-        tx: broadcast::Sender<Arc<EncodedPacket>>,
+        dispatcher: Arc<PacketDispatcher>,
     ) -> Self {
         Self {
             camera_id,
             rtsp_url,
             transport_policy,
-            tx,
+            dispatcher,
+            last_packet_time: None,
+            reconnect_count: None,
+            last_error: None,
             is_running: Arc::new(AtomicBool::new(false)),
             inactivity_timeout: DEFAULT_STREAM_INACTIVITY_TIMEOUT,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
         }
+    }
+
+    /// 注入 StreamHub 的墙上时间戳，用于健康检查。
+    pub fn with_last_packet_time(mut self, last_packet_time: Arc<AtomicI64>) -> Self {
+        self.last_packet_time = Some(last_packet_time);
+        self
+    }
+
+    /// 注入重连计数与最近错误指标引用。
+    pub fn with_reconnect_metrics(
+        mut self,
+        reconnect_count: Arc<std::sync::atomic::AtomicU64>,
+        last_error: Arc<parking_lot::Mutex<Option<String>>>,
+    ) -> Self {
+        self.reconnect_count = Some(reconnect_count);
+        self.last_error = Some(last_error);
+        self
+    }
+
+    fn publish(&self, packet: Arc<EncodedPacket>) {
+        if let Some(last_packet_time) = &self.last_packet_time {
+            last_packet_time.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
+        }
+        self.dispatcher.publish(packet);
     }
 
     /// 设置流静默看门狗超时时间（连续未收到任何音视频数据包的判定阈值）
@@ -154,6 +184,16 @@ impl RetinaIngestor {
                         break;
                     }
 
+                    // RTSP 会话重建前切换 epoch，阻止旧参考链和参数集进入新会话。
+                    self.dispatcher.source_reset();
+
+                    if let Some(count) = &self.reconnect_count {
+                        count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if let Some(last_err) = &self.last_error {
+                        *last_err.lock() = Some(err.to_string());
+                    }
+
                     // 经历过稳定流数据接收后发生的断开，代表长连接中途网络波动，重置退避时间为 1 秒
                     if frames_streamed > 0 {
                         backoff = Duration::from_secs(1);
@@ -172,11 +212,15 @@ impl RetinaIngestor {
                         }
                     }
 
+                    let jitter_ms = crate::dispatcher::monotonic_ms() % 500;
+                    let wait_duration = backoff + Duration::from_millis(jitter_ms);
+
                     tracing::warn!(
                         camera_id = %self.camera_id,
                         error = %err,
                         transport = ?current_transport,
                         retry_after_secs = backoff.as_secs(),
+                        jitter_ms,
                         "Retina RTSP 连接异常中断，准备指数退避重连"
                     );
 
@@ -185,7 +229,7 @@ impl RetinaIngestor {
                         _ = cancel_rx.wait_for(|&c| c) => {
                             break;
                         }
-                        _ = tokio::time::sleep(backoff) => {}
+                        _ = tokio::time::sleep(wait_duration) => {}
                     }
                     backoff = (backoff * 2).min(max_backoff);
                 }
@@ -460,7 +504,7 @@ impl RetinaIngestor {
                 payload: Bytes::from(extradata),
                 ..Default::default()
             });
-            let _ = self.tx.send(packet);
+            self.publish(packet);
         }
 
         // 6. 持续消费 VideoFrame（看门狗守护，防止半开连接与静默丢包死锁）
@@ -534,8 +578,8 @@ impl RetinaIngestor {
                         ..Default::default()
                     });
 
-                    // 广播分发至所有订阅者（StreamHub / RingBuffer / FlvPipeline）
-                    let _ = self.tx.send(packet);
+                    // 分发器为每个消费者维护独立 mailbox。
+                    self.publish(packet);
                 }
             } else if audio_track_active {
                 if let CodecItem::AudioFrame(frame) = item {
@@ -558,7 +602,7 @@ impl RetinaIngestor {
                                 stream_tag: StreamTag::Audio,
                             });
 
-                            let _ = self.tx.send(packet);
+                            self.publish(packet);
                         }
                     }
                 }
@@ -664,12 +708,12 @@ mod tests {
 
     #[test]
     fn test_retina_ingestor_builder_and_defaults() {
-        let (tx, _) = broadcast::channel(16);
+        let dispatcher = Arc::new(PacketDispatcher::new(Default::default()));
         let ingestor = RetinaIngestor::new(
             "cam-1".into(),
             "rtsp://127.0.0.1:554/live".into(),
             TransportPolicy::Auto,
-            tx.clone(),
+            dispatcher,
         );
 
         assert_eq!(
@@ -708,12 +752,12 @@ mod tests {
             }
         });
 
-        let (tx, _) = broadcast::channel(16);
+        let dispatcher = Arc::new(PacketDispatcher::new(Default::default()));
         let ingestor = RetinaIngestor::new(
             "cam-hang".into(),
             format!("rtsp://127.0.0.1:{port}/live"),
             TransportPolicy::Tcp,
-            tx,
+            dispatcher,
         )
         .with_handshake_timeout(Duration::from_millis(100));
 
@@ -789,12 +833,12 @@ mod tests {
             }
         });
 
-        let (tx, _) = broadcast::channel(16);
+        let dispatcher = Arc::new(PacketDispatcher::new(Default::default()));
         let ingestor = RetinaIngestor::new(
             "cam-silent-drop".into(),
             format!("rtsp://127.0.0.1:{port}/live"),
             TransportPolicy::Tcp,
-            tx,
+            dispatcher,
         )
         .with_handshake_timeout(Duration::from_secs(2))
         .with_inactivity_timeout(Duration::from_millis(150)); // 设置为 150ms 方便单测断言
@@ -840,12 +884,12 @@ mod tests {
             }
         });
 
-        let (tx, _) = broadcast::channel(16);
+        let dispatcher = Arc::new(PacketDispatcher::new(Default::default()));
         let ingestor = RetinaIngestor::new(
             "cam-cancel".into(),
             format!("rtsp://127.0.0.1:{port}/live"),
             TransportPolicy::Tcp,
-            tx,
+            dispatcher,
         )
         .with_handshake_timeout(Duration::from_secs(5));
 

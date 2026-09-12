@@ -64,7 +64,7 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
 
     // 2. 初始化模拟子码流会话
     let session = CameraStreamSession::mock(cam_id, "rtsp://mock-sub/live", TransportPolicy::Tcp);
-    let broadcast_tx = session.broadcast_tx.clone();
+    let dispatcher = session.dispatcher.clone();
 
     // 3. 构建专用常驻推理线程与解码器
     let infer_backend = Arc::new(E2eMockInferBackend {
@@ -97,7 +97,7 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
         payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f]),
         ..Default::default()
     });
-    let _ = broadcast_tx.send(pkt1);
+    dispatcher.publish(pkt1);
 
     // 等待异步处理完成
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -118,7 +118,7 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
         payload: Bytes::from_static(&[0xFF, 0xF1, 0x50, 0x80, 0x00, 0x09, 0x00, 0xAA, 0xBB]),
         stream_tag: types::StreamTag::Audio,
     });
-    let _ = broadcast_tx.send(audio_pkt);
+    dispatcher.publish(audio_pkt);
 
     // 移动目标至 Y = 0.55 (跨越 Y = 0.5 绊线，且与前一帧维持 IoU=0.5 关联)，发送第 2 帧
     *infer_backend.current_y.lock().unwrap() = 0.55;
@@ -129,7 +129,7 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
         payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x9a]),
         ..Default::default()
     });
-    let _ = broadcast_tx.send(pkt2);
+    dispatcher.publish(pkt2);
 
     // 等待跨帧轨迹关联与规则判定及快照落盘完成
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -336,7 +336,7 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
 
     // 4. 初始化模拟子码流会话
     let session = CameraStreamSession::mock(cam_id, "rtsp://mock-real/live", TransportPolicy::Tcp);
-    let broadcast_tx = session.broadcast_tx.clone();
+    let dispatcher = session.dispatcher.clone();
 
     // 5. 挂载子码流驱动泵并启动
     manager
@@ -359,7 +359,7 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
         payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f]),
         ..Default::default()
     });
-    let _ = broadcast_tx.send(pkt);
+    dispatcher.publish(pkt);
 
     // 等待异步流转完成（CoreML 首次前向推理包含模型预热，等待 500ms）
     tokio::time::sleep(Duration::from_millis(500)).await;

@@ -19,7 +19,8 @@
 | -------------- | ------------------------------------------------------------------------------- |
 | 帧             | `crossbeam_channel::bounded`，通常 1～4；非阻塞投递、优先丢旧并计数             |
 | 异步/同步控制  | 有界 `tokio::sync::mpsc`；阻塞接收只在 OS Worker，不能阻塞 Tokio 或硬件帧生产者 |
-| 多客户端广播   | 有界 `tokio::sync::broadcast`；`Lagged` 跳过旧消息                              |
+| 媒体流多路分发 | `PacketDispatcher` + 独立有界 `ConsumerMailbox`（`VecDeque + Notify`）；满载清空残缺 P/B 帧并排入单一 `GopSnapshot Replay`，不阻塞生产者，不影响其他正常消费者 |
+| 告警/事件广播  | 有界 `tokio::sync::broadcast`；`Lagged` 跳过旧消息                              |
 | 只读配置热替换 | `Arc<ArcSwap<Config>>`，按已有实现选用                                          |
 
 - 队列与通道规则见 [全局约定](../guides/conventions.md#队列与通道)。

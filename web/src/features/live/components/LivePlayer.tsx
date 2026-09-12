@@ -55,7 +55,7 @@ export interface LivePlayerProps {
   onClose?: () => void
   onTogglePause?: () => void
   onSwitchStream?: (stream: 'main' | 'sub') => void
-  /** 是否启用音频输出；仅 Hero 主预览窗口可开启，避免多路声音污染 */
+  /** 是否启用音频输出；当开启时将自动切换至具备音视频时钟同步的 FLV (MSE) 通道并请求后端携带 ?audio=true */
   audioEnabled?: boolean
   onToggleAudio?: () => void
 }
@@ -75,11 +75,22 @@ export function LivePlayer({
   onClose,
   onTogglePause,
   onSwitchStream,
-  audioEnabled = false,
+  audioEnabled,
   onToggleAudio,
 }: LivePlayerProps) {
   const { t } = useTranslation('camera')
   const streamType = stream || (isHero ? 'main' : 'sub')
+
+  const [internalAudioEnabled, setInternalAudioEnabled] = useState<boolean>(false)
+  const isAudioActive = audioEnabled !== undefined ? audioEnabled : internalAudioEnabled
+
+  const handleToggleAudio = () => {
+    if (onToggleAudio) {
+      onToggleAudio()
+    } else {
+      setInternalAudioEnabled((prev) => !prev)
+    }
+  }
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const videoCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -99,6 +110,8 @@ export function LivePlayer({
   const [latencyMs, setLatencyMs] = useState<number>(128)
   const [retryKey, setRetryKey] = useState<number>(0)
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const retryAttemptRef = useRef<number>(0)
+  const stableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (isPaused) {
@@ -117,17 +130,39 @@ export function LivePlayer({
 
     function scheduleRetry() {
       if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current)
+      if (stableTimerRef.current) {
+        clearTimeout(stableTimerRef.current)
+        stableTimerRef.current = null
+      }
+
+      const attempt = retryAttemptRef.current
+      const baseMs = Math.min(1000 * 2 ** attempt, 30_000)
+      const jitterMs = baseMs * 0.1 * Math.random()
+      const delayMs = Math.round(baseMs + jitterMs)
+      retryAttemptRef.current = Math.min(attempt + 1, 6)
+
       autoRetryTimerRef.current = setTimeout(() => {
         if (!isCancelled) {
           setRetryKey((k) => k + 1)
         }
-      }, 3000)
+      }, delayMs)
     }
 
     const handlePlaying = () => {
       if (!isCancelled) {
         setConnectionStatus('connected')
-        setLatencyMs(Math.floor(100 + Math.random() * 40))
+        if (videoEl && videoEl.buffered.length > 0) {
+          const bufferedEnd = videoEl.buffered.end(videoEl.buffered.length - 1)
+          const latency = Math.max(0, Math.round((bufferedEnd - videoEl.currentTime) * 1000))
+          setLatencyMs(latency)
+        }
+        // 持续稳定播放 5 秒后才重置重试计数，避免偶发短暂连通将退避阶段过早清零
+        if (!stableTimerRef.current) {
+          stableTimerRef.current = setTimeout(() => {
+            retryAttemptRef.current = 0
+            stableTimerRef.current = null
+          }, 5000)
+        }
       }
     }
 
@@ -136,7 +171,7 @@ export function LivePlayer({
       setActiveProtocol('flv')
       setConnectionStatus('connecting')
 
-      const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType, audioEnabled)
+      const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType, isAudioActive)
 
       if (!mpegts.isSupported()) {
         setConnectionStatus('failed')
@@ -146,20 +181,25 @@ export function LivePlayer({
       mpegts.LoggingControl.enableAll = false
 
       try {
+        videoEl.muted = !isAudioActive
+        if (isAudioActive) {
+          videoEl.volume = 1.0
+        }
+
         flvPlayer = mpegts.createPlayer(
           {
             type: 'flv',
             isLive: true,
             url: flvUrl,
-            hasAudio: audioEnabled,
+            hasAudio: isAudioActive,
             cors: true,
           },
           {
             enableWorker: false,
             lazyLoad: false,
             enableStashBuffer: true,
-            stashInitialSize: 384,
-            liveBufferLatencyChasing: false,
+            stashInitialSize: 128,
+            liveBufferLatencyChasing: true,
             autoCleanupSourceBuffer: true,
             autoCleanupMaxBackwardDuration: 10,
             autoCleanupMinBackwardDuration: 5,
@@ -172,7 +212,11 @@ export function LivePlayer({
         const playPromise = flvPlayer.play()
         if (playPromise && typeof playPromise.catch === 'function') {
           playPromise.catch(() => {
-            // Autoplay might be blocked or deferred
+            // 当非静音自动播放受限于浏览器策略时，自动降级为静音播放
+            if (videoEl && isAudioActive && !isCancelled) {
+              videoEl.muted = true
+              flvPlayer?.play()
+            }
           })
         }
 
@@ -215,9 +259,11 @@ export function LivePlayer({
       if (!cameraId) return
       setConnectionStatus('connecting')
 
-      // ① 优先嗅探 WebCodecs 硬件加速支持 (超低延迟 100~200ms)
+      // ① 仅在未开启音频且浏览器支持 WebCodecs 时，优先使用 WebCodecs 进行超低延迟画面渲染。
+      // WebCodecs 暂无 AudioDecoder / Web Audio 同步实现，开启音频时直通 FLV (MSE) 保证音画同步
       const canWebCodecs =
-        (await isWebCodecsSupported('h265')) || (await isWebCodecsSupported('h264'))
+        !isAudioActive &&
+        ((await isWebCodecsSupported('h265')) || (await isWebCodecsSupported('h264')))
 
       if (canWebCodecs && videoCanvas && !isCancelled) {
         try {
@@ -265,6 +311,10 @@ export function LivePlayer({
     }
 
     if (videoEl) {
+      videoEl.muted = !isAudioActive
+      if (isAudioActive) {
+        videoEl.volume = 1.0
+      }
       videoEl.addEventListener('loadstart', handleVideoEvent)
       videoEl.addEventListener('loadedmetadata', handleVideoEvent)
       videoEl.addEventListener('loadeddata', handleVideoEvent)
@@ -283,6 +333,10 @@ export function LivePlayer({
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current)
         autoRetryTimerRef.current = null
+      }
+      if (stableTimerRef.current) {
+        clearTimeout(stableTimerRef.current)
+        stableTimerRef.current = null
       }
       if (videoEl) {
         videoEl.removeEventListener('loadstart', handleVideoEvent)
@@ -321,7 +375,7 @@ export function LivePlayer({
         }
       }
     }
-  }, [cameraId, streamType, isPaused, retryKey, audioEnabled])
+  }, [cameraId, streamType, isPaused, retryKey, isAudioActive])
 
   // Canvas 2D 离屏 60fps 绘制循环（零 React 状态开销）
   useEffect(() => {
@@ -430,7 +484,7 @@ export function LivePlayer({
         ref={videoRef}
         autoPlay
         playsInline
-        muted={!audioEnabled}
+        muted={!isAudioActive}
         className={`h-full w-full ${
           fitMode === 'fill'
             ? 'object-fill'
@@ -521,6 +575,15 @@ export function LivePlayer({
           >
             {activeProtocol === 'webcodecs' ? 'WebCodecs' : 'FLV'}
           </span>
+          {isAudioActive && (
+            <>
+              <span className="text-white/40">|</span>
+              <span className="flex items-center gap-1 text-emerald-400">
+                <Volume2 className="h-3 w-3 animate-pulse" />
+                <span className="text-[9px] font-bold tracking-wider">AUDIO</span>
+              </span>
+            </>
+          )}
           {isHero && (
             <>
               <span className="text-white/40">|</span>
@@ -560,17 +623,21 @@ export function LivePlayer({
           </button>
         )}
 
-        {/* 音频开关 (仅 Hero 主预览窗口显示) */}
-        {onToggleAudio && isHero && (
+        {/* 音频开关 (主大屏、提供回调或显示 HUD 时可用) */}
+        {(onToggleAudio || isHero || showHud) && (
           <button
             type="button"
-            onClick={onToggleAudio}
-            className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-black/80 hover:text-white"
+            onClick={handleToggleAudio}
+            className={`rounded-md p-1 backdrop-blur-md transition-colors ${
+              isAudioActive
+                ? 'bg-[var(--accent)] text-white shadow-xs'
+                : 'bg-black/60 text-white/90 hover:bg-black/80 hover:text-white'
+            }`}
             title={
-              audioEnabled ? t('live.muteAudio', '关闭音频') : t('live.enableAudio', '开启音频')
+              isAudioActive ? t('live.muteAudio', '关闭音频') : t('live.enableAudio', '开启音频')
             }
           >
-            {audioEnabled ? (
+            {isAudioActive ? (
               <Volume2 className="h-3.5 w-3.5" />
             ) : (
               <VolumeX className="h-3.5 w-3.5 opacity-50" />

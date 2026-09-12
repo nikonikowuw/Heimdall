@@ -63,6 +63,8 @@ clap = { version = "4.5", features = ["derive"] }
 uuid = { version = "1.15", features = ["v4", "serde"] }
 bytes = "1.10"
 base64 = "0.22"
+percent-encoding = "2.3"
+parking_lot = "0.12"
 url = "2.5"
 mime_guess = "2.0"
 libloading = "0.8"

@@ -1,3 +1,4 @@
+mod media;
 mod network;
 mod overview;
 mod snapshot;
@@ -19,6 +20,7 @@ pub(super) fn round_1dp(v: f64) -> f64 {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/overview", get(overview::get_overview))
+        .merge(media::router())
         .merge(network::router())
         .merge(snapshot::router())
         .merge(storage::router())

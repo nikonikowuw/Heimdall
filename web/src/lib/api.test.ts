@@ -237,6 +237,14 @@ describe('API Client', () => {
   it('cameraApi.getLiveStreamUrl should build correct HTTP-FLV stream URL', () => {
     const url = cameraApi.getLiveStreamUrl('cam-01', 'main')
     expect(url).toContain('/api/v1/live/cam-01.flv?stream=main')
+    expect(url).not.toContain('audio=true')
+  })
+
+  it('cameraApi.getLiveStreamUrl should append audio=true when audio is enabled', () => {
+    const url = cameraApi.getLiveStreamUrl('cam-01', 'main', true)
+    expect(url).toContain('/api/v1/live/cam-01.flv?')
+    expect(url).toContain('stream=main')
+    expect(url).toContain('audio=true')
   })
 
   it('cameraApi.getWebCodecsWsUrl should build correct WebSocket WebCodecs URL', () => {

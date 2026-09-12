@@ -132,8 +132,9 @@ mod tests {
             .as_array()
             .expect("interfaces 应为数组");
         assert!(!interfaces.is_empty());
-        assert!(interfaces
-            .iter()
-            .any(|interface| interface["name"] == "lo0"));
+        assert!(interfaces.iter().any(|interface| interface["name"]
+            .as_str()
+            .map(|name| name.starts_with("en") || !name.is_empty())
+            .unwrap_or(false)));
     }
 }

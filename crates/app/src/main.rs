@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use axum::serve::ListenerExt;
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -249,6 +250,26 @@ async fn main() -> Result<()> {
     let probe_svc = Arc::new(api::CameraProbeService::from_state(&state));
     probe_svc.start_periodic_probe_worker(std::time::Duration::from_secs(30));
 
+    // 启动媒体消费者僵尸连接巡检，及时回收已进入恢复态但不再读取的 mailbox。
+    {
+        let stream_hub = state.stream_hub.clone();
+        let mut shutdown_rx = state.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let evicted = stream_hub.evict_stalled_consumers().await;
+                        if evicted > 0 {
+                            tracing::warn!(evicted, "媒体预览僵尸消费者已回收");
+                        }
+                    }
+                    _ = shutdown_rx.recv() => break,
+                }
+            }
+        });
+    }
+
     // 启动后台告警异步持久化与 WebSocket 实时广播工作线程
     let alarm_svc = Arc::new(api::AlarmDispatchService::from_state(&state));
     alarm_svc.start_worker();
@@ -316,7 +337,12 @@ async fn main() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .context("绑定监听端口失败")?;
+        .context("绑定监听端口失败")?
+        .tap_io(|stream| {
+            if let Err(error) = stream.set_nodelay(true) {
+                tracing::warn!(error = %error, "设置 HTTP accepted socket 的 TCP_NODELAY 失败");
+            }
+        });
 
     tracing::info!("Heimdall Web 控制台与 API 服务已就绪: http://{}", addr);
 

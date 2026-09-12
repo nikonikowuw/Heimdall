@@ -21,6 +21,17 @@ use types::{
     DetectionRuleRole, EncodedPacket, FrameRef, TransportPolicy,
 };
 
+async fn stop_mock_ingestor(session: &Arc<media::CameraStreamSession>) {
+    session.cancel_signal.store(true, Ordering::SeqCst);
+    let _ = session.cancel_tx.send(true);
+    for _ in 0..40 {
+        if !session.ingestor_running.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 /// 具备位置移动能力的测试模拟推理后端
 #[derive(Debug)]
 struct MockInferBackend {
@@ -147,9 +158,8 @@ async fn test_coordinator_full_lifecycle_and_events() {
     assert!(info.is_pump_running);
     assert_eq!(info.target_fps, 25);
 
-    // 3. 模拟推送主码流包与子码流包
-    let _ = main_session.broadcast_tx.send(create_packet(1000, true));
-    let _ = sub_session.broadcast_tx.send(create_packet(1000, true));
+    main_session.dispatcher.publish(create_packet(1000, true));
+    sub_session.dispatcher.publish(create_packet(1000, true));
 
     // 等待子流解码与推理
     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -404,15 +414,13 @@ async fn test_coordinator_alarm_trigger_and_event_broadcast() {
         .await
         .expect("启动管线成功");
 
-    // 推送第 1 帧 (Y=0.45)
-    let _ = sub_session.broadcast_tx.send(create_packet(1000, true));
+    stop_mock_ingestor(&sub_session).await;
+    sub_session.dispatcher.publish(create_packet(1000, true));
     tokio::time::sleep(Duration::from_millis(80)).await;
 
     // 移动目标至 Y = 0.55 (穿过绊线，维持 IoU=0.5 航迹关联)，推送第 2 帧
     backend.set_y(0.55);
-    let _ = sub_session.broadcast_tx.send(create_packet(1040, false));
-
-    // 验证是否收到告警事件 (异步落盘证据可能需要一定时间，采用有界轮询等待)
+    sub_session.dispatcher.publish(create_packet(1040, false));
     let mut received_alarm = false;
     let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
     while tokio::time::Instant::now() < deadline {
@@ -746,13 +754,13 @@ async fn test_coordinator_alarm_evidence_failure_preserves_alarm() {
         .await
         .expect("启动管线成功");
 
-    // 推送第 1 帧 (Y=0.45)
-    let _ = sub_session.broadcast_tx.send(create_packet(1000, true));
+    stop_mock_ingestor(&sub_session).await;
+    sub_session.dispatcher.publish(create_packet(1000, true));
     tokio::time::sleep(Duration::from_millis(80)).await;
 
     // 移动目标至 Y = 0.55 (穿过绊线触发告警)，推送第 2 帧
     backend.set_y(0.55);
-    let _ = sub_session.broadcast_tx.send(create_packet(1040, false));
+    sub_session.dispatcher.publish(create_packet(1040, false));
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     // 验证是否收到告警事件（即使证据写盘失败，告警事实也必须广播并保留）
@@ -856,8 +864,7 @@ async fn test_coordinator_empty_tracks_broadcast() {
         .await
         .expect("启动管线成功");
 
-    // 推送 1 帧
-    let _ = sub_session.broadcast_tx.send(create_packet(1000, true));
+    sub_session.dispatcher.publish(create_packet(1000, true));
     tokio::time::sleep(Duration::from_millis(120)).await;
 
     // 验证空检测时依然广播空 Tracks 事件，以便前端 Canvas 清除残留的旧框
@@ -1150,8 +1157,7 @@ async fn test_coordinator_multi_algorithm_instances() {
     assert_eq!(info.algorithm_id, "algo_face");
     assert_eq!(info.target_fps, 15);
 
-    // 推送子流数据包并验证稳定处理
-    let _ = sub_session.broadcast_tx.send(create_packet(1000, true));
+    sub_session.dispatcher.publish(create_packet(1000, true));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // 停止管线

@@ -1823,6 +1823,8 @@ dependencies = [
  "image",
  "libc",
  "md-5",
+ "parking_lot",
+ "percent-encoding",
  "retina",
  "serde",
  "thiserror",

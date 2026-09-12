@@ -8,6 +8,7 @@ use tokio::sync::RwLock as TokioRwLock;
 use infer::{AlgoPackage, InferenceWorker};
 use media::decoder::VideoDecoder;
 use media::ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
+use media::{StreamItem, StreamSubscription};
 use types::{
     AnalysisTask, BoundingBox, Camera, Detection, DetectionRule, EncodedPacket, FrameRef,
     TrackedObject,
@@ -474,11 +475,11 @@ impl PipelineManager {
         }
     }
 
-    /// 挂载主码流广播通道，持续将压缩 NALU 包压入 RingBuffer
+    /// 挂载主码流消费者，持续将压缩 NALU 包压入 RingBuffer
     pub fn attach_main_stream(
         &self,
         camera_id: &str,
-        mut packet_rx: tokio::sync::broadcast::Receiver<Arc<EncodedPacket>>,
+        subscription: StreamSubscription,
     ) -> tokio::task::JoinHandle<()> {
         let pipelines = self.pipelines.clone();
         let camera_id = camera_id.to_string();
@@ -493,27 +494,37 @@ impl PipelineManager {
 
             let mut awaiting_keyframe = false;
             loop {
-                match packet_rx.recv().await {
-                    Ok(pkt) => {
+                let Some(item) = subscription.recv().await else {
+                    tracing::warn!(camera_id = %camera_id, "主码流消费者 mailbox 已关闭，RingBuffer attach 退出");
+                    break;
+                };
+                match item {
+                    StreamItem::Packet(pkt) => {
+                        // 严格仅接收视频包，忽略音频包与非视频数据
+                        if !pkt.codec.is_video() || pkt.stream_tag == types::StreamTag::Audio {
+                            continue;
+                        }
                         if awaiting_keyframe && !pkt.is_keyframe {
                             continue;
                         }
                         awaiting_keyframe = false;
                         ctx.ring_buffer.push(pkt);
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        // 丢包后旧 GOP 已不再可靠，清空并等待新的关键帧恢复证据链。
+                    StreamItem::Replay(snapshot) => {
+                        ctx.ring_buffer.clear();
+                        awaiting_keyframe = false;
+                        for packet in snapshot.packets.iter().cloned() {
+                            if packet.codec.is_video()
+                                && packet.stream_tag != types::StreamTag::Audio
+                            {
+                                ctx.ring_buffer.push(packet);
+                            }
+                        }
+                    }
+                    StreamItem::SourceReset { epoch } => {
                         ctx.ring_buffer.clear();
                         awaiting_keyframe = true;
-                        tracing::warn!(
-                            camera_id = %camera_id,
-                            skipped,
-                            "主码流 RingBuffer attach 发生 Lagged，清空残缺 GOP 并等待新关键帧"
-                        );
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        tracing::warn!(camera_id = %camera_id, "主码流广播已关闭，RingBuffer attach 退出");
-                        break;
+                        tracing::info!(camera_id = %camera_id, epoch, "主码流源流 epoch 重建，清空残缺 GOP");
                     }
                 }
             }
@@ -1475,22 +1486,38 @@ mod tests {
         let manager = Arc::new(PipelineManager::new());
         let cam_id = "cam_lagged_test";
 
-        // 创建较小容量广播通道以便测试 Lagged
-        let (tx, rx) = tokio::sync::broadcast::channel(2);
-        let attach_handle = manager.attach_main_stream(cam_id, rx);
+        let hub = media::StreamHub::new();
+        let session = hub
+            .get_or_create_session(
+                cam_id,
+                "rtsp://127.0.0.1:8554/test",
+                types::TransportPolicy::Tcp,
+            )
+            .await;
+        let subscription = hub
+            .subscribe_existing_session(session.clone(), media::ConsumerKind::MainStreamEvidence)
+            .await
+            .expect("main stream subscription");
+        let attach_handle = manager.attach_main_stream(cam_id, subscription);
 
         let make_pkt = |pts: i64, key: bool| {
             Arc::new(EncodedPacket {
                 pts_ms: pts,
                 is_keyframe: key,
                 codec: CodecType::H264,
-                payload: Bytes::from_static(b"\x00\x00\x00\x01\x65idr"),
+                payload: if key {
+                    Bytes::from_static(b"\x00\x00\x00\x01\x67\x42\x00\x1e\x00\x00\x00\x01\x68\xce\x00\x00\x00\x01\x65idr")
+                } else {
+                    Bytes::from_static(b"\x00\x00\x00\x01\x41p")
+                },
                 ..Default::default()
             })
         };
 
         // 1. 发送第 1 包并等待进入 RingBuffer
-        let _ = tx.send(make_pkt(1000, true));
+        session.dispatcher.publish(make_pkt(1000, true));
+        tokio::task::yield_now().await;
+        assert!(!attach_handle.is_finished());
         tokio::time::sleep(Duration::from_millis(50)).await;
         let ctx = manager
             .get_pipeline_context(cam_id)
@@ -1498,18 +1525,11 @@ mod tests {
             .expect("context must exist");
         assert_eq!(ctx.ring_buffer.len(), 1);
 
-        // 2. 连续发送超过容量，制造 Lagged 溢出
-        for i in 1..=5 {
-            let _ = tx.send(make_pkt(1000 + i * 40, false));
-        }
-
+        // 2. 模拟源流 epoch 重建：消费者必须清空残缺 GOP，等待 Replay。
+        session.dispatcher.source_reset();
+        // 在新 epoch 中发送完整关键帧，dispatcher 以 Replay 方式恢复 RingBuffer。
+        session.dispatcher.publish(make_pkt(2000, true));
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(ctx.ring_buffer.is_empty(), "关键帧恢复前不得写入残缺 GOP");
-
-        // 3. 再次发送新的完整关键帧，RingBuffer 在清空残缺 GOP 后应正常恢复接收
-        let _ = tx.send(make_pkt(2000, true));
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
         assert!(!ctx.ring_buffer.is_empty());
         let newest = ctx.ring_buffer.newest_pts().expect("newest pts must exist");
         assert_eq!(newest, 2000);

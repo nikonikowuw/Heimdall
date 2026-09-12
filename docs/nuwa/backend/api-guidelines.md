@@ -14,8 +14,9 @@
 
 | 通路               | 当前入口                                                                    |
 | ------------------ | --------------------------------------------------------------------------- |
-| HTTP-FLV           | `GET /api/v1/live/{id}.flv?stream=main\|sub&token={jwt}`，也支持 `{id}/flv` |
-| WS-FLV / WebCodecs | `/api/v1/live/{id}/ws`、`/api/v1/live/{id}/webcodecs`                       |
+| HTTP-FLV           | `GET /api/v1/live/{id}.flv?stream=main\|sub&token={jwt}&audio=true\|false`，也支持 `{id}/flv`（`audio` 默认 false） |
+| WS-FLV / WebCodecs | `/api/v1/live/{id}/ws`、`/api/v1/live/{id}/webcodecs?stream=main\|sub&token={jwt}`                       |
+| 媒体流健康快照     | `GET /api/v1/system/media/streams/{stream_key}`，返回 `StreamHealthSnapshot`                |
 | 业务事件 WS        | `/api/v1/ws/events`                                                         |
 | 证据图片           | `/api/v1/evidence/image/...`；规范化后校验路径仍在证据根目录内              |
 | SPA                | 非 `/api/` 路径 fallback 到 `index.html`                                    |

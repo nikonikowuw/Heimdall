@@ -4,8 +4,8 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use bytes::Bytes;
-use media::{FlvMuxer, FlvStreamPipeline};
+use bytes::{Bytes, BytesMut};
+use media::{FlvMuxer, FlvStreamPipeline, MediaError, StreamItem, StreamSubscription};
 use serde::Deserialize;
 use types::{CodecType, StreamKey, StreamType, TransportPolicy};
 
@@ -23,7 +23,6 @@ pub struct LiveQuery {
 
 /// 客户端预览会话 RAII 守护者，确保在任何断开、异常中止或被 Drop 场景下安全注销订阅并扣减按需预览计数
 struct PreviewSessionGuard {
-    stream_hub: std::sync::Arc<media::StreamHub>,
     pipeline: std::sync::Arc<pipeline::PipelineManager>,
     stream_key: String,
     camera_id: String,
@@ -32,17 +31,39 @@ struct PreviewSessionGuard {
 
 impl Drop for PreviewSessionGuard {
     fn drop(&mut self) {
-        let hub = self.stream_hub.clone();
         let pipe = self.pipeline.clone();
         let key = self.stream_key.clone();
         let cid = self.camera_id.clone();
         let proto = self.protocol;
         tokio::spawn(async move {
-            hub.unsubscribe(&key).await;
             pipe.decrement_preview(&cid).await;
             tracing::info!(camera_id = %cid, stream_key = %key, protocol = proto, "实时流客户端已断开，释放订阅与预览引用");
         });
     }
+}
+
+fn append_flv_tag(buffer: &mut BytesMut, tag: Bytes, max_bytes: usize) -> Vec<Bytes> {
+    if tag.is_empty() {
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::with_capacity(2);
+    if tag.len() > max_bytes {
+        if !buffer.is_empty() {
+            chunks.push(buffer.split().freeze());
+        }
+        chunks.push(tag);
+        return chunks;
+    }
+
+    if !buffer.is_empty() && buffer.len() + tag.len() > max_bytes {
+        chunks.push(buffer.split().freeze());
+    }
+    buffer.extend_from_slice(&tag);
+    if buffer.len() == max_bytes {
+        chunks.push(buffer.split().freeze());
+    }
+    chunks
 }
 
 pub fn router() -> Router<AppState> {
@@ -58,14 +79,8 @@ async fn resolve_camera_and_subscribe(
     state: &AppState,
     camera_id: &str,
     stream_type: Option<&str>,
-) -> Result<
-    (
-        db::entity::camera::Model,
-        StreamKey,
-        tokio::sync::broadcast::Receiver<std::sync::Arc<types::EncodedPacket>>,
-    ),
-    StatusCode,
-> {
+    kind: media::ConsumerKind,
+) -> Result<(db::entity::camera::Model, StreamKey, StreamSubscription), StatusCode> {
     let clean_camera_id = camera_id
         .strip_suffix(".flv")
         .unwrap_or(camera_id)
@@ -106,11 +121,14 @@ async fn resolve_camera_and_subscribe(
     let str_key = stream_key.as_str_key();
     let packet_rx = match state
         .stream_hub
-        .subscribe(&str_key, &target_url, TransportPolicy::Auto)
+        .subscribe_kind(&str_key, &target_url, TransportPolicy::Auto, kind)
         .await
     {
-        Ok(rx) => rx,
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(subscription) => subscription,
+        Err(error) => match error {
+            MediaError::TooManyConsumers { .. } => return Err(StatusCode::TOO_MANY_REQUESTS),
+            _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        },
     };
 
     Ok((camera, stream_key, packet_rx))
@@ -123,20 +141,31 @@ async fn handle_http_flv(
     Path(camera_id): Path<String>,
     Query(query): Query<LiveQuery>,
 ) -> Response {
-    let (camera, stream_key, mut packet_rx) =
-        match resolve_camera_and_subscribe(&state, &camera_id, query.stream.as_deref()).await {
-            Ok(res) => res,
-            Err(status) => return status.into_response(),
-        };
+    let (camera, stream_key, subscription) = match resolve_camera_and_subscribe(
+        &state,
+        &camera_id,
+        query.stream.as_deref(),
+        media::ConsumerKind::HttpFlv,
+    )
+    .await
+    {
+        Ok(res) => res,
+        Err(status) => return status.into_response(),
+    };
 
     let stream_hub = state.stream_hub.clone();
     let pipeline_mgr = state.pipeline.clone();
     let str_key = stream_key.as_str_key();
     let str_key_clone = str_key.clone();
     let mut shutdown_rx = state.shutdown_tx.subscribe();
-    let is_main_stream = stream_key.stream_type == StreamType::Main;
     let cam_id_for_stream = camera.camera_id.clone();
     let include_audio = query.audio.unwrap_or(false);
+    let http_merge_flush_ms = state.stream_hub.preview_config().http_merge_flush_ms.max(1);
+    let http_merge_max_bytes = state
+        .stream_hub
+        .preview_config()
+        .http_merge_max_bytes
+        .max(1);
 
     // 活跃预览计数增加 (按需激活相关资源)
     pipeline_mgr.increment_preview(&camera.camera_id).await;
@@ -155,8 +184,8 @@ async fn handle_http_flv(
     };
 
     let stream = async_stream::stream! {
+        let subscription = subscription;
         let _guard = PreviewSessionGuard {
-            stream_hub: stream_hub.clone(),
             pipeline: pipeline_mgr.clone(),
             stream_key: str_key_clone.clone(),
             camera_id: cam_id_for_stream.clone(),
@@ -167,12 +196,28 @@ async fn handle_http_flv(
         yield Ok::<Bytes, std::convert::Infallible>(FlvMuxer::flv_header(include_audio));
 
         let mut flv_pipe = FlvStreamPipeline::new(include_audio);
+        let mut flv_merge = BytesMut::with_capacity(http_merge_max_bytes);
+        let mut flv_merge_interval = tokio::time::interval(std::time::Duration::from_millis(
+            http_merge_flush_ms,
+        ));
+        flv_merge_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut flv_chunks_merged: u64 = 0;
+        let mut flv_flush_count: u64 = 0;
+        let mut max_buffer_depth: usize = 0;
 
         // ② 尝试注入缓存中的 Sequence Header 与完整 GOP 关键帧序列
         if let Some(cache) = stream_hub.get_keyframe_cache(&str_key_clone).await {
             let init_tags = flv_pipe.inject_cache(&cache, fallback_codec);
             for tag in init_tags {
-                yield Ok(tag);
+                for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
+                    flv_chunks_merged += 1;
+                    yield Ok(chunk);
+                }
+            }
+            max_buffer_depth = max_buffer_depth.max(flv_merge.len());
+            if !flv_merge.is_empty() {
+                flv_flush_count += 1;
+                yield Ok(flv_merge.split().freeze());
             }
         }
 
@@ -181,44 +226,85 @@ async fn handle_http_flv(
             let pkt = tokio::select! {
                 _ = shutdown_rx.recv() => {
                     tracing::info!(stream_key = %str_key_clone, "HTTP-FLV 收到服务停机信号，主动终止流传输");
+                    if !flv_merge.is_empty() {
+                        flv_flush_count += 1;
+                        yield Ok(flv_merge.split().freeze());
+                    }
                     break;
                 }
-                res = packet_rx.recv() => {
-                    match res {
-                        Ok(p) => p,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(
-                                stream_key = %str_key_clone,
-                                skipped,
-                                "HTTP-FLV 消费端处理落后，跳过残片帧并等待下一个关键帧重新对齐"
-                            );
-                            flv_pipe.handle_lagged();
+                _ = flv_merge_interval.tick(), if !flv_merge.is_empty() => {
+                    flv_flush_count += 1;
+                    yield Ok(flv_merge.split().freeze());
+                    continue;
+                }
+                item = subscription.recv() => {
+                    match item {
+                        Some(StreamItem::Packet(packet)) => packet,
+                        Some(StreamItem::Replay(snapshot)) => {
+                            flv_pipe.reset_after_discontinuity();
+                            let replay_cache = snapshot.to_keyframe_cache();
+                            for tag in flv_pipe.inject_cache(&replay_cache, snapshot.codec) {
+                                for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
+                                    flv_chunks_merged += 1;
+                                    yield Ok(chunk);
+                                }
+                            }
+                            max_buffer_depth = max_buffer_depth.max(flv_merge.len());
+                            if !flv_merge.is_empty() {
+                                flv_flush_count += 1;
+                                yield Ok(flv_merge.split().freeze());
+                            }
                             continue;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Some(StreamItem::SourceReset { epoch }) => {
+                            tracing::info!(stream_key = %str_key_clone, epoch, "HTTP-FLV 收到源流重建事件，重置封装状态");
+                            if !flv_merge.is_empty() {
+                                flv_flush_count += 1;
+                                yield Ok(flv_merge.split().freeze());
+                            }
+                            flv_pipe.reset_after_discontinuity();
+                            continue;
+                        }
+                        None => {
+                            if !flv_merge.is_empty() {
+                                flv_flush_count += 1;
+                                yield Ok(flv_merge.split().freeze());
+                            }
+                            break;
+                        }
                     }
                 }
             };
 
-            // 若为主码流且为视频帧，同步推入内存 Ring Buffer 供告警瞬时靶向精准抽帧
-            if is_main_stream && pkt.stream_tag == types::StreamTag::Video {
-                pipeline_mgr.push_main_packet(&cam_id_for_stream, pkt.clone()).await;
-            }
-
             // 视频帧：标准 FLV Video Tag 封装
             if pkt.stream_tag == types::StreamTag::Video {
                 for tag in flv_pipe.process_packet(&pkt) {
-                    yield Ok(tag);
+                    for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
+                        flv_chunks_merged += 1;
+                        yield Ok(chunk);
+                    }
                 }
             }
 
             // 音频帧：FLV Audio Tag 封装 (仅 include_audio 时有效，且待视频关键帧就绪后对齐发送)
             if include_audio && pkt.stream_tag == types::StreamTag::Audio && flv_pipe.has_first_keyframe {
                 for tag in flv_pipe.process_audio_packet(&pkt) {
-                    yield Ok(tag);
+                    for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
+                        flv_chunks_merged += 1;
+                        yield Ok(chunk);
+                    }
                 }
             }
+            max_buffer_depth = max_buffer_depth.max(flv_merge.len());
         }
+
+        tracing::debug!(
+            stream_key = %str_key_clone,
+            flv_chunks_merged,
+            flv_flush_count,
+            max_buffer_depth,
+            "HTTP-FLV 会话合并写指标统计"
+        );
     };
 
     let body = axum::body::Body::from_stream(stream);
@@ -267,11 +353,17 @@ async fn handle_ws_flv(
     Query(query): Query<LiveQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let (camera, stream_key, packet_rx) =
-        match resolve_camera_and_subscribe(&state, &camera_id, query.stream.as_deref()).await {
-            Ok(res) => res,
-            Err(status) => return status.into_response(),
-        };
+    let (camera, stream_key, subscription) = match resolve_camera_and_subscribe(
+        &state,
+        &camera_id,
+        query.stream.as_deref(),
+        media::ConsumerKind::HttpFlv,
+    )
+    .await
+    {
+        Ok(res) => res,
+        Err(status) => return status.into_response(),
+    };
 
     let str_key = stream_key.as_str_key();
     let is_main_stream = stream_key.stream_type == StreamType::Main;
@@ -290,7 +382,7 @@ async fn handle_ws_flv(
             str_key,
             is_main_stream,
             camera,
-            packet_rx,
+            subscription,
             include_audio,
         )
     })
@@ -300,9 +392,9 @@ async fn serve_ws_flv(
     mut socket: WebSocket,
     state: AppState,
     stream_key: String,
-    is_main_stream: bool,
+    _is_main_stream: bool,
     camera: db::entity::camera::Model,
-    mut packet_rx: tokio::sync::broadcast::Receiver<std::sync::Arc<types::EncodedPacket>>,
+    subscription: StreamSubscription,
     include_audio: bool,
 ) {
     let mut shutdown_rx = state.shutdown_tx.subscribe();
@@ -313,7 +405,6 @@ async fn serve_ws_flv(
     pipeline_mgr.increment_preview(&camera.camera_id).await;
 
     let _guard = PreviewSessionGuard {
-        stream_hub: stream_hub.clone(),
         pipeline: pipeline_mgr.clone(),
         stream_key: stream_key.clone(),
         camera_id: camera.camera_id.clone(),
@@ -356,28 +447,28 @@ async fn serve_ws_flv(
                     let _ = socket.send(Message::Close(None)).await;
                     break;
                 }
-                res = packet_rx.recv() => {
-                    match res {
-                        Ok(p) => p,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(
-                                stream_key = %stream_key,
-                                skipped,
-                                "WS-FLV 消费端处理落后，跳过残片帧并等待下一个关键帧重新对齐"
-                            );
-                            flv_pipe.handle_lagged();
+                item = subscription.recv() => {
+                    match item {
+                        Some(StreamItem::Packet(packet)) => packet,
+                        Some(StreamItem::Replay(snapshot)) => {
+                            flv_pipe.reset_after_discontinuity();
+                            let replay_cache = snapshot.to_keyframe_cache();
+                            for tag in flv_pipe.inject_cache(&replay_cache, fallback_codec) {
+                                if socket.send(Message::Binary(tag)).await.is_err() {
+                                    return;
+                                }
+                            }
                             continue;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Some(StreamItem::SourceReset { epoch }) => {
+                            tracing::info!(stream_key = %stream_key, epoch, "WS-FLV 收到源流重建事件，重置封装状态");
+                            flv_pipe.reset_after_discontinuity();
+                            continue;
+                        }
+                        None => break,
                     }
                 }
             };
-
-            if is_main_stream && pkt.stream_tag == types::StreamTag::Video {
-                pipeline_mgr
-                    .push_main_packet(&camera.camera_id, pkt.clone())
-                    .await;
-            }
 
             // 视频帧
             if pkt.stream_tag == types::StreamTag::Video {
@@ -411,11 +502,17 @@ async fn handle_ws_webcodecs(
     Query(query): Query<LiveQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let (camera, stream_key, packet_rx) =
-        match resolve_camera_and_subscribe(&state, &camera_id, query.stream.as_deref()).await {
-            Ok(res) => res,
-            Err(status) => return status.into_response(),
-        };
+    let (camera, stream_key, subscription) = match resolve_camera_and_subscribe(
+        &state,
+        &camera_id,
+        query.stream.as_deref(),
+        media::ConsumerKind::WebCodecs,
+    )
+    .await
+    {
+        Ok(res) => res,
+        Err(status) => return status.into_response(),
+    };
 
     let str_key = stream_key.as_str_key();
     let is_main_stream = stream_key.stream_type == StreamType::Main;
@@ -427,7 +524,7 @@ async fn handle_ws_webcodecs(
     );
 
     ws.on_upgrade(move |socket| {
-        serve_ws_webcodecs(socket, state, str_key, is_main_stream, camera, packet_rx)
+        serve_ws_webcodecs(socket, state, str_key, is_main_stream, camera, subscription)
     })
 }
 
@@ -435,9 +532,9 @@ async fn serve_ws_webcodecs(
     mut socket: WebSocket,
     state: AppState,
     stream_key: String,
-    is_main_stream: bool,
+    _is_main_stream: bool,
     camera: db::entity::camera::Model,
-    mut packet_rx: tokio::sync::broadcast::Receiver<std::sync::Arc<types::EncodedPacket>>,
+    subscription: StreamSubscription,
 ) {
     let mut shutdown_rx = state.shutdown_tx.subscribe();
     let stream_hub = state.stream_hub.clone();
@@ -447,7 +544,6 @@ async fn serve_ws_webcodecs(
     pipeline_mgr.increment_preview(&camera.camera_id).await;
 
     let _guard = PreviewSessionGuard {
-        stream_hub: stream_hub.clone(),
         pipeline: pipeline_mgr.clone(),
         stream_key: stream_key.clone(),
         camera_id: camera.camera_id.clone(),
@@ -472,55 +568,68 @@ async fn serve_ws_webcodecs(
         return;
     }
 
-    let mut awaiting_keyframe_after_lag = false;
+    let mut pending_discontinuity = false;
 
     // ② 实时消费并封装 NALU 为 12 字节二进制帧格式推送至 WebSocket
     loop {
-        let pkt = tokio::select! {
+        let item = tokio::select! {
             _ = shutdown_rx.recv() => {
                 let _ = socket.send(Message::Close(None)).await;
                 break;
             }
-            res = packet_rx.recv() => {
-                match res {
-                    Ok(p) => p,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!(
-                            stream_key = %stream_key,
-                            skipped,
-                            "WebCodecs 消费端网络积压，主动丢弃后续 P 帧并等待下一个关键帧重新对齐"
-                        );
-                        awaiting_keyframe_after_lag = true;
-                        continue;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
+            item = subscription.recv() => item,
         };
 
-        // WebCodecs 仅传输视频通道数据，忽略音频
-        if pkt.stream_tag == types::StreamTag::Audio || !pkt.codec.is_video() {
-            continue;
-        }
+        let Some(item) = item else {
+            break;
+        };
 
-        // 若网络发生积压丢包，主动丢弃非关键帧直到收到完整关键帧
-        if awaiting_keyframe_after_lag {
-            if pkt.is_keyframe {
-                awaiting_keyframe_after_lag = false;
-            } else {
+        match item {
+            StreamItem::Replay(snapshot) => {
+                pending_discontinuity = false;
+                for (index, replay_packet) in snapshot.packets.iter().enumerate() {
+                    if replay_packet.stream_tag == types::StreamTag::Audio
+                        || !replay_packet.codec.is_video()
+                    {
+                        continue;
+                    }
+                    let flags = if index == 0 {
+                        media::WEBCODECS_FLAG_DISCONTINUITY
+                    } else {
+                        0
+                    };
+                    let bin = media::pack_webcodecs_frame_with_flags(replay_packet, flags);
+                    if !bin.is_empty() && socket.send(Message::Binary(bin)).await.is_err() {
+                        return;
+                    }
+                }
                 continue;
             }
-        }
+            StreamItem::SourceReset { epoch } => {
+                tracing::info!(stream_key = %stream_key, epoch, "WebCodecs 收到源流重建事件，等待新关键帧");
+                pending_discontinuity = true;
+                continue;
+            }
+            StreamItem::Packet(pkt) => {
+                // WebCodecs 仅传输视频通道数据，忽略音频。
+                if pkt.stream_tag == types::StreamTag::Audio || !pkt.codec.is_video() {
+                    continue;
+                }
+                if pending_discontinuity && !pkt.is_keyframe {
+                    continue;
+                }
+                let flags = if pending_discontinuity {
+                    pending_discontinuity = false;
+                    media::WEBCODECS_FLAG_DISCONTINUITY
+                } else {
+                    0
+                };
 
-        if is_main_stream {
-            pipeline_mgr
-                .push_main_packet(&camera.camera_id, pkt.clone())
-                .await;
-        }
-
-        let bin = media::pack_webcodecs_frame(&pkt);
-        if !bin.is_empty() && socket.send(Message::Binary(bin)).await.is_err() {
-            break;
+                let bin = media::pack_webcodecs_frame_with_flags(&pkt, flags);
+                if !bin.is_empty() && socket.send(Message::Binary(bin)).await.is_err() {
+                    break;
+                }
+            }
         }
     }
 }
@@ -536,7 +645,13 @@ mod tests {
         let pipeline = std::sync::Arc::new(pipeline::PipelineManager::new());
         let state = AppState::new(db, pipeline);
 
-        let res = resolve_camera_and_subscribe(&state, "non-existent-uuid", None).await;
+        let res = resolve_camera_and_subscribe(
+            &state,
+            "non-existent-uuid",
+            None,
+            media::ConsumerKind::HttpFlv,
+        )
+        .await;
         assert!(res.is_err());
         assert_eq!(res.unwrap_err(), StatusCode::NOT_FOUND);
     }

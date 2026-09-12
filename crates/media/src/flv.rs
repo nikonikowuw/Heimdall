@@ -1,7 +1,9 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use types::{CodecType, EncodedPacket, StreamTag};
 
-use crate::stream_hub::KeyframeCache;
+use crate::dispatcher::KeyframeCache;
+
+pub const MAX_FLV_TIMESTAMP_MS: i64 = u32::MAX as i64;
 
 /// 剥离 NALU 可能携带的 Annex B 起始码 (0x00 00 00 01 或 0x00 00 01)，确保纯净 NALU 载荷
 pub fn strip_nalu_start_code(data: &[u8]) -> &[u8] {
@@ -271,8 +273,9 @@ impl FlvMuxer {
         base_pts_ms: i64,
         last_timestamp_ms: &mut u32,
     ) -> Bytes {
-        let raw_rel_ts = (pkt.pts_ms.saturating_sub(base_pts_ms)).max(0) as u32;
-        let rel_ts = raw_rel_ts.max(*last_timestamp_ms);
+        let raw_rel_ts = pkt.pts_ms.saturating_sub(base_pts_ms).max(0);
+        let rel_ts = raw_rel_ts.min(MAX_FLV_TIMESTAMP_MS) as u32;
+        let rel_ts = rel_ts.max(*last_timestamp_ms);
         *last_timestamp_ms = rel_ts;
         Self::packet_to_flv_tag_with_dts_cts(pkt, rel_ts, 0)
     }
@@ -473,7 +476,9 @@ impl BFrameTimeManager {
 
     /// 计算当前帧的 (dts_ms, cts_ms)
     pub fn calculate_dts_cts(&mut self, pkt_pts_ms: i64, base_pts_ms: i64) -> (u32, u32) {
-        let rel_pts = (pkt_pts_ms.saturating_sub(base_pts_ms)).max(0) as u32;
+        let rel_pts = pkt_pts_ms
+            .saturating_sub(base_pts_ms)
+            .clamp(0, MAX_FLV_TIMESTAMP_MS) as u32;
 
         // 1. 动态自适应估算平均帧间隔 (FPS 自适应)
         if let Some(prev) = self.prev_raw_pts {
@@ -575,8 +580,17 @@ impl FlvStreamPipeline {
 
         let adts_data = pkt.payload.as_ref();
         let base_pts = *self.base_pts_ms.get_or_insert(pkt.pts_ms);
-        let raw_rel_pts = (pkt.pts_ms.saturating_sub(base_pts)).max(0) as u32;
-        let dts = raw_rel_pts.max(self.last_audio_pts);
+        let raw_rel_pts = pkt.pts_ms.saturating_sub(base_pts).max(0);
+        if raw_rel_pts > MAX_FLV_TIMESTAMP_MS {
+            tracing::warn!(
+                pts_ms = pkt.pts_ms,
+                base_pts_ms = base_pts,
+                "AAC FLV 时间戳超过 u32 上限，重置封装时间基准并等待新的关键帧"
+            );
+            self.reset_after_discontinuity();
+            return Vec::new();
+        }
+        let dts = (raw_rel_pts as u32).max(self.last_audio_pts);
         self.last_audio_pts = dts;
 
         // 1. 首帧：解析 ADTS 头部获取采样率与声道数，发送 AAC Sequence Header
@@ -634,12 +648,29 @@ impl FlvStreamPipeline {
         tags
     }
 
-    /// 处理消费端 Lagged 事件（重置关键帧对齐与音频序列头标记）
-    pub fn handle_lagged(&mut self) {
+    /// 明确的解码不连续点重置。与旧版 Lagged 重置相同，但名称表达了 Replay/SourceReset 契约。
+    pub fn reset_after_discontinuity(&mut self) {
+        self.sent_sequence_header = false;
         self.has_first_keyframe = false;
+        self.base_pts_ms = None;
+        self.last_flv_ts = 0;
+        self.last_gop_pts = 0;
+        self.sps_buf = None;
+        self.pps_buf = None;
+        self.vps_buf = None;
+        self.active_sps = None;
+        self.active_pps = None;
+        self.active_vps = None;
         self.last_audio_pts = 0;
         self.sent_audio_header = false;
+        self.audio_sample_rate = None;
+        self.audio_channels = None;
         self.bframe_mgr.reset();
+    }
+
+    /// 处理消费端 Lagged 事件（保留兼容调用，内部统一走显式不连续点重置）。
+    pub fn handle_lagged(&mut self) {
+        self.reset_after_discontinuity();
     }
 
     /// 处理实时收到的单个 EncodedPacket，返回待下发的 FLV Tags（可能包含 Sequence Header + 视频帧 Tag）
@@ -738,6 +769,16 @@ impl FlvStreamPipeline {
 
         // 5. 计算当前数据帧的 (DTS, CTS) 时间戳
         let base_pts = *self.base_pts_ms.get_or_insert(pkt.pts_ms);
+        let raw_rel_pts = pkt.pts_ms.saturating_sub(base_pts).max(0);
+        if raw_rel_pts > MAX_FLV_TIMESTAMP_MS {
+            tracing::warn!(
+                pts_ms = pkt.pts_ms,
+                base_pts_ms = base_pts,
+                "视频 FLV 时间戳超过 u32 上限，重置封装时间基准并等待新的关键帧"
+            );
+            self.reset_after_discontinuity();
+            return out_tags;
+        }
         let (dts, cts) = self.bframe_mgr.calculate_dts_cts(pkt.pts_ms, base_pts);
 
         // 6. 若检测到参数突变 (Mutation)，立即在关键帧前注入更新的 Sequence Header Tag (时间戳对齐当前 DTS)
@@ -851,6 +892,37 @@ mod tests {
         assert_eq!(strip_nalu_start_code(&raw), &[0x65, 0x88]);
     }
 
+    #[test]
+    fn test_flv_timestamp_rebase_avoids_u32_wrap() {
+        let keyframe = EncodedPacket {
+            pts_ms: 1_000,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(
+                b"\x00\x00\x00\x01\x67\x42\x00\x1e\x00\x00\x00\x01\x68\xce\x00\x00\x00\x01\x65\x88",
+            ),
+            ..Default::default()
+        };
+        let delta = EncodedPacket {
+            pts_ms: 1_000 + MAX_FLV_TIMESTAMP_MS + 1,
+            is_keyframe: false,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(b"\x00\x00\x00\x01\x41\x01"),
+            ..Default::default()
+        };
+        let mut pipeline = FlvStreamPipeline::new(false);
+        assert!(!pipeline.process_packet(&keyframe).is_empty());
+        assert!(pipeline.process_packet(&delta).is_empty());
+        assert!(!pipeline.has_first_keyframe);
+        assert_eq!(pipeline.base_pts_ms, None);
+
+        let rebased_keyframe = EncodedPacket {
+            pts_ms: delta.pts_ms + 40,
+            ..keyframe
+        };
+        assert!(!pipeline.process_packet(&rebased_keyframe).is_empty());
+        assert_eq!(pipeline.last_flv_ts, 0);
+    }
     #[test]
     fn test_packet_to_flv_tag_timestamp_monotonic() {
         let pkt1 = EncodedPacket {

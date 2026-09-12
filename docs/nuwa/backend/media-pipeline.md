@@ -37,6 +37,18 @@
 - 通过单调时钟与帧增量映射时间戳，检测回跳和静默超时。
 - 缓存最新 H.264 SPS/PPS/IDR、H.265 VPS/SPS/PPS/IRAP，客户端接入时先发参数集与关键帧。
 - 强密码 URL 复用现有解析器，日志统一 `mask_rtsp_url()`。
+- **多消费者隔离分发架构**：`StreamHub` 采用 `PacketDispatcher` + 每消费者独立有界 `ConsumerMailbox`（`VecDeque + Notify`），杜绝全局单一覆盖窗口导致慢读客户端拖慢正常客户端或 AI 推理：
+  - **显式消息状态机**：通道传递 `StreamItem`（`Packet`、`Replay`、`SourceReset`）；邮箱满载溢出时自动清空残缺 P/B 帧并排入单一完整 `GopSnapshot`，消费者无需等待下一个自然关键帧即可实现立即无损对齐；
+  - **源流 Epoch 重置**：物理 RTSP 重连时发布 `SourceReset { epoch }`，原子递增 epoch 并清空所有旧缓存与参考链，杜绝旧会话 PTS 与脏参考帧串流；
+  - **RAII 资源租约与僵尸驱逐**：订阅返回携带 RAII 租约的 `StreamSubscription`，Drop 时自动注销并归还全局消费者预算；基于 `last_progress_mono_ms` 监控无进展半开连接并幂等驱逐；
+  - **准入控制**：全局与单流消费者数量受 `PreviewDistributionConfig`（单流 16、全局 128、GOP 保护 8MB）强约束，溢出时返回 `TooManyConsumers` (HTTP 429)。
+- **音频架构与硬件隔离红线**：
+  - 采集层完整支持多轨 RTSP（AAC 音频帧封装为 `StreamTag::Audio` 进入分发总线）；
+  - 预览层遵循“默认关闭、`?audio=true` 按需开启”：客户端未传参数时过滤音频以节省下行带宽；传递 `audio=true` 时在 FLV Header 设置 `TypeFlags = 0x11` 并动态合成 AAC Sequence Header 与 FLV Audio Tags；
+  - **视觉推理与高清证据环硬件隔离**：`AnalysisPump` 与 `MainStreamRingBuffer` 仅面向纯 Annex-B 视频流；在送往 VPU 硬件视频解码器或推入 RingBuffer 前，必须严格过滤 `StreamTag::Audio` 与非视频数据，杜绝非视频 NALU 冲撞硬件解码内核引发 crash。
+- **HTTP-FLV 应用层合并写**：在 FLV tag 边界执行 `flv_merge` 缓冲（默认 10ms 周期 / 64KB 上限），降低高频小包的事件循环调度开销；时间戳计算严格单调非递减并设置 `u32` 边界守卫。
+- **WebCodecs 断点标记**：二进制帧协议支持 `WEBCODECS_FLAG_DISCONTINUITY` (0x01) 标志，配合前端在 Replay 或源流重置后触发 `VideoDecoder.reset()`。
+- **运维观测**：通过 `GET /api/v1/system/media/streams/{stream_key}` 获取流与消费者的实时健康快照 `StreamHealthSnapshot`。
 - HTTP-FLV 支持 AVC 与 Enhanced FLV HEVC（`hvc1`）；端点见 [API](./api-guidelines.md#路由)，浏览器能力需实测。
 - 帧/压缩包队列、GOP 丢弃及 500ms 解码停机超时见 [并发模型](./concurrency-guidelines.md)，不阻塞下游反压硬解。
 

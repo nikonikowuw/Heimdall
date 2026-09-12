@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { parseWebCodecsFrame, WEBCODECS_HEADER_LEN } from './webcodecs'
+import {
+  parseWebCodecsFrame,
+  WEBCODECS_FLAG_DISCONTINUITY,
+  WEBCODECS_HEADER_LEN,
+} from './webcodecs'
 
 describe('WebCodecs Framing Parser', () => {
   it('should parse valid H.264 keyframe buffer correctly', () => {
@@ -47,6 +51,18 @@ describe('WebCodecs Framing Parser', () => {
     expect(parsed?.ptsMs).toBe(1000)
   })
 
+  it('should preserve discontinuity flags for decoder reset', () => {
+    const buffer = new ArrayBuffer(WEBCODECS_HEADER_LEN)
+    const view = new DataView(buffer)
+    view.setUint8(0, 0x01)
+    view.setUint8(1, 0x01)
+    view.setUint8(2, 0x01)
+    view.setUint8(3, WEBCODECS_FLAG_DISCONTINUITY)
+    view.setBigInt64(4, 2000n, false)
+
+    const parsed = parseWebCodecsFrame(buffer)
+    expect(parsed?.flags).toBe(WEBCODECS_FLAG_DISCONTINUITY)
+  })
   it('should return null for truncated or invalid version buffer', () => {
     // 长度不足 12 字节
     const shortBuffer = new ArrayBuffer(8)

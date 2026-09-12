@@ -53,6 +53,12 @@ pub trait VideoDecoder: Send + 'static {
     /// 刷新解码器内部残留缓冲帧
     async fn flush(&mut self) -> Result<Vec<FrameRef>, MediaError>;
 
+    /// 丢帧恢复或源流 epoch 切换时重置解码参考链。
+    /// 默认实现先 flush，具体硬件解码器可覆盖为平台原生 reset/reconfigure。
+    async fn reset(&mut self) -> Result<(), MediaError> {
+        self.flush().await.map(|_| ())
+    }
+
     /// 配置解码交付策略 (实时丢旧帧 vs 无损反压)
     fn set_delivery_policy(&mut self, _policy: DecodeDeliveryPolicy) {}
 

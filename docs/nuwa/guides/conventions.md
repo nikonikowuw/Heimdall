@@ -19,7 +19,8 @@
 
 - 所有帧路径、事件缓冲、批次和缓存必须有**固定容量上限**。
 - 帧路径使用 `crossbeam_channel::bounded`（通常 1～4），满载**丢旧不阻塞**，不阻塞硬件解码反压。
-- 异步/同步控制用有界 `tokio::sync::mpsc`；广播用有界 `tokio::sync::broadcast`（`Lagged` 丢弃旧消息）。
+- 媒体压缩流分发使用 `PacketDispatcher` + 独立有界 `ConsumerMailbox` 隔离（单流/全局预算限制，满载清空并立即 Replay 完整 GOP，慢客户端不反压或拖慢正常消费端）。
+- 普通控制面事件与告警通知广播使用有界 `tokio::sync::broadcast`（`Lagged` 丢弃旧消息）；异步/同步任务控制用有界 `tokio::sync::mpsc`。
 - 写盘经有界通道攒批提交，禁止逐事件单事务刷盘。
 
 ## 资源释放与 RAII

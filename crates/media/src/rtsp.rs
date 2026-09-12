@@ -5,6 +5,7 @@ use std::time::Duration;
 use base64::Engine;
 use bytes::{Buf, Bytes, BytesMut};
 use md5::{Digest, Md5};
+use percent_encoding::percent_decode_str;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -181,9 +182,39 @@ impl ParsedRtspUrl {
     }
 }
 
+/// 对 RTSP userinfo 的单个组件执行 percent-decoding。
+///
+/// URL 的 path/query 不经过此函数，避免误解码媒体路径或查询参数。
+fn decode_userinfo_component(
+    value: &str,
+    component: &str,
+    masked_url: &str,
+) -> Result<String, MediaError> {
+    percent_decode_str(value)
+        .decode_utf8()
+        .map(|decoded| decoded.into_owned())
+        .map_err(|error| MediaError::RtspConnect {
+            url: masked_url.to_string(),
+            reason: format!("RTSP {component} percent 编码不是有效 UTF-8: {error}"),
+        })
+}
+
+/// 使用不依赖 URL 解析的兜底逻辑隐藏 RTSP userinfo。
+fn mask_rtsp_url_fallback(raw_url: &str) -> String {
+    if let Some(at_idx) = raw_url.rfind('@') {
+        let search_start = raw_url.find("://").map(|p| p + 3).unwrap_or(0);
+        if let Some(colon_offset) = raw_url[search_start..at_idx].find(':') {
+            let colon_idx = search_start + colon_offset;
+            return format!("{}***{}", &raw_url[..colon_idx + 1], &raw_url[at_idx..]);
+        }
+    }
+    raw_url.to_string()
+}
+
 /// 工业级 RTSP 脏 URL 解析清洗器
 ///
-/// 彻底攻克安防监控现场密码包含保留字符（如 `@`, `:`, `#`, `?`, `!` 等）导致常规 Url::parse 崩溃或截断的顽疾。
+/// 彻底攻克安防监控现场密码包含保留字符（如 `@`, `:`, `#`, `?`, `!` 等）或
+/// percent-encoding（如 `%40`）导致常规 Url::parse 崩溃或凭证字面量错误的问题。
 /// 基于“主机名/IP 绝对不含 `@`”的不变性数学约束，利用逆向锚点定位切分 userinfo 与 host。
 pub fn parse_and_clean_rtsp_url(raw_url: &str) -> Result<ParsedRtspUrl, MediaError> {
     let trimmed = raw_url.trim();
@@ -193,6 +224,8 @@ pub fn parse_and_clean_rtsp_url(raw_url: &str) -> Result<ParsedRtspUrl, MediaErr
             reason: "URL 不能为空".into(),
         });
     }
+
+    let masked_url = mask_rtsp_url_fallback(trimmed);
 
     // 1. 提取 scheme (支持 rtsp:// 或 rtsps://，大小写不敏感)
     let scheme_end = trimmed.find("://").ok_or_else(|| MediaError::RtspConnect {
@@ -283,18 +316,21 @@ pub fn parse_and_clean_rtsp_url(raw_url: &str) -> Result<ParsedRtspUrl, MediaErr
         (host_port_part.to_string(), None)
     };
 
-    // 5. 解析 userinfo: 第一个 ':' 划分 username 和 password
+    // 5. 解析并解码 userinfo: 第一个 ':' 划分 username 和 password。
+    // 保留原始最后一个 '@' 分隔策略，以兼容历史上未编码的密码保留字符。
     let (username, password) = match userinfo_opt {
         Some(userinfo) => match userinfo.find(':') {
             Some(colon_idx) => {
-                let user = &userinfo[..colon_idx];
-                let pass = &userinfo[colon_idx + 1..];
-                (
-                    (!user.is_empty()).then(|| user.to_string()),
-                    Some(pass.to_string()),
-                )
+                let user =
+                    decode_userinfo_component(&userinfo[..colon_idx], "username", &masked_url)?;
+                let pass =
+                    decode_userinfo_component(&userinfo[colon_idx + 1..], "password", &masked_url)?;
+                ((!user.is_empty()).then_some(user), Some(pass))
             }
-            None => ((!userinfo.is_empty()).then(|| userinfo.to_string()), None),
+            None => {
+                let user = decode_userinfo_component(userinfo, "username", &masked_url)?;
+                ((!user.is_empty()).then_some(user), None)
+            }
         },
         None => (None, None),
     };
@@ -314,17 +350,7 @@ pub fn parse_and_clean_rtsp_url(raw_url: &str) -> Result<ParsedRtspUrl, MediaErr
 pub fn mask_rtsp_url(raw_url: &str) -> String {
     match parse_and_clean_rtsp_url(raw_url) {
         Ok(parsed) => parsed.to_masked_string(),
-        Err(_) => {
-            // 容错兜底脱敏
-            if let Some(at_idx) = raw_url.rfind('@') {
-                let search_start = raw_url.find("://").map(|p| p + 3).unwrap_or(0);
-                if let Some(colon_offset) = raw_url[search_start..at_idx].find(':') {
-                    let colon_idx = search_start + colon_offset;
-                    return format!("{}***{}", &raw_url[..colon_idx + 1], &raw_url[at_idx..]);
-                }
-            }
-            raw_url.to_string()
-        }
+        Err(_) => mask_rtsp_url_fallback(raw_url),
     }
 }
 
@@ -1462,6 +1488,22 @@ mod tests {
         assert_eq!(parsed.username.as_deref(), Some("admin"));
         assert_eq!(parsed.password.as_deref(), Some("123"));
         assert_eq!(parsed.path_and_query, "/live@ch1:sub");
+    }
+
+    #[test]
+    fn test_parse_and_clean_rtsp_url_percent_encoded_credentials() {
+        let parsed = parse_and_clean_rtsp_url(
+            "rtsp://ad%6Din:tentcoo%4012%23safe@192.168.21.61:554/Streaming/Channels/102?token=%40",
+        )
+        .expect("should decode percent-encoded credentials");
+
+        assert_eq!(parsed.username.as_deref(), Some("admin"));
+        assert_eq!(parsed.password.as_deref(), Some("tentcoo@12#safe"));
+        assert_eq!(parsed.path_and_query, "/Streaming/Channels/102?token=%40");
+        assert_eq!(
+            parsed.to_clean_url().expect("valid clean url").as_str(),
+            "rtsp://192.168.21.61:554/Streaming/Channels/102?token=%40"
+        );
     }
 
     #[test]

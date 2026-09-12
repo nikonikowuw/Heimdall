@@ -7,13 +7,14 @@
 //! 4. 抽帧通过单槽 Drop-Oldest 缓冲区送入专用常驻推理线程池 (InferenceWorkerHandle)，防范超载；
 //! 5. 串行将推理结果输送至 `PipelineManager::process_detections`，规则触发告警时自动闭环执行靶向高清快照落地。
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use media::decoder::VideoDecoder;
 use media::stream_hub::CameraStreamSession;
-use tokio::sync::broadcast;
+use media::{ConsumerKind, StreamItem};
 use tokio_util::sync::CancellationToken;
 use types::{FrameRef, MotionGateConfig, StreamTag};
 
@@ -113,6 +114,14 @@ impl BlockingDecoder {
             .await
     }
 
+    async fn reset(&mut self) -> Result<(), media::error::MediaError> {
+        self.inner
+            .as_mut()
+            .expect("decoder owner must remain present")
+            .reset()
+            .await
+    }
+
     async fn dispose(&mut self) {
         if let Some(decoder) = self.inner.take() {
             let _ = tokio::task::spawn_blocking(move || drop(decoder)).await;
@@ -146,6 +155,8 @@ pub struct PumpMetrics {
     pub frames_inferred: AtomicU64,
     /// 累计因运动门控跳过的推理帧数
     pub frames_skipped_motion: AtomicU64,
+    /// 累计因丢帧恢复而重放的视频包数
+    pub replay_packets: AtomicU64,
     /// 累计因队列积压跳过的网络包数 (Lagged)
     pub frames_dropped_lagged: AtomicU64,
     /// 累计因背压队列已满被丢弃的采样帧数 (Drop-Oldest)
@@ -435,7 +446,16 @@ impl AnalysisPump {
         // 获取流会话的 RAII AI 保活租约，异常与正常关停均能保证引用回收
         let ai_lease = session.acquire_ai_task_lease();
 
-        let mut packet_rx = session.broadcast_tx.subscribe();
+        let packet_subscription = match session
+            .dispatcher
+            .subscribe(format!("analysis:{camera_id}"), ConsumerKind::Analysis)
+        {
+            Ok(subscription) => Some(subscription),
+            Err(error) => {
+                tracing::error!(camera_id = %camera_id, error = %error, "分析消费者订阅失败，分析泵将退出");
+                None
+            }
+        };
 
         // 为每个算法实例构建解码抽帧槽与控制面 Worker 槽。
         // 两类槽分离后，逐帧解码只访问本地 Vec，不与热重载/停机控制锁竞争。
@@ -652,83 +672,108 @@ impl AnalysisPump {
             let mut motion_gate =
                 motion_gate_enabled.then(|| MotionGate::new(MotionGateConfig::default()));
 
+            let mut replay_queue: VecDeque<Arc<types::EncodedPacket>> = VecDeque::new();
+
             loop {
-                tokio::select! {
-                    biased;
-
-                    _ = decode_cancel.cancelled() => {
-                        tracing::info!(camera_id = %cam_id, "分析码流解码驱动循环收到关停信号");
+                let (stream_item, is_replay) = if let Some(packet) = replay_queue.pop_front() {
+                    (Some(StreamItem::Packet(packet)), true)
+                } else {
+                    let Some(subscription) = packet_subscription.as_ref() else {
                         break;
+                    };
+                    tokio::select! {
+                        biased;
+                        _ = decode_cancel.cancelled() => {
+                            tracing::info!(camera_id = %cam_id, "分析码流解码驱动循环收到关停信号");
+                            break;
+                        }
+                        item = subscription.recv() => (item, false),
                     }
+                };
 
-                    recv_res = packet_rx.recv() => {
-                        let pkt = match recv_res {
-                            Ok(p) => p,
-                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                                metrics_clone.frames_dropped_lagged.fetch_add(skipped, Ordering::Relaxed);
-                                tracing::warn!(
-                                    camera_id = %cam_id,
-                                    skipped,
-                                    "分析码流驱动泵数据包积压掉队 (Lagged)，继续处理后续数据包"
-                                );
-                                continue;
-                            }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                tracing::info!(camera_id = %cam_id, "分析码流数据广播通道已关闭，解码循环退出");
-                                break;
-                            }
-                        };
+                let Some(stream_item) = stream_item else {
+                    tracing::info!(camera_id = %cam_id, "分析消费者 mailbox 已关闭，解码循环退出");
+                    break;
+                };
 
-                        // 严格仅处理视频包，忽略音频包与非视频数据
-                        if pkt.stream_tag == StreamTag::Audio || !pkt.codec.is_video() {
+                let pkt = match stream_item {
+                    StreamItem::Packet(packet) => packet,
+                    StreamItem::Replay(snapshot) => {
+                        if let Err(error) = decoder.reset().await {
+                            tracing::warn!(camera_id = %cam_id, error = %error, "分析解码器 Replay 重置失败");
                             continue;
                         }
+                        replay_queue.extend(snapshot.packets.iter().cloned());
+                        continue;
+                    }
+                    StreamItem::SourceReset { epoch } => {
+                        replay_queue.clear();
+                        if let Err(error) = decoder.reset().await {
+                            tracing::warn!(camera_id = %cam_id, epoch, error = %error, "源流重建后分析解码器重置失败");
+                        }
+                        continue;
+                    }
+                };
 
-                        metrics_clone.packets_received.fetch_add(1, Ordering::Relaxed);
+                if pkt.stream_tag == StreamTag::Audio || !pkt.codec.is_video() {
+                    continue;
+                }
 
-                        match decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
-                            Ok(Some(frame)) => {
-                                metrics_clone.frames_decoded.fetch_add(1, Ordering::Relaxed);
+                if is_replay {
+                    metrics_clone.replay_packets.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    metrics_clone
+                        .packets_received
+                        .fetch_add(1, Ordering::Relaxed);
+                }
 
-                                // 1. 实时更新管线保底快照与零解码直通候选帧
-                                pipeline_mgr_decode
-                                    .update_decoded_frame(&cam_id, frame.clone())
-                                    .await;
+                match decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
+                    Ok(Some(frame)) => {
+                        if !is_replay {
+                            metrics_clone.frames_decoded.fetch_add(1, Ordering::Relaxed);
 
-                                // 2. 运动门控过滤：静止帧跳过所有槽位推理，节省算力
-                                if let Some(gate) = motion_gate.as_mut() {
-                                    if gate.should_skip_frame(&frame) {
-                                        metrics_clone
-                                            .frames_skipped_motion
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        continue;
-                                    }
-                                }
+                            // 1. 实时更新管线保底快照与零解码直通候选帧
+                            pipeline_mgr_decode
+                                .update_decoded_frame(&cam_id, frame.clone())
+                                .await;
 
-                                // 3. 轮询每个实例的独立 FPS 节流器，命中采样的实例投递帧。
-                                // decode_slots 属于当前解码任务，不需要跨任务锁。
-                                for slot in &mut decode_slots {
-                                    if slot.governor.should_sample(frame.timestamp) {
-                                        slot.metrics.frames_sampled.fetch_add(1, Ordering::Relaxed);
-                                        metrics_clone.frames_sampled.fetch_add(1, Ordering::Relaxed);
-
-                                        // Drop-Oldest 单槽投递
-                                        if let Ok(mut slot_guard) = slot.sampling_slot.frame.lock() {
-                                            if slot_guard.replace(frame.clone()).is_some() {
-                                                slot.metrics.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                                                metrics_clone.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                                            }
-                                        }
-                                        slot.sampling_slot.notify.notify_one();
-                                    }
+                            // 2. 运动门控过滤：静止帧跳过所有槽位推理，节省算力
+                            if let Some(gate) = motion_gate.as_mut() {
+                                if gate.should_skip_frame(&frame) {
+                                    metrics_clone
+                                        .frames_skipped_motion
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    continue;
                                 }
                             }
-                            Ok(None) => {}
-                            Err(e) => {
-                                metrics_clone.decode_errors.fetch_add(1, Ordering::Relaxed);
-                                tracing::warn!(camera_id = %cam_id, error = %e, "解码分析码流数据包失败");
+
+                            // 3. 轮询每个实例的独立 FPS 节流器，命中采样的实例投递帧。
+                            // decode_slots 属于当前解码任务，不需要跨任务锁。
+                            for slot in &mut decode_slots {
+                                if slot.governor.should_sample(frame.timestamp) {
+                                    slot.metrics.frames_sampled.fetch_add(1, Ordering::Relaxed);
+                                    metrics_clone.frames_sampled.fetch_add(1, Ordering::Relaxed);
+
+                                    // Drop-Oldest 单槽投递
+                                    if let Ok(mut slot_guard) = slot.sampling_slot.frame.lock() {
+                                        if slot_guard.replace(frame.clone()).is_some() {
+                                            slot.metrics
+                                                .frames_dropped
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            metrics_clone
+                                                .frames_dropped
+                                                .fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
+                                    slot.sampling_slot.notify.notify_one();
+                                }
                             }
                         }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        metrics_clone.decode_errors.fetch_add(1, Ordering::Relaxed);
+                        tracing::warn!(camera_id = %cam_id, error = %e, "解码分析码流数据包失败");
                     }
                 }
             }

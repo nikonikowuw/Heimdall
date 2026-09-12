@@ -41,6 +41,9 @@ pub enum MediaError {
 
     #[error("IO 错误: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("媒体消费者数量已达到上限 ({max})")]
+    TooManyConsumers { max: usize },
 }
 
 impl MediaError {
@@ -60,6 +63,7 @@ impl MediaError {
             Self::Frame(_) => 20009,
             Self::Io(_) => 20010,
             Self::InactivityTimeout(_) => 20011,
+            Self::TooManyConsumers { .. } => 20014,
         }
     }
 }

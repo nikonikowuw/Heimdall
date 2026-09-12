@@ -17,6 +17,7 @@ export interface ParsedVideoChunk {
 }
 
 export const WEBCODECS_HEADER_LEN = 12
+export const WEBCODECS_FLAG_DISCONTINUITY = 0x01
 
 export const CODEC_MIME_STRINGS = {
   h264: 'avc1.42E01E',
@@ -134,7 +135,7 @@ export class WebCodecsPlayer {
   }
 
   private initDecoder(codec: 'h264' | 'h265') {
-    if (this.decoder && this.currentCodec === codec) {
+    if (this.decoder && this.currentCodec === codec && this.decoder.state !== 'closed') {
       return
     }
 
@@ -167,17 +168,48 @@ export class WebCodecsPlayer {
         optimizeForLatency: true,
       })
       this.currentCodec = codec
+      this.hasRenderedFirstFrame = false
+      this.currentPtsMs = null
     } catch (err) {
       this.options.onError?.(err instanceof Error ? err : new Error(String(err)))
     }
+  }
+
+  private resetDecoder(codec: 'h264' | 'h265') {
+    if (this.decoder && this.currentCodec === codec) {
+      try {
+        if (this.decoder.state !== 'closed') {
+          this.decoder.reset()
+          this.decoder.configure({
+            codec: CODEC_MIME_STRINGS[codec],
+            optimizeForLatency: true,
+          })
+          this.hasRenderedFirstFrame = false
+          this.currentPtsMs = null
+          return
+        }
+      } catch (err) {
+        this.options.onError?.(err instanceof Error ? err : new Error(String(err)))
+        try {
+          this.decoder.close()
+        } catch {
+          // 忽略重置失败后的关闭异常
+        }
+        this.decoder = null
+        this.currentCodec = null
+      }
+    }
+    this.initDecoder(codec)
   }
 
   private handlePacket(data: ArrayBuffer) {
     const chunk = parseWebCodecsFrame(data)
     if (!chunk) return
 
-    // 遇到新的 Codec 时惰性初始化或重构解码器
-    if (!this.decoder || this.currentCodec !== chunk.codec) {
+    // Replay 或源流 epoch 切换后的首个关键帧带有 discontinuity flag。
+    if ((chunk.flags & WEBCODECS_FLAG_DISCONTINUITY) !== 0) {
+      this.resetDecoder(chunk.codec)
+    } else if (!this.decoder || this.currentCodec !== chunk.codec) {
       this.initDecoder(chunk.codec)
     }
 
