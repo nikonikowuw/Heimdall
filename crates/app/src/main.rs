@@ -116,6 +116,7 @@ async fn main() -> Result<()> {
         max_burst_packets: cfg.pipeline.max_burst_packets,
         max_burst_timeout_ms: cfg.pipeline.max_burst_timeout_ms,
         capture_mode: cfg.pipeline.capture_mode,
+        ..Default::default()
     };
 
     let evidence_dir = cfg.storage.evidence_dir.clone();
@@ -172,7 +173,17 @@ async fn main() -> Result<()> {
                 tracing::info!("已从系统配置成功加载历史存储保留与自适应水位参数");
             }
         }
+    }
 
+    // 同步加载并恢复数据库中持久化的快照编码系统配置
+    state
+        .snapshot_config
+        .initialize()
+        .await
+        .map_err(|error| anyhow::anyhow!("初始化快照系统配置失败: {error}"))?;
+    tracing::info!("已校验并恢复快照编码系统配置");
+
+    if let Some(cleaner) = state.storage_cleaner.as_ref() {
         // 启动常驻后台存储水位自适应巡检与过期凭据清理任务 (300s 周期)
         let store = Arc::new(api::DbEvictionStoreAdapter(state.db.clone()));
         cleaner

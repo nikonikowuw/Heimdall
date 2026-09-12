@@ -1,5 +1,6 @@
 mod network;
 mod overview;
+mod snapshot;
 mod storage;
 mod time;
 
@@ -19,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/overview", get(overview::get_overview))
         .merge(network::router())
+        .merge(snapshot::router())
         .merge(storage::router())
         .merge(time::router())
 }

@@ -9,6 +9,10 @@ default-run = "heimdall"
 name = "heimdall"
 path = "src/main.rs"
 
+[features]
+default = []
+hw-snap-mpp = ["pipeline/hw-snap-mpp"]
+
 [lints]
 workspace = true
 

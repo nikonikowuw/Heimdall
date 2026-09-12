@@ -40,8 +40,9 @@ pub use system::{
     NetworkDiagnosticResult, NetworkDiagnosticType, NetworkInterface, NetworkInterfaceMetrics,
     NetworkInterfaceState, NetworkInterfaceType, NetworkInterfacesResponse, NetworkManager,
     NetworkUpdateResult, NpuCoreMetrics, NpuMetrics, OperationConfirmResult, OperationStatus,
-    OverwriteMode, ProcessMetrics, SetTimeResponse, StorageConfig, StorageHealthLevel,
-    StorageStatus, SystemOverview, ThermalMetrics, ThermalZone, TimeConfig, TimeStatus,
+    OverwriteMode, ProcessMetrics, SetTimeResponse, SnapshotSystemConfig, StorageConfig,
+    StorageHealthLevel, StorageStatus, SystemOverview, ThermalMetrics, ThermalZone, TimeConfig,
+    TimeStatus,
 };
 pub use task::{
     aggregate_task_instance_status, validate_task_algorithm_instances, AnalysisTask,

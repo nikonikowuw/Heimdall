@@ -192,6 +192,21 @@
       "evicting": "Evicting",
       "emergency": "Emergency",
       "critical": "Critical"
+    },
+    "snapshotEncoding": {
+      "title": "Image Encoding",
+      "subtitle": "Hardware-accelerated JPEG encoding parameters for evidence snapshots and target crops",
+      "mainStreamSection": "Main Stream (HD Evidence)",
+      "mainStreamDesc": "Used for main stream high-resolution snapshot and target crop evidence",
+      "subStreamSection": "Sub Stream (Low Power)",
+      "subStreamDesc": "Used for fallback sub-stream snapshots and resource-constrained scenarios",
+      "panoramicQuality": "Panoramic Quality",
+      "cropQuality": "Target Crop Quality",
+      "cropPadding": "Crop Boundary Padding",
+      "cropPaddingDesc": "Bounding box outer expansion percentage to prevent edge clipping (0% - 50%)",
+      "estimatedSize": "Est. ~{{size}} KB / frame",
+      "resetDefaults": "Reset Defaults",
+      "savedSuccess": "Snapshot encoding settings saved and applied"
     }
   },
   "time": {

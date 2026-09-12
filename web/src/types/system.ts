@@ -264,3 +264,13 @@ export interface NetworkDiagnosticResult {
   latencyMs?: number | null
   message: string
 }
+
+// ─── 快照图片编码配置 ───
+
+export interface SnapshotSystemConfig {
+  mainStreamPanoramicQuality: number
+  mainStreamCropQuality: number
+  subStreamPanoramicQuality: number
+  subStreamCropQuality: number
+  cropPaddingRatio: number
+}

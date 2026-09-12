@@ -16,6 +16,7 @@ import type {
   NetworkDiagnosticResult,
   ForceSyncResponse,
   SetTimeResponse,
+  SnapshotSystemConfig,
 } from '../types/system'
 
 async function get<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
@@ -74,6 +75,14 @@ export const systemApi = {
     put<StorageConfig>('/system/storage/config', config),
 
   triggerCleanup: () => post<EvictionReport>('/system/storage/cleanup'),
+
+  // ─── 快照图片编码配置 ───
+
+  getSnapshotConfig: (signal?: AbortSignal) =>
+    get<SnapshotSystemConfig>('/system/snapshot/config', signal),
+
+  updateSnapshotConfig: (config: SnapshotSystemConfig) =>
+    put<SnapshotSystemConfig>('/system/snapshot/config', config),
 
   // ─── 对时服务 ───
 

@@ -192,6 +192,21 @@
       "evicting": "淘汰中",
       "emergency": "紧急",
       "critical": "熔断"
+    },
+    "snapshotEncoding": {
+      "title": "图片编码",
+      "subtitle": "靶向证据快照与特写抠图的 JPEG 硬件加速编码参数",
+      "mainStreamSection": "主码流（高清取证）",
+      "mainStreamDesc": "用于主码流高分辨率单帧抓拍及违规特写证据保全",
+      "subStreamSection": "子码流（低功耗场景）",
+      "subStreamDesc": "用于分析子码流保底快照及低算力场景",
+      "panoramicQuality": "全景图片质量",
+      "cropQuality": "特写裁剪质量",
+      "cropPadding": "裁剪边界扩展",
+      "cropPaddingDesc": "目标检测框外扩比例，防止边缘切边（0% - 50%）",
+      "estimatedSize": "预估约 {{size}} KB / 张",
+      "resetDefaults": "恢复默认",
+      "savedSuccess": "快照编码配置已保存并即时生效"
     }
   },
   "time": {

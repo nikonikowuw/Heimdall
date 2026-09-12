@@ -468,3 +468,57 @@ pub struct NetworkDiagnosticResult {
     pub latency_ms: Option<f64>,
     pub message: String,
 }
+
+// ─── 快照编码配置（API DTO） ───
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSystemConfig {
+    /// 主码流全景 JPEG 质量 (1-100)，默认 90
+    pub main_stream_panoramic_quality: u8,
+    /// 主码流特写 JPEG 质量 (1-100)，默认 95
+    pub main_stream_crop_quality: u8,
+    /// 子码流全景 JPEG 质量 (1-100)，默认 80
+    pub sub_stream_panoramic_quality: u8,
+    /// 子码流特写 JPEG 质量 (1-100)，默认 85
+    pub sub_stream_crop_quality: u8,
+    /// 设备侧裁剪边界扩展比例 (0.0-0.5)，默认 0.1
+    pub crop_padding_ratio: f32,
+}
+
+impl Default for SnapshotSystemConfig {
+    fn default() -> Self {
+        Self {
+            main_stream_panoramic_quality: 90,
+            main_stream_crop_quality: 95,
+            sub_stream_panoramic_quality: 80,
+            sub_stream_crop_quality: 85,
+            crop_padding_ratio: 0.1,
+        }
+    }
+}
+
+impl SnapshotSystemConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, val) in [
+            (
+                "mainStreamPanoramicQuality",
+                self.main_stream_panoramic_quality,
+            ),
+            ("mainStreamCropQuality", self.main_stream_crop_quality),
+            (
+                "subStreamPanoramicQuality",
+                self.sub_stream_panoramic_quality,
+            ),
+            ("subStreamCropQuality", self.sub_stream_crop_quality),
+        ] {
+            if val == 0 || val > 100 {
+                return Err(format!("{name} 必须在 1-100 范围内"));
+            }
+        }
+        if !(0.0..=0.5).contains(&self.crop_padding_ratio) {
+            return Err("cropPaddingRatio 必须在 0.0-0.5 范围内".into());
+        }
+        Ok(())
+    }
+}

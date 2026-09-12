@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, Trash2, Check } from 'lucide-react'
+import { ChevronDown, ChevronRight, Trash2, Check, RotateCcw } from 'lucide-react'
 import { systemApi } from '../../lib/system-api'
 import { RefreshButton } from '../../components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from './components/ConfirmDialog'
-import type { StorageConfig, StorageStatus } from '../../types/system'
+import type { StorageConfig, StorageStatus, SnapshotSystemConfig } from '../../types/system'
 
 export function StorageSettings(): React.ReactElement {
   const { t } = useTranslation('system')
@@ -22,19 +22,29 @@ export function StorageSettings(): React.ReactElement {
   const [cleaning, setCleaning] = useState(false)
   const [cleanupError, setCleanupError] = useState<string | null>(null)
 
+  // ─── 快照图片编码配置状态 ───
+  const [snapshotConfig, setSnapshotConfig] = useState<SnapshotSystemConfig | null>(null)
+  const [snapshotDraft, setSnapshotDraft] = useState<SnapshotSystemConfig | null>(null)
+  const [savingSnapshot, setSavingSnapshot] = useState(false)
+  const [snapshotError, setSnapshotError] = useState<string | null>(null)
+  const [snapshotSuccess, setSnapshotSuccess] = useState(false)
+
   const loadData = useCallback(
     async (signal?: AbortSignal) => {
       try {
         setLoading(true)
         setError(null)
-        const [s, c] = await Promise.all([
+        const [s, c, snap] = await Promise.all([
           systemApi.getStorageStatus(signal),
           systemApi.getStorageConfig(signal),
+          systemApi.getSnapshotConfig(signal),
         ])
         if (!signal?.aborted) {
           setStatus(s)
           setConfig(c)
           setDraft(c)
+          setSnapshotConfig(snap)
+          setSnapshotDraft(snap)
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return
@@ -96,6 +106,40 @@ export function StorageSettings(): React.ReactElement {
   }
 
   const isDirty = draft && config && JSON.stringify(draft) !== JSON.stringify(config)
+  const isSnapshotDirty =
+    snapshotDraft &&
+    snapshotConfig &&
+    JSON.stringify(snapshotDraft) !== JSON.stringify(snapshotConfig)
+
+  const handleSaveSnapshot = async () => {
+    if (!snapshotDraft || !snapshotConfig) return
+    try {
+      setSavingSnapshot(true)
+      setSnapshotError(null)
+      setSnapshotSuccess(false)
+      const updated = await systemApi.updateSnapshotConfig(snapshotDraft)
+      setSnapshotConfig(updated)
+      setSnapshotDraft(updated)
+      setSnapshotSuccess(true)
+      setTimeout(() => setSnapshotSuccess(false), 2000)
+    } catch (err) {
+      setSnapshotError(
+        err instanceof Error ? err.message : t('saveFailed', { defaultValue: 'Failed to save' }),
+      )
+    } finally {
+      setSavingSnapshot(false)
+    }
+  }
+
+  const handleResetSnapshotDefaults = () => {
+    setSnapshotDraft({
+      mainStreamPanoramicQuality: 90,
+      mainStreamCropQuality: 95,
+      subStreamPanoramicQuality: 80,
+      subStreamCropQuality: 85,
+      cropPaddingRatio: 0.1,
+    })
+  }
 
   const healthConfig: Record<string, { label: string; color: string; bg: string }> = {
     normal: {
@@ -420,6 +464,137 @@ export function StorageSettings(): React.ReactElement {
         ) : null}
       </SettingsSection>
 
+      {/* ─── 图片编码配置 ─── */}
+      <SettingsSection
+        title={t('storage.snapshotEncoding.title', { defaultValue: '图片编码' })}
+        description={t('storage.snapshotEncoding.subtitle', {
+          defaultValue: '靶向证据快照与特写抠图的 JPEG 硬件加速编码参数',
+        })}
+        action={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleResetSnapshotDefaults}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              {t('storage.snapshotEncoding.resetDefaults', { defaultValue: '恢复默认' })}
+            </button>
+            <button
+              onClick={handleSaveSnapshot}
+              disabled={!isSnapshotDirty || savingSnapshot}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3.5 py-1.5 text-[13px] font-medium text-[var(--accent-contrast)] shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {snapshotSuccess ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  {t('saved', { defaultValue: '已保存' })}
+                </>
+              ) : (
+                t('save', { defaultValue: '保存' })
+              )}
+            </button>
+          </div>
+        }
+      >
+        {loading ? (
+          <LoadingSkeleton />
+        ) : snapshotDraft ? (
+          <div className="space-y-6">
+            {/* 主码流区域 */}
+            <div className="space-y-3">
+              <div className="border-b border-[var(--border)] pb-2">
+                <h4 className="text-[13px] font-semibold text-[var(--text-primary)]">
+                  {t('storage.snapshotEncoding.mainStreamSection', {
+                    defaultValue: '主码流（高清取证）',
+                  })}
+                </h4>
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  {t('storage.snapshotEncoding.mainStreamDesc', {
+                    defaultValue: '用于主码流高分辨率单帧抓拍及违规特写证据保全',
+                  })}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <QualitySlider
+                  label={t('storage.snapshotEncoding.panoramicQuality', {
+                    defaultValue: '全景图片质量',
+                  })}
+                  value={snapshotDraft.mainStreamPanoramicQuality}
+                  estimatedKb={estimateJpegSizeKb(snapshotDraft.mainStreamPanoramicQuality, false)}
+                  onChange={(v) =>
+                    setSnapshotDraft({ ...snapshotDraft, mainStreamPanoramicQuality: v })
+                  }
+                />
+                <QualitySlider
+                  label={t('storage.snapshotEncoding.cropQuality', {
+                    defaultValue: '特写裁剪质量',
+                  })}
+                  value={snapshotDraft.mainStreamCropQuality}
+                  estimatedKb={estimateJpegSizeKb(snapshotDraft.mainStreamCropQuality, false)}
+                  onChange={(v) => setSnapshotDraft({ ...snapshotDraft, mainStreamCropQuality: v })}
+                />
+              </div>
+            </div>
+
+            {/* 子码流区域 */}
+            <div className="space-y-3">
+              <div className="border-b border-[var(--border)] pb-2">
+                <h4 className="text-[13px] font-semibold text-[var(--text-primary)]">
+                  {t('storage.snapshotEncoding.subStreamSection', {
+                    defaultValue: '子码流（低功耗场景）',
+                  })}
+                </h4>
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  {t('storage.snapshotEncoding.subStreamDesc', {
+                    defaultValue: '用于分析子码流保底快照及低算力场景',
+                  })}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <QualitySlider
+                  label={t('storage.snapshotEncoding.panoramicQuality', {
+                    defaultValue: '全景图片质量',
+                  })}
+                  value={snapshotDraft.subStreamPanoramicQuality}
+                  estimatedKb={estimateJpegSizeKb(snapshotDraft.subStreamPanoramicQuality, true)}
+                  onChange={(v) =>
+                    setSnapshotDraft({ ...snapshotDraft, subStreamPanoramicQuality: v })
+                  }
+                />
+                <QualitySlider
+                  label={t('storage.snapshotEncoding.cropQuality', {
+                    defaultValue: '特写裁剪质量',
+                  })}
+                  value={snapshotDraft.subStreamCropQuality}
+                  estimatedKb={estimateJpegSizeKb(snapshotDraft.subStreamCropQuality, true)}
+                  onChange={(v) => setSnapshotDraft({ ...snapshotDraft, subStreamCropQuality: v })}
+                />
+              </div>
+            </div>
+
+            {/* 裁剪扩展参数 */}
+            <div className="space-y-3">
+              <PaddingSlider
+                label={t('storage.snapshotEncoding.cropPadding', {
+                  defaultValue: '裁剪边界扩展',
+                })}
+                description={t('storage.snapshotEncoding.cropPaddingDesc', {
+                  defaultValue: '目标检测框外扩比例，防止边缘切边（0% - 50%）',
+                })}
+                ratio={snapshotDraft.cropPaddingRatio}
+                onChange={(v) => setSnapshotDraft({ ...snapshotDraft, cropPaddingRatio: v })}
+              />
+            </div>
+
+            {snapshotError && (
+              <div className="rounded-lg border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 px-3 py-2 text-[13px] text-[var(--destructive)]">
+                {snapshotError}
+              </div>
+            )}
+          </div>
+        ) : null}
+      </SettingsSection>
+
       <ConfirmDialog
         open={showCleanupConfirm}
         title={t('storage.cleanupConfirmTitle', { defaultValue: '手动清理' })}
@@ -587,4 +762,90 @@ function NumberInput({
       />
     </div>
   )
+}
+
+function QualitySlider({
+  label,
+  value,
+  onChange,
+  estimatedKb,
+}: {
+  label: string
+  value: number
+  onChange: (val: number) => void
+  estimatedKb?: number
+}): React.ReactElement {
+  const { t } = useTranslation('system')
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[13px] font-medium text-[var(--text-primary)]">{label}</span>
+        <div className="flex items-center gap-2">
+          {estimatedKb !== undefined && (
+            <span className="rounded-md bg-[var(--bg-secondary)] px-2 py-0.5 font-mono text-[11px] text-[var(--text-muted)]">
+              {t('storage.snapshotEncoding.estimatedSize', {
+                size: estimatedKb,
+                defaultValue: `Est. ~${estimatedKb} KB / frame`,
+              })}
+            </span>
+          )}
+          <span className="min-w-[32px] text-right font-mono text-[14px] font-bold text-[var(--accent)]">
+            {value}
+          </span>
+        </div>
+      </div>
+      <input
+        type="range"
+        min={1}
+        max={100}
+        step={1}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent)]"
+      />
+    </div>
+  )
+}
+
+function PaddingSlider({
+  label,
+  description,
+  ratio,
+  onChange,
+}: {
+  label: string
+  description: string
+  ratio: number
+  onChange: (val: number) => void
+}): React.ReactElement {
+  const percent = Math.round(ratio * 100)
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5">
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="text-[13px] font-medium text-[var(--text-primary)]">{label}</span>
+          <p className="text-[11px] text-[var(--text-muted)]">{description}</p>
+        </div>
+        <span className="min-w-[40px] text-right font-mono text-[14px] font-bold text-[var(--accent)]">
+          {percent}%
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={50}
+        step={1}
+        value={percent}
+        onChange={(e) => onChange(Number(e.target.value) / 100)}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent)]"
+      />
+    </div>
+  )
+}
+
+function estimateJpegSizeKb(quality: number, isSubStream = false): number {
+  const q = Math.max(1, Math.min(100, quality))
+  const base = Math.round(50 + Math.pow(q / 100, 2.5) * 320)
+  return isSubStream ? Math.round(base * 0.45) : base
 }

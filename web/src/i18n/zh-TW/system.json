@@ -106,6 +106,21 @@
       "evicting": "淘汰中",
       "emergency": "緊急",
       "critical": "熔斷"
+    },
+    "snapshotEncoding": {
+      "title": "圖片編碼",
+      "subtitle": "靶向證據快照與特寫截圖的 JPEG 硬件加速編碼參數",
+      "mainStreamSection": "主流（高清取證）",
+      "mainStreamDesc": "用於主流高分辨率單幀抓拍及違規特寫證據保全",
+      "subStreamSection": "子流（低功耗場景）",
+      "subStreamDesc": "用於分析子流保底快照及低算力場景",
+      "panoramicQuality": "全景圖片品質",
+      "cropQuality": "特寫裁剪品質",
+      "cropPadding": "裁剪邊界擴展",
+      "cropPaddingDesc": "目標檢測框外擴比例，防止邊緣切邊（0% - 50%）",
+      "estimatedSize": "預估約 {{size}} KB / 張",
+      "resetDefaults": "恢復默認",
+      "savedSuccess": "快照編碼配置已保存並即時生效"
     }
   },
   "time": {
