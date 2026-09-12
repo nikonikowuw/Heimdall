@@ -811,6 +811,8 @@ impl RetinaIngestor {
         let mut audio_timestamps = TrackTimestampMapper::default();
         let mut rtp_diagnostics = RtpDiagnostics::default();
         let mut frames_received: u64 = 0;
+        let mut video_frames_received: u64 = 0;
+        let mut audio_frames_received: u64 = 0;
 
         // 清理伪唤醒
         let _ = cancel_rx.borrow_and_update();
@@ -849,6 +851,8 @@ impl RetinaIngestor {
                                 camera_id = %self.camera_id,
                                 timeout_secs = self.inactivity_timeout.as_secs(),
                                 frames_received,
+                                video_frames_received,
+                                audio_frames_received,
                                 video_loss_packets = rtp_diagnostics.video_loss_packets,
                                 video_loss_events = rtp_diagnostics.video_loss_events,
                                 audio_loss_packets = rtp_diagnostics.audio_loss_packets,
@@ -874,6 +878,8 @@ impl RetinaIngestor {
                         camera_id = %self.camera_id,
                         error = %e,
                         frames_received,
+                        video_frames_received,
+                        audio_frames_received,
                         video_loss_packets = rtp_diagnostics.video_loss_packets,
                         video_loss_events = rtp_diagnostics.video_loss_events,
                         audio_loss_packets = rtp_diagnostics.audio_loss_packets,
@@ -892,6 +898,8 @@ impl RetinaIngestor {
                     tracing::warn!(
                         camera_id = %self.camera_id,
                         frames_received,
+                        video_frames_received,
+                        audio_frames_received,
                         video_loss_packets = rtp_diagnostics.video_loss_packets,
                         video_loss_events = rtp_diagnostics.video_loss_events,
                         audio_loss_packets = rtp_diagnostics.audio_loss_packets,
@@ -913,6 +921,7 @@ impl RetinaIngestor {
             if let CodecItem::VideoFrame(frame) = item {
                 if frame.stream_id() == video_idx {
                     frames_received += 1;
+                    video_frames_received += 1;
                     let pts_ms = self.process_track_frame(
                         "video",
                         &mut video_timestamps,
@@ -923,8 +932,29 @@ impl RetinaIngestor {
                     );
 
                     let is_keyframe = frame.is_random_access_point();
-                    // 零拷贝借出底层 Vec<u8> 生成 Bytes，已包含 Annex B 0x00000001
+                    // 零拷贝借出底层 Vec<u8> 生成 Bytes，已包含 Annex B 0x00000001。
                     let payload = Bytes::from(frame.into_data());
+                    if video_frames_received == 1 {
+                        tracing::info!(
+                            camera_id = %self.camera_id,
+                            video_frames_received,
+                            codec = ?codec,
+                            is_keyframe,
+                            pts_ms,
+                            payload_bytes = payload.len(),
+                            "Retina 已收到首个视频帧"
+                        );
+                    } else if video_frames_received.is_multiple_of(100) {
+                        tracing::debug!(
+                            camera_id = %self.camera_id,
+                            video_frames_received,
+                            codec = ?codec,
+                            is_keyframe,
+                            pts_ms,
+                            payload_bytes = payload.len(),
+                            "Retina 已收到视频帧"
+                        );
+                    }
 
                     let packet = Arc::new(EncodedPacket {
                         pts_ms,
@@ -942,6 +972,7 @@ impl RetinaIngestor {
                     // 仅处理已成功 SETUP 的音频轨道
                     if let Some(target_idx) = audio_idx {
                         if frame.stream_id() == target_idx {
+                            audio_frames_received += 1;
                             let pts_ms = self.process_track_frame(
                                 "audio",
                                 &mut audio_timestamps,
@@ -953,6 +984,23 @@ impl RetinaIngestor {
 
                             // ADTS 封装的 AAC 音频数据 (FrameFormat::SIMPLE 输出)
                             let payload = Bytes::copy_from_slice(frame.data());
+                            if audio_frames_received == 1 {
+                                tracing::info!(
+                                    camera_id = %self.camera_id,
+                                    audio_frames_received,
+                                    pts_ms,
+                                    payload_bytes = payload.len(),
+                                    "Retina 已收到首个 AAC 音频帧"
+                                );
+                            } else if audio_frames_received.is_multiple_of(100) {
+                                tracing::debug!(
+                                    camera_id = %self.camera_id,
+                                    audio_frames_received,
+                                    pts_ms,
+                                    payload_bytes = payload.len(),
+                                    "Retina 已收到 AAC 音频帧"
+                                );
+                            }
 
                             let packet = Arc::new(EncodedPacket {
                                 pts_ms,
@@ -969,6 +1017,15 @@ impl RetinaIngestor {
             }
         }
 
+        tracing::info!(
+            camera_id = %self.camera_id,
+            frames_received,
+            video_frames_received,
+            audio_frames_received,
+            video_loss_packets = rtp_diagnostics.video_loss_packets,
+            audio_loss_packets = rtp_diagnostics.audio_loss_packets,
+            "Retina RTSP 会话正常停止"
+        );
         Ok(())
     }
 }

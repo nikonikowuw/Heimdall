@@ -32,9 +32,18 @@ const IM_SYNC: c_int = 1 << 19;
 /// 目标 RGA BSP 的安全公共最小 ROI；不足时由上层转 CPU crop。
 const RGA_MIN_DIMENSION: u32 = 68;
 
-/// RK_FORMAT_YCbCr_420_SP = 0x100 (NV12)
+/// librga 像素格式枚举常量（遵循 Rockchip rga.h 标准，值全部向左偏移 8 位以与 Android HAL 区分）
+///
+/// 详见 Rockchip 官方 rga.h：
+/// - RK_FORMAT_RGBA_8888 = 0x0 << 8 (0x0000)
+/// - RK_FORMAT_RGBX_8888 = 0x1 << 8 (0x0100)
+/// - RK_FORMAT_YCbCr_420_SP = 0xa << 8 (0x0a00, 即 NV12)
 #[allow(non_upper_case_globals)]
-pub const RK_FORMAT_YCbCr_420_SP: c_int = 0x100;
+pub const RK_FORMAT_RGBA_8888: c_int = 0x0 << 8;
+#[allow(non_upper_case_globals)]
+pub const RK_FORMAT_RGBX_8888: c_int = 0x1 << 8;
+#[allow(non_upper_case_globals)]
+pub const RK_FORMAT_YCbCr_420_SP: c_int = 0xa << 8;
 
 // ============================================================================
 // librga C 结构体（ABI 对齐 im2d_type.h）
@@ -368,7 +377,7 @@ impl RgaRuntime {
         let handle = unsafe { (self.ffi.import_buffer)(fd, &mut param) };
         if handle == 0 {
             return Err(MediaError::Encode {
-                reason: format!("RGA importbuffer_fd 失败: fd={fd}, {width}x{height}"),
+                reason: format!("RGA importbuffer_fd 失败 (返回空句柄): fd={fd}, {width}x{height}"),
             });
         }
         Ok(handle)
@@ -564,5 +573,15 @@ mod tests {
         assert_eq!(offset_of!(RgaBuffer, nn), 64);
         assert_eq!(offset_of!(RgaBuffer, rop_code), 88);
         assert_eq!(offset_of!(RgaBuffer, handle), 92);
+    }
+
+    #[test]
+    fn test_rga_format_constants() {
+        // Rockchip rga.h 核心格式常量严格检验，严防将 RGBX_8888 (0x100) 误当作 NV12 (0x0a00)
+        assert_eq!(RK_FORMAT_RGBA_8888, 0x0);
+        assert_eq!(RK_FORMAT_RGBX_8888, 0x100);
+        assert_eq!(RK_FORMAT_YCbCr_420_SP, 0x0a00);
+        assert_eq!(RK_FORMAT_YCbCr_420_SP, 2560);
+        assert_ne!(RK_FORMAT_YCbCr_420_SP, RK_FORMAT_RGBX_8888);
     }
 }

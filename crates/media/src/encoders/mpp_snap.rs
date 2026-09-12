@@ -37,6 +37,7 @@ pub(crate) mod ffi {
     pub const CMD_CTX_ID_ENC: c_int = 0x00020000;
     pub const MPP_ENC_CMD_BASE: c_int = CMD_MODULE_CODEC | CMD_CTX_ID_ENC;
     pub const MPP_ENC_SET_CFG: c_int = MPP_ENC_CMD_BASE + 1;
+    pub const MPP_ENC_GET_CFG: c_int = MPP_ENC_CMD_BASE + 2;
 
     // 色彩范围
     pub const MPP_FRAME_RANGE_JPEG: c_int = 2;
@@ -252,16 +253,35 @@ impl Drop for MppBufImportGuard {
     }
 }
 
+struct MppEncCfgGuard(*mut c_void);
+impl Drop for MppEncCfgGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: self.0 经由 mpp_enc_cfg_init 分配，mpp_enc_cfg_deinit 负责回收配置结构体。
+            unsafe {
+                ffi::mpp_enc_cfg_deinit(self.0);
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Scratchpad DMA-BUF 分配
 // ============================================================================
 
-const DMA_HEAP_PATHS: [&[u8]; 2] = [b"/dev/dma_heap/system-dma32\0", b"/dev/dma_heap/system\0"];
+const DMA_HEAP_PATHS: [&[u8]; 6] = [
+    b"/dev/dma_heap/cma\0",
+    b"/dev/dma_heap/cma-uncached\0",
+    b"/dev/dma_heap/system-dma32\0",
+    b"/dev/dma_heap/system-uncached-dma32\0",
+    b"/dev/dma_heap/system\0",
+    b"/dev/dma_heap/system-uncached\0",
+];
 
 #[repr(C)]
 struct DmaHeapAlloc {
     len: u64,
-    fd: c_int,
+    fd: u32,
     fd_flags: u32,
     heap_flags: u64,
 }
@@ -292,7 +312,7 @@ fn nv12_size(hor_stride: u32, ver_stride: u32) -> Result<usize, MediaError> {
         })
 }
 
-fn alloc_dma_buf(size: usize) -> Result<OwnedFd, MediaError> {
+fn alloc_dma_buf_from_path(heap_path: &[u8], size: usize) -> Result<OwnedFd, MediaError> {
     let page_size = 4096usize;
     let alloc_len = size
         .max(1)
@@ -302,46 +322,49 @@ fn alloc_dma_buf(size: usize) -> Result<OwnedFd, MediaError> {
             reason: "DMA-BUF 页面对齐溢出".into(),
         })?;
 
-    let mut last_error = String::new();
-    for heap_path in DMA_HEAP_PATHS {
-        // SAFETY: 系统调用打开标准 Linux DMA 堆字符设备。
-        let heap_fd = unsafe {
-            libc::open(
-                heap_path.as_ptr() as *const _,
-                libc::O_RDWR | libc::O_CLOEXEC,
-            )
-        };
-        if heap_fd < 0 {
-            last_error = std::io::Error::last_os_error().to_string();
-            continue;
-        }
+    // SAFETY: 系统调用打开标准 Linux DMA 堆字符设备。
+    let heap_fd = unsafe {
+        libc::open(
+            heap_path.as_ptr() as *const _,
+            libc::O_RDWR | libc::O_CLOEXEC,
+        )
+    };
+    if heap_fd < 0 {
+        return Err(MediaError::Encode {
+            reason: format!("open 失败: {}", std::io::Error::last_os_error()),
+        });
+    }
 
-        let mut alloc = DmaHeapAlloc {
-            len: alloc_len as u64,
-            fd: -1,
-            fd_flags: (libc::O_RDWR | libc::O_CLOEXEC) as u32,
-            heap_flags: 0,
-        };
+    // NOTE: Linux 内核 dma_heap_ioctl_allocate 要求输入的 fd 必须为 0，
+    // 若传入非零值内核会直接返回 -EINVAL (os error 22)。分配成功后内核将向此字段写入新 fd。
+    let mut alloc = DmaHeapAlloc {
+        len: alloc_len as u64,
+        fd: 0,
+        fd_flags: (libc::O_RDWR | libc::O_CLOEXEC) as u32,
+        heap_flags: 0,
+    };
 
-        // SAFETY: ioctl DMA_HEAP_IOCTL_ALLOC 遵循 Linux dma-heap UAPI。
-        let ret = unsafe { libc::ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &mut alloc) };
-        // SAFETY: 关闭临时打开的堆文件描述符。
-        unsafe {
-            libc::close(heap_fd);
-        }
+    // SAFETY: ioctl DMA_HEAP_IOCTL_ALLOC 遵循 Linux dma-heap UAPI。
+    let ret = unsafe { libc::ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &mut alloc) };
+    let ioctl_err = std::io::Error::last_os_error();
+    // SAFETY: 关闭临时打开的堆文件描述符。
+    unsafe {
+        libc::close(heap_fd);
+    }
 
-        if ret == 0 && alloc.fd >= 0 {
+    if ret == 0 {
+        let fd = alloc.fd as RawFd;
+        if fd >= 0 {
             // SAFETY: alloc.fd 为系统内核分配的有效文件描述符。
-            return Ok(unsafe { OwnedFd::from_raw_fd(alloc.fd) });
+            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
         }
-        last_error = std::io::Error::last_os_error().to_string();
+        return Err(MediaError::Encode {
+            reason: format!("DMA-BUF 分配成功但返回无效描述符: fd={fd}"),
+        });
     }
 
     Err(MediaError::Encode {
-        reason: format!(
-            "DMA-BUF 分配失败 ({} bytes)，已尝试 DMA32 与 system heap: {}",
-            alloc_len, last_error
-        ),
+        reason: format!("ioctl 失败: {ioctl_err}"),
     })
 }
 
@@ -349,19 +372,29 @@ fn alloc_dma_buf(size: usize) -> Result<OwnedFd, MediaError> {
 // MppSnapEncoder
 // ============================================================================
 
+/// RGA 常驻 Scratchpad 资源结构
+struct RgaScratchpad {
+    rga: RgaRuntime,
+    fd: OwnedFd,
+    handle: u32,
+    size: usize,
+}
+
+impl Drop for RgaScratchpad {
+    fn drop(&mut self) {
+        self.rga.release_buffer_handle(self.handle);
+    }
+}
+
 /// Rockchip MPP 全链路快照编码器
 ///
-/// 持有 MPP 编码上下文 + buffer_group + RGA 运行时 + Scratchpad DMA-BUF。
+/// 持有 MPP 编码上下文 + buffer_group + 可选的 RGA Scratchpad 特写通道。
 /// 由 SnapshotEngine 的固定专用 OS Worker 单线程持有与调用，避免跨线程共享硬件 context。
 pub struct MppSnapEncoder {
     enc: MppEncCtx,
     buf_group: MppBufGroup,
-    rga: RgaRuntime,
-    /// 常驻复用的 4K scratchpad，避免每次裁剪重新分配 CMA。
-    scratchpad_fd: OwnedFd,
-    /// scratchpad 在 RGA 中的常驻导入句柄。
-    scratchpad_rga_handle: u32,
-    scratchpad_size: usize,
+    /// 设备侧 RGA 特写裁剪通道（就绪时实现零拷贝裁剪，若不可用则特写平滑降级至 CPU，全景快照仍维持 100% MPP 硬件加速）
+    rga_scratchpad: Option<RgaScratchpad>,
     /// MPP reset 失败后永久关闭硬件路径，避免反复提交到未知状态的 context。
     ready: AtomicBool,
     /// 当前编码器绑定的分辨率（动态重配时更新）
@@ -386,49 +419,145 @@ impl std::fmt::Debug for MppSnapEncoder {
             )
             .field(
                 "scratchpad",
-                &format!("{}MB", self.scratchpad_size / 1024 / 1024),
+                &self
+                    .rga_scratchpad
+                    .as_ref()
+                    .map(|s| format!("{}MB", s.size / 1024 / 1024))
+                    .unwrap_or_else(|| "none".to_string()),
             )
             .finish()
     }
 }
 
 impl MppSnapEncoder {
-    /// 单画板 scratchpad 最大分辨率，覆盖 UHD/4K 快照特写。
-    const SCRATCHPAD_MAX_WIDTH: u32 = 4096;
-    const SCRATCHPAD_MAX_HEIGHT: u32 = 2160;
+    /// 单画板 scratchpad 最大分辨率，支持 1080P 高清特写抓拍。
+    ///
+    /// 硬件约束：Rockchip RGA 硬件驱动对目标输出端口（Destination）有硬性物理约束：
+    /// `act_w <= 2048, act_h <= 2048, vir_h <= 2048`。
+    /// 若画板设定为 4K (2160)，驱动会因 vir_h > 2048 直接拒绝 importbuffer_fd。
+    /// 1080P (1920x1080) 涵盖所有常规特写抓拍，同时仅占用 3.1MB 连续 DMA 内存。
+    const SCRATCHPAD_MAX_WIDTH: u32 = 1920;
+    const SCRATCHPAD_MAX_HEIGHT: u32 = 1080;
+
+    fn init_error(stage: &str, error: impl std::fmt::Display) -> MediaError {
+        MediaError::EncoderInit {
+            codec: "MPP-JPEG+RGA".into(),
+            reason: format!("{stage}: {error}"),
+        }
+    }
+
+    /// 探测并初始化 RGA 设备侧特写画板。
+    /// 优先使用连续物理内存堆 (CMA)，再回退至 DMA32 / system 堆。
+    fn init_rga_scratchpad() -> Option<RgaScratchpad> {
+        let rga = match RgaRuntime::try_load() {
+            Ok(r) => {
+                debug!(backend = "rga", "RGA 运行时加载成功");
+                r
+            }
+            Err(e) => {
+                debug!(error = %e, "未加载到 librga 运行时，跳过 RGA 设备侧特写通道");
+                return None;
+            }
+        };
+
+        let stride = match align_up(Self::SCRATCHPAD_MAX_WIDTH, 16) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "计算 scratchpad stride 失败");
+                return None;
+            }
+        };
+        let scratchpad_size = match nv12_size(stride, Self::SCRATCHPAD_MAX_HEIGHT) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "计算 scratchpad 大小失败");
+                return None;
+            }
+        };
+
+        // 优先探测物理连续内存堆 (CMA)，这对未挂载 IOMMU 的 RGA 驱动至关重要；
+        // 随后尝试 DMA32 与通用系统堆。
+        let mut errors = Vec::new();
+        for heap_path in DMA_HEAP_PATHS {
+            let path_str = std::ffi::CStr::from_bytes_with_nul(heap_path)
+                .map(|c| c.to_string_lossy())
+                .unwrap_or_default();
+
+            let fd = match alloc_dma_buf_from_path(heap_path, scratchpad_size) {
+                Ok(fd) => fd,
+                Err(e) => {
+                    errors.push(format!("{path_str}: {e}"));
+                    continue;
+                }
+            };
+
+            match rga.import_buffer_fd(
+                fd.as_raw_fd(),
+                stride,
+                Self::SCRATCHPAD_MAX_HEIGHT,
+                crate::rga_crop::RK_FORMAT_YCbCr_420_SP,
+            ) {
+                Ok(handle) => {
+                    info!(
+                        heap = %path_str,
+                        scratchpad_fd = fd.as_raw_fd(),
+                        scratchpad_size,
+                        "RGA Scratchpad DMA-BUF 分配并成功导入硬件句柄"
+                    );
+                    return Some(RgaScratchpad {
+                        rga,
+                        fd,
+                        handle,
+                        size: scratchpad_size,
+                    });
+                }
+                Err(e) => {
+                    errors.push(format!("{path_str} import 失败: {e}"));
+                }
+            }
+        }
+
+        warn!(
+            "RGA 设备侧特写裁剪画板未能就绪，特写裁剪将平滑降级至 CPU readback（全景快照仍维持 100% MPP 硬件加速）。尝试记录: [{}]",
+            errors.join("; ")
+        );
+        None
+    }
 
     pub fn try_new(quality: u8) -> Result<Self, MediaError> {
-        let q = quality.clamp(1, 100);
-        info!(quality = q, "初始化 MPP JPEG 编码器 + RGA 裁剪运行时...");
+        let quality = quality.clamp(1, 100);
+        info!(quality, "初始化 MPP JPEG 编码器...");
 
-        // 1. 加载 RGA。动态库句柄由 RgaRuntime 持有并在析构时释放。
-        let rga = RgaRuntime::try_load()?;
-        debug!("RGA 运行时加载成功");
-
-        // 2. 创建并初始化 MJPEG 编码上下文。
+        // 1. 创建并初始化 MJPEG 编码上下文。
         let mut ctx: *mut c_void = std::ptr::null_mut();
         let mut mpi: *mut ffi::MppApi = std::ptr::null_mut();
         // SAFETY: 传入有效指针地址接收 libmpp 上下文与虚表。
         let ret = unsafe { ffi::mpp_create(&mut ctx, &mut mpi) };
-        if ret != 0 || ctx.is_null() || mpi.is_null() {
-            return Err(MediaError::EncoderInit {
-                codec: "MPP-JPEG".into(),
-                reason: format!("mpp_create 失败: ret={ret}"),
-            });
+        if ret != ffi::MPP_OK || ctx.is_null() || mpi.is_null() {
+            let ctx_null = ctx.is_null();
+            let mpi_null = mpi.is_null();
+            if !ctx_null {
+                // SAFETY: mpp_create 返回的非空 ctx 是 MPP 创建阶段产生的部分句柄，
+                // mpp_destroy 负责释放其已分配资源。
+                unsafe {
+                    ffi::mpp_destroy(ctx);
+                }
+            }
+            return Err(Self::init_error(
+                "mpp_create",
+                format!("ret={ret}, ctx_null={ctx_null}, mpi_null={mpi_null}"),
+            ));
         }
         let enc = MppEncCtx { ctx, mpi };
 
         // SAFETY: ctx 已经过校验，第三个参数必须是 MPP_VIDEO_CodingMJPEG。
         let ret = unsafe { ffi::mpp_init(enc.ctx, ffi::MPP_CTX_ENC, ffi::MPP_VIDEO_CODING_MJPEG) };
-        if ret != 0 {
-            return Err(MediaError::EncoderInit {
-                codec: "MPP-JPEG".into(),
-                reason: format!("mpp_init MJPEG 失败: ret={ret}"),
-            });
+        if ret != ffi::MPP_OK {
+            return Err(Self::init_error("mpp_init MJPEG", format!("ret={ret}")));
         }
-        debug!("MPP MJPEG 编码上下文初始化成功");
+        debug!(backend = "mpp-jpeg", "MPP MJPEG 编码上下文初始化成功");
 
-        // 3. 创建外部 DMA-BUF buffer group。
+        // 2. 创建外部 DMA-BUF buffer group。
         let mut bg: *mut c_void = std::ptr::null_mut();
         let tag = b"mpp-snap-enc\0";
         let caller = ffi::CALLER_TAG;
@@ -442,49 +571,39 @@ impl MppSnapEncoder {
                 caller.as_ptr() as *const _,
             )
         };
-        if ret != 0 || bg.is_null() {
-            return Err(MediaError::EncoderInit {
-                codec: "MPP-JPEG".into(),
-                reason: format!("mpp_buffer_group_get 失败: ret={ret}"),
-            });
+        if ret != ffi::MPP_OK || bg.is_null() {
+            let bg_null = bg.is_null();
+            if !bg_null {
+                // SAFETY: MPP 已返回非空 buffer group 句柄，错误路径必须释放部分资源。
+                unsafe {
+                    ffi::mpp_buffer_group_put(bg);
+                }
+            }
+            return Err(Self::init_error(
+                "mpp_buffer_group_get",
+                format!("ret={ret}, group_null={bg_null}"),
+            ));
         }
         let buf_group = MppBufGroup(bg);
         debug!(ptr = ?bg, "MPP 外部 DMA-BUF buffer group 创建成功");
 
-        // 4. 配置 JPEG 质量与 NV12 full-range 输入，任何 setter 失败都拒绝硬件实例。
-        Self::configure_quality(enc.ctx, enc.mpi, q)?;
-        Self::configure_color_range(enc.ctx, enc.mpi)?;
-
-        // 5. 预分配固定 4K scratchpad，优先使用 DMA32 堆兼容 RGA2。
-        let stride = align_up(Self::SCRATCHPAD_MAX_WIDTH, 16)?;
-        let scratchpad_size = nv12_size(stride, Self::SCRATCHPAD_MAX_HEIGHT)?;
-        let scratchpad_fd = alloc_dma_buf(scratchpad_size)?;
-        let scratchpad_rga_handle = rga.import_buffer_fd(
-            scratchpad_fd.as_raw_fd(),
-            stride,
-            Self::SCRATCHPAD_MAX_HEIGHT,
-            crate::rga_crop::RK_FORMAT_YCbCr_420_SP,
-        )?;
+        // 3. 尝试探测并初始化 RGA 设备侧特写通道（解耦设计：失败不阻塞 MPP 全景直编）
+        let rga_scratchpad = Self::init_rga_scratchpad();
         info!(
-            scratchpad_fd = scratchpad_fd.as_raw_fd(),
-            scratchpad_size,
-            max_width = Self::SCRATCHPAD_MAX_WIDTH,
-            max_height = Self::SCRATCHPAD_MAX_HEIGHT,
-            "Scratchpad DMA-BUF 分配成功"
+            rga_ready = rga_scratchpad.is_some(),
+            "MPP JPEG 快照编码器装配完成"
         );
 
         Ok(Self {
             enc,
             buf_group,
-            rga,
-            scratchpad_fd,
-            scratchpad_rga_handle,
-            scratchpad_size,
+            rga_scratchpad,
             bound_w: AtomicU32::new(0),
             bound_h: AtomicU32::new(0),
             bound_hor_stride: AtomicU32::new(0),
             bound_ver_stride: AtomicU32::new(0),
-            bound_quality: AtomicU8::new(q),
+            // 0 表示还没有将真实帧配置提交给 MPP，首帧必须应用 q_factor。
+            bound_quality: AtomicU8::new(0),
             ready: AtomicBool::new(true),
         })
     }
@@ -494,53 +613,67 @@ impl MppSnapEncoder {
         mpi: *mut ffi::MppApi,
         values: &[(&[u8], c_int)],
     ) -> Result<(), MediaError> {
-        let mut cfg: *mut c_void = std::ptr::null_mut();
-        // SAFETY: cfg 是由 MPP 写入的不透明配置句柄输出参数。
-        let init_ret = unsafe { ffi::mpp_enc_cfg_init(&mut cfg) };
-        if init_ret != 0 || cfg.is_null() {
+        if ctx.is_null() || mpi.is_null() {
+            return Err(MediaError::Encode {
+                reason: format!(
+                    "MPP 配置参数为空: ctx_null={}, mpi_null={}",
+                    ctx.is_null(),
+                    mpi.is_null()
+                ),
+            });
+        }
+
+        // SAFETY: mpi 已经过非空校验，control 指针由当前 MPP 虚表提供。
+        let control = unsafe { (*mpi).control }.ok_or_else(|| MediaError::Encode {
+            reason: "MPP control 接口为空".into(),
+        })?;
+
+        let mut raw_cfg: *mut c_void = std::ptr::null_mut();
+        // SAFETY: raw_cfg 是由 MPP 写入的不透明配置句柄输出参数。
+        let init_ret = unsafe { ffi::mpp_enc_cfg_init(&mut raw_cfg) };
+        if init_ret != ffi::MPP_OK || raw_cfg.is_null() {
+            if !raw_cfg.is_null() {
+                // SAFETY: raw_cfg 非空时必须释放。
+                unsafe { ffi::mpp_enc_cfg_deinit(raw_cfg) };
+            }
             return Err(MediaError::Encode {
                 reason: format!("mpp_enc_cfg_init 失败: ret={init_ret}"),
             });
         }
+        let cfg = MppEncCfgGuard(raw_cfg);
 
-        let result = (|| {
-            for (name, value) in values {
-                // SAFETY: cfg、NUL 结尾配置键和值均由当前线程持有。
-                let ret =
-                    unsafe { ffi::mpp_enc_cfg_set_s32(cfg, name.as_ptr() as *const _, *value) };
-                if ret != 0 {
-                    return Err(MediaError::Encode {
-                        reason: format!(
-                            "mpp_enc_cfg_set_s32 失败: key={}, ret={ret}",
-                            String::from_utf8_lossy(name).trim_end_matches('\0')
-                        ),
-                    });
-                }
-            }
-
-            // SAFETY: mpi 来自同一 MPP context，control 指针由 MPP 虚表提供。
-            let control = unsafe { (*mpi).control };
-            let control = control.ok_or_else(|| MediaError::Encode {
-                reason: "MPP control 接口为空".into(),
-            })?;
-            // SAFETY: cfg 已初始化且 control 参数符合 MPP_ENC_SET_CFG 契约。
-            let ret = unsafe { control(ctx, ffi::MPP_ENC_SET_CFG, cfg) };
-            if ret != ffi::MPP_OK {
-                return Err(MediaError::Encode {
-                    reason: format!("MPP_ENC_SET_CFG 失败: ret={ret}"),
-                });
-            }
-            Ok(())
-        })();
-
-        // SAFETY: cfg 已由 mpp_enc_cfg_init 成功创建，必须成对释放。
-        let deinit_ret = unsafe { ffi::mpp_enc_cfg_deinit(cfg) };
-        if deinit_ret != 0 {
+        // MPP 官方编码流程要求先读取内部默认配置，再修改目标字段。
+        // 直接 SET 一个空配置在不同 BSP 上可能丢失默认值或被驱动拒绝。
+        // SAFETY: cfg.0 已初始化，且 control 参数符合 MPP_ENC_GET_CFG 契约。
+        let ret = unsafe { control(ctx, ffi::MPP_ENC_GET_CFG, cfg.0) };
+        if ret != ffi::MPP_OK {
             return Err(MediaError::Encode {
-                reason: format!("mpp_enc_cfg_deinit 失败: ret={deinit_ret}"),
+                reason: format!("MPP_ENC_GET_CFG 失败: ret={ret}"),
             });
         }
-        result
+
+        for (name, value) in values {
+            // SAFETY: cfg.0、NUL 结尾配置键和值均由当前线程持有。
+            let ret = unsafe { ffi::mpp_enc_cfg_set_s32(cfg.0, name.as_ptr() as *const _, *value) };
+            if ret != ffi::MPP_OK {
+                return Err(MediaError::Encode {
+                    reason: format!(
+                        "mpp_enc_cfg_set_s32 失败: key={}, ret={ret}",
+                        String::from_utf8_lossy(name).trim_end_matches('\0')
+                    ),
+                });
+            }
+        }
+
+        // SAFETY: cfg.0 已从当前 MPP context 获取并完成配置。
+        let ret = unsafe { control(ctx, ffi::MPP_ENC_SET_CFG, cfg.0) };
+        if ret != ffi::MPP_OK {
+            return Err(MediaError::Encode {
+                reason: format!("MPP_ENC_SET_CFG 失败: ret={ret}"),
+            });
+        }
+
+        Ok(())
     }
 
     fn configure_quality(ctx: *mut c_void, mpi: *mut ffi::MppApi, q: u8) -> Result<(), MediaError> {
@@ -551,38 +684,27 @@ impl MppSnapEncoder {
         Ok(())
     }
 
-    fn configure_color_range(ctx: *mut c_void, mpi: *mut ffi::MppApi) -> Result<(), MediaError> {
-        Self::apply_cfg(
-            ctx,
-            mpi,
-            &[
-                (b"prep:colorrange\0", ffi::MPP_FRAME_RANGE_JPEG),
-                (b"prep:format\0", ffi::MPP_FMT_YUV420SP_NV12),
-            ],
-        )?;
-        debug!("MPP 色彩范围: Full Range + NV12");
-        Ok(())
-    }
-
-    fn reconfigure_dimensions(
+    fn reconfigure_frame_params(
         &self,
         w: u32,
         h: u32,
         hor_stride: u32,
         ver_stride: u32,
+        quality: Option<u8>,
     ) -> Result<(), MediaError> {
-        Self::apply_cfg(
-            self.enc.ctx,
-            self.enc.mpi,
-            &[
-                (b"prep:width\0", w as c_int),
-                (b"prep:height\0", h as c_int),
-                (b"prep:hor_stride\0", hor_stride as c_int),
-                (b"prep:ver_stride\0", ver_stride as c_int),
-                (b"prep:format\0", ffi::MPP_FMT_YUV420SP_NV12),
-                (b"prep:colorrange\0", ffi::MPP_FRAME_RANGE_JPEG),
-            ],
-        )
+        let mut cfgs: Vec<(&[u8], c_int)> = vec![
+            (b"prep:width\0", w as c_int),
+            (b"prep:height\0", h as c_int),
+            (b"prep:hor_stride\0", hor_stride as c_int),
+            (b"prep:ver_stride\0", ver_stride as c_int),
+            (b"prep:format\0", ffi::MPP_FMT_YUV420SP_NV12),
+            (b"prep:colorrange\0", ffi::MPP_FRAME_RANGE_JPEG),
+        ];
+        let q_factor = quality.map(|q| i32::from(q.clamp(1, 99)));
+        if let Some(qf) = q_factor {
+            cfgs.push((b"jpeg:q_factor\0", qf));
+        }
+        Self::apply_cfg(self.enc.ctx, self.enc.mpi, &cfgs)
     }
 
     fn reset_after_error(&self) {
@@ -657,29 +779,42 @@ impl MppSnapEncoder {
         // Cache sync 不是设备完成栅障；先等待上游 VPU/RGA 的 dma_resv fence。
         wait_dmabuf_readable(fd, ffi::MPP_POLL_TIMEOUT_MS)?;
 
-        // 0. 动态重配尺寸与真实物理 stride。
+        // 0. 动态重配尺寸、物理 stride 与画质。
         let bound_w = self.bound_w.load(Ordering::Relaxed);
         let bound_h = self.bound_h.load(Ordering::Relaxed);
         let bound_hs = self.bound_hor_stride.load(Ordering::Relaxed);
         let bound_vs = self.bound_ver_stride.load(Ordering::Relaxed);
-        if width != bound_w || height != bound_h || hor_stride != bound_hs || ver_stride != bound_vs
-        {
+        let quality = quality.clamp(1, 100);
+        let bound_q = self.bound_quality.load(Ordering::Relaxed);
+
+        let dims_changed = width != bound_w
+            || height != bound_h
+            || hor_stride != bound_hs
+            || ver_stride != bound_vs;
+        let quality_changed = quality != bound_q;
+
+        if dims_changed {
             debug!(
                 old = ?format!("{}x{} stride {}x{}", bound_w, bound_h, bound_hs, bound_vs),
                 new = ?format!("{}x{} stride {}x{}", width, height, hor_stride, ver_stride),
-                "编码器尺寸与 stride 重配"
+                quality,
+                "编码器尺寸与 stride 重配（合并画质配置）"
             );
-            self.reconfigure_dimensions(width, height, hor_stride, ver_stride)?;
+            self.reconfigure_frame_params(
+                width,
+                height,
+                hor_stride,
+                ver_stride,
+                if quality_changed { Some(quality) } else { None },
+            )?;
             self.bound_w.store(width, Ordering::Relaxed);
             self.bound_h.store(height, Ordering::Relaxed);
             self.bound_hor_stride.store(hor_stride, Ordering::Relaxed);
             self.bound_ver_stride.store(ver_stride, Ordering::Relaxed);
-        }
-
-        // 动态重配质量；setter 失败必须让本次硬件编码失败并进入 CPU 保底。
-        let quality = quality.clamp(1, 100);
-        let bound_q = self.bound_quality.load(Ordering::Relaxed);
-        if quality != bound_q {
+            if quality_changed {
+                self.bound_quality.store(quality, Ordering::Relaxed);
+            }
+        } else if quality_changed {
             Self::configure_quality(ctx, mpi, quality)?;
             self.bound_quality.store(quality, Ordering::Relaxed);
         }
@@ -803,12 +938,6 @@ impl MppSnapEncoder {
     }
 }
 
-impl Drop for MppSnapEncoder {
-    fn drop(&mut self) {
-        self.rga.release_buffer_handle(self.scratchpad_rga_handle);
-    }
-}
-
 impl DeviceSnapEncoder for MppSnapEncoder {
     fn name(&self) -> &'static str {
         "mpp-snap"
@@ -855,6 +984,15 @@ impl DeviceSnapEncoder for MppSnapEncoder {
         padding_ratio: f32,
         quality: u8,
     ) -> Result<Vec<u8>, MediaError> {
+        let sp = match self.rga_scratchpad.as_ref() {
+            Some(sp) => sp,
+            None => {
+                return Err(MediaError::Encode {
+                    reason: "RGA 硬件特写通道未就绪，平滑降级至 CPU 特写生成".into(),
+                });
+            }
+        };
+
         let (src_fd, src_w, src_h, src_hor_stride, src_ver_stride) = match frame.handle() {
             FrameHandle::DmaBuf { fd, .. } if frame.format == PixelFormat::Nv12 => (
                 fd.as_raw_fd(),
@@ -886,20 +1024,20 @@ impl DeviceSnapEncoder for MppSnapEncoder {
 
         // 2. 严防 DMA 越界写：校验裁剪尺寸是否超出了预分配的 Scratchpad 单画板容量
         let needed_scratchpad_bytes = nv12_size(w_stride, crop_h)?;
-        if needed_scratchpad_bytes > self.scratchpad_size
+        if needed_scratchpad_bytes > sp.size
             || crop_w > Self::SCRATCHPAD_MAX_WIDTH
             || crop_h > Self::SCRATCHPAD_MAX_HEIGHT
         {
             return Err(MediaError::Encode {
                 reason: format!(
                     "裁剪尺寸 ({}x{}, stride {}) 超过 Scratchpad 最大画板容量 ({} bytes)，触发 CPU 保底",
-                    crop_w, crop_h, w_stride, self.scratchpad_size
+                    crop_w, crop_h, w_stride, sp.size
                 ),
             });
         }
 
         // 3. RGA crop: src DMA-BUF → scratchpad DMA-BUF
-        let dst_fd = self.scratchpad_fd.as_raw_fd();
+        let dst_fd = sp.fd.as_raw_fd();
         let job = RgaCropJob {
             src_fd,
             src_w,
@@ -914,8 +1052,8 @@ impl DeviceSnapEncoder for MppSnapEncoder {
             dst_w: w_stride,
             dst_h: crop_h,
         };
-        self.rga
-            .crop_blit_sync(job, self.scratchpad_rga_handle)
+        sp.rga
+            .crop_blit_sync(job, sp.handle)
             .map_err(|e| MediaError::Encode {
                 reason: format!("RGA crop blit 失败: {e}"),
             })?;
@@ -943,6 +1081,7 @@ mod tests {
     fn test_mpp_encoder_command_values() {
         assert_eq!(ffi::MPP_ENC_CMD_BASE, 0x0032_0000);
         assert_eq!(ffi::MPP_ENC_SET_CFG, 0x0032_0001);
+        assert_eq!(ffi::MPP_ENC_GET_CFG, 0x0032_0002);
     }
 
     #[test]

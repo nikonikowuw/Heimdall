@@ -63,6 +63,16 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | [🌐 目录与 i18n](./frontend/directory-structure.md) | Feature 目录组织与中简/中繁/英文三语 | 所有文本必须接入 i18n 语言包 |
 | [🧪 质量与构建](./frontend/quality-guidelines.md) | ESLint、TypeScript 门禁与端到端测试 | 零 Warning 门禁、构建产物尺寸监控 |
 
+### 4. 专项设计方案 (Design Specifications)
+系统关键子系统与架构升级的详细技术设计（含规划草案与已落地实现）。
+
+| 文档 | 说明 | 重点关注 |
+| :--- | :--- | :--- |
+| [📹 录像与回放引擎（规划草案）](./designs/video-recording-and-playback-engine.md) | 纯流直封装 MP4 切片、事件前置缓冲与时间轴回放 | 零转码开销、配置契约与可选启闭、eMMC 寿命防护 |
+| [🎯 运动门控引擎](./designs/motion-detection-gating-engine.md) | 基于 Y 平面差分的轻量级前置门控 | 0 次无效推理、余晖保活、多边形遮罩 |
+| [⚡ 实时预览改造](./designs/realtime-preview-overhaul.md) | StreamHub 隔离分发与 HTTP-FLV/WebCodecs | 每消费者 Mailbox 隔离、GOP 对齐恢复 |
+| [🛰️ 国标接入与设备发现（规划草案）](./designs/gb28181-native-ingest-engine.md) | 纯 Rust 原生 GB28181 接入、PS 容错解复用与局域网设备发现 | 纯 Rust 闭环、零二次转码、目录树扫描、33-bit PTS 翻转防御 |
+
 ---
 
 ## 🚦 质量门禁检查命令 (Quality Gate)

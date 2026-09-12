@@ -216,7 +216,16 @@ async fn handle_http_flv(
         };
 
         // ① 发送 13 字节 FLV Header
-        yield Ok::<Bytes, std::convert::Infallible>(FlvMuxer::flv_header_tracks(include_audio, include_video));
+        let flv_header = FlvMuxer::flv_header_tracks(include_audio, include_video);
+        tracing::debug!(
+            stream_key = %str_key_clone,
+            include_audio,
+            include_video,
+            header_len = flv_header.len(),
+            type_flags = flv_header.get(4).copied(),
+            "HTTP-FLV 已生成 Header"
+        );
+        yield Ok::<Bytes, std::convert::Infallible>(flv_header);
 
         let mut flv_pipe = FlvStreamPipeline::new(include_audio);
         let mut flv_merge = BytesMut::with_capacity(http_merge_max_bytes);
@@ -227,17 +236,46 @@ async fn handle_http_flv(
         let mut flv_chunks_merged: u64 = 0;
         let mut flv_flush_count: u64 = 0;
         let mut max_buffer_depth: usize = 0;
+        let mut video_packets_seen: u64 = 0;
+        let mut audio_packets_seen: u64 = 0;
+        let mut audio_packets_waiting_for_video: u64 = 0;
+        let mut video_tags_produced: u64 = 0;
+        let mut audio_tags_produced: u64 = 0;
+        let mut replay_count: u64 = 0;
+        let mut source_reset_count: u64 = 0;
 
         // ② 尝试注入缓存中的 Sequence Header 与完整 GOP 关键帧序列
         if include_video {
             if let Some(cache) = stream_hub.get_keyframe_cache(&str_key_clone).await {
+                tracing::debug!(
+                    stream_key = %str_key_clone,
+                    cache_epoch = cache.epoch,
+                    cache_codec = ?cache.codec,
+                    gop_packets = cache.gop_packets.len(),
+                    sps_bytes = cache.sps.as_ref().map(Bytes::len),
+                    pps_bytes = cache.pps.as_ref().map(Bytes::len),
+                    vps_bytes = cache.vps.as_ref().map(Bytes::len),
+                    "HTTP-FLV 注入缓存 GOP"
+                );
                 let init_tags = flv_pipe.inject_cache(&cache, fallback_codec);
+                tracing::debug!(
+                    stream_key = %str_key_clone,
+                    init_tags = init_tags.len(),
+                    has_sequence_header = flv_pipe.sent_sequence_header,
+                    has_first_keyframe = flv_pipe.has_first_keyframe,
+                    "HTTP-FLV 缓存 GOP 封装完成"
+                );
                 for chunk in flush_flv_tags(&mut flv_merge, init_tags, http_merge_max_bytes) {
                     flv_chunks_merged += 1;
                     flv_flush_count += 1;
                     yield Ok(chunk);
                 }
                 max_buffer_depth = max_buffer_depth.max(flv_merge.len());
+            } else {
+                tracing::debug!(
+                    stream_key = %str_key_clone,
+                    "HTTP-FLV 没有可注入的缓存 GOP，等待实时关键帧"
+                );
             }
         }
 
@@ -261,6 +299,15 @@ async fn handle_http_flv(
                     match item {
                         Some(StreamItem::Packet(packet)) => packet,
                         Some(StreamItem::Replay(snapshot)) => {
+                            replay_count += 1;
+                            tracing::debug!(
+                                stream_key = %str_key_clone,
+                                replay_count,
+                                replay_epoch = snapshot.epoch,
+                                replay_codec = ?snapshot.codec,
+                                replay_packets = snapshot.packets.len(),
+                                "HTTP-FLV 收到完整 GOP Replay"
+                            );
                             flv_pipe.reset_after_discontinuity();
                             if include_video {
                                 let replay_cache = snapshot.to_keyframe_cache();
@@ -275,7 +322,13 @@ async fn handle_http_flv(
                             continue;
                         }
                         Some(StreamItem::SourceReset { epoch }) => {
-                            tracing::info!(stream_key = %str_key_clone, epoch, "HTTP-FLV 收到源流重建事件，重置封装状态");
+                            source_reset_count += 1;
+                            tracing::info!(
+                                stream_key = %str_key_clone,
+                                epoch,
+                                source_reset_count,
+                                "HTTP-FLV 收到源流重建事件，重置封装状态"
+                            );
                             if !flv_merge.is_empty() {
                                 flv_flush_count += 1;
                                 yield Ok(flv_merge.split().freeze());
@@ -296,7 +349,21 @@ async fn handle_http_flv(
 
             // 视频帧：标准 FLV Video Tag 封装
             if include_video && pkt.stream_tag == types::StreamTag::Video {
-                for tag in flv_pipe.process_packet(&pkt) {
+                video_packets_seen += 1;
+                if video_packets_seen == 1 || video_packets_seen.is_multiple_of(100) {
+                    tracing::debug!(
+                        stream_key = %str_key_clone,
+                        video_packets_seen,
+                        codec = ?pkt.codec,
+                        is_keyframe = pkt.is_keyframe,
+                        pts_ms = pkt.pts_ms,
+                        payload_bytes = pkt.payload.len(),
+                        "HTTP-FLV 收到视频包"
+                    );
+                }
+                let tags = flv_pipe.process_packet(&pkt);
+                video_tags_produced += tags.len() as u64;
+                for tag in tags {
                     for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
                         flv_chunks_merged += 1;
                         yield Ok(chunk);
@@ -305,14 +372,29 @@ async fn handle_http_flv(
             }
 
             // 音频帧：FLV Audio Tag 封装。audio-only 通道不需要等待视频关键帧。
-            if include_audio
-                && pkt.stream_tag == types::StreamTag::Audio
-                && (flv_pipe.has_first_keyframe || !include_video)
-            {
-                for tag in flv_pipe.process_audio_packet(&pkt) {
-                    for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
-                        flv_chunks_merged += 1;
-                        yield Ok(chunk);
+            if include_audio && pkt.stream_tag == types::StreamTag::Audio {
+                audio_packets_seen += 1;
+                if audio_packets_seen == 1 || audio_packets_seen.is_multiple_of(100) {
+                    tracing::debug!(
+                        stream_key = %str_key_clone,
+                        audio_packets_seen,
+                        codec = ?pkt.codec,
+                        pts_ms = pkt.pts_ms,
+                        payload_bytes = pkt.payload.len(),
+                        has_first_keyframe = flv_pipe.has_first_keyframe,
+                        "HTTP-FLV 收到音频包"
+                    );
+                }
+                if !flv_pipe.has_first_keyframe && include_video {
+                    audio_packets_waiting_for_video += 1;
+                } else {
+                    let tags = flv_pipe.process_audio_packet(&pkt);
+                    audio_tags_produced += tags.len() as u64;
+                    for tag in tags {
+                        for chunk in append_flv_tag(&mut flv_merge, tag, http_merge_max_bytes) {
+                            flv_chunks_merged += 1;
+                            yield Ok(chunk);
+                        }
                     }
                 }
             }
@@ -324,6 +406,13 @@ async fn handle_http_flv(
             flv_chunks_merged,
             flv_flush_count,
             max_buffer_depth,
+            video_packets_seen,
+            audio_packets_seen,
+            audio_packets_waiting_for_video,
+            video_tags_produced,
+            audio_tags_produced,
+            replay_count,
+            source_reset_count,
             "HTTP-FLV 会话合并写指标统计"
         );
     };
@@ -393,37 +482,46 @@ async fn handle_ws_flv(
     };
 
     let str_key = stream_key.as_str_key();
-    let is_main_stream = stream_key.stream_type == StreamType::Main;
-    let include_audio = query.audio.unwrap_or(false);
 
     tracing::info!(
         camera_id = %camera.camera_id,
         stream_key = %str_key,
+        include_audio,
+        include_video,
         "启动 WS-FLV WebSocket 实时流通道"
     );
 
-    ws.on_upgrade(move |socket| {
-        serve_ws_flv(
-            socket,
-            state,
-            str_key,
-            is_main_stream,
-            camera,
-            subscription,
-            include_audio,
-        )
-    })
+    let session = WsFlvSession {
+        state,
+        stream_key: str_key,
+        camera,
+        subscription,
+        include_audio,
+        include_video,
+    };
+
+    ws.on_upgrade(move |socket| serve_ws_flv(socket, session))
 }
 
-async fn serve_ws_flv(
-    mut socket: WebSocket,
+struct WsFlvSession {
     state: AppState,
     stream_key: String,
-    _is_main_stream: bool,
     camera: db::entity::camera::Model,
     subscription: StreamSubscription,
     include_audio: bool,
-) {
+    include_video: bool,
+}
+
+async fn serve_ws_flv(mut socket: WebSocket, session: WsFlvSession) {
+    let WsFlvSession {
+        state,
+        stream_key,
+        camera,
+        subscription,
+        include_audio,
+        include_video,
+    } = session;
+
     let mut shutdown_rx = state.shutdown_tx.subscribe();
     let stream_hub = state.stream_hub.clone();
     let pipeline_mgr = state.pipeline.clone();
@@ -447,18 +545,17 @@ async fn serve_ws_flv(
     let mut flv_pipe = FlvStreamPipeline::new(include_audio);
 
     // ① 发送 13 字节 FLV Header 与缓存中的 Sequence Header / GOP 序列
+    let flv_header = FlvMuxer::flv_header_tracks(include_audio, include_video);
     let init_success = async {
-        if socket
-            .send(Message::Binary(FlvMuxer::flv_header(include_audio)))
-            .await
-            .is_err()
-        {
+        if socket.send(Message::Binary(flv_header)).await.is_err() {
             return false;
         }
-        if let Some(cache) = stream_hub.get_keyframe_cache(&stream_key).await {
-            for tag in flv_pipe.inject_cache(&cache, fallback_codec) {
-                if socket.send(Message::Binary(tag)).await.is_err() {
-                    return false;
+        if include_video {
+            if let Some(cache) = stream_hub.get_keyframe_cache(&stream_key).await {
+                for tag in flv_pipe.inject_cache(&cache, fallback_codec) {
+                    if socket.send(Message::Binary(tag)).await.is_err() {
+                        return false;
+                    }
                 }
             }
         }
@@ -479,10 +576,12 @@ async fn serve_ws_flv(
                         Some(StreamItem::Packet(packet)) => packet,
                         Some(StreamItem::Replay(snapshot)) => {
                             flv_pipe.reset_after_discontinuity();
-                            let replay_cache = snapshot.to_keyframe_cache();
-                            for tag in flv_pipe.inject_cache(&replay_cache, fallback_codec) {
-                                if socket.send(Message::Binary(tag)).await.is_err() {
-                                    return;
+                            if include_video {
+                                let replay_cache = snapshot.to_keyframe_cache();
+                                for tag in flv_pipe.inject_cache(&replay_cache, fallback_codec) {
+                                    if socket.send(Message::Binary(tag)).await.is_err() {
+                                        return;
+                                    }
                                 }
                             }
                             continue;
@@ -497,8 +596,8 @@ async fn serve_ws_flv(
                 }
             };
 
-            // 视频帧
-            if pkt.stream_tag == types::StreamTag::Video {
+            // 视频帧：仅 include_video 时封装 Video Tag
+            if include_video && pkt.stream_tag == types::StreamTag::Video {
                 for tag in flv_pipe.process_packet(&pkt) {
                     if socket.send(Message::Binary(tag)).await.is_err() {
                         return;
@@ -506,11 +605,11 @@ async fn serve_ws_flv(
                 }
             }
 
-            // 音频帧 (仅 include_audio 时有效，且待视频关键帧就绪后对齐发送)
-            if include_audio
-                && pkt.stream_tag == types::StreamTag::Audio
-                && flv_pipe.has_first_keyframe
-            {
+            // 音频帧：FLV Audio Tag 封装。audio-only 通道不需要等待视频关键帧。
+            if include_audio && pkt.stream_tag == types::StreamTag::Audio {
+                if !flv_pipe.has_first_keyframe && include_video {
+                    continue;
+                }
                 for tag in flv_pipe.process_audio_packet(&pkt) {
                     if socket.send(Message::Binary(tag)).await.is_err() {
                         return;
@@ -547,6 +646,7 @@ async fn handle_ws_webcodecs(
     tracing::info!(
         camera_id = %camera.camera_id,
         stream_key = %str_key,
+        codec = %camera.last_codec,
         "启动 WS-WebCodecs 超低延时二进制推流通道"
     );
 
@@ -577,15 +677,33 @@ async fn serve_ws_webcodecs(
         protocol: "WS-WebCodecs",
     };
 
+    let mut video_packets_seen: u64 = 0;
+    let mut webcodecs_frames_sent: u64 = 0;
+    let mut replay_count: u64 = 0;
+    let mut source_reset_count: u64 = 0;
+
     // ① 初始秒开：若缓存中有首包与当前 GOP，立即按 WebCodecs 二进制帧格式发送关键帧与完整 GOP 序列
     let init_success = async {
         if let Some(cache) = stream_hub.get_keyframe_cache(&stream_key).await {
+            tracing::debug!(
+                stream_key = %stream_key,
+                cache_epoch = cache.epoch,
+                cache_codec = ?cache.codec,
+                gop_packets = cache.gop_packets.len(),
+                "WebCodecs 注入缓存 GOP"
+            );
             for pkt in &cache.gop_packets {
                 let bin = media::pack_webcodecs_frame(pkt);
                 if socket.send(Message::Binary(bin)).await.is_err() {
                     return false;
                 }
+                webcodecs_frames_sent += 1;
             }
+        } else {
+            tracing::debug!(
+                stream_key = %stream_key,
+                "WebCodecs 没有可注入的缓存 GOP，等待实时关键帧"
+            );
         }
         true
     }
@@ -613,6 +731,15 @@ async fn serve_ws_webcodecs(
 
         match item {
             StreamItem::Replay(snapshot) => {
+                replay_count += 1;
+                tracing::debug!(
+                    stream_key = %stream_key,
+                    replay_count,
+                    replay_epoch = snapshot.epoch,
+                    replay_codec = ?snapshot.codec,
+                    replay_packets = snapshot.packets.len(),
+                    "WebCodecs 收到完整 GOP Replay"
+                );
                 pending_discontinuity = false;
                 for (index, replay_packet) in snapshot.packets.iter().enumerate() {
                     if replay_packet.stream_tag == types::StreamTag::Audio
@@ -626,14 +753,35 @@ async fn serve_ws_webcodecs(
                         0
                     };
                     let bin = media::pack_webcodecs_frame_with_flags(replay_packet, flags);
-                    if !bin.is_empty() && socket.send(Message::Binary(bin)).await.is_err() {
-                        return;
+                    if !bin.is_empty() {
+                        webcodecs_frames_sent += 1;
+                        if webcodecs_frames_sent == 1 || webcodecs_frames_sent.is_multiple_of(100) {
+                            tracing::debug!(
+                                stream_key = %stream_key,
+                                webcodecs_frames_sent,
+                                codec = ?replay_packet.codec,
+                                is_keyframe = replay_packet.is_keyframe,
+                                pts_ms = replay_packet.pts_ms,
+                                payload_bytes = replay_packet.payload.len(),
+                                flags,
+                                "WebCodecs 发送 Replay 视频帧"
+                            );
+                        }
+                        if socket.send(Message::Binary(bin)).await.is_err() {
+                            return;
+                        }
                     }
                 }
                 continue;
             }
             StreamItem::SourceReset { epoch } => {
-                tracing::info!(stream_key = %stream_key, epoch, "WebCodecs 收到源流重建事件，等待新关键帧");
+                source_reset_count += 1;
+                tracing::info!(
+                    stream_key = %stream_key,
+                    epoch,
+                    source_reset_count,
+                    "WebCodecs 收到源流重建事件，等待新关键帧"
+                );
                 pending_discontinuity = true;
                 continue;
             }
@@ -641,6 +789,19 @@ async fn serve_ws_webcodecs(
                 // WebCodecs 仅传输视频通道数据，忽略音频。
                 if pkt.stream_tag == types::StreamTag::Audio || !pkt.codec.is_video() {
                     continue;
+                }
+                video_packets_seen += 1;
+                if video_packets_seen == 1 || video_packets_seen.is_multiple_of(100) {
+                    tracing::debug!(
+                        stream_key = %stream_key,
+                        video_packets_seen,
+                        codec = ?pkt.codec,
+                        is_keyframe = pkt.is_keyframe,
+                        pts_ms = pkt.pts_ms,
+                        payload_bytes = pkt.payload.len(),
+                        pending_discontinuity,
+                        "WebCodecs 收到视频包"
+                    );
                 }
                 if pending_discontinuity && !pkt.is_keyframe {
                     continue;
@@ -653,12 +814,36 @@ async fn serve_ws_webcodecs(
                 };
 
                 let bin = media::pack_webcodecs_frame_with_flags(&pkt, flags);
-                if !bin.is_empty() && socket.send(Message::Binary(bin)).await.is_err() {
-                    break;
+                if !bin.is_empty() {
+                    webcodecs_frames_sent += 1;
+                    if webcodecs_frames_sent == 1 || webcodecs_frames_sent.is_multiple_of(100) {
+                        tracing::debug!(
+                            stream_key = %stream_key,
+                            webcodecs_frames_sent,
+                            codec = ?pkt.codec,
+                            is_keyframe = pkt.is_keyframe,
+                            pts_ms = pkt.pts_ms,
+                            payload_bytes = pkt.payload.len(),
+                            flags,
+                            "WebCodecs 发送实时视频帧"
+                        );
+                    }
+                    if socket.send(Message::Binary(bin)).await.is_err() {
+                        break;
+                    }
                 }
             }
         }
     }
+
+    tracing::debug!(
+        stream_key = %stream_key,
+        video_packets_seen,
+        webcodecs_frames_sent,
+        replay_count,
+        source_reset_count,
+        "WebCodecs 会话发送统计"
+    );
 }
 
 #[cfg(test)]

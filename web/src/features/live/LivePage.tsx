@@ -586,6 +586,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                           showHud={false}
                           isHero={false}
                           stream="sub"
+                          videoCodec={cam.lastCodec}
                           className="pointer-events-none h-full w-full"
                         />
                       )}
@@ -712,6 +713,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                     showHud={true}
                     isHero={false}
                     stream="sub"
+                    videoCodec={cam.lastCodec}
                     className="h-full w-full"
                   />
                 </div>

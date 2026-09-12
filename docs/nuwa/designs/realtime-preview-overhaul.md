@@ -470,6 +470,16 @@ async fn reset(&mut self) -> Result<(), MediaError> {
 
 证据 RingBuffer 是独立消费者，不允许因预览客户端慢读而被迫 Lagged。它应使用 `MediaSubscription`，按 `Replay` 和 `SourceReset` 清理不完整 GOP，并等待新的关键帧恢复；不能把残缺 GOP 写入证据环。
 
+### 8.5 音频独立分发与伴生播放契约（Audio-Video Decoupled Dispatch）
+
+在工业安防监控实际落地中，前端 MSE 播放器极易因摄像头音频流异常而产生死锁：
+1. **安防异构音频防挂起**：工业安防摄像头大量存在物理无麦克风、RTSP 音频轨道未启用、或采用非 AAC 编码（如 G.711A/U）的情况。若在视频主播放器中声明 `hasAudio: true`，浏览器 MSE 会挂载音频 `SourceBuffer`；在缺少 AAC 音频包时，音频轨道永久饥饿会导致浏览器主媒体时钟死锁挂起（`waiting`/`stalled`），造成视频黑屏死锁。
+2. **纯视频主路与伴生音频分离**：
+   - **主视频流纯视频规范**：主路视频通道（无论是 WebCodecs 还是 FLV MSE）必须强制声明纯视频模式（`hasAudio: false, hasVideo: true`，视频元素 `muted = true`），请求参数固定为 `?audio=false&video=true`，彻底杜绝音频轨道缺失或不同步拖死视频主画面；
+   - **伴生独立音频通道（Companion Audio Channel）**：前端开启声音时，由独立的伴生 `<audio>` 播放器通过 `?audio=true&video=false`（FLV Header 设置标准 `TypeFlags = 0x04`，音频-only）拉取独立 AAC FLV 流。若摄像头无音频仅伴生通道静默，主视频秒开率与流畅度受 0 影响；
+   - **静音/开启切换零抖动（Zero-Flicker Audio Toggling）**：用户在界面开关声音时，仅在后台启动或销毁独立伴生音频播放器，主视频通道严禁重启、重连或重新握手，实现 0 闪烁、0 断流的工业级监控体验；
+   - **后端音视频管道解耦保证**：HTTP-FLV 在 `include_audio = true, include_video = false` 模式下，FLV header 标记音频轨道（`0x04`），无需等待视频首个关键帧即可直接打包并输出 AAC Audio Tag，避免音频独立流由于不产生视频关键帧而挂起。
+
 ---
 
 ## 9. HTTP-FLV 合并写与时间戳

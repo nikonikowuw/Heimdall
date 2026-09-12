@@ -62,6 +62,16 @@ export interface LivePlayerProps {
   onToggleAudio?: () => void
 }
 
+const VIDEO_MEDIA_EVENTS = [
+  'loadstart',
+  'loadedmetadata',
+  'loadeddata',
+  'canplay',
+  'play',
+  'playing',
+  'timeupdate',
+] as const
+
 export function LivePlayer({
   cameraId,
   cameraName,
@@ -100,6 +110,7 @@ export function LivePlayer({
   const videoCanvasRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wcPlayerRef = useRef<WebCodecsPlayer | null>(null)
+  const activeProtocolRef = useRef<'webcodecs' | 'flv'>('flv')
   const externalTracksRef = useRef<TrackedBBox[] | undefined>(trackedObjects)
 
   // 外部显式传入目标检测框时同步至 ref，零 React 重排与零 RAF 重启开销
@@ -114,6 +125,7 @@ export function LivePlayer({
     isPaused ? 'paused' : 'connecting',
   )
   const [activeProtocol, setActiveProtocol] = useState<'webcodecs' | 'flv'>('flv')
+  activeProtocolRef.current = activeProtocol
   const [latencyMs, setLatencyMs] = useState<number>(128)
   const [retryKey, setRetryKey] = useState<number>(0)
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -170,9 +182,12 @@ export function LivePlayer({
         {
           enableWorker: false,
           lazyLoad: false,
-          enableStashBuffer: true,
-          stashInitialSize: 128,
-          liveBufferLatencyChasing: true,
+          enableStashBuffer: false,
+          stashInitialSize: 64,
+          liveBufferLatencyChasing: false,
+          liveSync: true,
+          liveSyncMaxLatency: 2.5,
+          liveSyncTargetLatency: 1.0,
           autoCleanupSourceBuffer: true,
           autoCleanupMaxBackwardDuration: 10,
           autoCleanupMinBackwardDuration: 5,
@@ -205,25 +220,20 @@ export function LivePlayer({
     }
   }, [cameraId, streamType, destroyAudioPlayer])
 
-  // WebCodecs 模式下，音频独立启停 AAC-only FLV 播放器，避免重新握手视频 WebSocket 导致画面重排闪烁
+  // 音频独立启停 AAC-only FLV 播放器（无论是 WebCodecs 还是 FLV 模式），
+  // 彻底避免无音频或非 AAC 摄像头阻塞视频 SourceBuffer 导致画面黑屏，
+  // 且用户静音/开音切换时无需重新拉取视频流导致画面闪烁或重启。
   useEffect(() => {
-    if (activeProtocol !== 'webcodecs' || isPaused) return
+    if (isPaused) {
+      destroyAudioPlayer()
+      return
+    }
     if (isAudioActive) {
       startAudioOnlyPlayer()
     } else {
       destroyAudioPlayer()
     }
-  }, [activeProtocol, isAudioActive, isPaused, startAudioOnlyPlayer, destroyAudioPlayer])
-
-  // FLV 模式下音频状态变更需要重协商 FLV 流参数 (?audio=true|false)
-  const prevAudioActiveRef = useRef(isAudioActive)
-  useEffect(() => {
-    if (prevAudioActiveRef.current === isAudioActive) return
-    prevAudioActiveRef.current = isAudioActive
-    if (activeProtocol === 'flv' && !isPaused) {
-      setRetryKey((k) => k + 1)
-    }
-  }, [isAudioActive, activeProtocol, isPaused])
+  }, [isAudioActive, isPaused, startAudioOnlyPlayer, destroyAudioPlayer])
 
   useEffect(() => {
     if (isPaused) {
@@ -292,11 +302,10 @@ export function LivePlayer({
 
     function startFlvPlayer() {
       if (isCancelled || !videoEl || !cameraId) return
-      destroyAudioPlayer()
       setActiveProtocol('flv')
       setConnectionStatus('connecting')
 
-      const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType, isAudioActiveRef.current)
+      const flvUrl = cameraApi.getLiveStreamUrl(cameraId, streamType, false, true)
 
       if (!canUseMseVideo()) {
         setConnectionStatus('failed')
@@ -306,26 +315,26 @@ export function LivePlayer({
       mpegts.LoggingControl.enableAll = false
 
       try {
-        videoEl.muted = !isAudioActiveRef.current
-        if (isAudioActiveRef.current) {
-          videoEl.volume = 1.0
-        }
+        videoEl.muted = true
 
         flvPlayer = mpegts.createPlayer(
           {
             type: 'flv',
             isLive: true,
             url: flvUrl,
-            hasAudio: isAudioActiveRef.current,
+            hasAudio: false,
             hasVideo: true,
             cors: true,
           },
           {
             enableWorker: false,
             lazyLoad: false,
-            enableStashBuffer: true,
-            stashInitialSize: 128,
-            liveBufferLatencyChasing: true,
+            enableStashBuffer: false,
+            stashInitialSize: 64,
+            liveBufferLatencyChasing: false,
+            liveSync: true,
+            liveSyncMaxLatency: 2.5,
+            liveSyncTargetLatency: 1.0,
             autoCleanupSourceBuffer: true,
             autoCleanupMaxBackwardDuration: 10,
             autoCleanupMinBackwardDuration: 5,
@@ -341,7 +350,10 @@ export function LivePlayer({
             // 当非静音自动播放受限于浏览器策略时，自动降级为静音播放
             if (videoEl && isAudioActiveRef.current && !isCancelled) {
               videoEl.muted = true
-              flvPlayer?.play()
+              const retryPlay = flvPlayer?.play()
+              if (retryPlay && typeof retryPlay.catch === 'function') {
+                void retryPlay.catch(() => undefined)
+              }
             }
           })
         }
@@ -381,7 +393,7 @@ export function LivePlayer({
       }
     }
 
-    async function startWebCodecsPlayer(withAudio: boolean) {
+    async function startWebCodecsPlayer() {
       if (!videoCanvas || isCancelled) return false
 
       try {
@@ -402,7 +414,6 @@ export function LivePlayer({
               wcPlayer = null
             }
             wcPlayerRef.current = null
-            destroyAudioPlayer()
             if (canUseMseVideo()) {
               startFlvPlayer()
             } else {
@@ -416,12 +427,8 @@ export function LivePlayer({
           },
         })
         wcPlayerRef.current = wcPlayer
-        if (withAudio) {
-          startAudioOnlyPlayer()
-        }
         return true
       } catch {
-        destroyAudioPlayer()
         return false
       }
     }
@@ -433,18 +440,26 @@ export function LivePlayer({
       // 精确探测当前目标码流编码的 WebCodecs 支持度，杜绝跨编码短路
       const canWebCodecs = await isWebCodecsSupported(preferredVideoCodec)
 
-      // H.264 可直接由 MSE 同步解码音视频；浏览器不支持 H.265 MSE 时，
-      // 保留 WebCodecs 视频并通过独立 audio-only FLV 播放 AAC。
-      if (isAudioActiveRef.current && !canUseMseVideo() && canWebCodecs && !isCancelled) {
-        if (await startWebCodecsPlayer(true)) return
+      // 优先嗅探 WebCodecs 支持，保持超低延迟；音频由独立的 companion audioPlayer 处理
+      if (canWebCodecs && !isCancelled) {
+        try {
+          const selected = await startWebCodecsPlayer()
+          if (selected) {
+            if (isAudioActiveRef.current) {
+              startAudioOnlyPlayer()
+            }
+            return
+          }
+        } catch {
+          // fallback to FLV below
+        }
       }
 
-      if (!isAudioActiveRef.current && canWebCodecs && !isCancelled) {
-        if (await startWebCodecsPlayer(false)) return
-      }
-
-      // 浏览器未支持 WebCodecs，或当前编码可由 MSE 直接承载时，使用合并 FLV。
+      // 浏览器未支持 WebCodecs，或当前编码可由 MSE 直接承载时，使用纯视频 FLV 并按需启动独立音频通道。
       startFlvPlayer()
+      if (isAudioActiveRef.current) {
+        startAudioOnlyPlayer()
+      }
     }
 
     const handleVideoEvent = (e: Event) => {
@@ -454,19 +469,8 @@ export function LivePlayer({
     }
 
     if (videoEl) {
-      videoEl.muted = !isAudioActiveRef.current
-      if (isAudioActiveRef.current) {
-        videoEl.volume = 1.0
-      }
-      videoEl.addEventListener('loadstart', handleVideoEvent)
-      videoEl.addEventListener('loadedmetadata', handleVideoEvent)
-      videoEl.addEventListener('loadeddata', handleVideoEvent)
-      videoEl.addEventListener('canplay', handleVideoEvent)
-      videoEl.addEventListener('play', handleVideoEvent)
-      videoEl.addEventListener('playing', handleVideoEvent)
-      videoEl.addEventListener('timeupdate', handleVideoEvent)
-      videoEl.addEventListener('waiting', handleVideoEvent)
-      videoEl.addEventListener('stalled', handleVideoEvent)
+      videoEl.muted = true
+      VIDEO_MEDIA_EVENTS.forEach((evt) => videoEl.addEventListener(evt, handleVideoEvent))
     }
 
     startPlayer()
@@ -482,15 +486,7 @@ export function LivePlayer({
         stableTimerRef.current = null
       }
       if (videoEl) {
-        videoEl.removeEventListener('loadstart', handleVideoEvent)
-        videoEl.removeEventListener('loadedmetadata', handleVideoEvent)
-        videoEl.removeEventListener('loadeddata', handleVideoEvent)
-        videoEl.removeEventListener('canplay', handleVideoEvent)
-        videoEl.removeEventListener('play', handleVideoEvent)
-        videoEl.removeEventListener('playing', handleVideoEvent)
-        videoEl.removeEventListener('timeupdate', handleVideoEvent)
-        videoEl.removeEventListener('waiting', handleVideoEvent)
-        videoEl.removeEventListener('stalled', handleVideoEvent)
+        VIDEO_MEDIA_EVENTS.forEach((evt) => videoEl.removeEventListener(evt, handleVideoEvent))
       }
       if (wcPlayer) {
         wcPlayer.destroy()

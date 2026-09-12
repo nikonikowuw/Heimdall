@@ -559,6 +559,8 @@ pub struct FlvStreamPipeline {
     pub audio_channels: Option<u8>,
     /// 上一次输出的音频时间戳 (FLV DTS，毫秒)，用于确保音频时间戳单调非递减
     pub last_audio_pts: u32,
+    /// ADTS 解析或 AAC Tag 封装失败的累计次数，用于定位音频源格式异常
+    pub invalid_audio_packets: u64,
 }
 
 impl FlvStreamPipeline {
@@ -566,6 +568,18 @@ impl FlvStreamPipeline {
         Self {
             include_audio,
             ..Default::default()
+        }
+    }
+
+    fn record_invalid_audio(&mut self, reason: &'static str, payload_bytes: usize) {
+        self.invalid_audio_packets += 1;
+        if self.invalid_audio_packets <= 3 || self.invalid_audio_packets.is_multiple_of(100) {
+            tracing::warn!(
+                reason,
+                payload_bytes,
+                invalid_audio_packets = self.invalid_audio_packets,
+                "FLV AAC 音频包无法解析或封装"
+            );
         }
     }
 
@@ -600,16 +614,27 @@ impl FlvStreamPipeline {
                 self.audio_channels = Some(channels);
                 let seq_tag = FlvMuxer::build_aac_sequence_header(sample_rate, channels, dts);
                 self.sent_audio_header = true;
+                tracing::debug!(
+                    sample_rate,
+                    channels,
+                    pts_ms = pkt.pts_ms,
+                    dts_ms = dts,
+                    payload_bytes = adts_data.len(),
+                    "FLV AAC 首包解析成功并生成 Audio Sequence Header"
+                );
                 return vec![seq_tag];
             }
-            // ADTS 帧头无效，静默丢弃
+            self.record_invalid_audio("invalid_adts_header", adts_data.len());
             return Vec::new();
         }
 
         // 2. 后续帧：直接封装为 FLV Audio Tag
         match FlvMuxer::adts_to_flv_audio_tag(adts_data, dts) {
             Some(tag) => vec![tag],
-            None => Vec::new(),
+            None => {
+                self.record_invalid_audio("invalid_adts_frame", adts_data.len());
+                Vec::new()
+            }
         }
     }
 
@@ -750,6 +775,14 @@ impl FlvStreamPipeline {
                     self.active_sps = Some(sps.clone());
                     self.active_pps = Some(pps.clone());
                     self.active_vps = self.vps_buf.clone();
+                    tracing::debug!(
+                        codec = ?pkt.codec,
+                        sps_bytes = sps.len(),
+                        pps_bytes = pps.len(),
+                        vps_bytes = self.vps_buf.as_ref().map(Bytes::len),
+                        pts_ms = pkt.pts_ms,
+                        "FLV 视频 Sequence Header 生成成功"
+                    );
                 }
             }
         }
@@ -762,6 +795,12 @@ impl FlvStreamPipeline {
         if !self.has_first_keyframe {
             if pkt.is_keyframe {
                 self.has_first_keyframe = true;
+                tracing::debug!(
+                    codec = ?pkt.codec,
+                    pts_ms = pkt.pts_ms,
+                    payload_bytes = pkt.payload.len(),
+                    "FLV 视频首个关键帧已就绪"
+                );
             } else {
                 return out_tags;
             }

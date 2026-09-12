@@ -19,8 +19,13 @@
 
 实现入口：[LivePlayer](../../../web/src/features/live/components/LivePlayer.tsx)、[WebCodecs 能力与协议](../../../web/src/lib/webcodecs.ts)。
 
+- **音视频解耦与伴生音频架构**：
+  - **主视频通道纯净度**：主视频播放器（WebCodecs Canvas 或 mpegts.js `<video>`）必须严格保持纯视频模式（`hasAudio: false, hasVideo: true`，视频元素 `muted = true`），彻底杜绝安防摄像头无音频或非 AAC 格式造成浏览器 MSE SourceBuffer 饥饿而永久死锁挂起；
+  - **伴生音频按需启停**：音频由独立的伴生 `<audio>` 播放器通过 `cameraApi.getLiveStreamUrl(cameraId, streamType, true, false)` 独立拉取纯 AAC-only FLV 流；
+  - **静音/开启切换零闪烁**：用户在界面开关音频仅在后台启动或销毁伴生音频播放器，严禁触发主视频播放器重启或更新 `retryKey`；
+  - **故障隔离原则**：伴生音频播放器的任何错误（如摄像头无音频、自动播放受阻或解析失败）仅记录警告，严禁向上传播为全局连接失败（`setConnectionStatus('failed')`）或触发主画面重试。
 - HTTP-FLV/mpegts.js 支持 H.264 与 Enhanced FLV H.265（`hvc1`）；实际硬解能力通过浏览器检测，不承诺所有浏览器都支持。
-- FLV 低延迟路径启用 `liveBufferLatencyChasing` 和 `enableWorker`；100～200ms 是验证目标，不能代替实测。
+- **WebCodecs 优先策略**：浏览器支持 WebCodecs 时，优先使用 WebCodecs + Canvas 零拷贝超低延迟渲染，伴生音频在开启时由伴生 `<audio>` 播放器同步接管，不受编码和音轨状态牵制。
 - 辅轨拉子码流，主屏默认主码流并支持切流；这不改变后端仅对子码流常驻推理的分工。
 - 卸载、换摄像头或换协议时销毁旧播放器、SourceBuffer、Worker、订阅、定时器与 RAF；MSE 实例必须调用 `destroy()`。
 - 断流展示可恢复状态，重试规则见 [错误处理](./error-handling.md#连接恢复)。

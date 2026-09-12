@@ -67,9 +67,8 @@ export async function isWebCodecsSupported(codec: 'h264' | 'h265' = 'h265'): Pro
   }
 
   try {
-    const codecString = CODEC_MIME_STRINGS[codec]
     const res = await VideoDecoder.isConfigSupported({
-      codec: codecString,
+      codec: CODEC_MIME_STRINGS[codec],
     })
     return !!res.supported
   } catch {
@@ -106,14 +105,14 @@ export class WebCodecsPlayer {
     this.init()
   }
 
+  private emitError(err: unknown) {
+    this.options.onError?.(err instanceof Error ? err : new Error(String(err)))
+  }
+
   private init() {
     try {
       this.ws = new WebSocket(this.options.wsUrl)
       this.ws.binaryType = 'arraybuffer'
-
-      this.ws.onopen = () => {
-        // WebSocket 已建立
-      }
 
       this.ws.onmessage = (e: MessageEvent<ArrayBuffer>) => {
         if (this.isDestroyed || !(e.data instanceof ArrayBuffer)) return
@@ -130,7 +129,7 @@ export class WebCodecsPlayer {
         this.options.onClose?.()
       }
     } catch (err) {
-      this.options.onError?.(err instanceof Error ? err : new Error(String(err)))
+      this.emitError(err)
     }
   }
 
@@ -162,16 +161,15 @@ export class WebCodecsPlayer {
         },
       })
 
-      const codecString = CODEC_MIME_STRINGS[codec]
       this.decoder.configure({
-        codec: codecString,
+        codec: CODEC_MIME_STRINGS[codec],
         optimizeForLatency: true,
       })
       this.currentCodec = codec
       this.hasRenderedFirstFrame = false
       this.currentPtsMs = null
     } catch (err) {
-      this.options.onError?.(err instanceof Error ? err : new Error(String(err)))
+      this.emitError(err)
     }
   }
 
@@ -189,7 +187,7 @@ export class WebCodecsPlayer {
           return
         }
       } catch (err) {
-        this.options.onError?.(err instanceof Error ? err : new Error(String(err)))
+        this.emitError(err)
         try {
           this.decoder.close()
         } catch {
@@ -231,7 +229,7 @@ export class WebCodecsPlayer {
       this.decoder.decode(encodedChunk)
     } catch (err) {
       // 容忍非关键解码异常，持续尝试后续帧
-      this.options.onError?.(err instanceof Error ? err : new Error(String(err)))
+      this.emitError(err)
     }
   }
 

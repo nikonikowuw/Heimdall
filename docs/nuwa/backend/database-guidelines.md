@@ -22,6 +22,7 @@
 - 表名单数 snake_case；主键 `id`，事件保留唯一 `event_id: TEXT` 用于幂等。
 - 绝对时间用 `INTEGER/i64` UTC 毫秒（见 [全局约定](../guides/conventions.md#时间)），布尔用 0/1；图片/视频存文件，库内只保存相对路径。
 - Alarms、Captures、Recognitions 分开管理；告警支持待处理/已核验状态流转。
+- **[规划设计] 录像切片实体 (RecordSegments)**：独立于抓拍单张图管理，表名为 `record_segments`。记录 `camera_id`、`stream_type`、`start_time_ms`、`end_time_ms`、`duration_ms`、`file_path`（必须为相对路径）、`has_motion`、`has_alarm`、`alarm_ids` 及 `status`。必须建立 `(camera_id, start_time_ms, end_time_ms)` 与 `(status, has_alarm, start_time_ms)` 复合索引，满足时间轴毫秒级范围检索与高效淘汰。详见 [视频录像与回放引擎设计](../designs/video-recording-and-playback-engine.md)。
 - 查询封装在 Repository，`api` / `pipeline` 不直接使用 SeaORM DSL；列表必须有 `limit`。
 - 时间范围与摄像头过滤建立对应复合索引，例如 `(camera_id, timestamp)`；分页遵循 [API 契约](./api-guidelines.md#分页)。
 
@@ -68,6 +69,7 @@ for task in &tasks {
 - SQLite 回滚不等于文件恢复；清理验证必须覆盖文件删除失败、DB 失败及中断后的恢复行为。
 - 保留天数/容量必须有限；配置 `auto_vacuum = INCREMENTAL` 并定期 `incremental_vacuum` 回收删除页面。
 - [StorageCleaner](../../../crates/pipeline/src/storage_cleaner/mod.rs) 与 Pipeline 使用同一证据目录，在应用启动时注入，不在 Handler 临时创建。
+- **[规划设计] 录像分级级联淘汰**：录像切片作为一级实体接入 `StorageCleaner` 的 `EvictionStore`。存储水位警戒时，严格遵循四级淘汰阶梯：无告警过期切片 $\to$ 水位超限早期无告警切片 $\to$ 过期告警关联切片。执行过程严格遵循两阶段提交（`deleting` 标记 $\to$ `.tombstone/` 原子移动 $\to$ 单事务 DB 清除 $\to$ 异步物理 Unlink），杜绝产生孤儿切片文件。详见 [视频录像与回放引擎设计](../designs/video-recording-and-playback-engine.md)。
 
 ## 验证
 

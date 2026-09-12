@@ -969,6 +969,7 @@ export function LiveRulesStudio({
               <LivePlayer
                 cameraId={camera.cameraId}
                 cameraName={camera.name}
+                videoCodec={camera.lastCodec}
                 stream={effectivePreviewStream}
                 fitMode={fitMode === 'fill' ? 'fill' : 'contain'}
                 className="pointer-events-none h-full w-full"

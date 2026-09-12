@@ -158,11 +158,20 @@ impl SnapEncoder {
     pub fn try_new() -> Self {
         #[cfg(all(target_os = "linux", feature = "hw-snap-mpp"))]
         {
-            if let Ok(enc) = mpp_snap::MppSnapEncoder::try_new(85) {
-                tracing::info!("MPP 硬件快照编码器初始化成功");
-                return Self::new(Some(Box::new(enc)));
+            match mpp_snap::MppSnapEncoder::try_new(85) {
+                Ok(enc) => {
+                    tracing::info!(backend = "mpp-jpeg+rga", "MPP 硬件快照编码器初始化成功");
+                    return Self::new(Some(Box::new(enc)));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        backend = "mpp-jpeg+rga",
+                        error = %error,
+                        error_debug = ?error,
+                        "MPP 硬件快照编码器初始化失败，降级至 CPU"
+                    );
+                }
             }
-            tracing::warn!("MPP 硬件快照编码器初始化失败，降级至 CPU");
         }
         #[cfg(all(target_os = "macos", feature = "hw-snap-vt"))]
         {
