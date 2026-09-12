@@ -5,6 +5,7 @@ pub mod events;
 pub mod geometry;
 pub mod manager;
 pub mod motion_gate;
+pub mod op_log;
 pub mod pump;
 pub mod roi;
 pub mod rules;

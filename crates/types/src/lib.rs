@@ -29,7 +29,7 @@ pub use event::{
     TOPIC_CAMERA_TRACKS, TOPIC_RECOGNITION_MATCHED,
 };
 pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
-pub use oplog::OperationLog;
+pub use oplog::{OpEvent, OperationLog};
 pub use personnel::{
     FaceMatchResult, GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto, PersonnelStatsDto,
     UpdatePersonnelRequest,

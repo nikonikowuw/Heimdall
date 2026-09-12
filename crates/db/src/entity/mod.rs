@@ -7,6 +7,7 @@ pub mod camera;
 pub mod capture;
 pub mod gallery;
 pub mod gallery_face;
+pub mod operational_log;
 pub mod oplog;
 pub mod personnel;
 pub mod recognition;

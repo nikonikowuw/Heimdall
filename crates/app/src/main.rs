@@ -6,6 +6,7 @@ use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
+mod op_log;
 mod reconcile;
 
 #[derive(Parser, Debug)]
@@ -55,12 +56,10 @@ async fn main() -> Result<()> {
         cfg.server.host = host;
     }
 
-    // 2. 初始化结构化日志
+    // 2. 初始化结构化日志 (tracing)
     // 优先级：环境变量 RUST_LOG > 配置文件 [logging]
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
         let trimmed = cfg.logging.filter.trim();
-        // 若 filter 留空，或者用户显式修改了 level (如 level = "warn") 但 filter 仍为遗留模板默认值，
-        // 则优先采用 cfg.logging.level，避免模板中写死的 "media=debug" 强行覆盖用户的全局日志级别。
         if trimmed.is_empty()
             || (cfg.logging.level != "info"
                 && trimmed == "info,api=debug,media=debug,pipeline=debug")
@@ -70,12 +69,30 @@ async fn main() -> Result<()> {
             trimmed.to_string()
         }
     });
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // systemd-journald 集成：非 systemd 环境（Docker、macOS）静默跳过
+    match tracing_journald::Layer::new() {
+        Ok(journald_layer) => {
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| filter.into()),
+                )
+                .with(tracing_subscriber::fmt::layer())
+                .with(journald_layer)
+                .init();
+            tracing::info!("日志系统初始化完成 (stdout + journald)");
+        }
+        Err(e) => {
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| filter.into()),
+                )
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+            tracing::info!(error = %e, "日志系统初始化完成 (stdout，journald 不可用)");
+        }
+    }
 
     // 提升进程文件描述符上限 (防止高并发多媒体流与 DMA-BUF fd 耗尽)
     raise_fd_limit();
@@ -110,7 +127,43 @@ async fn main() -> Result<()> {
         .context("初始化 SQLite 数据库失败")?;
     tracing::info!("SQLite 数据库版本迁移与连接池初始化完成 (WAL 模式)");
 
-    // 4. 初始化视频分析管线调度器 (注入配置参数与全局 VPU 通道池)
+    // 4. 初始化运维事件日志 (op_log → SQLite 撮批写入)
+    let op_rx = pipeline::op_log::init();
+    let db_for_oplog = db_conn.clone();
+    let (op_shutdown_tx, op_shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        op_log::flush_worker(op_rx, db_for_oplog, op_shutdown_rx).await;
+    });
+
+    // 记录服务启动事件
+    pipeline::op_log::record(types::OpEvent::ServiceStarted {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        port: cfg.server.port,
+    });
+
+    // 启动运维日志后台淘汰任务 (每 10 分钟清理过期记录)
+    {
+        let db_cleanup = db_conn.clone();
+        let retention_days = cfg.logging.retention_days;
+        let max_rows = cfg.logging.max_rows;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let cutoff_ms = now_ms - (retention_days as i64 * 86_400_000);
+                if let Err(e) = db::OperationalLogRepo::delete_before(&db_cleanup, cutoff_ms).await
+                {
+                    tracing::warn!(error = %e, "运维日志按时间淘汰失败");
+                }
+                if let Err(e) = db::OperationalLogRepo::retain_latest(&db_cleanup, max_rows).await {
+                    tracing::warn!(error = %e, "运维日志按总量淘汰失败");
+                }
+            }
+        });
+    }
+
+    // 5. 初始化视频分析管线调度器 (注入配置参数与全局 VPU 通道池)
     let snapshot_cfg = pipeline::SnapshotConfig {
         phase_diff_threshold_ms: cfg.pipeline.phase_diff_threshold_ms,
         max_burst_packets: cfg.pipeline.max_burst_packets,
@@ -128,7 +181,7 @@ async fn main() -> Result<()> {
     ));
     tracing::info!("核心视频分析管线调度器初始化完成 (全局 VPU 通道池就绪)");
 
-    // 5. 检查双轨初始化状态与环境变量
+    // 6. 检查双轨初始化状态与环境变量
     let env_password = std::env::var("ARGUS_ADMIN_PASSWORD").ok();
     if let Some(pwd) = env_password {
         let pwd = pwd.trim();
@@ -142,7 +195,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // 5. 组装 API 共享状态与路由器并同步初始化与撤销时间戳
+    // 7. 组装 API 共享状态与路由器并同步初始化与撤销时间戳
     let max_upload_size_bytes = cfg
         .server
         .max_package_size_bytes()
@@ -254,6 +307,7 @@ async fn main() -> Result<()> {
     }
 
     let state_shutdown = state.clone();
+    let op_shutdown_tx = op_shutdown_tx;
     let app = api::create_app(state);
 
     let addr: SocketAddr = format!("{}:{}", cfg.server.host, cfg.server.port)
@@ -269,8 +323,13 @@ async fn main() -> Result<()> {
     let shutdown_fut = async move {
         shutdown_signal().await;
         tracing::info!("正在广播全局停机通知，主动切断长连接流与后台巡检任务...");
+        // 记录服务停止运维事件
+        pipeline::op_log::record(types::OpEvent::ServiceStopped);
         state_shutdown.task_coordinator.stop_all().await;
         state_shutdown.notify_shutdown();
+
+        // 待管线注销完成后通知运维日志 flush worker 排空并退出
+        let _ = op_shutdown_tx.send(true);
 
         // 兜底保护：若 2.5 秒内未完成退出，或用户再次按下 Ctrl+C，立即强制退出
         tokio::spawn(async {

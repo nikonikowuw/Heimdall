@@ -12,10 +12,10 @@ pub use repository::{
     algorithm::{AlgorithmRepo, AlgorithmStats, UpsertAlgorithmParams, UpsertVersionParams},
     algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, UpdateInstanceParams},
     camera::ProbeUpdateParams,
-    AdminUserRepo, AlarmRepo, CameraRepo, CaptureRepo, GalleryFaceRepo, GalleryRepo, OplogRepo,
-    PersonnelRepo, RecognitionRepo, SaveTaskAlgorithmInstanceParams, SaveTaskParams,
-    SaveTaskWithInstancesParams, SystemConfigRepo, TaskInstanceStateUpdate, TaskRepo,
-    UpdateTaskInstanceParams,
+    AdminUserRepo, AlarmRepo, CameraRepo, CaptureRepo, GalleryFaceRepo, GalleryRepo,
+    OperationalLogRepo, OplogRepo, PersonnelRepo, RecognitionRepo, SaveTaskAlgorithmInstanceParams,
+    SaveTaskParams, SaveTaskWithInstancesParams, SystemConfigRepo, TaskInstanceStateUpdate,
+    TaskRepo, UpdateTaskInstanceParams,
 };
 pub use schema::create_tables_if_not_exist;
 pub use sea_orm::{self, DatabaseConnection};

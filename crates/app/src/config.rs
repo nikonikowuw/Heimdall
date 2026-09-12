@@ -170,6 +170,12 @@ pub struct LoggingConfig {
     pub level: String,
     #[serde(default = "default_log_filter")]
     pub filter: String,
+    /// 运维日志保留天数 (默认 30 天)
+    #[serde(default = "default_log_retention_days")]
+    pub retention_days: u64,
+    /// 运维日志最大行数 (默认 50 万条，超出自动淘汰最旧)
+    #[serde(default = "default_log_max_rows")]
+    pub max_rows: u64,
 }
 
 impl Default for LoggingConfig {
@@ -177,6 +183,8 @@ impl Default for LoggingConfig {
         Self {
             level: default_log_level(),
             filter: default_log_filter(),
+            retention_days: default_log_retention_days(),
+            max_rows: default_log_max_rows(),
         }
     }
 }
@@ -249,6 +257,14 @@ fn default_log_level() -> String {
 
 fn default_log_filter() -> String {
     "".to_string()
+}
+
+fn default_log_retention_days() -> u64 {
+    30
+}
+
+fn default_log_max_rows() -> u64 {
+    500_000
 }
 
 // ============================================================================

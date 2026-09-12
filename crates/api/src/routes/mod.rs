@@ -9,6 +9,7 @@ pub mod auth;
 pub mod camera;
 pub mod evidence;
 pub mod live;
+pub mod operational_log;
 pub mod oplog;
 pub mod personnel;
 pub mod system;
@@ -25,6 +26,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .nest("/personnel", personnel::router())
         .nest("/algorithms", algo::router(state.max_upload_size_bytes))
         .nest("/logs/operations", oplog::router())
+        .nest("/logs/operational", operational_log::router())
         .nest("/system", system::router())
         .nest("/ws/events", ws::router())
         // route_layer 执行顺序：后注册的先执行（洋葱模型）

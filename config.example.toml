@@ -68,3 +68,7 @@ level = "info"
 # 模块级结构化日志过滤指令 (可选，留空则默认遵循 level；设置后精确覆盖各模块日志级别，可用环境变量 RUST_LOG 覆盖)
 # 示例: 留空 "" (遵循 level) 或高级指令 "warn,api=debug,media=info"
 filter = ""
+# 运维事件日志保留天数 (默认 30 天)
+retention_days = 30
+# 运维事件日志最大行数 (默认 50 万条，超出自动淘汰最旧)
+max_rows = 500000
