@@ -109,9 +109,14 @@ impl PersonnelService {
         let (records, total) =
             PersonnelRepo::list_filtered(&self.db, keyword, limit, offset).await?;
 
+        // 批量加载人脸数量，避免 N+1 查询
+        let subject_ids: Vec<&str> = records.iter().map(|p| p.subject_id.as_str()).collect();
+        let face_counts =
+            GalleryFaceRepo::count_batch_by_subject_ids(&self.db, &subject_ids).await?;
+
         let mut items = Vec::with_capacity(records.len());
         for p in records {
-            let count = GalleryFaceRepo::count_by_subject_id(&self.db, &p.subject_id).await?;
+            let count = face_counts.get(&p.subject_id).copied().unwrap_or(0);
             items.push(PersonnelItemDto {
                 id: p.id,
                 subject_id: p.subject_id,

@@ -131,6 +131,27 @@ impl AlgorithmRepo {
             .map_err(DbError::from)
     }
 
+    /// 批量获取多个算法的版本明细，返回 HashMap<algorithm_id, Vec<VerModel>>
+    pub async fn list_versions_by_algorithm_ids(
+        db: &DatabaseConnection,
+        algorithm_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<VerModel>>, DbError> {
+        if algorithm_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let versions = VerEntity::find()
+            .filter(VerColumn::AlgorithmId.is_in(algorithm_ids.iter().copied()))
+            .order_by_desc(VerColumn::Id)
+            .all(db)
+            .await?;
+        let mut map: std::collections::HashMap<String, Vec<VerModel>> =
+            std::collections::HashMap::with_capacity(algorithm_ids.len());
+        for v in versions {
+            map.entry(v.algorithm_id.clone()).or_default().push(v);
+        }
+        Ok(map)
+    }
+
     /// 获取特定算法的具体版本
     pub async fn find_version(
         db: &DatabaseConnection,

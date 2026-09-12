@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    TransactionTrait,
 };
 
 use crate::entity::algorithm_instance::{
@@ -715,18 +716,18 @@ impl TaskRepo {
                     active.updated_at = Set(now);
                     active.update(txn).await?;
 
-                    // 同步所有关联算法实例
-                    let instances = InstEntity::find()
-                        .filter(InstColumn::TaskId.eq(task.id))
-                        .all(txn)
-                        .await?;
-                    for inst in instances {
-                        let mut inst_active: InstActiveModel = inst.into();
-                        inst_active.actual_status = Set(actual_status);
-                        inst_active.status_message = Set(msg.clone());
-                        inst_active.updated_at = Set(now);
-                        inst_active.update(txn).await?;
-                    }
+                    // 批量同步所有关联算法实例状态，避免逐条 UPDATE 的 N+1 开销
+                    txn.execute(Statement::from_sql_and_values(
+                        sea_orm::DatabaseBackend::Sqlite,
+                        "UPDATE algorithm_instances SET actual_status = ?, status_message = ?, updated_at = ? WHERE task_id = ?",
+                        [
+                            actual_status.into(),
+                            msg.clone().into(),
+                            now.into(),
+                            task.id.into(),
+                        ],
+                    ))
+                    .await?;
                 }
                 Ok(())
             })

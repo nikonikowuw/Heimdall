@@ -45,9 +45,21 @@ async fn list_algorithms(
     )
     .await?;
 
+    // 批量加载版本，避免 N+1 查询
+    let algo_ids: Vec<&str> = algos.iter().map(|a| a.algorithm_id.as_str()).collect();
+    let versions_map = AlgorithmRepo::list_versions_by_algorithm_ids(&state.db, &algo_ids).await?;
+
     let mut items = Vec::with_capacity(algos.len());
     for a in algos {
-        let versions = load_version_dtos(&state.db, &a.algorithm_id).await?;
+        let versions = versions_map
+            .get(&a.algorithm_id)
+            .map(|v| {
+                v.iter()
+                    .cloned()
+                    .map(AlgorithmVersionItemDto::from)
+                    .collect()
+            })
+            .unwrap_or_default();
         items.push(AlgorithmItemDto::from_model(a, versions));
     }
 

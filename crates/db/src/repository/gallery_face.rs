@@ -1,6 +1,6 @@
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Statement,
+    QueryOrder, QuerySelect, Statement,
 };
 
 use crate::entity::gallery_face::{ActiveModel, Column, Entity, Model};
@@ -34,6 +34,29 @@ impl GalleryFaceRepo {
             .count(db)
             .await
             .map_err(DbError::from)
+    }
+
+    /// 按多个 subject_id 批量统计人脸样本数量，返回 HashMap<subject_id, count>
+    pub async fn count_batch_by_subject_ids<C: ConnectionTrait>(
+        db: &C,
+        subject_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, u64>, DbError> {
+        if subject_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let rows = Entity::find()
+            .column(Column::SubjectId)
+            .column(Column::Id)
+            .filter(Column::SubjectId.is_in(subject_ids.iter().copied()))
+            .all(db)
+            .await?;
+        let mut map: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::with_capacity(subject_ids.len());
+        for row in rows {
+            let sid = row.subject_id;
+            *map.entry(sid).or_default() += 1;
+        }
+        Ok(map)
     }
 
     /// 根据 face_id 查询单张人脸样本
