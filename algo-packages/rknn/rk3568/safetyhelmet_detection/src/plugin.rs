@@ -14,7 +14,7 @@ use {
     crate::postprocess::{parse_and_unmap_output, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH},
     crate::rknn::{RknnRuntime, RknnSession},
     algo_sdk::cv::engine::CvEngine,
-    algo_sdk::cv::platforms::rockchip::RgaCvEngine,
+    algo_sdk::cv::platforms::rockchip::{DiagnosticConfig, FailureTracker, RgaCvEngine},
     std::path::{Path, PathBuf},
 };
 
@@ -57,6 +57,7 @@ pub struct SafetyHelmetDetector {
     pub cv_engine: RgaCvEngine,
     pub config: InstanceConfig,
     pub custom_label: Option<&'static str>,
+    pub failure_tracker: FailureTracker,
 }
 
 #[cfg(target_os = "linux")]
@@ -101,10 +102,16 @@ impl AlgoPlugin for SafetyHelmetDetector {
             .filter(|s| !s.is_empty())
             .map(|s| Box::leak(s.to_string().into_boxed_str()) as &'static str);
 
+        // 初始化失败跟踪器：连续 30 帧失败视为异常状态
+        let failure_tracker = FailureTracker::new(DiagnosticConfig {
+            failure_threshold: 30,
+        });
+
         tracing::info!(
             model = ?model_path,
             rga_hw = cv_engine.hardware_available(),
             fallback = session.is_fallback(),
+            failure_threshold = failure_tracker.failure_threshold(),
             "成功初始化 RK3568 安全帽检测算法插件"
         );
 
@@ -113,6 +120,7 @@ impl AlgoPlugin for SafetyHelmetDetector {
             cv_engine,
             config,
             custom_label,
+            failure_tracker,
         })
     }
 
@@ -122,57 +130,71 @@ impl AlgoPlugin for SafetyHelmetDetector {
         emitter: &mut ResultEmitter<'_>,
     ) -> Result<(), AlgoError> {
         // 1. RGA 硬件 Letterbox 等比缩放与填充
-        let (buf, mode) = self.cv_engine.letterbox(
+        let result = self.cv_engine.letterbox(
             &frame,
             MODEL_INPUT_WIDTH as u32,
             MODEL_INPUT_HEIGHT as u32,
             [114, 114, 114],
-        )?;
+        );
 
-        let orig_w = frame.width();
-        let orig_h = frame.height();
+        match result {
+            Ok((buf, mode)) => {
+                // 2. 处理成功，重置失败计数器
+                self.failure_tracker.record_success();
 
-        // 2. 双模自适应：优先 DMA-BUF 零拷贝，保底 Host 内存复制
-        if let Some(fd) = buf.as_dma_buf_fd() {
-            let buffer_size = (MODEL_INPUT_WIDTH as usize) * (MODEL_INPUT_HEIGHT as usize) * 3;
+                let orig_w = frame.width();
+                let orig_h = frame.height();
 
-            let custom_label = self.custom_label;
-            self.session
-                .infer_with_dma_buf(fd, buffer_size, |net_out| {
-                    let boxes = parse_and_unmap_output(
-                        net_out,
-                        &self.config,
-                        custom_label,
-                        &mode,
-                        orig_w,
-                        orig_h,
-                    );
-                    emitter.emit_detections(&boxes)
-                })?;
-        } else if let Some(host_bytes) = buf.as_host_bytes() {
-            let custom_label = self.custom_label;
-            self.session.infer_with_host_bytes(host_bytes, |net_out| {
-                let boxes = parse_and_unmap_output(
-                    net_out,
-                    &self.config,
-                    custom_label,
-                    &mode,
-                    orig_w,
-                    orig_h,
-                );
-                emitter.emit_detections(&boxes)
-            })?;
-        } else {
-            return Err(AlgoError::Preprocess {
-                reason: "预处理输出的 CvBuffer 既无有效 DMA-BUF 句柄，又无 Host 内存视图"
-                    .to_string(),
-            });
+                // 3. 双模自适应：优先 DMA-BUF 零拷贝，保底 Host 内存复制
+                if let Some(fd) = buf.as_dma_buf_fd() {
+                    let buffer_size =
+                        (MODEL_INPUT_WIDTH as usize) * (MODEL_INPUT_HEIGHT as usize) * 3;
+
+                    let custom_label = self.custom_label;
+                    self.session
+                        .infer_with_dma_buf(fd, buffer_size, |net_out| {
+                            let boxes = parse_and_unmap_output(
+                                net_out,
+                                &self.config,
+                                custom_label,
+                                &mode,
+                                orig_w,
+                                orig_h,
+                            );
+                            emitter.emit_detections(&boxes)
+                        })?;
+                } else if let Some(host_bytes) = buf.as_host_bytes() {
+                    let custom_label = self.custom_label;
+                    self.session.infer_with_host_bytes(host_bytes, |net_out| {
+                        let boxes = parse_and_unmap_output(
+                            net_out,
+                            &self.config,
+                            custom_label,
+                            &mode,
+                            orig_w,
+                            orig_h,
+                        );
+                        emitter.emit_detections(&boxes)
+                    })?;
+                } else {
+                    return Err(AlgoError::Preprocess {
+                        reason: "预处理输出的 CvBuffer 既无有效 DMA-BUF 句柄，又无 Host 内存视图"
+                            .to_string(),
+                    });
+                }
+
+                Ok(())
+            }
+            Err(error) => {
+                // 4. 处理失败，记录失败计数（告警由 tracing::error! 在 engine.rs 中记录）
+                self.failure_tracker.record_failure();
+                Err(error)
+            }
         }
-
-        Ok(())
     }
 
     fn flush(&mut self, _emitter: &mut ResultEmitter<'_>) -> Result<(), AlgoError> {
+        self.failure_tracker.reset();
         Ok(())
     }
 

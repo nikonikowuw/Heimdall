@@ -125,7 +125,16 @@ impl RgaCvEngine {
         let height = frame.height();
         let alloc_width = frame.alloc_width().max(width);
         let alloc_height = frame.alloc_height().max(height);
+
         if width == 0 || height == 0 || alloc_width == 0 || alloc_height == 0 {
+            tracing::error!(
+                frame_id = frame.frame_id(),
+                width,
+                height,
+                alloc_width,
+                alloc_height,
+                "RGA source_layout 失败: 维度为零"
+            );
             return Err(AlgoError::Preprocess {
                 reason: "RGA source dimensions must be non-zero".to_string(),
             });
@@ -136,6 +145,14 @@ impl RgaCvEngine {
                 let stride_y = positive_stride(frame.stride(0), alloc_width)?;
                 let stride_uv = positive_stride(frame.stride(1), stride_y)?;
                 if stride_uv != stride_y {
+                    tracing::error!(
+                        frame_id = frame.frame_id(),
+                        stride_y,
+                        stride_uv,
+                        "RGA NV12 stride 不一致: Y={}, UV={}",
+                        stride_y,
+                        stride_uv
+                    );
                     return Err(AlgoError::IncompatibleFrame {
                         reason: format!(
                             "RGA NV12 requires a shared Y/UV stride: y={stride_y}, uv={stride_uv}"
@@ -155,6 +172,14 @@ impl RgaCvEngine {
             }
             PixelFormat::I420 => {
                 if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+                    tracing::error!(
+                        frame_id = frame.frame_id(),
+                        width,
+                        height,
+                        "RGA I420 维度必须为偶数: {}x{}",
+                        width,
+                        height
+                    );
                     return Err(AlgoError::Preprocess {
                         reason: format!("I420 dimensions must be even: {width}x{height}"),
                     });
@@ -164,6 +189,16 @@ impl RgaCvEngine {
                 let stride_u = positive_stride(frame.stride(1), chroma_width)?;
                 let stride_v = positive_stride(frame.stride(2), stride_u)?;
                 if stride_y % 2 != 0 || stride_u != stride_y / 2 || stride_v != stride_u {
+                    tracing::error!(
+                        frame_id = frame.frame_id(),
+                        stride_y,
+                        stride_u,
+                        stride_v,
+                        "RGA I420 stride 不符合要求: Y={}, U={}, V={}",
+                        stride_y,
+                        stride_u,
+                        stride_v
+                    );
                     return Err(AlgoError::IncompatibleFrame {
                         reason: format!(
                             "RGA I420 requires Y stride twice the shared U/V stride: y={stride_y}, u={stride_u}, v={stride_v}"
@@ -204,6 +239,15 @@ impl RgaCvEngine {
                     .ok_or(AlgoError::OutOfMemory)?;
                 let stride_bytes = positive_stride(frame.stride(0), default_stride)?;
                 if !stride_bytes.is_multiple_of(bytes_per_pixel) {
+                    tracing::error!(
+                        frame_id = frame.frame_id(),
+                        format = ?format,
+                        stride_bytes,
+                        bytes_per_pixel,
+                        "RGA RGB stride 未按像素对齐: stride_bytes={}, bytes_per_pixel={}",
+                        stride_bytes,
+                        bytes_per_pixel
+                    );
                     return Err(AlgoError::Preprocess {
                         reason: format!(
                             "{format:?} byte stride is not pixel aligned: {stride_bytes}"
@@ -225,6 +269,12 @@ impl RgaCvEngine {
                 (rga_format, stride_pixels, alloc_height, total)
             }
             PixelFormat::Unknown(code) => {
+                tracing::error!(
+                    frame_id = frame.frame_id(),
+                    code,
+                    "RGA 不支持的像素格式: 0x{:x}",
+                    code
+                );
                 return Err(AlgoError::IncompatibleFrame {
                     reason: format!("unsupported RGA source pixel format 0x{code:x}"),
                 });
