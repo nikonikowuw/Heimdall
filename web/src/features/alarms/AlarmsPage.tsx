@@ -8,7 +8,6 @@ import {
   RefreshCw,
   ShieldAlert,
   UserCheck,
-  X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { alarmApi, cameraApi, evidenceApi } from '../../lib/api'
@@ -29,27 +28,33 @@ import { BatchActionBar } from './components/BatchActionBar'
 import { CaptureLightboxModal } from './components/CaptureLightboxModal'
 import { CapturesContent } from './components/CapturesContent'
 import { CropLightboxModal } from './components/CropLightboxModal'
+import { DateTimeRangePicker, type DateTimeRangeValue } from './components/DateTimeRangePicker'
 import { RealtimeAlarmBanner } from './components/RealtimeAlarmBanner'
 import { RecognitionContent } from './components/RecognitionContent'
 import { RecognitionReviewModal } from './components/RecognitionReviewModal'
 
 type EvidenceTab = 'alarms' | 'captures' | 'recognition'
-type QuickTimeRange = 'all' | '1h' | '24h' | '7d' | 'custom'
 
-const QUICK_TIME_HOURS: Record<Exclude<QuickTimeRange, 'all' | 'custom'>, number> = {
-  '1h': 1,
-  '24h': 24,
-  '7d': 7 * 24,
+function getInitialTodayRange(): DateTimeRangeValue {
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  return {
+    quickPreset: 'today',
+    startTime: todayStart.getTime(),
+    endTime: Date.now(),
+  }
 }
 
-function formatLocalDateTimeInput(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const y = date.getFullYear()
-  const m = pad(date.getMonth() + 1)
-  const d = pad(date.getDate())
-  const h = pad(date.getHours())
-  const min = pad(date.getMinutes())
-  return `${y}-${m}-${d}T${h}:${min}`
+function matchesTimeRange(timeRange: DateTimeRangeValue, timestamp: number): boolean {
+  if (timeRange.quickPreset === 'all' || (!timeRange.startTime && !timeRange.endTime)) {
+    return true
+  }
+  if (timeRange.quickPreset === 'today') {
+    return true
+  }
+  const afterStart = timeRange.startTime === undefined || timestamp >= timeRange.startTime
+  const beforeEnd = timeRange.endTime === undefined || timestamp <= timeRange.endTime + 60_000
+  return afterStart && beforeEnd
 }
 
 export function AlarmsPage(): React.ReactElement {
@@ -64,20 +69,18 @@ export function AlarmsPage(): React.ReactElement {
   const [selectedSeverity, setSelectedSeverity] = useState<string>('all')
   const [selectedStatus, setSelectedStatus] = useState<string>('all')
 
-  // 时间维度筛选
-  const [quickTimeRange, setQuickTimeRange] = useState<QuickTimeRange>('all')
-  const [startTime, setStartTime] = useState<string>('')
-  const [endTime, setEndTime] = useState<string>('')
+  // 时间维度筛选 (默认查询当前最新记录 - 今天)
+  const [timeRange, setTimeRange] = useState<DateTimeRangeValue>(getInitialTodayRange)
 
-  // 分页与总数
+  // 分页与总数 (支持动态选择每页条数)
   const [page, setPage] = useState<number>(1)
+  const [pageSize, setPageSize] = useState<number>(20)
   const [totalCount, setTotalCount] = useState<number>(0)
   const [tabCounts, setTabCounts] = useState<Record<EvidenceTab, number>>({
     alarms: 0,
     captures: 0,
     recognition: 0,
   })
-  const pageSize = 20
 
   // 数据列表
   const [alarms, setAlarms] = useState<AlarmRecord[]>([])
@@ -111,10 +114,17 @@ export function AlarmsPage(): React.ReactElement {
       })
       .catch(() => {})
 
+    const initialRange = getInitialTodayRange()
     Promise.all([
-      alarmApi.count().catch(() => ({ total: 0 })),
-      evidenceApi.countCaptures().catch(() => ({ total: 0 })),
-      evidenceApi.countRecognitions().catch(() => ({ total: 0 })),
+      alarmApi
+        .count({ startTime: initialRange.startTime, endTime: initialRange.endTime })
+        .catch(() => ({ total: 0 })),
+      evidenceApi
+        .countCaptures({ startTime: initialRange.startTime, endTime: initialRange.endTime })
+        .catch(() => ({ total: 0 })),
+      evidenceApi
+        .countRecognitions({ startTime: initialRange.startTime, endTime: initialRange.endTime })
+        .catch(() => ({ total: 0 })),
     ]).then(([alarmsRes, capturesRes, recsRes]) => {
       if (!isMounted) return
       setTabCounts({
@@ -137,20 +147,6 @@ export function AlarmsPage(): React.ReactElement {
     return map
   }, [cameras])
 
-  // 处理快捷时间区间（使用本地时间格式化，杜绝 UTC 时区偏差）
-  const handleQuickTimeChange = (range: QuickTimeRange) => {
-    setQuickTimeRange(range)
-    if (range in QUICK_TIME_HOURS) {
-      const hours = QUICK_TIME_HOURS[range as keyof typeof QUICK_TIME_HOURS]
-      setStartTime(formatLocalDateTimeInput(new Date(Date.now() - hours * 3600 * 1000)))
-      setEndTime('')
-    } else if (range === 'all') {
-      setStartTime('')
-      setEndTime('')
-    }
-    setPage(1)
-  }
-
   const handleSwitchTab = (tab: EvidenceTab) => {
     setActiveTab(tab)
     setSelectedStatus('all')
@@ -167,8 +163,8 @@ export function AlarmsPage(): React.ReactElement {
       const targetLbl = selectedTargetLabel || undefined
       const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
       const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
-      const startMs = startTime ? new Date(startTime).getTime() : undefined
-      const endMs = endTime ? new Date(endTime).getTime() : undefined
+      const startMs = timeRange.startTime
+      const endMs = timeRange.endTime
       const offset = (page - 1) * pageSize
 
       if (activeTab === 'alarms') {
@@ -220,12 +216,16 @@ export function AlarmsPage(): React.ReactElement {
           evidenceApi.listRecognitions({
             cameraId: camId,
             status: statusParam,
+            startTime: startMs,
+            endTime: endMs,
             limit: pageSize,
             offset,
           }),
           evidenceApi.countRecognitions({
             cameraId: camId,
             status: statusParam,
+            startTime: startMs,
+            endTime: endMs,
           }),
         ])
         setRecognitions(list)
@@ -244,9 +244,9 @@ export function AlarmsPage(): React.ReactElement {
     selectedTargetLabel,
     selectedSeverity,
     selectedStatus,
-    startTime,
-    endTime,
+    timeRange,
     page,
+    pageSize,
   ])
 
   useEffect(() => {
@@ -278,7 +278,7 @@ export function AlarmsPage(): React.ReactElement {
       const matchesTarget = !selectedTargetLabel || selectedTargetLabel === p.targetLabel
       const matchesSeverity = selectedSeverity === 'all' || selectedSeverity === p.severity
       const matchesStatus = selectedStatus === 'all' || selectedStatus === 'unprocessed'
-      const isLiveTime = quickTimeRange === 'all' && !startTime && !endTime
+      const isLiveTime = matchesTimeRange(timeRange, p.occurredAt)
 
       if (
         page === 1 &&
@@ -358,10 +358,9 @@ export function AlarmsPage(): React.ReactElement {
     selectedTargetLabel,
     selectedSeverity,
     selectedStatus,
-    quickTimeRange,
-    startTime,
-    endTime,
+    timeRange,
     page,
+    pageSize,
   ])
 
   const handleFilterChange = (setter: (v: string) => void, val: string): void => {
@@ -466,7 +465,7 @@ export function AlarmsPage(): React.ReactElement {
           setSelectedTargetLabel('')
           setSelectedSeverity('all')
           setSelectedStatus('all')
-          handleQuickTimeChange('all')
+          setTimeRange(getInitialTodayRange())
           setPage(1)
         }}
         onDismiss={() => setUnreadRealtimeCount(0)}
@@ -552,7 +551,7 @@ export function AlarmsPage(): React.ReactElement {
       </div>
 
       {/* 筛选工具条与视图切换 */}
-      <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl p-3 shadow-xs">
+      <div className="frosted-glass relative z-20 flex flex-wrap items-center justify-between gap-3 rounded-2xl p-3 shadow-xs">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <Filter className="h-3.5 w-3.5 text-[var(--text-muted)]" />
 
@@ -565,7 +564,7 @@ export function AlarmsPage(): React.ReactElement {
             <option value="">{t('filter.allCameras')}</option>
             {cameras.map((c) => (
               <option key={c.id} value={c.cameraId}>
-                {c.name} ({c.cameraId})
+                {c.name || c.cameraId}
               </option>
             ))}
           </select>
@@ -624,67 +623,15 @@ export function AlarmsPage(): React.ReactElement {
             </select>
           )}
 
-          {/* 快捷时间筛选 Chip */}
-          <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-[11px]">
-            {(
-              [
-                { key: 'all', label: t('filter.quickAll') },
-                { key: '1h', label: t('filter.past1Hour') },
-                { key: '24h', label: t('filter.past24Hours') },
-                { key: '7d', label: t('filter.past7Days') },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => handleQuickTimeChange(opt.key)}
-                className={`rounded-lg px-2 py-1 transition-all ${
-                  quickTimeRange === opt.key
-                    ? 'bg-[var(--accent)] text-white shadow-xs'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
-          {/* 自定义精确时间 */}
-          <div className="flex items-center gap-1.5">
-            <input
-              type="datetime-local"
-              value={startTime}
-              onChange={(e) => {
-                setQuickTimeRange('custom')
-                handleFilterChange(setStartTime, e.target.value)
-              }}
-              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-              title={t('timeFilter.start')}
-            />
-            <span className="text-[var(--text-muted)]">-</span>
-            <input
-              type="datetime-local"
-              value={endTime}
-              onChange={(e) => {
-                setQuickTimeRange('custom')
-                handleFilterChange(setEndTime, e.target.value)
-              }}
-              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-              title={t('timeFilter.end')}
-            />
-            {(startTime || endTime) && (
-              <button
-                type="button"
-                onClick={() => {
-                  handleQuickTimeChange('all')
-                }}
-                className="rounded-lg p-1 text-[var(--text-muted)] transition-all hover:bg-rose-500/10 hover:text-rose-400"
-                title={t('timeFilter.clear')}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+          {/* 秒级精细时间选择器 */}
+          <DateTimeRangePicker
+            value={timeRange}
+            onChange={(val) => {
+              setTimeRange(val)
+              setPage(1)
+            }}
+            t={t}
+          />
         </div>
 
         <div className="flex items-center gap-2">
@@ -759,12 +706,18 @@ export function AlarmsPage(): React.ReactElement {
         )}
 
         {activeTab === 'captures' && (
-          <CapturesContent captures={captures} onSelect={setLightboxCapture} t={t} />
+          <CapturesContent
+            captures={captures}
+            cameraNameMap={cameraNameMap}
+            onSelect={setLightboxCapture}
+            t={t}
+          />
         )}
 
         {activeTab === 'recognition' && (
           <RecognitionContent
             recognitions={recognitions}
+            cameraNameMap={cameraNameMap}
             onOpenReview={setReviewModalRec}
             onQuickReview={(recognition, status) => handleReviewRecognition(recognition, status)}
             t={t}
@@ -772,15 +725,35 @@ export function AlarmsPage(): React.ReactElement {
         )}
       </div>
 
-      {/* 分页控制栏 */}
-      <div className="frosted-glass flex items-center justify-between rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
-        <div className="flex items-center gap-2">
+      {/* 分页控制栏 (支持每页条数选择器) */}
+      <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
+        <div className="flex items-center gap-3">
           <span>{t('pagination.page', { current: page })}</span>
           {totalCount > 0 && (
             <span className="font-mono text-[var(--text-muted)]">
               ({t('pagination.total', { total: totalCount })})
             </span>
           )}
+
+          {/* 每页条数选择器 */}
+          <div className="flex items-center gap-1.5 border-l border-[var(--border)] pl-3">
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                const next = Number(e.target.value)
+                setPageSize(next)
+                setPage(1)
+              }}
+              className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--text-primary)] transition-all outline-none hover:border-[var(--accent)] focus:border-[var(--accent)]"
+              title={t('pagination.pageSize')}
+            >
+              {[10, 20, 50, 100].map((size) => (
+                <option key={size} value={size}>
+                  {t('pagination.perPage', { count: size })}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -832,6 +805,7 @@ export function AlarmsPage(): React.ReactElement {
       {lightboxCapture && (
         <CaptureLightboxModal
           capture={lightboxCapture}
+          cameraName={cameraNameMap[lightboxCapture.cameraId]}
           onClose={() => setLightboxCapture(null)}
           t={t}
         />
@@ -841,6 +815,7 @@ export function AlarmsPage(): React.ReactElement {
       {reviewModalRec && (
         <RecognitionReviewModal
           recognition={reviewModalRec}
+          cameraName={cameraNameMap[reviewModalRec.cameraId]}
           onClose={() => setReviewModalRec(null)}
           onReview={handleReviewRecognition}
           t={t}
