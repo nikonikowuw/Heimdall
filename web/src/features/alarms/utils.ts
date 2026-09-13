@@ -97,3 +97,37 @@ export function calculateFittedImageRect(
     y: 0,
   }
 }
+
+/**
+ * 推导图片下载保存文件名：优先级自定义文件名 > URL 文件名 > 标题语义名称 > 时间戳保底
+ */
+export function deriveDownloadFilename(
+  src: string,
+  customFilename?: string,
+  title?: string,
+): string {
+  if (customFilename?.trim()) {
+    return customFilename.trim()
+  }
+
+  // 1. 尝试从 src 路径提取最后的文件名
+  try {
+    const base = typeof window !== 'undefined' ? window.location.href : 'http://localhost'
+    const pathname = new URL(src, base).pathname
+    const last = pathname.split('/').filter(Boolean).pop()
+    if (last && /\.(jpg|jpeg|png|webp|bmp|gif|svg)$/i.test(last)) {
+      return decodeURIComponent(last)
+    }
+  } catch {
+    // ignore URL parsing error
+  }
+
+  // 2. 尝试从 title 生成业务可读的文件名
+  const safeTitle = title?.replace(/[\\/:*?"<>|\s]+/g, '_').trim()
+  if (safeTitle) {
+    return `${safeTitle}.jpg`
+  }
+
+  // 3. 安全回退：带时间戳的文件名，杜绝重名覆盖
+  return `image_${Date.now()}.jpg`
+}

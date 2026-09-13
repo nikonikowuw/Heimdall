@@ -142,7 +142,11 @@
     "trackId": "Track ID",
     "channel": "通道",
     "qualityScore": "質量評分",
-    "time": "時間"
+    "time": "時間",
+    "download": "下載圖片",
+    "openOriginal": "在新分頁中打開原圖",
+    "close": "關閉",
+    "escHint": "按 Esc 或點擊外部空白處即可關閉"
   },
   "toast": {
     "ruleTriggered": "偵測到 {{target}} 觸發規則",

@@ -1,12 +1,14 @@
 import React, { useState } from 'react'
-import { Check, Users, X } from 'lucide-react'
+import { Check, Users, X, ZoomIn } from 'lucide-react'
 import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import { evidenceApi } from '../../../lib/api'
 import type { FaceCandidateItem, RecognitionRecord } from '../../../types'
 import { formatTimestamp } from '../utils'
+import { ImagePreviewModal } from './ImagePreviewModal'
 
 export interface RecognitionReviewModalProps {
   recognition: RecognitionRecord
+  cameraName?: string
   onClose: () => void
   onReview: (
     recognition: RecognitionRecord,
@@ -16,8 +18,65 @@ export interface RecognitionReviewModalProps {
   t: (key: string) => string
 }
 
+interface ReviewPreviewThumbProps {
+  src?: string | null
+  alt: string
+  label?: string
+  className: string
+  title?: string
+  noImageText: string
+  onPreview?: () => void
+}
+
+function ReviewPreviewThumb({
+  src,
+  alt,
+  label,
+  className,
+  title,
+  noImageText,
+  onPreview,
+}: ReviewPreviewThumbProps): React.ReactElement {
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div
+        onClick={src ? onPreview : undefined}
+        className={`group/img relative overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs ${className} ${
+          src ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md' : ''
+        }`}
+        title={src ? title : undefined}
+      >
+        {src ? (
+          <>
+            <img
+              src={evidenceApi.getImageUrl(src)}
+              alt={alt}
+              className="h-full w-full object-cover transition-transform duration-200 group-hover/img:scale-105"
+            />
+            <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/img:opacity-100">
+              <ZoomIn className="h-4 w-4 text-white" />
+            </div>
+          </>
+        ) : (
+          <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
+            {noImageText}
+          </div>
+        )}
+      </div>
+      {label && <span className="text-[10px] text-[var(--text-muted)]">{label}</span>}
+    </div>
+  )
+}
+
+const STATUS_LABEL_KEYS: Record<string, string> = {
+  confirmed: 'card.statusConfirmed',
+  rejected: 'card.statusRejected',
+  pending_review: 'card.statusPendingReview',
+}
+
 export function RecognitionReviewModal({
   recognition,
+  cameraName,
   onClose,
   onReview,
   t,
@@ -27,6 +86,11 @@ export function RecognitionReviewModal({
   const [compareCandidate, setCompareCandidate] = useState<FaceCandidateItem | null>(
     () => candidates[0] || null,
   )
+  const [previewImage, setPreviewImage] = useState<{
+    src: string
+    title?: string
+    subtitle?: string
+  } | null>(null)
 
   // 浮层按栈响应 ESC，杜绝穿透
   useDismissStack(true, onClose)
@@ -69,46 +133,49 @@ export function RecognitionReviewModal({
                 {t('card.siteCrop')} & {t('card.registeredPhoto')}
               </span>
               <div className="grid grid-cols-2 gap-2">
-                <div className="flex flex-col items-center gap-1">
-                  <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs">
-                    {recognition.fieldCropPath ? (
-                      <img
-                        src={evidenceApi.getImageUrl(recognition.fieldCropPath)}
-                        alt={t('card.siteCrop')}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
-                        {t('card.noImage')}
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-[var(--text-muted)]">{t('card.siteCrop')}</span>
-                </div>
-                <div className="flex flex-col items-center gap-1">
-                  <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs">
-                    {registeredPhotoRel ? (
-                      <img
-                        src={evidenceApi.getImageUrl(registeredPhotoRel)}
-                        alt={t('card.registeredPhoto')}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
-                        {t('card.noImage')}
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-[var(--text-muted)]">
-                    {t('card.registeredPhoto')}
-                  </span>
-                </div>
+                <ReviewPreviewThumb
+                  src={recognition.fieldCropPath}
+                  alt={t('card.siteCrop')}
+                  label={t('card.siteCrop')}
+                  className="aspect-square w-full"
+                  title={t('card.viewHd')}
+                  noImageText={t('card.noImage')}
+                  onPreview={() => {
+                    if (recognition.fieldCropPath) {
+                      setPreviewImage({
+                        src: evidenceApi.getImageUrl(recognition.fieldCropPath),
+                        title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
+                        subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
+                      })
+                    }
+                  }}
+                />
+                <ReviewPreviewThumb
+                  src={registeredPhotoRel}
+                  alt={t('card.registeredPhoto')}
+                  label={t('card.registeredPhoto')}
+                  className="aspect-square w-full"
+                  title={t('card.viewHd')}
+                  noImageText={t('card.noImage')}
+                  onPreview={() => {
+                    if (registeredPhotoRel) {
+                      setPreviewImage({
+                        src: evidenceApi.getImageUrl(registeredPhotoRel),
+                        title: `${t('card.registeredPhoto')}: ${recognition.subjectName || '底库样本'}`,
+                        subtitle: `ID: ${recognition.subjectId || '-'}`,
+                      })
+                    }
+                  }}
+                />
               </div>
               <div className="space-y-1.5 pt-2 text-xs">
                 <div className="flex justify-between">
                   <span className="text-[var(--text-muted)]">{t('modal.channel')}:</span>
-                  <span className="font-mono text-[var(--text-primary)]">
-                    {recognition.cameraId}
+                  <span
+                    className="max-w-[200px] truncate font-medium text-[var(--text-primary)]"
+                    title={cameraName || recognition.cameraId}
+                  >
+                    {cameraName || recognition.cameraId}
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -120,11 +187,7 @@ export function RecognitionReviewModal({
                 <div className="flex justify-between">
                   <span className="text-[var(--text-muted)]">{t('card.currentStatus')}:</span>
                   <span className="font-semibold text-amber-500">
-                    {recognition.status === 'confirmed'
-                      ? t('card.statusConfirmed')
-                      : recognition.status === 'rejected'
-                        ? t('card.statusRejected')
-                        : t('card.statusPendingReview')}
+                    {t(STATUS_LABEL_KEYS[recognition.status] || 'card.statusPendingReview')}
                   </span>
                 </div>
               </div>
@@ -147,41 +210,41 @@ export function RecognitionReviewModal({
                     </button>
                   </div>
                   <div className="flex items-center justify-center gap-6">
+                    <ReviewPreviewThumb
+                      src={recognition.fieldCropPath}
+                      alt={t('card.siteCrop')}
+                      label={t('card.siteCrop')}
+                      className="h-32 w-32"
+                      title={t('card.viewHd')}
+                      noImageText={t('card.noImage')}
+                      onPreview={() => {
+                        if (recognition.fieldCropPath) {
+                          setPreviewImage({
+                            src: evidenceApi.getImageUrl(recognition.fieldCropPath),
+                            title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
+                            subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
+                          })
+                        }
+                      }}
+                    />
                     <div className="flex flex-col items-center gap-1.5">
-                      <span className="text-[10px] font-medium text-[var(--text-muted)]">
-                        {t('card.siteCrop')}
-                      </span>
-                      <div className="h-32 w-32 overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-sm">
-                        {recognition.fieldCropPath ? (
-                          <img
-                            src={evidenceApi.getImageUrl(recognition.fieldCropPath)}
-                            alt={t('card.siteCrop')}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
-                            {t('card.noImage')}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-center gap-1.5">
-                      <span className="text-[10px] font-medium text-[var(--text-muted)]">
-                        {compareCandidate.subjectName}
-                      </span>
-                      <div className="h-32 w-32 overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-sm">
-                        {compareCandidate.photoRelPath ? (
-                          <img
-                            src={evidenceApi.getImageUrl(compareCandidate.photoRelPath)}
-                            alt={compareCandidate.subjectName}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
-                            {t('card.noImage')}
-                          </div>
-                        )}
-                      </div>
+                      <ReviewPreviewThumb
+                        src={compareCandidate.photoRelPath}
+                        alt={compareCandidate.subjectName}
+                        label={compareCandidate.subjectName}
+                        className="h-32 w-32"
+                        title={t('card.viewHd')}
+                        noImageText={t('card.noImage')}
+                        onPreview={() => {
+                          if (compareCandidate.photoRelPath) {
+                            setPreviewImage({
+                              src: evidenceApi.getImageUrl(compareCandidate.photoRelPath),
+                              title: `${t('card.candidateList')}: ${compareCandidate.subjectName}`,
+                              subtitle: `ID: ${compareCandidate.subjectId} · ${t('card.similarity')}: ${(compareCandidate.similarity * 100).toFixed(1)}%`,
+                            })
+                          }
+                        }}
+                      />
                       <span className="font-mono text-[10px] font-bold text-emerald-500">
                         {(compareCandidate.similarity * 100).toFixed(1)}%
                       </span>
@@ -222,13 +285,35 @@ export function RecognitionReviewModal({
                           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] font-mono text-xs font-bold text-[var(--accent)]">
                             #{cand.rank || idx + 1}
                           </span>
-                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-black">
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (cand.photoRelPath) {
+                                setPreviewImage({
+                                  src: evidenceApi.getImageUrl(cand.photoRelPath),
+                                  title: `${t('card.candidateList')}: ${cand.subjectName}`,
+                                  subtitle: `#${cand.rank || idx + 1} · ID: ${cand.subjectId}`,
+                                })
+                              }
+                            }}
+                            className={`group/cand relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-black ${
+                              cand.photoRelPath
+                                ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md'
+                                : ''
+                            }`}
+                            title={cand.photoRelPath ? t('card.viewHd') : undefined}
+                          >
                             {cand.photoRelPath ? (
-                              <img
-                                src={evidenceApi.getImageUrl(cand.photoRelPath)}
-                                alt={cand.subjectName}
-                                className="h-full w-full object-cover"
-                              />
+                              <>
+                                <img
+                                  src={evidenceApi.getImageUrl(cand.photoRelPath)}
+                                  alt={cand.subjectName}
+                                  className="h-full w-full object-cover transition-transform duration-200 group-hover/cand:scale-105"
+                                />
+                                <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/cand:opacity-100">
+                                  <ZoomIn className="h-3 w-3 text-white" />
+                                </div>
+                              </>
                             ) : (
                               <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
                                 {t('card.noImage')}
@@ -261,6 +346,7 @@ export function RecognitionReviewModal({
                                 onReview(recognition, 'confirmed', cand)
                               }}
                               className="flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-500 transition-colors hover:bg-emerald-500 hover:text-white"
+                              title={t('card.confirmCandidate')}
                             >
                               <Check className="h-3.5 w-3.5" />
                               <span>{t('card.confirmCandidate')}</span>
@@ -276,8 +362,8 @@ export function RecognitionReviewModal({
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+        {/* Footer Actions */}
+        <div className="flex items-center justify-between border-t border-[var(--border)] bg-[var(--bg-secondary)]/50 px-6 py-4">
           <button
             onClick={() => onReview(recognition, 'rejected')}
             className="flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs font-medium text-rose-500 transition-colors hover:bg-rose-500 hover:text-white"
@@ -288,22 +374,34 @@ export function RecognitionReviewModal({
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
-              className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)]"
+              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
             >
               {t('card.cancel')}
             </button>
-            {candidates.length > 0 && (
+            {candidates[0] && (
               <button
                 onClick={() => onReview(recognition, 'confirmed', candidates[0])}
-                className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90"
+                className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-medium text-white shadow-sm transition-colors hover:bg-emerald-500"
               >
                 <Check className="h-4 w-4" />
-                <span>{t('card.passTop1')}</span>
+                <span>
+                  {t('card.passTop1')} ({candidates[0].subjectName})
+                </span>
               </button>
             )}
           </div>
         </div>
       </div>
+
+      {/* 高清图片大图全屏预览灯箱 */}
+      {previewImage && (
+        <ImagePreviewModal
+          src={previewImage.src}
+          title={previewImage.title}
+          subtitle={previewImage.subtitle}
+          onClose={() => setPreviewImage(null)}
+        />
+      )}
     </div>
   )
 }

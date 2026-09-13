@@ -142,7 +142,11 @@
     "trackId": "Track ID",
     "channel": "Channel",
     "qualityScore": "Quality",
-    "time": "Time"
+    "time": "Time",
+    "download": "Download Image",
+    "openOriginal": "Open in New Tab",
+    "close": "Close",
+    "escHint": "Press Esc or click outside to close"
   },
   "toast": {
     "ruleTriggered": "Detected {{target}} triggering rule",

@@ -142,7 +142,11 @@
     "trackId": "Track ID",
     "channel": "通道",
     "qualityScore": "质量评分",
-    "time": "时间"
+    "time": "时间",
+    "download": "下载图片",
+    "openOriginal": "在新标签页中打开原图",
+    "close": "关闭",
+    "escHint": "按 Esc 或点击外部空白处即可关闭"
   },
   "toast": {
     "ruleTriggered": "检测到 {{target}} 触发规则",
