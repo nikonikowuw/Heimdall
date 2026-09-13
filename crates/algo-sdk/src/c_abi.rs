@@ -1,6 +1,6 @@
 //! C ABI 类型 1:1 映射
 //! 权威来源：本文件与 `crates/infer/src/c_abi/types.rs` 必须 bit-for-bit 一致。
-//! 严格匹配 `sdk/include/argus/algo.h`, `types.h`, `result.h`。
+//! 严格匹配 `sdk/include/heimdall/algo.h`, `types.h`, `result.h`。
 //! 必须保持 64 位平台 8 字节对齐。
 
 use std::ffi::{c_char, c_int, c_void};

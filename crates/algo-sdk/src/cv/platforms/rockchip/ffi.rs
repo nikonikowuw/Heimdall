@@ -457,7 +457,7 @@ impl Drop for RgaHandleGuard {
 }
 
 fn library_candidates() -> Vec<std::ffi::OsString> {
-    if let Some(path) = std::env::var_os("ARGUS_RGA_LIBRARY") {
+    if let Some(path) = std::env::var_os("HEIMDALL_RGA_LIBRARY") {
         return vec![path];
     }
     vec![

@@ -1,5 +1,5 @@
 -- V1__init_schema.sql
--- Argus 核心数据表初始 Schema 迁移文件 (Refinery)
+-- Heimdall 核心数据表初始 Schema 迁移文件 (Refinery)
 
 CREATE TABLE IF NOT EXISTS cameras (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

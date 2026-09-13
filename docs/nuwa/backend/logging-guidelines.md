@@ -31,7 +31,7 @@ if frame_id % 100 == 0 {
 ## 配置与文件日志
 
 当前 `RUST_LOG` 覆盖 `logging.filter`；完整配置见 [目录与配置](./directory-structure.md#配置)。
-旧 `ARGUS_LOG_MODE=dev|prod`、文件轮转和应用日志查询/导出尚未接入当前启动路径，不能当作可用功能。
+旧 `HEIMDALL_LOG_MODE=dev|prod`、文件轮转和应用日志查询/导出尚未接入当前启动路径，不能当作可用功能。
 
 落地文件日志时保留以下约束：
 

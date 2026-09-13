@@ -183,12 +183,12 @@ async fn main() -> Result<()> {
     tracing::info!("核心视频分析管线调度器初始化完成 (全局 VPU 通道池就绪)");
 
     // 6. 检查双轨初始化状态与环境变量
-    let env_password = std::env::var("ARGUS_ADMIN_PASSWORD").ok();
+    let env_password = std::env::var("HEIMDALL_ADMIN_PASSWORD").ok();
     if let Some(pwd) = env_password {
         let pwd = pwd.trim();
         if !pwd.is_empty() {
             let username =
-                std::env::var("ARGUS_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
+                std::env::var("HEIMDALL_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
             let hash = api::crypto::hash_password(pwd);
             if db::AdminUserRepo::ensure_silent_admin(&db_conn, &username, &hash).await? {
                 tracing::info!(username = %username, "已通过环境变量自动完成管理员静默初始化");

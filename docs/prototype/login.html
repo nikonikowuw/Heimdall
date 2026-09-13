@@ -406,7 +406,7 @@
       if (isDark) {
         document.documentElement.classList.add('dark');
         targetTheme = 1.0;
-        localStorage.setItem('argus-theme', 'dark');
+        localStorage.setItem('heimdall_theme', 'dark');
 
         if (toggleBtn) toggleBtn.setAttribute('aria-checked', 'true');
         if (thumb) {
@@ -418,7 +418,7 @@
       } else {
         document.documentElement.classList.remove('dark');
         targetTheme = 0.0;
-        localStorage.setItem('argus-theme', 'light');
+        localStorage.setItem('heimdall_theme', 'light');
 
         if (toggleBtn) toggleBtn.setAttribute('aria-checked', 'false');
         if (thumb) {
@@ -441,7 +441,7 @@
     }
 
     // 初始化恢复用户主题
-    const savedTheme = localStorage.getItem('argus-theme') || 'dark';
+    const savedTheme = localStorage.getItem('heimdall_theme') || 'dark';
     setTheme(savedTheme);
 
     // 快捷键 T 切换主题

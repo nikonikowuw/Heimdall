@@ -8,9 +8,9 @@ interface AuthState {
   logout: () => void
 }
 
-const STORAGE_KEY_TOKEN = 'argus-token'
-const STORAGE_KEY_USER = 'argus-user'
-export const STORAGE_KEY_REMEMBER_USER = 'argus-remember-user'
+const STORAGE_KEY_TOKEN = 'heimdall-token'
+const STORAGE_KEY_USER = 'heimdall-user'
+export const STORAGE_KEY_REMEMBER_USER = 'heimdall-remember-user'
 
 export function getRememberedUser(): string {
   if (typeof window !== 'undefined') {

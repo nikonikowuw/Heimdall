@@ -95,7 +95,7 @@ fn test_sandbox_subprocess_self_test() {
     ];
     if let Some(bin) = candidates.into_iter().find(|p| p.exists()) {
         if let Ok(canon) = bin.canonicalize() {
-            std::env::set_var("ARGUS_BIN", canon);
+            std::env::set_var("HEIMDALL_BIN", canon);
             let res = AlgoSandbox::validate_package(&pkg_path, true);
             assert!(res.is_ok(), "子进程物理隔离自检失败: {:?}", res.err());
         }

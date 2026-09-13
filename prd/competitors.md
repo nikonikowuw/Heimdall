@@ -1,6 +1,6 @@
 # 架构重构对比与技术选型分析报告 (competitors / rewrite analysis)
 
-本文档对比分析原 `/Users/zhang/dev/go/argus` 系统与新架构 `Heimdall (Rust All-in-One)` 的技术指标、架构开销与演进优势。
+本文档对比分析原 Argus 系统 (Go 版) 与新架构 `Heimdall (Rust All-in-One)` 的技术指标、架构开销与演进优势。
 
 ---
 

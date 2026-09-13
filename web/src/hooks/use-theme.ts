@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 export type ThemeMode = 'light' | 'dark'
 
-const THEME_STORAGE_KEY = 'argus_theme'
+const THEME_STORAGE_KEY = 'heimdall_theme'
 
 export function getInitialTheme(): ThemeMode {
   if (typeof window === 'undefined') return 'dark'

@@ -89,7 +89,7 @@ pub async fn write_upload_field_to_temp_file(
     max_bytes: usize,
 ) -> Result<TempFileGuard, ApiError> {
     let path = std::env::temp_dir().join(format!(
-        "argus_upload_{}.part",
+        "heimdall_upload_{}.part",
         uuid::Uuid::now_v7().simple()
     ));
     let guard = TempFileGuard::new(path);
@@ -148,7 +148,7 @@ pub fn process_uploaded_package_archive_sync(
     upload_filename: Option<&str>,
 ) -> Result<ProcessedUploadResult, Box<ProcessedUploadError>> {
     let temp_dir =
-        std::env::temp_dir().join(format!("argus_pkg_{}", uuid::Uuid::now_v7().simple()));
+        std::env::temp_dir().join(format!("heimdall_pkg_{}", uuid::Uuid::now_v7().simple()));
     if let Err(e) = std::fs::create_dir_all(&temp_dir) {
         return Err(Box::new(ProcessedUploadError {
             failed_idx: 0,

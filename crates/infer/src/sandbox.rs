@@ -189,7 +189,7 @@ impl AlgoSandbox {
     fn run_subprocess_self_test(package_dir: &Path) -> Result<(), InferError> {
         use std::io::Read;
 
-        let current_exe = std::env::var("ARGUS_BIN")
+        let current_exe = std::env::var("HEIMDALL_BIN")
             .map(PathBuf::from)
             .or_else(|_| std::env::current_exe())
             .map_err(|e| InferError::SandboxValidation {

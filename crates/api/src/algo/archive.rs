@@ -301,7 +301,7 @@ mod tests {
         use flate2::Compression;
 
         let temp = std::env::temp_dir().join(format!(
-            "test_argus_targz_{}",
+            "test_heimdall_targz_{}",
             uuid::Uuid::now_v7().simple()
         ));
         std::fs::create_dir_all(&temp).unwrap();
@@ -331,8 +331,10 @@ mod tests {
 
     #[test]
     fn test_extract_uncompressed_tar_archive() {
-        let temp =
-            std::env::temp_dir().join(format!("test_argus_tar_{}", uuid::Uuid::now_v7().simple()));
+        let temp = std::env::temp_dir().join(format!(
+            "test_heimdall_tar_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
         std::fs::create_dir_all(&temp).unwrap();
 
         let mut tar_bytes = Vec::new();
@@ -360,7 +362,7 @@ mod tests {
     #[test]
     fn test_extract_tar_rejects_absolute_path_and_parent_dir() {
         let temp = std::env::temp_dir().join(format!(
-            "test_argus_tar_slip_{}",
+            "test_heimdall_tar_slip_{}",
             uuid::Uuid::now_v7().simple()
         ));
         std::fs::create_dir_all(&temp).unwrap();

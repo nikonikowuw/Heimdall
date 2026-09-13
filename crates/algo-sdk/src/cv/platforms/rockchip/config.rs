@@ -177,19 +177,19 @@ impl RgaPoolConfig {
 
     /// Apply process-level overrides without making environment variables part of the API.
     pub fn apply_env_overrides(&mut self) -> Result<(), AlgoError> {
-        if let Some(value) = env_parse("ARGUS_RGA_POOL_MIN_IDLE")? {
+        if let Some(value) = env_parse("HEIMDALL_RGA_POOL_MIN_IDLE")? {
             self.min_idle = value;
         }
-        if let Some(value) = env_parse("ARGUS_RGA_POOL_MAX_SIZE")? {
+        if let Some(value) = env_parse("HEIMDALL_RGA_POOL_MAX_SIZE")? {
             self.max_size = value;
         }
-        if let Some(value) = env_parse("ARGUS_RGA_POOL_ACQUIRE_TIMEOUT_MS")? {
+        if let Some(value) = env_parse("HEIMDALL_RGA_POOL_ACQUIRE_TIMEOUT_MS")? {
             self.acquire_timeout_ms = value;
         }
-        if let Some(value) = env_parse("ARGUS_RGA_POOL_IDLE_TIMEOUT_SEC")? {
+        if let Some(value) = env_parse("HEIMDALL_RGA_POOL_IDLE_TIMEOUT_SEC")? {
             self.idle_timeout_sec = value;
         }
-        if let Some(value) = std::env::var_os("ARGUS_RGA_DMA_HEAP") {
+        if let Some(value) = std::env::var_os("HEIMDALL_RGA_DMA_HEAP") {
             let value = value.to_string_lossy().into_owned();
             self.dma_heap_path = (!value.is_empty()).then_some(value);
         }
@@ -267,16 +267,16 @@ mod tests {
         let decoded: RgaPoolConfig = serde_json::from_str(&json).expect("deserialize config");
         assert_eq!(decoded, config);
 
-        let old_min = std::env::var_os("ARGUS_RGA_POOL_MIN_IDLE");
-        let old_max = std::env::var_os("ARGUS_RGA_POOL_MAX_SIZE");
-        std::env::set_var("ARGUS_RGA_POOL_MIN_IDLE", "3");
-        std::env::set_var("ARGUS_RGA_POOL_MAX_SIZE", "5");
+        let old_min = std::env::var_os("HEIMDALL_RGA_POOL_MIN_IDLE");
+        let old_max = std::env::var_os("HEIMDALL_RGA_POOL_MAX_SIZE");
+        std::env::set_var("HEIMDALL_RGA_POOL_MIN_IDLE", "3");
+        std::env::set_var("HEIMDALL_RGA_POOL_MAX_SIZE", "5");
         let mut overridden = RgaPoolConfig::default();
         overridden.apply_env_overrides().expect("valid overrides");
         assert_eq!(overridden.min_idle, 3);
         assert_eq!(overridden.max_size, 5);
-        restore_env("ARGUS_RGA_POOL_MIN_IDLE", old_min);
-        restore_env("ARGUS_RGA_POOL_MAX_SIZE", old_max);
+        restore_env("HEIMDALL_RGA_POOL_MIN_IDLE", old_min);
+        restore_env("HEIMDALL_RGA_POOL_MAX_SIZE", old_max);
     }
 
     #[test]

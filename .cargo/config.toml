@@ -10,7 +10,7 @@
 #   brew install aarch64-unknown-linux-gnu-gcc   # 或 cargo install cargo-zigbuild + brew install zig
 #
 # 快速验证：
-#   cargo zigbuild -p argus --release --target aarch64-unknown-linux-gnu
+#   cargo zigbuild -p app --bin heimdall --release --target aarch64-unknown-linux-gnu
 # ============================================================================
 
 # ---------------------------------------------------------------------------

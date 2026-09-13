@@ -1,7 +1,7 @@
 //! 系统级应用配置加载器
 //!
 //! 优先级架构：
-//! 环境变量 (`ARGUS_*`) > 本地 `.env` 文件 > `config.toml` > 代码内置默认值
+//! 环境变量 (`HEIMDALL_*`) > 本地 `.env` 文件 > `config.toml` > 代码内置默认值
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -208,7 +208,7 @@ fn default_max_package_size_mb() -> usize {
 }
 
 fn default_db_path() -> String {
-    "argus.db".to_string()
+    "heimdall.db".to_string()
 }
 
 fn default_max_connections() -> u32 {
@@ -275,7 +275,7 @@ fn default_log_max_rows() -> u64 {
 ///
 /// 1. 加载本地 `.env` 文件到系统环境变量（若存在）；
 /// 2. 加载指定的 `config.toml` 或同目录 `config` 配置文件（若存在）；
-/// 3. 读取 `ARGUS_` 前缀的环境变量并根据双下划线 `__` 映射覆盖配置字段；
+/// 3. 读取 `HEIMDALL_` 前缀的环境变量并根据双下划线 `__` 映射覆盖配置字段；
 /// 4. 未指定的配置自动填充工业级默认值。
 pub fn load_config(custom_path: Option<&str>) -> Result<AppConfig, config::ConfigError> {
     // 1. 加载本地 .env 到系统环境变量
@@ -291,9 +291,9 @@ pub fn load_config(custom_path: Option<&str>) -> Result<AppConfig, config::Confi
         builder = builder.add_source(config::File::with_name("config").required(false));
     }
 
-    // 3. 环境变量覆盖 (ARGUS_前缀，双下划线__层级映射，如 ARGUS_PIPELINE__MAX_CONCURRENT_DECODERS=2)
+    // 3. 环境变量覆盖 (HEIMDALL_前缀，双下划线__层级映射，如 HEIMDALL_PIPELINE__MAX_CONCURRENT_DECODERS=2)
     builder = builder.add_source(
-        config::Environment::with_prefix("ARGUS")
+        config::Environment::with_prefix("HEIMDALL")
             .prefix_separator("_")
             .separator("__"),
     );
@@ -302,19 +302,19 @@ pub fn load_config(custom_path: Option<&str>) -> Result<AppConfig, config::Confi
     let mut app_config: AppConfig = cfg.try_deserialize()?;
 
     // 兼容历史快捷变量，但让嵌套变量保持更明确的优先级。
-    if std::env::var_os("ARGUS_SERVER__MAX_PACKAGE_SIZE_MB").is_none() {
-        match std::env::var("ARGUS_MAX_PACKAGE_SIZE_MB") {
+    if std::env::var_os("HEIMDALL_SERVER__MAX_PACKAGE_SIZE_MB").is_none() {
+        match std::env::var("HEIMDALL_MAX_PACKAGE_SIZE_MB") {
             Ok(raw) => {
                 app_config.server.max_package_size_mb = raw.parse::<usize>().map_err(|_| {
                     config::ConfigError::Message(
-                        "ARGUS_MAX_PACKAGE_SIZE_MB 必须是有效的正整数 MB 值".to_string(),
+                        "HEIMDALL_MAX_PACKAGE_SIZE_MB 必须是有效的正整数 MB 值".to_string(),
                     )
                 })?;
             }
             Err(std::env::VarError::NotPresent) => {}
             Err(std::env::VarError::NotUnicode(_)) => {
                 return Err(config::ConfigError::Message(
-                    "ARGUS_MAX_PACKAGE_SIZE_MB 必须是 UTF-8 文本".to_string(),
+                    "HEIMDALL_MAX_PACKAGE_SIZE_MB 必须是 UTF-8 文本".to_string(),
                 ));
             }
         }
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(cfg.server.host, "0.0.0.0");
         assert_eq!(cfg.server.port, 8000);
         assert_eq!(cfg.server.max_package_size_mb, 1024);
-        assert_eq!(cfg.database.path, "argus.db");
+        assert_eq!(cfg.database.path, "heimdall.db");
         assert_eq!(
             cfg.pipeline.max_concurrent_decoders,
             pipeline::DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS
@@ -381,7 +381,7 @@ capture_mode = "sub_stream_on_large_gap"
             pipeline::SnapshotCaptureMode::SubStreamOnLargeGap
         );
         // 验证其余未配置项使用默认值
-        assert_eq!(cfg.database.path, "argus.db");
+        assert_eq!(cfg.database.path, "heimdall.db");
         assert_eq!(cfg.media.handshake_timeout_ms, 5000);
         assert_eq!(cfg.logging.level, "info");
         assert_eq!(cfg.logging.filter, "");
@@ -411,10 +411,10 @@ filter = "warn,media=debug"
     #[test]
     fn test_environment_variable_override() {
         // 设置测试环境变量
-        std::env::set_var("ARGUS_SERVER__PORT", "9999");
-        std::env::set_var("ARGUS_PIPELINE__MAX_CONCURRENT_DECODERS", "12");
-        std::env::set_var("ARGUS_PIPELINE__MAX_BURST_TIMEOUT_MS", "65");
-        std::env::set_var("ARGUS_MAX_PACKAGE_SIZE_MB", "2048");
+        std::env::set_var("HEIMDALL_SERVER__PORT", "9999");
+        std::env::set_var("HEIMDALL_PIPELINE__MAX_CONCURRENT_DECODERS", "12");
+        std::env::set_var("HEIMDALL_PIPELINE__MAX_BURST_TIMEOUT_MS", "65");
+        std::env::set_var("HEIMDALL_MAX_PACKAGE_SIZE_MB", "2048");
 
         let cfg = load_config(None).expect("带环境变量的配置加载应成功");
         assert_eq!(cfg.server.port, 9999);
@@ -422,16 +422,16 @@ filter = "warn,media=debug"
         assert_eq!(cfg.pipeline.max_concurrent_decoders, 12);
         assert_eq!(cfg.pipeline.max_burst_timeout_ms, 65);
 
-        std::env::set_var("ARGUS_SERVER__MAX_PACKAGE_SIZE_MB", "3072");
+        std::env::set_var("HEIMDALL_SERVER__MAX_PACKAGE_SIZE_MB", "3072");
         let canonical_cfg = load_config(None).expect("嵌套环境变量配置加载应成功");
         assert_eq!(canonical_cfg.server.max_package_size_mb, 3072);
 
         // 清理环境变量防影响其他测试
-        std::env::remove_var("ARGUS_SERVER__PORT");
-        std::env::remove_var("ARGUS_SERVER__MAX_PACKAGE_SIZE_MB");
-        std::env::remove_var("ARGUS_PIPELINE__MAX_CONCURRENT_DECODERS");
-        std::env::remove_var("ARGUS_PIPELINE__MAX_BURST_TIMEOUT_MS");
-        std::env::remove_var("ARGUS_MAX_PACKAGE_SIZE_MB");
+        std::env::remove_var("HEIMDALL_SERVER__PORT");
+        std::env::remove_var("HEIMDALL_SERVER__MAX_PACKAGE_SIZE_MB");
+        std::env::remove_var("HEIMDALL_PIPELINE__MAX_CONCURRENT_DECODERS");
+        std::env::remove_var("HEIMDALL_PIPELINE__MAX_BURST_TIMEOUT_MS");
+        std::env::remove_var("HEIMDALL_MAX_PACKAGE_SIZE_MB");
     }
 
     #[test]

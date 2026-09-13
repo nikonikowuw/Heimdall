@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn test_refinery_migrations_on_file() {
         let temp_dir = std::env::temp_dir();
-        let db_file = temp_dir.join("test_argus_migration.db");
+        let db_file = temp_dir.join("test_heimdall_migration.db");
         if db_file.exists() {
             let _ = std::fs::remove_file(&db_file);
         }

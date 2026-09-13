@@ -31,7 +31,7 @@ pub fn router() -> Router<AppState> {
 /// 启动时从数据库同步初始化状态、失效时间戳以及持久化 JWT Secret
 pub async fn sync_auth_state(state: &AppState) {
     // 同步并持久化 JWT Secret（如果未通过环境变量注入）
-    if std::env::var("ARGUS_JWT_SECRET")
+    if std::env::var("HEIMDALL_JWT_SECRET")
         .map(|s| s.trim().is_empty())
         .unwrap_or(true)
     {

@@ -3841,7 +3841,7 @@
           icon.setAttribute('data-lucide', 'sun');
           icon.className = 'w-4 h-4 text-amber-400';
         }
-        localStorage.setItem('argus_theme', 'dark');
+        localStorage.setItem('heimdall_theme', 'dark');
       } else {
         html.classList.remove('dark');
         if (logo) logo.src = 'assets/logo-horizontal-light.svg';
@@ -3849,14 +3849,14 @@
           icon.setAttribute('data-lucide', 'moon');
           icon.className = 'w-4 h-4 text-slate-700';
         }
-        localStorage.setItem('argus_theme', 'light');
+        localStorage.setItem('heimdall_theme', 'light');
       }
 
       lucide.createIcons();
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-      const savedTheme = localStorage.getItem('argus_theme') || 'dark';
+      const savedTheme = localStorage.getItem('heimdall_theme') || 'dark';
       setTheme(savedTheme);
       updateDrawingHud();
       renderChannelHub();

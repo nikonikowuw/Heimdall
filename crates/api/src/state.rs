@@ -245,7 +245,7 @@ impl AppState {
                 stream_hub.clone(),
                 algo_registry.clone(),
             ));
-        let jwt_secret = match std::env::var("ARGUS_JWT_SECRET") {
+        let jwt_secret = match std::env::var("HEIMDALL_JWT_SECRET") {
             Ok(secret) if !secret.trim().is_empty() => secret.into_bytes(),
             _ => {
                 let uuid1 = uuid::Uuid::new_v4();

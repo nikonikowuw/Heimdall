@@ -2,11 +2,11 @@
 # Heimdall 边缘端一体化 AI 视频分析系统配置文件
 #
 # 优先级说明：
-# 命令行显式参数 / 环境变量 (ARGUS_*) > 本地 .env 文件 > config.toml > 代码内置默认值
+# 命令行显式参数 / 环境变量 (HEIMDALL_*) > 本地 .env 文件 > config.toml > 代码内置默认值
 # 环境变量层级映射示例：
-#   ARGUS_SERVER__PORT=8000
-#   ARGUS_PIPELINE__MAX_CONCURRENT_DECODERS=4
-#   ARGUS_PIPELINE__MAX_BURST_TIMEOUT_MS=80
+#   HEIMDALL_SERVER__PORT=8000
+#   HEIMDALL_PIPELINE__MAX_CONCURRENT_DECODERS=4
+#   HEIMDALL_PIPELINE__MAX_BURST_TIMEOUT_MS=80
 # ==============================================================================
 
 [server]
@@ -19,7 +19,7 @@ max_package_size_mb = 1024
 
 [database]
 # SQLite 数据库文件存储路径
-path = "Heimdall.db"
+path = "heimdall.db"
 # 数据库最大并发连接数 (SQLite 推荐 4)
 max_connections = 4
 
