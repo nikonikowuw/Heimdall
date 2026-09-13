@@ -542,7 +542,7 @@ pub fn cosine_similarity(a: &[f32; 512], b: &[f32; 512]) -> f32 {
     let mut dot = 0.0f32;
     let mut norm_a_sq = 0.0f32;
     let mut norm_b_sq = 0.0f32;
-    for (left, right) in a.iter().zip(b.iter()) {
+    for (&left, &right) in a.iter().zip(b.iter()) {
         if !left.is_finite() || !right.is_finite() {
             return 0.0;
         }
@@ -550,7 +550,7 @@ pub fn cosine_similarity(a: &[f32; 512], b: &[f32; 512]) -> f32 {
         norm_a_sq += left * left;
         norm_b_sq += right * right;
     }
-    let denominator = norm_a_sq.sqrt() * norm_b_sq.sqrt();
+    let denominator = (norm_a_sq * norm_b_sq).sqrt();
     if !denominator.is_finite() || denominator <= f32::EPSILON {
         return 0.0;
     }
@@ -573,9 +573,10 @@ pub fn normalize_embedding(values: &[f32]) -> Result<[f32; 512], AlgoError> {
             reason: "EdgeFace embedding L2 范数无效".to_string(),
         });
     }
+    let inv_norm = 1.0 / norm;
     let mut embedding = [0.0f32; 512];
-    for (target, source) in embedding.iter_mut().zip(values) {
-        *target = *source / norm;
+    for (target, &source) in embedding.iter_mut().zip(values) {
+        *target = source * inv_norm;
     }
     Ok(embedding)
 }
@@ -613,8 +614,8 @@ pub fn prepare_detector_input_for(
     let mut canvas = vec![114u8; canvas_len];
     let dst_width = dst_w as usize;
     let scaled_width = layout.scaled_w as usize;
+    let row_len = scaled_width.checked_mul(3).ok_or(AlgoError::OutOfMemory)?;
     for y in 0..layout.scaled_h as usize {
-        let row_len = scaled_width.checked_mul(3).ok_or(AlgoError::OutOfMemory)?;
         let src_offset = y.checked_mul(row_len).ok_or(AlgoError::OutOfMemory)?;
         let src_end = src_offset
             .checked_add(row_len)

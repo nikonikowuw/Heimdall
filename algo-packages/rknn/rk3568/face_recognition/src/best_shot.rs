@@ -190,7 +190,7 @@ impl BestShotManager {
                 record.score = score;
                 record.quality = quality;
             }
-            record.embedding = fused.to_vec();
+            record.embedding.copy_from_slice(&fused);
             record.fused_count += 1;
             record.total_weight = prev_weight + weight;
             record.last_extract_frame_id = frame_id;

@@ -58,7 +58,7 @@ pub fn compute_quality(
         .iter()
         .map(|score| finite_or_zero(*score).clamp(0.0, 1.0))
         .sum::<f32>()
-        / landmark_scores.len() as f32;
+        * 0.2;
     // YOLOv5-face 没有独立 Laplacian 输出，关键点置信度是 fast path 上的低成本模糊代理。
     let blur = (1.0 - average_landmark_score).clamp(0.0, 1.0);
     let size = face_width.max(0.0);

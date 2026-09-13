@@ -47,6 +47,8 @@ pub fn associate_persons_and_faces(
         // 头部先验锚点 (位于身体中轴，顶部向下 15% 处)
         let anchor_x = px1 + pw * 0.5;
         let anchor_y = py1 + ph * 0.15;
+        let inv_pw = 1.0 / pw;
+        let inv_head_h = 1.0 / (0.45 * ph);
 
         for (f_idx, f) in faces.iter().enumerate() {
             let fw = f.bbox[2];
@@ -74,8 +76,8 @@ pub fn associate_persons_and_faces(
             }
 
             // 归一化欧式几何距离（比较平方距离，避免在 N*M 内层循环中开方）
-            let dx = (fcx - anchor_x) / pw;
-            let dy = (fcy - anchor_y) / (0.45 * ph);
+            let dx = (fcx - anchor_x) * inv_pw;
+            let dy = (fcy - anchor_y) * inv_head_h;
             let dist_sq = dx * dx + dy * dy;
 
             if dist_sq < 1.0 {

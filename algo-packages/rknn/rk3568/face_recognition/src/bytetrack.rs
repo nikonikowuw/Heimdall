@@ -28,8 +28,12 @@ pub fn box_iou(a: &Rect, b: &Rect) -> f32 {
     let inter_x2 = ax2.min(bx2);
     let inter_y2 = ay2.min(by2);
 
-    let inter_w = (inter_x2 - inter_x1).max(0.0);
-    let inter_h = (inter_y2 - inter_y1).max(0.0);
+    if inter_x2 <= inter_x1 || inter_y2 <= inter_y1 {
+        return 0.0;
+    }
+
+    let inter_w = inter_x2 - inter_x1;
+    let inter_h = inter_y2 - inter_y1;
     let inter_area = inter_w * inter_h;
 
     let area_a = (a[2] * a[3]).max(0.0);
@@ -110,8 +114,9 @@ impl KalmanBoxTracker {
                 let p_vp = self.covariance[(i + 4) * 8 + j];
                 let p_vv = self.covariance[(i + 4) * 8 + (j + 4)];
 
-                p_next[i * 8 + j] = p_pp + p_pv + p_vp + p_vv;
-                p_next[i * 8 + (j + 4)] = p_pv + p_vv;
+                let pv_vv = p_pv + p_vv;
+                p_next[i * 8 + j] = p_pp + p_vp + pv_vv;
+                p_next[i * 8 + (j + 4)] = pv_vv;
                 p_next[(i + 4) * 8 + j] = p_vp + p_vv;
                 p_next[(i + 4) * 8 + (j + 4)] = p_vv;
             }

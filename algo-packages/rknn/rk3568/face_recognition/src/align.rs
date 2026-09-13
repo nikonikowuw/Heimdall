@@ -54,10 +54,7 @@ pub fn estimate_similarity_checked(
     src: &[[f32; 2]; 5],
     dst: &[[f64; 2]; 5],
 ) -> Result<AffineMatrix2D, &'static str> {
-    let n = src.len() as f64;
-    if n == 0.0 {
-        return Err("输入点集为空");
-    }
+    const INV_N: f64 = 1.0 / 5.0;
 
     // 1. 计算源点集与目标点集的质心 (Centroids)
     let (mut src_cx, mut src_cy) = (0.0f64, 0.0f64);
@@ -68,10 +65,10 @@ pub fn estimate_similarity_checked(
         dst_cx += d[0];
         dst_cy += d[1];
     }
-    src_cx /= n;
-    src_cy /= n;
-    dst_cx /= n;
-    dst_cy /= n;
+    src_cx *= INV_N;
+    src_cy *= INV_N;
+    dst_cx *= INV_N;
+    dst_cy *= INV_N;
 
     // 2. 中心化并计算方差与协方差
     let mut src_var = 0.0f64;
@@ -167,11 +164,9 @@ pub fn apply_affine(
         let y_f = y as f32;
         let mut sx = m01 * y_f + m02;
         let mut sy = m11 * y_f + m12;
-        let out_row_offset = y * out_size * 3;
+        let mut out_offset = y * out_size * 3;
 
-        for x in 0..out_size {
-            let out_offset = out_row_offset + x * 3;
-
+        for _ in 0..out_size {
             if sx >= 0.0 && sy >= 0.0 && sx <= max_x && sy <= max_y {
                 let x0 = sx as usize;
                 let y0 = sy as usize;
@@ -209,6 +204,7 @@ pub fn apply_affine(
                 }
             }
 
+            out_offset += 3;
             sx += m00;
             sy += m10;
         }

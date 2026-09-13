@@ -55,8 +55,11 @@ impl RawFace {
         let iy1 = self.bbox[1].max(other.bbox[1]);
         let ix2 = ax2.min(bx2);
         let iy2 = ay2.min(by2);
-        let iw = (ix2 - ix1).max(0.0);
-        let ih = (iy2 - iy1).max(0.0);
+        if ix2 <= ix1 || iy2 <= iy1 {
+            return 0.0;
+        }
+        let iw = ix2 - ix1;
+        let ih = iy2 - iy1;
         let intersection = iw * ih;
         let union = self.area() + other.area() - intersection;
         if union > 0.0 {
@@ -94,11 +97,12 @@ fn compute_dfl(logits: &[f32]) -> Result<f32, AlgoError> {
         });
     }
     let inv_sum = 1.0 / exp_sum;
-    Ok(exp_vals
+    let weighted_sum: f32 = exp_vals
         .iter()
         .enumerate()
-        .map(|(i, &e)| (e * inv_sum) * i as f32)
-        .sum())
+        .map(|(i, &e)| e * i as f32)
+        .sum();
+    Ok(weighted_sum * inv_sum)
 }
 
 /// 单尺度解码：遍历 grid，解码 box + cls + kpt
@@ -155,13 +159,8 @@ fn decode_scale(
                 continue;
             }
 
-            // 快速过滤：score_sum < threshold 直接跳过
-            if objectness < conf_threshold {
-                continue;
-            }
-
-            // 检测置信度
-            if cls_score < conf_threshold {
+            // 快速过滤：低于阈值直接跳过
+            if objectness < conf_threshold || cls_score < conf_threshold {
                 continue;
             }
 
@@ -177,10 +176,13 @@ fn decode_scale(
             }
 
             // 还原为原图像素坐标 (x1, y1, x2, y2)
-            let x1 = (-box_offset[0] + gx as f32 + 0.5) * stride as f32;
-            let y1 = (-box_offset[1] + gy as f32 + 0.5) * stride as f32;
-            let x2 = (box_offset[2] + gx as f32 + 0.5) * stride as f32;
-            let y2 = (box_offset[3] + gy as f32 + 0.5) * stride as f32;
+            let cx = gx as f32 + 0.5;
+            let cy = gy as f32 + 0.5;
+            let stride_f = stride as f32;
+            let x1 = (cx - box_offset[0]) * stride_f;
+            let y1 = (cy - box_offset[1]) * stride_f;
+            let x2 = (cx + box_offset[2]) * stride_f;
+            let y2 = (cy + box_offset[3]) * stride_f;
 
             if x2 <= x1 || y2 <= y1 {
                 continue;
