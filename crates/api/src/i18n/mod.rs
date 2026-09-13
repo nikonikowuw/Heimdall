@@ -68,7 +68,7 @@ pub fn localize_api_message(code: u32, original_msg: &str, locale: Locale) -> St
         10000..=19999 => auth::translate_auth(code, original_msg, locale),
         20000..=29999 => camera::translate_camera(code, original_msg, locale),
         30000..=39999 => task::translate_task(code, original_msg, locale),
-        40002..=49999 => alarm::translate_alarm(code, original_msg, locale),
+        42000..=42999 => alarm::translate_alarm(code, original_msg, locale),
         51000..=51999 => system::translate_system(code, original_msg, locale),
         _ => common::translate_common(code, original_msg, locale),
     };
@@ -187,10 +187,50 @@ mod tests {
             "数据库操作异常"
         );
 
-        // Alarm 40000 段
+        // Alarm 42000 段
         assert_eq!(
-            localize_api_message(40002, "原消息", Locale::En),
+            localize_api_message(42001, "原消息", Locale::En),
             "Alarm record not found"
+        );
+
+        // Face Quality 40002
+        assert_eq!(
+            localize_api_message(
+                40002,
+                "未在上传照片中检测到有效人脸，请上传正面清晰免冠照",
+                Locale::ZhCn
+            ),
+            "未在上传照片中检测到有效人脸，请上传正面清晰免冠照"
+        );
+        assert_eq!(
+            localize_api_message(
+                40002,
+                "未在上传照片中检测到有效人脸，请上传正面清晰免冠照",
+                Locale::ZhTw
+            ),
+            "未在上傳照片中檢測到有效人臉，請上傳正面清晰免冠照"
+        );
+        assert_eq!(
+            localize_api_message(
+                40002,
+                "未在上传照片中检测到有效人脸，请上传正面清晰免冠照",
+                Locale::En
+            ),
+            "No valid face detected in the photo. Please upload a clear frontal photo without hat or glasses."
+        );
+        assert_eq!(
+            localize_api_message(
+                40002,
+                "人脸质量评分过低 (0.32)，未满足 0.50 门禁要求，请上传光线充足的正面照片",
+                Locale::En
+            ),
+            "Face quality rejected: 人脸质量评分过低 (0.32)，未满足 0.50 门禁要求，请上传光线充足的正面照片"
+        );
+
+        // Resource Not Found 40401
+        assert_eq!(
+            localize_api_message(40401, "告警记录", Locale::En),
+            "Resource not found: 告警记录"
         );
 
         // System 51000 段

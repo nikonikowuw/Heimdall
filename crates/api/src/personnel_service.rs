@@ -632,3 +632,32 @@ async fn ensure_jpeg_bytes_async(raw: Vec<u8>) -> Result<Vec<u8>, ApiError> {
     .await
     .map_err(|e| ApiError::Internal(format!("图片转码任务调度异常: {e}")))?
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_ensure_jpeg_bytes_async_with_jpeg() {
+        let fake_jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        let result = ensure_jpeg_bytes_async(fake_jpeg.clone()).await.unwrap();
+        assert_eq!(result, fake_jpeg);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_jpeg_bytes_async_with_webp() {
+        // 1x1 像素有效 WebP 格式
+        let tiny_webp = vec![
+            0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50,
+            0x38, 0x20, 0x18, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x9d, 0x01, 0x2a, 0x01, 0x00,
+            0x01, 0x00, 0x01, 0x00, 0x1c, 0x25, 0xa4, 0x00, 0x03, 0x70, 0x00, 0xfe, 0xfd, 0xc0,
+            0x80, 0x00,
+        ];
+        let result = ensure_jpeg_bytes_async(tiny_webp).await.unwrap();
+        // 确保转码产物是合法 JPEG（以 0xFF 0xD8 开头）
+        assert!(result.len() >= 2);
+        assert_eq!(result[0], 0xFF);
+        assert_eq!(result[1], 0xD8);
+    }
+}

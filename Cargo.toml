@@ -68,7 +68,7 @@ parking_lot = "0.12"
 url = "2.5"
 mime_guess = "2.0"
 libloading = "0.8"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 sha2 = "0.10"
 static_assertions = "1.1"
 libc = "0.2"
