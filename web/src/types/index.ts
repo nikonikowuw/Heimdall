@@ -105,12 +105,19 @@ export interface SubStreamCandidate {
   description: string
 }
 
+export interface FaceTrack {
+  bbox: [number, number, number, number] // [x1, y1, x2, y2] 归一化坐标 0.0 ~ 1.0
+  confidence: number
+  qualityScore?: number
+}
+
 export interface TrackedBBox {
   trackId: number
   label: string
   confidence: number
   qualityScore?: number
   bbox: [number, number, number, number] // [x1, y1, x2, y2] 归一化坐标 0.0 ~ 1.0
+  face?: FaceTrack // 挂载的人脸详情
   trajectory?: [number, number][]
 }
 

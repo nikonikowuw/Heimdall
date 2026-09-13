@@ -275,13 +275,15 @@ pub fn apply_affine(
     output
 }
 
-/// 将归一化/像素关键点转换为 112x112 对齐图像。
-pub fn align_face(
-    image: &[u8],
+/// 将归一化/像素关键点转换为 source-top-left -> 112x112 target-top-left 仿射矩阵。
+///
+/// 矩阵布局为 `[a, b, tx, c, d, ty]`，对应 `x' = ax + by + tx`、
+/// `y' = cx + dy + ty`。该矩阵可直接交给设备侧 Core Image 预处理。
+pub fn face_alignment_matrix(
     width: u32,
     height: u32,
     landmarks: &[[f32; 2]; 5],
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<[f64; 6], &'static str> {
     if width == 0 || height == 0 {
         return Err("人脸图像尺寸不能为 0");
     }
@@ -291,9 +293,27 @@ pub fn align_face(
             point[0] *= width as f32;
             point[1] *= height as f32;
         }
+        if !point[0].is_finite() || !point[1].is_finite() {
+            return Err("人脸关键点包含非有限值");
+        }
     }
-    let matrix = estimate_affine(&source, &ARC_FACE_TEMPLATE);
-    let aligned = apply_affine(image, width, height, matrix, 112);
+    let matrix = estimate_affine_checked(&source, &ARC_FACE_TEMPLATE)?;
+    let coefficients = matrix.coefficients();
+    if coefficients.iter().any(|value| !value.is_finite()) {
+        return Err("人脸对齐矩阵包含非有限值");
+    }
+    Ok(coefficients)
+}
+
+/// 将归一化/像素关键点转换为 112x112 对齐图像。
+pub fn align_face(
+    image: &[u8],
+    width: u32,
+    height: u32,
+    landmarks: &[[f32; 2]; 5],
+) -> Result<Vec<u8>, &'static str> {
+    let matrix = face_alignment_matrix(width, height, landmarks)?;
+    let aligned = apply_affine(image, width, height, AffineMatrix2D(matrix), 112);
     if aligned.len() == 112 * 112 * 3 {
         Ok(aligned)
     } else {

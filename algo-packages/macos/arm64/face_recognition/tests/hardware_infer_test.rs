@@ -1,18 +1,72 @@
 #[cfg(target_os = "macos")]
 #[test]
-#[ignore = "需要 macOS 14+、Apple Silicon 和两个 CoreML 模型包"]
+#[ignore = "需要 macOS 14+、Apple Silicon 和三个 CoreML 模型包"]
 fn hardware_inference_requires_real_models() {
     let package_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    assert!(
-        package_root.join("model/yolov8_face.mlpackage").exists()
-            || package_root.join("model/yolov5n_face.mlpackage").exists()
-    );
+    assert!(package_root.join("model/yolov8_face.mlpackage").exists());
+    assert!(package_root.join("model/yolo26n.mlpackage").exists());
     assert!(package_root.join("model/edgeface_s.mlpackage").exists());
 }
 
 #[cfg(target_os = "macos")]
 #[test]
-#[ignore = "需要 macOS 14+、Apple Silicon 和两个 CoreML 模型包"]
+#[ignore = "需要 macOS 14+、Apple Silicon 和三个 CoreML 模型包"]
+fn test_device_side_embedding_keeps_pixelbuffer_path() {
+    use face_recognition_coreml::align::{align_face, face_alignment_matrix};
+    use face_recognition_coreml::coreml::{CoreMlFaceModels, OwnedPixelBuffer};
+    use face_recognition_coreml::detect::{decode_face_detections, nms, unmap_letterbox};
+    use face_recognition_coreml::{cosine_similarity, normalize_embedding, prepare_detector_input};
+
+    let package_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let image = image::open(package_root.join("testimage.jpg"))
+        .expect("读取测试图片应成功")
+        .to_rgb8();
+    let (width, height) = image.dimensions();
+    let models = CoreMlFaceModels::load(package_root).expect("CoreML 模型应加载成功");
+
+    let (detector_rgb, detector_mode) = prepare_detector_input(&image).expect("检测预处理应成功");
+    let detector_surface =
+        OwnedPixelBuffer::from_rgb(&detector_rgb, 640, 384).expect("创建检测 CVPixelBuffer 应成功");
+    // SAFETY: detector_surface 在同步预测完成前保持所有权。
+    let raw_output =
+        unsafe { models.predict_detector(detector_surface.as_ptr()) }.expect("人脸检测应成功");
+    let mut faces = decode_face_detections(&raw_output, 0.5);
+    nms(&mut faces, 0.45);
+    unmap_letterbox(&mut faces, &detector_mode, width, height);
+    let face = faces
+        .into_iter()
+        .max_by(|left, right| left.score.total_cmp(&right.score))
+        .expect("测试图应至少包含一张人脸");
+
+    let matrix =
+        face_alignment_matrix(width, height, &face.landmarks).expect("人脸关键点应能生成仿射矩阵");
+    let source = OwnedPixelBuffer::from_rgb(image.as_raw(), width, height)
+        .expect("创建源 CVPixelBuffer 应成功");
+    // SAFETY: source 在同步调用完成前保持所有权；模型不会保存该输入 surface。
+    let device_values = unsafe {
+        models
+            .predict_embedding_from_pixelbuffer(source.as_ptr(), width, height, matrix)
+            .expect("设备侧 Core Image -> CoreML 特征提取应成功")
+    };
+    let device_embedding = normalize_embedding(&device_values).expect("设备 embedding 应有效");
+
+    let aligned =
+        align_face(image.as_raw(), width, height, &face.landmarks).expect("CPU 对齐回归路径应成功");
+    let cpu_values = models
+        .predict_embedding(&aligned)
+        .expect("CPU 对齐后的 EdgeFace 应成功");
+    let cpu_embedding = normalize_embedding(&cpu_values).expect("CPU embedding 应有效");
+
+    let similarity = cosine_similarity(&device_embedding, &cpu_embedding);
+    assert!(
+        similarity > 0.90,
+        "设备 affine 与 CPU affine 的 embedding 相似度过低: {similarity}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "需要 macOS 14+、Apple Silicon 和三个 CoreML 模型包"]
 fn library_hooks_load_and_release_coreml_models() {
     use std::ffi::CString;
 
@@ -44,7 +98,7 @@ fn library_hooks_load_and_release_coreml_models() {
 
 #[cfg(target_os = "macos")]
 #[test]
-#[ignore = "需要 macOS 14+、Apple Silicon 和两个 CoreML 模型包"]
+#[ignore = "需要 macOS 14+、Apple Silicon 和三个 CoreML 模型包"]
 fn test_face_extraction_and_cosine_similarity() {
     use std::ffi::CString;
 

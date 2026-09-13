@@ -81,7 +81,13 @@ pub const DEFAULT_CAPTURE_BATCH_SIZE: usize = 32;
 /// 默认抓拍攒批最大刷新等待时间 (毫秒)
 pub const DEFAULT_CAPTURE_FLUSH_INTERVAL_MS: u64 = 500;
 
-/// 客观通行抓拍凭据异步持久化服务
+/// 低频识别输入；embedding 只在 API 后台内存中存在。
+#[derive(Debug, Clone, Copy)]
+struct RecognitionFeature {
+    embedding: [f32; 512],
+    quality_score: f32,
+}
+
 ///
 /// 核心职责：
 /// 1. 订阅管线分析引擎发出的客观通行抓拍事件 (`PipelineCaptureEvent`)；
@@ -274,8 +280,7 @@ impl CaptureDispatchService {
             }
         };
 
-        let (Some(gallery_index), Some(algo_registry)) = (&self.gallery_index, &self.algo_registry)
-        else {
+        let Some(gallery_index) = &self.gallery_index else {
             return;
         };
 
@@ -288,24 +293,48 @@ impl CaptureDispatchService {
         let Some(snap) = &event.snapshot else {
             return;
         };
-        if snap.crop_image_rel_path.is_empty() {
-            return;
-        }
 
         if gallery_index.count().await == 0 {
             return;
         }
 
+        // 新版 face_recognition 包在 best-shot 帧直接把 embedding 通过 C ABI
+        // sidecar 交给宿主；这里优先使用它，避免实时识别再次读盘、JPEG 解码和
+        // 重复调用模型。旧包没有 sidecar 时保留一次性的证据 JPEG 回退路径。
         let base_dir = self.pipeline.snapshot_engine().base_evidence_dir();
-        let crop_path = base_dir.join(&snap.crop_image_rel_path);
-        let crop_bytes = match tokio::fs::read(&crop_path).await {
-            Ok(b) => b,
-            Err(_) => return,
-        };
-
-        let extraction = match algo_registry.extract_face(&crop_bytes).await {
-            Ok(ext) => ext,
-            Err(_) => return,
+        let feature = if let Some(embedding) = event.tracked_object.embedding.as_ref() {
+            RecognitionFeature {
+                embedding: *embedding.as_ref(),
+                quality_score: event
+                    .tracked_object
+                    .quality_score
+                    .unwrap_or(event.tracked_object.confidence)
+                    .clamp(0.0, 1.0),
+            }
+        } else {
+            if snap.crop_image_rel_path.is_empty() {
+                return;
+            }
+            let Some(algo_registry) = &self.algo_registry else {
+                return;
+            };
+            let crop_path = base_dir.join(&snap.crop_image_rel_path);
+            let crop_bytes = match tokio::fs::read(&crop_path).await {
+                Ok(b) => b,
+                Err(_) => return,
+            };
+            let extraction = match algo_registry.extract_face(&crop_bytes).await {
+                Ok(ext) => ext,
+                Err(_) => return,
+            };
+            let embedding = match extraction.embedding.try_into() {
+                Ok(embedding) => embedding,
+                Err(_) => return,
+            };
+            RecognitionFeature {
+                embedding,
+                quality_score: extraction.quality_score,
+            }
         };
 
         // 动态解析摄像头关联的算法实例阈值 (未显式配置时回退到安全默认值)
@@ -315,13 +344,13 @@ impl CaptureDispatchService {
 
         // 遵循 docs/algo/EdgeFace.md 约定的自适应置信度动态微调
         // 质量评分围绕 0.50 基准点浮动 ±0.05，质量越低门槛越高，抑制低质误报
-        let quality_adjustment = (extraction.quality_score - 0.5) * 0.1;
+        let quality_adjustment = (feature.quality_score - 0.5) * 0.1;
         let adaptive_confirm = (confirm_threshold - quality_adjustment).clamp(0.40, 0.95);
         let adaptive_review = (review_threshold - quality_adjustment).clamp(0.30, adaptive_confirm);
 
         // 执行 1:N 余弦比对 Top-5，底线门槛为 adaptive_review
         let candidates = gallery_index
-            .search_top_k(&extraction.embedding, 5, adaptive_review)
+            .search_top_k(&feature.embedding, 5, adaptive_review)
             .await;
 
         if candidates.is_empty() {

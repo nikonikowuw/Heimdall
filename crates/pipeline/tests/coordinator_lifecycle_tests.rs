@@ -66,6 +66,7 @@ impl InferenceBackend for MockInferBackend {
             confidence: 0.95,
             quality_score: None,
             bbox: BoundingBox::new(0.4, y - 0.3, 0.6, y),
+            face: None,
         }])
     }
 }

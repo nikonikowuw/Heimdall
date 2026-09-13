@@ -42,6 +42,7 @@ impl InferenceBackend for E2eMockInferBackend {
             quality_score: None,
             // 构造宽度 0.2，高度 0.3，底中心为 (0.5, y) 的目标框
             bbox: BoundingBox::new(0.4, y - 0.3, 0.6, y),
+            face: None,
         }])
     }
 }

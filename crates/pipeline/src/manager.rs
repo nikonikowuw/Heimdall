@@ -759,6 +759,28 @@ impl PipelineManager {
         detections: Vec<Detection>,
         timestamp_ms: i64,
     ) -> AnalysisOutcome {
+        let embeddings = (0..detections.len()).map(|_| None).collect();
+        self.process_detections_for_algo_with_embeddings(
+            camera_id,
+            algorithm_id,
+            algorithm_kind,
+            detections,
+            embeddings,
+            timestamp_ms,
+        )
+        .await
+    }
+
+    /// 处理检测结果并转移 C ABI 低频特征 sidecar。
+    pub async fn process_detections_for_algo_with_embeddings(
+        &self,
+        camera_id: &str,
+        algorithm_id: &str,
+        algorithm_kind: impl Into<types::AlgorithmKind>,
+        detections: Vec<Detection>,
+        embeddings: Vec<Option<types::FaceEmbedding>>,
+        timestamp_ms: i64,
+    ) -> AnalysisOutcome {
         let ctx = self.get_or_create_context(camera_id).await;
 
         // 1. 局部仿射映射至全景坐标系
@@ -767,6 +789,9 @@ impl PipelineManager {
             .into_iter()
             .map(|mut det| {
                 det.bbox = mapper.map_bbox(&det.bbox);
+                if let Some(f) = &mut det.face {
+                    f.bbox = mapper.map_bbox(&f.bbox);
+                }
                 det
             })
             .collect();
@@ -776,15 +801,20 @@ impl PipelineManager {
         let tracker = trackers
             .entry(algorithm_id.to_string())
             .or_insert_with(SimpleTracker::new);
-        let tracked_objects = tracker.update(global_detections);
+        let tracked_objects = tracker.update_with_embeddings(global_detections, embeddings);
 
-        // 同步更新最新航迹快照 (PRD R1.1: 维护活跃航迹快照)
+        // 同步更新最新航迹快照 (PRD R1.1: 维护活跃航迹快照)。高频快照不携带
+        // backend-only embedding，识别抓拍仍使用下方 `tracked_objects` 原值。
         {
+            let public_tracks: Vec<TrackedObject> = tracked_objects
+                .iter()
+                .map(TrackedObject::without_embedding)
+                .collect();
             let mut current = ctx.current_tracks.write().await;
-            if tracked_objects.is_empty() {
+            if public_tracks.is_empty() {
                 current.remove(algorithm_id);
             } else {
-                current.insert(algorithm_id.to_string(), tracked_objects.clone());
+                current.insert(algorithm_id.to_string(), public_tracks);
             }
         }
 
@@ -1292,6 +1322,7 @@ mod tests {
             confidence: 0.95,
             quality_score: None,
             bbox: BoundingBox::new(0.2, 0.2, 0.4, 0.4),
+            face: None,
         }];
 
         let (tracked1, alarms1) = manager.process_detections(cam_id, local_det1, 1000).await;
@@ -1309,6 +1340,7 @@ mod tests {
             confidence: 0.96,
             quality_score: None,
             bbox: BoundingBox::new(0.21, 0.21, 0.41, 0.41),
+            face: None,
         }];
 
         let (tracked2, alarms2) = manager.process_detections(cam_id, local_det2, 2000).await;
@@ -1596,7 +1628,9 @@ mod tests {
                 label: "person".to_string(),
                 confidence: 0.9,
                 quality_score: None,
+                embedding: None,
                 bbox: BoundingBox::new(0.1, 0.1, 0.4, 0.4),
+                face: None,
                 trajectory: vec![],
             },
             occurred_at_ms: 1000,
@@ -1642,7 +1676,9 @@ mod tests {
                 label: "face".to_string(),
                 confidence: 0.98,
                 quality_score: Some(0.85),
+                embedding: None,
                 bbox: types::BoundingBox::new(0.2, 0.2, 0.5, 0.5),
+                face: None,
                 trajectory: vec![],
             },
             snapshot: None,
@@ -1719,6 +1755,7 @@ mod tests {
             confidence: 0.95,
             quality_score: None,
             bbox: types::BoundingBox::new(0.1, 0.2, 0.3, 0.4),
+            face: None,
         };
 
         let outcome = manager
@@ -1743,6 +1780,7 @@ mod tests {
             confidence: 0.95,
             quality_score: Some(0.88),
             bbox: types::BoundingBox::new(0.2, 0.2, 0.4, 0.4),
+            face: None,
         };
         let rec_outcome = manager
             .process_detections_for_algo(

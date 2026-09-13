@@ -593,6 +593,22 @@ export function LivePlayer({
           ctx.lineWidth = isHero ? 2 : 1.5
           ctx.strokeRect(x, y, boxW, boxH)
 
+          // 2.1 若包含结构化人脸框，同时高亮人脸精细检测框
+          if (item.face) {
+            const [fx1, fy1, fx2, fy2] = item.face.bbox
+            const fx = fx1 * w
+            const fy = fy1 * h
+            const fboxW = (fx2 - fx1) * w
+            const fboxH = (fy2 - fy1) * h
+
+            ctx.save()
+            ctx.strokeStyle = '#8b5cf6'
+            ctx.lineWidth = isHero ? 1.8 : 1.2
+            ctx.setLineDash([3, 2])
+            ctx.strokeRect(fx, fy, fboxW, fboxH)
+            ctx.restore()
+          }
+
           // 3. 绘制目标标签与置信度胶囊
           ctx.fillStyle = isPerson
             ? 'rgba(6, 182, 212, 0.85)'
@@ -600,9 +616,10 @@ export function LivePlayer({
               ? 'rgba(139, 92, 246, 0.85)'
               : 'rgba(16, 185, 129, 0.85)'
           const detPct = `${(item.confidence * 100).toFixed(0)}%`
+          const faceQuality = item.face?.qualityScore ?? (isFace ? item.qualityScore : undefined)
           const labelText =
-            isFace && item.qualityScore !== undefined
-              ? `#${item.trackId} ${item.label} Q:${(item.qualityScore * 100).toFixed(0)}% (${detPct})`
+            faceQuality !== undefined
+              ? `#${item.trackId} ${item.label} Q:${(faceQuality * 100).toFixed(0)}% (${detPct})`
               : `#${item.trackId} ${item.label} ${detPct}`
           ctx.font = isHero ? '600 11px monospace' : '500 9px monospace'
           const textWidth = ctx.measureText(labelText).width

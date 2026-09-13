@@ -191,6 +191,12 @@ impl RuleEvaluator {
             .any(|r| r.role == DetectionRuleRole::Roi || r.role == DetectionRuleRole::Line);
 
         for obj in tracked_objects {
+            // 人脸识别类任务的人员目标：若当前帧未检测到人脸（如背身、低头），
+            // 暂不触发抓拍判定，避免在无脸帧消耗防抖冷却，等待其转正脸时再触发抓拍。
+            if obj.label == "person" && obj.face.is_none() {
+                continue;
+            }
+
             let bottom_center = obj.bbox.bottom_center();
 
             if is_object_masked(rules, bottom_center) {
@@ -267,7 +273,9 @@ mod tests {
             label: "person".to_string(),
             confidence: 0.9,
             quality_score: None,
+            embedding: None,
             bbox: BoundingBox::new(0.1, 0.1, 0.3, 0.3),
+            face: None,
             trajectory: vec![(0.2, 0.3)],
         };
 
@@ -281,7 +289,9 @@ mod tests {
             label: "person".to_string(),
             confidence: 0.9,
             quality_score: None,
+            embedding: None,
             bbox: BoundingBox::new(0.6, 0.6, 0.8, 0.8),
+            face: None,
             trajectory: vec![(0.7, 0.8)],
         };
 
@@ -307,7 +317,9 @@ mod tests {
             label: "car".to_string(),
             confidence: 0.95,
             quality_score: None,
+            embedding: None,
             bbox: BoundingBox::new(0.4, 0.6, 0.6, 0.8),
+            face: None,
             trajectory: vec![(0.5, 0.3), (0.5, 0.7)],
         };
 
@@ -347,7 +359,9 @@ mod tests {
             label: "person".to_string(),
             confidence: 0.95,
             quality_score: None,
+            embedding: None,
             bbox: BoundingBox::new(0.4, 0.4, 0.6, 0.6),
+            face: None,
             trajectory: vec![(0.5, 0.6)],
         };
 
@@ -392,7 +406,9 @@ mod tests {
             label: "person".to_string(),
             confidence: 0.9,
             quality_score: None,
+            embedding: None,
             bbox: BoundingBox::new(0.05, 0.05, 0.2, 0.2),
+            face: None,
             trajectory: vec![(0.125, 0.2)],
         };
 
@@ -403,7 +419,9 @@ mod tests {
             label: "person".to_string(),
             confidence: 0.92,
             quality_score: None,
+            embedding: None,
             bbox: BoundingBox::new(0.5, 0.5, 0.7, 0.7),
+            face: None,
             trajectory: vec![(0.6, 0.7)],
         };
 
@@ -434,7 +452,9 @@ mod tests {
             label: "face".to_string(),
             confidence: 0.96,
             quality_score: Some(0.88),
+            embedding: None,
             bbox: BoundingBox::new(0.4, 0.4, 0.6, 0.6),
+            face: None,
             trajectory: vec![(0.5, 0.6)],
         };
 
@@ -480,7 +500,9 @@ mod tests {
             label: "face".to_string(),
             confidence: 0.95,
             quality_score: Some(0.85),
+            embedding: None,
             bbox: BoundingBox::new(0.5, 0.5, 0.7, 0.7),
+            face: None,
             trajectory: vec![(0.6, 0.7)],
         };
         let in_obj = TrackedObject {
@@ -489,7 +511,9 @@ mod tests {
             label: "face".to_string(),
             confidence: 0.95,
             quality_score: Some(0.89),
+            embedding: None,
             bbox: BoundingBox::new(0.1, 0.1, 0.2, 0.2),
+            face: None,
             trajectory: vec![(0.15, 0.2)],
         };
 
@@ -513,7 +537,9 @@ mod tests {
             label: "face".to_string(),
             confidence: 0.97,
             quality_score: Some(0.91),
+            embedding: None,
             bbox: BoundingBox::new(0.4, 0.4, 0.6, 0.6),
+            face: None,
             // 从 y=0.4 移动到 y=0.6，跨越 y=0.5 绊线
             trajectory: vec![(0.5, 0.4), (0.5, 0.6)],
         };

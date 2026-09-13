@@ -7,7 +7,7 @@ pub mod package;
 pub mod sandbox;
 pub mod worker;
 
-pub use backend::InferenceBackend;
+pub use backend::{InferenceBackend, InferenceResult};
 pub use backends::{CoreMlBackend, CpuBackend};
 pub use c_abi::loader::FaceExtraction;
 pub use error::InferError;

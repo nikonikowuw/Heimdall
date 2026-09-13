@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+/// 后端内存中的 512 维归一化人脸特征。
+///
+/// 该类型只允许在推理、管线和 API 后台之间转移；所有面向前端的 DTO
+/// 都通过 `serde(skip)` 排除它，避免隐私数据进入 WebSocket/HTTP JSON。
+pub type FaceEmbedding = Box<[f32; 512]>;
+
 /// 归一化矩形边界框 [0.0, 1.0]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BoundingBox {
@@ -36,6 +42,40 @@ impl BoundingBox {
     }
 }
 
+/// 挂载在主体目标上的精细人脸详情
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceDetail {
+    pub bbox: BoundingBox,
+    pub confidence: f32,
+    /// 人脸姿态综合质量评分 (0.0..=1.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f32>,
+    /// 低频人脸识别 sidecar；绝不序列化到 TrackDto 或其它前端 DTO。
+    #[serde(skip)]
+    pub embedding: Option<FaceEmbedding>,
+}
+
+impl FaceDetail {
+    pub fn new(bbox: BoundingBox, confidence: f32) -> Self {
+        Self {
+            bbox,
+            confidence,
+            quality_score: None,
+            embedding: None,
+        }
+    }
+
+    pub fn without_embedding(&self) -> Self {
+        Self {
+            bbox: self.bbox,
+            confidence: self.confidence,
+            quality_score: self.quality_score,
+            embedding: None,
+        }
+    }
+}
+
 /// 单个目标检测结果
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Detection {
@@ -46,6 +86,9 @@ pub struct Detection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_score: Option<f32>,
     pub bbox: BoundingBox,
+    /// 挂载的人脸详情 (仅在人员目标挂载人脸时有效)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<FaceDetail>,
 }
 
 /// ByteTrack 多目标跟踪后的航迹目标
@@ -59,8 +102,45 @@ pub struct TrackedObject {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_score: Option<f32>,
     pub bbox: BoundingBox,
+    /// 挂载的人脸详情 (仅在人员目标挂载人脸时有效)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<FaceDetail>,
+    /// 低频人脸识别 sidecar；绝不序列化到 TrackDto 或其它前端 DTO。
+    #[serde(skip)]
+    pub embedding: Option<FaceEmbedding>,
     /// 历史轨迹点集合 (通常保留最近 N 帧底边中心点，用于绊线跨越判定)
     pub trajectory: Vec<(f64, f64)>,
+}
+
+impl TrackedObject {
+    /// Clone a track for high-frequency/public metadata paths without carrying the
+    /// backend-only recognition sidecar.
+    pub fn without_embedding(&self) -> Self {
+        Self {
+            track_id: self.track_id,
+            class_id: self.class_id,
+            label: self.label.clone(),
+            confidence: self.confidence,
+            quality_score: self.quality_score,
+            bbox: self.bbox,
+            face: self.face.as_ref().map(|f| f.without_embedding()),
+            embedding: None,
+            trajectory: self.trajectory.clone(),
+        }
+    }
+
+    /// 获取人脸检测框（若挂载人脸）
+    pub fn face_bbox(&self) -> Option<BoundingBox> {
+        self.face.as_ref().map(|f| f.bbox)
+    }
+
+    /// 获取人脸特征向量（优先从 face 读取，若无则从根字段读取）
+    pub fn embedding(&self) -> Option<&FaceEmbedding> {
+        self.face
+            .as_ref()
+            .and_then(|f| f.embedding.as_ref())
+            .or(self.embedding.as_ref())
+    }
 }
 
 /// 算法分类与执行责任流向
@@ -125,6 +205,17 @@ impl std::fmt::Display for AlgorithmKind {
     }
 }
 
+/// 推送给前端播放器的精细人脸航迹详情
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceTrackDto {
+    /// 归一化两点坐标 [x1, y1, x2, y2]
+    pub bbox: [f32; 4],
+    pub confidence: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f32>,
+}
+
 /// 实时推送给前端播放器的目标检测框与航迹 DTO (采用扁平数组降低高频传输开销)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,6 +228,9 @@ pub struct TrackDto {
     pub quality_score: Option<f32>,
     /// 归一化坐标 [x1, y1, x2, y2]
     pub bbox: [f32; 4],
+    /// 挂载的人脸详情 (若人员检出并关联人脸)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<FaceTrackDto>,
     /// 历史轨迹坐标序列 [[x, y], ...]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trajectory: Vec<(f64, f64)>,
@@ -148,8 +242,15 @@ impl From<&TrackedObject> for TrackDto {
             track_id: obj.track_id,
             label: obj.label.clone(),
             confidence: obj.confidence,
-            quality_score: obj.quality_score,
+            quality_score: obj
+                .quality_score
+                .or_else(|| obj.face.as_ref().and_then(|f| f.quality_score)),
             bbox: [obj.bbox.x1, obj.bbox.y1, obj.bbox.x2, obj.bbox.y2],
+            face: obj.face.as_ref().map(|f| FaceTrackDto {
+                bbox: [f.bbox.x1, f.bbox.y1, f.bbox.x2, f.bbox.y2],
+                confidence: f.confidence,
+                quality_score: f.quality_score,
+            }),
             trajectory: obj.trajectory.clone(),
         }
     }
@@ -170,6 +271,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn public_track_clone_drops_embedding_sidecar() {
+        let object = TrackedObject {
+            track_id: 7,
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.9,
+            quality_score: Some(0.8),
+            bbox: BoundingBox::new(0.1, 0.2, 0.3, 0.4),
+            face: Some(FaceDetail {
+                bbox: BoundingBox::new(0.12, 0.22, 0.28, 0.38),
+                confidence: 0.95,
+                quality_score: Some(0.8),
+                embedding: Some(Box::new([0.25; 512])),
+            }),
+            embedding: Some(Box::new([0.25; 512])),
+            trajectory: vec![(0.2, 0.6)],
+        };
+
+        let public = object.without_embedding();
+        assert!(object.embedding.is_some());
+        assert!(object.face.as_ref().unwrap().embedding.is_some());
+        assert!(public.embedding.is_none());
+        assert!(public.face.as_ref().unwrap().embedding.is_none());
+        assert_eq!(public.track_id, object.track_id);
+        assert_eq!(public.face_bbox(), object.face_bbox());
+        assert_eq!(public.trajectory, object.trajectory);
+    }
+
+    #[test]
     fn test_track_dto_and_payload_serialization() {
         let obj = TrackedObject {
             track_id: 12,
@@ -178,12 +308,29 @@ mod tests {
             confidence: 0.89,
             quality_score: Some(0.92),
             bbox: BoundingBox::new(0.15, 0.22, 0.35, 0.68),
+            face: Some(FaceDetail {
+                bbox: BoundingBox::new(0.20, 0.22, 0.30, 0.35),
+                confidence: 0.96,
+                quality_score: Some(0.92),
+                embedding: None,
+            }),
+            embedding: None,
             trajectory: vec![(0.25, 0.65), (0.25, 0.68)],
         };
         let dto = TrackDto::from(&obj);
         assert_eq!(dto.track_id, 12);
         assert_eq!(dto.bbox, [0.15, 0.22, 0.35, 0.68]);
+        assert_eq!(
+            dto.face,
+            Some(FaceTrackDto {
+                bbox: [0.20, 0.22, 0.30, 0.35],
+                confidence: 0.96,
+                quality_score: Some(0.92),
+            })
+        );
         assert_eq!(dto.quality_score, Some(0.92));
+        let serialized_track = serde_json::to_value(&obj).expect("航迹序列化应成功");
+        assert!(serialized_track.get("embedding").is_none());
 
         let payload = CameraTracksPayload {
             camera_id: "CAM-01".to_string(),

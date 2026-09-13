@@ -7,7 +7,7 @@
 //! 5. 航迹消亡时同步级联清理报警冷却映射，保证常驻内存严格有界。
 
 use std::collections::{HashMap, HashSet};
-use types::{BoundingBox, Detection, DetectionRuleRole, TrackedObject};
+use types::{BoundingBox, Detection, DetectionRuleRole, FaceDetail, FaceEmbedding, TrackedObject};
 
 /// 边界框四维速度向量 (dx1, dy1, dx2, dy2)
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -88,7 +88,9 @@ struct TrackState {
     label: String,
     confidence: f32,
     quality_score: Option<f32>,
+    embedding: Option<FaceEmbedding>,
     bbox: BoundingBox,
+    face: Option<FaceDetail>,
     /// 速度估计向量 (dx1, dy1, dx2, dy2)
     velocity: Velocity,
     trajectory: Vec<(f64, f64)>,
@@ -132,8 +134,23 @@ impl SimpleTracker {
         }
     }
 
-    /// 输入当前帧检测列表，执行航迹更新并输出当前活跃的 TrackedObject
+    /// 输入当前帧检测列表，执行航迹更新并输出当前活跃的 TrackedObject。
     pub fn update(&mut self, detections: Vec<Detection>) -> Vec<TrackedObject> {
+        let embeddings = (0..detections.len()).map(|_| None).collect();
+        self.update_with_embeddings(detections, embeddings)
+    }
+
+    /// 更新航迹并转移与检测索引对应的低频 embedding sidecar。
+    pub fn update_with_embeddings(
+        &mut self,
+        detections: Vec<Detection>,
+        mut embeddings: Vec<Option<FaceEmbedding>>,
+    ) -> Vec<TrackedObject> {
+        if embeddings.len() > detections.len() {
+            embeddings.truncate(detections.len());
+        } else {
+            embeddings.resize_with(detections.len(), || None);
+        }
         let num_tracks = self.tracks.len();
         let num_dets = detections.len();
 
@@ -184,6 +201,21 @@ impl SimpleTracker {
                     track.bbox = det.bbox;
                     track.confidence = det.confidence;
                     track.quality_score = det.quality_score;
+                    if let Some(face) = &det.face {
+                        let mut face = face.clone();
+                        if let Some(embedding) = embeddings[d_idx].as_ref() {
+                            face.embedding = Some(embedding.clone());
+                            track.embedding = Some(embedding.clone());
+                        } else if let Some(existing_emb) = &track.embedding {
+                            face.embedding = Some(existing_emb.clone());
+                        }
+                        track.face = Some(face);
+                    } else {
+                        track.face = None;
+                    }
+                    if let Some(embedding) = embeddings[d_idx].as_ref() {
+                        track.embedding = Some(embedding.clone());
+                    }
                     track.lost_frames = 0;
 
                     let bottom_center = det.bbox.bottom_center();
@@ -202,13 +234,21 @@ impl SimpleTracker {
                 self.next_track_id += 1;
 
                 let bottom_center = det.bbox.bottom_center();
+                let mut face = det.face;
+                if let Some(f) = &mut face {
+                    if f.embedding.is_none() {
+                        f.embedding = embeddings[d_idx].clone();
+                    }
+                }
                 self.tracks.push(TrackState {
                     track_id,
                     class_id: det.class_id,
                     label: det.label,
                     confidence: det.confidence,
                     quality_score: det.quality_score,
+                    embedding: embeddings[d_idx].clone(),
                     bbox: det.bbox,
+                    face,
                     velocity: Velocity::ZERO,
                     trajectory: vec![bottom_center],
                     lost_frames: 0,
@@ -244,7 +284,9 @@ impl SimpleTracker {
                 label: t.label.clone(),
                 confidence: t.confidence,
                 quality_score: t.quality_score,
+                embedding: t.embedding.clone(),
                 bbox: t.bbox,
+                face: t.face.clone(),
                 trajectory: t.trajectory.clone(),
             })
             .collect()
@@ -333,6 +375,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_embedding_sidecar_follows_track_and_survives_normal_frames() {
+        let mut tracker = SimpleTracker::new();
+        let detection = Detection {
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.95,
+            quality_score: Some(0.9),
+            bbox: BoundingBox::new(0.2, 0.2, 0.4, 0.5),
+            face: None,
+        };
+        let embedding = Box::new([0.125; 512]);
+
+        let first =
+            tracker.update_with_embeddings(vec![detection.clone()], vec![Some(embedding.clone())]);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].embedding.as_deref(), Some(embedding.as_ref()));
+
+        let second = tracker.update_with_embeddings(vec![detection], vec![None]);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].embedding.as_deref(), Some(embedding.as_ref()));
+    }
+
+    #[test]
     fn test_tracker_continuous_tracking() {
         let mut tracker = SimpleTracker::new();
 
@@ -343,6 +408,7 @@ mod tests {
             confidence: 0.9,
             quality_score: None,
             bbox: BoundingBox::new(0.1, 0.1, 0.2, 0.2),
+            face: None,
         }];
         let res1 = tracker.update(dets1);
         assert_eq!(res1.len(), 1);
@@ -355,6 +421,7 @@ mod tests {
             confidence: 0.91,
             quality_score: None,
             bbox: BoundingBox::new(0.12, 0.12, 0.22, 0.22),
+            face: None,
         }];
         let res2 = tracker.update(dets2);
         assert_eq!(res2.len(), 1);
@@ -374,6 +441,7 @@ mod tests {
             confidence: 0.95,
             quality_score: None,
             bbox: BoundingBox::new(0.10, 0.10, 0.18, 0.18),
+            face: None,
         }];
         let res1 = tracker.update(det1);
         assert_eq!(res1.len(), 1);
@@ -386,6 +454,7 @@ mod tests {
             confidence: 0.93,
             quality_score: None,
             bbox: BoundingBox::new(0.12, 0.12, 0.20, 0.20),
+            face: None,
         }];
         let res2 = tracker.update(det2);
         assert_eq!(res2.len(), 1);
@@ -399,6 +468,7 @@ mod tests {
             confidence: 0.91,
             quality_score: None,
             bbox: BoundingBox::new(0.155, 0.155, 0.235, 0.235),
+            face: None,
         }];
         let res3 = tracker.update(det3);
         assert_eq!(res3.len(), 1);
@@ -416,6 +486,7 @@ mod tests {
             confidence: 0.95,
             quality_score: None,
             bbox: BoundingBox::new(0.10, 0.10, 0.20, 0.20),
+            face: None,
         }];
         let res1 = tracker.update(det1);
         let tid = res1[0].track_id;
@@ -427,6 +498,7 @@ mod tests {
             confidence: 0.95,
             quality_score: None,
             bbox: BoundingBox::new(0.12, 0.12, 0.22, 0.22),
+            face: None,
         }];
         let res2 = tracker.update(det2);
         assert_eq!(res2[0].track_id, tid);
@@ -443,6 +515,7 @@ mod tests {
             confidence: 0.95,
             quality_score: None,
             bbox: BoundingBox::new(0.155, 0.155, 0.255, 0.255),
+            face: None,
         }];
         let res4 = tracker.update(det4);
         assert_eq!(res4.len(), 1);
@@ -461,6 +534,7 @@ mod tests {
             confidence: 0.95,
             quality_score: None,
             bbox: BoundingBox::new(0.3, 0.3, 0.5, 0.5),
+            face: None,
         }];
         let res = tracker.update(dets);
         let tid = res[0].track_id;
@@ -484,6 +558,7 @@ mod tests {
             confidence: 0.95,
             quality_score: None,
             bbox: BoundingBox::new(0.3, 0.3, 0.5, 0.5),
+            face: None,
         }];
         let res = tracker.update(dets);
         let tid = res[0].track_id;

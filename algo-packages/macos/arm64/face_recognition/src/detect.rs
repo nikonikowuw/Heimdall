@@ -208,7 +208,11 @@ pub fn decode_person_detections(raw: &[f32], conf_threshold: f32) -> Vec<PersonC
             continue;
         }
 
-        let cls_id = row[5].round() as usize;
+        let cls_id = if row[5].is_finite() && row[5] >= 0.0 && row[5].fract() == 0.0 {
+            row[5] as usize
+        } else {
+            continue;
+        };
         if cls_id != PERSON_CLASS_ID {
             continue;
         }
@@ -394,6 +398,19 @@ pub fn unmap_letterbox(faces: &mut [RawFace], mode: &PreprocessMode, orig_w: u32
 mod tests {
     use super::*;
     use algo_sdk::cv::types::{LetterboxLayout, PreprocessMode};
+
+    #[test]
+    fn decodes_yolo26n_xyxy_person_rows_and_filters_classes() {
+        let mut raw = vec![0.0; PERSON_FIELDS * 3];
+        raw[0..6].copy_from_slice(&[32.0, 48.0, 160.0, 240.0, 0.91, 0.0]);
+        raw[6..12].copy_from_slice(&[10.0, 20.0, 80.0, 90.0, 0.99, 1.0]);
+        raw[12..18].copy_from_slice(&[10.0, 20.0, 80.0, 90.0, 0.99, f32::NAN]);
+
+        let persons = decode_person_detections(&raw, 0.4);
+        assert_eq!(persons.len(), 1);
+        assert_eq!(persons[0].bbox, [32.0, 48.0, 128.0, 192.0]);
+        assert!((persons[0].score - 0.91).abs() < 1e-6);
+    }
 
     #[test]
     fn decodes_and_filters_face_candidates() {

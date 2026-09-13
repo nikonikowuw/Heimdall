@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use base64::Engine;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
-use types::{BoundingBox, Detection, FrameHandle, FrameRef, PixelFormat};
+use types::{BoundingBox, Detection, FaceEmbedding, FrameHandle, FrameRef, PixelFormat};
 
-use crate::backend::InferenceBackend;
+use crate::backend::{InferenceBackend, InferenceResult};
 use crate::c_abi::loader::{check_c_status, FaceExtraction, LoadedLib, RawAlgoLibrary};
 use crate::c_abi::types::*;
 use crate::error::InferError;
@@ -189,6 +190,10 @@ impl InferenceBackend for AlgoInstance {
     }
 
     async fn detect(&self, frame: &FrameRef) -> Result<Vec<Detection>, InferError> {
+        Ok(self.detect_with_metadata(frame).await?.detections)
+    }
+
+    async fn detect_with_metadata(&self, frame: &FrameRef) -> Result<InferenceResult, InferError> {
         let _guard = self.lock.lock().await;
 
         // 清空上一轮可能残留的回调结果
@@ -291,14 +296,21 @@ impl InferenceBackend for AlgoInstance {
             .map(|mut lock| std::mem::take(&mut *lock))
             .unwrap_or_default();
 
-        // 解析回调产出的检测框 JSON
+        // 解析回调产出的检测框与低频特征 sidecar
         let mut detections = Vec::new();
+        let mut embeddings = Vec::new();
         for json_str in collected_results {
-            let parsed = parse_alarm_objects(&json_str)?;
-            detections.extend(parsed);
+            let parsed = parse_alarm_objects_with_metadata(&json_str)?;
+            for item in parsed {
+                detections.push(item.detection);
+                embeddings.push(item.embedding);
+            }
         }
 
-        Ok(detections)
+        Ok(InferenceResult {
+            detections,
+            embeddings,
+        })
     }
 }
 
@@ -412,8 +424,55 @@ fn stitch_quality_scores(
     }
 }
 
-/// 从算法包输出的 alarm/detection JSON 中解析目标框与质量元数据
-fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
+/// 解析后的检测目标与可选低频 embedding sidecar。
+#[derive(Debug)]
+struct ParsedDetection {
+    detection: Detection,
+    embedding: Option<FaceEmbedding>,
+}
+
+fn decode_face_embedding(encoded: &str) -> Result<FaceEmbedding, InferError> {
+    const EMBEDDING_BYTES: usize = 512 * std::mem::size_of::<f32>();
+    const EMBEDDING_BASE64_LEN: usize = EMBEDDING_BYTES.div_ceil(3) * 4;
+    if encoded.len() != EMBEDDING_BASE64_LEN {
+        return Err(InferError::JsonParse {
+            reason: format!(
+                "embedding Base64 长度非法: {}，预期 {}",
+                encoded.len(),
+                EMBEDDING_BASE64_LEN
+            ),
+        });
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| InferError::JsonParse {
+            reason: format!("embedding Base64 解码失败: {error}"),
+        })?;
+    if bytes.len() != EMBEDDING_BYTES {
+        return Err(InferError::JsonParse {
+            reason: format!(
+                "embedding 字节长度非法: {}，预期 {}",
+                bytes.len(),
+                EMBEDDING_BYTES
+            ),
+        });
+    }
+
+    let mut values = [0.0f32; 512];
+    for (index, chunk) in bytes.chunks(4).enumerate() {
+        values[index] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        if !values[index].is_finite() {
+            return Err(InferError::JsonParse {
+                reason: "embedding 包含非有限浮点数".to_string(),
+            });
+        }
+    }
+    Ok(Box::new(values))
+}
+
+/// 从算法包输出的 alarm/detection JSON 中解析目标框与质量元数据。
+fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetection>, InferError> {
     #[derive(Deserialize, Default)]
     struct RawQuality {
         #[serde(default)]
@@ -431,6 +490,17 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
     }
 
     #[derive(Deserialize)]
+    struct RawFaceDetail {
+        bbox: RawBBox,
+        #[serde(default)]
+        confidence: Option<f32>,
+        #[serde(default)]
+        quality_score: Option<f32>,
+        #[serde(default)]
+        embedding: Option<String>,
+    }
+
+    #[derive(Deserialize)]
     struct RawObject {
         #[serde(default)]
         class_id: usize,
@@ -443,7 +513,13 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
         #[serde(default)]
         box_coords: Option<RawBBox>,
         #[serde(default)]
+        embedding: Option<String>,
+        #[serde(default)]
         bbox: Option<RawBBox>,
+        #[serde(default)]
+        face: Option<RawFaceDetail>,
+        #[serde(default)]
+        face_bbox: Option<RawBBox>,
     }
 
     let val: serde_json::Value =
@@ -487,12 +563,16 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
                         });
                     }
                     let quality_score = f.quality.and_then(|q| q.score).map(|s| s.clamp(0.0, 1.0));
-                    detections.push(Detection {
-                        class_id: 0,
-                        label: "face".to_string(),
-                        confidence,
-                        quality_score,
-                        bbox,
+                    detections.push(ParsedDetection {
+                        detection: Detection {
+                            class_id: 0,
+                            label: "face".to_string(),
+                            confidence,
+                            quality_score,
+                            bbox,
+                            face: None,
+                        },
+                        embedding: None,
                     });
                 }
                 return Ok(detections);
@@ -546,17 +626,73 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
             .or_else(|| item.quality.and_then(|q| q.score))
             .map(|s| s.clamp(0.0, 1.0));
         let quality_score = stitch_quality_scores(&item.label, &bbox, self_quality, &parsed_faces);
+        let (face, embedding) = if let Some(raw_face) = item.face {
+            let f_bbox = raw_face.bbox.to_bounding_box()?;
+            let f_conf = raw_face.confidence.unwrap_or(item.confidence);
+            let f_qual = raw_face.quality_score.map(|s| s.clamp(0.0, 1.0));
+            let f_emb = raw_face
+                .embedding
+                .as_deref()
+                .map(decode_face_embedding)
+                .transpose()?;
+            (
+                Some(types::FaceDetail {
+                    bbox: f_bbox,
+                    confidence: f_conf,
+                    quality_score: f_qual,
+                    embedding: f_emb.clone(),
+                }),
+                f_emb,
+            )
+        } else if let Some(raw_face_bbox) = item.face_bbox {
+            // 兼容扁平 face_bbox 字段
+            let f_bbox = raw_face_bbox.to_bounding_box()?;
+            let f_emb = item
+                .embedding
+                .as_deref()
+                .map(decode_face_embedding)
+                .transpose()?;
+            (
+                Some(types::FaceDetail {
+                    bbox: f_bbox,
+                    confidence: item.confidence,
+                    quality_score,
+                    embedding: f_emb.clone(),
+                }),
+                f_emb,
+            )
+        } else {
+            let emb = item
+                .embedding
+                .as_deref()
+                .map(decode_face_embedding)
+                .transpose()?;
+            (None, emb)
+        };
 
-        detections.push(Detection {
-            class_id: item.class_id,
-            label: item.label,
-            confidence: item.confidence,
-            quality_score,
-            bbox,
+        detections.push(ParsedDetection {
+            detection: Detection {
+                class_id: item.class_id,
+                label: item.label,
+                confidence: item.confidence,
+                quality_score,
+                bbox,
+                face,
+            },
+            embedding,
         });
     }
 
     Ok(detections)
+}
+
+#[cfg(test)]
+/// 兼容只需要检测框的调用方；embedding sidecar 在这里被明确丢弃。
+fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
+    Ok(parse_alarm_objects_with_metadata(json_str)?
+        .into_iter()
+        .map(|item| item.detection)
+        .collect())
 }
 
 /// 计算目录下所有文件的总字节大小
@@ -1172,6 +1308,35 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_structured_person_with_face_bbox() {
+        let envelope = r#"{
+            "schema_version": 1,
+            "objects": [
+                {
+                    "class_id": 0,
+                    "label": "person",
+                    "confidence": 0.94,
+                    "bbox": [0.1, 0.2, 0.5, 0.9],
+                    "face": {
+                        "bbox": [0.2, 0.22, 0.35, 0.45],
+                        "confidence": 0.96,
+                        "quality_score": 0.87
+                    }
+                }
+            ]
+        }"#;
+
+        let dets = parse_alarm_objects(envelope).expect("parse structured envelope");
+        assert_eq!(dets.len(), 1);
+        assert_eq!(dets[0].label, "person");
+        assert_eq!(dets[0].bbox, BoundingBox::new(0.1, 0.2, 0.5, 0.9));
+        let face = dets[0].face.as_ref().expect("should have face detail");
+        assert_eq!(face.bbox, BoundingBox::new(0.2, 0.22, 0.35, 0.45));
+        assert_eq!(face.confidence, 0.96);
+        assert_eq!(face.quality_score, Some(0.87));
+    }
+
+    #[test]
     fn test_parse_face_envelope_with_quality_score() {
         let face_envelope = r#"{
             "schema_version": 1,
@@ -1279,6 +1444,51 @@ mod tests {
         let dets = parse_alarm_objects(envelope).expect("parse envelope");
         assert_eq!(dets.len(), 1);
         assert!(dets[0].quality_score.is_some());
+    }
+
+    #[test]
+    fn test_parse_best_shot_embedding_sidecar_only() {
+        let mut bytes = Vec::with_capacity(512 * 4);
+        for index in 0..512 {
+            bytes.extend_from_slice(&(index as f32 / 512.0).to_le_bytes());
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let envelope = serde_json::json!({
+            "schema_version": 1,
+            "objects": [{
+                "class_id": 0,
+                "label": "face",
+                "confidence": 0.91,
+                "quality_score": 0.88,
+                "embedding": encoded,
+                "bbox": [0.1, 0.2, 0.4, 0.8]
+            }]
+        });
+
+        let parsed = parse_alarm_objects_with_metadata(&envelope.to_string())
+            .expect("best-shot sidecar 应解析成功");
+        assert_eq!(parsed.len(), 1);
+        let embedding = parsed[0]
+            .embedding
+            .as_ref()
+            .expect("best-shot 必须携带 embedding");
+        assert_eq!(embedding.len(), 512);
+        assert!((embedding[1] - (1.0 / 512.0)).abs() < 1e-6);
+
+        let public_detections = parse_alarm_objects(&envelope.to_string()).expect("检测解析成功");
+        assert_eq!(public_detections.len(), 1);
+
+        let invalid = serde_json::json!({
+            "schema_version": 1,
+            "objects": [{
+                "class_id": 0,
+                "label": "face",
+                "confidence": 0.91,
+                "embedding": "AAAA",
+                "bbox": [0.1, 0.2, 0.4, 0.8]
+            }]
+        });
+        assert!(parse_alarm_objects_with_metadata(&invalid.to_string()).is_err());
     }
 
     #[tokio::test]

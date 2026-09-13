@@ -15,6 +15,7 @@ use algo_sdk::error::AlgoError;
 #[link(name = "objc", kind = "dylib")]
 #[link(name = "Foundation", kind = "framework")]
 #[link(name = "CoreML", kind = "framework")]
+#[link(name = "CoreImage", kind = "framework")]
 #[link(name = "CoreVideo", kind = "framework")]
 #[link(name = "Accelerate", kind = "framework")]
 extern "C" {
@@ -61,6 +62,45 @@ struct VImageBuffer {
     width: usize,
     row_bytes: usize,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgAffineTransform {
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    tx: f64,
+    ty: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgPoint {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgSize {
+    width: f64,
+    height: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgRect {
+    origin: CgPoint,
+    size: CgSize,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<CgAffineTransform>() == 6 * std::mem::size_of::<f64>());
+    assert!(std::mem::align_of::<CgAffineTransform>() == std::mem::align_of::<f64>());
+    assert!(std::mem::size_of::<CgRect>() == 4 * std::mem::size_of::<f64>());
+    assert!(std::mem::align_of::<CgRect>() == std::mem::align_of::<f64>());
+};
 
 struct AutoreleasePool(*mut c_void);
 
@@ -208,6 +248,32 @@ impl Drop for PixelBufferLock {
 pub struct OwnedPixelBuffer(*mut c_void);
 
 impl OwnedPixelBuffer {
+    fn new_bgra(width: u32, height: u32) -> Result<Self, AlgoError> {
+        if width == 0 || height == 0 {
+            return Err(AlgoError::Preprocess {
+                reason: "BGRA CVPixelBuffer 尺寸不能为 0".to_string(),
+            });
+        }
+        let mut raw = null_mut();
+        // SAFETY: 输出指针指向当前栈变量；attributes 为空表示使用 CoreVideo 默认属性。
+        let status = unsafe {
+            CVPixelBufferCreate(
+                ptr::null(),
+                width as usize,
+                height as usize,
+                K_CVPIXEL_FORMAT_32_BGRA,
+                ptr::null(),
+                &mut raw,
+            )
+        };
+        if status != 0 || raw.is_null() {
+            return Err(AlgoError::Preprocess {
+                reason: format!("创建 BGRA CVPixelBuffer 失败: {status}"),
+            });
+        }
+        Ok(Self(raw))
+    }
+
     pub fn from_rgb(rgb: &[u8], width: u32, height: u32) -> Result<Self, AlgoError> {
         let width_usize = width as usize;
         let height_usize = height as usize;
@@ -220,29 +286,12 @@ impl OwnedPixelBuffer {
                 reason: "RGB 输入尺寸或数据长度无效".to_string(),
             });
         }
-        let mut raw = null_mut();
-        // SAFETY: 输出指针指向当前栈变量；attributes 为空表示使用 CoreVideo 默认属性。
-        let status = unsafe {
-            CVPixelBufferCreate(
-                ptr::null(),
-                width_usize,
-                height_usize,
-                K_CVPIXEL_FORMAT_32_BGRA,
-                ptr::null(),
-                &mut raw,
-            )
-        };
-        if status != 0 || raw.is_null() {
-            return Err(AlgoError::Preprocess {
-                reason: format!("创建 BGRA CVPixelBuffer 失败: {status}"),
-            });
-        }
-        let buffer = Self(raw);
-        let _lock = PixelBufferLock::new(raw, 0)?;
+        let buffer = Self::new_bgra(width, height)?;
+        let _lock = PixelBufferLock::new(buffer.0, 0)?;
         // SAFETY: buffer 已成功 lock，CoreVideo 返回的 base address 覆盖整个 surface。
-        let base = unsafe { CVPixelBufferGetBaseAddress(raw) } as *mut u8;
+        let base = unsafe { CVPixelBufferGetBaseAddress(buffer.0) } as *mut u8;
         // SAFETY: buffer 已成功 lock，row bytes 由 CoreVideo 返回且不小于一行像素。
-        let row_bytes = unsafe { CVPixelBufferGetBytesPerRow(raw) };
+        let row_bytes = unsafe { CVPixelBufferGetBytesPerRow(buffer.0) };
         let row_len = width_usize.checked_mul(4).ok_or(AlgoError::OutOfMemory)?;
         if base.is_null() || row_bytes < row_len {
             return Err(AlgoError::Preprocess {
@@ -266,6 +315,99 @@ impl OwnedPixelBuffer {
             }
         }
         Ok(buffer)
+    }
+
+    /// 在原生 CVPixelBuffer 上执行 source-top-left -> target-top-left 仿射变换。
+    ///
+    /// Core Image 直接读取源 surface 并把结果渲染到新的 BGRA surface；整个过程不
+    /// 生成 CPU 像素 Vec，也不执行 D2H readback。`source_to_target` 的布局为
+    /// `[a, b, tx, c, d, ty]`，即 `x' = ax + by + tx`、`y' = cx + dy + ty`。
+    /// # Safety
+    /// `source` 必须是当前调用期间保持有效的 `CVPixelBufferRef`；本函数同步渲染，
+    /// 不会把该裸指针保存到返回值或异步任务中。
+    pub unsafe fn from_pixelbuffer_affine(
+        source: *mut c_void,
+        source_width: u32,
+        source_height: u32,
+        source_to_target: [f64; 6],
+        target_width: u32,
+        target_height: u32,
+    ) -> Result<Self, AlgoError> {
+        if source.is_null() || source_width == 0 || source_height == 0 {
+            return Err(AlgoError::Preprocess {
+                reason: "Core Image 仿射输入 surface 无效".to_string(),
+            });
+        }
+        if source_to_target.iter().any(|value| !value.is_finite()) {
+            return Err(AlgoError::Preprocess {
+                reason: "Core Image 仿射矩阵包含非有限值".to_string(),
+            });
+        }
+        if target_width == 0 || target_height == 0 {
+            return Err(AlgoError::Preprocess {
+                reason: "Core Image 仿射输出尺寸不能为 0".to_string(),
+            });
+        }
+
+        let output = Self::new_bgra(target_width, target_height)?;
+        let _pool = AutoreleasePool::new();
+        let ci_image_class = get_class("CIImage")?;
+        let image_with_pixel_buffer = register_selector("imageWithCVPixelBuffer:")?;
+        let image = objc_msg!(ci_image_class, image_with_pixel_buffer, source);
+        if image.is_null() {
+            return Err(AlgoError::Preprocess {
+                reason: "从 CVPixelBuffer 创建 CIImage 失败".to_string(),
+            });
+        }
+
+        // Core Image 使用左下角原点，而检测/关键点使用左上角原点。
+        // 把 source-top-left -> target-top-left 矩阵转换为 Core Graphics 坐标。
+        let [a, b, tx, c, d, ty] = source_to_target;
+        let transform = CgAffineTransform {
+            a,
+            b: -c,
+            c: -b,
+            d,
+            tx: b * source_height as f64 + tx,
+            ty: target_height as f64 - d * source_height as f64 - ty,
+        };
+        let apply_transform = register_selector("imageByApplyingTransform:")?;
+        let transformed = objc_msg!(image, apply_transform, transform);
+        if transformed.is_null() {
+            return Err(AlgoError::Preprocess {
+                reason: "Core Image 仿射变换失败".to_string(),
+            });
+        }
+
+        let ci_context_class = get_class("CIContext")?;
+        let context_with_options = register_selector("contextWithOptions:")?;
+        let options: *mut c_void = null_mut();
+        let context = objc_msg!(ci_context_class, context_with_options, options);
+        if context.is_null() {
+            return Err(AlgoError::Preprocess {
+                reason: "创建 Core Image context 失败".to_string(),
+            });
+        }
+        let bounds = CgRect {
+            origin: CgPoint { x: 0.0, y: 0.0 },
+            size: CgSize {
+                width: target_width as f64,
+                height: target_height as f64,
+            },
+        };
+        let render = register_selector("render:toCVPixelBuffer:bounds:colorSpace:")?;
+        let color_space: *mut c_void = null_mut();
+        // SAFETY: Core Image 对象和 output 在当前 autorelease pool/局部 RAII 生命周期内有效；
+        // render 是同步调用，返回后 CoreML 输入 surface 已完成写入。
+        objc_msg!(
+            context,
+            render,
+            transformed,
+            output.as_ptr(),
+            bounds,
+            color_space => ()
+        );
+        Ok(output)
     }
 
     #[inline]
@@ -843,28 +985,16 @@ fn read_tensor(
 pub struct CoreMlFaceModels {
     pub detector: CoreMlRunner,
     pub embedder: CoreMlRunner,
-    pub person_detector: Option<CoreMlRunner>,
+    pub person_detector: CoreMlRunner,
 }
 
 impl CoreMlFaceModels {
     pub fn load(package_root: &Path) -> Result<Self, AlgoError> {
-        let detector_model_name = if package_root.join("model/yolov8_face.mlpackage").exists() {
-            "yolov8_face.mlpackage"
-        } else {
-            "yolov5n_face.mlpackage"
-        };
+        let detector_model_name = "yolov8_face.mlpackage";
 
-        // 人体检测使用 yolo26n（输出 [1, 300, 6] xyxy+class 格式）
-        let person_detector = if package_root.join("model/yolo26n.mlpackage").exists() {
-            Some(CoreMlRunner::load_model(
-                package_root,
-                "yolo26n.mlpackage",
-                "image",
-                "var_911",
-            )?)
-        } else {
-            None
-        };
+        // 人体检测使用 yolo26n（输出 [1, 300, 6] xyxy+class 格式）。
+        let person_detector =
+            CoreMlRunner::load_model(package_root, "yolo26n.mlpackage", "image", "var_911")?;
 
         Ok(Self {
             detector: CoreMlRunner::load_model(
@@ -899,12 +1029,34 @@ impl CoreMlFaceModels {
         &self,
         pixel_buffer: *mut c_void,
     ) -> Result<Vec<f32>, AlgoError> {
-        if let Some(ref runner) = self.person_detector {
-            // SAFETY: 由调用方保证 pixel_buffer 生命周期，本函数仅借用它做同步预测。
-            unsafe { runner.predict_pixelbuffer(pixel_buffer) }
-        } else {
-            Ok(Vec::new())
-        }
+        // SAFETY: 由调用方保证 pixel_buffer 生命周期，本函数仅借用它做同步预测。
+        unsafe { self.person_detector.predict_pixelbuffer(pixel_buffer) }
+    }
+
+    /// 在设备侧完成五点仿射对齐后执行 EdgeFace，不把原始帧读回 Host。
+    ///
+    /// # Safety
+    /// `pixel_buffer` 必须在本次同步调用完成前保持有效，并且尺寸与矩阵的源坐标一致。
+    pub unsafe fn predict_embedding_from_pixelbuffer(
+        &self,
+        pixel_buffer: *mut c_void,
+        source_width: u32,
+        source_height: u32,
+        source_to_target: [f64; 6],
+    ) -> Result<Vec<f32>, AlgoError> {
+        // SAFETY: `pixel_buffer` 由调用方在同步预测期间保持有效；该函数不会保存裸指针。
+        let aligned = unsafe {
+            OwnedPixelBuffer::from_pixelbuffer_affine(
+                pixel_buffer,
+                source_width,
+                source_height,
+                source_to_target,
+                112,
+                112,
+            )?
+        };
+        // SAFETY: aligned 在同步推理完成前保持所有权和有效生命周期。
+        unsafe { self.embedder.predict_pixelbuffer(aligned.as_ptr()) }
     }
 
     pub fn predict_embedding(&self, rgb: &[u8]) -> Result<Vec<f32>, AlgoError> {

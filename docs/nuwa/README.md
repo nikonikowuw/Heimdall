@@ -71,6 +71,7 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | [📹 录像与回放引擎（规划草案）](./designs/video-recording-and-playback-engine.md) | 纯流直封装 MP4 切片、事件前置缓冲与时间轴回放 | 零转码开销、配置契约与可选启闭、eMMC 寿命防护 |
 | [🎯 运动门控引擎](./designs/motion-detection-gating-engine.md) | 基于 Y 平面差分的轻量级前置门控 | 0 次无效推理、余晖保活、多边形遮罩 |
 | [⚡ 实时预览改造](./designs/realtime-preview-overhaul.md) | StreamHub 隔离分发与 HTTP-FLV/WebCodecs | 每消费者 Mailbox 隔离、GOP 对齐恢复 |
+| [👤 人脸识别分析包](./designs/face-recognition-pipeline.md) | macOS CoreML 人体/人脸检测、宿主航迹、低频特征提取与识别事件边界 | trackId 不进入插件结果，Embedding 仅作为后端 sidecar，不进入前端 |
 | [🛰️ 国标接入与设备发现（规划草案）](./designs/gb28181-native-ingest-engine.md) | 纯 Rust 原生 GB28181 接入、PS 容错解复用与局域网设备发现 | 纯 Rust 闭环、零二次转码、目录树扫描、33-bit PTS 翻转防御 |
 
 ---

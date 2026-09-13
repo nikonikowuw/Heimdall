@@ -14,22 +14,16 @@ mod macos {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
-    use image::RgbImage;
-    use serde::Serialize;
-
     use algo_sdk::c_abi::AV_OPAQUE_CVPIXELBUFFER;
     use algo_sdk::cv::platforms::apple::AppleCvEngine;
     use algo_sdk::cv::CvEngine;
     use algo_sdk::error::AlgoError;
-    use algo_sdk::frame::SafeFrame;
+    use algo_sdk::frame::{FrameHandleView, SafeFrame};
     use algo_sdk::testing::MockFrameBuilder;
+    use image::RgbImage;
 
-    use face_recognition_coreml::align::align_face;
-    use face_recognition_coreml::association::{
-        associate_persons_and_faces, match_tracks_to_associated,
-    };
-    use face_recognition_coreml::best_shot::BestShotManager;
-    use face_recognition_coreml::bytetrack::{ByteTrackConfig, ByteTracker, TrackDetection};
+    use face_recognition_coreml::align::face_alignment_matrix;
+    use face_recognition_coreml::association::associate_persons_and_faces;
     use face_recognition_coreml::config::InstanceConfig;
     use face_recognition_coreml::coreml::{CoreMlFaceModels, CoreMlRunner};
     use face_recognition_coreml::detect::{
@@ -37,51 +31,48 @@ mod macos {
         unmap_persons_letterbox,
     };
     use face_recognition_coreml::normalize_embedding;
-    use face_recognition_coreml::postprocess::FaceDetection;
+    use face_recognition_coreml::postprocess::{encode_embedding, normalized_xywh_to_xyxy};
     use face_recognition_coreml::quality::compute_quality;
 
-    #[derive(Debug, Clone, Serialize)]
-    pub struct FaceResult {
-        pub face: FaceDetection,
-        pub embedding: Vec<f32>,
-        pub is_best_shot: bool,
+    #[derive(Debug, Clone)]
+    struct FaceAnalyzed {
+        bbox: [f32; 4],
+        confidence: f32,
+        quality_score: f32,
+        embedding: Option<String>,
+        landmarks: [[f32; 2]; 5],
     }
 
-    #[derive(Debug, Clone, Serialize)]
-    pub struct TrackedResult {
-        pub track_id: u64,
-        pub person_bbox: [f32; 4],
-        pub person_score: f32,
-        pub is_pseudo_body: bool,
-        pub face: Option<FaceResult>,
+    #[derive(Debug, Clone)]
+    struct AnalyzedObject {
+        /// 对外输出的人体主体框。
+        bbox: [f32; 4],
+        confidence: f32,
+        /// 挂载的人脸详情 (若有)
+        face: Option<FaceAnalyzed>,
     }
 
     #[derive(Debug, Clone, Default)]
-    pub struct StageTimings {
-        pub preprocess_ms: f64,
-        pub person_infer_ms: f64,
-        pub face_infer_ms: f64,
-        pub decode_nms_ms: f64,
-        pub association_ms: f64,
-        pub bytetrack_ms: f64,
-        pub quality_ms: f64,
-        pub align_ms: f64,
-        pub embed_infer_ms: f64,
-        pub norm_ms: f64,
-        pub total_ms: f64,
+    struct StageTimings {
+        preprocess_ms: f64,
+        person_infer_ms: f64,
+        face_infer_ms: f64,
+        decode_nms_ms: f64,
+        association_ms: f64,
+        quality_ms: f64,
+        embedding_ms: f64,
+        total_ms: f64,
     }
 
     fn infer_pipeline(
         models: &CoreMlFaceModels,
         safe_frame: &SafeFrame<'_>,
-        image: &RgbImage,
+        image_width: u32,
+        image_height: u32,
         config: &InstanceConfig,
-        tracker: &mut ByteTracker,
-        best_shots: &mut BestShotManager,
-    ) -> Result<(Vec<TrackedResult>, StageTimings), AlgoError> {
+    ) -> Result<(Vec<AnalyzedObject>, StageTimings), AlgoError> {
         let t_start = Instant::now();
 
-        // 阶段 1: 硬件预处理 (Apple Accelerate vImage Letterbox 缩放至 640x384 并转 BGRA)
         let t0 = Instant::now();
         let (buffer, mode) = AppleCvEngine.letterbox(safe_frame, 640, 384, [114, 114, 114])?;
         let pixelbuffer = buffer.as_raw_ptr().ok_or_else(|| AlgoError::Preprocess {
@@ -89,161 +80,143 @@ mod macos {
         })?;
         let preprocess_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-        // 阶段 2: YOLO26n 人体检测 (CoreML ANE 前向推理)
         let t1 = Instant::now();
-        // SAFETY: pixelbuffer 由当前 CvBuffer 持有，在同步预测返回前保持有效生命周期。
+        // SAFETY: pixelbuffer 由当前 CvBuffer 持有，在同步预测返回前保持有效。
         let raw_person = unsafe { models.predict_person_detector(pixelbuffer)? };
         let person_infer_ms = t1.elapsed().as_secs_f64() * 1000.0;
 
-        // 阶段 3: YOLOv8-face 人脸检测 (CoreML ANE 前向推理)
         let t2 = Instant::now();
-        // SAFETY: pixelbuffer 由当前 CvBuffer 持有，在同步预测返回前保持有效生命周期。
+        // SAFETY: pixelbuffer 由当前 CvBuffer 持有，在同步预测返回前保持有效。
         let raw_face = unsafe { models.predict_detector(pixelbuffer)? };
         let face_infer_ms = t2.elapsed().as_secs_f64() * 1000.0;
 
-        // 阶段 4: 解码、NMS 与 Letterbox 坐标反算
         let t3 = Instant::now();
         let mut persons = decode_person_detections(&raw_person, 0.40);
         nms_persons(&mut persons, 0.45);
-        unmap_persons_letterbox(&mut persons, &mode, image.width(), image.height());
+        unmap_persons_letterbox(&mut persons, &mode, image_width, image_height);
 
-        let mut raw_faces =
-            decode_face_detections(&raw_face, config.detection_confidence_threshold);
-        nms(&mut raw_faces, 0.45);
-        unmap_letterbox(&mut raw_faces, &mode, image.width(), image.height());
+        let mut faces = decode_face_detections(&raw_face, config.detection_confidence_threshold);
+        nms(&mut faces, 0.45);
+        unmap_letterbox(&mut faces, &mode, image_width, image_height);
         let decode_nms_ms = t3.elapsed().as_secs_f64() * 1000.0;
 
-        // 阶段 5: 人体与人脸二分图空间几何挂载
         let t4 = Instant::now();
-        let associated = associate_persons_and_faces(&persons, &raw_faces);
+        let associated = associate_persons_and_faces(&persons, &faces);
         let association_ms = t4.elapsed().as_secs_f64() * 1000.0;
 
-        // 阶段 6: ByteTrack 多目标航迹更新 (8状态 Kalman Filter)
-        let t5 = Instant::now();
-        let track_dets: Vec<TrackDetection> = associated
-            .iter()
-            .map(|a| TrackDetection {
-                bbox: a.person_bbox,
-                score: a.person_score,
-                class_id: 0,
-            })
-            .collect();
-        let active_tracks = tracker.update(&track_dets);
-        let bytetrack_ms = t5.elapsed().as_secs_f64() * 1000.0;
-
-        // 阶段 7: 质量门控与动态最优抓拍特征提取
+        let mut objects = Vec::with_capacity(associated.len());
         let mut quality_ms = 0.0;
-        let mut align_ms = 0.0;
-        let mut embed_infer_ms = 0.0;
-        let mut norm_ms = 0.0;
-
-        // 5. 将活跃航迹互斥映射回关联的人脸，并执行质量门控与动态择优抓拍
-        let mut results = Vec::with_capacity(active_tracks.len());
-        let mut active_track_ids = Vec::with_capacity(active_tracks.len());
-
-        let matched_assocs = match_tracks_to_associated(&active_tracks, &associated, 0.30);
-
-        for (track, best_assoc) in active_tracks.iter().zip(matched_assocs) {
-            active_track_ids.push(track.track_id);
-
-            let attached_face = best_assoc.as_ref().and_then(|a| a.attached_face);
-            let is_pseudo = best_assoc
-                .as_ref()
-                .map(|a| a.is_pseudo_body)
-                .unwrap_or(false);
-
-            let mut face_result = None;
-            if let Some(face) = attached_face {
-                let t_q = Instant::now();
+        let mut embedding_ms = 0.0;
+        for candidate in associated {
+            let face = if let Some(face_cand) = candidate.attached_face {
+                let quality_start = Instant::now();
                 let quality = compute_quality(
-                    &face.landmarks,
-                    &face.landmark_scores,
-                    face.bbox[2] * image.width() as f32,
+                    &face_cand.landmarks,
+                    &face_cand.landmark_scores,
+                    face_cand.bbox[2] * image_width as f32,
                     &config.quality_thresholds,
                 );
-                quality_ms += t_q.elapsed().as_secs_f64() * 1000.0;
-
+                quality_ms += quality_start.elapsed().as_secs_f64() * 1000.0;
                 if quality.accepted(&config.quality_thresholds, config.min_face_size) {
-                    let should_extract =
-                        best_shots.should_update_best_shot(track.track_id, &quality);
-                    let mut embedding = Vec::new();
-                    let is_best_shot = should_extract;
-
-                    if should_extract {
-                        let t_al = Instant::now();
-                        let aligned = align_face(
-                            image.as_raw(),
-                            image.width(),
-                            image.height(),
-                            &face.landmarks,
-                        )
-                        .map_err(|reason| AlgoError::Preprocess {
-                            reason: reason.to_string(),
-                        })?;
-                        align_ms += t_al.elapsed().as_secs_f64() * 1000.0;
-
-                        let t_em = Instant::now();
-                        let values = models.predict_embedding(&aligned)?;
-                        embed_infer_ms += t_em.elapsed().as_secs_f64() * 1000.0;
-
-                        let t_no = Instant::now();
-                        embedding = normalize_embedding(&values)?.to_vec();
-                        norm_ms += t_no.elapsed().as_secs_f64() * 1000.0;
-
-                        best_shots.update(
-                            track.track_id,
-                            face.bbox,
-                            face.landmarks,
-                            face.score,
-                            quality,
-                            embedding.clone(),
-                            1,
-                        );
-                    } else if let Some(rec) = best_shots.get(track.track_id) {
-                        embedding = rec.embedding.clone();
-                    }
-
-                    face_result = Some(FaceResult {
-                        face: FaceDetection {
-                            bbox: face.bbox,
-                            landmarks: face.landmarks,
-                            detection_score: face.score,
-                            quality,
-                        },
+                    let embedding_start = Instant::now();
+                    let embedding = match safe_frame.handle_view() {
+                        FrameHandleView::ApplePixelBuffer { ptr } => {
+                            let matrix = face_alignment_matrix(
+                                image_width,
+                                image_height,
+                                &face_cand.landmarks,
+                            )
+                            .map_err(|error| {
+                                AlgoError::Preprocess {
+                                    reason: error.to_string(),
+                                }
+                            })?;
+                            // SAFETY: ptr 来自当前 SafeFrame，且 predict 在本次调用内同步完成；
+                            // CoreML 不会保存该裸指针或把它交给异步任务。
+                            let values = unsafe {
+                                models.predict_embedding_from_pixelbuffer(
+                                    ptr,
+                                    image_width,
+                                    image_height,
+                                    matrix,
+                                )?
+                            };
+                            let normalized = normalize_embedding(&values)?;
+                            Some(encode_embedding(&normalized)?)
+                        }
+                        _ => {
+                            return Err(AlgoError::IncompatibleFrame {
+                                reason: "单帧 best-shot 特征提取需要原生 Apple CVPixelBuffer"
+                                    .to_string(),
+                            });
+                        }
+                    };
+                    embedding_ms += embedding_start.elapsed().as_secs_f64() * 1000.0;
+                    Some(FaceAnalyzed {
+                        bbox: normalized_xywh_to_xyxy(face_cand.bbox),
+                        confidence: face_cand.score.clamp(0.0, 1.0),
+                        quality_score: quality.score.clamp(0.0, 1.0),
                         embedding,
-                        is_best_shot,
-                    });
+                        landmarks: face_cand.landmarks,
+                    })
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
 
-            results.push(TrackedResult {
-                track_id: track.track_id,
-                person_bbox: track.bbox,
-                person_score: track.score,
-                is_pseudo_body: is_pseudo,
-                face: face_result,
+            objects.push(AnalyzedObject {
+                bbox: normalized_xywh_to_xyxy(candidate.person_bbox),
+                confidence: candidate.person_score.clamp(0.0, 1.0),
+                face,
             });
         }
-
-        best_shots.retain_active_tracks(&active_track_ids);
         let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
         Ok((
-            results,
+            objects,
             StageTimings {
                 preprocess_ms,
                 person_infer_ms,
                 face_infer_ms,
                 decode_nms_ms,
                 association_ms,
-                bytetrack_ms,
                 quality_ms,
-                align_ms,
-                embed_infer_ms,
-                norm_ms,
+                embedding_ms,
                 total_ms,
             },
         ))
+    }
+
+    fn detection_json(results: &[AnalyzedObject]) -> serde_json::Value {
+        let objects: Vec<_> = results
+            .iter()
+            .map(|object| {
+                let mut value = serde_json::json!({
+                    "class_id": 0,
+                    "label": "person",
+                    "confidence": object.confidence,
+                    "bbox": object.bbox,
+                });
+                if let Some(face) = &object.face {
+                    let mut face_val = serde_json::json!({
+                        "bbox": face.bbox,
+                        "confidence": face.confidence,
+                        "quality_score": face.quality_score,
+                    });
+                    if let Some(embedding) = face.embedding.as_ref() {
+                        face_val["embedding"] = serde_json::Value::String(embedding.clone());
+                    }
+                    value["face"] = face_val;
+                }
+                value
+            })
+            .collect();
+        serde_json::json!({
+            "schema_version": 1,
+            "objects": objects,
+        })
     }
 
     fn calc_stats(samples: &mut [f64]) -> (f64, f64, f64) {
@@ -254,31 +227,23 @@ mod macos {
         let sum: f64 = samples.iter().sum();
         let avg = sum / samples.len() as f64;
         let p50 = samples[samples.len() / 2];
-        let p99_idx = ((samples.len() as f64 * 0.99).ceil() as usize).min(samples.len()) - 1;
-        let p99 = samples[p99_idx];
-        (avg, p50, p99)
+        let p99_idx = ((samples.len() as f64 * 0.99).ceil() as usize)
+            .saturating_sub(1)
+            .min(samples.len() - 1);
+        (avg, p50, samples[p99_idx])
     }
 
     fn benchmark(
         models: &CoreMlFaceModels,
         safe_frame: &SafeFrame<'_>,
-        image: &RgbImage,
+        image_width: u32,
+        image_height: u32,
         config: &InstanceConfig,
         warmup: usize,
         loops: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut tracker = ByteTracker::new(ByteTrackConfig::default());
-        let mut best_shots = BestShotManager::new();
-
         for _ in 0..warmup {
-            let _ = infer_pipeline(
-                models,
-                safe_frame,
-                image,
-                config,
-                &mut tracker,
-                &mut best_shots,
-            )?;
+            let _ = infer_pipeline(models, safe_frame, image_width, image_height, config)?;
         }
 
         let mut pre_samples = Vec::with_capacity(loops);
@@ -286,37 +251,22 @@ mod macos {
         let mut face_samples = Vec::with_capacity(loops);
         let mut dec_samples = Vec::with_capacity(loops);
         let mut assoc_samples = Vec::with_capacity(loops);
-        let mut track_samples = Vec::with_capacity(loops);
-        let mut q_samples = Vec::with_capacity(loops);
-        let mut al_samples = Vec::with_capacity(loops);
-        let mut em_samples = Vec::with_capacity(loops);
-        let mut norm_samples = Vec::with_capacity(loops);
+        let mut quality_samples = Vec::with_capacity(loops);
+        let mut embedding_samples = Vec::with_capacity(loops);
         let mut e2e_samples = Vec::with_capacity(loops);
-
-        let mut tracked_count = 0;
-        let mut face_count = 0;
+        let mut object_count = 0;
 
         for _ in 0..loops {
-            let (tracks, timing) = infer_pipeline(
-                models,
-                safe_frame,
-                image,
-                config,
-                &mut tracker,
-                &mut best_shots,
-            )?;
-            tracked_count = tracks.len();
-            face_count = tracks.iter().filter(|t| t.face.is_some()).count();
+            let (objects, timing) =
+                infer_pipeline(models, safe_frame, image_width, image_height, config)?;
+            object_count = objects.len();
             pre_samples.push(timing.preprocess_ms);
             person_samples.push(timing.person_infer_ms);
             face_samples.push(timing.face_infer_ms);
             dec_samples.push(timing.decode_nms_ms);
             assoc_samples.push(timing.association_ms);
-            track_samples.push(timing.bytetrack_ms);
-            q_samples.push(timing.quality_ms);
-            al_samples.push(timing.align_ms);
-            em_samples.push(timing.embed_infer_ms);
-            norm_samples.push(timing.norm_ms);
+            quality_samples.push(timing.quality_ms);
+            embedding_samples.push(timing.embedding_ms);
             e2e_samples.push(timing.total_ms);
         }
 
@@ -325,84 +275,38 @@ mod macos {
         let (f_avg, f_p50, _) = calc_stats(&mut face_samples);
         let (dec_avg, dec_p50, _) = calc_stats(&mut dec_samples);
         let (assoc_avg, assoc_p50, _) = calc_stats(&mut assoc_samples);
-        let (track_avg, track_p50, _) = calc_stats(&mut track_samples);
-        let (q_avg, q_p50, _) = calc_stats(&mut q_samples);
-        let (al_avg, al_p50, _) = calc_stats(&mut al_samples);
-        let (em_avg, em_p50, _) = calc_stats(&mut em_samples);
-        let (norm_avg, norm_p50, _) = calc_stats(&mut norm_samples);
+        let (q_avg, q_p50, _) = calc_stats(&mut quality_samples);
+        let (embedding_avg, embedding_p50, _) = calc_stats(&mut embedding_samples);
         let (e2e_avg, e2e_p50, e2e_p99) = calc_stats(&mut e2e_samples);
         let fps = if e2e_avg > 0.0 { 1000.0 / e2e_avg } else { 0.0 };
 
         println!(
             "================================================================================"
         );
-        println!("  人脸识别全管线性能分析 (YOLO26n + YOLOv8-face + ByteTrack + EdgeFace)");
+        println!("  人脸识别检测管线性能分析 (YOLO26n + YOLOv8-face + Quality Gating)");
         println!(
             "================================================================================"
         );
         println!("  采样轮次: {loops} 轮 (预热: {warmup} 轮)");
         println!(
-            "  输入尺寸: {}x{} -> 640x384 共享 Letterbox BGRA CVPixelBuffer",
-            image.width(),
-            image.height()
+            "  输入尺寸: {image_width}x{image_height} -> 640x384 共享 Letterbox CVPixelBuffer"
         );
-        println!(
-            "  活跃航迹: {tracked_count} 条，挂载人脸: {face_count} 个 (含五点仿射对齐与 512D 特征提取)"
-        );
+        println!("  最近一轮可识别目标: {object_count} 个");
         println!(
             "--------------------------------------------------------------------------------"
         );
-        println!(
-            "  阶段 1: 硬件预处理 (Letterbox 640x384)   : avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            pre_avg, pre_p50
-        );
-        println!(
-            "  阶段 2: YOLO26n 人体检测 (CoreML ANE)    : avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            p_avg, p_p50
-        );
-        println!(
-            "  阶段 3: YOLOv8-face 人脸检测 (CoreML ANE): avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            f_avg, f_p50
-        );
-        println!(
-            "  阶段 4: 解码、NMS 与全图坐标还原         : avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            dec_avg, dec_p50
-        );
-        println!(
-            "  阶段 5: 人体与人脸上半身几何空间挂载     : avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            assoc_avg, assoc_p50
-        );
-        println!(
-            "  阶段 6: ByteTrack 8状态卡尔曼滤波航迹更新: avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            track_avg, track_p50
-        );
-        println!(
-            "  阶段 7: 人脸质量门控 (Quality Gating)   : avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            q_avg, q_p50
-        );
-        println!(
-            "  阶段 8: ArcFace 5点仿射对齐 (112x112)    : avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            al_avg, al_p50
-        );
-        println!(
-            "  阶段 9: EdgeFace-s 提取 (CoreML ANE)    : avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            em_avg, em_p50
-        );
-        println!(
-            "  阶段10: 特征 L2 归一化 (Normalize)       : avg = {:>6.3} ms, p50 = {:>6.3} ms",
-            norm_avg, norm_p50
-        );
+        println!("  阶段 1: 硬件预处理                     : avg = {pre_avg:>6.3} ms, p50 = {pre_p50:>6.3} ms");
+        println!("  阶段 2: YOLO26n 人体检测 (CoreML ANE)  : avg = {p_avg:>6.3} ms, p50 = {p_p50:>6.3} ms");
+        println!("  阶段 3: YOLOv8-face 人脸检测 (CoreML)  : avg = {f_avg:>6.3} ms, p50 = {f_p50:>6.3} ms");
+        println!("  阶段 4: 解码、NMS 与坐标还原            : avg = {dec_avg:>6.3} ms, p50 = {dec_p50:>6.3} ms");
+        println!("  阶段 5: 人体/人脸当前帧空间关联         : avg = {assoc_avg:>6.3} ms, p50 = {assoc_p50:>6.3} ms");
+        println!("  阶段 6: 人脸质量门控                    : avg = {q_avg:>6.3} ms, p50 = {q_p50:>6.3} ms");
+        println!("  阶段 7: EdgeFace 设备侧特征提取         : avg = {embedding_avg:>6.3} ms, p50 = {embedding_p50:>6.3} ms");
         println!(
             "--------------------------------------------------------------------------------"
         );
-        println!(
-            "  全链路端到端耗时 (End-to-End Latency)   : avg = {:>6.3} ms, p50 = {:>6.3} ms, p99 = {:>6.3} ms",
-            e2e_avg, e2e_p50, e2e_p99
-        );
-        println!(
-            "  全链路实时吞吐量 (Throughput)           : {:>6.2} FPS",
-            fps
-        );
+        println!("  检测端到端耗时                         : avg = {e2e_avg:>6.3} ms, p50 = {e2e_p50:>6.3} ms, p99 = {e2e_p99:>6.3} ms");
+        println!("  检测吞吐量                             : {fps:>6.2} FPS");
         println!(
             "================================================================================"
         );
@@ -429,14 +333,11 @@ mod macos {
 
         let runner_person =
             CoreMlRunner::load_model(package_root, "yolo26n.mlpackage", "image", "var_911")?;
-
-        // 640x384 预处理
         let (buf640, mode640) = AppleCvEngine.letterbox(safe_frame, 640, 384, [114, 114, 114])?;
         let pb640 = buf640.as_raw_ptr().ok_or_else(|| AlgoError::Preprocess {
             reason: "pb640 null".to_string(),
         })?;
 
-        // 预热
         for _ in 0..5 {
             // SAFETY: pixelbuffer 由 buf640 持有，在同步预测期间有效。
             unsafe {
@@ -444,7 +345,6 @@ mod macos {
             }
         }
 
-        // 性能测试
         let mut times = Vec::with_capacity(loops);
         let mut raw_person = Vec::new();
         for _ in 0..loops {
@@ -477,26 +377,11 @@ mod macos {
             p50_ms,
             p99_ms,
             persons.len(),
-            1000.0 / avg_ms
+            if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 }
         );
         println!(
             "================================================================================"
         );
-
-        println!("  架构分析与工程建议:");
-        println!(
-            "  1. 单模型推理均值: {:.2} ms ({:.1} FPS)",
-            avg_ms,
-            1000.0 / avg_ms
-        );
-        println!("  2. 显存与预处理开销:");
-        println!("     - 640x384 方案: 人脸检测与人体检测共享同一个 640x384 CVPixelBuffer，只需一次 Letterbox 硬件缩放；");
-        println!("     - 384x216 方案: 需额外执行一次 384x224 Letterbox 硬件缩放 (额外引入约 0.2~0.4ms vImage 耗时)。");
-        println!("  3. 最终结论: 640x384 单一预处理缓冲区零拷贝直通双模型，综合系统开销与检出精度表现更优！");
-        println!(
-            "================================================================================"
-        );
-
         Ok(())
     }
 
@@ -508,8 +393,8 @@ mod macos {
         }
         let x1 = (bbox[0] * width as f32).round() as i32;
         let y1 = (bbox[1] * height as f32).round() as i32;
-        let x2 = ((bbox[0] + bbox[2]) * width as f32).round() as i32;
-        let y2 = ((bbox[1] + bbox[3]) * height as f32).round() as i32;
+        let x2 = (bbox[2] * width as f32).round() as i32;
+        let y2 = (bbox[3] * height as f32).round() as i32;
         for x in x1.clamp(0, width - 1)..=x2.clamp(0, width - 1) {
             for thickness in 0..3 {
                 if (y1 + thickness).clamp(0, height - 1) < height {
@@ -544,11 +429,11 @@ mod macos {
         let width = image.width() as i32;
         let height = image.height() as i32;
         let colors = [
-            image::Rgb([0, 255, 0]),   // 0: 左眼 (亮绿)
-            image::Rgb([0, 255, 0]),   // 1: 右眼 (亮绿)
-            image::Rgb([255, 255, 0]), // 2: 鼻尖 (明黄)
-            image::Rgb([0, 255, 255]), // 3: 左嘴角 (亮青)
-            image::Rgb([0, 255, 255]), // 4: 右嘴角 (亮青)
+            image::Rgb([0, 255, 0]),
+            image::Rgb([0, 255, 0]),
+            image::Rgb([255, 255, 0]),
+            image::Rgb([0, 255, 255]),
+            image::Rgb([0, 255, 255]),
         ];
         let radius = 3;
         for (i, point) in landmarks.iter().enumerate() {
@@ -572,7 +457,7 @@ mod macos {
     fn env_usize(key: &str, default: usize) -> usize {
         env::var(key)
             .ok()
-            .and_then(|val| val.parse::<usize>().ok())
+            .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(default)
     }
 
@@ -592,7 +477,6 @@ mod macos {
             })
             .map(PathBuf::from)
             .unwrap_or(default_image);
-
         let output_path = args
             .iter()
             .position(|arg| arg == "--output")
@@ -602,10 +486,7 @@ mod macos {
 
         let models = CoreMlFaceModels::load(package_root)?;
         let config = InstanceConfig::default();
-
         let image = image::open(&image_path)?.to_rgb8();
-
-        // 构造 NV12 CVPixelBuffer 真实硬件帧 (模拟 VideoToolbox 硬解码输出)
         let mock_frame = MockFrameBuilder::new()
             .dimensions(image.width(), image.height())
             .host_data(image.clone().into_raw())
@@ -626,103 +507,105 @@ mod macos {
         });
 
         if is_benchmark {
-            benchmark(
+            return benchmark(
                 &models,
                 &safe_frame,
-                &image,
+                image.width(),
+                image.height(),
                 &config,
                 env_usize("WARMUP", 5),
                 env_usize("LOOPS", 100).max(1),
-            )?;
-            return Ok(());
+            );
         }
 
         if let Some(seconds) = stress {
-            let mut tracker = ByteTracker::new(ByteTrackConfig::default());
-            let mut best_shots = BestShotManager::new();
             let deadline = Instant::now() + Duration::from_secs(seconds);
             let mut iterations = 0usize;
             while Instant::now() < deadline {
-                let _ = infer_pipeline(
-                    &models,
-                    &safe_frame,
-                    &image,
-                    &config,
-                    &mut tracker,
-                    &mut best_shots,
-                )?;
+                let _ =
+                    infer_pipeline(&models, &safe_frame, image.width(), image.height(), &config)?;
                 iterations += 1;
             }
             eprintln!("stress: durationSeconds={seconds} iterations={iterations}");
             return Ok(());
         }
 
-        let mut tracker = ByteTracker::new(ByteTrackConfig::default());
-        let mut best_shots = BestShotManager::new();
-        let (results, timing) = infer_pipeline(
-            &models,
-            &safe_frame,
-            &image,
-            &config,
-            &mut tracker,
-            &mut best_shots,
-        )?;
-
-        let tracks_json: Vec<_> = results
-            .iter()
-            .map(|item| {
-                serde_json::json!({
-                    "track_id": item.track_id,
-                    "person_bbox": item.person_bbox,
-                    "person_score": item.person_score,
-                    "is_pseudo_body": item.is_pseudo_body,
-                    "face": item.face.as_ref().map(|f| serde_json::json!({
-                        "bbox": f.face.bbox,
-                        "detection_score": f.face.detection_score,
-                        "landmarks": f.face.landmarks,
-                        "quality": f.face.quality,
-                        "embedding_head": &f.embedding[..10],
-                        "is_best_shot": f.is_best_shot,
-                    })),
-                })
-            })
-            .collect();
-
-        let json = serde_json::json!({
-            "tracked_count": results.len(),
-            "tracks": tracks_json,
-            "latency_breakdown_ms": {
-                "preprocess": timing.preprocess_ms,
-                "person_inference": timing.person_infer_ms,
-                "face_inference": timing.face_infer_ms,
-                "decode_nms": timing.decode_nms_ms,
-                "association": timing.association_ms,
-                "bytetrack": timing.bytetrack_ms,
-                "quality_gating": timing.quality_ms,
-                "affine_alignment": timing.align_ms,
-                "embedding_inference": timing.embed_infer_ms,
-                "l2_normalize": timing.norm_ms,
-                "total_e2e": timing.total_ms,
-            }
-        });
+        let (results, _) =
+            infer_pipeline(&models, &safe_frame, image.width(), image.height(), &config)?;
+        let json = detection_json(&results);
         println!("{}", serde_json::to_string_pretty(&json)?);
 
         let mut result = image;
-        let person_box_color = image::Rgb([0, 200, 255]); // 青蓝色：人体航迹框
-        let face_box_color = image::Rgb([255, 48, 48]); // 鲜红橙：人脸框
-
-        for item in &results {
-            draw_box(&mut result, item.person_bbox, person_box_color);
-            if let Some(ref f) = item.face {
-                draw_box(&mut result, f.face.bbox, face_box_color);
-                draw_landmarks(&mut result, &f.face.landmarks);
+        for object in &results {
+            draw_box(&mut result, object.bbox, image::Rgb([0, 200, 255]));
+            if let Some(face) = &object.face {
+                draw_box(&mut result, face.bbox, image::Rgb([255, 48, 48]));
+                draw_landmarks(&mut result, &face.landmarks);
             }
         }
         result.save(&output_path)?;
-        println!(
-            "\n✓ 已保存带有 ByteTrack 人体航迹框、人脸检测框与 5 关键点绘制结果图至: {}",
-            output_path
-        );
+        eprintln!("已保存检测结果图至: {output_path}");
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn local_detection_json_excludes_latency_breakdown() {
+            let object = AnalyzedObject {
+                bbox: [0.1, 0.2, 0.4, 0.8],
+                confidence: 0.9,
+                face: Some(FaceAnalyzed {
+                    bbox: [0.15, 0.22, 0.25, 0.35],
+                    confidence: 0.95,
+                    quality_score: 0.8,
+                    embedding: None,
+                    landmarks: [[0.25, 0.35]; 5],
+                }),
+            };
+
+            let json = detection_json(&[object]);
+            assert_eq!(json["schema_version"], 1);
+            assert_eq!(json["objects"].as_array().map(Vec::len), Some(1));
+            assert_eq!(json["objects"][0]["label"], "person");
+            let face_x1 = json["objects"][0]["face"]["bbox"][0]
+                .as_f64()
+                .expect("face bbox x1 应为数字");
+            assert!((face_x1 - 0.15).abs() < 1e-4);
+            let bbox_x1 = json["objects"][0]["bbox"][0]
+                .as_f64()
+                .expect("person bbox x1 应为数字");
+            assert!((bbox_x1 - 0.1).abs() < 1e-6);
+            assert!(json.get("latency_breakdown_ms").is_none());
+            assert!(json.get("preprocess").is_none());
+        }
+
+        #[test]
+        fn local_detection_json_includes_backend_embedding_sidecar() {
+            let object = AnalyzedObject {
+                bbox: [0.1, 0.2, 0.4, 0.8],
+                confidence: 0.9,
+                face: Some(FaceAnalyzed {
+                    bbox: [0.15, 0.22, 0.25, 0.35],
+                    confidence: 0.95,
+                    quality_score: 0.8,
+                    embedding: Some("encoded-512d-sidecar".to_string()),
+                    landmarks: [[0.25, 0.35]; 5],
+                }),
+            };
+
+            let json = detection_json(&[object]);
+            assert_eq!(json["objects"][0]["label"], "person");
+            assert_eq!(
+                json["objects"][0]["face"]["embedding"],
+                "encoded-512d-sidecar"
+            );
+            let face_x1 = json["objects"][0]["face"]["bbox"][0]
+                .as_f64()
+                .expect("face bbox x1 应为数字");
+            assert!((face_x1 - 0.15).abs() < 1e-4);
+        }
     }
 }

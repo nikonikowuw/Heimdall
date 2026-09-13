@@ -6,16 +6,20 @@ use algo_sdk::frame::SafeFrame;
 use algo_sdk::plugin::{AlgoPlugin, InitContext};
 
 use crate::config::InstanceConfig;
-#[cfg(target_os = "macos")]
-use crate::detect::{decode_face_detections, nms, unmap_letterbox};
-#[cfg(target_os = "macos")]
-use crate::quality::compute_quality;
 
 #[cfg(target_os = "macos")]
 use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
+use crate::align::face_alignment_matrix;
+#[cfg(target_os = "macos")]
 use crate::coreml::CoreMlFaceModels;
+#[cfg(target_os = "macos")]
+use crate::detect::{decode_face_detections, nms, unmap_letterbox};
+#[cfg(target_os = "macos")]
+use crate::normalize_embedding;
+#[cfg(target_os = "macos")]
+use crate::quality::compute_quality;
 #[cfg(target_os = "macos")]
 use algo_sdk::cv::platforms::apple::AppleCvEngine;
 #[cfg(target_os = "macos")]
@@ -26,6 +30,7 @@ use algo_sdk::cv::CvEngine;
 pub struct FaceRecognizer {
     pub models: Arc<CoreMlFaceModels>,
     pub config: InstanceConfig,
+    /// 仅用于当前算法实例内部的 best-shot 去重，不向 C ABI/宿主输出 trackId。
     pub tracker: crate::bytetrack::ByteTracker,
     pub best_shots: crate::best_shot::BestShotManager,
 }
@@ -47,14 +52,13 @@ impl AlgoPlugin for FaceRecognizer {
             .validate()
             .map_err(|reason| AlgoError::ConfigParse { reason })?;
         let models = crate::shared_models(ctx.package_root)?;
-        let tracker =
-            crate::bytetrack::ByteTracker::new(crate::bytetrack::ByteTrackConfig::default());
-        let best_shots = crate::best_shot::BestShotManager::new();
         Ok(Self {
             models,
             config,
-            tracker,
-            best_shots,
+            tracker: crate::bytetrack::ByteTracker::new(
+                crate::bytetrack::ByteTrackConfig::default(),
+            ),
+            best_shots: crate::best_shot::BestShotManager::new(),
         })
     }
 
@@ -74,111 +78,155 @@ impl AlgoPlugin for FaceRecognizer {
         frame: SafeFrame<'_>,
         emitter: &mut ResultEmitter<'_>,
     ) -> Result<(), AlgoError> {
+        let source_pixelbuffer = match frame.handle_view() {
+            algo_sdk::frame::FrameHandleView::ApplePixelBuffer { ptr } => ptr,
+            _ => {
+                tracing::warn!(
+                    "best-shot EdgeFace 需要原生 Apple CVPixelBuffer，当前帧跳过 embedding"
+                );
+                std::ptr::null_mut()
+            }
+        };
         let (buffer, mode) = AppleCvEngine.letterbox(&frame, 640, 384, [114, 114, 114])?;
         let pixelbuffer = buffer.as_raw_ptr().ok_or_else(|| AlgoError::Preprocess {
             reason: "CoreML 检测输入 CVPixelBuffer 指针为空".to_string(),
         })?;
 
-        // 1. 人体检测 (yolo26n / 640x384)
-        // SAFETY: pixelbuffer 由当前 CvBuffer 持有，直到预测返回前不会释放。
+        // yolo26n 和人脸模型共享同一个平台侧预处理缓冲区。两次推理都在
+        // 当前 process 调用内完成，pixelbuffer 不会逃逸到异步任务或插件状态。
+        // SAFETY: pixelbuffer 由当前 CvBuffer 持有，直到两次同步预测返回前有效。
         let raw_person = unsafe { self.models.predict_person_detector(pixelbuffer)? };
+        // SAFETY: pixelbuffer 仍由当前 CvBuffer 持有，且 predict_detector 同步执行。
+        let raw_face_output = unsafe { self.models.predict_detector(pixelbuffer)? };
+
         let mut persons = crate::detect::decode_person_detections(&raw_person, 0.40);
         crate::detect::nms_persons(&mut persons, 0.45);
         crate::detect::unmap_persons_letterbox(&mut persons, &mode, frame.width(), frame.height());
 
-        // 2. 人脸检测 (yolov8-face / 640x384)
-        // SAFETY: pixelbuffer 由当前 CvBuffer 持有，直到预测返回前不会释放。
-        let raw_face_output = unsafe { self.models.predict_detector(pixelbuffer)? };
         let mut raw_faces =
             decode_face_detections(&raw_face_output, self.config.detection_confidence_threshold);
         nms(&mut raw_faces, 0.45);
         unmap_letterbox(&mut raw_faces, &mode, frame.width(), frame.height());
 
-        // 3. 人体与人脸二分图空间几何挂载
+        // 关联是当前帧的空间操作。宿主仍然拥有对外 TrackDto 使用的 trackId；
+        // 这里的私有 ByteTrack 只为 best-shot 质量状态提供稳定键，不进入结果 JSON。
         let associated = crate::association::associate_persons_and_faces(&persons, &raw_faces);
-
-        // 4. ByteTrack 多目标航迹更新 (以人体为主航迹主体)
         let track_dets: Vec<crate::bytetrack::TrackDetection> = associated
             .iter()
-            .map(|a| crate::bytetrack::TrackDetection {
-                bbox: a.person_bbox,
-                score: a.person_score,
+            .map(|candidate| crate::bytetrack::TrackDetection {
+                bbox: candidate.person_bbox,
+                score: candidate.person_score,
                 class_id: 0,
             })
             .collect();
         let active_tracks = self.tracker.update(&track_dets);
-
-        // 5. 将活跃航迹互斥映射回关联的人脸，并执行质量门控与动态择优抓拍
-        let mut tracked_outputs = Vec::with_capacity(active_tracks.len());
-        let mut active_track_ids = Vec::with_capacity(active_tracks.len());
-
         let matched_assocs =
             crate::association::match_tracks_to_associated(&active_tracks, &associated, 0.30);
+        let active_track_ids: Vec<u64> = active_tracks.iter().map(|track| track.track_id).collect();
+        let mut objects = Vec::with_capacity(active_tracks.len());
 
         for (track, best_assoc) in active_tracks.iter().zip(matched_assocs) {
-            active_track_ids.push(track.track_id);
+            let Some(candidate) = best_assoc else {
+                continue;
+            };
 
-            let attached_face = best_assoc.as_ref().and_then(|a| a.attached_face);
-            let is_pseudo = best_assoc
-                .as_ref()
-                .map(|a| a.is_pseudo_body)
-                .unwrap_or(false);
-
-            let mut face_detail = None;
-            if let Some(face) = attached_face {
+            let face_detail = if let Some(face) = candidate.attached_face {
                 let quality = compute_quality(
                     &face.landmarks,
                     &face.landmark_scores,
                     face.bbox[2] * frame.width() as f32,
                     &self.config.quality_thresholds,
                 );
-
                 if quality.accepted(&self.config.quality_thresholds, self.config.min_face_size) {
-                    let should_extract = self
-                        .best_shots
-                        .should_update_best_shot(track.track_id, &quality);
-                    let mut embedding = None;
-                    let is_best_shot = should_extract;
-
-                    if should_extract {
-                        // 记录最优抓拍状态（在流式感知阶段轻量标记，不执行重型特征提取）
-                        self.best_shots.update(
+                    // best-shot 仍由质量门控控制频率，但提取在当前算法 worker 内同步完成：
+                    // CVPixelBuffer -> Core Image affine warp -> CVPixelBuffer -> CoreML/ANE。
+                    // 不执行整帧 D2H readback、CPU RGB 重排或 JPEG 往返。
+                    let embedding = if !source_pixelbuffer.is_null()
+                        && self.best_shots.should_update_best_shot(
                             track.track_id,
-                            face.bbox,
-                            face.landmarks,
-                            face.score,
-                            quality,
-                            Vec::new(),
+                            &quality,
                             frame.frame_id() as usize,
-                        );
-                    } else if let Some(rec) = self.best_shots.get(track.track_id) {
-                        embedding = rec.embedding_opt().map(|s| s.to_vec());
-                    }
+                        ) {
+                        match face_alignment_matrix(frame.width(), frame.height(), &face.landmarks)
+                            .map_err(|error| error.to_string())
+                            .and_then(|matrix| {
+                                // SAFETY: source_pixelbuffer 来自当前 SafeFrame，且本次调用同步完成；
+                                // EdgeFace 不会保存该裸指针或把它交给异步任务。
+                                unsafe {
+                                    self.models
+                                        .predict_embedding_from_pixelbuffer(
+                                            source_pixelbuffer,
+                                            frame.width(),
+                                            frame.height(),
+                                            matrix,
+                                        )
+                                        .map_err(|error| error.to_string())
+                                }
+                            })
+                            .and_then(|values| {
+                                normalize_embedding(&values).map_err(|error| error.to_string())
+                            }) {
+                            Ok(normalized) => {
+                                let fused = self.best_shots.update_with_fusion(
+                                    track.track_id,
+                                    face.bbox,
+                                    face.landmarks,
+                                    face.score,
+                                    quality,
+                                    &normalized,
+                                    frame.frame_id() as usize,
+                                );
+                                Some(fused)
+                            }
+                            Err(error) => {
+                                self.best_shots.record_attempt_without_embedding(
+                                    track.track_id,
+                                    face.bbox,
+                                    face.landmarks,
+                                    face.score,
+                                    quality,
+                                    frame.frame_id() as usize,
+                                );
+                                tracing::warn!(
+                                    error = %error,
+                                    "best-shot CoreML 设备侧 EdgeFace 提取失败，保留检测结果并允许后续重试"
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
 
-                    face_detail = Some(crate::postprocess::FaceDetail {
-                        bbox: face.bbox,
-                        landmarks: face.landmarks,
-                        detection_score: face.score,
-                        quality,
-                        embedding,
-                        is_best_shot,
-                    });
+                    let embedding_str = embedding
+                        .as_ref()
+                        .map(|value| crate::postprocess::encode_embedding(value.as_slice()))
+                        .transpose()?;
+
+                    Some(crate::postprocess::FaceDetailObject {
+                        bbox: crate::postprocess::normalized_xywh_to_xyxy(face.bbox),
+                        confidence: face.score.clamp(0.0, 1.0),
+                        quality_score: Some(quality.score.clamp(0.0, 1.0)),
+                        embedding: embedding_str,
+                    })
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
 
-            tracked_outputs.push(crate::postprocess::TrackedPersonOutput {
-                track_id: track.track_id,
-                person_bbox: track.bbox,
-                person_score: track.score,
-                is_pseudo_body: is_pseudo,
+            objects.push(crate::postprocess::DetectionObject {
+                class_id: 0,
+                label: "person".to_string(),
+                confidence: candidate.person_score.clamp(0.0, 1.0),
+                bbox: crate::postprocess::normalized_xywh_to_xyxy(candidate.person_bbox),
                 face: face_detail,
             });
         }
 
-        // 级联清理失活航迹
         self.best_shots.retain_active_tracks(&active_track_ids);
-
-        crate::postprocess::emit_tracked_results(emitter, &tracked_outputs)
+        crate::postprocess::emit_detection_objects(emitter, &objects)
     }
 
     #[cfg(not(target_os = "macos"))]

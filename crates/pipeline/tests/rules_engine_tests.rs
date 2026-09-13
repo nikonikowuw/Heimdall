@@ -86,6 +86,7 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
         confidence: 0.95,
         quality_score: None,
         bbox: BoundingBox::new(0.4, 0.28, 0.6, 0.48),
+        face: None,
     }];
     let tracked1 = tracker.update(det1);
     assert_eq!(tracked1.len(), 1);
@@ -99,6 +100,7 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
         confidence: 0.96,
         quality_score: None,
         bbox: BoundingBox::new(0.4, 0.34, 0.6, 0.54),
+        face: None,
     }];
     let tracked2 = tracker.update(det2);
     assert_eq!(tracked2.len(), 1);

@@ -21,7 +21,8 @@ pub use camera::{
     StreamTag, StreamType, TransportPolicy, UpdateCameraRequest,
 };
 pub use detection::{
-    AlgorithmKind, BoundingBox, CameraTracksPayload, Detection, TrackDto, TrackedObject,
+    AlgorithmKind, BoundingBox, CameraTracksPayload, Detection, FaceDetail, FaceEmbedding,
+    FaceTrackDto, TrackDto, TrackedObject,
 };
 pub use error::{FrameError, TypeError};
 pub use event::{

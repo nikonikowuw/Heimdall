@@ -14,7 +14,7 @@ use futures::FutureExt;
 use tokio::sync::{oneshot, watch, Notify};
 use types::{Detection, FrameRef};
 
-use crate::backend::InferenceBackend;
+use crate::backend::{InferenceBackend, InferenceResult};
 use crate::error::InferError;
 
 /// 工作线程优雅关停超时上限（2500ms，需大于单帧推理超时阈值，超时后强制隔离放弃，防止拖死守护进程退出）
@@ -23,7 +23,7 @@ pub const DEFAULT_INFER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(2500)
 /// 单次推理任务请求
 struct InferenceJob {
     frame: FrameRef,
-    reply: oneshot::Sender<Result<Vec<Detection>, InferError>>,
+    reply: oneshot::Sender<Result<InferenceResult, InferError>>,
 }
 
 /// 共享单槽任务队列（Drop-Oldest 丢旧帧机制核心）
@@ -81,11 +81,11 @@ impl std::fmt::Debug for InferenceWorkerHandle {
 }
 
 impl InferenceWorkerHandle {
-    /// 提交一帧执行推理检测（具备 Drop-Oldest 丢旧帧保护）
-    ///
-    /// 若推理线程正在忙碌，新帧将替换掉上一帧在队列中等待的旧帧，
-    /// 旧帧调用方将收到超载丢弃错误，确保始终只有最新帧进入计算。
-    pub async fn submit(&self, frame: FrameRef) -> Result<Vec<Detection>, InferError> {
+    /// 提交一帧执行推理并保留低频特征 sidecar。
+    pub async fn submit_with_metadata(
+        &self,
+        frame: FrameRef,
+    ) -> Result<InferenceResult, InferError> {
         if !self.is_alive.load(Ordering::Relaxed) {
             return Err(InferError::Execution {
                 reason: "推理工作线程已退出或停止运行".to_string(),
@@ -112,13 +112,15 @@ impl InferenceWorkerHandle {
             }
         }
 
-        // 通知常驻线程有新任务就绪
         self.slot.notify.notify_one();
-
-        // 等待推理结果返回
         reply_rx.await.map_err(|_| InferError::Execution {
             reason: "推理工作线程通道意外关闭".to_string(),
         })?
+    }
+
+    /// 提交一帧执行推理检测（具备 Drop-Oldest 丢旧帧保护）。
+    pub async fn submit(&self, frame: FrameRef) -> Result<Vec<Detection>, InferError> {
+        Ok(self.submit_with_metadata(frame).await?.detections)
     }
 
     /// 获取因负载过高累计被丢弃的旧帧计数
@@ -331,8 +333,10 @@ async fn execute_inference(
     frame: &FrameRef,
     timeout: Duration,
     worker_name: &str,
-) -> Result<Vec<Detection>, InferError> {
-    let call_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.detect(frame)));
+) -> Result<InferenceResult, InferError> {
+    let call_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.detect_with_metadata(frame)
+    }));
 
     let infer_fut = match call_res {
         Ok(fut) => fut,
@@ -407,6 +411,7 @@ mod tests {
                 confidence: 0.95,
                 quality_score: None,
                 bbox: BoundingBox::new(0.1, 0.1, 0.2, 0.2),
+                face: None,
             }])
         }
     }

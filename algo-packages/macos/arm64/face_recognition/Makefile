@@ -3,15 +3,16 @@
 TARGET_LIB := lib/libface_recognition.dylib
 WORKSPACE_ROOT := ../../../..
 DURATION ?= 30
+REQUIRED_MODELS := model/edgeface_s.mlpackage model/yolo26n.mlpackage model/yolov8_face.mlpackage
 
 all: build
 
 models:
 	python3 convert_models.py
 
-# 从 general_detection 同步 yolo26n 人体检测模型（替代已废弃的 person_detect）
+# 从 general_detection 同步 yolo26n 人体检测模型
 models-sync:
-	@mkdir -p model
+	@rm -rf model/yolo26n.mlpackage
 	@cp -R ../general_detection/model/yolo26n.mlpackage model/yolo26n.mlpackage
 	@echo "Synced yolo26n.mlpackage from general_detection"
 
@@ -34,8 +35,8 @@ stress: build
 
 package: build
 	@echo "Checking mlpackage weights..."
-	@for pkg in model/*.mlpackage; do \
-		if [ -d "$$pkg/Data/com.apple.CoreML" ] && [ ! -d "$$pkg/Data/com.apple.CoreML/weights" ]; then \
+	@for pkg in $(REQUIRED_MODELS); do \
+		if [ ! -d "$$pkg/Data/com.apple.CoreML/weights" ]; then \
 			echo "ERROR: $$pkg is missing Data/com.apple.CoreML/weights/"; \
 			echo "Run 'make models' first to generate CoreML model weights."; \
 			exit 1; \
@@ -56,7 +57,8 @@ package: build
 		config.schema.json \
 		testimage.jpg \
 		README.md \
-		model \
+		model/README.md \
+		$(REQUIRED_MODELS) \
 		lib
 
 clean:

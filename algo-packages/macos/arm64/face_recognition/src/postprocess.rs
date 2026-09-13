@@ -1,129 +1,82 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
-use uuid::Uuid;
 
 use algo_sdk::emitter::ResultEmitter;
 use algo_sdk::error::AlgoError;
 
-use crate::quality::FaceQuality;
-
+/// 挂载在主体人员目标上的精细人脸详情对象。
 #[derive(Debug, Clone, Serialize)]
-pub struct FaceDetection {
+pub struct FaceDetailObject {
     pub bbox: [f32; 4],
-    pub landmarks: [[f32; 2]; 5],
-    pub detection_score: f32,
-    pub quality: FaceQuality,
+    pub confidence: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<String>,
 }
 
-/// 挂载在航迹上的人脸详情
+/// 宿主检测解析器消费的稳定目标对象。
+///
+/// `bbox` 为人体主体框，`face` 为挂载的人脸检测详情。
+/// 均使用归一化 `[x1, y1, x2, y2]`，而检测阶段的内部人体框仍使用
+/// `[x, y, width, height]`。转换集中在本模块，避免把坐标约定泄漏到调用方。
 #[derive(Debug, Clone, Serialize)]
-pub struct FaceDetail {
-    pub bbox: [f32; 4],
-    pub landmarks: [[f32; 2]; 5],
-    pub detection_score: f32,
-    pub quality: FaceQuality,
-    pub embedding: Option<Vec<f32>>,
-    pub is_best_shot: bool,
-}
-
-/// ByteTrack 输出的带挂载人脸的人体航迹
-#[derive(Debug, Clone, Serialize)]
-pub struct TrackedPersonOutput {
-    pub track_id: u64,
-    pub person_bbox: [f32; 4],
-    pub person_score: f32,
-    pub is_pseudo_body: bool,
-    pub face: Option<FaceDetail>,
-}
-
-/// 兼容 Engine 规则引擎的目标对象
-#[derive(Debug, Clone, Serialize)]
-pub struct CompatibleObject {
-    pub track_id: u64,
+pub struct DetectionObject {
     pub class_id: usize,
     pub label: String,
     pub confidence: f32,
     pub bbox: [f32; 4],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub face: Option<FaceDetailObject>,
 }
 
 #[derive(Debug, Serialize)]
-struct FaceRecognitionEnvelope<'a> {
-    event_id: Uuid,
-    tracks: &'a [TrackedPersonOutput],
-    faces: Vec<FaceDetection>,
-    objects: Vec<CompatibleObject>,
+struct RecognitionEnvelope<'a> {
+    schema_version: u32,
+    objects: &'a [DetectionObject],
 }
 
-/// 序列化并发射完整的人体航迹与人脸识别结果。
-pub fn emit_tracked_results(
-    emitter: &mut ResultEmitter<'_>,
-    tracks: &[TrackedPersonOutput],
-) -> Result<(), AlgoError> {
-    if tracks.is_empty() {
-        return Ok(());
-    }
+pub const RECOGNITION_SCHEMA_VERSION: u32 = 1;
 
-    let mut faces = Vec::new();
-    let mut objects = Vec::with_capacity(tracks.len());
+/// 将归一化 `xywh` 转为宿主契约要求的归一化 `xyxy`。
+#[inline]
+pub fn normalized_xywh_to_xyxy(bbox: [f32; 4]) -> [f32; 4] {
+    let x1 = bbox[0].clamp(0.0, 1.0);
+    let y1 = bbox[1].clamp(0.0, 1.0);
+    let x2 = (bbox[0] + bbox[2]).clamp(x1, 1.0);
+    let y2 = (bbox[1] + bbox[3]).clamp(y1, 1.0);
+    [x1, y1, x2, y2]
+}
 
-    for t in tracks {
-        objects.push(CompatibleObject {
-            track_id: t.track_id,
-            class_id: 0,
-            label: "person".to_string(),
-            confidence: t.person_score,
-            bbox: t.person_bbox,
+pub fn encode_embedding(embedding: &[f32]) -> Result<String, AlgoError> {
+    if embedding.len() != 512 || embedding.iter().any(|value| !value.is_finite()) {
+        return Err(AlgoError::Inference {
+            reason: format!("embedding 维度或数值非法: {}", embedding.len()),
         });
-
-        if let Some(ref face) = t.face {
-            faces.push(FaceDetection {
-                bbox: face.bbox,
-                landmarks: face.landmarks,
-                detection_score: face.detection_score,
-                quality: face.quality,
-            });
-        }
     }
 
-    let envelope = FaceRecognitionEnvelope {
-        event_id: Uuid::new_v4(),
-        tracks,
-        faces,
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(embedding));
+    for value in embedding {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(STANDARD.encode(bytes))
+}
+
+///
+/// 空对象列表也是有效结果，代表当前帧没有通过人脸质量门控的目标。
+/// 该函数不携带插件内部航迹、事件 ID 或特征向量。
+pub fn emit_detection_objects(
+    emitter: &mut ResultEmitter<'_>,
+    objects: &[DetectionObject],
+) -> Result<(), AlgoError> {
+    let envelope = RecognitionEnvelope {
+        schema_version: RECOGNITION_SCHEMA_VERSION,
         objects,
     };
     let json = serde_json::to_vec(&envelope).map_err(|error| AlgoError::Internal {
         reason: format!("序列化人脸识别结果失败: {error}"),
     })?;
     emitter.emit_recognition_json(&json)
-}
-
-/// 兼容性序列化并发射原纯人脸格式 `AV_RESULT_RECOGNITION` 结果。
-pub fn emit_face_detections(
-    emitter: &mut ResultEmitter<'_>,
-    faces: &[FaceDetection],
-) -> Result<(), AlgoError> {
-    if faces.is_empty() {
-        return Ok(());
-    }
-    let tracks: Vec<TrackedPersonOutput> = faces
-        .iter()
-        .enumerate()
-        .map(|(idx, f)| TrackedPersonOutput {
-            track_id: (idx + 1) as u64,
-            person_bbox: f.bbox,
-            person_score: f.detection_score,
-            is_pseudo_body: true,
-            face: Some(FaceDetail {
-                bbox: f.bbox,
-                landmarks: f.landmarks,
-                detection_score: f.detection_score,
-                quality: f.quality,
-                embedding: None,
-                is_best_shot: true,
-            }),
-        })
-        .collect();
-
-    emit_tracked_results(emitter, &tracks)
 }
 
 #[cfg(test)]
@@ -147,7 +100,19 @@ mod tests {
     }
 
     #[test]
-    fn recognition_payload_contains_landmarks_and_quality() {
+    fn converts_normalized_xywh_to_xyxy() {
+        assert_eq!(
+            normalized_xywh_to_xyxy([0.1, 0.2, 0.3, 0.4]),
+            [0.1, 0.2, 0.4, 0.6]
+        );
+        assert_eq!(
+            normalized_xywh_to_xyxy([-0.2, 0.1, 1.5, 1.2]),
+            [0.0, 0.1, 1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn emits_only_standard_detection_objects() {
         let mut captured = String::new();
         // SAFETY: 回调和 user_data 在 emitter 生命周期内保持有效。
         let mut emitter = unsafe {
@@ -158,23 +123,68 @@ mod tests {
             )
         };
 
-        let faces = vec![FaceDetection {
-            bbox: [0.1, 0.2, 0.3, 0.4],
-            landmarks: [[0.15, 0.25]; 5],
-            detection_score: 0.95,
-            quality: FaceQuality {
-                score: 0.88,
-                blur: 0.12,
-                yaw: 1.5,
-                pitch: -2.0,
-                face_size: 160,
-            },
+        let objects = vec![DetectionObject {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            bbox: normalized_xywh_to_xyxy([0.1, 0.2, 0.3, 0.4]),
+            face: Some(FaceDetailObject {
+                bbox: [0.15, 0.22, 0.25, 0.35],
+                confidence: 0.92,
+                quality_score: Some(0.88),
+                embedding: None,
+            }),
         }];
 
-        emit_face_detections(&mut emitter, &faces).expect("发射应成功");
-        assert!(captured.contains("\"faces\""));
-        assert!(captured.contains("\"tracks\""));
+        emit_detection_objects(&mut emitter, &objects).expect("发射应成功");
+        assert!(captured.contains("\"schema_version\":1"));
         assert!(captured.contains("\"objects\""));
-        assert!(captured.contains("\"track_id\":1"));
+        assert!(captured.contains("\"label\":\"person\""));
+        assert!(captured.contains("\"bbox\":[0.1,0.2,0.4,0.6]"));
+        assert!(captured.contains("\"face\":{"));
+        assert!(captured.contains("\"quality_score\":0.88"));
+        assert!(captured.contains("\"bbox\":[0.15,0.22,0.25,0.35]"));
+        assert!(!captured.contains("tracks"));
+        assert!(!captured.contains("track_id"));
+        assert!(!captured.contains("is_pseudo_body"));
+        assert!(!captured.contains("embedding"));
+    }
+
+    #[test]
+    fn encodes_embedding_only_when_present() {
+        let encoded = encode_embedding(&[0.25; 512]).expect("embedding 编码应成功");
+        assert_eq!(encoded.len(), 2732);
+
+        let object = DetectionObject {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.9,
+            bbox: [0.1, 0.2, 0.4, 0.6],
+            face: Some(FaceDetailObject {
+                bbox: [0.15, 0.22, 0.25, 0.35],
+                confidence: 0.92,
+                quality_score: Some(0.9),
+                embedding: Some(encoded),
+            }),
+        };
+        let json = serde_json::to_string(&object).expect("目标序列化应成功");
+        assert!(json.contains("face"));
+        assert!(json.contains("embedding"));
+    }
+
+    #[test]
+    fn emits_empty_successful_result() {
+        let mut captured = String::new();
+        // SAFETY: 回调和 user_data 在 emitter 生命周期内保持有效。
+        let mut emitter = unsafe {
+            ResultEmitter::from_raw(
+                1,
+                Some(capture_result),
+                (&mut captured as *mut String).cast::<c_void>(),
+            )
+        };
+
+        emit_detection_objects(&mut emitter, &[]).expect("空结果也应发射");
+        assert_eq!(captured, r#"{"schema_version":1,"objects":[]}"#);
     }
 }

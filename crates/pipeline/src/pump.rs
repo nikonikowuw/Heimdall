@@ -16,7 +16,7 @@ use media::decoder::VideoDecoder;
 use media::stream_hub::CameraStreamSession;
 use media::{ConsumerKind, StreamItem};
 use tokio_util::sync::CancellationToken;
-use types::{DetectionRule, FrameRef, MotionGateConfig, StreamTag};
+use types::{DetectionRule, FrameRef, MotionGateConfig, StreamTag, TrackedObject};
 
 use infer::{InferenceWorker, InferenceWorkerHandle};
 
@@ -525,8 +525,12 @@ impl AnalysisPump {
                             if let Some(frame) = maybe_frame {
                                 let timestamp = frame.timestamp;
                                 let current_worker = infer_worker_holder.read().await.clone();
-                                match current_worker.submit(frame).await {
-                                    Ok(detections) => {
+                                match current_worker.submit_with_metadata(frame).await {
+                                    Ok(inference_result) => {
+                                        let infer::InferenceResult {
+                                            detections,
+                                            embeddings,
+                                        } = inference_result;
                                         infer_metrics
                                             .frames_inferred
                                             .fetch_add(1, Ordering::Relaxed);
@@ -536,11 +540,12 @@ impl AnalysisPump {
 
                                         // 驱动管线执行独立算法实例的航迹跟踪与几何规则判定 (保序执行)
                                         let outcome = pipeline_mgr_infer
-                                            .process_detections_for_algo(
+                                            .process_detections_for_algo_with_embeddings(
                                                 &cam_id_infer,
                                                 &algorithm_id_infer,
                                                 &algorithm_type_infer,
                                                 detections,
+                                                embeddings,
                                                 timestamp,
                                             )
                                             .await;
@@ -551,7 +556,11 @@ impl AnalysisPump {
                                                 camera_id: cam_id_infer.clone(),
                                                 algorithm_id: algorithm_id_infer.clone(),
                                                 timestamp,
-                                                tracks: outcome.tracked,
+                                                tracks: outcome
+                                                    .tracked
+                                                    .iter()
+                                                    .map(TrackedObject::without_embedding)
+                                                    .collect(),
                                             }),
                                         );
 
@@ -559,12 +568,13 @@ impl AnalysisPump {
                                         if !outcome.captures.is_empty() {
                                             for target in outcome.captures {
                                                 let capture_id = uuid::Uuid::new_v4().to_string();
+                                                let crop_bbox = target.face_bbox().unwrap_or(target.bbox);
                                                 let snapshot = trigger_target_snapshot(
                                                     &pipeline_mgr_infer,
                                                     &cam_id_infer,
                                                     &algorithm_id_infer,
                                                     timestamp,
-                                                    target.bbox,
+                                                    crop_bbox,
                                                     "通行识别抓拍",
                                                     &infer_metrics,
                                                     &pump_metrics,

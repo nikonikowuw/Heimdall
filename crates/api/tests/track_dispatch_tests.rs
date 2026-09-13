@@ -30,7 +30,9 @@ fn create_mock_track_event_with_algo(
             label: "person".to_string(),
             confidence: 0.92,
             quality_score: None,
+            embedding: None,
             bbox: BoundingBox::new(0.1, 0.2, 0.3, 0.6),
+            face: None,
             trajectory: vec![(0.2, 0.6)],
         });
     }
