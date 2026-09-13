@@ -160,18 +160,19 @@ impl BestShotManager {
                 let prev_weight = record.total_weight;
                 let new_total_weight = prev_weight + weight;
                 let mut accumulated = [0.0f32; 512];
-                for i in 0..512 {
-                    accumulated[i] = current_arr[i] * prev_weight + new_embedding[i] * weight;
+                let mut norm_sq = 0.0f32;
+                for (acc, (&curr, &new)) in accumulated
+                    .iter_mut()
+                    .zip(current_arr.iter().zip(new_embedding))
+                {
+                    let val = curr * prev_weight + new * weight;
+                    *acc = val;
+                    norm_sq += val * val;
                 }
 
-                let norm_sq: f32 = accumulated.iter().map(|v| v * v).sum();
                 let fused = if norm_sq > 1e-12 {
                     let inv_norm = 1.0 / norm_sq.sqrt();
-                    let mut norm_vec = [0.0f32; 512];
-                    for i in 0..512 {
-                        norm_vec[i] = accumulated[i] * inv_norm;
-                    }
-                    norm_vec
+                    accumulated.map(|v| v * inv_norm)
                 } else {
                     *new_embedding
                 };

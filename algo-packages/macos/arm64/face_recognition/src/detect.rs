@@ -237,22 +237,46 @@ pub fn decode_person_detections(raw: &[f32], conf_threshold: f32) -> Vec<PersonC
     persons
 }
 
-/// 对人体候选框执行类别无关 NMS。
-pub fn nms_persons(persons: &mut Vec<PersonCandidate>, iou_threshold: f32) {
-    if persons.len() <= 1 {
+fn greedy_nms_by<T>(items: &mut Vec<T>, iou_threshold: f32, mut iou_fn: impl FnMut(&T, &T) -> f32) {
+    if items.len() <= 1 {
         return;
     }
-    persons.sort_by(|left, right| right.score.total_cmp(&left.score));
-    let mut kept = Vec::with_capacity(persons.len());
-    for p in persons.iter().copied() {
-        if kept.iter().all(|prev: &PersonCandidate| {
-            let iou = crate::bytetrack::box_iou(&prev.bbox, &p.bbox);
-            iou < iou_threshold
-        }) {
-            kept.push(p);
+    let mut kept = Vec::with_capacity(items.len());
+    for item in items.drain(..) {
+        if kept.iter().all(|prev| iou_fn(prev, &item) < iou_threshold) {
+            kept.push(item);
         }
     }
-    *persons = kept;
+    *items = kept;
+}
+
+/// 对人体候选框执行类别无关 NMS。
+pub fn nms_persons(persons: &mut Vec<PersonCandidate>, iou_threshold: f32) {
+    persons.sort_by(|left, right| right.score.total_cmp(&left.score));
+    greedy_nms_by(persons, iou_threshold, |a, b| {
+        crate::bytetrack::box_iou(&a.bbox, &b.bbox)
+    });
+}
+
+fn unmap_bbox_rect(
+    bbox: [f32; 4],
+    mode: &PreprocessMode,
+    orig_w: f32,
+    orig_h: f32,
+    score: f32,
+) -> [f32; 4] {
+    let p1 = map_point([bbox[0], bbox[1]], mode, orig_w, orig_h);
+    let p2 = map_point([bbox[0] + bbox[2], bbox[1] + bbox[3]], mode, orig_w, orig_h);
+
+    let unmapped_x = p1[0].min(p2[0]);
+    let unmapped_y = p1[1].min(p2[1]);
+    let unmapped_w = (p2[0] - p1[0]).abs();
+    let unmapped_h = (p2[1] - p1[1]).abs();
+
+    let mut normalized =
+        algo_sdk::math::NormBox::new(unmapped_x, unmapped_y, unmapped_w, unmapped_h, score, 0);
+    clamp_bbox(&mut normalized);
+    [normalized.x, normalized.y, normalized.w, normalized.h]
 }
 
 /// 反算人体检测框至 `[0.0, 1.0]` 归一化全图空间。
@@ -267,48 +291,14 @@ pub fn unmap_persons_letterbox(
     }
     let (orig_w, orig_h) = (orig_width as f32, orig_height as f32);
     for person in persons.iter_mut() {
-        let x1 = person.bbox[0];
-        let y1 = person.bbox[1];
-        let x2 = x1 + person.bbox[2];
-        let y2 = y1 + person.bbox[3];
-
-        let p1 = map_point([x1, y1], mode, orig_w, orig_h);
-        let p2 = map_point([x2, y2], mode, orig_w, orig_h);
-
-        let unmapped_x = p1[0].min(p2[0]);
-        let unmapped_y = p1[1].min(p2[1]);
-        let unmapped_w = (p2[0] - p1[0]).abs();
-        let unmapped_h = (p2[1] - p1[1]).abs();
-
-        let mut normalized = algo_sdk::math::NormBox::new(
-            unmapped_x,
-            unmapped_y,
-            unmapped_w,
-            unmapped_h,
-            person.score,
-            0,
-        );
-        clamp_bbox(&mut normalized);
-        person.bbox = [normalized.x, normalized.y, normalized.w, normalized.h];
+        person.bbox = unmap_bbox_rect(person.bbox, mode, orig_w, orig_h, person.score);
     }
 }
 
 /// 对同一张图的人脸候选执行类别无关 NMS。
 pub fn nms(faces: &mut Vec<RawFace>, iou_threshold: f32) {
-    if faces.len() <= 1 {
-        return;
-    }
     faces.sort_by(|left, right| right.score.total_cmp(&left.score));
-    let mut kept = Vec::with_capacity(faces.len());
-    for face in faces.iter().copied() {
-        if kept
-            .iter()
-            .all(|previous: &RawFace| previous.iou(&face) < iou_threshold)
-        {
-            kept.push(face);
-        }
-    }
-    *faces = kept;
+    greedy_nms_by(faces, iou_threshold, |a, b| a.iou(b));
 }
 
 fn model_coordinate(value: f32, extent: f32) -> f32 {
@@ -366,31 +356,10 @@ pub fn unmap_letterbox(faces: &mut [RawFace], mode: &PreprocessMode, orig_w: u32
     let width = orig_w as f32;
     let height = orig_h as f32;
     for face in faces {
-        let x1 = face.bbox[0];
-        let y1 = face.bbox[1];
-        let x2 = x1 + face.bbox[2];
-        let y2 = y1 + face.bbox[3];
-        let p1 = map_point([x1, y1], mode, width, height);
-        let p2 = map_point([x2, y2], mode, width, height);
-        face.bbox = [
-            p1[0],
-            p1[1],
-            (p2[0] - p1[0]).max(0.0),
-            (p2[1] - p1[1]).max(0.0),
-        ];
+        face.bbox = unmap_bbox_rect(face.bbox, mode, width, height, face.score);
         for point in &mut face.landmarks {
             *point = map_point(*point, mode, width, height);
         }
-        let mut normalized = algo_sdk::math::NormBox::new(
-            face.bbox[0],
-            face.bbox[1],
-            face.bbox[2],
-            face.bbox[3],
-            face.score,
-            0,
-        );
-        clamp_bbox(&mut normalized);
-        face.bbox = [normalized.x, normalized.y, normalized.w, normalized.h];
     }
 }
 

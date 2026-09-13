@@ -247,6 +247,58 @@ impl Drop for PixelBufferLock {
 #[derive(Debug)]
 pub struct OwnedPixelBuffer(*mut c_void);
 
+struct CoreImageContext {
+    context: *mut c_void,
+    ci_image_class: *mut c_void,
+    image_with_pixel_buffer: *mut c_void,
+    apply_transform: *mut c_void,
+    render_to_pixel_buffer: *mut c_void,
+}
+
+// SAFETY: CIContext 是 Apple 官方保证线程安全的渲染对象，内部持有常驻引用。
+unsafe impl Send for CoreImageContext {}
+// SAFETY: CIContext 可在多线程并发安全发起 render 调用。
+unsafe impl Sync for CoreImageContext {}
+
+fn get_core_image_context() -> Result<&'static CoreImageContext, AlgoError> {
+    static INSTANCE: std::sync::OnceLock<Result<CoreImageContext, String>> =
+        std::sync::OnceLock::new();
+    let res = INSTANCE.get_or_init(|| {
+        let _pool = AutoreleasePool::new();
+        let ci_image_class = get_class("CIImage").map_err(|e| e.to_string())?;
+        let image_with_pixel_buffer =
+            register_selector("imageWithCVPixelBuffer:").map_err(|e| e.to_string())?;
+        let apply_transform =
+            register_selector("imageByApplyingTransform:").map_err(|e| e.to_string())?;
+        let render_to_pixel_buffer = register_selector("render:toCVPixelBuffer:bounds:colorSpace:")
+            .map_err(|e| e.to_string())?;
+
+        let ci_context_class = get_class("CIContext").map_err(|e| e.to_string())?;
+        let context_with_options =
+            register_selector("contextWithOptions:").map_err(|e| e.to_string())?;
+        let options: *mut c_void = null_mut();
+        let context = objc_msg!(ci_context_class, context_with_options, options);
+        if context.is_null() {
+            return Err("创建常驻 Core Image CIContext 失败".to_string());
+        }
+        // SAFETY: 保留 context 引用供全局常驻复用。
+        let retained = unsafe { objc_retain(context) };
+        Ok(CoreImageContext {
+            context: retained,
+            ci_image_class,
+            image_with_pixel_buffer,
+            apply_transform,
+            render_to_pixel_buffer,
+        })
+    });
+    match res {
+        Ok(ctx) => Ok(ctx),
+        Err(err) => Err(AlgoError::Preprocess {
+            reason: err.clone(),
+        }),
+    }
+}
+
 impl OwnedPixelBuffer {
     fn new_bgra(width: u32, height: u32) -> Result<Self, AlgoError> {
         if width == 0 || height == 0 {
@@ -351,9 +403,8 @@ impl OwnedPixelBuffer {
 
         let output = Self::new_bgra(target_width, target_height)?;
         let _pool = AutoreleasePool::new();
-        let ci_image_class = get_class("CIImage")?;
-        let image_with_pixel_buffer = register_selector("imageWithCVPixelBuffer:")?;
-        let image = objc_msg!(ci_image_class, image_with_pixel_buffer, source);
+        let ci = get_core_image_context()?;
+        let image = objc_msg!(ci.ci_image_class, ci.image_with_pixel_buffer, source);
         if image.is_null() {
             return Err(AlgoError::Preprocess {
                 reason: "从 CVPixelBuffer 创建 CIImage 失败".to_string(),
@@ -371,23 +422,13 @@ impl OwnedPixelBuffer {
             tx: b * source_height as f64 + tx,
             ty: target_height as f64 - d * source_height as f64 - ty,
         };
-        let apply_transform = register_selector("imageByApplyingTransform:")?;
-        let transformed = objc_msg!(image, apply_transform, transform);
+        let transformed = objc_msg!(image, ci.apply_transform, transform);
         if transformed.is_null() {
             return Err(AlgoError::Preprocess {
                 reason: "Core Image 仿射变换失败".to_string(),
             });
         }
 
-        let ci_context_class = get_class("CIContext")?;
-        let context_with_options = register_selector("contextWithOptions:")?;
-        let options: *mut c_void = null_mut();
-        let context = objc_msg!(ci_context_class, context_with_options, options);
-        if context.is_null() {
-            return Err(AlgoError::Preprocess {
-                reason: "创建 Core Image context 失败".to_string(),
-            });
-        }
         let bounds = CgRect {
             origin: CgPoint { x: 0.0, y: 0.0 },
             size: CgSize {
@@ -395,13 +436,12 @@ impl OwnedPixelBuffer {
                 height: target_height as f64,
             },
         };
-        let render = register_selector("render:toCVPixelBuffer:bounds:colorSpace:")?;
         let color_space: *mut c_void = null_mut();
         // SAFETY: Core Image 对象和 output 在当前 autorelease pool/局部 RAII 生命周期内有效；
         // render 是同步调用，返回后 CoreML 输入 surface 已完成写入。
         objc_msg!(
-            context,
-            render,
+            ci.context,
+            ci.render_to_pixel_buffer,
             transformed,
             output.as_ptr(),
             bounds,

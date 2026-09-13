@@ -55,9 +55,9 @@ pub fn encode_embedding(embedding: &[f32]) -> Result<String, AlgoError> {
         });
     }
 
-    let mut bytes = Vec::with_capacity(std::mem::size_of_val(embedding));
-    for value in embedding {
-        bytes.extend_from_slice(&value.to_le_bytes());
+    let mut bytes = [0u8; 512 * 4];
+    for (src, chunk) in embedding.iter().zip(bytes.as_chunks_mut::<4>().0) {
+        chunk.copy_from_slice(&src.to_le_bytes());
     }
     Ok(STANDARD.encode(bytes))
 }
