@@ -6,12 +6,14 @@ import { formatTimestamp } from '../utils'
 
 export interface CaptureCardItemProps {
   capture: CaptureRecord
+  cameraName?: string
   onSelect: () => void
   t: (key: string) => string
 }
 
 export function CaptureCardItem({
   capture,
+  cameraName,
   onSelect,
   t,
 }: CaptureCardItemProps): React.ReactElement {
@@ -45,7 +47,12 @@ export function CaptureCardItem({
 
       <div className="space-y-1.5 p-3 text-xs">
         <div className="flex items-center justify-between font-medium">
-          <span className="text-[var(--text-primary)]">{capture.cameraId}</span>
+          <span
+            className="max-w-[120px] truncate text-[var(--text-primary)]"
+            title={cameraName || capture.cameraId}
+          >
+            {cameraName || capture.cameraId}
+          </span>
           <span className="font-mono text-[11px] text-cyan-400">
             {(capture.confidence * 100).toFixed(0)}%
           </span>
@@ -61,12 +68,14 @@ export function CaptureCardItem({
 
 export interface CapturesContentProps {
   captures: CaptureRecord[]
+  cameraNameMap?: Record<string, string>
   onSelect: (capture: CaptureRecord) => void
   t: (key: string) => string
 }
 
 export function CapturesContent({
   captures,
+  cameraNameMap,
   onSelect,
   t,
 }: CapturesContentProps): React.ReactElement {
@@ -85,6 +94,7 @@ export function CapturesContent({
         <CaptureCardItem
           key={capture.id}
           capture={capture}
+          cameraName={cameraNameMap?.[capture.cameraId]}
           onSelect={() => onSelect(capture)}
           t={t}
         />

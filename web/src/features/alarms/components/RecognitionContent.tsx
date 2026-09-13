@@ -5,6 +5,7 @@ import { RecognitionCardItem } from './RecognitionCardItem'
 
 export interface RecognitionContentProps {
   recognitions: RecognitionRecord[]
+  cameraNameMap?: Record<string, string>
   onOpenReview: (rec: RecognitionRecord) => void
   onQuickReview: (rec: RecognitionRecord, status: 'confirmed' | 'rejected') => void
   t: (key: string) => string
@@ -12,6 +13,7 @@ export interface RecognitionContentProps {
 
 export function RecognitionContent({
   recognitions,
+  cameraNameMap,
   onOpenReview,
   onQuickReview,
   t,
@@ -32,6 +34,7 @@ export function RecognitionContent({
         <RecognitionCardItem
           key={recognition.id}
           recognition={recognition}
+          cameraName={cameraNameMap?.[recognition.cameraId]}
           onOpenReview={onOpenReview}
           onQuickReview={onQuickReview}
           t={t}
