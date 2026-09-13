@@ -17,7 +17,7 @@ use types::TaskStatus;
 /// 启动时自愈对齐扫描与装载：
 /// 1. 扫描当前平台内置目录 (algo-packages/{platform}) 与已安装目录 (var/packages)
 /// 2. 对未入库算法执行沙箱自检，自动在 DB algorithms 与 algorithm_versions 中自愈落库
-/// 3. 以 DB 中所有 is_active = true 为事实源，装载至内存 AlgoRegistry
+/// 3. 以 DB 中所有 is_active = true 为事实源，安全装载 (open_and_register) 至内存 AlgoRegistry（无需重复执行昂贵耗时的沙箱自检推理）
 pub async fn reconcile_and_seed_algorithms(
     db: &DatabaseConnection,
     registry: &Arc<AlgoRegistry>,
@@ -177,7 +177,7 @@ pub async fn reconcile_and_seed_algorithms(
             continue;
         }
 
-        match registry.load_and_register(root, false).await {
+        match registry.open_and_register(root).await {
             Ok(pkg) => {
                 tracing::info!(
                     algorithm_id = %pkg.manifest().algorithm_id,

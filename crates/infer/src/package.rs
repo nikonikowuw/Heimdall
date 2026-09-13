@@ -33,9 +33,25 @@ pub struct AlgoPackage {
 }
 
 impl AlgoPackage {
-    /// 通过沙箱安全校验并打开算法包
-    pub fn load_and_verify(package_dir: &Path, use_subprocess: bool) -> Result<Self, InferError> {
-        let manifest = AlgoSandbox::validate_package(package_dir, use_subprocess)?;
+    /// 打开已通过安全校验并入库的受信任算法包
+    ///
+    /// 仅解析 Manifest、加载动态库并建立 C ABI 虚表会话，不重复执行昂贵耗时的六步沙箱前向推理自测。
+    pub fn open(package_dir: &Path) -> Result<Self, InferError> {
+        let manifest_path = package_dir.join(ALGO_MANIFEST_FILENAME);
+        if !manifest_path.is_file() {
+            return Err(InferError::Execution {
+                reason: format!("缺少 {ALGO_MANIFEST_FILENAME} 文件: {:?}", package_dir),
+            });
+        }
+
+        let manifest_bytes = std::fs::read(&manifest_path).map_err(|e| InferError::Execution {
+            reason: format!("读取 {ALGO_MANIFEST_FILENAME} 失败: {e}"),
+        })?;
+        let manifest: AlgoManifest =
+            serde_json::from_slice(&manifest_bytes).map_err(|e| InferError::Execution {
+                reason: format!("解析 {ALGO_MANIFEST_FILENAME} 格式失败: {e}"),
+            })?;
+
         let entry_lib = find_entry_library(package_dir, &manifest.algorithm_id)?;
 
         let loaded_lib = Arc::new(LoadedLib::load(&entry_lib)?);
@@ -45,12 +61,28 @@ impl AlgoPackage {
             &manifest.platform_id,
         )?);
 
+        if raw_lib.meta().algorithm_id != manifest.algorithm_id {
+            return Err(InferError::Execution {
+                reason: format!(
+                    "动态库导出的 algorithm_id [{}] 与 manifest [{}] 不一致",
+                    raw_lib.meta().algorithm_id,
+                    manifest.algorithm_id
+                ),
+            });
+        }
+
         Ok(Self {
             manifest,
             package_dir: package_dir.to_path_buf(),
             lib: loaded_lib,
             raw_lib,
         })
+    }
+
+    /// 通过沙箱安全校验并打开算法包（用于新包初次安装或自检）
+    pub fn load_and_verify(package_dir: &Path, use_subprocess: bool) -> Result<Self, InferError> {
+        let _ = AlgoSandbox::validate_package(package_dir, use_subprocess)?;
+        Self::open(package_dir)
     }
 
     #[inline]
@@ -982,7 +1014,17 @@ impl AlgoRegistry {
         map.values().map(|p| p.manifest().clone()).collect()
     }
 
-    /// 从目录加载并直接注册到注册表中
+    /// 打开已通过安全校验并入库的算法包并注册到注册表中（仅执行动态链接与虚表绑定，不重复执行沙箱推理自测）
+    pub async fn open_and_register(
+        &self,
+        package_dir: &Path,
+    ) -> Result<Arc<AlgoPackage>, InferError> {
+        let pkg = Arc::new(AlgoPackage::open(package_dir)?);
+        self.register(pkg.clone()).await;
+        Ok(pkg)
+    }
+
+    /// 从目录加载并直接注册到注册表中（执行六步沙箱安全校验与推理自测，用于未校验的新包初次装载）
     pub async fn load_and_register(
         &self,
         package_dir: &Path,

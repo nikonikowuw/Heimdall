@@ -363,13 +363,9 @@ pub async fn handle_package_upload(
     )
     .await?;
 
-    // 热加载至内存注册中心，并热重载给运行中管线 (零停机、不断流)
+    // 热加载至内存注册中心，并热重载给运行中管线 (零停机、不断流；无需重复前向推理自测)
     let target_dir = PathBuf::from(&target_dir_str);
-    if let Ok(pkg) = state
-        .algo_registry
-        .load_and_register(&target_dir, false)
-        .await
-    {
+    if let Ok(pkg) = state.algo_registry.open_and_register(&target_dir).await {
         tracing::info!(
             algorithm_id = %pkg.manifest().algorithm_id,
             version = %pkg.manifest().version,

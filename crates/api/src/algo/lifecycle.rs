@@ -52,7 +52,7 @@ pub async fn activate_version(state: &AppState, id: &str, version: &str) -> Resu
     // 检查并加载进内存注册中心，并通知 Pipeline 优雅热替换
     let root = Path::new(&ver_model.package_root);
     if root.is_dir() {
-        if let Ok(pkg) = state.algo_registry.load_and_register(root, false).await {
+        if let Ok(pkg) = state.algo_registry.open_and_register(root).await {
             let count = state.pipeline.reload_algorithm_on_pumps(&aid, pkg).await;
             tracing::info!(
                 algorithm_id = %aid,
@@ -102,7 +102,7 @@ pub async fn uninstall_version(state: &AppState, id: &str, version: &str) -> Res
             {
                 let p = Path::new(&active_ver.package_root);
                 if p.is_dir() {
-                    let _ = state.algo_registry.load_and_register(p, false).await;
+                    let _ = state.algo_registry.open_and_register(p).await;
                 }
             }
         }

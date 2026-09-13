@@ -255,3 +255,30 @@ fn test_rknn_rk3576_package_structure_and_sandbox_guards() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_algo_package_open_without_sandbox_self_test() {
+    if infer::sandbox::current_platform_id() != "macos-arm64" {
+        return;
+    }
+    let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
+        return;
+    };
+
+    // 测试通过 open 直接打开已受信任/已落库的算法包，不重复触发沙箱六步推理自测
+    let pkg = infer::package::AlgoPackage::open(&pkg_path).expect("AlgoPackage::open 应该成功打开");
+    assert_eq!(pkg.manifest().algorithm_id, "general_detection");
+
+    // 测试 AlgoRegistry::open_and_register
+    let registry = infer::AlgoRegistry::new();
+    let reg_pkg = registry
+        .open_and_register(&pkg_path)
+        .await
+        .expect("open_and_register 应该成功");
+    assert_eq!(reg_pkg.manifest().algorithm_id, "general_detection");
+    assert!(registry.contains("general_detection").await);
+
+    // 针对不存在路径测试快速失败
+    let nonexistent = pkg_path.join("nonexistent_sub_path");
+    assert!(infer::package::AlgoPackage::open(&nonexistent).is_err());
+}

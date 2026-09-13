@@ -178,7 +178,8 @@ unsafe extern "C" fn(
 
 子进程使用当前可执行文件的 `__verify-algo <package_dir>`，看门狗 **10000ms**；超时终止，非零退出或 SIGSEGV 等信号均失败。
 库查找顺序：`lib/lib{algorithm_id}.{本机扩展名}` → 异构扩展名 → lib 目录按扩展名扫描；不能因此跳过平台匹配。
-`AlgoRegistry` 的 `scan_and_register/load_and_register/get/list/unregister` 复用 canonical 路径去重，具体 async 签名以 `package.rs` 为准。
+`AlgoRegistry` 的 `scan_and_register/load_and_register/open_and_register/get/list/unregister` 复用 canonical 路径去重，具体 async 签名以 `package.rs` 为准。
+- **冷启动与运行时热重载守卫**：已在数据库中完成准入持久化的受信任算法包，冷启动与运行时版本切换统一使用轻量 `open` / `open_and_register`（仅执行动态链接与 C ABI 虚表握手，耗时 < 1ms），严禁在冷启动或已入库热切换时无条件重跑六步沙箱前向推理自测，避免触发边缘端冷启动推理风暴与 CMA 显存争抢。
 
 ## Apple Silicon
 
