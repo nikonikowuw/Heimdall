@@ -91,7 +91,7 @@ mod macos {
         let face_infer_ms = t2.elapsed().as_secs_f64() * 1000.0;
 
         let t3 = Instant::now();
-        let mut persons = decode_person_detections(&raw_person, 0.40);
+        let mut persons = decode_person_detections(&raw_person, config.person_confidence_threshold);
         nms_persons(&mut persons, 0.45);
         unmap_persons_letterbox(&mut persons, &mode, image_width, image_height);
 
@@ -354,7 +354,8 @@ mod macos {
             times.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let (avg_ms, p50_ms, p99_ms) = calc_stats(&mut times);
-        let mut persons = decode_person_detections(&raw_person, 0.40);
+        let default_person_conf = InstanceConfig::default().person_confidence_threshold;
+        let mut persons = decode_person_detections(&raw_person, default_person_conf);
         nms_persons(&mut persons, 0.45);
         unmap_persons_letterbox(
             &mut persons,

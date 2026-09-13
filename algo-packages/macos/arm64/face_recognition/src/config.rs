@@ -7,6 +7,10 @@ fn default_detection_threshold() -> f32 {
     0.5
 }
 
+fn default_person_threshold() -> f32 {
+    0.4
+}
+
 fn default_min_face_size() -> u32 {
     30
 }
@@ -45,6 +49,8 @@ struct RawInstanceConfig {
     #[serde(default)]
     detection_confidence_threshold: Option<f32>,
     #[serde(default)]
+    person_confidence_threshold: Option<f32>,
+    #[serde(default)]
     min_face_size: Option<u32>,
     #[serde(default)]
     quality_thresholds: Option<RawQualityThresholds>,
@@ -62,6 +68,7 @@ struct RawInstanceConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceConfig {
     pub detection_confidence_threshold: f32,
+    pub person_confidence_threshold: f32,
     pub min_face_size: u32,
     pub quality_thresholds: QualityThresholds,
 
@@ -82,6 +89,13 @@ impl<'de> Deserialize<'de> for InstanceConfig {
             v
         } else {
             default_detection_threshold()
+        };
+
+        let person_confidence_threshold = if let Some(v) = raw.person_confidence_threshold {
+            explicit_fields.insert("person_confidence_threshold".to_string());
+            v
+        } else {
+            default_person_threshold()
         };
 
         let min_face_size = if let Some(v) = raw.min_face_size {
@@ -129,6 +143,7 @@ impl<'de> Deserialize<'de> for InstanceConfig {
 
         Ok(Self {
             detection_confidence_threshold,
+            person_confidence_threshold,
             min_face_size,
             quality_thresholds: thresholds,
             explicit_fields,
@@ -140,6 +155,7 @@ impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
             detection_confidence_threshold: default_detection_threshold(),
+            person_confidence_threshold: default_person_threshold(),
             min_face_size: default_min_face_size(),
             quality_thresholds: QualityThresholds::default(),
             explicit_fields: HashSet::new(),
@@ -161,6 +177,11 @@ impl InstanceConfig {
         {
             if let Some(v) = env.get_f32("detection_confidence_threshold") {
                 self.detection_confidence_threshold = v;
+            }
+        }
+        if !self.explicit_fields.contains("person_confidence_threshold") {
+            if let Some(v) = env.get_f32("person_confidence_threshold") {
+                self.person_confidence_threshold = v;
             }
         }
         if !self.explicit_fields.contains("min_face_size") {
@@ -196,6 +217,11 @@ impl InstanceConfig {
             || !(0.0..=1.0).contains(&self.detection_confidence_threshold)
         {
             return Err("detection_confidence_threshold 必须位于 [0, 1]".to_string());
+        }
+        if !self.person_confidence_threshold.is_finite()
+            || !(0.0..=1.0).contains(&self.person_confidence_threshold)
+        {
+            return Err("person_confidence_threshold 必须位于 [0, 1]".to_string());
         }
         if self.min_face_size == 0 {
             return Err("min_face_size 必须大于 0".to_string());
@@ -254,6 +280,7 @@ mod tests {
     fn default_config_has_expected_values() {
         let config = InstanceConfig::default();
         assert_eq!(config.detection_confidence_threshold, 0.5);
+        assert_eq!(config.person_confidence_threshold, 0.4);
         assert_eq!(config.min_face_size, 30);
         assert_eq!(config.quality_thresholds.min_score, 0.3);
         assert_eq!(config.quality_thresholds.max_yaw, 45.0);
@@ -266,6 +293,7 @@ mod tests {
     fn deserializes_flat_schema_properties() {
         let json = r#"{
             "detection_confidence_threshold": 0.4,
+            "person_confidence_threshold": 0.35,
             "min_face_size": 48,
             "quality_min_score": 0.55,
             "quality_max_yaw": 30.0,
@@ -275,6 +303,7 @@ mod tests {
 
         let config: InstanceConfig = serde_json::from_str(json).expect("解析扁平配置应当成功");
         assert_eq!(config.detection_confidence_threshold, 0.4);
+        assert_eq!(config.person_confidence_threshold, 0.35);
         assert_eq!(config.min_face_size, 48);
         assert_eq!(config.quality_thresholds.min_score, 0.55);
         assert_eq!(config.quality_thresholds.max_yaw, 30.0);
@@ -308,13 +337,17 @@ mod tests {
 
     #[test]
     fn test_precedence_host_overrides_env_and_env_overrides_default() {
-        let host_json = r#"{"detection_confidence_threshold": 0.85}"#;
+        let host_json = r#"{
+            "detection_confidence_threshold": 0.85,
+            "person_confidence_threshold": 0.65
+        }"#;
         let mut config: InstanceConfig =
             serde_json::from_str(host_json).expect("解析宿主配置应当成功");
 
         let env = PackageEnv::parse_str(
             r#"
             DETECTION_CONFIDENCE_THRESHOLD = 0.10
+            PERSON_CONFIDENCE_THRESHOLD = 0.20
             MIN_FACE_SIZE = 50
             QUALITY_MIN_SCORE = 0.60
             "#,
@@ -323,6 +356,7 @@ mod tests {
         config.apply_env(&env);
 
         assert_eq!(config.detection_confidence_threshold, 0.85);
+        assert_eq!(config.person_confidence_threshold, 0.65);
         assert_eq!(config.min_face_size, 50);
         assert_eq!(config.quality_thresholds.min_score, 0.60);
         assert_eq!(config.quality_thresholds.max_yaw, 45.0);

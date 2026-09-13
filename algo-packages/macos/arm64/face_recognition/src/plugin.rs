@@ -99,7 +99,10 @@ impl AlgoPlugin for FaceRecognizer {
         // SAFETY: pixelbuffer 仍由当前 CvBuffer 持有，且 predict_detector 同步执行。
         let raw_face_output = unsafe { self.models.predict_detector(pixelbuffer)? };
 
-        let mut persons = crate::detect::decode_person_detections(&raw_person, 0.40);
+        let mut persons = crate::detect::decode_person_detections(
+            &raw_person,
+            self.config.person_confidence_threshold,
+        );
         crate::detect::nms_persons(&mut persons, 0.45);
         crate::detect::unmap_persons_letterbox(&mut persons, &mode, frame.width(), frame.height());
 

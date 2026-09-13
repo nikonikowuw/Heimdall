@@ -254,9 +254,13 @@ impl RawAlgoLibrary {
         // SAFETY: input/output 结构体满足 ABI 契约且在调用期间保持有效
         let status = unsafe { extract_fn(self.raw, &input, &mut output) };
         if status != AV_OK || output.status_code != 0 {
+            // 复用 check_c_status 拉取算法插件底层详细错误描述
+            // SAFETY: self.raw 为有效 AvAlgoLibrary 句柄，abi 虚表在 RawAlgoLibrary 存活期间有效
+            let detail =
+                unsafe { check_c_status(status, self.lib.abi(), self.raw as AvAlgoInstance) };
             return Err(InferError::Execution {
                 reason: format!(
-                    "人脸特征提取失败: status={status}, code={}",
+                    "人脸特征提取失败: plugin_status={status}, plugin_code={}, detail={detail}",
                     output.status_code
                 ),
             });

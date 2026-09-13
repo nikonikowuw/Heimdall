@@ -13,6 +13,14 @@
       "maximum": 1.0,
       "default": 0.5
     },
+    "person_confidence_threshold": {
+      "type": "number",
+      "title": "人体检测置信度阈值",
+      "description": "人体主体检测框置信度过滤阈值，低于该值的候选框将被过滤",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.4
+    },
     "min_face_size": {
       "type": "integer",
       "title": "最小人脸尺寸",

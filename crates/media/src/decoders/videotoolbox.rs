@@ -124,6 +124,14 @@ extern "C" {
     fn CVPixelBufferGetHeight(pixel_buffer: *mut c_void) -> usize;
     fn CVPixelBufferGetBytesPerRow(pixel_buffer: *mut c_void) -> usize;
     fn CVPixelBufferRetain(pixel_buffer: *mut c_void) -> *mut c_void;
+    fn CVPixelBufferRelease(pixel_buffer: *mut c_void);
+
+    fn CMBlockBufferReplaceDataBytes(
+        source_bytes: *const c_void,
+        destination_buffer: *mut c_void,
+        offset_into_destination: usize,
+        data_length: usize,
+    ) -> i32;
 }
 
 #[cfg(target_os = "macos")]
@@ -490,20 +498,21 @@ impl VideoDecoder for VideoToolboxDecoder {
             }
 
             let mut block_buffer: *mut c_void = std::ptr::null_mut();
-            const K_CM_BLOCK_BUFFER_ALWAYS_COPY_DATA_FLAG: u32 = 0x00000020;
+            const K_CM_BLOCK_BUFFER_ASSURE_MEMORY_NOW_FLAG: u32 = 1 << 0;
 
-            // SAFETY: 创建 CMBlockBuffer，传入 kCMBlockBufferAlwaysCopyDataFlag = 0x00000020
-            // 确保 CoreMedia 立即分配内部内存并复制切片，彻底消除栈变量生命周期悬垂与 UAF 风险
+            // SAFETY: 创建 CMBlockBuffer 时传入 memoryBlock 为 NULL，并置 kCMBlockBufferAssureMemoryNowFlag，
+            // 要求 CoreMedia 立即使用系统分配器自行为 BlockBuffer 分配内部内存空间。
+            // 绝不将 Rust 管理的局部 Vec 堆指针交给 CoreMedia 释放，彻底杜绝 double free 与生命周期悬垂风险
             let block_status = unsafe {
                 CMBlockBufferCreateWithMemoryBlock(
                     std::ptr::null(),
-                    avcc_buffer.as_ptr() as *mut c_void,
+                    std::ptr::null_mut(),
                     avcc_buffer.len(),
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
                     avcc_buffer.len(),
-                    K_CM_BLOCK_BUFFER_ALWAYS_COPY_DATA_FLAG,
+                    K_CM_BLOCK_BUFFER_ASSURE_MEMORY_NOW_FLAG,
                     &mut block_buffer,
                 )
             };
@@ -511,6 +520,24 @@ impl VideoDecoder for VideoToolboxDecoder {
             if block_status != 0 || block_buffer.is_null() {
                 return Err(MediaError::Decode {
                     reason: format!("CMBlockBufferCreate 失败, code: {block_status}"),
+                });
+            }
+
+            // SAFETY: 将 AVCC 格式数据安全拷贝至 CoreMedia 内部管理的 BlockBuffer 显存/内存块中
+            let replace_status = unsafe {
+                CMBlockBufferReplaceDataBytes(
+                    avcc_buffer.as_ptr() as *const c_void,
+                    block_buffer,
+                    0,
+                    avcc_buffer.len(),
+                )
+            };
+
+            if replace_status != 0 {
+                // SAFETY: 写入数据失败时及时释放 block_buffer
+                unsafe { CFRelease(block_buffer) };
+                return Err(MediaError::Decode {
+                    reason: format!("CMBlockBufferReplaceDataBytes 失败, code: {replace_status}"),
                 });
             }
 
@@ -651,7 +678,10 @@ unsafe extern "C" fn decompression_callback(
             let retained = unsafe { CVPixelBufferRetain(image_buffer) };
             // SAFETY: source_frame_ref_con 是 &mut Option<*mut c_void> 指针
             let target = unsafe { &mut *(source_frame_ref_con as *mut Option<*mut c_void>) };
-            *target = Some(retained);
+            if let Some(old) = target.replace(retained) {
+                // SAFETY: 若异常出现多帧回调，释放旧帧引用以杜绝显存泄漏
+                unsafe { CVPixelBufferRelease(old) };
+            }
         }
     });
 }
@@ -672,5 +702,30 @@ mod tests {
         assert_eq!(nalus[0], b"\x67sps_data");
         assert_eq!(nalus[1], b"\x68pps_data");
         assert_eq!(nalus[2], b"\x65idr_data");
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn test_videotoolbox_init_and_decode_no_double_free() {
+        let mut decoder = VideoToolboxDecoder::new("cam_vt_test", CodecType::H264);
+
+        // 包含真实合法的 1080p H.264 SPS, PPS 与 IDR 切片
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        packet.extend_from_slice(&[
+            0x67, 0x64, 0x00, 0x29, 0xac, 0x72, 0x84, 0x40, 0x78, 0x02, 0x27, 0xe5, 0xc0, 0x44,
+            0x00, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60, 0xc9, 0x20,
+        ]); // SPS
+        packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        packet.extend_from_slice(&[0x68, 0xee, 0x3c, 0x80]); // PPS
+        packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        packet.extend_from_slice(&[0x65, 0x88, 0x84, 0x00, 0x10]); // IDR slice (前缀)
+
+        // 验证调用 decode_packet 时不会发生内存二次释放崩溃 (double free abort)
+        let _ = decoder.decode_packet(&packet, 1000).await;
+
+        // 显式 flush 与 drop
+        let _ = decoder.flush().await;
+        drop(decoder);
     }
 }
