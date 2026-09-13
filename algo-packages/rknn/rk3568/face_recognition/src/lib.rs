@@ -1,9 +1,12 @@
-//! Rockchip RK3576 人脸检测与 EdgeFace 特征提取算法包。
+//! Rockchip RK3568 人脸检测与 EdgeFace 特征提取算法包。
 //!
-//! 常驻视频路径只做检测和质量门控；embedding 通过低频抓拍 API 或显式请求执行。
+//! 集成 YOLOv8n-face 检测器、ByteTrack 航迹追踪与 EdgeFace-xs 512 维特征提取与时域超球面融合。
 //! RKNN context 常驻独立 OS worker，避免在宿主调用线程之间迁移硬件会话。
 
 pub mod align;
+pub mod association;
+pub mod best_shot;
+pub mod bytetrack;
 pub mod config;
 pub mod detect;
 pub mod manifest;

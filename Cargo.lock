@@ -917,6 +917,7 @@ name = "face-recognition-rk3568-rknn"
 version = "1.0.0"
 dependencies = [
  "algo-sdk",
+ "base64 0.22.1",
  "image",
  "libc",
  "libloading",

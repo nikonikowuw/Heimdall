@@ -1,31 +1,13 @@
-use std::collections::HashSet;
-
 use algo_sdk::env::PackageEnv;
 use serde::Deserialize;
 
-fn default_detection_threshold() -> f32 {
-    0.25
-}
-
-fn default_min_face_size() -> u32 {
-    30
-}
-
-fn default_min_quality_score() -> f32 {
-    0.3
-}
-
-fn default_max_yaw() -> f32 {
-    45.0
-}
-
-fn default_max_pitch() -> f32 {
-    30.0
-}
-
-fn default_max_blur() -> f32 {
-    0.7
-}
+const FIELD_DETECTION_CONF: u8 = 1 << 0;
+const FIELD_PERSON_CONF: u8 = 1 << 1;
+const FIELD_MIN_FACE_SIZE: u8 = 1 << 2;
+const FIELD_QUALITY_MIN_SCORE: u8 = 1 << 3;
+const FIELD_QUALITY_MAX_YAW: u8 = 1 << 4;
+const FIELD_QUALITY_MAX_PITCH: u8 = 1 << 5;
+const FIELD_QUALITY_MAX_BLUR: u8 = 1 << 6;
 
 #[derive(Deserialize, Default)]
 struct RawQualityThresholds {
@@ -45,6 +27,8 @@ struct RawInstanceConfig {
     #[serde(default)]
     detection_confidence_threshold: Option<f32>,
     #[serde(default)]
+    person_confidence_threshold: Option<f32>,
+    #[serde(default)]
     min_face_size: Option<u32>,
     #[serde(default)]
     quality_thresholds: Option<RawQualityThresholds>,
@@ -62,11 +46,24 @@ struct RawInstanceConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceConfig {
     pub detection_confidence_threshold: f32,
+    pub person_confidence_threshold: f32,
     pub min_face_size: u32,
     pub quality_thresholds: QualityThresholds,
 
-    /// 记录宿主任务配置显式下发的参数名（用于执行三级优先级隔离）
-    explicit_fields: HashSet<String>,
+    /// 记录宿主任务配置显式下发的参数位掩码（用于执行三级优先级隔离）
+    explicit_fields: u8,
+}
+
+impl Default for InstanceConfig {
+    fn default() -> Self {
+        Self {
+            detection_confidence_threshold: 0.5,
+            person_confidence_threshold: 0.4,
+            min_face_size: 30,
+            quality_thresholds: QualityThresholds::default(),
+            explicit_fields: 0,
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for InstanceConfig {
@@ -75,75 +72,85 @@ impl<'de> Deserialize<'de> for InstanceConfig {
         D: serde::Deserializer<'de>,
     {
         let raw = RawInstanceConfig::deserialize(deserializer)?;
-        let mut explicit_fields = HashSet::new();
-
-        let detection_confidence_threshold = if let Some(v) = raw.detection_confidence_threshold {
-            explicit_fields.insert("detection_confidence_threshold".to_string());
-            v
-        } else {
-            default_detection_threshold()
+        let mut explicit = 0u8;
+        let set_f32 = |explicit: &mut u8, mask: u8, opt: Option<f32>, target: &mut f32| {
+            if let Some(val) = opt {
+                *explicit |= mask;
+                *target = val;
+            }
         };
 
-        let min_face_size = if let Some(v) = raw.min_face_size {
-            explicit_fields.insert("min_face_size".to_string());
-            v
-        } else {
-            default_min_face_size()
-        };
+        let mut config = Self::default();
+        set_f32(
+            &mut explicit,
+            FIELD_DETECTION_CONF,
+            raw.detection_confidence_threshold,
+            &mut config.detection_confidence_threshold,
+        );
+        set_f32(
+            &mut explicit,
+            FIELD_PERSON_CONF,
+            raw.person_confidence_threshold,
+            &mut config.person_confidence_threshold,
+        );
+        if let Some(v) = raw.min_face_size {
+            explicit |= FIELD_MIN_FACE_SIZE;
+            config.min_face_size = v;
+        }
 
-        let mut thresholds = QualityThresholds::default();
         if let Some(nested) = raw.quality_thresholds {
-            if let Some(v) = nested.min_score {
-                explicit_fields.insert("quality_min_score".to_string());
-                thresholds.min_score = v;
-            }
-            if let Some(v) = nested.max_yaw {
-                explicit_fields.insert("quality_max_yaw".to_string());
-                thresholds.max_yaw = v;
-            }
-            if let Some(v) = nested.max_pitch {
-                explicit_fields.insert("quality_max_pitch".to_string());
-                thresholds.max_pitch = v;
-            }
-            if let Some(v) = nested.max_blur {
-                explicit_fields.insert("quality_max_blur".to_string());
-                thresholds.max_blur = v;
-            }
+            set_f32(
+                &mut explicit,
+                FIELD_QUALITY_MIN_SCORE,
+                nested.min_score,
+                &mut config.quality_thresholds.min_score,
+            );
+            set_f32(
+                &mut explicit,
+                FIELD_QUALITY_MAX_YAW,
+                nested.max_yaw,
+                &mut config.quality_thresholds.max_yaw,
+            );
+            set_f32(
+                &mut explicit,
+                FIELD_QUALITY_MAX_PITCH,
+                nested.max_pitch,
+                &mut config.quality_thresholds.max_pitch,
+            );
+            set_f32(
+                &mut explicit,
+                FIELD_QUALITY_MAX_BLUR,
+                nested.max_blur,
+                &mut config.quality_thresholds.max_blur,
+            );
         }
-        if let Some(v) = raw.quality_min_score {
-            explicit_fields.insert("quality_min_score".to_string());
-            thresholds.min_score = v;
-        }
-        if let Some(v) = raw.quality_max_yaw {
-            explicit_fields.insert("quality_max_yaw".to_string());
-            thresholds.max_yaw = v;
-        }
-        if let Some(v) = raw.quality_max_pitch {
-            explicit_fields.insert("quality_max_pitch".to_string());
-            thresholds.max_pitch = v;
-        }
-        if let Some(v) = raw.quality_max_blur {
-            explicit_fields.insert("quality_max_blur".to_string());
-            thresholds.max_blur = v;
-        }
+        set_f32(
+            &mut explicit,
+            FIELD_QUALITY_MIN_SCORE,
+            raw.quality_min_score,
+            &mut config.quality_thresholds.min_score,
+        );
+        set_f32(
+            &mut explicit,
+            FIELD_QUALITY_MAX_YAW,
+            raw.quality_max_yaw,
+            &mut config.quality_thresholds.max_yaw,
+        );
+        set_f32(
+            &mut explicit,
+            FIELD_QUALITY_MAX_PITCH,
+            raw.quality_max_pitch,
+            &mut config.quality_thresholds.max_pitch,
+        );
+        set_f32(
+            &mut explicit,
+            FIELD_QUALITY_MAX_BLUR,
+            raw.quality_max_blur,
+            &mut config.quality_thresholds.max_blur,
+        );
 
-        Ok(Self {
-            detection_confidence_threshold,
-            min_face_size,
-            quality_thresholds: thresholds,
-            explicit_fields,
-        })
-    }
-}
-
-impl Default for InstanceConfig {
-    fn default() -> Self {
-        Self {
-            detection_confidence_threshold: default_detection_threshold(),
-            min_face_size: default_min_face_size(),
-            quality_thresholds: QualityThresholds::default(),
-            explicit_fields: HashSet::new(),
-        }
+        config.explicit_fields = explicit;
+        Ok(config)
     }
 }
 
@@ -155,39 +162,49 @@ impl InstanceConfig {
     /// 2. 宿主未传递该字段时：优先使用 `.env` 局部配置；
     /// 3. 若 `.env` 也未设置：维持代码硬编码默认值。
     pub fn apply_env(&mut self, env: &PackageEnv) {
-        if !self
-            .explicit_fields
-            .contains("detection_confidence_threshold")
-        {
-            if let Some(v) = env.get_f32("detection_confidence_threshold") {
-                self.detection_confidence_threshold = v;
+        let apply_f32 = |mask: u8, key: &str, target: &mut f32| {
+            if self.explicit_fields & mask == 0 {
+                if let Some(v) = env.get_f32(key) {
+                    *target = v;
+                }
             }
-        }
-        if !self.explicit_fields.contains("min_face_size") {
+        };
+
+        apply_f32(
+            FIELD_DETECTION_CONF,
+            "detection_confidence_threshold",
+            &mut self.detection_confidence_threshold,
+        );
+        apply_f32(
+            FIELD_PERSON_CONF,
+            "person_confidence_threshold",
+            &mut self.person_confidence_threshold,
+        );
+        if self.explicit_fields & FIELD_MIN_FACE_SIZE == 0 {
             if let Some(v) = env.get_u32("min_face_size") {
                 self.min_face_size = v;
             }
         }
-        if !self.explicit_fields.contains("quality_min_score") {
-            if let Some(v) = env.get_f32("quality_min_score") {
-                self.quality_thresholds.min_score = v;
-            }
-        }
-        if !self.explicit_fields.contains("quality_max_yaw") {
-            if let Some(v) = env.get_f32("quality_max_yaw") {
-                self.quality_thresholds.max_yaw = v;
-            }
-        }
-        if !self.explicit_fields.contains("quality_max_pitch") {
-            if let Some(v) = env.get_f32("quality_max_pitch") {
-                self.quality_thresholds.max_pitch = v;
-            }
-        }
-        if !self.explicit_fields.contains("quality_max_blur") {
-            if let Some(v) = env.get_f32("quality_max_blur") {
-                self.quality_thresholds.max_blur = v;
-            }
-        }
+        apply_f32(
+            FIELD_QUALITY_MIN_SCORE,
+            "quality_min_score",
+            &mut self.quality_thresholds.min_score,
+        );
+        apply_f32(
+            FIELD_QUALITY_MAX_YAW,
+            "quality_max_yaw",
+            &mut self.quality_thresholds.max_yaw,
+        );
+        apply_f32(
+            FIELD_QUALITY_MAX_PITCH,
+            "quality_max_pitch",
+            &mut self.quality_thresholds.max_pitch,
+        );
+        apply_f32(
+            FIELD_QUALITY_MAX_BLUR,
+            "quality_max_blur",
+            &mut self.quality_thresholds.max_blur,
+        );
     }
 
     /// 校验来自 ABI 配置 JSON 的数值范围。
@@ -197,6 +214,11 @@ impl InstanceConfig {
         {
             return Err("detection_confidence_threshold 必须位于 [0, 1]".to_string());
         }
+        if !self.person_confidence_threshold.is_finite()
+            || !(0.0..=1.0).contains(&self.person_confidence_threshold)
+        {
+            return Err("person_confidence_threshold 必须位于 [0, 1]".to_string());
+        }
         if self.min_face_size == 0 {
             return Err("min_face_size 必须大于 0".to_string());
         }
@@ -205,30 +227,32 @@ impl InstanceConfig {
 }
 
 /// 质量门控阈值。
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
 pub struct QualityThresholds {
-    #[serde(default = "default_min_quality_score")]
+    #[serde(default = "QualityThresholds::default_min_score")]
     pub min_score: f32,
-    #[serde(default = "default_max_yaw")]
+    #[serde(default = "QualityThresholds::default_max_yaw")]
     pub max_yaw: f32,
-    #[serde(default = "default_max_pitch")]
+    #[serde(default = "QualityThresholds::default_max_pitch")]
     pub max_pitch: f32,
-    #[serde(default = "default_max_blur")]
+    #[serde(default = "QualityThresholds::default_max_blur")]
     pub max_blur: f32,
 }
 
-impl Default for QualityThresholds {
-    fn default() -> Self {
-        Self {
-            min_score: default_min_quality_score(),
-            max_yaw: default_max_yaw(),
-            max_pitch: default_max_pitch(),
-            max_blur: default_max_blur(),
-        }
-    }
-}
-
 impl QualityThresholds {
+    const fn default_min_score() -> f32 {
+        0.3
+    }
+    const fn default_max_yaw() -> f32 {
+        45.0
+    }
+    const fn default_max_pitch() -> f32 {
+        30.0
+    }
+    const fn default_max_blur() -> f32 {
+        0.7
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !self.min_score.is_finite() || !(0.0..=1.0).contains(&self.min_score) {
             return Err("quality_thresholds.min_score 必须位于 [0, 1]".to_string());
@@ -246,6 +270,17 @@ impl QualityThresholds {
     }
 }
 
+impl Default for QualityThresholds {
+    fn default() -> Self {
+        Self {
+            min_score: Self::default_min_score(),
+            max_yaw: Self::default_max_yaw(),
+            max_pitch: Self::default_max_pitch(),
+            max_blur: Self::default_max_blur(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,7 +288,8 @@ mod tests {
     #[test]
     fn default_config_has_expected_values() {
         let config = InstanceConfig::default();
-        assert_eq!(config.detection_confidence_threshold, 0.25);
+        assert_eq!(config.detection_confidence_threshold, 0.5);
+        assert_eq!(config.person_confidence_threshold, 0.4);
         assert_eq!(config.min_face_size, 30);
         assert_eq!(config.quality_thresholds.min_score, 0.3);
         assert_eq!(config.quality_thresholds.max_yaw, 45.0);
@@ -266,6 +302,7 @@ mod tests {
     fn deserializes_flat_schema_properties() {
         let json = r#"{
             "detection_confidence_threshold": 0.4,
+            "person_confidence_threshold": 0.35,
             "min_face_size": 48,
             "quality_min_score": 0.55,
             "quality_max_yaw": 30.0,
@@ -275,6 +312,7 @@ mod tests {
 
         let config: InstanceConfig = serde_json::from_str(json).expect("解析扁平配置应当成功");
         assert_eq!(config.detection_confidence_threshold, 0.4);
+        assert_eq!(config.person_confidence_threshold, 0.35);
         assert_eq!(config.min_face_size, 48);
         assert_eq!(config.quality_thresholds.min_score, 0.55);
         assert_eq!(config.quality_thresholds.max_yaw, 30.0);
@@ -308,16 +346,17 @@ mod tests {
 
     #[test]
     fn test_precedence_host_overrides_env_and_env_overrides_default() {
-        // 宿主只传递了 detection_confidence_threshold=0.85，未传递 min_face_size 和 quality_min_score
-        let host_json = r#"{"detection_confidence_threshold": 0.85}"#;
+        let host_json = r#"{
+            "detection_confidence_threshold": 0.85,
+            "person_confidence_threshold": 0.65
+        }"#;
         let mut config: InstanceConfig =
             serde_json::from_str(host_json).expect("解析宿主配置应当成功");
 
-        // 算法包私有 .env
         let env = PackageEnv::parse_str(
             r#"
-            # .env 中尝试设置两个参数
             DETECTION_CONFIDENCE_THRESHOLD = 0.10
+            PERSON_CONFIDENCE_THRESHOLD = 0.20
             MIN_FACE_SIZE = 50
             QUALITY_MIN_SCORE = 0.60
             "#,
@@ -325,12 +364,10 @@ mod tests {
 
         config.apply_env(&env);
 
-        // 1. 宿主显式传递的必须维持 0.85（第一优先级最高，不可被 .env 覆盖）
         assert_eq!(config.detection_confidence_threshold, 0.85);
-        // 2. 宿主未传递的 min_face_size 和 quality_min_score 取 .env 中的值（第二优先级）
+        assert_eq!(config.person_confidence_threshold, 0.65);
         assert_eq!(config.min_face_size, 50);
         assert_eq!(config.quality_thresholds.min_score, 0.60);
-        // 3. 宿主和 .env 都未传递的 quality_max_yaw 取代码硬编码默认值（第三优先级保底）
         assert_eq!(config.quality_thresholds.max_yaw, 45.0);
     }
 }

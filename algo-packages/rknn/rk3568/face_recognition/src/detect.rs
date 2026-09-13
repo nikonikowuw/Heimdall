@@ -6,6 +6,8 @@
 use algo_sdk::cv::LetterboxLayout;
 use algo_sdk::error::AlgoError;
 
+pub use crate::association::PersonCandidate;
+
 /// 每个尺度的输出分支数
 const BRANCHES_PER_SCALE: usize = 4;
 /// box DFL 的 bin 数量（每条边 16 个分布）
@@ -16,9 +18,9 @@ const KPT_CHANNELS_PER_POINT: usize = 3;
 pub const NUM_LANDMARKS: usize = 5;
 
 /// YOLOv8n-face 单候选框
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RawFace {
-    /// `[x1, y1, x2, y2]` 对角线坐标格式，归一化到 [0, 1]
+    /// `[x, y, width, height]` 坐标格式，左上角原点，归一化到 [0, 1]
     pub bbox: [f32; 4],
     /// 5 个关键点坐标，归一化到 [0, 1]
     pub landmarks: [[f32; 2]; NUM_LANDMARKS],
@@ -31,12 +33,12 @@ pub struct RawFace {
 impl RawFace {
     #[inline]
     pub fn width(&self) -> f32 {
-        (self.bbox[2] - self.bbox[0]).max(0.0)
+        self.bbox[2].max(0.0)
     }
 
     #[inline]
     pub fn height(&self) -> f32 {
-        (self.bbox[3] - self.bbox[1]).max(0.0)
+        self.bbox[3].max(0.0)
     }
 
     #[inline]
@@ -44,12 +46,18 @@ impl RawFace {
         self.width() * self.height()
     }
 
-    fn iou(&self, other: &Self) -> f32 {
+    pub fn iou(&self, other: &Self) -> f32 {
+        let ax2 = self.bbox[0] + self.bbox[2];
+        let ay2 = self.bbox[1] + self.bbox[3];
+        let bx2 = other.bbox[0] + other.bbox[2];
+        let by2 = other.bbox[1] + other.bbox[3];
         let ix1 = self.bbox[0].max(other.bbox[0]);
         let iy1 = self.bbox[1].max(other.bbox[1]);
-        let ix2 = self.bbox[2].min(other.bbox[2]);
-        let iy2 = self.bbox[3].min(other.bbox[3]);
-        let intersection = (ix2 - ix1).max(0.0) * (iy2 - iy1).max(0.0);
+        let ix2 = ax2.min(bx2);
+        let iy2 = ay2.min(by2);
+        let iw = (ix2 - ix1).max(0.0);
+        let ih = (iy2 - iy1).max(0.0);
+        let intersection = iw * ih;
         let union = self.area() + other.area() - intersection;
         if union > 0.0 {
             intersection / union
@@ -73,16 +81,23 @@ fn compute_dfl(logits: &[f32]) -> Result<f32, AlgoError> {
         });
     }
     let max_val = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let exp_sum: f32 = logits.iter().map(|&v| (v - max_val).exp()).sum();
+    let mut exp_vals = [0.0f32; DFL_LEN];
+    let mut exp_sum = 0.0f32;
+    for (i, &v) in logits.iter().enumerate() {
+        let e = (v - max_val).exp();
+        exp_vals[i] = e;
+        exp_sum += e;
+    }
     if !exp_sum.is_finite() || exp_sum <= f32::EPSILON {
         return Err(AlgoError::Inference {
             reason: "DFL softmax 分母非法".to_string(),
         });
     }
-    Ok(logits
+    let inv_sum = 1.0 / exp_sum;
+    Ok(exp_vals
         .iter()
         .enumerate()
-        .map(|(i, &v)| (v - max_val).exp() / exp_sum * i as f32)
+        .map(|(i, &e)| (e * inv_sum) * i as f32)
         .sum())
 }
 
@@ -200,7 +215,7 @@ fn decode_scale(
                 continue;
             }
             faces.push(RawFace {
-                bbox: [x1, y1, x2, y2],
+                bbox: [x1, y1, x2 - x1, y2 - y1],
                 landmarks,
                 landmark_scores,
                 score: cls_score,
@@ -211,26 +226,25 @@ fn decode_scale(
     Ok(faces)
 }
 
-/// 对人脸候选执行类别无关 NMS
+/// 对人脸候选执行类别无关 NMS（零额外堆内存分配原地抑制）
 pub fn nms(faces: &mut Vec<RawFace>, iou_threshold: f32) {
     if faces.len() <= 1 {
         return;
     }
-    faces.sort_by(|a, b| b.score.total_cmp(&a.score));
-    let mut kept = Vec::with_capacity(faces.len());
-    for face in faces.iter().cloned() {
-        if kept
-            .iter()
-            .all(|previous: &RawFace| previous.iou(&face) < iou_threshold)
-        {
-            kept.push(face);
+    faces.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+    let mut kept_len = 0;
+    for i in 0..faces.len() {
+        let overlaps = (0..kept_len).any(|j| faces[j].iou(&faces[i]) >= iou_threshold);
+        if !overlaps {
+            faces.swap(kept_len, i);
+            kept_len += 1;
         }
     }
-    *faces = kept;
+    faces.truncate(kept_len);
 }
 
 /// 将 bbox 和 landmarks 从模型输入画布像素坐标根据 Letterbox 布局反算并归一化到原图 [0, 1]
-/// 全系统统一遵循 [x1, y1, x2, y2] 规范
+/// 全系统统一遵循 [x, y, w, h] 规范
 pub fn normalize_to_relative(faces: &mut [RawFace], layout: &LetterboxLayout) {
     let eff_w = layout.scaled_w as f32;
     let eff_h = layout.scaled_h as f32;
@@ -241,13 +255,13 @@ pub fn normalize_to_relative(faces: &mut [RawFace], layout: &LetterboxLayout) {
     let pad_top = layout.pad_top as f32;
 
     for face in faces {
-        // bbox 反算黑边并归一化到原图 [0, 1] (x1, y1, x2, y2)
+        // bbox 反算黑边并归一化到原图 [0, 1] (x, y, w, h)
         let x1 = ((face.bbox[0] - pad_left) / eff_w).clamp(0.0, 1.0);
         let y1 = ((face.bbox[1] - pad_top) / eff_h).clamp(0.0, 1.0);
-        let x2 = ((face.bbox[2] - pad_left) / eff_w).clamp(0.0, 1.0);
-        let y2 = ((face.bbox[3] - pad_top) / eff_h).clamp(0.0, 1.0);
+        let x2 = ((face.bbox[0] + face.bbox[2] - pad_left) / eff_w).clamp(0.0, 1.0);
+        let y2 = ((face.bbox[1] + face.bbox[3] - pad_top) / eff_h).clamp(0.0, 1.0);
 
-        face.bbox = [x1, y1, x2.max(x1), y2.max(y1)];
+        face.bbox = [x1, y1, (x2 - x1).max(0.0), (y2 - y1).max(0.0)];
 
         // landmarks 反算黑边并归一化到原图
         for point in &mut face.landmarks {
@@ -409,7 +423,7 @@ mod tests {
             scaled_h: 360,
         };
         let mut faces = vec![RawFace {
-            bbox: [320.0, 192.0, 453.33334, 325.33334],
+            bbox: [320.0, 192.0, 133.33334, 133.33334],
             landmarks: [[320.0, 192.0]; 5],
             landmark_scores: [0.9; 5],
             score: 0.95,
@@ -418,8 +432,8 @@ mod tests {
         let f = &faces[0];
         assert!((f.bbox[0] - 0.5).abs() < 1e-4);
         assert!((f.bbox[1] - 0.5).abs() < 1e-4);
-        assert!((f.bbox[2] - 0.70833).abs() < 1e-4);
-        assert!((f.bbox[3] - 0.87037).abs() < 1e-4);
+        assert!((f.bbox[2] - 0.20833).abs() < 1e-4);
+        assert!((f.bbox[3] - 0.37037).abs() < 1e-4);
         assert!((f.landmarks[0][0] - 0.5).abs() < 1e-4);
         assert!((f.landmarks[0][1] - 0.5).abs() < 1e-4);
     }
