@@ -218,6 +218,40 @@ impl<'a> SafeFrame<'a> {
         self.desc.frame_id
     }
 
+    /// 是否为 Linux DRM DMA-BUF 原生硬件句柄
+    #[inline]
+    pub fn is_dma_buf(&self) -> bool {
+        self.desc.opaque_kind == AV_OPAQUE_DMABUF
+    }
+
+    /// 若为 DMA-BUF，获取其文件描述符
+    #[inline]
+    pub fn dma_buf_fd(&self) -> Option<i32> {
+        if self.is_dma_buf() && !self.desc.opaque.is_null() {
+            Some(self.desc.opaque as usize as i32)
+        } else {
+            None
+        }
+    }
+
+    /// 是否为 Apple CoreVideo CVPixelBufferRef 原生硬件句柄
+    #[inline]
+    pub fn is_apple_pixel_buffer(&self) -> bool {
+        self.desc.opaque_kind == AV_OPAQUE_CVPIXELBUFFER
+    }
+
+    /// 是否为华为昇腾 DVPP 原生设备显存指针
+    #[inline]
+    pub fn is_ascend_memory(&self) -> bool {
+        self.desc.opaque_kind == AV_OPAQUE_ASCEND_DEVICE_MEMORY
+    }
+
+    /// 是否为 CPU Host 内存
+    #[inline]
+    pub fn is_host(&self) -> bool {
+        self.desc.opaque_kind == AV_OPAQUE_NONE
+    }
+
     /// 解包底层硬件句柄视图
     pub fn handle_view(&self) -> FrameHandleView<'a> {
         match self.desc.opaque_kind {

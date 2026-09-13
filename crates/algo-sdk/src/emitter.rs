@@ -62,6 +62,13 @@ struct JsonAlarmEnvelope<'a> {
     objects: BoxesSerializer<'a>,
 }
 
+#[derive(Debug, Serialize)]
+struct JsonSelfTestResult {
+    detections_count: usize,
+    self_test: bool,
+    status: &'static str,
+}
+
 /// 算法结果发射器
 #[derive(Debug)]
 pub struct ResultEmitter<'a> {
@@ -97,19 +104,16 @@ impl<'a> ResultEmitter<'a> {
 
     /// 发射指定类型的 JSON 结果。
     ///
-    /// `json` 可以不带结尾 NUL；方法会在回调前构造临时 C 字符串，保证
-    /// `AvAlgoResult::json` 在宿主同步回调期间有效。
-    pub fn emit_json_result(
+    /// 底层直接发射就绪的 C 字符串 JSON 结果，避免多余的内存拷贝
+    #[inline]
+    fn emit_json_c_str(
         &mut self,
         kind: u32,
-        json: &[u8],
+        c_json: &std::ffi::CStr,
+        json_len: u32,
         images: &[AvAlgoImageReq],
     ) -> Result<(), AlgoError> {
-        let json_len = u32::try_from(json.len()).map_err(|_| AlgoError::OutOfMemory)?;
         let image_count = u32::try_from(images.len()).map_err(|_| AlgoError::OutOfMemory)?;
-        let c_json = CString::new(json).map_err(|e| AlgoError::Internal {
-            reason: format!("结果 JSON 包含非法空字符: {e}"),
-        })?;
         let result = AvAlgoResult {
             size: std::mem::size_of::<AvAlgoResult>() as u32,
             api_version: AV_ALGO_API_VERSION,
@@ -135,12 +139,40 @@ impl<'a> ResultEmitter<'a> {
         Ok(())
     }
 
+    /// 发射指定类型的 JSON 结果。
+    ///
+    /// `json` 可以不带结尾 NUL；方法会在回调前构造临时 C 字符串，保证
+    /// `AvAlgoResult::json` 在宿主同步回调期间有效。
+    pub fn emit_json_result(
+        &mut self,
+        kind: u32,
+        json: &[u8],
+        images: &[AvAlgoImageReq],
+    ) -> Result<(), AlgoError> {
+        let json_len = u32::try_from(json.len()).map_err(|_| AlgoError::OutOfMemory)?;
+
+        // 若调用方已传入以 NUL 结尾的合法 C 字符串，直接零拷贝使用
+        if json.last() == Some(&0) {
+            if let Ok(c_json) = std::ffi::CStr::from_bytes_with_nul(json) {
+                let payload_len = json_len.saturating_sub(1);
+                return self.emit_json_c_str(kind, c_json, payload_len, images);
+            }
+        }
+
+        let c_json = CString::new(json).map_err(|e| AlgoError::Internal {
+            reason: format!("结果 JSON 包含非法空字符: {e}"),
+        })?;
+        self.emit_json_c_str(kind, &c_json, json_len, images)
+    }
+
     /// 发射人脸识别结果 JSON，不自动附加抓拍请求。
     pub fn emit_recognition_json(&mut self, json: &[u8]) -> Result<(), AlgoError> {
         self.emit_json_result(AV_RESULT_RECOGNITION, json, &[])
     }
 
     /// 发射告警检测结果，并自动请求全景大图抓拍
+    ///
+    /// 采用就地追加 NUL 终止符与直接 CStr 视图转换，消除整块 JSON 内存的二次拷贝与重复扫描。
     pub fn emit_detections(&mut self, boxes: &[NormBox]) -> Result<(), AlgoError> {
         let envelope = JsonAlarmEnvelope {
             schema_version: 1,
@@ -148,9 +180,17 @@ impl<'a> ResultEmitter<'a> {
             objects: BoxesSerializer(boxes),
         };
 
-        let json_bytes = serde_json::to_vec(&envelope).map_err(|e| AlgoError::Internal {
+        let mut json_bytes = serde_json::to_vec(&envelope).map_err(|e| AlgoError::Internal {
             reason: format!("序列化告警 JSON 失败: {e}"),
         })?;
+        let json_len = u32::try_from(json_bytes.len()).map_err(|_| AlgoError::OutOfMemory)?;
+
+        // 原地追加 NUL 构造零拷贝 CStr
+        json_bytes.push(0);
+        let c_json =
+            std::ffi::CStr::from_bytes_with_nul(&json_bytes).map_err(|e| AlgoError::Internal {
+                reason: format!("序列化告警 JSON 包含非法空字符: {e}"),
+            })?;
 
         // 默认挂载全景大图抓拍请求 (x=0, y=0, w=1, h=1, purpose=1)
         let full_req = AvAlgoImageReq {
@@ -164,21 +204,28 @@ impl<'a> ResultEmitter<'a> {
             reserved0: 0,
         };
 
-        self.emit_json_result(AV_RESULT_ALARM, &json_bytes, &[full_req])
+        self.emit_json_c_str(AV_RESULT_ALARM, c_json, json_len, &[full_req])
     }
 
     /// 自检模式发射合格信号
     pub fn emit_self_test(&mut self, detection_count: usize) -> Result<(), AlgoError> {
-        let json_bytes = serde_json::to_vec(&serde_json::json!({
-            "self_test": true,
-            "detections_count": detection_count,
-            "status": "passed"
-        }))
-        .map_err(|e| AlgoError::Internal {
+        let payload = JsonSelfTestResult {
+            detections_count: detection_count,
+            self_test: true,
+            status: "passed",
+        };
+        let mut json_bytes = serde_json::to_vec(&payload).map_err(|e| AlgoError::Internal {
             reason: e.to_string(),
         })?;
+        let json_len = u32::try_from(json_bytes.len()).map_err(|_| AlgoError::OutOfMemory)?;
 
-        self.emit_json_result(AV_RESULT_SELF_TEST, &json_bytes, &[])
+        json_bytes.push(0);
+        let c_json =
+            std::ffi::CStr::from_bytes_with_nul(&json_bytes).map_err(|e| AlgoError::Internal {
+                reason: format!("自检结果 JSON 包含非法空字符: {e}"),
+            })?;
+
+        self.emit_json_c_str(AV_RESULT_SELF_TEST, c_json, json_len, &[])
     }
 }
 

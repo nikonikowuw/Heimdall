@@ -35,9 +35,22 @@ impl NormBox {
 }
 
 /// 计算两个归一化框的交并比 (IoU)
+#[inline(always)]
 pub fn calculate_iou(a: &NormBox, b: &NormBox) -> f32 {
     let a_x2 = a.x + a.w;
     let a_y2 = a.y + a.h;
+    let area_a = (a.w * a.h).max(0.0);
+    calculate_iou_with_precomputed(a_x2, a_y2, area_a, a, b)
+}
+
+#[inline(always)]
+fn calculate_iou_with_precomputed(
+    a_x2: f32,
+    a_y2: f32,
+    area_a: f32,
+    a: &NormBox,
+    b: &NormBox,
+) -> f32 {
     let b_x2 = b.x + b.w;
     let b_y2 = b.y + b.h;
 
@@ -50,7 +63,6 @@ pub fn calculate_iou(a: &NormBox, b: &NormBox) -> f32 {
     let inter_h = (inter_y2 - inter_y1).max(0.0);
     let inter_area = inter_w * inter_h;
 
-    let area_a = (a.w * a.h).max(0.0);
     let area_b = (b.w * b.h).max(0.0);
     let union_area = area_a + area_b - inter_area;
 
@@ -61,70 +73,103 @@ pub fn calculate_iou(a: &NormBox, b: &NormBox) -> f32 {
     }
 }
 
+const STACK_MASK_WORDS: usize = 16; // 16 * 64 = 1024 框以内保持栈上零分配
+
+enum BitMask {
+    Stack([u64; STACK_MASK_WORDS]),
+    Heap(Vec<u64>),
+}
+
+impl BitMask {
+    #[inline]
+    fn new(len: usize) -> Self {
+        let words = len.div_ceil(64);
+        if words <= STACK_MASK_WORDS {
+            BitMask::Stack([0; STACK_MASK_WORDS])
+        } else {
+            BitMask::Heap(vec![0; words])
+        }
+    }
+
+    #[inline(always)]
+    fn is_set(&self, idx: usize) -> bool {
+        let word = idx >> 6;
+        let bit = idx & 63;
+        match self {
+            BitMask::Stack(arr) => (arr[word] & (1u64 << bit)) != 0,
+            BitMask::Heap(vec) => (vec[word] & (1u64 << bit)) != 0,
+        }
+    }
+
+    #[inline(always)]
+    fn set(&mut self, idx: usize) {
+        let word = idx >> 6;
+        let bit = idx & 63;
+        match self {
+            BitMask::Stack(arr) => arr[word] |= 1u64 << bit,
+            BitMask::Heap(vec) => vec[word] |= 1u64 << bit,
+        }
+    }
+}
+
 /// 高性能非极大值抑制 (NMS)，默认类别相关抑制 (Class-aware)
+///
+/// 采用位图掩码与就地双指针压缩，避免额外的 keep/suppressed 工作数组分配。
+#[inline]
 pub fn fast_nms(boxes: &mut Vec<NormBox>, iou_threshold: f32) {
-    if boxes.len() <= 1 {
+    fast_nms_impl::<false>(boxes, iou_threshold);
+}
+
+/// 类别无关非极大值抑制 (Class-agnostic NMS)
+///
+/// 采用位图掩码与就地双指针压缩，避免额外的 keep/suppressed 工作数组分配。
+#[inline]
+pub fn fast_nms_agnostic(boxes: &mut Vec<NormBox>, iou_threshold: f32) {
+    fast_nms_impl::<true>(boxes, iou_threshold);
+}
+
+#[inline]
+fn fast_nms_impl<const AGNOSTIC: bool>(boxes: &mut Vec<NormBox>, iou_threshold: f32) {
+    let n = boxes.len();
+    if n <= 1 {
         return;
     }
 
     // 按置信度降序排序
     boxes.sort_by(|a, b| b.confidence.total_cmp(&a.confidence));
 
-    let mut keep = Vec::with_capacity(boxes.len());
-    let mut suppressed = vec![false; boxes.len()];
+    let mut mask = BitMask::new(n);
+    let mut write_idx = 0;
 
-    for i in 0..boxes.len() {
-        if suppressed[i] {
+    for i in 0..n {
+        if mask.is_set(i) {
             continue;
         }
-        keep.push(boxes[i]);
 
-        for j in (i + 1)..boxes.len() {
-            if suppressed[j] {
+        let a = boxes[i];
+        let a_x2 = a.x + a.w;
+        let a_y2 = a.y + a.h;
+        let area_a = (a.w * a.h).max(0.0);
+
+        for (j, b) in boxes.iter().enumerate().skip(i + 1) {
+            if mask.is_set(j) {
                 continue;
             }
-            // 相同类别才进行抑制
-            if boxes[i].class_id == boxes[j].class_id {
-                let iou = calculate_iou(&boxes[i], &boxes[j]);
+            if AGNOSTIC || a.class_id == b.class_id {
+                let iou = calculate_iou_with_precomputed(a_x2, a_y2, area_a, &a, b);
                 if iou >= iou_threshold {
-                    suppressed[j] = true;
+                    mask.set(j);
                 }
             }
         }
-    }
 
-    *boxes = keep;
-}
-
-/// 类别无关非极大值抑制 (Class-agnostic NMS)
-pub fn fast_nms_agnostic(boxes: &mut Vec<NormBox>, iou_threshold: f32) {
-    if boxes.len() <= 1 {
-        return;
-    }
-
-    boxes.sort_by(|a, b| b.confidence.total_cmp(&a.confidence));
-
-    let mut keep = Vec::with_capacity(boxes.len());
-    let mut suppressed = vec![false; boxes.len()];
-
-    for i in 0..boxes.len() {
-        if suppressed[i] {
-            continue;
+        if write_idx != i {
+            boxes[write_idx] = a;
         }
-        keep.push(boxes[i]);
-
-        for j in (i + 1)..boxes.len() {
-            if suppressed[j] {
-                continue;
-            }
-            let iou = calculate_iou(&boxes[i], &boxes[j]);
-            if iou >= iou_threshold {
-                suppressed[j] = true;
-            }
-        }
+        write_idx += 1;
     }
 
-    *boxes = keep;
+    boxes.truncate(write_idx);
 }
 
 /// 坐标反算：将模型输出空间的检测框映射回原始视频帧的归一化空间 `[0.0, 1.0]`

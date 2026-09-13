@@ -22,6 +22,15 @@ struct DstRegion {
     dst_y_offset: usize,
 }
 
+/// 预计算的 X 轴双线性插值采样点与权重
+#[derive(Debug, Clone, Copy)]
+struct XCoordLut {
+    sx0_3: usize,
+    sx1_3: usize,
+    wx0: f32,
+    wx1: f32,
+}
+
 impl CpuCvEngine {
     pub fn new() -> Self {
         Self
@@ -29,7 +38,7 @@ impl CpuCvEngine {
 
     /// 将输入帧解码/转换为连续的 RGB24 像素
     fn extract_rgb24(&self, frame: &SafeFrame<'_>) -> Result<Vec<u8>, AlgoError> {
-        frame.validate()?;
+        // letterbox/resize 已在入口完成帧校验，这里直接复用校验后的只读视图。
         let w = frame.width() as usize;
         let h = frame.height() as usize;
         if w == 0 || h == 0 {
@@ -155,10 +164,11 @@ impl CpuCvEngine {
                         let clamp_u8 = |v: f32| -> u8 { v.clamp(0.0, 255.0).round() as u8 };
 
                         for y in 0..h {
+                            let uv_row = (y / 2) * uv_stride;
+                            let dst_row = y * w * 3;
                             for x in 0..w {
                                 let y_val = y_plane[y * y_stride + x] as f32;
-                                let uv_x = (x / 2) * 2;
-                                let uv_idx = (y / 2) * uv_stride + uv_x;
+                                let uv_idx = uv_row + (x / 2) * 2;
                                 let u_val = uv_plane[uv_idx] as f32;
                                 let v_val = uv_plane[uv_idx + 1] as f32;
 
@@ -170,7 +180,7 @@ impl CpuCvEngine {
                                 let g = clamp_u8(c + conversion.g_cb * d + conversion.g_cr * e);
                                 let b = clamp_u8(c + conversion.b_cb * d);
 
-                                let dst_idx = (y * w + x) * 3;
+                                let dst_idx = dst_row + x * 3;
                                 rgb[dst_idx] = r;
                                 rgb[dst_idx + 1] = g;
                                 rgb[dst_idx + 2] = b;
@@ -268,15 +278,19 @@ impl CpuCvEngine {
                         let conversion = frame.yuv_conversion();
                         let clamp_u8 = |v: f32| -> u8 { v.clamp(0.0, 255.0).round() as u8 };
                         for y in 0..h {
+                            let chroma_row = y / 2;
+                            let u_row = chroma_row * u_stride;
+                            let v_row = chroma_row * v_stride;
+                            let dst_row = y * w * 3;
                             for x in 0..w {
                                 let y_val = y_plane[y * y_stride + x] as f32;
-                                let chroma_idx = (y / 2) * u_stride + x / 2;
-                                let u_val = u_plane[chroma_idx] as f32;
-                                let v_val = v_plane[(y / 2) * v_stride + x / 2] as f32;
+                                let chroma_x = x / 2;
+                                let u_val = u_plane[u_row + chroma_x] as f32;
+                                let v_val = v_plane[v_row + chroma_x] as f32;
                                 let c = (y_val - conversion.y_offset) * conversion.y_scale;
                                 let d = u_val - 128.0;
                                 let e = v_val - 128.0;
-                                let dst_idx = (y * w + x) * 3;
+                                let dst_idx = dst_row + x * 3;
                                 rgb[dst_idx] = clamp_u8(c + conversion.r_cr * e);
                                 rgb[dst_idx + 1] =
                                     clamp_u8(c + conversion.g_cb * d + conversion.g_cr * e);
@@ -336,7 +350,7 @@ impl CpuCvEngine {
         }
     }
 
-    /// 双线性插值缩放
+    /// 高性能双线性插值缩放（带 X 轴预计算查找表）
     fn bilinear_resize(
         &self,
         src: &[u8],
@@ -352,6 +366,24 @@ impl CpuCvEngine {
         let scale_x = src_w as f32 / region.dst_w as f32;
         let scale_y = src_h as f32 / region.dst_h as f32;
 
+        // 预计算 X 坐标采样点与权重，彻底消除每行对 X 轴的重复浮点乘法与截断
+        let mut x_lut = Vec::with_capacity(region.dst_w);
+        for dx in 0..region.dst_w {
+            let sx = ((dx as f32 + 0.5) * scale_x - 0.5).clamp(0.0, (src_w - 1) as f32);
+            let sx0 = sx.floor() as usize;
+            let sx1 = (sx0 + 1).min(src_w - 1);
+            let wx1 = sx - sx0 as f32;
+            let wx0 = 1.0 - wx1;
+            x_lut.push(XCoordLut {
+                sx0_3: sx0 * 3,
+                sx1_3: sx1 * 3,
+                wx0,
+                wx1,
+            });
+        }
+
+        let src_stride = src_w * 3;
+
         for dy in 0..region.dst_h {
             let sy = ((dy as f32 + 0.5) * scale_y - 0.5).clamp(0.0, (src_h - 1) as f32);
             let sy0 = sy.floor() as usize;
@@ -361,24 +393,25 @@ impl CpuCvEngine {
 
             let out_row_start =
                 (region.dst_y_offset + dy) * region.dst_stride + region.dst_x_offset * 3;
+            let row0_offset = sy0 * src_stride;
+            let row1_offset = sy1 * src_stride;
 
-            for dx in 0..region.dst_w {
-                let sx = ((dx as f32 + 0.5) * scale_x - 0.5).clamp(0.0, (src_w - 1) as f32);
-                let sx0 = sx.floor() as usize;
-                let sx1 = (sx0 + 1).min(src_w - 1);
-                let wx1 = sx - sx0 as f32;
-                let wx0 = 1.0 - wx1;
+            for (dx, lut) in x_lut.iter().enumerate() {
+                let p00_idx = row0_offset + lut.sx0_3;
+                let p10_idx = row0_offset + lut.sx1_3;
+                let p01_idx = row1_offset + lut.sx0_3;
+                let p11_idx = row1_offset + lut.sx1_3;
 
                 let out_idx = out_row_start + dx * 3;
 
                 for c in 0..3 {
-                    let p00 = src[(sy0 * src_w + sx0) * 3 + c] as f32;
-                    let p10 = src[(sy0 * src_w + sx1) * 3 + c] as f32;
-                    let p01 = src[(sy1 * src_w + sx0) * 3 + c] as f32;
-                    let p11 = src[(sy1 * src_w + sx1) * 3 + c] as f32;
+                    let p00 = src[p00_idx + c] as f32;
+                    let p10 = src[p10_idx + c] as f32;
+                    let p01 = src[p01_idx + c] as f32;
+                    let p11 = src[p11_idx + c] as f32;
 
-                    let top = p00 * wx0 + p10 * wx1;
-                    let bot = p01 * wx0 + p11 * wx1;
+                    let top = p00 * lut.wx0 + p10 * lut.wx1;
+                    let bot = p01 * lut.wx0 + p11 * lut.wx1;
                     let val = (top * wy0 + bot * wy1).clamp(0.0, 255.0).round() as u8;
 
                     dst[out_idx + c] = val;
@@ -408,17 +441,19 @@ impl CvEngine for CpuCvEngine {
 
         let layout = compute_letterbox_layout(src_w, src_h, dst_w, dst_h);
 
-        // 创建底色画布
+        // 创建底色画布（若为纯黑底色直接复用 zeroed 内存，避免二次全量遍历）
         let total_bytes = dst_w
             .checked_mul(dst_h)
             .and_then(|pixels| pixels.checked_mul(3))
             .map(|bytes| bytes as usize)
             .ok_or(AlgoError::OutOfMemory)?;
         let mut canvas = vec![0u8; total_bytes];
-        for pixel in canvas.as_chunks_mut::<3>().0 {
-            pixel[0] = fill_color[0];
-            pixel[1] = fill_color[1];
-            pixel[2] = fill_color[2];
+        if fill_color != [0, 0, 0] {
+            for pixel in canvas.as_chunks_mut::<3>().0 {
+                pixel[0] = fill_color[0];
+                pixel[1] = fill_color[1];
+                pixel[2] = fill_color[2];
+            }
         }
 
         // 双线性缩放填充居中区域

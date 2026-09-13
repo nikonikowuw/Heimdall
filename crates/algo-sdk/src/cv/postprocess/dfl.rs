@@ -6,29 +6,31 @@
 /// DFL 解码：将 N-bin softmax 分布还原为单个回归值
 ///
 /// 计算公式：`out = Σ softmax(bin_i) * i`
-/// 使用 log-sum-exp 技巧避免数值溢出。
+/// 使用 log-sum-exp 技巧避免数值溢出，并将 exp() 超越函数调用收敛至单次循环。
+#[inline]
 pub fn decode_dfl(slice: &[f32], out: &mut f32) {
     let n = slice.len();
     if n == 0 {
         *out = 0.0;
         return;
     }
+
     let mut max_v = slice[0];
     for &v in &slice[1..] {
         if v > max_v {
             max_v = v;
         }
     }
+
     let mut exp_sum = 0.0f32;
-    for &val in slice {
-        exp_sum += (val - max_v).exp();
-    }
-    let inv_exp_sum = 1.0 / exp_sum;
-    let mut weighted = 0.0f32;
+    let mut weighted_sum = 0.0f32;
     for (i, &val) in slice.iter().enumerate() {
-        weighted += ((val - max_v).exp() * inv_exp_sum) * (i as f32);
+        let exp_v = (val - max_v).exp();
+        exp_sum += exp_v;
+        weighted_sum += exp_v * (i as f32);
     }
-    *out = weighted;
+
+    *out = weighted_sum / exp_sum;
 }
 
 #[cfg(test)]

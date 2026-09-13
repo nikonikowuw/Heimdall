@@ -85,18 +85,18 @@ pub fn parse_yolov8_int8(ctx: &Yolov8ParseContext<'_>) -> Vec<NormBox> {
     }
 
     if ctx.config.use_score_sum {
-        parse_multi_branch_with_score_sum(ctx)
+        parse_multi_branch::<true>(ctx)
     } else {
-        parse_multi_branch_without_score_sum(ctx)
+        parse_multi_branch::<false>(ctx)
     }
 }
 
 // ---------------------------------------------------------------------------
-// 9-tensor 路径：每 3 个一组 (box, cls, score_sum)
+// 多分支路径：每个分支包含 (box, cls)，可选 score_sum
 // ---------------------------------------------------------------------------
 
-fn parse_multi_branch_with_score_sum(ctx: &Yolov8ParseContext<'_>) -> Vec<NormBox> {
-    let outputs_per_branch = 3;
+fn parse_multi_branch<const WITH_SCORE_SUM: bool>(ctx: &Yolov8ParseContext<'_>) -> Vec<NormBox> {
+    let outputs_per_branch = if WITH_SCORE_SUM { 3 } else { 2 };
     let total_branches = ctx.branches.len() / outputs_per_branch;
     if total_branches == 0 {
         return Vec::new();
@@ -105,76 +105,82 @@ fn parse_multi_branch_with_score_sum(ctx: &Yolov8ParseContext<'_>) -> Vec<NormBo
     let box_channels = ctx.config.dfl_bins * 4;
     let mut candidates = Vec::with_capacity(32);
 
-    for s in 0..total_branches {
-        let base = s * outputs_per_branch;
+    for branch_idx in 0..total_branches {
+        let base = branch_idx * outputs_per_branch;
         let box_out = &ctx.branches[base];
         let cls_out = &ctx.branches[base + 1];
-        let score_sum_out = &ctx.branches[base + 2];
+        let score_sum_out = if WITH_SCORE_SUM {
+            Some(&ctx.branches[base + 2])
+        } else {
+            None
+        };
 
-        let stride = stride_for_branch(s, total_branches);
+        let stride = stride_for_branch(branch_idx, total_branches);
         let grid_w = (ctx.config.model_input_w as usize) / stride;
         let grid_h = (ctx.config.model_input_h as usize) / stride;
         let grid_len = grid_w * grid_h;
 
         if box_out.data.len() < box_channels * grid_len
             || cls_out.data.len() < ctx.config.num_classes * grid_len
-            || score_sum_out.data.len() < grid_len
+            || score_sum_out.is_some_and(|output| output.data.len() < grid_len)
         {
             continue;
         }
 
         let cls_th_i8 = quant_f32(ctx.conf_threshold, cls_out.zp, cls_out.scale);
+        let score_sum_pass = score_sum_out.map_or([true; SCORE_SUM_LUT_LEN], |output| {
+            score_sum_pass_lut(output, ctx.conf_threshold)
+        });
+        let stride_f = stride as f32;
 
-        for offset in 0..grid_len {
-            // ① score_sum 快速过滤
-            // SAFETY: 已断言 score_sum_out.data.len() >= grid_len
-            let ss_val = dequant_i8(
-                unsafe { *score_sum_out.data.get_unchecked(offset) },
-                score_sum_out.zp,
-                score_sum_out.scale,
-            );
-            if ss_val < ctx.conf_threshold {
-                continue;
-            }
+        for row in 0..grid_h {
+            let row_offset = row * grid_w;
+            let cy = (row as f32 + 0.5) * stride_f;
 
-            // ② 遍历类别找最高分
-            let mut max_class_id = 0usize;
-            let mut max_score_i8 = i8::MIN;
-            let mut c_offset = offset;
-            for c in 0..ctx.config.num_classes {
-                // SAFETY: 已断言 cls_out.data.len() >= num_classes * grid_len
-                let val = unsafe { *cls_out.data.get_unchecked(c_offset) };
-                if val > cls_th_i8 && val > max_score_i8 {
-                    max_score_i8 = val;
-                    max_class_id = c;
+            for column in 0..grid_w {
+                let offset = row_offset + column;
+
+                if let Some(score_sum_out) = score_sum_out {
+                    // SAFETY: 已断言 score_sum_out.data.len() >= grid_len。
+                    let value = unsafe { *score_sum_out.data.get_unchecked(offset) };
+                    if !score_sum_pass[value as u8 as usize] {
+                        continue;
+                    }
                 }
-                c_offset += grid_len;
+
+                let mut max_class_id = 0usize;
+                let mut max_score_i8 = i8::MIN;
+                let mut class_offset = offset;
+                for class_id in 0..ctx.config.num_classes {
+                    // SAFETY: 已断言 cls_out.data.len() >= num_classes * grid_len。
+                    let value = unsafe { *cls_out.data.get_unchecked(class_offset) };
+                    if value > cls_th_i8 && value > max_score_i8 {
+                        max_score_i8 = value;
+                        max_class_id = class_id;
+                    }
+                    class_offset += grid_len;
+                }
+
+                if max_score_i8 <= cls_th_i8 {
+                    continue;
+                }
+
+                push_candidate(
+                    ctx,
+                    box_out,
+                    cls_out,
+                    CandidateGeometry {
+                        offset,
+                        grid_len,
+                        cx: (column as f32 + 0.5) * stride_f,
+                        cy,
+                        stride: stride_f,
+                    },
+                    max_class_id,
+                    max_score_i8,
+                    &mut candidates,
+                );
             }
-
-            if max_score_i8 <= cls_th_i8 {
-                continue;
-            }
-
-            // ③ DFL 解码 box 坐标
-            let i = offset / grid_w;
-            let j = offset % grid_w;
-            let dfl_box = decode_anchor_box(box_out, offset, grid_len, ctx.config.dfl_bins);
-
-            let x1 = (-dfl_box[0] + j as f32 + 0.5) * stride as f32;
-            let y1 = (-dfl_box[1] + i as f32 + 0.5) * stride as f32;
-            let x2 = (dfl_box[2] + j as f32 + 0.5) * stride as f32;
-            let y2 = (dfl_box[3] + i as f32 + 0.5) * stride as f32;
-
-            let raw = NormBox {
-                x: (x1 / ctx.config.model_input_w).clamp(0.0, 1.0),
-                y: (y1 / ctx.config.model_input_h).clamp(0.0, 1.0),
-                w: ((x2 - x1) / ctx.config.model_input_w).clamp(0.0, 1.0),
-                h: ((y2 - y1) / ctx.config.model_input_h).clamp(0.0, 1.0),
-                confidence: dequant_i8(max_score_i8, cls_out.zp, cls_out.scale),
-                class_id: max_class_id as u32,
-                label: resolve_label(max_class_id, ctx.labels, ctx.label_fn),
-            };
-            candidates.push(unmap_box(&raw, ctx.mode, ctx.orig_w, ctx.orig_h));
         }
     }
 
@@ -185,83 +191,61 @@ fn parse_multi_branch_with_score_sum(ctx: &Yolov8ParseContext<'_>) -> Vec<NormBo
     candidates
 }
 
-// ---------------------------------------------------------------------------
-// 6-tensor 路径：每 2 个一组 (box, cls)，无 score_sum
-// ---------------------------------------------------------------------------
+const SCORE_SUM_LUT_LEN: usize = 256;
 
-fn parse_multi_branch_without_score_sum(ctx: &Yolov8ParseContext<'_>) -> Vec<NormBox> {
-    let outputs_per_branch = 2;
-    let total_branches = ctx.branches.len() / outputs_per_branch;
-    if total_branches == 0 {
-        return Vec::new();
-    }
+/// 为所有可能的 INT8 score_sum 值预计算原始浮点判定，避免逐网格重复反量化。
+#[inline]
+fn score_sum_pass_lut(output: &RknnTensorOutput<'_>, threshold: f32) -> [bool; SCORE_SUM_LUT_LEN] {
+    std::array::from_fn(|raw| {
+        let value = raw as u8 as i8;
+        !matches!(
+            dequant_i8(value, output.zp, output.scale).partial_cmp(&threshold),
+            Some(std::cmp::Ordering::Less)
+        )
+    })
+}
 
-    let box_channels = ctx.config.dfl_bins * 4;
-    let mut candidates = Vec::with_capacity(32);
+#[derive(Debug, Clone, Copy)]
+struct CandidateGeometry {
+    offset: usize,
+    grid_len: usize,
+    cx: f32,
+    cy: f32,
+    stride: f32,
+}
 
-    for s in 0..total_branches {
-        let base = s * outputs_per_branch;
-        let box_out = &ctx.branches[base];
-        let cls_out = &ctx.branches[base + 1];
+/// 将单个网格候选解码、反算坐标并追加到结果集。
+#[inline]
+fn push_candidate(
+    ctx: &Yolov8ParseContext<'_>,
+    box_out: &RknnTensorOutput<'_>,
+    cls_out: &RknnTensorOutput<'_>,
+    geometry: CandidateGeometry,
+    class_id: usize,
+    score_i8: i8,
+    candidates: &mut Vec<NormBox>,
+) {
+    let dfl_box = decode_anchor_box(
+        box_out,
+        geometry.offset,
+        geometry.grid_len,
+        ctx.config.dfl_bins,
+    );
+    let x1 = -dfl_box[0] * geometry.stride + geometry.cx;
+    let y1 = -dfl_box[1] * geometry.stride + geometry.cy;
+    let x2 = dfl_box[2] * geometry.stride + geometry.cx;
+    let y2 = dfl_box[3] * geometry.stride + geometry.cy;
 
-        let stride = stride_for_branch(s, total_branches);
-        let grid_w = (ctx.config.model_input_w as usize) / stride;
-        let grid_h = (ctx.config.model_input_h as usize) / stride;
-        let grid_len = grid_w * grid_h;
-
-        if box_out.data.len() < box_channels * grid_len
-            || cls_out.data.len() < ctx.config.num_classes * grid_len
-        {
-            continue;
-        }
-
-        let cls_th_i8 = quant_f32(ctx.conf_threshold, cls_out.zp, cls_out.scale);
-
-        for offset in 0..grid_len {
-            let mut max_class_id = 0usize;
-            let mut max_score_i8 = i8::MIN;
-            let mut c_offset = offset;
-            for c in 0..ctx.config.num_classes {
-                // SAFETY: 已断言 cls_out.data.len() >= num_classes * grid_len
-                let val = unsafe { *cls_out.data.get_unchecked(c_offset) };
-                if val > cls_th_i8 && val > max_score_i8 {
-                    max_score_i8 = val;
-                    max_class_id = c;
-                }
-                c_offset += grid_len;
-            }
-
-            if max_score_i8 <= cls_th_i8 {
-                continue;
-            }
-
-            let i = offset / grid_w;
-            let j = offset % grid_w;
-            let dfl_box = decode_anchor_box(box_out, offset, grid_len, ctx.config.dfl_bins);
-
-            let x1 = (-dfl_box[0] + j as f32 + 0.5) * stride as f32;
-            let y1 = (-dfl_box[1] + i as f32 + 0.5) * stride as f32;
-            let x2 = (dfl_box[2] + j as f32 + 0.5) * stride as f32;
-            let y2 = (dfl_box[3] + i as f32 + 0.5) * stride as f32;
-
-            let raw = NormBox {
-                x: (x1 / ctx.config.model_input_w).clamp(0.0, 1.0),
-                y: (y1 / ctx.config.model_input_h).clamp(0.0, 1.0),
-                w: ((x2 - x1) / ctx.config.model_input_w).clamp(0.0, 1.0),
-                h: ((y2 - y1) / ctx.config.model_input_h).clamp(0.0, 1.0),
-                confidence: dequant_i8(max_score_i8, cls_out.zp, cls_out.scale),
-                class_id: max_class_id as u32,
-                label: resolve_label(max_class_id, ctx.labels, ctx.label_fn),
-            };
-            candidates.push(unmap_box(&raw, ctx.mode, ctx.orig_w, ctx.orig_h));
-        }
-    }
-
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-    fast_nms(&mut candidates, ctx.iou_threshold);
-    candidates
+    let raw = NormBox {
+        x: (x1 / ctx.config.model_input_w).clamp(0.0, 1.0),
+        y: (y1 / ctx.config.model_input_h).clamp(0.0, 1.0),
+        w: ((x2 - x1) / ctx.config.model_input_w).clamp(0.0, 1.0),
+        h: ((y2 - y1) / ctx.config.model_input_h).clamp(0.0, 1.0),
+        confidence: dequant_i8(score_i8, cls_out.zp, cls_out.scale),
+        class_id: class_id as u32,
+        label: resolve_label(class_id, ctx.labels, ctx.label_fn),
+    };
+    candidates.push(unmap_box(&raw, ctx.mode, ctx.orig_w, ctx.orig_h));
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +261,10 @@ fn stride_for_branch(branch_idx: usize, total_branches: usize) -> usize {
 }
 
 /// 从 box 张量中解码单个 anchor 的 DFL 坐标 → [x1, y1, x2, y2]
+///
+/// 利用 `(val - zp) * scale` 在原生 `i8` 上的单调性直接进行极值比较，
+/// 并将 `exp()` 超越函数计算合并至单次加权循环，大幅提升向量化吞吐。
+#[inline]
 fn decode_anchor_box(
     box_out: &RknnTensorOutput<'_>,
     offset: usize,
@@ -287,26 +275,42 @@ fn decode_anchor_box(
         return [0.0; 4];
     }
 
+    let scale = if box_out.scale.is_finite() && box_out.scale > 0.0 {
+        box_out.scale
+    } else {
+        0.0
+    };
+
     let mut dfl_box = [0.0f32; 4];
     for (side, distance) in dfl_box.iter_mut().enumerate() {
         let side_offset = offset + side * dfl_bins * grid_len;
-        let mut max_value = f32::NEG_INFINITY;
+
+        // ① 纯整数比较求极值，零浮点开销
+        let mut max_i8 = i8::MIN;
         for bin in 0..dfl_bins {
             // SAFETY: 调用方已断言 box_out.data.len() >= dfl_bins * 4 * grid_len。
             let value = unsafe { *box_out.data.get_unchecked(side_offset + bin * grid_len) };
-            max_value = max_value.max(dequant_i8(value, box_out.zp, box_out.scale));
+            if value > max_i8 {
+                max_i8 = value;
+            }
         }
 
+        // ② 单次 exp() 计算与加权累加
         let mut exp_sum = 0.0f32;
         let mut weighted_sum = 0.0f32;
         for bin in 0..dfl_bins {
             // SAFETY: 与上面的边界证明相同。
             let value = unsafe { *box_out.data.get_unchecked(side_offset + bin * grid_len) };
-            let exp = (dequant_i8(value, box_out.zp, box_out.scale) - max_value).exp();
-            exp_sum += exp;
-            weighted_sum += exp * bin as f32;
+            let diff = (value as i32 - max_i8 as i32) as f32 * scale;
+            let exp_v = diff.exp();
+            exp_sum += exp_v;
+            weighted_sum += exp_v * (bin as f32);
         }
-        *distance = weighted_sum / exp_sum;
+        *distance = if exp_sum > 0.0 {
+            weighted_sum / exp_sum
+        } else {
+            0.0
+        };
     }
     dfl_box
 }
@@ -412,6 +416,121 @@ mod tests {
         for (actual, expected) in decoded.into_iter().zip([0.0, 1.0, 2.0, 3.0]) {
             assert!((actual - expected).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn test_score_sum_lut_matches_float_threshold_boundary() {
+        let data = [];
+        let output = RknnTensorOutput {
+            index: 0,
+            dims: [1, 1, 1, 1],
+            scale: 0.1,
+            zp: 0,
+            data: &data,
+        };
+        let pass = score_sum_pass_lut(&output, 0.21);
+
+        assert!(!pass[2_i8 as u8 as usize]);
+        assert!(pass[3_i8 as u8 as usize]);
+    }
+
+    #[test]
+    fn test_parse_single_branch_with_score_sum() {
+        let box_data = [0i8; 4];
+        let class_data = [10i8];
+        let score_sum_data = [10i8];
+        let branches = [
+            RknnTensorOutput {
+                index: 0,
+                dims: [1, 4, 1, 1],
+                scale: 1.0,
+                zp: 0,
+                data: &box_data,
+            },
+            RknnTensorOutput {
+                index: 1,
+                dims: [1, 1, 1, 1],
+                scale: 0.1,
+                zp: 0,
+                data: &class_data,
+            },
+            RknnTensorOutput {
+                index: 2,
+                dims: [1, 1, 1, 1],
+                scale: 0.01,
+                zp: 0,
+                data: &score_sum_data,
+            },
+        ];
+        let config = Yolov8RknnConfig {
+            model_input_w: 8.0,
+            model_input_h: 8.0,
+            dfl_bins: 1,
+            num_classes: 1,
+            use_score_sum: true,
+        };
+        let mode = PreprocessMode::Resize;
+        let context = Yolov8ParseContext {
+            branches: &branches,
+            config: &config,
+            conf_threshold: 0.05,
+            iou_threshold: 0.45,
+            labels: &["object"],
+            label_fn: None,
+            mode: &mode,
+            orig_w: 8,
+            orig_h: 8,
+        };
+
+        let boxes = parse_yolov8_int8(&context);
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].label, Some("object"));
+        assert!((boxes[0].confidence - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_single_branch_without_score_sum() {
+        let box_data = [0i8; 4];
+        let class_data = [10i8];
+        let branches = [
+            RknnTensorOutput {
+                index: 0,
+                dims: [1, 4, 1, 1],
+                scale: 1.0,
+                zp: 0,
+                data: &box_data,
+            },
+            RknnTensorOutput {
+                index: 1,
+                dims: [1, 1, 1, 1],
+                scale: 0.1,
+                zp: 0,
+                data: &class_data,
+            },
+        ];
+        let config = Yolov8RknnConfig {
+            model_input_w: 8.0,
+            model_input_h: 8.0,
+            dfl_bins: 1,
+            num_classes: 1,
+            use_score_sum: false,
+        };
+        let mode = PreprocessMode::Resize;
+        let context = Yolov8ParseContext {
+            branches: &branches,
+            config: &config,
+            conf_threshold: 0.05,
+            iou_threshold: 0.45,
+            labels: &["object"],
+            label_fn: None,
+            mode: &mode,
+            orig_w: 8,
+            orig_h: 8,
+        };
+
+        let boxes = parse_yolov8_int8(&context);
+        assert_eq!(boxes.len(), 1);
+        assert!((boxes[0].confidence - 1.0).abs() < 1e-6);
     }
 
     #[test]

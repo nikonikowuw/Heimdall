@@ -71,13 +71,45 @@ impl PackageEnv {
         Self { vars }
     }
 
-    /// 查询字符串值（支持大小写不敏感查找：精确 -> 全大写 -> 全小写）
+    /// 查询字符串值（支持大小写不敏感查找：精确 -> 全大写 -> 全小写，≤64 字节键名 0 堆分配）
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.vars
-            .get(key)
-            .or_else(|| self.vars.get(&key.to_ascii_uppercase()))
-            .or_else(|| self.vars.get(&key.to_ascii_lowercase()))
-            .map(|s| s.as_str())
+        if let Some(value) = self.vars.get(key) {
+            return Some(value.as_str());
+        }
+
+        // 短键名（≤64 字节）走栈缓冲区大小写映射，保持旧优先级并消除堆分配。
+        let bytes = key.as_bytes();
+        if bytes.len() <= 64 {
+            let mut buf = [0u8; 64];
+
+            // 保持兼容：全大写键优先于全小写键。
+            for (index, &byte) in bytes.iter().enumerate() {
+                buf[index] = byte.to_ascii_uppercase();
+            }
+            if let Ok(mapped) = std::str::from_utf8(&buf[..bytes.len()]) {
+                if let Some(value) = self.vars.get(mapped) {
+                    return Some(value.as_str());
+                }
+            }
+
+            for (index, &byte) in bytes.iter().enumerate() {
+                buf[index] = byte.to_ascii_lowercase();
+            }
+            if let Ok(mapped) = std::str::from_utf8(&buf[..bytes.len()]) {
+                if let Some(value) = self.vars.get(mapped) {
+                    return Some(value.as_str());
+                }
+            }
+        } else {
+            if let Some(value) = self.vars.get(&key.to_ascii_uppercase()) {
+                return Some(value.as_str());
+            }
+            if let Some(value) = self.vars.get(&key.to_ascii_lowercase()) {
+                return Some(value.as_str());
+            }
+        }
+
+        None
     }
 
     /// 获取 `String` 配置值
@@ -115,14 +147,24 @@ impl PackageEnv {
         self.get(key).and_then(|s| s.parse::<i32>().ok())
     }
 
-    /// 获取 `bool` 布尔型配置值（支持 `1/0`, `true/false`, `yes/no`, `on/off`）
+    /// 获取 `bool` 布尔型配置值（支持 `1/0`, `true/false`, `yes/no`, `on/off`，零堆分配比对）
     pub fn get_bool(&self, key: &str) -> Option<bool> {
-        self.get(key)
-            .and_then(|s| match s.to_ascii_lowercase().as_str() {
-                "1" | "true" | "yes" | "on" => Some(true),
-                "0" | "false" | "no" | "off" => Some(false),
-                _ => None,
-            })
+        let s = self.get(key)?;
+        if s == "1"
+            || s.eq_ignore_ascii_case("true")
+            || s.eq_ignore_ascii_case("yes")
+            || s.eq_ignore_ascii_case("on")
+        {
+            Some(true)
+        } else if s == "0"
+            || s.eq_ignore_ascii_case("false")
+            || s.eq_ignore_ascii_case("no")
+            || s.eq_ignore_ascii_case("off")
+        {
+            Some(false)
+        } else {
+            None
+        }
     }
 
     /// 安全解析模型或资源文件路径：
@@ -211,6 +253,14 @@ mod tests {
         );
         assert_eq!(env.get_f32("quality_max_yaw"), Some(35.5));
         assert_eq!(env.get("NON_EXISTING"), None);
+    }
+
+    #[test]
+    fn test_get_case_fallback_preserves_precedence() {
+        let env = PackageEnv::parse_str("MIXED=value_from_upper\nmixed=value_from_lower");
+
+        assert_eq!(env.get("MiXeD"), Some("value_from_upper"));
+        assert_eq!(env.get("mixed"), Some("value_from_lower"));
     }
 
     #[test]
