@@ -12,7 +12,9 @@
     "account": "Account",
     "network": "Network",
     "storage": "Storage",
-    "time": "Time Sync"
+    "time": "Time Sync",
+    "gb28181": "GB28181",
+    "gb28181Desc": "GB/T 28181 SIP service configuration"
   },
   "overview": {
     "title": "System Overview",
@@ -236,5 +238,38 @@
     "confirmTitle": "Manual Time Set",
     "confirmMessage": "This will modify the system clock, which may cause video timestamp jumps and affect recording continuity. NTP auto sync is recommended.",
     "confirmSet": "Confirm Set"
+  },
+  "gb28181": {
+    "serviceTitle": "GB/T 28181 Native Service",
+    "serviceDesc": "Single-binary embedded SIP UAS registration service & MPEG-PS demuxer without external middleware",
+    "statusOnline": "Running",
+    "listenPort": "Listen Port",
+    "activeDevices": "Connected Devices",
+    "platformParams": "Local SIP Platform Parameters (For camera web portal)",
+    "exportCard": "View IPC Setup Card",
+    "sipId": "Platform SIP ID",
+    "sipDomain": "SIP Server Domain",
+    "sipPort": "SIP Listen Port",
+    "password": "Device Password",
+    "heartbeatTimeout": "Heartbeat Timeout (sec)",
+    "portPoolTitle": "RTP Media Port Pool",
+    "portPoolDesc": "Dynamic one-to-one receiving port pairs (even RTP / odd RTCP) managed by RAII leases",
+    "portStart": "Port Range Start",
+    "portEnd": "Port Range End",
+    "maxStreams": "Max Concurrent Streams",
+    "streams": "streams",
+    "automationTitle": "Automation Policies",
+    "autoCatalogSync": "Auto catalog query & sync channels on device registration",
+    "cardTitle": "IPC / NVR Field Setup Guidance Card",
+    "cardDesc": "Configure on camera Web portal under Network > Advanced > Platform Access (GB28181):",
+    "copyAll": "Copy All Parameters",
+    "cardHeaderTitle": "Heimdall GB28181 Camera Integration Guidance Card",
+    "cardServerIp": "SIP Server IP",
+    "cardServerPort": "SIP Server Port",
+    "cardServerId": "SIP Server ID",
+    "cardServerDomain": "SIP Server Domain",
+    "cardPassword": "Access Password",
+    "cardHeartbeat": "Suggested Heartbeat: 60s (Timeout: {{timeout}}s)",
+    "cardStreamMode": "Suggested Stream Transport: TCP Passive (Recommended) or UDP"
   }
 }

@@ -199,15 +199,17 @@ async fn review_recognition(
     }
 
     // 若核验指定了候选底库照片，执行安全证据隔离复制并更新记录引用
-    let mut updated_photo_rel: Option<String> = None;
-    if let Some(photo) = req.photo_rel_path.as_deref() {
-        let base_dir = state.pipeline.snapshot_engine().base_evidence_dir();
-        if let Some(isolated) =
-            isolate_gallery_evidence_photo(base_dir, photo, &recognition_id).await
-        {
-            updated_photo_rel = Some(isolated);
+    let updated_photo_rel = match req.photo_rel_path.as_deref() {
+        Some(photo) => {
+            let base_dir = state.pipeline.snapshot_engine().base_evidence_dir();
+            Some(
+                isolate_gallery_evidence_photo(base_dir, photo, &recognition_id)
+                    .await
+                    .unwrap_or_else(|| photo.to_string()),
+            )
         }
-    }
+        None => None,
+    };
 
     let updated = RecognitionRepo::update_review_status(
         &state.db,

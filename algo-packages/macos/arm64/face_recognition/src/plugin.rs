@@ -55,9 +55,10 @@ impl AlgoPlugin for FaceRecognizer {
         Ok(Self {
             models,
             config,
-            tracker: crate::bytetrack::ByteTracker::new(
-                crate::bytetrack::ByteTrackConfig::default(),
-            ),
+            tracker: crate::bytetrack::ByteTracker::new(crate::bytetrack::ByteTrackConfig {
+                confirm_new_tracks: false,
+                ..Default::default()
+            }),
             best_shots: crate::best_shot::BestShotManager::new(),
         })
     }
@@ -123,15 +124,24 @@ impl AlgoPlugin for FaceRecognizer {
             })
             .collect();
         let active_tracks = self.tracker.update(&track_dets);
-        let matched_assocs =
-            crate::association::match_tracks_to_associated(&active_tracks, &associated, 0.30);
         let active_track_ids: Vec<u64> = active_tracks.iter().map(|track| track.track_id).collect();
-        let mut objects = Vec::with_capacity(active_tracks.len());
+        let mut objects = Vec::with_capacity(associated.len());
 
-        for (track, best_assoc) in active_tracks.iter().zip(matched_assocs) {
-            let Some(candidate) = best_assoc else {
-                continue;
-            };
+        for (a_idx, candidate) in associated.iter().enumerate() {
+            // 匹配内部 tracker 的 track_id 以驱动 best_shot 状态与特征提取
+            let internal_track_id = active_tracks
+                .iter()
+                .filter_map(|t| {
+                    let iou = crate::bytetrack::box_iou(&t.bbox, &candidate.person_bbox);
+                    if iou >= 0.25 {
+                        Some((iou, t.track_id))
+                    } else {
+                        None
+                    }
+                })
+                .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(_, id)| id)
+                .unwrap_or((a_idx + 1) as u64);
 
             let face_detail = if let Some(face) = candidate.attached_face {
                 let quality = compute_quality(
@@ -140,13 +150,14 @@ impl AlgoPlugin for FaceRecognizer {
                     face.bbox[2] * frame.width() as f32,
                     &self.config.quality_thresholds,
                 );
-                if quality.accepted(&self.config.quality_thresholds, self.config.min_face_size) {
-                    // best-shot 仍由质量门控控制频率，但提取在当前算法 worker 内同步完成：
-                    // CVPixelBuffer -> Core Image affine warp -> CVPixelBuffer -> CoreML/ANE。
-                    // 不执行整帧 D2H readback、CPU RGB 重排或 JPEG 往返。
+
+                // 仅在人脸通过姿态质量门控时触发低频 EdgeFace 特征提取 (best-shot)
+                let embedding_str = if quality
+                    .accepted(&self.config.quality_thresholds, self.config.min_face_size)
+                {
                     let embedding = if !source_pixelbuffer.is_null()
                         && self.best_shots.should_update_best_shot(
-                            track.track_id,
+                            internal_track_id,
                             &quality,
                             frame.frame_id() as usize,
                         ) {
@@ -171,7 +182,7 @@ impl AlgoPlugin for FaceRecognizer {
                             }) {
                             Ok(normalized) => {
                                 let fused = self.best_shots.update_with_fusion(
-                                    track.track_id,
+                                    internal_track_id,
                                     face.bbox,
                                     face.landmarks,
                                     face.score,
@@ -183,7 +194,7 @@ impl AlgoPlugin for FaceRecognizer {
                             }
                             Err(error) => {
                                 self.best_shots.record_attempt_without_embedding(
-                                    track.track_id,
+                                    internal_track_id,
                                     face.bbox,
                                     face.landmarks,
                                     face.score,
@@ -201,20 +212,21 @@ impl AlgoPlugin for FaceRecognizer {
                         None
                     };
 
-                    let embedding_str = embedding
+                    embedding
                         .as_ref()
                         .map(|value| crate::postprocess::encode_embedding(value.as_slice()))
-                        .transpose()?;
-
-                    Some(crate::postprocess::FaceDetailObject {
-                        bbox: crate::postprocess::normalized_xywh_to_xyxy(face.bbox),
-                        confidence: face.score.clamp(0.0, 1.0),
-                        quality_score: Some(quality.score.clamp(0.0, 1.0)),
-                        embedding: embedding_str,
-                    })
+                        .transpose()?
                 } else {
                     None
-                }
+                };
+
+                // 人脸检测框只要检出，就必须作为精细元数据输出给宿主管线与前端实时绘制
+                Some(crate::postprocess::FaceDetailObject {
+                    bbox: crate::postprocess::normalized_xywh_to_xyxy(face.bbox),
+                    confidence: face.score.clamp(0.0, 1.0),
+                    quality_score: Some(quality.score.clamp(0.0, 1.0)),
+                    embedding: embedding_str,
+                })
             } else {
                 None
             };

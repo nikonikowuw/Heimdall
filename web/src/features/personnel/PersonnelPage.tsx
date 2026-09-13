@@ -270,7 +270,7 @@ export const PersonnelPage: React.FC = () => {
       {/* 分页控制 */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between border-t border-[var(--border)] pt-4 text-xs text-[var(--text-muted)]">
-          <span>共 {total} 位人员</span>
+          <span>{t('pagination.total', { total })}</span>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -278,7 +278,7 @@ export const PersonnelPage: React.FC = () => {
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               className="rounded-lg border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--bg-secondary)] disabled:opacity-40"
             >
-              上一页
+              {t('pagination.prev')}
             </button>
             <span>
               {page} / {totalPages}
@@ -289,7 +289,7 @@ export const PersonnelPage: React.FC = () => {
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               className="rounded-lg border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--bg-secondary)] disabled:opacity-40"
             >
-              下一页
+              {t('pagination.next')}
             </button>
           </div>
         </div>

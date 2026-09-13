@@ -551,6 +551,35 @@ function AlarmLightboxModal({
   )
 }
 
+interface ParsedBBoxCoords {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+function parseBBoxCoords(raw?: string): ParsedBBoxCoords | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed) && parsed.length >= 4) {
+      const [x1, y1, x2, y2] = parsed.map(Number)
+      return { x1, y1, x2, y2 }
+    }
+    if (parsed && typeof parsed === 'object' && 'x1' in parsed && 'y1' in parsed) {
+      return {
+        x1: Number(parsed.x1),
+        y1: Number(parsed.y1),
+        x2: Number(parsed.x2),
+        y2: Number(parsed.y2),
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 interface CaptureLightboxModalProps {
   capture: CaptureRecord
   onClose: () => void
@@ -562,6 +591,46 @@ function CaptureLightboxModal({
   onClose,
   t,
 }: CaptureLightboxModalProps): React.ReactElement {
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [imgRect, setImgRect] = React.useState<{
+    x: number
+    y: number
+    width: number
+    height: number
+  } | null>(null)
+  const bbox = parseBBoxCoords(capture.bboxJson)
+
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget
+    const container = containerRef.current
+    if (!container) return
+
+    const cW = container.clientWidth
+    const cH = container.clientHeight
+    const nW = img.naturalWidth || 1
+    const nH = img.naturalHeight || 1
+
+    const cRatio = cW / cH
+    const iRatio = nW / nH
+
+    let width = cW
+    let height = cH
+    let x = 0
+    let y = 0
+
+    if (iRatio > cRatio) {
+      width = cW
+      height = cW / iRatio
+      y = (cH - height) / 2
+    } else {
+      height = cH
+      width = cH * iRatio
+      x = (cW - width) / 2
+    }
+
+    setImgRect({ x, y, width, height })
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
@@ -586,25 +655,86 @@ function CaptureLightboxModal({
           </button>
         </div>
         <div className="flex-1 space-y-4 overflow-auto p-6">
-          <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-black shadow-md">
+          {/* 全景大图与高亮人体检测框标注 */}
+          <div
+            ref={containerRef}
+            className="relative aspect-video w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-black shadow-md"
+          >
             {capture.imageRelPath ? (
-              <img
-                src={evidenceApi.getImageUrl(capture.imageRelPath)}
-                alt="Capture"
-                className="h-full w-full object-contain"
-              />
+              <>
+                <img
+                  src={evidenceApi.getImageUrl(capture.imageRelPath)}
+                  alt="Capture"
+                  className="h-full w-full object-contain"
+                  onLoad={handleImageLoad}
+                />
+                {bbox && imgRect && (
+                  <div
+                    className="pointer-events-none absolute border-2 border-cyan-400 bg-cyan-400/15 shadow-[0_0_12px_rgba(6,182,212,0.5)] transition-all"
+                    style={{
+                      left: `${imgRect.x + bbox.x1 * imgRect.width}px`,
+                      top: `${imgRect.y + bbox.y1 * imgRect.height}px`,
+                      width: `${Math.max(6, (bbox.x2 - bbox.x1) * imgRect.width)}px`,
+                      height: `${Math.max(6, (bbox.y2 - bbox.y1) * imgRect.height)}px`,
+                    }}
+                  >
+                    <span className="absolute -top-5 left-0 rounded bg-cyan-500 px-1.5 py-0.5 font-mono text-[9px] font-bold whitespace-nowrap text-black shadow-xs">
+                      #{capture.trackId} {capture.targetLabel} (
+                      {(capture.confidence * 100).toFixed(0)}%)
+                    </span>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="flex h-full w-full items-center justify-center text-slate-500">
                 {t('modal.noImage')}
               </div>
             )}
           </div>
-          <div className="flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4 font-mono text-xs">
-            <span>{capture.cameraId}</span>
-            <span>
-              {t('modal.qualityScore')}: {(capture.qualityScore ?? 0).toFixed(0)}
-            </span>
-            <span>{formatTimestamp(capture.capturedAt)}</span>
+
+          {/* 人体信息与特写扣图卡片 */}
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
+            <div className="flex items-center gap-4">
+              {capture.cropImageRelPath && (
+                <div className="h-16 w-16 overflow-hidden rounded-xl border border-cyan-400/40 bg-black/80 shadow-xs">
+                  <img
+                    src={evidenceApi.getImageUrl(capture.cropImageRelPath)}
+                    alt={t('modal.cropImage')}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+              )}
+              <div className="space-y-1 text-xs">
+                <div className="font-semibold text-[var(--text-primary)]">
+                  {capture.targetLabel} · #{capture.trackId}
+                </div>
+                <div className="font-mono text-[11px] text-[var(--text-muted)]">
+                  {t('modal.channel')}: {capture.cameraId}
+                </div>
+                <div className="font-mono text-[11px] text-[var(--text-muted)]">
+                  {t('modal.time')}: {formatTimestamp(capture.capturedAt)}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 font-mono text-xs">
+              <div className="flex flex-col items-end">
+                <span className="text-[10px] text-[var(--text-muted)]">
+                  {t('columns.confidence')}
+                </span>
+                <span className="font-bold text-cyan-400">
+                  {(capture.confidence * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div className="flex flex-col items-end">
+                <span className="text-[10px] text-[var(--text-muted)]">
+                  {t('modal.qualityScore')}
+                </span>
+                <span className="font-bold text-emerald-400">
+                  {(capture.qualityScore ?? 0).toFixed(0)}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </div>

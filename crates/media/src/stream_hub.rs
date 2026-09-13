@@ -26,6 +26,9 @@ pub fn canonicalize_rtsp_url(raw_url: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
+    if trimmed.starts_with("gb28181://") || trimmed.starts_with("GB28181://") {
+        return trimmed.trim_end_matches('/').to_string();
+    }
     match parse_and_clean_rtsp_url(trimmed) {
         Ok(parsed) => parsed.to_canonical_key(),
         Err(_) => trimmed.trim_end_matches('/').to_string(),
@@ -202,6 +205,13 @@ impl Drop for StreamSubscription {
     }
 }
 
+/// GB/T 28181 接入上下文句柄
+#[derive(Debug, Clone)]
+pub struct Gb28181Context {
+    pub sip_server: Arc<crate::gb28181::Gb28181SipServer>,
+    pub port_pool: crate::gb28181::PortPool,
+}
+
 /// 全局流媒体调度与分发中心（按规范化 RTSP URL 复用物理连接）。
 #[derive(Debug, Clone)]
 pub struct StreamHub {
@@ -216,6 +226,8 @@ pub struct StreamHub {
     /// 全局消费者准入计数。
     total_consumers: Arc<AtomicUsize>,
     distribution_config: PreviewDistributionConfig,
+    /// GB28181 信令与端口池上下文
+    gb28181_context: Arc<RwLock<Option<Gb28181Context>>>,
 }
 
 impl Default for StreamHub {
@@ -237,6 +249,21 @@ impl StreamHub {
             probe_failures: Arc::new(RwLock::new(HashMap::new())),
             total_consumers: Arc::new(AtomicUsize::new(0)),
             distribution_config,
+            gb28181_context: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// 设置 GB28181 接入上下文
+    pub async fn set_gb28181_context(&self, ctx: Gb28181Context) {
+        *self.gb28181_context.write().await = Some(ctx);
+    }
+
+    /// 获取当前正在推流的 GB28181 媒体路数
+    pub async fn gb28181_active_streams(&self) -> usize {
+        if let Some(ctx) = self.gb28181_context.read().await.as_ref() {
+            ctx.port_pool.active_port_pairs()
+        } else {
+            0
         }
     }
 
@@ -446,7 +473,7 @@ impl StreamHub {
         if counts_viewer {
             session.active_viewers.fetch_add(1, Ordering::SeqCst);
         }
-        Self::ensure_ingestor_started(&session);
+        self.ensure_ingestor_started(&session).await;
 
         Ok(StreamSubscription {
             inner: media_subscription,
@@ -512,7 +539,7 @@ impl StreamHub {
             session.manual_ai_enabled.store(true, Ordering::SeqCst);
             session.refresh_ai_task_enabled();
             session.cancel_cooldown().await;
-            Self::ensure_ingestor_started(&session);
+            self.ensure_ingestor_started(&session).await;
         } else {
             session.manual_ai_enabled.store(false, Ordering::SeqCst);
             session.refresh_ai_task_enabled();
@@ -567,7 +594,44 @@ impl StreamHub {
             .sum()
     }
 
-    fn ensure_ingestor_started(session: &Arc<CameraStreamSession>) {
+    async fn create_ingestor(
+        &self,
+        session: &Arc<CameraStreamSession>,
+    ) -> Option<Arc<dyn crate::media_ingestor::MediaIngestor>> {
+        if session.rtsp_url.starts_with("gb28181://") || session.rtsp_url.starts_with("GB28181://")
+        {
+            if let Some((device_id, channel_id)) =
+                crate::gb28181::parse_gb28181_url(&session.rtsp_url)
+            {
+                let gb_ctx = self.gb28181_context.read().await.clone();
+                if let Some(ctx) = gb_ctx {
+                    return Some(Arc::new(crate::gb28181::Gb28181Ingestor::new(
+                        device_id,
+                        channel_id,
+                        ctx.sip_server,
+                        ctx.port_pool,
+                        session.dispatcher.clone(),
+                    )));
+                } else {
+                    tracing::warn!(url = %session.rtsp_url, "StreamHub 未配置 Gb28181Context，无法启动国标拉流");
+                    return None;
+                }
+            }
+        }
+
+        Some(Arc::new(
+            RetinaIngestor::new(
+                session.camera_id.clone(),
+                session.rtsp_url.clone(),
+                session.transport_policy,
+                session.dispatcher.clone(),
+            )
+            .with_last_packet_time(session.last_packet_time.clone())
+            .with_reconnect_metrics(session.reconnect_count.clone(), session.last_error.clone()),
+        ))
+    }
+
+    async fn ensure_ingestor_started(&self, session: &Arc<CameraStreamSession>) {
         if session
             .ingestor_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -575,19 +639,14 @@ impl StreamHub {
         {
             session.cancel_signal.store(false, Ordering::SeqCst);
             let _ = session.cancel_tx.send(false);
-            let ingestor = Arc::new(
-                RetinaIngestor::new(
-                    session.camera_id.clone(),
-                    session.rtsp_url.clone(),
-                    session.transport_policy,
-                    session.dispatcher.clone(),
-                )
-                .with_last_packet_time(session.last_packet_time.clone())
-                .with_reconnect_metrics(
-                    session.reconnect_count.clone(),
-                    session.last_error.clone(),
-                ),
-            );
+
+            let ingestor = match self.create_ingestor(session).await {
+                Some(ing) => ing,
+                None => {
+                    session.ingestor_running.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
 
             let session_clone = session.clone();
             let cancel_signal = session.cancel_signal.clone();

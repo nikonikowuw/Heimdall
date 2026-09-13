@@ -201,8 +201,36 @@ async fn main() -> Result<()> {
         .server
         .max_package_size_bytes()
         .context("算法包上传大小配置无效")?;
+
+    // 初始化 GB/T 28181 SIP 原生服务端与媒体上下文
+    let gb_config = db::SysGb28181ConfigRepo::get(&db_conn)
+        .await
+        .unwrap_or_default();
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<media::gb28181::Gb28181Event>(128);
+    let sip_server = media::gb28181::Gb28181SipServer::new(gb_config.clone(), event_tx);
+    let port_pool =
+        media::gb28181::PortPool::new(gb_config.rtp_port_range_start, gb_config.rtp_port_range_end);
+
     let state = api::AppState::new_with_limit(db_conn, pipeline_mgr, max_upload_size_bytes)
-        .with_storage_cleaner(evidence_dir);
+        .with_storage_cleaner(evidence_dir)
+        .with_gb28181_sip_server(sip_server.clone());
+
+    state
+        .stream_hub
+        .set_gb28181_context(media::Gb28181Context {
+            sip_server: sip_server.clone(),
+            port_pool,
+        })
+        .await;
+
+    // 启动 GB28181 后台持久化工作循环、超时巡检与 SIP UAS 监听
+    let sip_shutdown_tx = spawn_gb28181_background_tasks(
+        state.db.clone(),
+        event_rx,
+        gb_config.heartbeat_timeout_sec,
+        sip_server,
+    );
+
     api::sync_auth_state(&state).await;
 
     // 同步加载数据库中持久化的存储保留与水位配置至运行时 StorageCleaner
@@ -354,7 +382,8 @@ async fn main() -> Result<()> {
         state_shutdown.task_coordinator.stop_all().await;
         state_shutdown.notify_shutdown();
 
-        // 待管线注销完成后通知运维日志 flush worker 排空并退出
+        // 待管线注销完成后通知运维日志与 SIP 服务端排空并退出
+        let _ = sip_shutdown_tx.send(true);
         let _ = op_shutdown_tx.send(true);
 
         // 兜底保护：若 2.5 秒内未完成退出，或用户再次按下 Ctrl+C，立即强制退出
@@ -473,4 +502,85 @@ fn raise_fd_limit() {
             }
         }
     }
+}
+
+/// 启动 GB/T 28181 后台持久化事件循环、离线巡检与 SIP UAS 服务监听
+fn spawn_gb28181_background_tasks(
+    db: db::DatabaseConnection,
+    mut event_rx: tokio::sync::mpsc::Receiver<media::gb28181::Gb28181Event>,
+    heartbeat_timeout_sec: u32,
+    sip_server: std::sync::Arc<media::gb28181::Gb28181SipServer>,
+) -> tokio::sync::watch::Sender<bool> {
+    // 1. 状态机与目录树通道持久化工作任务
+    let db_for_events = db.clone();
+    tokio::spawn(async move {
+        while let Some(evt) = event_rx.recv().await {
+            match evt {
+                media::gb28181::Gb28181Event::DeviceRegistered {
+                    device_id,
+                    name,
+                    ip_addr,
+                    sip_port,
+                    transport,
+                } => {
+                    if let Err(e) = db::Gb28181DeviceRepo::upsert_device(
+                        &db_for_events,
+                        &device_id,
+                        &name,
+                        &ip_addr,
+                        sip_port,
+                        &transport,
+                        "online",
+                    )
+                    .await
+                    {
+                        tracing::warn!(device_id = %device_id, error = %e, "持久化 GB28181 设备注册信息失败");
+                    }
+                }
+                media::gb28181::Gb28181Event::DeviceKeepalive { device_id } => {
+                    if let Err(e) =
+                        db::Gb28181DeviceRepo::record_keepalive(&db_for_events, &device_id).await
+                    {
+                        tracing::warn!(device_id = %device_id, error = %e, "更新 GB28181 心跳失败");
+                    }
+                }
+                media::gb28181::Gb28181Event::ChannelsDiscovered {
+                    device_id,
+                    channels,
+                } => {
+                    if let Err(e) = db::Gb28181DeviceRepo::batch_upsert_channels(
+                        &db_for_events,
+                        &device_id,
+                        &channels,
+                    )
+                    .await
+                    {
+                        tracing::warn!(device_id = %device_id, error = %e, "批量持久化 GB28181 通道失败");
+                    }
+                }
+            }
+        }
+    });
+
+    // 2. 超时离线巡检定时器
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let threshold =
+                chrono::Utc::now().timestamp_millis() - (heartbeat_timeout_sec as i64 * 1000);
+            if let Err(e) = db::Gb28181DeviceRepo::mark_stale_devices_offline(&db, threshold).await
+            {
+                tracing::warn!(error = %e, "巡检标记离线 GB28181 设备失败");
+            }
+        }
+    });
+
+    // 3. 启动 SIP 原生服务端 (UDP/TCP 5060)
+    let (sip_shutdown_tx, sip_shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        let _ = sip_server.start(sip_shutdown_rx).await;
+    });
+
+    sip_shutdown_tx
 }

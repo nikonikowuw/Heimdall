@@ -5,6 +5,7 @@ pub mod detection;
 pub mod error;
 pub mod event;
 pub mod frame;
+pub mod gb28181;
 pub mod oplog;
 pub mod personnel;
 pub mod system;
@@ -31,6 +32,11 @@ pub use event::{
     TOPIC_RECOGNITION_STATUS_CHANGED,
 };
 pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
+pub use gb28181::{
+    BatchImportGbChannelsRequest, BatchImportGbChannelsResponse, DiscoveredDevice,
+    Gb28181ChannelDto, Gb28181ConfigResponse, Gb28181DeviceDto, Gb28181ServerHealth,
+    ImportGbChannelItem, SysGb28181Config, UpdateGb28181ConfigRequest,
+};
 pub use oplog::{OpEvent, OperationLog};
 pub use personnel::{
     FaceCandidateItem, FaceMatchResult, GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto,

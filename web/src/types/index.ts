@@ -105,6 +105,98 @@ export interface SubStreamCandidate {
   description: string
 }
 
+export interface SysGb28181Config {
+  sipId: string
+  sipDomain: string
+  sipPort: number
+  sipPassword: string
+  rtpPortRangeStart: number
+  rtpPortRangeEnd: number
+  autoCatalogSync: boolean
+  heartbeatTimeoutSec: number
+  updatedAtMs: number
+}
+
+export interface UpdateGb28181ConfigRequest {
+  sipId?: string
+  sipDomain?: string
+  sipPort?: number
+  sipPassword?: string
+  rtpPortRangeStart?: number
+  rtpPortRangeEnd?: number
+  autoCatalogSync?: boolean
+  heartbeatTimeoutSec?: number
+}
+
+export interface Gb28181ServerHealth {
+  running: boolean
+  sipPort: number
+  transport: string
+  onlineDevicesCount: number
+  totalDevicesCount: number
+  activeStreamsCount: number
+}
+
+export interface Gb28181ConfigResponse {
+  config: SysGb28181Config
+  health: Gb28181ServerHealth
+}
+
+export interface Gb28181Channel {
+  deviceId: string
+  channelId: string
+  name: string
+  manufacturer: string
+  model: string
+  status: string
+  parentId: string
+  subStreamSupported: boolean
+  lastSeenMs: number
+  isImported: boolean
+  cameraId?: string | null
+}
+
+export interface Gb28181Device {
+  deviceId: string
+  name: string
+  ipAddr: string
+  sipPort: number
+  transport: string
+  status: string
+  channelCount: number
+  lastKeepaliveMs: number
+  createdAtMs: number
+  updatedAtMs: number
+  channels: Gb28181Channel[]
+}
+
+export interface ImportGbChannelItem {
+  deviceId: string
+  channelId: string
+  name?: string
+  streamMode?: string
+}
+
+export interface BatchImportGbChannelsRequest {
+  channels: ImportGbChannelItem[]
+}
+
+export interface BatchImportGbChannelsResponse {
+  importedCount: number
+  cameraIds: string[]
+}
+
+export interface DiscoveredDevice {
+  ip: string
+  port: number
+  name: string
+  manufacturer: string
+  model: string
+  protocol: string
+  xaddrs?: string | null
+  rtspUrl?: string | null
+}
+
 export interface FaceTrack {
   bbox: [number, number, number, number] // [x1, y1, x2, y2] 归一化坐标 0.0 ~ 1.0
   confidence: number

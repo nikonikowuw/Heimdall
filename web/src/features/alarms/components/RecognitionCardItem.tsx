@@ -21,8 +21,20 @@ export function RecognitionCardItem({
   const isConfirmed = recognition.status === 'confirmed'
   const isRejected = recognition.status === 'rejected'
   const candidates = recognition.candidates || []
+  const registeredPhotoRel = recognition.registeredPhotoPath || candidates[0]?.photoRelPath || ''
+  const [photoLoadError, setPhotoLoadError] = React.useState(false)
 
   const simPct = ((recognition.similarity ?? 0) * 100).toFixed(0)
+
+  let statusTextColor = 'text-emerald-500'
+  let statusBadgeClass = 'border-emerald-500/40 bg-emerald-500/15 text-emerald-500'
+  if (isPending) {
+    statusTextColor = 'text-amber-500'
+    statusBadgeClass = 'border-amber-500/40 bg-amber-500/15 text-amber-500'
+  } else if (isRejected) {
+    statusTextColor = 'text-rose-400'
+    statusBadgeClass = 'border-rose-500/40 bg-rose-500/15 text-rose-400'
+  }
 
   return (
     <div
@@ -84,21 +96,11 @@ export function RecognitionCardItem({
 
         {/* 相似度分值徽标 */}
         <div className="flex flex-col items-center gap-1 px-1">
-          <span
-            className={`font-mono text-[9px] font-bold uppercase ${
-              isPending ? 'text-amber-500' : isRejected ? 'text-rose-400' : 'text-emerald-500'
-            }`}
-          >
+          <span className={`font-mono text-[9px] font-bold uppercase ${statusTextColor}`}>
             {t('card.match')}
           </span>
           <div
-            className={`flex h-11 w-11 items-center justify-center rounded-full border font-mono text-xs font-bold shadow-xs ${
-              isPending
-                ? 'border-amber-500/40 bg-amber-500/15 text-amber-500'
-                : isRejected
-                  ? 'border-rose-500/40 bg-rose-500/15 text-rose-400'
-                  : 'border-emerald-500/40 bg-emerald-500/15 text-emerald-500'
-            }`}
+            className={`flex h-11 w-11 items-center justify-center rounded-full border font-mono text-xs font-bold shadow-xs ${statusBadgeClass}`}
           >
             {simPct}%
           </div>
@@ -108,11 +110,12 @@ export function RecognitionCardItem({
         {/* 底库登记照片 */}
         <div className="flex flex-1 flex-col items-center gap-1.5">
           <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black/90 shadow-xs">
-            {recognition.registeredPhotoPath ? (
+            {registeredPhotoRel && !photoLoadError ? (
               <img
-                src={evidenceApi.getImageUrl(recognition.registeredPhotoPath)}
+                src={evidenceApi.getImageUrl(registeredPhotoRel)}
                 alt={t('card.registeredPhoto')}
                 className="h-full w-full object-cover"
+                onError={() => setPhotoLoadError(true)}
               />
             ) : (
               <div className="flex h-full items-center justify-center text-[10px] text-slate-500">

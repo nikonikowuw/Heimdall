@@ -22,7 +22,10 @@ export function RecognitionReviewModal({
   t,
 }: RecognitionReviewModalProps): React.ReactElement {
   const candidates = recognition.candidates || []
-  const [compareCandidate, setCompareCandidate] = useState<FaceCandidateItem | null>(null)
+  const registeredPhotoRel = recognition.registeredPhotoPath || candidates[0]?.photoRelPath || ''
+  const [compareCandidate, setCompareCandidate] = useState<FaceCandidateItem | null>(
+    () => candidates[0] || null,
+  )
 
   // 浮层按栈响应 ESC，优化键盘操作体验
   useEffect(() => {
@@ -67,23 +70,46 @@ export function RecognitionReviewModal({
         {/* Content */}
         <div className="flex-1 overflow-auto p-6">
           <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-            {/* 左侧：现场抓拍特写与元数据 */}
+            {/* 左侧：现场特写与底库样本 */}
             <div className="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-base)] p-4">
               <span className="text-xs font-semibold text-[var(--text-secondary)]">
-                {t('card.siteCrop')}
+                {t('card.siteCrop')} & {t('card.registeredPhoto')}
               </span>
-              <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs">
-                {recognition.fieldCropPath ? (
-                  <img
-                    src={evidenceApi.getImageUrl(recognition.fieldCropPath)}
-                    alt={t('card.siteCrop')}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                    {t('card.noImage')}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col items-center gap-1">
+                  <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs">
+                    {recognition.fieldCropPath ? (
+                      <img
+                        src={evidenceApi.getImageUrl(recognition.fieldCropPath)}
+                        alt={t('card.siteCrop')}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
+                        {t('card.noImage')}
+                      </div>
+                    )}
                   </div>
-                )}
+                  <span className="text-[10px] text-[var(--text-muted)]">{t('card.siteCrop')}</span>
+                </div>
+                <div className="flex flex-col items-center gap-1">
+                  <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs">
+                    {registeredPhotoRel ? (
+                      <img
+                        src={evidenceApi.getImageUrl(registeredPhotoRel)}
+                        alt={t('card.registeredPhoto')}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
+                        {t('card.noImage')}
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-[var(--text-muted)]">
+                    {t('card.registeredPhoto')}
+                  </span>
+                </div>
               </div>
               <div className="space-y-1.5 pt-2 text-xs">
                 <div className="flex justify-between">

@@ -12,7 +12,9 @@
     "account": "帳號與安全",
     "network": "網路/服務",
     "storage": "儲存策略",
-    "time": "對時服務"
+    "time": "對時服務",
+    "gb28181": "國標服務",
+    "gb28181Desc": "GB/T 28181 接入底座配置與狀態"
   },
   "overview": {
     "title": "系統概覽",
@@ -150,5 +152,38 @@
     "confirmTitle": "手動設定系統時間",
     "confirmMessage": "此操作將修改系統時鐘，可能導致視訊時間戳跳動，影響錄影回放連續性。建議優先使用 NTP 自動同步。",
     "confirmSet": "確認設定"
+  },
+  "gb28181": {
+    "serviceTitle": "國標 GB/T 28181 原生服務",
+    "serviceDesc": "單二進位內嵌 SIP UAS 註冊服務與 MPEG-PS 串流解複用引擎，無需外部串流媒體中介軟體",
+    "statusOnline": "運行中",
+    "listenPort": "監聽連接埠",
+    "activeDevices": "已握手裝置",
+    "platformParams": "本機 SIP 平台參數 (供攝影機後台填寫)",
+    "exportCard": "檢視 IPC 對接指導卡",
+    "sipId": "平台國標編碼 (SIP ID)",
+    "sipDomain": "SIP 伺服器域 (Domain)",
+    "sipPort": "SIP 監聽連接埠 (Port)",
+    "password": "裝置接入密碼 (Password)",
+    "heartbeatTimeout": "心跳超時判定時長 (秒)",
+    "portPoolTitle": "媒體串流連接埠池 (RTP Media Port Pool)",
+    "portPoolDesc": "點播推流時動態分配的一對一接收連接埠（偶數 RTP / 奇數 RTCP），任務結束由 RAII 租約自動回收",
+    "portStart": "連接埠池起始",
+    "portEnd": "連接埠池結束",
+    "maxStreams": "最大支援並發串流",
+    "streams": "路",
+    "automationTitle": "自動化策略",
+    "autoCatalogSync": "裝置首次註冊成功後，自動下發 Catalog 目錄掃描同步多通道",
+    "cardTitle": "IPC / NVR 現場對接指導卡",
+    "cardDesc": "登入海康、大華、宇視等攝影機 Web 管理後台，進入「網路」-「進階設定」-「平台接入」選 28181 填寫：",
+    "copyAll": "複製全量參數文字",
+    "cardHeaderTitle": "Heimdall GB28181 攝影機對接指導卡",
+    "cardServerIp": "SIP 伺服器 IP",
+    "cardServerPort": "SIP 伺服器連接埠",
+    "cardServerId": "SIP 伺服器編碼",
+    "cardServerDomain": "SIP 伺服器域",
+    "cardPassword": "接入鑑權密碼",
+    "cardHeartbeat": "心跳間隔建議: 60 秒 (超時時間: {{timeout}} 秒)",
+    "cardStreamMode": "串流傳輸模式建議: TCP 被動 (推薦) 或 UDP"
   }
 }

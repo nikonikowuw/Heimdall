@@ -99,5 +99,10 @@
     "sampleHealth": "主樣本質檢",
     "scoreLabel": "品質評分",
     "detectionLabel": "置信度"
+  },
+  "pagination": {
+    "total": "共 {{total}} 位人員",
+    "prev": "上一頁",
+    "next": "下一頁"
   }
 }

@@ -6,8 +6,10 @@ pub mod dmabuf_sync;
 pub mod encoders;
 pub mod error;
 pub mod flv;
+pub mod gb28181;
 pub mod gop_queue;
 pub mod image_convert;
+pub mod media_ingestor;
 pub mod probe;
 pub mod retina_ingest;
 pub mod rga;
@@ -44,6 +46,7 @@ pub use image_convert::{
     debug_cpu_fallback_nv12_to_rgb, fast_nv12_to_rgb_image, frame_to_rgb_image,
     snapshot_readback_to_rgb_image,
 };
+pub use media_ingestor::MediaIngestor;
 pub use probe::{StreamInfo, StreamProber};
 pub use retina_ingest::{
     sanitize_rtsp_url_and_credentials, RetinaIngestor, DEFAULT_HANDSHAKE_TIMEOUT,
@@ -55,7 +58,9 @@ pub use rtsp::{mask_rtsp_url, RtspIngestor};
 pub use sps::{
     is_keyframe_or_parameter_set, parse_h264_sps, parse_h265_sps, split_annex_b_nalus, SpsInfo,
 };
-pub use stream_hub::{AiTaskLease, CameraStreamSession, StreamHub, StreamSubscription};
+pub use stream_hub::{
+    AiTaskLease, CameraStreamSession, Gb28181Context, StreamHub, StreamSubscription,
+};
 pub use sub_stream::{deduce_primary_sub_stream, deduce_sub_stream, SubStreamCandidate};
 pub use webcodecs::{
     pack_webcodecs_frame, pack_webcodecs_frame_with_flags, unpack_webcodecs_frame,

@@ -220,6 +220,7 @@ pub struct AppState {
     pub algorithm_upload_semaphore: Arc<Semaphore>,
     pub storage_cleaner: Option<Arc<pipeline::storage_cleaner::StorageCleaner>>,
     pub gallery_index: Arc<crate::gallery_index::FaceFeatureIndex>,
+    pub gb28181_sip_server: Arc<media::gb28181::Gb28181SipServer>,
 }
 
 impl AppState {
@@ -256,6 +257,10 @@ impl AppState {
             }
         };
 
+        let (event_tx, _) = mpsc::channel(128);
+        let gb28181_sip_server =
+            media::gb28181::Gb28181SipServer::new(types::SysGb28181Config::default(), event_tx);
+
         Self {
             db,
             pipeline,
@@ -274,7 +279,17 @@ impl AppState {
             )),
             storage_cleaner: None,
             gallery_index,
+            gb28181_sip_server,
         }
+    }
+
+    /// 为 API 状态注入自定义的 GB28181 SIP 服务器
+    pub fn with_gb28181_sip_server(
+        mut self,
+        server: Arc<media::gb28181::Gb28181SipServer>,
+    ) -> Self {
+        self.gb28181_sip_server = server;
+        self
     }
 
     /// 为 API 状态注入自定义的分析任务运行时服务 (主要用于测试隔离与 Mock)

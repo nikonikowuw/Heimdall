@@ -18,11 +18,12 @@ import {
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { motionTokens } from '@/lib/motionTokens'
-import { cameraApi, taskApi } from '../../lib/api'
-import type { Camera, TaskSummaryDto } from '../../types'
+import { cameraApi, gb28181Api, taskApi } from '../../lib/api'
+import type { Camera, Gb28181Device, TaskSummaryDto } from '../../types'
 import { getProbeBadge, normalizeProbeStatus } from './cameraStatus'
 import { CameraModal } from './components/CameraModal'
 import { DeleteCameraModal } from './components/DeleteCameraModal'
+import { BatchImportGbModal } from './components/BatchImportGbModal'
 import { copyToClipboard } from '../../lib/utils'
 
 export interface CamerasPageProps {
@@ -38,6 +39,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
   const [isLoading, setIsLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [protocolFilter, setProtocolFilter] = useState<'all' | 'rtsp' | 'gb28181'>('all')
+  const [gbDevices, setGbDevices] = useState<Gb28181Device[]>([])
+  const [isBatchImportOpen, setIsBatchImportOpen] = useState(false)
+  const [bannerDismissed, setBannerDismissed] = useState(false)
   const [probingCameraId, setProbingCameraId] = useState<string | null>(null)
   const [copiedCameraId, setCopiedCameraId] = useState<string | null>(null)
 
@@ -64,9 +69,14 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
   const loadData = async (): Promise<void> => {
     setIsLoading(true)
     try {
-      const [cams, taskList] = await Promise.all([cameraApi.list(), taskApi.list()])
+      const [cams, taskList, devs] = await Promise.all([
+        cameraApi.list(),
+        taskApi.list(),
+        gb28181Api.listDevices().catch(() => [] as Gb28181Device[]),
+      ])
       setCameras(cams)
       setTasks(taskList)
+      setGbDevices(devs)
     } catch {
       // 优雅降级
     } finally {
@@ -190,6 +200,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
   const filteredCameras = useMemo(() => {
     const q = searchQuery.toLowerCase().trim()
     return cameras.filter((cam) => {
+      if (protocolFilter !== 'all' && cam.protocol !== protocolFilter) {
+        return false
+      }
+
       const matchesSearch =
         !q ||
         cam.name?.toLowerCase().includes(q) ||
@@ -203,7 +217,25 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
       }
       return true
     })
-  }, [cameras, searchQuery, statusFilter])
+  }, [cameras, searchQuery, statusFilter, protocolFilter])
+
+  // 聚合统计国标设备未纳管通道与全量纳管指标
+  const { unmanagedChannels, totalChannelsCount, importedChannelsCount } = useMemo(() => {
+    const list: { device: Gb28181Device; channelId: string; name: string }[] = []
+    let total = 0
+    let imported = 0
+    for (const dev of gbDevices) {
+      for (const ch of dev.channels || []) {
+        total++
+        if (ch.isImported) {
+          imported++
+        } else {
+          list.push({ device: dev, channelId: ch.channelId, name: ch.name })
+        }
+      }
+    }
+    return { unmanagedChannels: list, totalChannelsCount: total, importedChannelsCount: imported }
+  }, [gbDevices])
 
   // 检查摄像头是否已绑定任务
   const taskMap = useMemo(() => {
@@ -283,6 +315,50 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
         </div>
       </div>
 
+      {/* 国标新通道发现提示横幅 */}
+      {unmanagedChannels.length > 0 && !bannerDismissed && (
+        <div className="frosted-glass flex items-center justify-between gap-4 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3.5 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400">
+              <Radio className="h-4.5 w-4.5" />
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-[var(--text-primary)]">
+                {t('discovery.bannerTitle', {
+                  name: unmanagedChannels[0].device.name || unmanagedChannels[0].device.deviceId,
+                  total: unmanagedChannels.length,
+                  defaultValue: `检测到新注册的国标设备「${unmanagedChannels[0].device.name || unmanagedChannels[0].device.deviceId}」，发现 ${unmanagedChannels.length} 个可用通道`,
+                })}
+              </div>
+              <div className="text-[11px] text-[var(--text-muted)]">
+                {t('discovery.bannerStatus', {
+                  imported: importedChannelsCount,
+                  total: totalChannelsCount,
+                  defaultValue: `当前已纳管: ${importedChannelsCount} / ${totalChannelsCount} 通道`,
+                })}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsBatchImportOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition-all hover:bg-cyan-500 active:scale-95"
+            >
+              {t('discovery.batchImport', { defaultValue: '批量纳管通道' })}
+            </button>
+            <button
+              type="button"
+              onClick={() => setBannerDismissed(true)}
+              className="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
+              title={t('discovery.ignore', { defaultValue: '忽略' })}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 搜索与过滤筛选栏 */}
       {cameras.length > 0 && (
         <div className="frosted-glass flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 shadow-xs">
@@ -297,6 +373,42 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
               })}
               className="w-full bg-transparent text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
             />
+          </div>
+
+          <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setProtocolFilter('all')}
+              className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
+                protocolFilter === 'all'
+                  ? 'bg-[var(--accent)] text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              {t('protocol.all', { defaultValue: '全部协议' })}
+            </button>
+            <button
+              type="button"
+              onClick={() => setProtocolFilter('rtsp')}
+              className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
+                protocolFilter === 'rtsp'
+                  ? 'bg-[var(--accent)] text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              {t('protocol.rtsp', { defaultValue: 'RTSP' })}
+            </button>
+            <button
+              type="button"
+              onClick={() => setProtocolFilter('gb28181')}
+              className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
+                protocolFilter === 'gb28181'
+                  ? 'bg-cyan-600 text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-cyan-400'
+              }`}
+            >
+              {t('protocol.gb28181', { defaultValue: '国标 28181' })}
+            </button>
           </div>
 
           <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
@@ -406,6 +518,15 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
                             >
                               <span className={`h-1.5 w-1.5 rounded-full ${probeBadge.dotClass}`} />
                               <span>{probeBadge.text}</span>
+                            </span>
+                            <span
+                              className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase ${
+                                camera.protocol === 'gb28181'
+                                  ? 'border border-cyan-500/30 bg-cyan-500/10 text-cyan-400'
+                                  : 'border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]'
+                              }`}
+                            >
+                              {camera.protocol === 'gb28181' ? 'GB28181' : 'RTSP'}
                             </span>
                             <span className="rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-muted)]">
                               {camera.cameraId}
@@ -625,6 +746,14 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
         camera={cameraToDelete}
         onClose={() => setCameraToDelete(null)}
         onSuccess={handleCameraDeleted}
+      />
+
+      {/* 批量纳管国标通道抽屉 */}
+      <BatchImportGbModal
+        isOpen={isBatchImportOpen}
+        onClose={() => setIsBatchImportOpen(false)}
+        onSuccess={loadData}
+        devices={gbDevices}
       />
 
       {/* 探活结果悬浮 Toast 提示 (顶部居中 + 100% 纯色不透光，杜绝右上角遮挡按钮与底色穿透) */}

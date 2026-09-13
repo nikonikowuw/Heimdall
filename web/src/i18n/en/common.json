@@ -19,11 +19,18 @@
     "save": "Save",
     "add": "Add",
     "delete": "Delete",
-    "edit": "Edit"
+    "edit": "Edit",
+    "copy": "Copy"
   },
   "lang": {
     "zhCN": "简体中文",
     "zhTW": "繁體中文",
     "en": "English"
-  }
+  },
+  "close": "Close",
+  "cancel": "Cancel",
+  "confirm": "Confirm",
+  "refresh": "Refresh",
+  "copy": "Copy",
+  "save": "Save"
 }

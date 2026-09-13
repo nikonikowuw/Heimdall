@@ -144,6 +144,23 @@ impl CaptureDispatchService {
         }
     }
 
+    /// 提取抓拍对象的有效质量评分（优先使用人脸质量分，回退至目标质量分或置信度）
+    fn resolve_quality_score(obj: &types::TrackedObject) -> f32 {
+        obj.face
+            .as_ref()
+            .and_then(|f| f.quality_score)
+            .or(obj.quality_score)
+            .unwrap_or(obj.confidence)
+            .clamp(0.0, 1.0)
+    }
+
+    /// 判定抓拍事件是否关联人脸目标
+    fn is_face_event(event: &PipelineCaptureEvent) -> bool {
+        event.tracked_object.face.is_some()
+            || event.tracked_object.label.eq_ignore_ascii_case("face")
+            || event.algorithm_id.to_lowercase().contains("face")
+    }
+
     /// 将单个 `PipelineCaptureEvent` 转换为数据库 `ActiveModel`
     fn event_to_active_model(
         event: &PipelineCaptureEvent,
@@ -168,11 +185,7 @@ impl CaptureDispatchService {
         let bbox_json =
             serde_json::to_string(&event.tracked_object.bbox).unwrap_or_else(|_| "{}".to_string());
 
-        let quality_score = event
-            .tracked_object
-            .quality_score
-            .unwrap_or(event.tracked_object.confidence)
-            .clamp(0.0, 1.0);
+        let quality_score = Self::resolve_quality_score(&event.tracked_object);
 
         Some(db::entity::capture::ActiveModel {
             id: sea_orm::NotSet,
@@ -215,9 +228,7 @@ impl CaptureDispatchService {
         if let Some(gallery_index) = &self.gallery_index {
             if gallery_index.count().await > 0 {
                 for evt in events {
-                    let is_face = evt.tracked_object.label.eq_ignore_ascii_case("face")
-                        || evt.algorithm_id.contains("face");
-                    if is_face {
+                    if Self::is_face_event(evt) {
                         let this = self.clone();
                         let event = evt.clone();
                         tokio::spawn(async move {
@@ -284,9 +295,7 @@ impl CaptureDispatchService {
             return;
         };
 
-        let is_face = event.tracked_object.label.eq_ignore_ascii_case("face")
-            || event.algorithm_id.contains("face");
-        if !is_face {
+        if !Self::is_face_event(event) {
             return;
         }
 
@@ -302,14 +311,11 @@ impl CaptureDispatchService {
         // sidecar 交给宿主；这里优先使用它，避免实时识别再次读盘、JPEG 解码和
         // 重复调用模型。旧包没有 sidecar 时保留一次性的证据 JPEG 回退路径。
         let base_dir = self.pipeline.snapshot_engine().base_evidence_dir();
-        let feature = if let Some(embedding) = event.tracked_object.embedding.as_ref() {
+        let feature = if let Some(embedding) = event.tracked_object.embedding() {
+            let quality_score = Self::resolve_quality_score(&event.tracked_object);
             RecognitionFeature {
-                embedding: *embedding.as_ref(),
-                quality_score: event
-                    .tracked_object
-                    .quality_score
-                    .unwrap_or(event.tracked_object.confidence)
-                    .clamp(0.0, 1.0),
+                embedding: **embedding,
+                quality_score,
             }
         } else {
             if snap.crop_image_rel_path.is_empty() {
@@ -372,7 +378,7 @@ impl CaptureDispatchService {
         let rec_gallery_rel =
             isolate_gallery_evidence_photo(base_dir, &best_match.photo_rel_path, &recognition_id)
                 .await
-                .unwrap_or_default();
+                .unwrap_or_else(|| best_match.photo_rel_path.clone());
 
         let candidates_json =
             serde_json::to_string(&candidates).unwrap_or_else(|_| "[]".to_string());

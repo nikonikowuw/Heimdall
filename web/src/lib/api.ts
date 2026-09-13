@@ -9,11 +9,16 @@ import type {
   AlgorithmStats,
   AlgorithmVersionItem,
   ApiResponse,
+  BatchImportGbChannelsRequest,
+  BatchImportGbChannelsResponse,
   Camera,
   CaptureRecord,
   ChangePasswordRequest,
   CreateAlgorithmInstanceRequest,
   CreateCameraRequest,
+  DiscoveredDevice,
+  Gb28181ConfigResponse,
+  Gb28181Device,
   InitStatusResponse,
   InitializeRequest,
   LoginRequest,
@@ -24,10 +29,12 @@ import type {
   PersonnelItem,
   PersonnelStats,
   RecognitionRecord,
+  SysGb28181Config,
   TaskConfigDto,
   TaskSummaryDto,
   UpdateAlgorithmInstanceRequest,
   UpdateCameraRequest,
+  UpdateGb28181ConfigRequest,
   UploadAlgorithmResponse,
 } from '../types'
 
@@ -473,5 +480,31 @@ export const instanceApi = {
 
   delete(instanceId: string): Promise<void> {
     return api.delete<void>(`/tasks/instances/${encodeURIComponent(instanceId)}`)
+  },
+}
+
+export const gb28181Api = {
+  getConfig(): Promise<Gb28181ConfigResponse> {
+    return api.get<Gb28181ConfigResponse>('/system/gb28181/config')
+  },
+
+  updateConfig(data: UpdateGb28181ConfigRequest): Promise<SysGb28181Config> {
+    return api.put<SysGb28181Config>('/system/gb28181/config', data)
+  },
+
+  listDevices(): Promise<Gb28181Device[]> {
+    return api.get<Gb28181Device[]>('/system/gb28181/devices')
+  },
+
+  syncCatalog(deviceId: string): Promise<void> {
+    return api.post<void>(`/system/gb28181/devices/${encodeURIComponent(deviceId)}/sync`, {})
+  },
+
+  batchImportChannels(data: BatchImportGbChannelsRequest): Promise<BatchImportGbChannelsResponse> {
+    return api.post<BatchImportGbChannelsResponse>('/system/gb28181/channels/import', data)
+  },
+
+  scanDiscovery(): Promise<DiscoveredDevice[]> {
+    return api.get<DiscoveredDevice[]>('/system/discovery/scan')
   },
 }

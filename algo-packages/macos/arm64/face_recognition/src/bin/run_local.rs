@@ -117,51 +117,54 @@ mod macos {
                     &config.quality_thresholds,
                 );
                 quality_ms += quality_start.elapsed().as_secs_f64() * 1000.0;
-                if quality.accepted(&config.quality_thresholds, config.min_face_size) {
-                    let embedding_start = Instant::now();
-                    let embedding = match safe_frame.handle_view() {
-                        FrameHandleView::ApplePixelBuffer { ptr } => {
-                            let matrix = face_alignment_matrix(
-                                image_width,
-                                image_height,
-                                &face_cand.landmarks,
-                            )
-                            .map_err(|error| {
-                                AlgoError::Preprocess {
-                                    reason: error.to_string(),
-                                }
-                            })?;
-                            // SAFETY: ptr 来自当前 SafeFrame，且 predict 在本次调用内同步完成；
-                            // CoreML 不会保存该裸指针或把它交给异步任务。
-                            let values = unsafe {
-                                models.predict_embedding_from_pixelbuffer(
-                                    ptr,
+                let embedding =
+                    if quality.accepted(&config.quality_thresholds, config.min_face_size) {
+                        let embedding_start = Instant::now();
+                        let emb = match safe_frame.handle_view() {
+                            FrameHandleView::ApplePixelBuffer { ptr } => {
+                                let matrix = face_alignment_matrix(
                                     image_width,
                                     image_height,
-                                    matrix,
-                                )?
-                            };
-                            let normalized = normalize_embedding(&values)?;
-                            Some(encode_embedding(&normalized)?)
-                        }
-                        _ => {
-                            return Err(AlgoError::IncompatibleFrame {
-                                reason: "单帧 best-shot 特征提取需要原生 Apple CVPixelBuffer"
-                                    .to_string(),
-                            });
-                        }
+                                    &face_cand.landmarks,
+                                )
+                                .map_err(|error| {
+                                    AlgoError::Preprocess {
+                                        reason: error.to_string(),
+                                    }
+                                })?;
+                                // SAFETY: ptr 来自当前 SafeFrame，且 predict 在本次调用内同步完成；
+                                // CoreML 不会保存该裸指针或把它交给异步任务。
+                                let values = unsafe {
+                                    models.predict_embedding_from_pixelbuffer(
+                                        ptr,
+                                        image_width,
+                                        image_height,
+                                        matrix,
+                                    )?
+                                };
+                                let normalized = normalize_embedding(&values)?;
+                                Some(encode_embedding(&normalized)?)
+                            }
+                            _ => {
+                                return Err(AlgoError::IncompatibleFrame {
+                                    reason: "单帧 best-shot 特征提取需要原生 Apple CVPixelBuffer"
+                                        .to_string(),
+                                });
+                            }
+                        };
+                        embedding_ms += embedding_start.elapsed().as_secs_f64() * 1000.0;
+                        emb
+                    } else {
+                        None
                     };
-                    embedding_ms += embedding_start.elapsed().as_secs_f64() * 1000.0;
-                    Some(FaceAnalyzed {
-                        bbox: normalized_xywh_to_xyxy(face_cand.bbox),
-                        confidence: face_cand.score.clamp(0.0, 1.0),
-                        quality_score: quality.score.clamp(0.0, 1.0),
-                        embedding,
-                        landmarks: face_cand.landmarks,
-                    })
-                } else {
-                    None
-                }
+
+                Some(FaceAnalyzed {
+                    bbox: normalized_xywh_to_xyxy(face_cand.bbox),
+                    confidence: face_cand.score.clamp(0.0, 1.0),
+                    quality_score: quality.score.clamp(0.0, 1.0),
+                    embedding,
+                    landmarks: face_cand.landmarks,
+                })
             } else {
                 None
             };

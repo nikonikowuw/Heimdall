@@ -77,25 +77,28 @@ function sortCamerasByHealth(list: Camera[]): Camera[] {
   })
 }
 
-function getStatusBadge(status?: ProbeStatus | string) {
+function getStatusBadge(
+  t: (key: string, opts?: { defaultValue?: string }) => string,
+  status?: ProbeStatus | string,
+) {
   switch (normalizeProbeStatus(status)) {
     case 'healthy':
       return {
-        text: '在线',
+        text: t('status.healthy', { defaultValue: '在线' }),
         badgeClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
         dotClass: 'bg-emerald-400 animate-pulse',
         statusColor: 'text-emerald-400',
       }
     case 'degraded':
       return {
-        text: '网络波动',
+        text: t('status.degraded', { defaultValue: '网络波动' }),
         badgeClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
         dotClass: 'bg-amber-400 animate-ping',
         statusColor: 'text-amber-400',
       }
     case 'offline':
       return {
-        text: '离线/故障',
+        text: t('status.offline', { defaultValue: '离线/故障' }),
         badgeClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20',
         dotClass: 'bg-rose-500',
         statusColor: 'text-rose-400',
@@ -103,7 +106,7 @@ function getStatusBadge(status?: ProbeStatus | string) {
     case 'unprobed':
     default:
       return {
-        text: '待探测',
+        text: t('status.unprobed', { defaultValue: '待探测' }),
         badgeClass: 'bg-gray-500/10 text-gray-400 border border-gray-500/20',
         dotClass: 'bg-gray-400',
         statusColor: 'text-gray-400',
@@ -336,15 +339,15 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           <div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-[var(--text-primary)]">
-                {t('live.title', '边缘智能监控大屏')}
+                {t('live.title')}
               </span>
               <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
                 <Radio className="h-2.5 w-2.5 animate-pulse" />
-                <span>{t('live.protocolBadge', 'HTTP-FLV · MSE')}</span>
+                <span>{t('live.protocolBadge')}</span>
               </span>
               <span className="flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-400">
                 <Zap className="h-2.5 w-2.5" />
-                <span>{t('live.aneAccelerator', 'Apple ANE 加速')}</span>
+                <span>{t('live.aneAccelerator')}</span>
               </span>
             </div>
           </div>
@@ -360,10 +363,10 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                 ? 'border border-cyan-500/30 bg-cyan-500/15 text-cyan-400'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
             }`}
-            title={t('live.autoSpotlightDesc', '检测到告警或活动目标时自动将视角切入主视口')}
+            title={t('live.autoSpotlightDesc')}
           >
             <Sparkles className="h-3.5 w-3.5" />
-            <span>{t('live.autoSpotlight', '智能追焦')}</span>
+            <span>{t('live.autoSpotlight')}</span>
             <span
               className={`h-1.5 w-1.5 rounded-full ${
                 autoSpotlight ? 'animate-pulse bg-cyan-400' : 'bg-gray-500'
@@ -383,7 +386,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               }`}
             >
               <Compass className="h-3.5 w-3.5" />
-              <span>{t('live.focusMode', '指挥舱')}</span>
+              <span>{t('live.focusMode')}</span>
             </button>
             <button
               type="button"
@@ -395,7 +398,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               }`}
             >
               <Grid className="h-3.5 w-3.5" />
-              <span>{t('live.bentoMode', '全景 Bento')}</span>
+              <span>{t('live.bentoMode')}</span>
             </button>
           </div>
 
@@ -409,7 +412,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             className="flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90"
           >
             <Plus className="h-3.5 w-3.5" />
-            <span>{t('live.addCamera', '接入设备')}</span>
+            <span>{t('live.addCamera')}</span>
           </button>
         </div>
       </div>
@@ -442,9 +445,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   </div>
                   <div>
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">
-                      {cameras.length > 0
-                        ? '主屏预览已关闭'
-                        : t('live.noCameras', '暂无活动摄像头')}
+                      {cameras.length > 0 ? '主屏预览已关闭' : t('live.noCameras')}
                     </h4>
                     <p className="mt-1 max-w-sm text-xs text-[var(--text-secondary)]">
                       {cameras.length > 0
@@ -470,25 +471,22 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             <div className="frosted-glass flex items-center justify-between rounded-lg px-3 py-1.5 text-xs text-[var(--text-secondary)]">
               <div className="flex items-center gap-2 font-mono text-[11px]">
                 <span className="flex h-2 w-2 animate-ping rounded-full bg-cyan-400" />
-                <span className="font-semibold text-cyan-400">
-                  {t('live.liveTelemetry', '实时遥测')}:
-                </span>
+                <span className="font-semibold text-cyan-400">{t('live.liveTelemetry')}:</span>
                 <span className="text-[var(--text-primary)]">
                   {heroCamera
                     ? `[${heroCamera.name}] ${heroCamera.lastCodec.toUpperCase()} ${heroCamera.lastWidth ? `${heroCamera.lastWidth}x${heroCamera.lastHeight}` : ''}`
-                    : '待命中 (子码流待机中)'}
+                    : t('live.savingMode')}
                 </span>
               </div>
               <div className="flex items-center gap-3 text-[11px]">
                 <span>
-                  {t('live.fps', '帧率')}:{' '}
+                  {t('live.fps')}:{' '}
                   <strong className="text-emerald-400">
                     {heroCamera?.lastFps ? heroCamera.lastFps.toFixed(1) : '25.0'} FPS
                   </strong>
                 </span>
                 <span>
-                  {t('live.latency', '端到端延时')}:{' '}
-                  <strong className="text-cyan-400">128 ms</strong>
+                  {t('live.latency')}: <strong className="text-cyan-400">128 ms</strong>
                 </span>
                 {heroCamera && (
                   <div className="flex items-center gap-1.5 border-l border-[var(--border)] pl-2">
@@ -522,9 +520,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           <div className="col-span-12 flex flex-col gap-3 overflow-y-auto lg:col-span-4 xl:col-span-3">
             <div className="flex items-center justify-between px-1 text-xs text-[var(--text-muted)]">
               <span className="font-medium tracking-wide">
-                {t('live.auxStreams', '活动监控流')} ({cameras.length})
+                {t('live.auxStreams')} ({cameras.length})
               </span>
-              <span className="text-[10px]">{t('live.switchMainHint', '点击切换主流 ↗')}</span>
+              <span className="text-[10px]">{t('live.switchMainHint')}</span>
             </div>
 
             <div className="flex flex-1 flex-col gap-3">
@@ -625,7 +623,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                           </span>
                         </div>
                         {(() => {
-                          const badge = getStatusBadge(cam.lastProbeStatus)
+                          const badge = getStatusBadge(t, cam.lastProbeStatus)
                           return (
                             <span
                               className={`flex items-center gap-1 font-mono text-[10px] ${badge.statusColor}`}
@@ -643,7 +641,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
 
               {cameras.length === 0 && (
                 <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-8 text-center text-xs text-[var(--text-muted)]">
-                  <span>{t('live.noAuxStreams', '暂无更多辅路流')}</span>
+                  <span>{t('live.noAuxStreams')}</span>
                 </div>
               )}
             </div>
@@ -653,7 +651,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
         /* 全景自适应 Bento 网格视图 */
         <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto md:grid-cols-2 lg:grid-cols-3">
           {cameras.map((cam) => {
-            const statusBadge = getStatusBadge(cam.lastProbeStatus)
+            const statusBadge = getStatusBadge(t, cam.lastProbeStatus)
             return (
               <div
                 key={cam.cameraId}
@@ -723,7 +721,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
 
           {cameras.length === 0 && (
             <div className="col-span-full flex items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-12 text-center text-xs text-[var(--text-muted)]">
-              <span>{t('live.noCameras', '暂无活动摄像头')}</span>
+              <span>{t('live.noCameras')}</span>
             </div>
           )}
         </div>

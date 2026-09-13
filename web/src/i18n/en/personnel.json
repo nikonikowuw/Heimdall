@@ -99,5 +99,10 @@
     "sampleHealth": "Primary Quality",
     "scoreLabel": "Quality Score",
     "detectionLabel": "Confidence"
+  },
+  "pagination": {
+    "total": "Total {{total}} personnel",
+    "prev": "Previous",
+    "next": "Next"
   }
 }

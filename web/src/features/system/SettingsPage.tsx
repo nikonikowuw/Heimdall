@@ -2,14 +2,24 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
-import { Settings, User, Wifi, HardDrive, Clock, LayoutDashboard, ChevronRight } from 'lucide-react'
+import {
+  Settings,
+  User,
+  Wifi,
+  HardDrive,
+  Clock,
+  LayoutDashboard,
+  ChevronRight,
+  Radio,
+} from 'lucide-react'
 import { SystemOverview } from './SystemOverview'
 import { AccountSecurity } from './AccountSecurity'
 import { NetworkSettings } from './NetworkSettings'
 import { StorageSettings } from './StorageSettings'
 import { TimeSettings } from './TimeSettings'
+import { Gb28181Settings } from './Gb28181Settings'
 
-type SettingsTab = 'overview' | 'account' | 'network' | 'storage' | 'time'
+type SettingsTab = 'overview' | 'account' | 'network' | 'storage' | 'time' | 'gb28181'
 
 const TABS: {
   key: SettingsTab
@@ -27,6 +37,7 @@ const TABS: {
   { key: 'network', icon: Wifi, labelKey: 'tabs.network', descKey: 'tabs.networkDesc' },
   { key: 'storage', icon: HardDrive, labelKey: 'tabs.storage', descKey: 'tabs.storageDesc' },
   { key: 'time', icon: Clock, labelKey: 'tabs.time', descKey: 'tabs.timeDesc' },
+  { key: 'gb28181', icon: Radio, labelKey: 'tabs.gb28181', descKey: 'tabs.gb28181Desc' },
 ]
 
 interface SettingsPageProps {
@@ -106,6 +117,7 @@ export function SettingsPage({ onOpenPasswordModal }: SettingsPageProps): React.
               {activeTab === 'network' && <NetworkSettings />}
               {activeTab === 'storage' && <StorageSettings />}
               {activeTab === 'time' && <TimeSettings />}
+              {activeTab === 'gb28181' && <Gb28181Settings />}
             </motion.div>
           </AnimatePresence>
         </div>

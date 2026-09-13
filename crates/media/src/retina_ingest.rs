@@ -1030,6 +1030,17 @@ impl RetinaIngestor {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::media_ingestor::MediaIngestor for RetinaIngestor {
+    async fn run_loop(
+        self: Arc<Self>,
+        cancel_signal: Arc<AtomicBool>,
+        cancel_rx: tokio::sync::watch::Receiver<bool>,
+    ) {
+        Self::run_loop(self, cancel_signal, cancel_rx).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

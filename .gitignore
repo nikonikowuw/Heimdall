@@ -57,3 +57,4 @@ config.toml
 
 # Temporary files
 *.tmp
+var/

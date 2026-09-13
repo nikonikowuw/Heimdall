@@ -19,11 +19,18 @@
     "save": "儲存",
     "add": "新增",
     "delete": "刪除",
-    "edit": "編輯"
+    "edit": "編輯",
+    "copy": "複製"
   },
   "lang": {
     "zhCN": "简体中文",
     "zhTW": "繁體中文",
     "en": "English"
-  }
+  },
+  "close": "關閉",
+  "cancel": "取消",
+  "confirm": "確定",
+  "refresh": "刷新",
+  "copy": "複製",
+  "save": "儲存"
 }

@@ -589,7 +589,13 @@ export function LivePlayer({
           // 2. 绘制半透明发光识别框 (Bounding Box)
           const isFace = item.label.toLowerCase() === 'face'
           const isPerson = item.label.toLowerCase() === 'person'
-          ctx.strokeStyle = isPerson ? '#06b6d4' : isFace ? '#8b5cf6' : '#10b981'
+          let strokeColor = '#10b981'
+          if (isPerson) {
+            strokeColor = '#06b6d4'
+          } else if (isFace) {
+            strokeColor = '#8b5cf6'
+          }
+          ctx.strokeStyle = strokeColor
           ctx.lineWidth = isHero ? 2 : 1.5
           ctx.strokeRect(x, y, boxW, boxH)
 
@@ -602,10 +608,20 @@ export function LivePlayer({
             const fboxH = (fy2 - fy1) * h
 
             ctx.save()
-            ctx.strokeStyle = '#8b5cf6'
-            ctx.lineWidth = isHero ? 1.8 : 1.2
+            ctx.strokeStyle = '#a855f7'
+            ctx.lineWidth = isHero ? 2 : 1.5
             ctx.setLineDash([3, 2])
             ctx.strokeRect(fx, fy, fboxW, fboxH)
+
+            // 人脸框上方绘制人脸微型标识与质量评分
+            const qScore = item.face.qualityScore ?? item.qualityScore
+            const qText = qScore !== undefined ? `Face ${(qScore * 100).toFixed(0)}%` : 'Face'
+            ctx.font = '600 8px monospace'
+            const qWidth = ctx.measureText(qText).width
+            ctx.fillStyle = 'rgba(168, 85, 247, 0.9)'
+            ctx.fillRect(fx, Math.max(0, fy - 11), qWidth + 6, 10)
+            ctx.fillStyle = '#ffffff'
+            ctx.fillText(qText, fx + 3, Math.max(8, fy - 3))
             ctx.restore()
           }
 
@@ -697,12 +713,12 @@ export function LivePlayer({
               type="button"
               onClick={onTogglePause}
               className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-[var(--accent)]/30 shadow-lg transition-transform hover:scale-105 active:scale-95"
-              title={t('live.clickToPlay', '点击开启实时拉流')}
+              title={t('live.clickToPlay')}
             >
               <Play className="ml-0.5 h-5 w-5 fill-current" />
             </button>
             <span className="text-xs font-medium text-[var(--text-secondary)]">
-              {t('live.paused', '已停止预览')}
+              {t('live.paused')}
             </span>
           </div>
         </div>
@@ -712,7 +728,7 @@ export function LivePlayer({
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs">
           <RefreshCw className="h-6 w-6 animate-spin text-[var(--accent)]" />
           <span className="mt-2 text-xs font-medium text-[var(--text-secondary)]">
-            {t('live.negotiating', '媒体流连接中...')}
+            {t('live.negotiating')}
           </span>
         </div>
       )}
@@ -721,7 +737,7 @@ export function LivePlayer({
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/50">
           <div className="flex items-center gap-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs text-amber-400 backdrop-blur-md">
             <Wifi className="h-4 w-4 animate-pulse" />
-            <span>{t('live.reconnecting', '网络抖动重连中...')}</span>
+            <span>{t('live.reconnecting')}</span>
           </div>
         </div>
       )}
@@ -729,9 +745,7 @@ export function LivePlayer({
       {connectionStatus === 'failed' && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80">
           <WifiOff className="h-8 w-8 text-rose-500 opacity-80" />
-          <span className="mt-2 text-xs font-medium text-rose-400">
-            {t('live.streamFailed', '视频流接入失败')}
-          </span>
+          <span className="mt-2 text-xs font-medium text-rose-400">{t('live.streamFailed')}</span>
           <button
             type="button"
             onClick={() => {
@@ -741,7 +755,7 @@ export function LivePlayer({
             className="mt-3 flex items-center gap-1.5 rounded-md bg-white/10 px-3 py-1 text-xs font-medium text-white transition hover:bg-white/20 active:scale-95"
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            <span>{t('live.retry', '重新连接')}</span>
+            <span>{t('live.retry')}</span>
           </button>
         </div>
       )}
@@ -825,9 +839,7 @@ export function LivePlayer({
                 ? 'bg-[var(--accent)] text-white shadow-xs'
                 : 'bg-black/60 text-white/90 hover:bg-black/80 hover:text-white'
             }`}
-            title={
-              isAudioActive ? t('live.muteAudio', '关闭音频') : t('live.enableAudio', '开启音频')
-            }
+            title={isAudioActive ? t('live.muteAudio') : t('live.enableAudio')}
           >
             {isAudioActive ? (
               <Volume2 className="h-3.5 w-3.5" />
@@ -855,7 +867,7 @@ export function LivePlayer({
             type="button"
             onClick={onClose}
             className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-rose-500/80 hover:text-white"
-            title={t('common.close', '关闭')}
+            title={t('live.close')}
           >
             <X className="h-3.5 w-3.5" />
           </button>
