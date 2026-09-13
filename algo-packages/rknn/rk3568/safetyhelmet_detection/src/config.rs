@@ -10,13 +10,8 @@ use serde::Deserialize;
 /// 模型输出类别
 pub const HELMET_CLASSES: [&str; 2] = ["Hardhat", "NO-Hardhat"];
 
-fn default_confidence() -> f32 {
-    0.45
-}
-
-fn default_iou() -> f32 {
-    0.45
-}
+pub const DEFAULT_CONFIDENCE: f32 = 0.45;
+pub const DEFAULT_IOU: f32 = 0.45;
 
 #[derive(Deserialize, Default)]
 struct RawInstanceConfig {
@@ -51,27 +46,23 @@ impl<'de> Deserialize<'de> for InstanceConfig {
     {
         let raw = RawInstanceConfig::deserialize(deserializer)?;
         let mut explicit_fields = HashSet::new();
-
-        let confidence_threshold = if let Some(v) = raw.confidence_threshold {
-            explicit_fields.insert("confidence_threshold".to_string());
-            v
-        } else {
-            default_confidence()
+        let mut track = |name: &'static str| {
+            explicit_fields.insert(name.to_string());
         };
 
-        let iou_threshold = if let Some(v) = raw.iou_threshold {
-            explicit_fields.insert("iou_threshold".to_string());
-            v
-        } else {
-            default_iou()
-        };
+        let confidence_threshold = raw
+            .confidence_threshold
+            .inspect(|_| track("confidence_threshold"))
+            .unwrap_or(DEFAULT_CONFIDENCE);
 
-        let custom_alarm_label = if let Some(v) = raw.custom_alarm_label {
-            explicit_fields.insert("custom_alarm_label".to_string());
-            Some(v)
-        } else {
-            None
-        };
+        let iou_threshold = raw
+            .iou_threshold
+            .inspect(|_| track("iou_threshold"))
+            .unwrap_or(DEFAULT_IOU);
+
+        let custom_alarm_label = raw
+            .custom_alarm_label
+            .inspect(|_| track("custom_alarm_label"));
 
         Ok(Self {
             confidence_threshold,
@@ -85,8 +76,8 @@ impl<'de> Deserialize<'de> for InstanceConfig {
 impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
-            confidence_threshold: default_confidence(),
-            iou_threshold: default_iou(),
+            confidence_threshold: DEFAULT_CONFIDENCE,
+            iou_threshold: DEFAULT_IOU,
             custom_alarm_label: None,
             explicit_fields: HashSet::new(),
         }

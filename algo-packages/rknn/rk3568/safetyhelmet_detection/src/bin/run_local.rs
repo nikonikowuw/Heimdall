@@ -17,6 +17,7 @@ fn main() {
 mod linux_run {
     use std::collections::HashMap;
     use std::ffi::c_void;
+    use std::fmt::Write;
     use std::fs;
     use std::path::Path;
 
@@ -89,7 +90,7 @@ mod linux_run {
             if samples.is_empty() {
                 return Self::default();
             }
-            samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            samples.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let sum: f64 = samples.iter().sum();
             let avg_ms = sum / samples.len() as f64;
             let p50_idx = samples.len() * 50 / 100;
@@ -116,9 +117,8 @@ mod linux_run {
     }
 
     fn format_detection_json(event_id: &str, objects: &[NormBox]) -> String {
-        let mut out = String::new();
-        out.push_str("{\n");
-        out.push_str(&format!("  \"event_id\": \"{event_id}\",\n"));
+        let mut out = String::with_capacity(128 + objects.len() * 128);
+        let _ = writeln!(out, "{{\n  \"event_id\": \"{event_id}\",");
         if objects.is_empty() {
             out.push_str("  \"objects\": []\n");
         } else {
@@ -126,15 +126,14 @@ mod linux_run {
             for (i, obj) in objects.iter().enumerate() {
                 let comma = if i + 1 < objects.len() { "," } else { "" };
                 let label = obj.label.unwrap_or("unknown");
-                out.push_str("    {\n");
-                out.push_str(&format!("      \"class_id\": {},\n", obj.class_id));
-                out.push_str(&format!("      \"label\": \"{label}\",\n"));
-                out.push_str(&format!("      \"confidence\": {:.4},\n", obj.confidence));
-                out.push_str(&format!(
-                    "      \"bbox\": [{:.4}, {:.4}, {:.4}, {:.4}]\n",
+                let _ = writeln!(out, "    {{\n      \"class_id\": {},", obj.class_id);
+                let _ = writeln!(out, "      \"label\": \"{label}\",");
+                let _ = writeln!(out, "      \"confidence\": {:.4},", obj.confidence);
+                let _ = writeln!(
+                    out,
+                    "      \"bbox\": [{:.4}, {:.4}, {:.4}, {:.4}]\n    }}{comma}",
                     obj.x, obj.y, obj.w, obj.h
-                ));
-                out.push_str(&format!("    }}{comma}\n"));
+                );
             }
             out.push_str("  ]\n");
         }

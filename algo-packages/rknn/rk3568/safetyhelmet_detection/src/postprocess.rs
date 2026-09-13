@@ -14,6 +14,10 @@ use crate::rknn::RknnInferenceOutput;
 
 pub const MODEL_INPUT_WIDTH: f32 = 640.0;
 pub const MODEL_INPUT_HEIGHT: f32 = 384.0;
+pub const MODEL_INPUT_W_U32: u32 = 640;
+pub const MODEL_INPUT_H_U32: u32 = 384;
+pub const MODEL_INPUT_BUFFER_SIZE: usize =
+    (MODEL_INPUT_W_U32 as usize) * (MODEL_INPUT_H_U32 as usize) * 3;
 
 /// 单浮点输出模式的锚点总数
 pub const TOTAL_ANCHORS: usize = 5040;
@@ -61,11 +65,8 @@ pub fn parse_and_unmap_output(
                 orig_h,
             };
             let mut boxes = parse_yolov8_int8(&ctx);
-            // 自定义标签覆盖
             if let Some(label) = custom_label {
-                for b in &mut boxes {
-                    b.label = Some(label);
-                }
+                boxes.iter_mut().for_each(|b| b.label = Some(label));
             }
             boxes
         }
@@ -119,11 +120,7 @@ fn parse_single_float_fallback(
             h: (h / MODEL_INPUT_HEIGHT).clamp(0.0, 1.0),
             confidence: max_score,
             class_id: best_class as u32,
-            label: if let Some(custom) = custom_label {
-                Some(custom)
-            } else {
-                HELMET_CLASSES.get(best_class).copied()
-            },
+            label: custom_label.or_else(|| HELMET_CLASSES.get(best_class).copied()),
         };
         candidates.push(unmap_box(&raw, mode, orig_w, orig_h));
     }

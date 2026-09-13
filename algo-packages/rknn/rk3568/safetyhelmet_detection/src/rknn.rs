@@ -602,23 +602,26 @@ impl RknnSession {
     /// 模拟 2 个检测结果：
     /// - 锚点 10: Hardhat (class 0), 置信度 0.92, 中心 (320, 192), 尺寸 (100, 80)
     /// - 锚点 25: NO-Hardhat (class 1), 置信度 0.88, 中心 (480, 300), 尺寸 (120, 90)
-    fn generate_fallback_outputs() -> Vec<f32> {
-        let mut net_out = vec![0.0f32; 84 * 5040];
-        let anchor_a = 10;
-        net_out[anchor_a] = 320.0;
-        net_out[5040 + anchor_a] = 192.0;
-        net_out[2 * 5040 + anchor_a] = 100.0;
-        net_out[3 * 5040 + anchor_a] = 80.0;
-        net_out[4 * 5040 + anchor_a] = 0.92; // class 0: Hardhat
+    fn fallback_outputs() -> &'static [f32] {
+        static FALLBACK_DATA: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+        FALLBACK_DATA.get_or_init(|| {
+            let mut net_out = vec![0.0f32; 84 * 5040];
+            let anchor_a = 10;
+            net_out[anchor_a] = 320.0;
+            net_out[5040 + anchor_a] = 192.0;
+            net_out[2 * 5040 + anchor_a] = 100.0;
+            net_out[3 * 5040 + anchor_a] = 80.0;
+            net_out[4 * 5040 + anchor_a] = 0.92; // class 0: Hardhat
 
-        let anchor_b = 25;
-        net_out[anchor_b] = 480.0;
-        net_out[5040 + anchor_b] = 300.0;
-        net_out[2 * 5040 + anchor_b] = 120.0;
-        net_out[3 * 5040 + anchor_b] = 90.0;
-        net_out[(4 + 1) * 5040 + anchor_b] = 0.88; // class 1: NO-Hardhat
+            let anchor_b = 25;
+            net_out[anchor_b] = 480.0;
+            net_out[5040 + anchor_b] = 300.0;
+            net_out[2 * 5040 + anchor_b] = 120.0;
+            net_out[3 * 5040 + anchor_b] = 90.0;
+            net_out[(4 + 1) * 5040 + anchor_b] = 0.88; // class 1: NO-Hardhat
 
-        net_out
+            net_out
+        })
     }
 
     /// 执行推理（Host 内存输入），并闭包借用输出抽象视图
@@ -660,8 +663,7 @@ impl RknnSession {
                 self.get_hardware_outputs(runtime, *ctx, process_fn)
             }
             RknnBackend::Fallback => {
-                let net_out = Self::generate_fallback_outputs();
-                process_fn(&RknnInferenceOutput::SingleFloat(&net_out))
+                process_fn(&RknnInferenceOutput::SingleFloat(Self::fallback_outputs()))
             }
         }
     }
@@ -682,8 +684,7 @@ impl RknnSession {
         let (runtime, ctx) = match &self.backend {
             RknnBackend::Hardware { runtime, ctx, .. } => (runtime.clone(), *ctx),
             RknnBackend::Fallback => {
-                let net_out = Self::generate_fallback_outputs();
-                return process_fn(&RknnInferenceOutput::SingleFloat(&net_out));
+                return process_fn(&RknnInferenceOutput::SingleFloat(Self::fallback_outputs()));
             }
         };
 
@@ -791,12 +792,9 @@ impl RknnSession {
                     .iter()
                     .min_by_key(|(_, entry)| entry.last_used)
                     .map(|(&fd, _)| fd);
-                if let Some(fd) = oldest_fd {
-                    if let Some(mut evicted) = dma_mem_cache.remove(&fd) {
-                        evicted.release(runtime, ctx);
-                    }
-                } else {
-                    break;
+                let Some(fd) = oldest_fd else { break };
+                if let Some(mut evicted) = dma_mem_cache.remove(&fd) {
+                    evicted.release(runtime, ctx);
                 }
             }
 
@@ -871,12 +869,14 @@ impl RknnSession {
         // 9 输出张量 = 安全帽模型多分支 INT8 输出；2 输出 = 简化模型
         let is_multi_int8 = n_out > 1;
 
-        let mut outputs = vec![RknnOutput::default(); n_out];
-        for (i, out) in outputs.iter_mut().enumerate() {
-            out.index = i as u32;
-            out.want_float = if is_multi_int8 { 0 } else { 1 };
-            out.is_prealloc = 0;
-        }
+        let want_float = (!is_multi_int8) as u8;
+        let mut outputs: Vec<RknnOutput> = (0..n_out as u32)
+            .map(|i| RknnOutput {
+                index: i,
+                want_float,
+                ..Default::default()
+            })
+            .collect();
 
         // SAFETY: outputs 为分配好的连续结构体切片
         let ret = unsafe {

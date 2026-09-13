@@ -11,12 +11,22 @@ use crate::config::InstanceConfig;
 
 #[cfg(target_os = "linux")]
 use {
-    crate::postprocess::{parse_and_unmap_output, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH},
+    crate::postprocess::{
+        parse_and_unmap_output, MODEL_INPUT_BUFFER_SIZE, MODEL_INPUT_H_U32, MODEL_INPUT_W_U32,
+    },
     crate::rknn::{RknnRuntime, RknnSession},
     algo_sdk::cv::engine::CvEngine,
     algo_sdk::cv::platforms::rockchip::{DiagnosticConfig, FailureTracker, RgaCvEngine},
     std::path::Path,
 };
+
+/// 仅在初始化或配置更新时泄漏一次性静态自定义标签，杜绝每帧重复分配
+#[cfg(target_os = "linux")]
+fn leak_custom_label(label: Option<&str>) -> Option<&'static str> {
+    label
+        .filter(|s| !s.is_empty())
+        .map(|s| Box::leak(s.to_string().into_boxed_str()) as &'static str)
+}
 
 /// 算法包内有效的 RKNN 模型文件查找（优先使用包级私有 .env 配置，零全局污染）
 #[cfg(target_os = "linux")]
@@ -73,12 +83,7 @@ impl AlgoPlugin for SafetyHelmetDetector {
         };
         let cv_engine = RgaCvEngine::new();
 
-        // 仅在初始化阶段缓存一次性静态自定义标签，杜绝每帧重复分配
-        let custom_label = config
-            .custom_alarm_label
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|s| Box::leak(s.to_string().into_boxed_str()) as &'static str);
+        let custom_label = leak_custom_label(config.custom_alarm_label.as_deref());
 
         // 初始化失败跟踪器：连续 30 帧失败视为异常状态
         let failure_tracker = FailureTracker::new(DiagnosticConfig {
@@ -110,8 +115,8 @@ impl AlgoPlugin for SafetyHelmetDetector {
         // 1. RGA 硬件 Letterbox 等比缩放与填充
         let result = self.cv_engine.letterbox(
             &frame,
-            MODEL_INPUT_WIDTH as u32,
-            MODEL_INPUT_HEIGHT as u32,
+            MODEL_INPUT_W_U32,
+            MODEL_INPUT_H_U32,
             [114, 114, 114],
         );
 
@@ -122,38 +127,27 @@ impl AlgoPlugin for SafetyHelmetDetector {
 
                 let orig_w = frame.width();
                 let orig_h = frame.height();
+                let custom_label = self.custom_label;
+
+                let parse_and_emit = |net_out: &crate::rknn::RknnInferenceOutput<'_>| {
+                    let boxes = parse_and_unmap_output(
+                        net_out,
+                        &self.config,
+                        custom_label,
+                        &mode,
+                        orig_w,
+                        orig_h,
+                    );
+                    emitter.emit_detections(&boxes)
+                };
 
                 // 3. 双模自适应：优先 DMA-BUF 零拷贝，保底 Host 内存复制
                 if let Some(fd) = buf.as_dma_buf_fd() {
-                    let buffer_size =
-                        (MODEL_INPUT_WIDTH as usize) * (MODEL_INPUT_HEIGHT as usize) * 3;
-
-                    let custom_label = self.custom_label;
                     self.session
-                        .infer_with_dma_buf(fd, buffer_size, |net_out| {
-                            let boxes = parse_and_unmap_output(
-                                net_out,
-                                &self.config,
-                                custom_label,
-                                &mode,
-                                orig_w,
-                                orig_h,
-                            );
-                            emitter.emit_detections(&boxes)
-                        })?;
+                        .infer_with_dma_buf(fd, MODEL_INPUT_BUFFER_SIZE, parse_and_emit)?;
                 } else if let Some(host_bytes) = buf.as_host_bytes() {
-                    let custom_label = self.custom_label;
-                    self.session.infer_with_host_bytes(host_bytes, |net_out| {
-                        let boxes = parse_and_unmap_output(
-                            net_out,
-                            &self.config,
-                            custom_label,
-                            &mode,
-                            orig_w,
-                            orig_h,
-                        );
-                        emitter.emit_detections(&boxes)
-                    })?;
+                    self.session
+                        .infer_with_host_bytes(host_bytes, parse_and_emit)?;
                 } else {
                     return Err(AlgoError::Preprocess {
                         reason: "预处理输出的 CvBuffer 既无有效 DMA-BUF 句柄，又无 Host 内存视图"
@@ -178,11 +172,7 @@ impl AlgoPlugin for SafetyHelmetDetector {
 
     fn update_config(&mut self, config: Self::Config) -> Result<(), AlgoError> {
         if self.config.custom_alarm_label != config.custom_alarm_label {
-            self.custom_label = config
-                .custom_alarm_label
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(|s| Box::leak(s.to_string().into_boxed_str()) as &'static str);
+            self.custom_label = leak_custom_label(config.custom_alarm_label.as_deref());
         }
         self.config = config;
         Ok(())
