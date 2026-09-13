@@ -195,14 +195,18 @@ export const PersonnelPage: React.FC = () => {
           <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
           <input
             type="text"
+            data-search-input="true"
             value={searchKeyword}
             onChange={(e) => {
               setSearchKeyword(e.target.value)
               setPage(1)
             }}
             placeholder={t('actions.searchPlaceholder')}
-            className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-4 pl-10 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] shadow-xs focus:border-emerald-500/60 focus:outline-none"
+            className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-9 pl-10 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] shadow-xs focus:border-emerald-500/60 focus:outline-none"
           />
+          <kbd className="pointer-events-none absolute top-1/2 right-3 hidden -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-muted)] sm:inline-block">
+            /
+          </kbd>
         </div>
 
         <div className="flex items-center gap-2">

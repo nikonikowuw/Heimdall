@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { Check, Users, X } from 'lucide-react'
+import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import { evidenceApi } from '../../../lib/api'
 import type { FaceCandidateItem, RecognitionRecord } from '../../../types'
 import { formatTimestamp } from '../utils'
@@ -27,16 +28,8 @@ export function RecognitionReviewModal({
     () => candidates[0] || null,
   )
 
-  // 浮层按栈响应 ESC，优化键盘操作体验
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
+  // 浮层按栈响应 ESC，杜绝穿透
+  useDismissStack(true, onClose)
 
   return (
     <div

@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Cpu,
   FileText,
+  Keyboard,
   LogOut,
   Monitor,
   Moon,
@@ -15,6 +16,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { ChangePasswordModal } from '../components/ChangePasswordModal'
 import { LocaleDropdown } from '../components/LocaleDropdown'
+import { ShortcutsModal } from '../components/ShortcutsModal'
 import { AlarmsPage } from '../features/alarms/AlarmsPage'
 import { AlgorithmsPage } from '../features/algorithms'
 import { LoginPage } from '../features/auth'
@@ -24,6 +26,7 @@ import { OplogPage } from '../features/oplog/OplogPage'
 import { PersonnelPage } from '../features/personnel'
 import { SettingsPage } from '../features/system'
 import { TasksPage } from '../features/tasks/TasksPage'
+import { useGlobalShortcuts } from '../hooks/use-global-shortcuts'
 import { useTheme } from '../hooks/use-theme'
 import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
@@ -47,7 +50,16 @@ export function Layout() {
   const [currentTab, setCurrentTab] = useState<NavTab>('live')
   const [targetTaskCameraId, setTargetTaskCameraId] = useState<string | null>(null)
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false)
   const { isDark, toggleTheme } = useTheme()
+
+  useGlobalShortcuts({
+    currentTab,
+    onSelectTab: (tab) => setCurrentTab(tab),
+    onToggleTheme: toggleTheme,
+    onOpenShortcutsHelp: () => setIsShortcutsOpen(true),
+    enabled: isAuthenticated,
+  })
 
   const handleLogout = async () => {
     try {
@@ -110,6 +122,14 @@ export function Layout() {
             {isDark ? <Sun className="h-5 w-5 text-amber-400" /> : <Moon className="h-5 w-5" />}
           </button>
 
+          <button
+            onClick={() => setIsShortcutsOpen(true)}
+            title={`${t('shortcuts.title')} (?)`}
+            className="nav-btn"
+          >
+            <Keyboard className="h-5 w-5" />
+          </button>
+
           <div className="my-1 h-px w-5 bg-[var(--border)]" />
 
           <button
@@ -161,6 +181,8 @@ export function Layout() {
         isOpen={isPasswordModalOpen}
         onClose={() => setIsPasswordModalOpen(false)}
       />
+      {/* 快捷键速查面板 */}
+      <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
     </div>
   )
 }

@@ -35,11 +35,15 @@ export const AlgoFilterBar: React.FC<AlgoFilterBarProps> = ({
           <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
           <input
             type="text"
+            data-search-input="true"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder={t('filter.searchPlaceholder')}
-            className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-3 pl-9 text-xs text-[var(--text-primary)] transition-all placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-hidden"
+            className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-8 pl-9 text-xs text-[var(--text-primary)] transition-all placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-hidden"
           />
+          <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-muted)] sm:inline-block">
+            /
+          </kbd>
         </div>
 
         {/* 算法类型筛选下拉框 */}

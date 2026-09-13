@@ -6,7 +6,26 @@
     "algorithms": "演算法倉庫",
     "personnel": "人員底庫",
     "alarms": "告警事件",
-    "oplog": "審計日誌"
+    "oplog": "審計日誌",
+    "system": "系統設定"
+  },
+  "shortcuts": {
+    "title": "鍵盤快捷鍵",
+    "subtitle": "全域高效鍵盤導覽與控制指南",
+    "hint": "隨時按 ? 喚起此面板，按 Esc 快速關閉",
+    "categories": {
+      "navigation": "導覽與工作區",
+      "general": "全域與視口",
+      "modals": "浮層與互動"
+    },
+    "items": {
+      "navTabs": "快速切換導覽視口",
+      "toggleTheme": "切換明亮 / 暗黑主題",
+      "help": "喚起快捷鍵速查面板",
+      "quickSearch": "快速聚焦頁面搜尋框",
+      "escDismiss": "按棧彈出關閉頂層浮層 / 釋放輸入焦點",
+      "enterConfirm": "確認表單 / 觸發彈窗首選操作"
+    }
   },
   "theme": {
     "toLight": "切換至淺色模式",

@@ -12,3 +12,88 @@ export function formatTimestamp(val?: number | string | null): string {
   }
   return String(val)
 }
+
+export interface ParsedBBoxCoords {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+/**
+ * 解析归一化对角两点式 BBox 坐标
+ * 支持 [x1, y1, x2, y2] 数组或具名对象 { x1, y1, x2, y2 }
+ */
+export function parseBBoxCoords(raw?: string): ParsedBBoxCoords | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed) && parsed.length >= 4) {
+      const [x1, y1, x2, y2] = parsed.map(Number)
+      return { x1, y1, x2, y2 }
+    }
+    if (parsed && typeof parsed === 'object' && 'x1' in parsed && 'y1' in parsed) {
+      return {
+        x1: Number(parsed.x1),
+        y1: Number(parsed.y1),
+        x2: Number(parsed.x2),
+        y2: Number(parsed.y2),
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 映射布防规则展示标签
+ */
+export function getRuleTypeLabel(ruleType: string | undefined, t: (key: string) => string): string {
+  return ruleType === 'line' ? t('types.lineCrossing') : t('types.regionIntrusion')
+}
+
+export interface FittedImageRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * 根据容器尺寸和图片原始尺寸，计算 object-contain 模式下的实际渲染几何位置
+ */
+export function calculateFittedImageRect(
+  containerWidth: number,
+  containerHeight: number,
+  naturalWidth: number,
+  naturalHeight: number,
+): FittedImageRect {
+  const cW = containerWidth
+  const cH = containerHeight
+  const nW = naturalWidth || 1
+  const nH = naturalHeight || 1
+
+  const cRatio = cW / cH
+  const iRatio = nW / nH
+
+  if (iRatio > cRatio) {
+    const width = cW
+    const height = cW / iRatio
+    return {
+      width,
+      height,
+      x: 0,
+      y: (cH - height) / 2,
+    }
+  }
+
+  const height = cH
+  const width = cH * iRatio
+  return {
+    width,
+    height,
+    x: (cW - width) / 2,
+    y: 0,
+  }
+}

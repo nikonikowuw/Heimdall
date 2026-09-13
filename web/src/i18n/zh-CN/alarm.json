@@ -55,7 +55,26 @@
     "person": "人员 (Person)",
     "car": "机动车 (Vehicle)",
     "bicycle": "非机动车 (Bicycle)",
-    "refresh": "刷新"
+    "refresh": "刷新",
+    "allSeverities": "全部等级 (All Severities)",
+    "severityWarning": "一般告警 (Warning)",
+    "severityCritical": "严重告警 (Critical)",
+    "quickAll": "全部时间",
+    "past1Hour": "近 1 小时",
+    "past24Hours": "近 24 小时",
+    "past7Days": "近 7 天"
+  },
+  "batch": {
+    "selected": "已选择 {{count}} 项",
+    "markProcessed": "批量标记已处理",
+    "markUnprocessed": "批量标记待处理",
+    "selectAll": "全选当前页",
+    "deselectAll": "取消选择"
+  },
+  "realtime": {
+    "newAlarms": "收到 {{count}} 条实时新告警",
+    "viewNew": "点击置顶查看",
+    "dismiss": "忽略"
   },
   "empty": {
     "alarms": "暂无违规告警记录",

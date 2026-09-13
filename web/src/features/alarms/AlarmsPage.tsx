@@ -2,10 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   Camera as CameraIcon,
-  Check,
-  CheckCircle2,
-  Clock,
-  ExternalLink,
   Filter,
   LayoutGrid,
   List,
@@ -16,830 +12,81 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { alarmApi, cameraApi, evidenceApi } from '../../lib/api'
-import type {
-  AlarmRecord,
-  AlarmStatus,
-  Camera,
-  CaptureRecord,
-  FaceCandidateItem,
-  RecognitionRecord,
+import { wsClient } from '../../lib/wsClient'
+import {
+  type AlarmRecord,
+  type AlarmSeverity,
+  type AlarmStatus,
+  type Camera,
+  type CaptureRecord,
+  type FaceCandidateItem,
+  type RecognitionRecord,
+  WS_TOPICS,
 } from '../../types'
+import { AlarmLightboxModal } from './components/AlarmLightboxModal'
+import { AlarmsContent, type ViewMode } from './components/AlarmsContent'
+import { BatchActionBar } from './components/BatchActionBar'
+import { CaptureLightboxModal } from './components/CaptureLightboxModal'
+import { CapturesContent } from './components/CapturesContent'
+import { CropLightboxModal } from './components/CropLightboxModal'
+import { RealtimeAlarmBanner } from './components/RealtimeAlarmBanner'
 import { RecognitionContent } from './components/RecognitionContent'
 import { RecognitionReviewModal } from './components/RecognitionReviewModal'
-import { formatTimestamp } from './utils'
 
 type EvidenceTab = 'alarms' | 'captures' | 'recognition'
-type ViewMode = 'cards' | 'table'
+type QuickTimeRange = 'all' | '1h' | '24h' | '7d' | 'custom'
 
-function getRuleTypeLabel(ruleType: string | undefined, t: (key: string) => string): string {
-  return ruleType === 'line' ? t('types.lineCrossing') : t('types.regionIntrusion')
-}
-
-interface AlarmStatusButtonProps {
-  isProcessed: boolean
-  onClick: (e: React.MouseEvent) => void
-  t: (key: string) => string
-  className?: string
-}
-
-function AlarmStatusButton({
-  isProcessed,
-  onClick,
-  t,
-  className = '',
-}: AlarmStatusButtonProps): React.ReactElement {
-  if (isProcessed) {
-    return (
-      <button
-        onClick={onClick}
-        className={`flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-500 transition-all ${className}`}
-      >
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        <span>{t('card.processed')}</span>
-      </button>
-    )
-  }
-
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/15 px-3 py-1 text-xs font-semibold text-rose-500 transition-all hover:bg-rose-500 hover:text-white ${className}`}
-    >
-      <Check className="h-3.5 w-3.5" />
-      <span>{t('card.markProcessed')}</span>
-    </button>
-  )
-}
-
-interface AlarmCardItemProps {
-  alarm: AlarmRecord
-  cameraName?: string
-  onSelect: () => void
-  onSelectCrop: () => void
-  onToggleStatus: () => void
-  t: (key: string) => string
-}
-
-function AlarmCardItem({
-  alarm,
-  cameraName,
-  onSelect,
-  onSelectCrop,
-  onToggleStatus,
-  t,
-}: AlarmCardItemProps): React.ReactElement {
-  const isProcessed = alarm.status === 'processed'
-
-  return (
-    <div
-      onClick={onSelect}
-      className={`group flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-[var(--bg-surface)] shadow-xs transition-all duration-200 hover:shadow-md ${
-        isProcessed
-          ? 'border-[var(--border)] opacity-75'
-          : 'border-rose-500/30 hover:border-rose-500/70'
-      }`}
-    >
-      <div className="relative aspect-video w-full overflow-hidden bg-black/90">
-        {alarm.imageRelPath ? (
-          <img
-            src={evidenceApi.getImageUrl(alarm.imageRelPath)}
-            alt={alarm.eventId}
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center font-mono text-xs text-slate-500">
-            {t('card.noImage')}
-          </div>
-        )}
-
-        {alarm.cropImageRelPath && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onSelectCrop()
-            }}
-            className="absolute right-2 bottom-2 z-20 h-14 w-14 overflow-hidden rounded-lg border border-white/40 bg-black/80 p-0.5 shadow-md backdrop-blur-xs transition-all duration-200 hover:border-white/70 hover:shadow-lg hover:shadow-black/40"
-          >
-            <img
-              src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
-              alt="Crop"
-              className="h-full w-full rounded object-cover"
-            />
-          </button>
-        )}
-
-        <div className="absolute top-2 left-2 flex items-center gap-1.5">
-          <span
-            className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
-              alarm.severity === 'critical'
-                ? 'bg-rose-500/80 text-white'
-                : 'bg-amber-500/80 text-white'
-            }`}
-          >
-            {alarm.severity || 'WARNING'}
-          </span>
-          <span className="rounded-md bg-black/60 px-1.5 py-0.5 font-mono text-[10px] text-white backdrop-blur-xs">
-            {getRuleTypeLabel(alarm.ruleType, t)}
-          </span>
-        </div>
-      </div>
-
-      <div className="space-y-2 p-3.5 text-xs">
-        <div className="flex items-center justify-between">
-          <span className="font-semibold text-[var(--text-primary)]">
-            {t('card.target')}: {alarm.targetLabel}
-          </span>
-          <span className="font-mono text-[11px] font-semibold text-[var(--accent)]">
-            {((alarm.confidence ?? 0) * 100).toFixed(0)}% {t('card.confidence')}
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between font-mono text-[11px] text-[var(--text-muted)]">
-          <span className="font-sans font-medium text-[var(--text-secondary)]">
-            {cameraName || alarm.cameraId}
-          </span>
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            {formatTimestamp(alarm.occurredAt)}
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between border-t border-[var(--border)] pt-2">
-          <AlarmStatusButton
-            isProcessed={isProcessed}
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleStatus()
-            }}
-            t={t}
-          />
-
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onSelect()
-            }}
-            className="flex items-center gap-1 text-[11px] text-[var(--text-muted)] transition-all hover:text-[var(--text-primary)]"
-          >
-            <span>{t('card.viewHd')}</span>
-            <ExternalLink className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-interface AlarmTableRowProps {
-  alarm: AlarmRecord
-  cameraName?: string
-  onSelect: () => void
-  onSelectCrop: () => void
-  onToggleStatus: () => void
-  t: (key: string) => string
-}
-
-function AlarmTableRow({
-  alarm,
-  cameraName,
-  onSelect,
-  onSelectCrop,
-  onToggleStatus,
-  t,
-}: AlarmTableRowProps): React.ReactElement {
-  const isProcessed = alarm.status === 'processed'
-
-  return (
-    <tr
-      onClick={onSelect}
-      className="cursor-pointer transition-colors hover:bg-[var(--accent-soft)]/20"
-    >
-      <td className="px-3 py-2">
-        {alarm.cropImageRelPath || alarm.imageRelPath ? (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              if (alarm.cropImageRelPath) onSelectCrop()
-            }}
-            className="h-10 w-16 shrink-0 overflow-hidden rounded border border-[var(--border)] bg-black/80 transition-all duration-200 hover:border-[var(--accent)]/50 hover:shadow-md"
-          >
-            <img
-              src={evidenceApi.getImageUrl(alarm.cropImageRelPath || alarm.imageRelPath)}
-              alt="Thumb"
-              className="h-full w-full object-cover"
-            />
-          </button>
-        ) : (
-          <div className="flex h-10 w-16 items-center justify-center rounded border border-[var(--border)] bg-black/80 font-mono text-[9px] text-slate-500">
-            N/A
-          </div>
-        )}
-      </td>
-      <td className="px-3 py-2 font-mono text-[11px] text-[var(--text-primary)]">
-        {alarm.eventId.slice(0, 12)}...
-      </td>
-      <td className="px-3 py-2 font-medium text-[var(--text-primary)]">
-        {cameraName || alarm.cameraId}
-      </td>
-      <td className="px-3 py-2 font-semibold text-[var(--text-primary)]">{alarm.targetLabel}</td>
-      <td className="px-3 py-2 font-mono text-[11px]">{getRuleTypeLabel(alarm.ruleType, t)}</td>
-      <td className="px-3 py-2">
-        <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
-            alarm.severity === 'critical'
-              ? 'bg-rose-500/20 text-rose-500'
-              : 'bg-amber-500/20 text-amber-500'
-          }`}
-        >
-          {alarm.severity || 'WARNING'}
-        </span>
-      </td>
-      <td className="px-3 py-2 font-mono text-[11px]">
-        {((alarm.confidence ?? 0) * 100).toFixed(0)}%
-      </td>
-      <td className="px-3 py-2">
-        <span
-          className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
-            isProcessed
-              ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500'
-              : 'border border-rose-500/30 bg-rose-500/15 text-rose-500'
-          }`}
-        >
-          {isProcessed ? t('card.processed') : t('statusFilter.unprocessed')}
-        </span>
-      </td>
-      <td className="px-3 py-2 font-mono text-[11px] text-[var(--text-muted)]">
-        {formatTimestamp(alarm.occurredAt)}
-      </td>
-      <td className="px-3 py-2 text-right">
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleStatus()
-          }}
-          className={`rounded px-2.5 py-1 text-[11px] font-semibold transition-all ${
-            isProcessed
-              ? 'bg-emerald-500/15 text-emerald-500'
-              : 'bg-rose-500 text-white hover:opacity-90'
-          }`}
-        >
-          {isProcessed ? t('card.processed') : t('card.markProcessed')}
-        </button>
-      </td>
-    </tr>
-  )
-}
-
-interface AlarmsContentProps {
-  alarms: AlarmRecord[]
-  viewMode: ViewMode
-  cameraNameMap?: Record<string, string>
-  onSelect: (alarm: AlarmRecord) => void
-  onSelectCrop: (alarm: AlarmRecord) => void
-  onToggleStatus: (alarm: AlarmRecord) => void
-  t: (key: string) => string
-}
-
-function AlarmsContent({
-  alarms,
-  viewMode,
-  cameraNameMap,
-  onSelect,
-  onSelectCrop,
-  onToggleStatus,
-  t,
-}: AlarmsContentProps): React.ReactElement {
-  if (alarms.length === 0) {
-    return (
-      <div className="py-24 text-center text-[var(--text-muted)]">
-        <AlertCircle className="mx-auto mb-2 h-8 w-8 opacity-40" />
-        <p className="font-medium text-[var(--text-secondary)]">{t('empty.alarms')}</p>
-        <p className="text-xs opacity-75">{t('empty.alarmsDesc')}</p>
-      </div>
-    )
-  }
-
-  if (viewMode === 'cards') {
-    return (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {alarms.map((alarm) => (
-          <AlarmCardItem
-            key={alarm.id}
-            alarm={alarm}
-            cameraName={cameraNameMap?.[alarm.cameraId]}
-            onSelect={() => onSelect(alarm)}
-            onSelectCrop={() => onSelectCrop(alarm)}
-            onToggleStatus={() => onToggleStatus(alarm)}
-            t={t}
-          />
-        ))}
-      </div>
-    )
-  }
-
-  return (
-    <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-      <table className="w-full text-left text-xs text-[var(--text-secondary)]">
-        <thead className="border-b border-[var(--border)] bg-[var(--bg-secondary)] text-[11px] font-semibold text-[var(--text-muted)] uppercase">
-          <tr>
-            <th className="px-3 py-2.5">{t('columns.thumbnail')}</th>
-            <th className="px-3 py-2.5">{t('columns.eventId')}</th>
-            <th className="px-3 py-2.5">{t('columns.camera')}</th>
-            <th className="px-3 py-2.5">{t('columns.targetLabel')}</th>
-            <th className="px-3 py-2.5">{t('columns.ruleType')}</th>
-            <th className="px-3 py-2.5">{t('columns.severity')}</th>
-            <th className="px-3 py-2.5">{t('columns.confidence')}</th>
-            <th className="px-3 py-2.5">{t('columns.status')}</th>
-            <th className="px-3 py-2.5">{t('columns.occurredAt')}</th>
-            <th className="px-3 py-2.5 text-right">{t('columns.actions')}</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-[var(--border)]">
-          {alarms.map((alarm) => (
-            <AlarmTableRow
-              key={alarm.id}
-              alarm={alarm}
-              cameraName={cameraNameMap?.[alarm.cameraId]}
-              onSelect={() => onSelect(alarm)}
-              onSelectCrop={() => onSelectCrop(alarm)}
-              onToggleStatus={() => onToggleStatus(alarm)}
-              t={t}
-            />
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-interface CaptureCardItemProps {
-  capture: CaptureRecord
-  onSelect: () => void
-  t: (key: string) => string
-}
-
-function CaptureCardItem({ capture, onSelect, t }: CaptureCardItemProps): React.ReactElement {
-  return (
-    <div
-      onClick={onSelect}
-      className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] transition-all duration-200 hover:border-cyan-500/50 hover:shadow-md"
-    >
-      <div className="relative aspect-square w-full overflow-hidden bg-black/90">
-        {capture.cropImageRelPath || capture.imageRelPath ? (
-          <img
-            src={evidenceApi.getImageUrl(capture.cropImageRelPath || capture.imageRelPath)}
-            alt={capture.captureId}
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center font-mono text-xs text-slate-500">
-            {t('card.noImage')}
-          </div>
-        )}
-        <span className="absolute top-1.5 left-1.5 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[9px] text-cyan-400 backdrop-blur-xs">
-          Track #{capture.trackId}
-        </span>
-        <span className="absolute right-1.5 bottom-1.5 rounded-md bg-emerald-600/90 px-1.5 py-0.5 font-mono text-[9px] font-bold text-white shadow-xs">
-          {(capture.qualityScore ?? 0).toFixed(0)}
-        </span>
-      </div>
-      <div className="space-y-1 p-2 text-[10px]">
-        <div className="flex justify-between font-medium text-[var(--text-primary)]">
-          <span>{capture.targetLabel}</span>
-          <span className="font-mono text-[var(--text-muted)]">{capture.cameraId}</span>
-        </div>
-        <div className="truncate font-mono text-[9px] text-[var(--text-muted)]">
-          {formatTimestamp(capture.capturedAt)}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-interface CapturesContentProps {
-  captures: CaptureRecord[]
-  onSelect: (capture: CaptureRecord) => void
-  t: (key: string) => string
-}
-
-function CapturesContent({ captures, onSelect, t }: CapturesContentProps): React.ReactElement {
-  if (captures.length === 0) {
-    return (
-      <div className="py-24 text-center text-[var(--text-muted)]">
-        <CameraIcon className="mx-auto mb-2 h-8 w-8 opacity-40" />
-        <p className="font-medium text-[var(--text-secondary)]">{t('empty.captures')}</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-      {captures.map((cap) => (
-        <CaptureCardItem key={cap.id} capture={cap} onSelect={() => onSelect(cap)} t={t} />
-      ))}
-    </div>
-  )
-}
-
-interface AlarmLightboxModalProps {
-  alarm: AlarmRecord
-  onClose: () => void
-  onToggleStatus: () => void
-  t: (key: string) => string
-}
-
-function AlarmLightboxModal({
-  alarm,
-  onClose,
-  onToggleStatus,
-  t,
-}: AlarmLightboxModalProps): React.ReactElement {
-  const isProcessed = alarm.status === 'processed'
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <ShieldAlert className="h-5 w-5 text-rose-500" />
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-              {alarm.targetLabel} · {getRuleTypeLabel(alarm.ruleType, t)}
-            </h3>
-            <span className="font-mono text-xs text-[var(--text-muted)]">{alarm.eventId}</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-xl p-1.5 text-[var(--text-muted)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="flex-1 space-y-4 overflow-auto p-6">
-          <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-black shadow-md">
-            {alarm.imageRelPath ? (
-              <img
-                src={evidenceApi.getImageUrl(alarm.imageRelPath)}
-                alt="Full Frame"
-                className="h-full w-full object-contain"
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-slate-500">
-                {t('modal.noImage')}
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
-            <div className="flex items-center gap-4">
-              {alarm.cropImageRelPath && (
-                <div className="h-16 w-16 overflow-hidden rounded-xl border border-white/30 bg-black/80 shadow-xs">
-                  <img
-                    src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
-                    alt="Crop"
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-              )}
-              <div className="space-y-1 text-xs">
-                <div className="font-semibold text-[var(--text-primary)]">
-                  {t('modal.cropImage')}
-                </div>
-                <div className="font-mono text-[11px] text-[var(--text-muted)]">
-                  {t('modal.channel')}: {alarm.cameraId} · {t('modal.trackId')}: #{alarm.trackId}
-                </div>
-                <div className="font-mono text-[11px] text-[var(--text-muted)]">
-                  {t('modal.time')}: {formatTimestamp(alarm.occurredAt)}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={onToggleStatus}
-                className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
-                  isProcessed
-                    ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500'
-                    : 'bg-rose-500 text-white shadow-xs hover:opacity-90'
-                }`}
-              >
-                {isProcessed ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>{t('card.processed')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Check className="h-4 w-4" />
-                    <span>{t('card.markProcessed')}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-interface ParsedBBoxCoords {
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-}
-
-function parseBBoxCoords(raw?: string): ParsedBBoxCoords | null {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed) && parsed.length >= 4) {
-      const [x1, y1, x2, y2] = parsed.map(Number)
-      return { x1, y1, x2, y2 }
-    }
-    if (parsed && typeof parsed === 'object' && 'x1' in parsed && 'y1' in parsed) {
-      return {
-        x1: Number(parsed.x1),
-        y1: Number(parsed.y1),
-        x2: Number(parsed.x2),
-        y2: Number(parsed.y2),
-      }
-    }
-    return null
-  } catch {
-    return null
-  }
-}
-
-interface CaptureLightboxModalProps {
-  capture: CaptureRecord
-  onClose: () => void
-  t: (key: string) => string
-}
-
-function CaptureLightboxModal({
-  capture,
-  onClose,
-  t,
-}: CaptureLightboxModalProps): React.ReactElement {
-  const containerRef = React.useRef<HTMLDivElement>(null)
-  const [imgRect, setImgRect] = React.useState<{
-    x: number
-    y: number
-    width: number
-    height: number
-  } | null>(null)
-  const bbox = parseBBoxCoords(capture.bboxJson)
-
-  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    const img = e.currentTarget
-    const container = containerRef.current
-    if (!container) return
-
-    const cW = container.clientWidth
-    const cH = container.clientHeight
-    const nW = img.naturalWidth || 1
-    const nH = img.naturalHeight || 1
-
-    const cRatio = cW / cH
-    const iRatio = nW / nH
-
-    let width = cW
-    let height = cH
-    let x = 0
-    let y = 0
-
-    if (iRatio > cRatio) {
-      width = cW
-      height = cW / iRatio
-      y = (cH - height) / 2
-    } else {
-      height = cH
-      width = cH * iRatio
-      x = (cW - width) / 2
-    }
-
-    setImgRect({ x, y, width, height })
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
-          <div className="flex items-center gap-2">
-            <CameraIcon className="h-5 w-5 text-cyan-400" />
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-              {capture.targetLabel} (Track #{capture.trackId})
-            </h3>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-xl p-1.5 text-[var(--text-muted)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        <div className="flex-1 space-y-4 overflow-auto p-6">
-          {/* 全景大图与高亮人体检测框标注 */}
-          <div
-            ref={containerRef}
-            className="relative aspect-video w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-black shadow-md"
-          >
-            {capture.imageRelPath ? (
-              <>
-                <img
-                  src={evidenceApi.getImageUrl(capture.imageRelPath)}
-                  alt="Capture"
-                  className="h-full w-full object-contain"
-                  onLoad={handleImageLoad}
-                />
-                {bbox && imgRect && (
-                  <div
-                    className="pointer-events-none absolute border-2 border-cyan-400 bg-cyan-400/15 shadow-[0_0_12px_rgba(6,182,212,0.5)] transition-all"
-                    style={{
-                      left: `${imgRect.x + bbox.x1 * imgRect.width}px`,
-                      top: `${imgRect.y + bbox.y1 * imgRect.height}px`,
-                      width: `${Math.max(6, (bbox.x2 - bbox.x1) * imgRect.width)}px`,
-                      height: `${Math.max(6, (bbox.y2 - bbox.y1) * imgRect.height)}px`,
-                    }}
-                  >
-                    <span className="absolute -top-5 left-0 rounded bg-cyan-500 px-1.5 py-0.5 font-mono text-[9px] font-bold whitespace-nowrap text-black shadow-xs">
-                      #{capture.trackId} {capture.targetLabel} (
-                      {(capture.confidence * 100).toFixed(0)}%)
-                    </span>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-slate-500">
-                {t('modal.noImage')}
-              </div>
-            )}
-          </div>
-
-          {/* 人体信息与特写扣图卡片 */}
-          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4">
-            <div className="flex items-center gap-4">
-              {capture.cropImageRelPath && (
-                <div className="h-16 w-16 overflow-hidden rounded-xl border border-cyan-400/40 bg-black/80 shadow-xs">
-                  <img
-                    src={evidenceApi.getImageUrl(capture.cropImageRelPath)}
-                    alt={t('modal.cropImage')}
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-              )}
-              <div className="space-y-1 text-xs">
-                <div className="font-semibold text-[var(--text-primary)]">
-                  {capture.targetLabel} · #{capture.trackId}
-                </div>
-                <div className="font-mono text-[11px] text-[var(--text-muted)]">
-                  {t('modal.channel')}: {capture.cameraId}
-                </div>
-                <div className="font-mono text-[11px] text-[var(--text-muted)]">
-                  {t('modal.time')}: {formatTimestamp(capture.capturedAt)}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-4 font-mono text-xs">
-              <div className="flex flex-col items-end">
-                <span className="text-[10px] text-[var(--text-muted)]">
-                  {t('columns.confidence')}
-                </span>
-                <span className="font-bold text-cyan-400">
-                  {(capture.confidence * 100).toFixed(0)}%
-                </span>
-              </div>
-              <div className="flex flex-col items-end">
-                <span className="text-[10px] text-[var(--text-muted)]">
-                  {t('modal.qualityScore')}
-                </span>
-                <span className="font-bold text-emerald-400">
-                  {(capture.qualityScore ?? 0).toFixed(0)}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-interface CropLightboxModalProps {
-  alarm: AlarmRecord
-  onClose: () => void
-  t: (key: string) => string
-}
-
-function CropLightboxModal({ alarm, onClose, t }: CropLightboxModalProps): React.ReactElement {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="relative flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-black shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/15">
-              <ShieldAlert className="h-4 w-4 text-rose-500" />
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold text-white">{alarm.targetLabel}</h3>
-              <span className="font-mono text-[11px] text-white/50">
-                #{alarm.trackId} · {alarm.cameraId}
-              </span>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-xl p-1.5 text-white/50 transition-all hover:bg-white/10 hover:text-white"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-auto p-4">
-          <div className="flex items-center justify-center overflow-hidden rounded-2xl bg-black">
-            {alarm.cropImageRelPath ? (
-              <img
-                src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
-                alt="Crop full"
-                className="max-h-[78vh] w-full object-contain"
-              />
-            ) : (
-              <div className="flex h-64 items-center justify-center text-white/30">
-                {t('modal.noImage')}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between border-t border-white/10 px-6 py-3">
-          <div className="flex items-center gap-3 font-mono text-[11px] text-white/50">
-            <span>
-              {t('modal.channel')}: {alarm.cameraId}
-            </span>
-            <span className="text-white/20">|</span>
-            <span>
-              {t('modal.trackId')}: #{alarm.trackId}
-            </span>
-            <span className="text-white/20">|</span>
-            <span>{formatTimestamp(alarm.occurredAt)}</span>
-          </div>
-          <span className="rounded-md bg-white/10 px-2 py-0.5 font-mono text-[10px] text-white/60">
-            {((alarm.confidence ?? 0) * 100).toFixed(0)}% {t('card.confidence')}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
+const QUICK_TIME_HOURS: Record<Exclude<QuickTimeRange, 'all' | 'custom'>, number> = {
+  '1h': 1,
+  '24h': 24,
+  '7d': 7 * 24,
 }
 
 export function AlarmsPage(): React.ReactElement {
   const { t } = useTranslation('alarm')
   const [activeTab, setActiveTab] = useState<EvidenceTab>('alarms')
   const [viewMode, setViewMode] = useState<ViewMode>('cards')
+
+  // 基础数据与通道
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selectedCameraId, setSelectedCameraId] = useState<string>('')
   const [selectedTargetLabel, setSelectedTargetLabel] = useState<string>('')
+  const [selectedSeverity, setSelectedSeverity] = useState<string>('all')
   const [selectedStatus, setSelectedStatus] = useState<string>('all')
+
+  // 时间维度筛选
+  const [quickTimeRange, setQuickTimeRange] = useState<QuickTimeRange>('all')
   const [startTime, setStartTime] = useState<string>('')
   const [endTime, setEndTime] = useState<string>('')
+
+  // 分页与总数
   const [page, setPage] = useState<number>(1)
+  const [totalCount, setTotalCount] = useState<number>(0)
   const pageSize = 20
 
-  const [isLoading, setIsLoading] = useState(false)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-
+  // 数据列表
   const [alarms, setAlarms] = useState<AlarmRecord[]>([])
   const [captures, setCaptures] = useState<CaptureRecord[]>([])
   const [recognitions, setRecognitions] = useState<RecognitionRecord[]>([])
 
+  // 多选与批量操作
+  const [selectedAlarmIds, setSelectedAlarmIds] = useState<Set<number>>(new Set())
+  const [isBatchProcessing, setIsBatchProcessing] = useState<boolean>(false)
+
+  // 实时未读告警通知
+  const [unreadRealtimeCount, setUnreadRealtimeCount] = useState<number>(0)
+
+  // 界面状态
+  const [isLoading, setIsLoading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  // 模态框灯箱
   const [lightboxAlarm, setLightboxAlarm] = useState<AlarmRecord | null>(null)
   const [lightboxCapture, setLightboxCapture] = useState<CaptureRecord | null>(null)
   const [cropPreviewAlarm, setCropPreviewAlarm] = useState<AlarmRecord | null>(null)
   const [reviewModalRec, setReviewModalRec] = useState<RecognitionRecord | null>(null)
 
+  // 挂载时加载摄像头字典
   useEffect(() => {
     let isMounted = true
     cameraApi
@@ -861,30 +108,62 @@ export function AlarmsPage(): React.ReactElement {
     return map
   }, [cameras])
 
+  // 处理快捷时间区间
+  const handleQuickTimeChange = (range: QuickTimeRange) => {
+    setQuickTimeRange(range)
+    if (range in QUICK_TIME_HOURS) {
+      const hours = QUICK_TIME_HOURS[range as keyof typeof QUICK_TIME_HOURS]
+      setStartTime(new Date(Date.now() - hours * 3600 * 1000).toISOString().slice(0, 16))
+      setEndTime('')
+    } else if (range === 'all') {
+      setStartTime('')
+      setEndTime('')
+    }
+    setPage(1)
+  }
+
+  const handleSwitchTab = (tab: EvidenceTab) => {
+    setActiveTab(tab)
+    setSelectedStatus('all')
+    setPage(1)
+  }
+
+  // 数据加载函数
   const loadData = useCallback(async () => {
     setIsLoading(true)
     setErrorMessage(null)
     try {
       const camId = selectedCameraId || undefined
       const targetLbl = selectedTargetLabel || undefined
+      const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
+      const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
       const startMs = startTime ? new Date(startTime).getTime() : undefined
       const endMs = endTime ? new Date(endTime).getTime() : undefined
-      const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
       const offset = (page - 1) * pageSize
 
       if (activeTab === 'alarms') {
-        const list = await alarmApi.list({
-          cameraId: camId,
-          status: statusParam,
-          startTime: startMs,
-          endTime: endMs,
-          limit: pageSize,
-          offset,
-        })
-        const filtered = targetLbl
-          ? list.filter((a) => a.targetLabel?.toLowerCase() === targetLbl.toLowerCase())
-          : list
-        setAlarms(filtered)
+        const [list, countRes] = await Promise.all([
+          alarmApi.list({
+            cameraId: camId,
+            status: statusParam,
+            targetLabel: targetLbl,
+            severity: severityParam,
+            startTime: startMs,
+            endTime: endMs,
+            limit: pageSize,
+            offset,
+          }),
+          alarmApi.count({
+            cameraId: camId,
+            status: statusParam,
+            targetLabel: targetLbl,
+            severity: severityParam,
+            startTime: startMs,
+            endTime: endMs,
+          }),
+        ])
+        setAlarms(list)
+        setTotalCount(countRes.total)
       } else if (activeTab === 'captures') {
         const list = await evidenceApi.listCaptures({
           cameraId: camId,
@@ -895,6 +174,7 @@ export function AlarmsPage(): React.ReactElement {
           offset,
         })
         setCaptures(list)
+        setTotalCount(list.length)
       } else if (activeTab === 'recognition') {
         const list = await evidenceApi.listRecognitions({
           cameraId: camId,
@@ -903,23 +183,144 @@ export function AlarmsPage(): React.ReactElement {
           offset,
         })
         setRecognitions(list)
+        setTotalCount(list.length)
       }
+      setSelectedAlarmIds(new Set())
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err))
     } finally {
       setIsLoading(false)
     }
-  }, [activeTab, selectedCameraId, selectedTargetLabel, selectedStatus, startTime, endTime, page])
+  }, [
+    activeTab,
+    selectedCameraId,
+    selectedTargetLabel,
+    selectedSeverity,
+    selectedStatus,
+    startTime,
+    endTime,
+    page,
+  ])
 
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // 实时 WebSocket 订阅：新告警触发 & 状态变更
+  useEffect(() => {
+    const unsubAlarm = wsClient.subscribe<{
+      id: number
+      eventId: string
+      cameraId: string
+      cameraName: string
+      algorithmId: string
+      alarmTypeId: string
+      targetLabel: string
+      ruleType: string
+      severity: AlarmSeverity
+      cropImageRelPath: string
+      imageRelPath: string
+      occurredAt: number
+    }>(WS_TOPICS.ALARM_TRIGGERED, (p) => {
+      if (!p) return
+
+      if (activeTab !== 'alarms') return
+
+      // 若当前在第 1 页且无冲突筛选，平滑 prepend 到列表顶部
+      const matchesCamera = !selectedCameraId || selectedCameraId === p.cameraId
+      const matchesTarget = !selectedTargetLabel || selectedTargetLabel === p.targetLabel
+      const matchesSeverity = selectedSeverity === 'all' || selectedSeverity === p.severity
+      const matchesStatus = selectedStatus === 'all' || selectedStatus === 'unprocessed'
+      const isLiveTime = quickTimeRange === 'all' && !startTime && !endTime
+
+      if (
+        page === 1 &&
+        matchesCamera &&
+        matchesTarget &&
+        matchesSeverity &&
+        matchesStatus &&
+        isLiveTime
+      ) {
+        const newRecord: AlarmRecord = {
+          id: p.id,
+          eventId: p.eventId,
+          cameraId: p.cameraId,
+          alarmTypeId: p.alarmTypeId,
+          occurredAt: p.occurredAt,
+          targetLabel: p.targetLabel,
+          confidence: 1.0,
+          trackId: 0,
+          bboxJson: '{}',
+          imageId: '',
+          imageRelPath: p.imageRelPath || '',
+          cropImageId: '',
+          cropImageRelPath: p.cropImageRelPath || '',
+          ruleType: p.ruleType,
+          severity: p.severity,
+          status: 'unprocessed',
+          handledAt: null,
+          createdAt: Date.now(),
+        }
+        setAlarms((prev) => {
+          if (prev.some((a) => a.id === p.id || a.eventId === p.eventId)) return prev
+          return [newRecord, ...prev.slice(0, pageSize - 1)]
+        })
+        setTotalCount((c) => c + 1)
+      } else {
+        setUnreadRealtimeCount((c) => c + 1)
+      }
+    })
+
+    const unsubStatus = wsClient.subscribe<{
+      id?: number
+      eventId?: string
+      status?: AlarmStatus
+      handledAt?: number
+    }>(WS_TOPICS.ALARM_STATUS_CHANGED, (p) => {
+      if (!p || !p.status) return
+      const nextStatus = p.status
+      const nextHandledAt = p.handledAt ?? Date.now()
+
+      setAlarms((prev) =>
+        prev.map((a) => {
+          if ((p.id && a.id === p.id) || (p.eventId && a.eventId === p.eventId)) {
+            return { ...a, status: nextStatus, handledAt: nextHandledAt }
+          }
+          return a
+        }),
+      )
+
+      setLightboxAlarm((prev) => {
+        if (!prev) return null
+        if ((p.id && prev.id === p.id) || (p.eventId && prev.eventId === p.eventId)) {
+          return { ...prev, status: nextStatus, handledAt: nextHandledAt }
+        }
+        return prev
+      })
+    })
+
+    return () => {
+      unsubAlarm()
+      unsubStatus()
+    }
+  }, [
+    activeTab,
+    selectedCameraId,
+    selectedTargetLabel,
+    selectedSeverity,
+    selectedStatus,
+    quickTimeRange,
+    startTime,
+    endTime,
+    page,
+  ])
 
   const handleFilterChange = (setter: (v: string) => void, val: string): void => {
     setter(val)
     setPage(1)
   }
 
+  // 单条告警状态切换
   const handleToggleAlarmStatus = async (alarm: AlarmRecord): Promise<void> => {
     const nextStatus: AlarmStatus = alarm.status === 'processed' ? 'unprocessed' : 'processed'
     try {
@@ -933,6 +334,45 @@ export function AlarmsPage(): React.ReactElement {
     }
   }
 
+  // 批量操作处理
+  const handleToggleSelectAlarm = (id: number, selected: boolean): void => {
+    setSelectedAlarmIds((prev) => {
+      const next = new Set(prev)
+      if (selected) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      return next
+    })
+  }
+
+  const handleToggleSelectAll = (selected: boolean): void => {
+    if (selected) {
+      const allIds = new Set(alarms.map((a) => a.id))
+      setSelectedAlarmIds(allIds)
+    } else {
+      setSelectedAlarmIds(new Set())
+    }
+  }
+
+  const handleBatchStatus = async (status: AlarmStatus): Promise<void> => {
+    if (selectedAlarmIds.size === 0) return
+    setIsBatchProcessing(true)
+    try {
+      const ids = Array.from(selectedAlarmIds)
+      const updatedList = await alarmApi.batchUpdateStatus(ids, status)
+      const updatedMap = new Map(updatedList.map((item) => [item.id, item]))
+      setAlarms((prev) => prev.map((a) => updatedMap.get(a.id) || a))
+      setSelectedAlarmIds(new Set())
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setIsBatchProcessing(false)
+    }
+  }
+
+  // 人脸识别复核处理
   const handleReviewRecognition = async (
     rec: RecognitionRecord,
     status: 'confirmed' | 'rejected',
@@ -958,15 +398,26 @@ export function AlarmsPage(): React.ReactElement {
     }
   }
 
-  let currentItemCount = alarms.length
-  if (activeTab === 'captures') {
-    currentItemCount = captures.length
-  } else if (activeTab === 'recognition') {
-    currentItemCount = recognitions.length
-  }
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
 
   return (
-    <div className="flex h-full flex-col gap-4 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] select-none">
+    <div className="flex h-full flex-col gap-3 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] select-none">
+      {/* 实时新告警浮条 */}
+      <RealtimeAlarmBanner
+        count={unreadRealtimeCount}
+        onViewNew={() => {
+          setUnreadRealtimeCount(0)
+          setSelectedCameraId('')
+          setSelectedTargetLabel('')
+          setSelectedSeverity('all')
+          setSelectedStatus('all')
+          handleQuickTimeChange('all')
+          setPage(1)
+        }}
+        onDismiss={() => setUnreadRealtimeCount(0)}
+        t={t}
+      />
+
       {/* 顶部控制栏与三重视图切换 */}
       <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl p-3 shadow-xs">
         <div className="flex items-center gap-3">
@@ -983,68 +434,63 @@ export function AlarmsPage(): React.ReactElement {
 
         {/* 证据分类 Tab 切换器 */}
         <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
-          <button
-            onClick={() => {
-              setActiveTab('alarms')
-              setSelectedStatus('all')
-              setPage(1)
-            }}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-all ${
-              activeTab === 'alarms'
-                ? 'border border-rose-500/30 bg-rose-500/15 text-rose-500 shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <AlertCircle className="h-3.5 w-3.5 text-rose-500" />
-            <span>{t('tabs.alarms')}</span>
-            {alarms.length > 0 && (
-              <span className="py-0.2 ml-1 rounded-full bg-rose-500/10 px-1.5 font-mono text-[10px] font-bold text-rose-500">
-                {alarms.length}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('captures')
-              setSelectedStatus('all')
-              setPage(1)
-            }}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-all ${
-              activeTab === 'captures'
-                ? 'border border-cyan-500/30 bg-cyan-500/15 text-cyan-500 shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <CameraIcon className="h-3.5 w-3.5 text-cyan-500" />
-            <span>{t('tabs.captures')}</span>
-            {captures.length > 0 && (
-              <span className="py-0.2 ml-1 rounded-full bg-cyan-500/10 px-1.5 font-mono text-[10px] font-bold text-cyan-500">
-                {captures.length}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('recognition')
-              setSelectedStatus('all')
-              setPage(1)
-            }}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-all ${
-              activeTab === 'recognition'
-                ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500 shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <UserCheck className="h-3.5 w-3.5 text-emerald-500" />
-            <span>{t('tabs.recognition')}</span>
-            {recognitions.length > 0 && (
-              <span className="py-0.2 ml-1 rounded-full bg-emerald-500/10 px-1.5 font-mono text-[10px] font-bold text-emerald-500">
-                {recognitions.length}
-              </span>
-            )}
-          </button>
+          {(
+            [
+              {
+                key: 'alarms' as const,
+                label: t('tabs.alarms'),
+                icon: AlertCircle,
+                activeClass: 'border border-rose-500/30 bg-rose-500/15 text-rose-500 shadow-xs',
+                iconColor: 'text-rose-500',
+                badgeBg: 'bg-rose-500/10 text-rose-500',
+                badgeCount: totalCount,
+              },
+              {
+                key: 'captures' as const,
+                label: t('tabs.captures'),
+                icon: CameraIcon,
+                activeClass: 'border border-cyan-500/30 bg-cyan-500/15 text-cyan-500 shadow-xs',
+                iconColor: 'text-cyan-500',
+                badgeBg: 'bg-cyan-500/10 text-cyan-500',
+                badgeCount: captures.length,
+              },
+              {
+                key: 'recognition' as const,
+                label: t('tabs.recognition'),
+                icon: UserCheck,
+                activeClass:
+                  'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500 shadow-xs',
+                iconColor: 'text-emerald-500',
+                badgeBg: 'bg-emerald-500/10 text-emerald-500',
+                badgeCount: recognitions.length,
+              },
+            ] as const
+          ).map((tab) => {
+            const Icon = tab.icon
+            const isActive = activeTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => handleSwitchTab(tab.key)}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-all ${
+                  isActive
+                    ? tab.activeClass
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Icon className={`h-3.5 w-3.5 ${tab.iconColor}`} />
+                <span>{tab.label}</span>
+                {tab.badgeCount > 0 && isActive && (
+                  <span
+                    className={`py-0.2 ml-1 rounded-full px-1.5 font-mono text-[10px] font-bold ${tab.badgeBg}`}
+                  >
+                    {tab.badgeCount}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -1081,6 +527,19 @@ export function AlarmsPage(): React.ReactElement {
             </select>
           )}
 
+          {/* 严重级别筛选 */}
+          {activeTab === 'alarms' && (
+            <select
+              value={selectedSeverity}
+              onChange={(e) => handleFilterChange(setSelectedSeverity, e.target.value)}
+              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+            >
+              <option value="all">{t('filter.allSeverities')}</option>
+              <option value="warning">{t('filter.severityWarning')}</option>
+              <option value="critical">{t('filter.severityCritical')}</option>
+            </select>
+          )}
+
           {/* 告警状态筛选 */}
           {activeTab === 'alarms' && (
             <select
@@ -1108,12 +567,40 @@ export function AlarmsPage(): React.ReactElement {
             </select>
           )}
 
-          {/* 时间范围筛选 */}
+          {/* 快捷时间筛选 Chip */}
+          <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-[11px]">
+            {(
+              [
+                { key: 'all', label: t('filter.quickAll') },
+                { key: '1h', label: t('filter.past1Hour') },
+                { key: '24h', label: t('filter.past24Hours') },
+                { key: '7d', label: t('filter.past7Days') },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => handleQuickTimeChange(opt.key)}
+                className={`rounded-lg px-2 py-1 transition-all ${
+                  quickTimeRange === opt.key
+                    ? 'bg-[var(--accent)] text-white shadow-xs'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* 自定义精确时间 */}
           <div className="flex items-center gap-1.5">
             <input
               type="datetime-local"
               value={startTime}
-              onChange={(e) => handleFilterChange(setStartTime, e.target.value)}
+              onChange={(e) => {
+                setQuickTimeRange('custom')
+                handleFilterChange(setStartTime, e.target.value)
+              }}
               className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
               title={t('timeFilter.start')}
             />
@@ -1121,16 +608,18 @@ export function AlarmsPage(): React.ReactElement {
             <input
               type="datetime-local"
               value={endTime}
-              onChange={(e) => handleFilterChange(setEndTime, e.target.value)}
+              onChange={(e) => {
+                setQuickTimeRange('custom')
+                handleFilterChange(setEndTime, e.target.value)
+              }}
               className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
               title={t('timeFilter.end')}
             />
             {(startTime || endTime) && (
               <button
+                type="button"
                 onClick={() => {
-                  setStartTime('')
-                  setEndTime('')
-                  setPage(1)
+                  handleQuickTimeChange('all')
                 }}
                 className="rounded-lg p-1 text-[var(--text-muted)] transition-all hover:bg-rose-500/10 hover:text-rose-400"
                 title={t('timeFilter.clear')}
@@ -1146,6 +635,7 @@ export function AlarmsPage(): React.ReactElement {
           {activeTab === 'alarms' && (
             <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs">
               <button
+                type="button"
                 onClick={() => setViewMode('cards')}
                 className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-all ${
                   viewMode === 'cards'
@@ -1158,6 +648,7 @@ export function AlarmsPage(): React.ReactElement {
                 <span className="text-[11px]">{t('views.cards')}</span>
               </button>
               <button
+                type="button"
                 onClick={() => setViewMode('table')}
                 className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-all ${
                   viewMode === 'table'
@@ -1173,6 +664,7 @@ export function AlarmsPage(): React.ReactElement {
           )}
 
           <button
+            type="button"
             onClick={loadData}
             disabled={isLoading}
             className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-50"
@@ -1198,6 +690,9 @@ export function AlarmsPage(): React.ReactElement {
             alarms={alarms}
             viewMode={viewMode}
             cameraNameMap={cameraNameMap}
+            selectedAlarmIds={selectedAlarmIds}
+            onToggleSelectAlarm={handleToggleSelectAlarm}
+            onToggleSelectAll={handleToggleSelectAll}
             onSelect={setLightboxAlarm}
             onSelectCrop={setCropPreviewAlarm}
             onToggleStatus={handleToggleAlarmStatus}
@@ -1221,19 +716,31 @@ export function AlarmsPage(): React.ReactElement {
 
       {/* 分页控制栏 */}
       <div className="frosted-glass flex items-center justify-between rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
-        <span>{t('pagination.page', { current: page })}</span>
+        <div className="flex items-center gap-2">
+          <span>{t('pagination.page', { current: page })}</span>
+          {activeTab === 'alarms' && totalCount > 0 && (
+            <span className="font-mono text-[var(--text-muted)]">
+              ({t('pagination.total', { total: totalCount })})
+            </span>
+          )}
+        </div>
+
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page === 1 || isLoading}
             className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
           >
             {t('pagination.prev')}
           </button>
-          <span className="px-1 font-mono font-semibold text-[var(--text-primary)]">{page}</span>
+          <span className="px-1 font-mono font-semibold text-[var(--text-primary)]">
+            {page} / {totalPages}
+          </span>
           <button
+            type="button"
             onClick={() => setPage((p) => p + 1)}
-            disabled={currentItemCount < pageSize || isLoading}
+            disabled={page >= totalPages || isLoading}
             className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
           >
             {t('pagination.next')}
@@ -1241,12 +748,24 @@ export function AlarmsPage(): React.ReactElement {
         </div>
       </div>
 
-      {/* 告警大图灯箱 Modal */}
+      {/* 底部浮动批量操作条 */}
+      <BatchActionBar
+        selectedCount={selectedAlarmIds.size}
+        isProcessing={isBatchProcessing}
+        onMarkProcessed={() => handleBatchStatus('processed')}
+        onMarkUnprocessed={() => handleBatchStatus('unprocessed')}
+        onClearSelection={() => setSelectedAlarmIds(new Set())}
+        t={t}
+      />
+
+      {/* 告警大图灯箱 Modal (高精度 BBox 绘制 + Esc 快速退出) */}
       {lightboxAlarm && (
         <AlarmLightboxModal
           alarm={lightboxAlarm}
+          cameraName={cameraNameMap[lightboxAlarm.cameraId]}
           onClose={() => setLightboxAlarm(null)}
           onToggleStatus={() => handleToggleAlarmStatus(lightboxAlarm)}
+          onSelectCrop={() => setCropPreviewAlarm(lightboxAlarm)}
           t={t}
         />
       )}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, X } from 'lucide-react'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -29,29 +30,25 @@ export function ConfirmDialog({
   const confirmRef = useRef<HTMLButtonElement>(null)
   const previousActiveElement = useRef<Element | null>(null)
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onCancel()
-        return
-      }
-      if (e.key !== 'Tab' || !dialogRef.current) return
-      const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      )
-      if (focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    },
-    [onCancel],
-  )
+  // 接入浮层栈，优先级设为 15（确保高于底层 Modal 抽屉）
+  useDismissStack(open, onCancel, { priority: 15 })
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key !== 'Tab' || !dialogRef.current) return
+    const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    )
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return

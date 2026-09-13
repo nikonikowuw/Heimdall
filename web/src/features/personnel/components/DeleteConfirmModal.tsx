@@ -1,9 +1,10 @@
-import React from 'react'
+import { useEffect } from 'react'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import type { PersonnelItem } from '../../../types'
 
-interface DeleteConfirmModalProps {
+export interface DeleteConfirmModalProps {
   isOpen: boolean
   target: PersonnelItem | null
   isDeleting: boolean
@@ -11,14 +12,30 @@ interface DeleteConfirmModalProps {
   onConfirm: () => void
 }
 
-export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
+export function DeleteConfirmModal({
   isOpen,
   target,
   isDeleting,
   onClose,
   onConfirm,
-}) => {
+}: DeleteConfirmModalProps) {
   const { t } = useTranslation(['personnel', 'common'])
+
+  // ESC 浮层栈支持
+  useDismissStack(isOpen && Boolean(target), onClose, { disabled: isDeleting })
+
+  // Enter 快捷确认
+  useEffect(() => {
+    if (!isOpen || !target) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !isDeleting) {
+        e.preventDefault()
+        onConfirm()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, target, isDeleting, onConfirm])
 
   if (!isOpen || !target) return null
 

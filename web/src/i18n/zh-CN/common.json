@@ -6,7 +6,26 @@
     "algorithms": "算法仓库",
     "personnel": "人员底库",
     "alarms": "告警事件",
-    "oplog": "审计日志"
+    "oplog": "审计日志",
+    "system": "系统设置"
+  },
+  "shortcuts": {
+    "title": "键盘快捷键",
+    "subtitle": "全局高效键盘导航与控制指南",
+    "hint": "随时按 ? 唤起此面板，按 Esc 快速关闭",
+    "categories": {
+      "navigation": "导航与工作区",
+      "general": "全局与视口",
+      "modals": "浮层与交互"
+    },
+    "items": {
+      "navTabs": "快速切换导航视口",
+      "toggleTheme": "切换明亮 / 暗黑主题",
+      "help": "唤起快捷键速查面板",
+      "quickSearch": "快速聚焦页面搜索框",
+      "escDismiss": "按栈弹出关闭顶层浮层 / 释放输入焦点",
+      "enterConfirm": "确认表单 / 触发弹窗首选操作"
+    }
   },
   "theme": {
     "toLight": "切换至亮色模式",

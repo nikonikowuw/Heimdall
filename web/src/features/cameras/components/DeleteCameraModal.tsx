@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, AlertTriangle, Loader2, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { cameraApi } from '@/lib/api'
 import type { Camera } from '@/types'
 
@@ -23,21 +24,8 @@ export function DeleteCameraModal({
   const [isDeleting, setIsDeleting] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  // ESC 快捷键关闭
-  useEffect(() => {
-    if (!isOpen) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isDeleting) {
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, isDeleting, onClose])
-
-  if (!isOpen || !camera) return null
-
-  const handleDelete = async () => {
+  const handleDelete = useCallback(async () => {
+    if (!camera) return
     setIsDeleting(true)
     setErrorMsg(null)
     try {
@@ -53,7 +41,25 @@ export function DeleteCameraModal({
     } finally {
       setIsDeleting(false)
     }
-  }
+  }, [camera, onSuccess, onClose, t])
+
+  // ESC 浮层栈支持
+  useDismissStack(isOpen, onClose, { disabled: isDeleting })
+
+  // Enter 快捷确认删除
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !isDeleting) {
+        e.preventDefault()
+        handleDelete()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, isDeleting, handleDelete])
+
+  if (!isOpen || !camera) return null
 
   return (
     <div

@@ -2,6 +2,7 @@ import React from 'react'
 import { Cpu, ExternalLink, ShieldCheck, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { motionTokens } from '@/lib/motionTokens'
 import type { AlgoManifest } from '@/types'
 
@@ -19,6 +20,8 @@ export function AlgoSandboxDrawer({
   onNavigateToAlgorithms,
 }: AlgoSandboxDrawerProps): React.ReactElement {
   const { t } = useTranslation('task')
+
+  useDismissStack(isOpen, onClose)
 
   return (
     <AnimatePresence>

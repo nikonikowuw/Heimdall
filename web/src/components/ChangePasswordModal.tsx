@@ -1,15 +1,16 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { Eye, EyeOff, KeyRound, Lock, ShieldCheck, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '../hooks/use-dismiss-stack'
 import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
 
-interface ChangePasswordModalProps {
+export interface ChangePasswordModalProps {
   isOpen: boolean
   onClose: () => void
 }
 
-export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen, onClose }) => {
+export function ChangePasswordModal({ isOpen, onClose }: ChangePasswordModalProps) {
   const { t } = useTranslation('auth')
   const { username, logout } = useAuthStore()
 
@@ -20,8 +21,6 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
-
-  if (!isOpen) return null
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -71,6 +70,10 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
     setSuccessMsg(null)
     onClose()
   }
+
+  useDismissStack(isOpen, handleClose, { disabled: loading })
+
+  if (!isOpen) return null
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

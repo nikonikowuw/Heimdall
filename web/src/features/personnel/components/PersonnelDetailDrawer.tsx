@@ -12,11 +12,12 @@ import {
   CheckCircle2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import { evidenceApi, personnelApi } from '../../../lib/api'
 import type { PersonnelDetail, GalleryFace } from '../../../types'
 import { formatTimestamp } from '../../../lib/time'
 
-interface PersonnelDetailDrawerProps {
+export interface PersonnelDetailDrawerProps {
   isOpen: boolean
   subjectId: string | null
   autoOpenUpload?: boolean
@@ -65,13 +66,13 @@ function getQualityGrade(score: number, t: (key: string) => string): QualityGrad
   }
 }
 
-export const PersonnelDetailDrawer: React.FC<PersonnelDetailDrawerProps> = ({
+export function PersonnelDetailDrawer({
   isOpen,
   subjectId,
   autoOpenUpload,
   onClose,
   onUpdate,
-}) => {
+}: PersonnelDetailDrawerProps) {
   const { t } = useTranslation(['personnel', 'common'])
   const [detail, setDetail] = useState<PersonnelDetail | null>(null)
   const [loading, setLoading] = useState(false)
@@ -81,6 +82,15 @@ export const PersonnelDetailDrawer: React.FC<PersonnelDetailDrawerProps> = ({
   const [faceToDelete, setFaceToDelete] = useState<GalleryFace | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // 1. 抽屉自身接入浮层栈（priority: 0）
+  useDismissStack(Boolean(subjectId), onClose, { priority: 0 })
+
+  // 2. 删除人脸样本子弹窗接入浮层栈（priority: 10），按 Esc 先关子弹窗
+  useDismissStack(Boolean(faceToDelete), () => setFaceToDelete(null), {
+    priority: 10,
+    disabled: actionLoading,
+  })
 
   const fetchDetail = useCallback(
     async (id: string) => {

@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { Check, CheckCircle2, Loader2, Radio, Server, X } from 'lucide-react'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { gb28181Api } from '@/lib/api'
 import type { Gb28181Channel, Gb28181Device, ImportGbChannelItem } from '@/types'
 
@@ -46,6 +47,8 @@ export function BatchImportGbModal({
   const [streamModes, setStreamModes] = useState<Record<string, 'auto' | 'main' | 'sub'>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  useDismissStack(isOpen, onClose, { disabled: isSubmitting })
 
   React.useEffect(() => {
     setSelectedKeys(

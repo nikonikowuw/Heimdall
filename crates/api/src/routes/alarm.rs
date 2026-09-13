@@ -63,6 +63,9 @@ impl From<db::entity::alarm::Model> for AlarmDto {
 pub struct AlarmQuery {
     pub camera_id: Option<String>,
     pub status: Option<String>,
+    pub target_label: Option<String>,
+    pub rule_type: Option<String>,
+    pub severity: Option<String>,
     pub start_time: Option<i64>,
     pub end_time: Option<i64>,
     #[serde(default = "default_limit")]
@@ -72,7 +75,30 @@ pub struct AlarmQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct AlarmCountQuery {
+    pub camera_id: Option<String>,
+    pub status: Option<String>,
+    pub target_label: Option<String>,
+    pub rule_type: Option<String>,
+    pub severity: Option<String>,
+    pub start_time: Option<i64>,
+    pub end_time: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlarmCountDto {
+    pub total: u64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateAlarmStatusRequest {
+    pub status: AlarmStatus,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchUpdateAlarmStatusRequest {
+    pub ids: Vec<i64>,
     pub status: AlarmStatus,
 }
 
@@ -83,6 +109,11 @@ fn default_limit() -> u64 {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_alarms))
+        .route("/count", get(count_alarms))
+        .route(
+            "/batch-status",
+            axum::routing::post(batch_update_alarm_status),
+        )
         .route("/{id}/status", axum::routing::put(update_alarm_status))
 }
 
@@ -97,6 +128,9 @@ async fn list_alarms(
         &state.db,
         params.camera_id.as_deref(),
         params.status.as_deref(),
+        params.target_label.as_deref(),
+        params.rule_type.as_deref(),
+        params.severity.as_deref(),
         start_utc,
         end_utc,
         params.limit,
@@ -104,6 +138,57 @@ async fn list_alarms(
     )
     .await?;
     let dtos = list.into_iter().map(AlarmDto::from).collect();
+    Ok(ApiResponse::success(dtos))
+}
+
+async fn count_alarms(
+    State(state): State<AppState>,
+    Query(params): Query<AlarmCountQuery>,
+) -> Result<ApiResponse<AlarmCountDto>, ApiError> {
+    let start_utc = params.start_time.and_then(DateTime::from_timestamp_millis);
+    let end_utc = params.end_time.and_then(DateTime::from_timestamp_millis);
+
+    let total = AlarmRepo::count_filtered(
+        &state.db,
+        params.camera_id.as_deref(),
+        params.status.as_deref(),
+        params.target_label.as_deref(),
+        params.rule_type.as_deref(),
+        params.severity.as_deref(),
+        start_utc,
+        end_utc,
+    )
+    .await?;
+
+    Ok(ApiResponse::success(AlarmCountDto { total }))
+}
+
+fn broadcast_alarm_status_change(state: &AppState, dto: &AlarmDto) {
+    let _ = state.event_broadcaster.send(WsBroadcastEvent {
+        topic: TOPIC_ALARM_STATUS_CHANGED.to_string(),
+        payload: serde_json::json!({
+            "id": dto.id,
+            "eventId": dto.event_id,
+            "status": dto.status.as_str(),
+            "handledAt": dto.handled_at,
+        }),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+    });
+}
+
+async fn batch_update_alarm_status(
+    State(state): State<AppState>,
+    Json(payload): Json<BatchUpdateAlarmStatusRequest>,
+) -> Result<ApiResponse<Vec<AlarmDto>>, ApiError> {
+    let updated =
+        AlarmRepo::update_status_by_ids(&state.db, &payload.ids, payload.status.as_str()).await?;
+    let dtos: Vec<AlarmDto> = updated.into_iter().map(AlarmDto::from).collect();
+
+    // 逐个广播告警状态变更事件
+    for dto in &dtos {
+        broadcast_alarm_status_change(&state, dto);
+    }
+
     Ok(ApiResponse::success(dtos))
 }
 
@@ -116,16 +201,7 @@ async fn update_alarm_status(
     let dto = AlarmDto::from(updated);
 
     // 广播告警状态变更事件
-    let _ = state.event_broadcaster.send(WsBroadcastEvent {
-        topic: TOPIC_ALARM_STATUS_CHANGED.to_string(),
-        payload: serde_json::json!({
-            "id": dto.id,
-            "eventId": dto.event_id,
-            "status": dto.status.as_str(),
-            "handledAt": dto.handled_at,
-        }),
-        timestamp: chrono::Utc::now().timestamp_millis(),
-    });
+    broadcast_alarm_status_change(&state, &dto);
 
     Ok(ApiResponse::success(dto))
 }

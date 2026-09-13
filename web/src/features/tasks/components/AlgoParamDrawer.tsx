@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { Check, Cpu, RotateCcw, Sliders, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { motionTokens } from '@/lib/motionTokens'
 import type { AlgoManifest } from '@/types'
 import { getLocalizedClassName } from './rulesStudioTypes'
@@ -151,6 +152,8 @@ export function AlgoParamDrawer({
     onSaveParams(finalParams)
     onClose()
   }
+
+  useDismissStack(isOpen, onClose)
 
   if (!isOpen || !algo) return null
 

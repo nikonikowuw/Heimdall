@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { X, UploadCloud, Star, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import { personnelApi } from '../../../lib/api'
 import type { PersonnelItem, PersonnelDetail } from '../../../types'
 
-interface PersonnelModalProps {
+export interface PersonnelModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess: (detail: PersonnelDetail) => void
@@ -17,13 +18,13 @@ interface ImageFilePreview {
   previewUrl: string
 }
 
-export const PersonnelModal: React.FC<PersonnelModalProps> = ({
+export function PersonnelModal({
   isOpen,
   onClose,
   onSuccess,
   editTarget,
   onManagePhotos,
-}) => {
+}: PersonnelModalProps) {
   const { t } = useTranslation(['personnel', 'common'])
   const isEdit = Boolean(editTarget)
 
@@ -82,6 +83,8 @@ export const PersonnelModal: React.FC<PersonnelModalProps> = ({
       setSelectedImages([])
     }
   }, [isOpen, editTarget, cleanupPreviews])
+
+  useDismissStack(isOpen, handleClose, { disabled: isSubmitting })
 
   if (!isOpen) return null
 

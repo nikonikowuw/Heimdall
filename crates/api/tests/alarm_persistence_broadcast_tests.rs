@@ -504,3 +504,147 @@ async fn test_cold_start_pending_capture_drain_and_batch_persistence() {
         .unwrap();
     assert_eq!(captures.len(), 3, "所有冷启动积压通行抓拍必须全部落库");
 }
+
+#[tokio::test]
+async fn test_count_and_batch_update_alarm_status_api() {
+    let (app, state, token) = setup_test_app().await;
+
+    // 1. 插入 3 条测试告警，2 条未处理，1 条已处理
+    let a1 = db::entity::alarm::ActiveModel {
+        id: sea_orm::NotSet,
+        event_id: Set("batch-evt-1".to_string()),
+        camera_id: Set("CAM-01".to_string()),
+        alarm_type_id: Set("rule_1".to_string()),
+        occurred_at: Set(chrono::Utc::now()),
+        target_label: Set("person".to_string()),
+        confidence: Set(0.95),
+        track_id: Set(101),
+        bbox_json: Set("{}".to_string()),
+        image_id: Set("img1".to_string()),
+        image_rel_path: Set("path1".to_string()),
+        crop_image_id: Set("crop1".to_string()),
+        crop_image_rel_path: Set("crop_path1".to_string()),
+        rule_type: Set("roi".to_string()),
+        severity: Set("critical".to_string()),
+        status: Set("unprocessed".to_string()),
+        handled_at: Set(None),
+        created_at: Set(chrono::Utc::now()),
+    };
+    let a2 = db::entity::alarm::ActiveModel {
+        id: sea_orm::NotSet,
+        event_id: Set("batch-evt-2".to_string()),
+        camera_id: Set("CAM-01".to_string()),
+        alarm_type_id: Set("rule_1".to_string()),
+        occurred_at: Set(chrono::Utc::now()),
+        target_label: Set("car".to_string()),
+        confidence: Set(0.90),
+        track_id: Set(102),
+        bbox_json: Set("{}".to_string()),
+        image_id: Set("img2".to_string()),
+        image_rel_path: Set("path2".to_string()),
+        crop_image_id: Set("crop2".to_string()),
+        crop_image_rel_path: Set("crop_path2".to_string()),
+        rule_type: Set("line".to_string()),
+        severity: Set("warning".to_string()),
+        status: Set("unprocessed".to_string()),
+        handled_at: Set(None),
+        created_at: Set(chrono::Utc::now()),
+    };
+    let a3 = db::entity::alarm::ActiveModel {
+        id: sea_orm::NotSet,
+        event_id: Set("batch-evt-3".to_string()),
+        camera_id: Set("CAM-02".to_string()),
+        alarm_type_id: Set("rule_2".to_string()),
+        occurred_at: Set(chrono::Utc::now()),
+        target_label: Set("person".to_string()),
+        confidence: Set(0.92),
+        track_id: Set(103),
+        bbox_json: Set("{}".to_string()),
+        image_id: Set("img3".to_string()),
+        image_rel_path: Set("path3".to_string()),
+        crop_image_id: Set("crop3".to_string()),
+        crop_image_rel_path: Set("crop_path3".to_string()),
+        rule_type: Set("roi".to_string()),
+        severity: Set("critical".to_string()),
+        status: Set("processed".to_string()),
+        handled_at: Set(Some(chrono::Utc::now())),
+        created_at: Set(chrono::Utc::now()),
+    };
+
+    let m1 = AlarmRepo::insert(&state.db, a1).await.unwrap();
+    let m2 = AlarmRepo::insert(&state.db, a2).await.unwrap();
+    let _m3 = AlarmRepo::insert(&state.db, a3).await.unwrap();
+
+    // 2. 测试 GET /api/v1/alarms/count
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/alarms/count?status=unprocessed")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["data"]["total"], 2);
+
+    // 带 target_label 过滤测试 count
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/alarms/count?target_label=person")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["data"]["total"], 2);
+
+    // 3. 测试 POST /api/v1/alarms/batch-status 批量将 m1 和 m2 标记为 processed
+    let mut ws_rx = state.event_broadcaster.subscribe();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/alarms/batch-status")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "ids": [m1.id, m2.id],
+                "status": "processed"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["code"], 0);
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+
+    // 检查 DB
+    let rec1 = AlarmRepo::find_by_event_id(&state.db, "batch-evt-1")
+        .await
+        .unwrap()
+        .unwrap();
+    let rec2 = AlarmRepo::find_by_event_id(&state.db, "batch-evt-2")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec1.status, "processed");
+    assert_eq!(rec2.status, "processed");
+
+    // 检查 WS 广播接收
+    let evt1 = ws_rx.recv().await.unwrap();
+    assert_eq!(evt1.topic, TOPIC_ALARM_STATUS_CHANGED);
+    let evt2 = ws_rx.recv().await.unwrap();
+    assert_eq!(evt2.topic, TOPIC_ALARM_STATUS_CHANGED);
+}

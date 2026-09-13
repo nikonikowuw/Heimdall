@@ -6,7 +6,26 @@
     "algorithms": "Algorithm Warehouse",
     "personnel": "Personnel",
     "alarms": "Alerts Hub",
-    "oplog": "Audit Logs"
+    "oplog": "Audit Logs",
+    "system": "Settings"
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "subtitle": "Global keyboard navigation & control cheatsheet",
+    "hint": "Press ? anywhere to toggle this cheat sheet, Esc to dismiss",
+    "categories": {
+      "navigation": "Navigation & Workspaces",
+      "general": "Global Controls",
+      "modals": "Modals & Interaction"
+    },
+    "items": {
+      "navTabs": "Quickly switch active workspace",
+      "toggleTheme": "Toggle Light / Dark theme",
+      "help": "Open shortcuts cheat sheet",
+      "quickSearch": "Quick focus search bar",
+      "escDismiss": "Dismiss top modal by stack / Blur input focus",
+      "enterConfirm": "Submit form / Trigger primary action"
+    }
   },
   "theme": {
     "toLight": "Switch to Light Mode",

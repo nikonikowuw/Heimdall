@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { algorithmApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import type { UploadAlgorithmResponse } from '@/types'
@@ -20,7 +21,7 @@ export interface UploadModalProps {
   onSuccess: () => void
 }
 
-export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuccess }) => {
+export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps) {
   const { t } = useTranslation('algo')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -38,6 +39,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onSuc
   const [uploadResult, setUploadResult] = useState<UploadAlgorithmResponse | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [currentStepIdx, setCurrentStepIdx] = useState(0)
+
+  useDismissStack(isOpen, onClose, { disabled: isUploading })
 
   if (!isOpen) return null
 

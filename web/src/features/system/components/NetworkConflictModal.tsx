@@ -1,7 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import { AlertOctagon, Network, ShieldAlert, X } from 'lucide-react'
+import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 
-interface NetworkConflictModalProps {
+export interface NetworkConflictModalProps {
   open: boolean
   onClose: () => void
   conflictIp: string
@@ -15,6 +16,8 @@ export function NetworkConflictModal({
   conflictMac,
 }: NetworkConflictModalProps): React.ReactElement | null {
   const { t } = useTranslation('system')
+
+  useDismissStack(open, onClose)
 
   if (!open) return null
 

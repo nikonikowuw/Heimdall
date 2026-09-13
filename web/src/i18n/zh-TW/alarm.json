@@ -55,7 +55,26 @@
     "person": "人員 (Person)",
     "car": "機動車 (Vehicle)",
     "bicycle": "非機動車 (Bicycle)",
-    "refresh": "刷新"
+    "refresh": "刷新",
+    "allSeverities": "全部等級 (All Severities)",
+    "severityWarning": "一般告警 (Warning)",
+    "severityCritical": "嚴重告警 (Critical)",
+    "quickAll": "全部時間",
+    "past1Hour": "近 1 小時",
+    "past24Hours": "近 24 小時",
+    "past7Days": "近 7 天"
+  },
+  "batch": {
+    "selected": "已選擇 {{count}} 項",
+    "markProcessed": "批量標記已處理",
+    "markUnprocessed": "批量標記待處理",
+    "selectAll": "全選當前頁",
+    "deselectAll": "取消選擇"
+  },
+  "realtime": {
+    "newAlarms": "收到 {{count}} 條實時新告警",
+    "viewNew": "點擊置頂查看",
+    "dismiss": "忽略"
   },
   "empty": {
     "alarms": "暫無違規告警記錄",

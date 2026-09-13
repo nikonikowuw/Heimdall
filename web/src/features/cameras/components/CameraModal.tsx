@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { AlertCircle, Check, Loader2, Radio, Sparkles, Video, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { StreamModeSelector } from '@/components/StreamModeSelector'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { cameraApi, gb28181Api } from '@/lib/api'
 import type {
   Camera,
@@ -117,16 +118,7 @@ export function CameraModal({
   }
 
   // ESC 快捷键关闭
-  useEffect(() => {
-    if (!isOpen) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isSubmitting) {
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, isSubmitting, onClose])
+  useDismissStack(isOpen, onClose, { disabled: isSubmitting })
 
   if (!isOpen) return null
 

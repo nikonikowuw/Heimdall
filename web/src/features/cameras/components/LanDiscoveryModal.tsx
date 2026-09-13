@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { Check, Radio, RefreshCw, Video, X } from 'lucide-react'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { gb28181Api } from '@/lib/api'
 import type { DiscoveredDevice } from '@/types'
 
@@ -45,6 +46,8 @@ export function LanDiscoveryModal({
       handleScan()
     }
   }, [isOpen, handleScan])
+
+  useDismissStack(isOpen, onClose, { disabled: scanning })
 
   if (!isOpen) return null
 

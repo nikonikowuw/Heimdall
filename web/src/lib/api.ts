@@ -253,6 +253,9 @@ export const alarmApi = {
   list(params?: {
     cameraId?: string
     status?: AlarmStatus | string
+    targetLabel?: string
+    ruleType?: string
+    severity?: string
     startTime?: number
     endTime?: number
     limit?: number
@@ -261,6 +264,9 @@ export const alarmApi = {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       status: params?.status,
+      target_label: params?.targetLabel,
+      rule_type: params?.ruleType,
+      severity: params?.severity,
       start_time: params?.startTime,
       end_time: params?.endTime,
       limit: params?.limit,
@@ -269,8 +275,33 @@ export const alarmApi = {
     return api.get<AlarmRecord[]>(`/alarms${qs}`)
   },
 
+  count(params?: {
+    cameraId?: string
+    status?: AlarmStatus | string
+    targetLabel?: string
+    ruleType?: string
+    severity?: string
+    startTime?: number
+    endTime?: number
+  }): Promise<{ total: number }> {
+    const qs = toQueryString({
+      camera_id: params?.cameraId,
+      status: params?.status,
+      target_label: params?.targetLabel,
+      rule_type: params?.ruleType,
+      severity: params?.severity,
+      start_time: params?.startTime,
+      end_time: params?.endTime,
+    })
+    return api.get<{ total: number }>(`/alarms/count${qs}`)
+  },
+
   updateStatus(id: number, status: AlarmStatus): Promise<AlarmRecord> {
     return api.put<AlarmRecord>(`/alarms/${id}/status`, { status })
+  },
+
+  batchUpdateStatus(ids: number[], status: AlarmStatus): Promise<AlarmRecord[]> {
+    return api.post<AlarmRecord[]>(`/alarms/batch-status`, { ids, status })
   },
 }
 

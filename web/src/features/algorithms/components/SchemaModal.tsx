@@ -1,7 +1,8 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { Code2, Copy, FileJson, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { motionTokens } from '@/lib/motionTokens'
 import { copyToClipboard } from '@/lib/utils'
 import type { AlgorithmItem } from '@/types'
@@ -19,10 +20,12 @@ interface SchemaProperty {
   description: string
 }
 
-export const SchemaModal: React.FC<SchemaModalProps> = ({ isOpen, algorithm, onClose }) => {
+export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps) {
   const { t } = useTranslation('algo')
   const [showRaw, setShowRaw] = useState(false)
   const [copied, setCopied] = useState(false)
+
+  useDismissStack(isOpen && Boolean(algorithm), onClose)
 
   if (!isOpen || !algorithm) return null
 

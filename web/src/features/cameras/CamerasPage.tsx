@@ -366,6 +366,7 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             <Search className="h-3.5 w-3.5 text-[var(--text-muted)]" />
             <input
               type="text"
+              data-search-input="true"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t('manage.searchPlaceholder', {
@@ -373,6 +374,9 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
               })}
               className="w-full bg-transparent text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
             />
+            <kbd className="hidden rounded border border-[var(--border)] bg-[var(--bg-secondary)] px-1 font-mono text-[10px] text-[var(--text-muted)] sm:inline-block">
+              /
+            </kbd>
           </div>
 
           <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">

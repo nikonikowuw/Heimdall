@@ -55,7 +55,26 @@
     "person": "Person",
     "car": "Vehicle",
     "bicycle": "Bicycle",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "allSeverities": "All Severities",
+    "severityWarning": "Warning",
+    "severityCritical": "Critical",
+    "quickAll": "All Time",
+    "past1Hour": "Past 1h",
+    "past24Hours": "Past 24h",
+    "past7Days": "Past 7d"
+  },
+  "batch": {
+    "selected": "{{count}} item(s) selected",
+    "markProcessed": "Mark Selected Processed",
+    "markUnprocessed": "Mark Selected Unprocessed",
+    "selectAll": "Select All on Page",
+    "deselectAll": "Deselect"
+  },
+  "realtime": {
+    "newAlarms": "{{count}} new alarm(s) received",
+    "viewNew": "View Now",
+    "dismiss": "Dismiss"
   },
   "empty": {
     "alarms": "No alarm records found",

@@ -9,6 +9,40 @@ use crate::error::DbError;
 #[derive(Debug)]
 pub struct AlarmRepo;
 
+fn build_filter_query(
+    camera_id: Option<&str>,
+    status: Option<&str>,
+    target_label: Option<&str>,
+    rule_type: Option<&str>,
+    severity: Option<&str>,
+    start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+    end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+) -> sea_orm::Select<Entity> {
+    let mut query = Entity::find();
+    if let Some(cid) = camera_id {
+        query = query.filter(Column::CameraId.eq(cid));
+    }
+    if let Some(st) = status {
+        query = query.filter(Column::Status.eq(st));
+    }
+    if let Some(lbl) = target_label {
+        query = query.filter(Column::TargetLabel.eq(lbl));
+    }
+    if let Some(rt) = rule_type {
+        query = query.filter(Column::RuleType.eq(rt));
+    }
+    if let Some(sev) = severity {
+        query = query.filter(Column::Severity.eq(sev));
+    }
+    if let Some(start) = start_time {
+        query = query.filter(Column::OccurredAt.gte(start));
+    }
+    if let Some(end) = end_time {
+        query = query.filter(Column::OccurredAt.lte(end));
+    }
+    query
+}
+
 impl AlarmRepo {
     pub async fn list_recent(
         db: &DatabaseConnection,
@@ -16,37 +50,65 @@ impl AlarmRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        Self::list_filtered(db, camera_id, None, None, None, limit, offset).await
+        Self::list_filtered(
+            db, camera_id, None, None, None, None, None, None, limit, offset,
+        )
+        .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_filtered(
         db: &DatabaseConnection,
         camera_id: Option<&str>,
         status: Option<&str>,
+        target_label: Option<&str>,
+        rule_type: Option<&str>,
+        severity: Option<&str>,
         start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
         end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        let mut query = Entity::find().order_by_desc(Column::OccurredAt);
-        if let Some(cid) = camera_id {
-            query = query.filter(Column::CameraId.eq(cid));
-        }
-        if let Some(st) = status {
-            query = query.filter(Column::Status.eq(st));
-        }
-        if let Some(start) = start_time {
-            query = query.filter(Column::OccurredAt.gte(start));
-        }
-        if let Some(end) = end_time {
-            query = query.filter(Column::OccurredAt.lte(end));
-        }
-        query
-            .limit(limit)
-            .offset(offset)
-            .all(db)
-            .await
-            .map_err(DbError::from)
+        build_filter_query(
+            camera_id,
+            status,
+            target_label,
+            rule_type,
+            severity,
+            start_time,
+            end_time,
+        )
+        .order_by_desc(Column::OccurredAt)
+        .limit(limit)
+        .offset(offset)
+        .all(db)
+        .await
+        .map_err(DbError::from)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn count_filtered(
+        db: &DatabaseConnection,
+        camera_id: Option<&str>,
+        status: Option<&str>,
+        target_label: Option<&str>,
+        rule_type: Option<&str>,
+        severity: Option<&str>,
+        start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+    ) -> Result<u64, DbError> {
+        build_filter_query(
+            camera_id,
+            status,
+            target_label,
+            rule_type,
+            severity,
+            start_time,
+            end_time,
+        )
+        .count(db)
+        .await
+        .map_err(DbError::from)
     }
 
     pub async fn update_status(
@@ -66,6 +128,39 @@ impl AlarmRepo {
         active.status = sea_orm::Set(status.to_string());
         active.handled_at = sea_orm::Set(Some(chrono::Utc::now()));
         active.update(db).await.map_err(DbError::from)
+    }
+
+    pub async fn update_status_by_ids(
+        db: &DatabaseConnection,
+        ids: &[i64],
+        status: &str,
+    ) -> Result<Vec<Model>, DbError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let now = chrono::Utc::now();
+        let ids_vec = ids.to_vec();
+        let status_str = status.to_string();
+        db.transaction::<_, Vec<Model>, DbError>(|txn| {
+            Box::pin(async move {
+                let records = Entity::find()
+                    .filter(Column::Id.is_in(ids_vec))
+                    .all(txn)
+                    .await?;
+
+                let mut updated = Vec::with_capacity(records.len());
+                for r in records {
+                    let mut active: ActiveModel = r.into();
+                    active.status = sea_orm::Set(status_str.clone());
+                    active.handled_at = sea_orm::Set(Some(now));
+                    let saved = active.update(txn).await.map_err(DbError::from)?;
+                    updated.push(saved);
+                }
+                Ok(updated)
+            })
+        })
+        .await
+        .map_err(DbError::from)
     }
 
     pub async fn insert(

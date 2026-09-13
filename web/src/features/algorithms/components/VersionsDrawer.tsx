@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { algorithmApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import type { AlgorithmItem, AlgorithmVersionItem } from '@/types'
@@ -30,16 +31,15 @@ function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
-export const VersionsDrawer: React.FC<VersionsDrawerProps> = ({
-  isOpen,
-  algorithm,
-  onClose,
-  onRefresh,
-}) => {
+export function VersionsDrawer({ isOpen, algorithm, onClose, onRefresh }: VersionsDrawerProps) {
   const { t } = useTranslation('algo')
   const [operatingVersion, setOperatingVersion] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [versionToUninstall, setVersionToUninstall] = useState<AlgorithmVersionItem | null>(null)
+
+  useDismissStack(isOpen && Boolean(algorithm), onClose, {
+    disabled: operatingVersion !== null,
+  })
 
   if (!isOpen || !algorithm) return null
 

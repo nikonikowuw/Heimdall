@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { AlertCircle, Check, Loader2, Plus, Sliders, Video, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { taskApi, algorithmApi } from '@/lib/api'
 import { StreamModeSelector } from '@/components/StreamModeSelector'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { taskApi, algorithmApi } from '@/lib/api'
 import type { AlgorithmItem, Camera, TaskConfigDto, StreamMode } from '@/types'
 
 export interface CreateTaskModalProps {
@@ -121,17 +122,8 @@ export function CreateTaskModal({
     }
   }, [isOpen, cameras, existingCameraIdsWithTasks, preselectedCameraId])
 
-  // ESC 快捷键关闭
-  useEffect(() => {
-    if (!isOpen) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isSubmitting) {
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, isSubmitting, onClose])
+  // ESC 浮层栈支持
+  useDismissStack(isOpen, onClose, { disabled: isSubmitting })
 
   if (!isOpen) return null
 

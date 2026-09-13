@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   X,
 } from 'lucide-react'
+import { useDismissStack } from '../../hooks/use-dismiss-stack'
 import { gb28181Api } from '../../lib/api'
 import type { Gb28181ConfigResponse } from '../../types'
 
@@ -26,6 +27,8 @@ export function Gb28181Settings(): React.ReactElement {
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [showCardModal, setShowCardModal] = useState(false)
   const [cardCopied, setCardCopied] = useState(false)
+
+  useDismissStack(showCardModal, () => setShowCardModal(false))
 
   // Form state
   const [sipId, setSipId] = useState('')
