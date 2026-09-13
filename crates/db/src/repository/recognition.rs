@@ -17,6 +17,17 @@ pub struct UpdateRecognitionReviewParams<'a> {
     pub selected_similarity: Option<f32>,
 }
 
+fn build_filter_query(camera_id: Option<&str>, status: Option<&str>) -> sea_orm::Select<Entity> {
+    let mut query = Entity::find();
+    if let Some(cid) = camera_id.filter(|s| !s.trim().is_empty()) {
+        query = query.filter(Column::CameraId.eq(cid));
+    }
+    if let Some(st) = status.filter(|s| !s.trim().is_empty()) {
+        query = query.filter(Column::Status.eq(st));
+    }
+    query
+}
+
 #[derive(Debug)]
 pub struct RecognitionRepo;
 
@@ -37,17 +48,22 @@ impl RecognitionRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        let mut query = Entity::find().order_by_desc(Column::RecognizedAt);
-        if let Some(cid) = camera_id {
-            query = query.filter(Column::CameraId.eq(cid));
-        }
-        if let Some(st) = status {
-            query = query.filter(Column::Status.eq(st));
-        }
-        query
+        build_filter_query(camera_id, status)
+            .order_by_desc(Column::RecognizedAt)
             .limit(limit)
             .offset(offset)
             .all(db)
+            .await
+            .map_err(DbError::from)
+    }
+
+    pub async fn count_filtered(
+        db: &DatabaseConnection,
+        camera_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<u64, DbError> {
+        build_filter_query(camera_id, status)
+            .count(db)
             .await
             .map_err(DbError::from)
     }

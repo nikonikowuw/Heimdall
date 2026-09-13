@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import { authApi, algorithmApi, cameraApi, taskApi, oplogApi, ApiError } from './api'
+import {
+  authApi,
+  algorithmApi,
+  cameraApi,
+  taskApi,
+  oplogApi,
+  alarmApi,
+  evidenceApi,
+  ApiError,
+} from './api'
 import { useAuthStore } from '../stores/auth'
 
 describe('API Client', () => {
@@ -302,5 +311,50 @@ describe('API Client', () => {
     expect(tasks).toHaveLength(1)
     expect(tasks[0].cameraId).toBe('cam-01')
     expect(tasks[0].rulesCount).toBe(2)
+  })
+
+  it('alarmApi.count should query alarm counts with parameters', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: { total: 42 },
+        timestamp: 1747584000000,
+      }),
+    })
+
+    const res = await alarmApi.count({ cameraId: 'cam-01', status: 'unprocessed' })
+    expect(res.total).toBe(42)
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/alarms/count?camera_id=cam-01&status=unprocessed',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('evidenceApi.countCaptures and countRecognitions should query counts', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: { total: 88 },
+        timestamp: 1747584000000,
+      }),
+    })
+
+    const capRes = await evidenceApi.countCaptures({ targetLabel: 'person' })
+    expect(capRes.total).toBe(88)
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/evidence/captures/count?target_label=person',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    const recRes = await evidenceApi.countRecognitions({ status: 'confirmed' })
+    expect(recRes.total).toBe(88)
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/evidence/recognitions/count?status=confirmed',
+      expect.objectContaining({ method: 'GET' }),
+    )
   })
 })

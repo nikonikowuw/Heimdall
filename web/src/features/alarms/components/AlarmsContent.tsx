@@ -8,6 +8,7 @@ export type ViewMode = 'cards' | 'table'
 
 export interface AlarmsContentProps {
   alarms: AlarmRecord[]
+  totalCount?: number
   viewMode: ViewMode
   cameraNameMap?: Record<string, string>
   selectedAlarmIds: Set<number>
@@ -16,11 +17,12 @@ export interface AlarmsContentProps {
   onSelect: (alarm: AlarmRecord) => void
   onSelectCrop: (alarm: AlarmRecord) => void
   onToggleStatus: (alarm: AlarmRecord) => void
-  t: (key: string) => string
+  t: (key: string, options?: Record<string, unknown>) => string
 }
 
 export function AlarmsContent({
   alarms,
+  totalCount,
   viewMode,
   cameraNameMap,
   selectedAlarmIds,
@@ -61,7 +63,9 @@ export function AlarmsContent({
             <span className="text-[11px] font-medium">{t('batch.selectAll')}</span>
           </label>
           <span className="font-mono text-[11px]">
-            {alarms.length} {t('columns.evidence')}
+            {totalCount !== undefined && totalCount > alarms.length
+              ? `${alarms.length} / ${totalCount} ${t('columns.evidence')}`
+              : `${alarms.length} ${t('columns.evidence')}`}
           </span>
         </div>
 

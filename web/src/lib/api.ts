@@ -325,6 +325,21 @@ export const evidenceApi = {
     return api.get<CaptureRecord[]>(`/evidence/captures${qs}`)
   },
 
+  countCaptures(params?: {
+    cameraId?: string
+    targetLabel?: string
+    startTime?: number
+    endTime?: number
+  }): Promise<{ total: number }> {
+    const qs = toQueryString({
+      camera_id: params?.cameraId,
+      target_label: params?.targetLabel,
+      start_time: params?.startTime,
+      end_time: params?.endTime,
+    })
+    return api.get<{ total: number }>(`/evidence/captures/count${qs}`)
+  },
+
   listRecognitions(params?: {
     cameraId?: string
     status?: string
@@ -338,6 +353,14 @@ export const evidenceApi = {
       offset: params?.offset,
     })
     return api.get<RecognitionRecord[]>(`/evidence/recognitions${qs}`)
+  },
+
+  countRecognitions(params?: { cameraId?: string; status?: string }): Promise<{ total: number }> {
+    const qs = toQueryString({
+      camera_id: params?.cameraId,
+      status: params?.status,
+    })
+    return api.get<{ total: number }>(`/evidence/recognitions/count${qs}`)
   },
 
   reviewRecognition(

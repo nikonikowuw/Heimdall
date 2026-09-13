@@ -119,11 +119,19 @@ fn default_limit() -> u64 {
     20
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceCountDto {
+    pub total: u64,
+}
+
 /// 受保护的证据数据接口路由
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/captures", get(list_captures))
+        .route("/captures/count", get(count_captures))
         .route("/recognitions", get(list_recognitions))
+        .route("/recognitions/count", get(count_recognitions))
         .route(
             "/recognitions/{recognition_id}/review",
             post(review_recognition),
@@ -133,6 +141,37 @@ pub fn router() -> Router<AppState> {
 /// 证据图片提供路由（支持 Header 或 ?token= 校验）
 pub fn image_router() -> Router<AppState> {
     Router::new().route("/{*path}", get(serve_evidence_image))
+}
+
+async fn count_captures(
+    State(state): State<AppState>,
+    Query(params): Query<EvidenceQuery>,
+) -> Result<ApiResponse<EvidenceCountDto>, ApiError> {
+    let start_utc = params.start_time.and_then(DateTime::from_timestamp_millis);
+    let end_utc = params.end_time.and_then(DateTime::from_timestamp_millis);
+
+    let total = CaptureRepo::count_filtered(
+        &state.db,
+        params.camera_id.as_deref(),
+        params.target_label.as_deref(),
+        start_utc,
+        end_utc,
+    )
+    .await?;
+    Ok(ApiResponse::success(EvidenceCountDto { total }))
+}
+
+async fn count_recognitions(
+    State(state): State<AppState>,
+    Query(params): Query<EvidenceQuery>,
+) -> Result<ApiResponse<EvidenceCountDto>, ApiError> {
+    let total = RecognitionRepo::count_filtered(
+        &state.db,
+        params.camera_id.as_deref(),
+        params.status.as_deref(),
+    )
+    .await?;
+    Ok(ApiResponse::success(EvidenceCountDto { total }))
 }
 
 async fn list_captures(

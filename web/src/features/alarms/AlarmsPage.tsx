@@ -42,6 +42,16 @@ const QUICK_TIME_HOURS: Record<Exclude<QuickTimeRange, 'all' | 'custom'>, number
   '7d': 7 * 24,
 }
 
+function formatLocalDateTimeInput(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const y = date.getFullYear()
+  const m = pad(date.getMonth() + 1)
+  const d = pad(date.getDate())
+  const h = pad(date.getHours())
+  const min = pad(date.getMinutes())
+  return `${y}-${m}-${d}T${h}:${min}`
+}
+
 export function AlarmsPage(): React.ReactElement {
   const { t } = useTranslation('alarm')
   const [activeTab, setActiveTab] = useState<EvidenceTab>('alarms')
@@ -62,6 +72,11 @@ export function AlarmsPage(): React.ReactElement {
   // 分页与总数
   const [page, setPage] = useState<number>(1)
   const [totalCount, setTotalCount] = useState<number>(0)
+  const [tabCounts, setTabCounts] = useState<Record<EvidenceTab, number>>({
+    alarms: 0,
+    captures: 0,
+    recognition: 0,
+  })
   const pageSize = 20
 
   // 数据列表
@@ -86,7 +101,7 @@ export function AlarmsPage(): React.ReactElement {
   const [cropPreviewAlarm, setCropPreviewAlarm] = useState<AlarmRecord | null>(null)
   const [reviewModalRec, setReviewModalRec] = useState<RecognitionRecord | null>(null)
 
-  // 挂载时加载摄像头字典
+  // 挂载时加载摄像头字典并拉取各 Tab 初始总数
   useEffect(() => {
     let isMounted = true
     cameraApi
@@ -95,6 +110,20 @@ export function AlarmsPage(): React.ReactElement {
         if (isMounted) setCameras(list)
       })
       .catch(() => {})
+
+    Promise.all([
+      alarmApi.count().catch(() => ({ total: 0 })),
+      evidenceApi.countCaptures().catch(() => ({ total: 0 })),
+      evidenceApi.countRecognitions().catch(() => ({ total: 0 })),
+    ]).then(([alarmsRes, capturesRes, recsRes]) => {
+      if (!isMounted) return
+      setTabCounts({
+        alarms: alarmsRes.total,
+        captures: capturesRes.total,
+        recognition: recsRes.total,
+      })
+    })
+
     return () => {
       isMounted = false
     }
@@ -108,12 +137,12 @@ export function AlarmsPage(): React.ReactElement {
     return map
   }, [cameras])
 
-  // 处理快捷时间区间
+  // 处理快捷时间区间（使用本地时间格式化，杜绝 UTC 时区偏差）
   const handleQuickTimeChange = (range: QuickTimeRange) => {
     setQuickTimeRange(range)
     if (range in QUICK_TIME_HOURS) {
       const hours = QUICK_TIME_HOURS[range as keyof typeof QUICK_TIME_HOURS]
-      setStartTime(new Date(Date.now() - hours * 3600 * 1000).toISOString().slice(0, 16))
+      setStartTime(formatLocalDateTimeInput(new Date(Date.now() - hours * 3600 * 1000)))
       setEndTime('')
     } else if (range === 'all') {
       setStartTime('')
@@ -125,6 +154,7 @@ export function AlarmsPage(): React.ReactElement {
   const handleSwitchTab = (tab: EvidenceTab) => {
     setActiveTab(tab)
     setSelectedStatus('all')
+    setTotalCount(tabCounts[tab] || 0)
     setPage(1)
   }
 
@@ -164,26 +194,43 @@ export function AlarmsPage(): React.ReactElement {
         ])
         setAlarms(list)
         setTotalCount(countRes.total)
+        setTabCounts((prev) => ({ ...prev, alarms: countRes.total }))
       } else if (activeTab === 'captures') {
-        const list = await evidenceApi.listCaptures({
-          cameraId: camId,
-          targetLabel: targetLbl,
-          startTime: startMs,
-          endTime: endMs,
-          limit: pageSize,
-          offset,
-        })
+        const [list, countRes] = await Promise.all([
+          evidenceApi.listCaptures({
+            cameraId: camId,
+            targetLabel: targetLbl,
+            startTime: startMs,
+            endTime: endMs,
+            limit: pageSize,
+            offset,
+          }),
+          evidenceApi.countCaptures({
+            cameraId: camId,
+            targetLabel: targetLbl,
+            startTime: startMs,
+            endTime: endMs,
+          }),
+        ])
         setCaptures(list)
-        setTotalCount(list.length)
+        setTotalCount(countRes.total)
+        setTabCounts((prev) => ({ ...prev, captures: countRes.total }))
       } else if (activeTab === 'recognition') {
-        const list = await evidenceApi.listRecognitions({
-          cameraId: camId,
-          status: statusParam,
-          limit: pageSize,
-          offset,
-        })
+        const [list, countRes] = await Promise.all([
+          evidenceApi.listRecognitions({
+            cameraId: camId,
+            status: statusParam,
+            limit: pageSize,
+            offset,
+          }),
+          evidenceApi.countRecognitions({
+            cameraId: camId,
+            status: statusParam,
+          }),
+        ])
         setRecognitions(list)
-        setTotalCount(list.length)
+        setTotalCount(countRes.total)
+        setTabCounts((prev) => ({ ...prev, recognition: countRes.total }))
       }
       setSelectedAlarmIds(new Set())
     } catch (err) {
@@ -266,8 +313,10 @@ export function AlarmsPage(): React.ReactElement {
           return [newRecord, ...prev.slice(0, pageSize - 1)]
         })
         setTotalCount((c) => c + 1)
+        setTabCounts((prev) => ({ ...prev, alarms: prev.alarms + 1 }))
       } else {
         setUnreadRealtimeCount((c) => c + 1)
+        setTabCounts((prev) => ({ ...prev, alarms: prev.alarms + 1 }))
       }
     })
 
@@ -329,6 +378,9 @@ export function AlarmsPage(): React.ReactElement {
       if (lightboxAlarm && lightboxAlarm.id === alarm.id) {
         setLightboxAlarm(updated)
       }
+      if (selectedStatus !== 'all') {
+        loadData()
+      }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err))
     }
@@ -365,6 +417,9 @@ export function AlarmsPage(): React.ReactElement {
       const updatedMap = new Map(updatedList.map((item) => [item.id, item]))
       setAlarms((prev) => prev.map((a) => updatedMap.get(a.id) || a))
       setSelectedAlarmIds(new Set())
+      if (selectedStatus !== 'all') {
+        loadData()
+      }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err))
     } finally {
@@ -443,7 +498,7 @@ export function AlarmsPage(): React.ReactElement {
                 activeClass: 'border border-rose-500/30 bg-rose-500/15 text-rose-500 shadow-xs',
                 iconColor: 'text-rose-500',
                 badgeBg: 'bg-rose-500/10 text-rose-500',
-                badgeCount: totalCount,
+                badgeCount: activeTab === 'alarms' ? totalCount : tabCounts.alarms,
               },
               {
                 key: 'captures' as const,
@@ -452,7 +507,7 @@ export function AlarmsPage(): React.ReactElement {
                 activeClass: 'border border-cyan-500/30 bg-cyan-500/15 text-cyan-500 shadow-xs',
                 iconColor: 'text-cyan-500',
                 badgeBg: 'bg-cyan-500/10 text-cyan-500',
-                badgeCount: captures.length,
+                badgeCount: activeTab === 'captures' ? totalCount : tabCounts.captures,
               },
               {
                 key: 'recognition' as const,
@@ -462,7 +517,7 @@ export function AlarmsPage(): React.ReactElement {
                   'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500 shadow-xs',
                 iconColor: 'text-emerald-500',
                 badgeBg: 'bg-emerald-500/10 text-emerald-500',
-                badgeCount: recognitions.length,
+                badgeCount: activeTab === 'recognition' ? totalCount : tabCounts.recognition,
               },
             ] as const
           ).map((tab) => {
@@ -481,9 +536,11 @@ export function AlarmsPage(): React.ReactElement {
               >
                 <Icon className={`h-3.5 w-3.5 ${tab.iconColor}`} />
                 <span>{tab.label}</span>
-                {tab.badgeCount > 0 && isActive && (
+                {tab.badgeCount > 0 && (
                   <span
-                    className={`py-0.2 ml-1 rounded-full px-1.5 font-mono text-[10px] font-bold ${tab.badgeBg}`}
+                    className={`py-0.2 ml-1 rounded-full px-1.5 font-mono text-[10px] font-bold ${
+                      isActive ? tab.badgeBg : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'
+                    }`}
                   >
                     {tab.badgeCount}
                   </span>
@@ -688,6 +745,7 @@ export function AlarmsPage(): React.ReactElement {
         {activeTab === 'alarms' && (
           <AlarmsContent
             alarms={alarms}
+            totalCount={totalCount}
             viewMode={viewMode}
             cameraNameMap={cameraNameMap}
             selectedAlarmIds={selectedAlarmIds}
@@ -718,7 +776,7 @@ export function AlarmsPage(): React.ReactElement {
       <div className="frosted-glass flex items-center justify-between rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
         <div className="flex items-center gap-2">
           <span>{t('pagination.page', { current: page })}</span>
-          {activeTab === 'alarms' && totalCount > 0 && (
+          {totalCount > 0 && (
             <span className="font-mono text-[var(--text-muted)]">
               ({t('pagination.total', { total: totalCount })})
             </span>
