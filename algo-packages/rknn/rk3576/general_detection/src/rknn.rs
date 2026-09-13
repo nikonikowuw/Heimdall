@@ -299,10 +299,33 @@ pub enum RknnInferenceOutput<'a> {
     MultiBranch(Vec<RknnTensorOutput<'a>>),
 }
 
+/// DMA-BUF 缓存条目上限（防止解码器/上游频繁轮转 fd 导致显存和虚拟内存泄露）
+const MAX_DMA_MEM_CACHE: usize = 16;
+
 struct DmaMemEntry {
     mem: *mut RknnTensorMem,
     virt_addr: *mut c_void,
     size: usize,
+    inode: u64,
+    last_used: u64,
+}
+
+impl DmaMemEntry {
+    /// 释放 NPU 显存句柄与内核虚拟内存映射
+    fn release(&mut self, runtime: &RknnRuntime, ctx: RknnContext) {
+        if let Some(destroy_mem) = runtime.rknn_destroy_mem {
+            if !self.mem.is_null() && ctx != 0 {
+                // SAFETY: 释放 NPU 显存句柄，与 rknn_create_mem_from_fd 成对
+                unsafe { (destroy_mem)(ctx, self.mem) };
+                self.mem = null_mut();
+            }
+        }
+        if !self.virt_addr.is_null() && self.virt_addr != libc::MAP_FAILED {
+            // SAFETY: 释放内核 DMA-BUF 虚拟内存映射，与 libc::mmap 成对
+            unsafe { libc::munmap(self.virt_addr, self.size) };
+            self.virt_addr = null_mut();
+        }
+    }
 }
 
 enum RknnBackend {
@@ -310,6 +333,7 @@ enum RknnBackend {
         runtime: Arc<RknnRuntime>,
         ctx: RknnContext,
         dma_mem_cache: std::collections::HashMap<i32, DmaMemEntry>,
+        access_tick: u64,
     },
     Fallback,
 }
@@ -353,20 +377,12 @@ impl Drop for RknnSession {
             ref runtime,
             ref mut ctx,
             ref mut dma_mem_cache,
+            ..
         } = self.backend
         {
             // 释放所有已缓存的 DMA-BUF NPU 显存映射与对应虚拟内存空间
-            for (_fd, entry) in dma_mem_cache.drain() {
-                if let Some(destroy_mem) = runtime.rknn_destroy_mem {
-                    if !entry.mem.is_null() && *ctx != 0 {
-                        // SAFETY: 释放长期复用的 DMA-BUF 显存句柄
-                        unsafe { (destroy_mem)(*ctx, entry.mem) };
-                    }
-                }
-                if !entry.virt_addr.is_null() && entry.virt_addr != libc::MAP_FAILED {
-                    // SAFETY: 释放内核 DMA-BUF 虚拟内存映射
-                    unsafe { libc::munmap(entry.virt_addr, entry.size) };
-                }
+            for (_fd, mut entry) in dma_mem_cache.drain() {
+                entry.release(runtime, *ctx);
             }
 
             if *ctx != 0 {
@@ -518,6 +534,7 @@ impl RknnSession {
                 runtime,
                 ctx,
                 dma_mem_cache: std::collections::HashMap::new(),
+                access_tick: 0,
             },
             input_attr,
             output_attrs,
@@ -646,7 +663,10 @@ impl RknnSession {
         }
     }
 
-    /// 执行硬件 DMA-BUF 零拷贝直通推理，并借用输出抽象视图
+    /// 执行硬件 DMA-BUF 零拷贝直通推理
+    ///
+    /// 生产主路径始终走 `rknn_set_io_mem` 零拷贝直通，避免内核态 memcpy。
+    /// 若 `librknnrt.so` 版本不提供零拷贝 API，则返回明确错误。
     pub fn infer_with_dma_buf<F, R>(
         &mut self,
         dma_fd: i32,
@@ -664,158 +684,175 @@ impl RknnSession {
             }
         };
 
-        let use_zero_copy_io = std::env::var_os("USE_RKNN_ZERO_COPY_IO_MEM").is_some();
-        if use_zero_copy_io {
-            if let (Some(create_mem), Some(set_io_mem)) =
-                (runtime.rknn_create_mem_from_fd, runtime.rknn_set_io_mem)
-            {
-                let mem_ptr = if let RknnBackend::Hardware {
-                    ref mut dma_mem_cache,
-                    ..
-                } = self.backend
-                {
-                    match dma_mem_cache.get(&dma_fd) {
-                        Some(entry) if !entry.mem.is_null() => entry.mem,
-                        _ => {
-                            // SAFETY: 映射 DMA-BUF 虚拟地址。RKNN 驱动要求 rknn_create_mem_from_fd 必须提供非空 virt_addr
-                            let virt_addr = unsafe {
-                                libc::mmap(
-                                    null_mut(),
-                                    buffer_size,
-                                    libc::PROT_READ | libc::PROT_WRITE,
-                                    libc::MAP_SHARED,
-                                    dma_fd,
-                                    0,
-                                )
-                            };
-                            if virt_addr == libc::MAP_FAILED {
-                                return Err(AlgoError::Internal {
-                                    reason: format!(
-                                        "mmap DMA-BUF (fd={dma_fd}) 失败: {}",
-                                        std::io::Error::last_os_error()
-                                    ),
-                                });
-                            }
+        // 零拷贝 API 可用时，始终走 rknn_set_io_mem 直通路径（无需环境变量开关）
+        if let (Some(create_mem), Some(set_io_mem)) =
+            (runtime.rknn_create_mem_from_fd, runtime.rknn_set_io_mem)
+        {
+            let mem_ptr = self.ensure_dma_mem_cached(ctx, dma_fd, buffer_size, create_mem)?;
 
-                            // SAFETY: ctx 为有效上下文，dma_fd 为有效描述符，virt_addr 为有效映射
-                            let ptr = unsafe {
-                                (create_mem)(ctx, dma_fd, virt_addr, buffer_size as u32, 0)
-                            };
-                            if ptr.is_null() {
-                                // SAFETY: 释放刚映射的虚拟内存
-                                unsafe { libc::munmap(virt_addr, buffer_size) };
-                                return Err(AlgoError::Internal {
-                                    reason: format!(
-                                        "rknn_create_mem_from_fd 绑定 DMA-BUF (fd={dma_fd}) 失败"
-                                    ),
-                                });
-                            }
-                            dma_mem_cache.insert(
-                                dma_fd,
-                                DmaMemEntry {
-                                    mem: ptr,
-                                    virt_addr,
-                                    size: buffer_size,
-                                },
-                            );
-                            ptr
-                        }
-                    }
-                } else {
-                    unreachable!()
-                };
-
-                // SAFETY: mem_ptr 为有效 RknnTensorMem 句柄，input_attr 为合法输入属性指针
-                let ret = unsafe { (set_io_mem)(ctx, mem_ptr, &mut self.input_attr) };
-                if ret != RKNN_SUCC {
-                    return Err(AlgoError::Internal {
-                        reason: format!("rknn_set_io_mem 设置输入张量失败，错误码: {ret}"),
-                    });
-                }
-
-                // SAFETY: 触发 NPU 推理运算
-                let ret = unsafe { (runtime.rknn_run)(ctx, null_mut()) };
-                if ret != RKNN_SUCC {
-                    return Err(AlgoError::Internal {
-                        reason: format!("rknn_run 推理失败，错误码: {ret}"),
-                    });
-                }
-
-                return self.get_hardware_outputs(&runtime, ctx, process_fn);
+            // 使用本地副本传递给 C FFI，防止底层驱动可能存在的非只读修改污染模型初始状态
+            let mut input_attr = self.input_attr;
+            // SAFETY: mem_ptr 为有效 RknnTensorMem 句柄，input_attr 为合法输入属性指针
+            let ret = unsafe { (set_io_mem)(ctx, mem_ptr, &mut input_attr) };
+            if ret != RKNN_SUCC {
+                return Err(AlgoError::Internal {
+                    reason: format!("rknn_set_io_mem 设置输入张量失败，错误码: {ret}"),
+                });
             }
+
+            // SAFETY: 触发 NPU 推理运算
+            let ret = unsafe { (runtime.rknn_run)(ctx, null_mut()) };
+            if ret != RKNN_SUCC {
+                return Err(AlgoError::Internal {
+                    reason: format!("rknn_run 推理失败，错误码: {ret}"),
+                });
+            }
+
+            return self.get_hardware_outputs(&runtime, ctx, process_fn);
         }
 
-        // 常驻硬件加速默认主路径：
-        // 针对 RK3576 NPU 总线架构，复用缓存映射的用户态虚拟地址并通过 rknn_inputs_set 注入
-        // 硬件驱动内部专用高带宽物理通路 (~9.8ms)，效率显著高于走非一致性 CMA DMA-BUF 外部总线 (~15.4ms)
-        let virt_addr = if let RknnBackend::Hardware {
+        // 降级拦截：librknnrt.so 版本不支持零拷贝 API，根据契约拒绝伪装为硬件加速
+        tracing::warn!(
+            "[infer_fast_path] librknnrt.so 不支持 rknn_set_io_mem，无法执行 DMA-BUF 零拷贝推理"
+        );
+        Err(AlgoError::Internal {
+            reason: "当前 librknnrt.so 不支持 rknn_set_io_mem 零拷贝 API，无法执行 DMA-BUF 推理"
+                .to_string(),
+        })
+    }
+
+    /// 确保 DMA-BUF fd 对应的 NPU 显存映射已缓存（mmap + rknn_create_mem_from_fd）
+    ///
+    /// 首次遇到新 fd 或句柄失效/容量变化时执行 mmap 与 NPU 内存绑定，后续帧直接复用缓存句柄。
+    /// 严格遵循 `MAX_DMA_MEM_CACHE` 上限进行 LRU 淘汰，避免内核映射与 NPU 显存泄漏。
+    fn ensure_dma_mem_cached(
+        &mut self,
+        ctx: RknnContext,
+        dma_fd: i32,
+        buffer_size: usize,
+        create_mem: RknnCreateMemFromFdFn,
+    ) -> Result<*mut RknnTensorMem, AlgoError> {
+        if dma_fd < 0 {
+            return Err(AlgoError::IncompatibleFrame {
+                reason: format!("无效的 DMA-BUF 文件描述符: {dma_fd}"),
+            });
+        }
+        if buffer_size == 0 {
+            return Err(AlgoError::IncompatibleFrame {
+                reason: "DMA-BUF 缓冲区大小不能为 0".to_string(),
+            });
+        }
+
+        // 获取文件描述符底层 inode，用于精确检测内核 fd 复用与换位
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: stat 指向可写的 libc::stat 结构体
+        let ret = unsafe { libc::fstat(dma_fd, stat.as_mut_ptr()) };
+        if ret != 0 {
+            return Err(AlgoError::IncompatibleFrame {
+                reason: format!(
+                    "fstat DMA-BUF (fd={dma_fd}) 失败: {}",
+                    std::io::Error::last_os_error()
+                ),
+            });
+        }
+        // SAFETY: fstat 成功返回后完整初始化 stat
+        let stat = unsafe { stat.assume_init() };
+        let inode = stat.st_ino;
+
+        let tick = if let RknnBackend::Hardware {
+            ref mut dma_mem_cache,
+            ref mut access_tick,
+            ref runtime,
+            ..
+        } = self.backend
+        {
+            *access_tick = access_tick.wrapping_add(1);
+            let current_tick = *access_tick;
+
+            // 缓存命中校验：fd 存在、显存句柄有效、buffer_size 一致，且 inode 精确匹配
+            if let Some(entry) = dma_mem_cache.get_mut(&dma_fd) {
+                if !entry.mem.is_null() && entry.size == buffer_size && entry.inode == inode {
+                    entry.last_used = current_tick;
+                    return Ok(entry.mem);
+                }
+            }
+
+            // 缓存未命中或失效：先清理旧条目（释放旧显存句柄并 munmap 虚拟映射），避免内存泄漏
+            if let Some(mut old_entry) = dma_mem_cache.remove(&dma_fd) {
+                old_entry.release(runtime, ctx);
+            }
+
+            // LRU 淘汰：若缓存条目达到上限，淘汰最久未访问的条目
+            while dma_mem_cache.len() >= MAX_DMA_MEM_CACHE {
+                let oldest_fd = dma_mem_cache
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.last_used)
+                    .map(|(&fd, _)| fd);
+                if let Some(fd) = oldest_fd {
+                    if let Some(mut evicted) = dma_mem_cache.remove(&fd) {
+                        evicted.release(runtime, ctx);
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            current_tick
+        } else {
+            unreachable!("ensure_dma_mem_cached called on non-hardware backend")
+        };
+
+        // 缓存未命中：mmap DMA-BUF 并绑定到 NPU 上下文
+        // SAFETY: 映射 DMA-BUF 虚拟地址。RKNN 驱动要求 rknn_create_mem_from_fd 必须提供非空 virt_addr。
+        //         RK3568/RK3576 必须声明 PROT_READ | PROT_WRITE，只读映射将在驱动写入时触发 SIGSEGV。
+        let virt_addr = unsafe {
+            libc::mmap(
+                null_mut(),
+                buffer_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                dma_fd,
+                0,
+            )
+        };
+        if virt_addr == libc::MAP_FAILED {
+            return Err(AlgoError::Internal {
+                reason: format!(
+                    "mmap DMA-BUF (fd={dma_fd}, size={buffer_size}) 失败: {}",
+                    std::io::Error::last_os_error()
+                ),
+            });
+        }
+
+        // SAFETY: ctx 为有效上下文，dma_fd 为有效描述符，virt_addr 为有效映射
+        let ptr = unsafe { (create_mem)(ctx, dma_fd, virt_addr, buffer_size as u32, 0) };
+        if ptr.is_null() {
+            // SAFETY: create_mem 失败，释放刚映射的虚拟内存
+            unsafe { libc::munmap(virt_addr, buffer_size) };
+            return Err(AlgoError::Internal {
+                reason: format!("rknn_create_mem_from_fd 绑定 DMA-BUF (fd={dma_fd}) 失败"),
+            });
+        }
+
+        // 先缓存再返回，确保后续帧 cache hit；失败路径上方已提前返回，不会插入脏条目
+        if let RknnBackend::Hardware {
             ref mut dma_mem_cache,
             ..
         } = self.backend
         {
-            match dma_mem_cache.get(&dma_fd) {
-                Some(entry) if !entry.virt_addr.is_null() => entry.virt_addr,
-                _ => {
-                    // SAFETY: 映射内核 DMA-BUF 虚拟内存空间并长期复用
-                    let virt_addr = unsafe {
-                        libc::mmap(
-                            null_mut(),
-                            buffer_size,
-                            libc::PROT_READ,
-                            libc::MAP_SHARED,
-                            dma_fd,
-                            0,
-                        )
-                    };
-                    if virt_addr == libc::MAP_FAILED {
-                        return Err(AlgoError::Internal {
-                            reason: format!(
-                                "mmap DMA-BUF (fd={dma_fd}) 失败: {}",
-                                std::io::Error::last_os_error()
-                            ),
-                        });
-                    }
-                    dma_mem_cache.insert(
-                        dma_fd,
-                        DmaMemEntry {
-                            mem: null_mut(),
-                            virt_addr,
-                            size: buffer_size,
-                        },
-                    );
-                    virt_addr
-                }
-            }
-        } else {
-            unreachable!()
-        };
-
-        let mut input = RknnInput {
-            index: 0,
-            buf: virt_addr,
-            size: buffer_size as u32,
-            pass_through: 0,
-            type_: RknnTensorType::Uint8,
-            fmt: RknnTensorFormat::Nhwc,
-        };
-
-        // SAFETY: input 是受 dma_mem_cache 保护的有效映射内存
-        let ret = unsafe { (runtime.rknn_inputs_set)(ctx, 1, &mut input) };
-        if ret != RKNN_SUCC {
-            return Err(AlgoError::Internal {
-                reason: format!("rknn_inputs_set 提交输入失败，错误码: {ret}"),
-            });
+            dma_mem_cache.insert(
+                dma_fd,
+                DmaMemEntry {
+                    mem: ptr,
+                    virt_addr,
+                    size: buffer_size,
+                    inode,
+                    last_used: tick,
+                },
+            );
         }
 
-        // SAFETY: 触发 NPU 推理运算
-        let ret = unsafe { (runtime.rknn_run)(ctx, null_mut()) };
-        if ret != RKNN_SUCC {
-            return Err(AlgoError::Internal {
-                reason: format!("rknn_run 推理失败，错误码: {ret}"),
-            });
-        }
-
-        self.get_hardware_outputs(&runtime, ctx, process_fn)
+        Ok(ptr)
     }
 
     fn get_hardware_outputs<F, R>(
@@ -874,5 +911,39 @@ impl RknnSession {
             };
             process_fn(&RknnInferenceOutput::SingleFloat(float_slice))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ffi_layout_matches_rknn_header() {
+        assert_eq!(std::mem::align_of::<RknnTensorAttr>(), 4);
+        assert_eq!(std::mem::size_of::<RknnTensorAttr>(), 376);
+        assert_eq!(std::mem::align_of::<RknnTensorMem>(), 8);
+        assert_eq!(std::mem::size_of::<RknnTensorMem>(), 40);
+        assert_eq!(std::mem::size_of::<RknnInput>(), 32);
+        assert_eq!(std::mem::size_of::<RknnOutput>(), 24);
+    }
+
+    #[test]
+    fn test_max_dma_mem_cache_limit() {
+        const { assert!(MAX_DMA_MEM_CACHE > 0 && MAX_DMA_MEM_CACHE <= 64) };
+    }
+
+    #[test]
+    fn test_dma_mem_entry_fields() {
+        let entry = DmaMemEntry {
+            mem: null_mut(),
+            virt_addr: null_mut(),
+            size: 1024,
+            inode: 42,
+            last_used: 1,
+        };
+        assert_eq!(entry.size, 1024);
+        assert_eq!(entry.inode, 42);
+        assert_eq!(entry.last_used, 1);
     }
 }

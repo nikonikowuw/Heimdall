@@ -1242,7 +1242,7 @@ fn dma_identity(layout: &DmaBufLayout) -> Result<DmaIdentity, AlgoError> {
     // SAFETY: fstat 返回成功后完整写入 stat。
     let stat = unsafe { stat.assume_init() };
     Ok(DmaIdentity {
-        device: stat.st_dev,
+        device: stat.st_dev as u64,
         inode: stat.st_ino,
         size: layout.size,
         stride: layout.stride[0],

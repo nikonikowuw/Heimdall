@@ -15,6 +15,7 @@
 pub mod c_abi;
 pub mod cv;
 pub mod emitter;
+pub mod env;
 pub mod error;
 pub mod frame;
 pub mod macros;
@@ -24,6 +25,7 @@ pub mod plugin;
 pub mod testing;
 
 pub use emitter::ResultEmitter;
+pub use env::PackageEnv;
 pub use error::AlgoError;
 pub use frame::{FrameHandleView, SafeFrame};
 pub use math::NormBox;
@@ -36,6 +38,7 @@ pub mod prelude {
     pub use crate::c_abi::*;
     pub use crate::cv::{self, CvBuffer, PreprocessMode};
     pub use crate::emitter::ResultEmitter;
+    pub use crate::env::PackageEnv;
     pub use crate::error::AlgoError;
     pub use crate::export_algo;
     pub use crate::frame::{FrameHandleView, SafeFrame};

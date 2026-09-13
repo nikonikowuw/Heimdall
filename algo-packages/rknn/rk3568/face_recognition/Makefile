@@ -11,11 +11,11 @@ WORKSPACE_ROOT := ../../../..
 all: package
 
 # 检测交叉编译工具链 (优先 cross, 其次 cargo zigbuild, 保底 cargo)
-CARGO_CROSS ?= $(shell if command -v cross >/dev/null 2>&1; then echo "CROSS_CONTAINER_ENGINE=podman cross"; elif cargo zigbuild -h >/dev/null 2>&1; then echo "cargo zigbuild"; else echo "cargo"; fi)
+CARGO_CROSS ?= $(shell if command -v cross >/dev/null 2>&1; then echo "CROSS_CONTAINER_ENGINE=podman cross build"; elif cargo zigbuild -h >/dev/null 2>&1; then echo "cargo zigbuild"; else echo "cargo build"; fi)
 
 # 交叉编译 release
 build:
-	cd $(WORKSPACE_ROOT) && $(CARGO_CROSS) build -p $(PACKAGE) --release --target $(TARGET_TRIPLE)
+	cd $(WORKSPACE_ROOT) && $(CARGO_CROSS) -p $(PACKAGE) --release --target $(TARGET_TRIPLE)
 	@mkdir -p lib
 	cp $(WORKSPACE_ROOT)/target/$(TARGET_TRIPLE)/release/libface_recognition_rk3568.so lib/libface_recognition.so
 

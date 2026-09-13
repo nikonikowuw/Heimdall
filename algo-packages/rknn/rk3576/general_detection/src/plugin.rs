@@ -18,28 +18,48 @@ use {
 };
 
 #[cfg(target_os = "linux")]
-/// 寻找算法包内有效的 RKNN 模型文件路径
-fn locate_model_file(package_root: &Path) -> Result<std::path::PathBuf, AlgoError> {
-    // 1. 优先检测标准模型路径
-    let default_model = package_root.join("model/yolov8n-640x384-rk3576.rknn");
-    if default_model.is_file() {
-        return Ok(default_model);
+/// 寻找算法包内有效的 RKNN 模型文件路径（优先使用当前包私有 .env 配置，零全局污染）
+fn locate_model_file(
+    package_root: &Path,
+    env: &algo_sdk::env::PackageEnv,
+) -> Result<std::path::PathBuf, AlgoError> {
+    // 1. 优先使用当前包私有 .env 配置
+    if env.get("MODEL_PATH").is_some() {
+        return env.resolve_model_path(
+            package_root,
+            "MODEL_PATH",
+            "model/yolov8n-640x384-rk3576.rknn",
+        );
     }
 
-    // 2. 遍历 model/ 目录查找第一个 .rknn 文件
+    // 2. 检测标准模型路径
+    let default_model = package_root.join("model/yolov8n-640x384-rk3576.rknn");
+    if default_model.is_file() {
+        return default_model
+            .canonicalize()
+            .map_err(|e| AlgoError::ModelLoad {
+                reason: format!("规范化模型路径失败: {e}"),
+            });
+    }
+
+    // 3. 遍历 model/ 目录查找第一个 .rknn 文件
     let model_dir = package_root.join("model");
     if let Ok(entries) = std::fs::read_dir(&model_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rknn") {
-                return Ok(path);
+                return path.canonicalize().map_err(|e| AlgoError::ModelLoad {
+                    reason: format!("规范化模型路径失败: {e}"),
+                });
             }
         }
     }
 
-    Err(AlgoError::Internal {
-        reason: format!("在算法包模型目录中未找到 .rknn 模型: {:?}", model_dir),
-    })
+    env.resolve_model_path(
+        package_root,
+        "MODEL_PATH",
+        "model/yolov8n-640x384-rk3576.rknn",
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -65,8 +85,10 @@ impl std::fmt::Debug for GeneralDetector {
 impl AlgoPlugin for GeneralDetector {
     type Config = InstanceConfig;
 
-    fn init(ctx: &InitContext<'_>, config: Self::Config) -> Result<Self, AlgoError> {
-        let model_path = locate_model_file(ctx.package_root)?;
+    fn init(ctx: &InitContext<'_>, mut config: Self::Config) -> Result<Self, AlgoError> {
+        let env = ctx.load_env();
+        config.apply_env(&env);
+        let model_path = locate_model_file(ctx.package_root, &env)?;
         let session = match RknnRuntime::load(ctx.package_root) {
             Ok(runtime) => {
                 tracing::info!(

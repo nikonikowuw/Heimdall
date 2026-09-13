@@ -18,37 +18,13 @@ use {
     std::path::{Path, PathBuf},
 };
 
-/// 算法包内有效的 RKNN 模型文件查找
-///
-/// 优先级：
-/// 1. 环境变量 MODEL_PATH
-/// 2. 默认路径 model/best_hybrid.rknn
+/// 算法包内有效的 RKNN 模型文件查找（优先使用包级私有 .env 配置，零全局污染）
 #[cfg(target_os = "linux")]
-fn locate_model_file(package_root: &Path) -> Result<std::path::PathBuf, AlgoError> {
-    // 1. 优先使用环境变量 MODEL_PATH
-    if let Ok(env_path) = std::env::var("MODEL_PATH") {
-        let model_path = if Path::new(&env_path).is_absolute() {
-            PathBuf::from(&env_path)
-        } else {
-            package_root.join(&env_path)
-        };
-        if model_path.is_file() {
-            return Ok(model_path);
-        }
-        return Err(AlgoError::Internal {
-            reason: format!("环境变量 MODEL_PATH 指向的模型文件不存在: {:?}", model_path),
-        });
-    }
-
-    // 2. 使用默认路径
-    let model_path = package_root.join("model/best_hybrid.rknn");
-    if model_path.is_file() {
-        return Ok(model_path);
-    }
-
-    Err(AlgoError::Internal {
-        reason: format!("未找到模型文件: {:?}", model_path),
-    })
+fn locate_model_file(
+    package_root: &Path,
+    env: &algo_sdk::env::PackageEnv,
+) -> Result<std::path::PathBuf, AlgoError> {
+    env.resolve_model_path(package_root, "MODEL_PATH", "model/best_hybrid.rknn")
 }
 
 #[cfg(target_os = "linux")]
@@ -74,8 +50,10 @@ impl std::fmt::Debug for SafetyHelmetDetector {
 impl AlgoPlugin for SafetyHelmetDetector {
     type Config = InstanceConfig;
 
-    fn init(ctx: &InitContext<'_>, config: Self::Config) -> Result<Self, AlgoError> {
-        let model_path = locate_model_file(ctx.package_root)?;
+    fn init(ctx: &InitContext<'_>, mut config: Self::Config) -> Result<Self, AlgoError> {
+        let env = ctx.load_env();
+        config.apply_env(&env);
+        let model_path = locate_model_file(ctx.package_root, &env)?;
         let session = match RknnRuntime::load(ctx.package_root) {
             Ok(runtime) => {
                 tracing::info!(

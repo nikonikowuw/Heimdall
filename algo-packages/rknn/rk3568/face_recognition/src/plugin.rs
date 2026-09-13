@@ -29,7 +29,9 @@ impl std::fmt::Debug for FaceRecognizer {
 impl AlgoPlugin for FaceRecognizer {
     type Config = InstanceConfig;
 
-    fn init(ctx: &InitContext<'_>, config: Self::Config) -> Result<Self, AlgoError> {
+    fn init(ctx: &InitContext<'_>, mut config: Self::Config) -> Result<Self, AlgoError> {
+        let env = ctx.load_env();
+        config.apply_env(&env);
         config
             .validate()
             .map_err(|reason| AlgoError::ConfigParse { reason })?;

@@ -22,6 +22,13 @@ pub struct InitContext<'a> {
     pub is_self_test: bool,
 }
 
+impl<'a> InitContext<'a> {
+    /// 加载当前算法包根目录下的私有 `.env` 文件（不污染全局环境）
+    pub fn load_env(&self) -> crate::env::PackageEnv {
+        crate::env::PackageEnv::load(self.package_root)
+    }
+}
+
 /// 算法插件核心契约 Trait
 pub trait AlgoPlugin: Sized + Send + 'static {
     /// 插件配置类型，必须支持 Serde 反序列化与默认值

@@ -15,9 +15,12 @@ pub struct PackageManifest {
     pub manifest_version: u32,
     pub algorithm_id: String,
     pub platform_id: String,
-    pub runtime_constraints: RuntimeConstraints,
-    pub models: ModelsManifest,
-    pub self_test: SelfTestManifest,
+    #[serde(default)]
+    pub runtime_constraints: Option<RuntimeConstraints>,
+    #[serde(default)]
+    pub models: Option<ModelsManifest>,
+    #[serde(default)]
+    pub self_test: Option<SelfTestManifest>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -34,8 +37,66 @@ pub struct ModelsManifest {
     pub detector: ModelManifest,
     #[serde(deserialize_with = "deserialize_embedder")]
     pub embedder: ModelManifest,
-    #[serde(rename = "embedding_dimension")]
+    #[serde(
+        rename = "embedding_dimension",
+        default = "default_embedding_dimension"
+    )]
     pub embedding_dimension: u32,
+}
+
+fn default_embedding_dimension() -> u32 {
+    512
+}
+
+impl Default for ModelsManifest {
+    fn default() -> Self {
+        Self {
+            detector: ModelManifest {
+                path: "model/yolov8n-face-640x384_rk3568_mixed_face.rknn".to_string(),
+                sha256: String::new(),
+                input: ModelInputManifest {
+                    width: 640,
+                    height: 384,
+                    channels: 3,
+                    pixel_format: "rgb24".to_string(),
+                    layout: "nchw".to_string(),
+                    data_type: "uint8".to_string(),
+                    pass_through: false,
+                    mean_values: [0.0; 3],
+                    std_values: [255.0; 3],
+                },
+                outputs: DETECTOR_OUTPUT_SHAPES
+                    .iter()
+                    .map(|shape| ModelOutputManifest {
+                        shape: *shape,
+                        layout: "nchw".to_string(),
+                        data_type: "float32".to_string(),
+                    })
+                    .collect(),
+            },
+            embedder: ModelManifest {
+                path: "model/edgeface_xs_gamma_06_rk3568_fp16.rknn".to_string(),
+                sha256: String::new(),
+                input: ModelInputManifest {
+                    width: 112,
+                    height: 112,
+                    channels: 3,
+                    pixel_format: "rgb24".to_string(),
+                    layout: "nchw".to_string(),
+                    data_type: "uint8".to_string(),
+                    pass_through: false,
+                    mean_values: [127.5; 3],
+                    std_values: [127.5; 3],
+                },
+                outputs: vec![ModelOutputManifest {
+                    shape: [1, 512, 1, 1],
+                    layout: "nchw".to_string(),
+                    data_type: "float32".to_string(),
+                }],
+            },
+            embedding_dimension: 512,
+        }
+    }
 }
 
 fn deserialize_detector<'de, D>(deserializer: D) -> Result<ModelManifest, D::Error>
@@ -155,6 +216,7 @@ pub struct SelfTestManifest {
 pub struct LoadedPackage {
     pub root: PathBuf,
     pub manifest: PackageManifest,
+    pub models: ModelsManifest,
     pub detector_path: PathBuf,
     pub embedder_path: PathBuf,
 }
@@ -180,7 +242,7 @@ impl LoadedPackage {
             std::fs::read(&manifest_path).map_err(|error| AlgoError::ModelLoad {
                 reason: format!("读取算法包 manifest 失败 ({manifest_path:?}): {error}"),
             })?;
-        let manifest: PackageManifest =
+        let mut manifest: PackageManifest =
             serde_json::from_slice(&manifest_bytes).map_err(|error| AlgoError::ModelLoad {
                 reason: format!("解析算法包 manifest 失败: {error}"),
             })?;
@@ -199,17 +261,31 @@ impl LoadedPackage {
                 ),
             });
         }
-        if manifest.models.embedding_dimension != 512 {
+
+        let mut models = manifest.models.take().unwrap_or_default();
+        let env = algo_sdk::env::PackageEnv::load(&root);
+
+        // 优先使用当前包私有的 .env 配置路径覆盖模型（零全局污染）
+        if let Some(custom_detector) = env.get_str("DETECTOR_MODEL_PATH") {
+            models.detector.path = custom_detector;
+            models.detector.sha256.clear();
+        }
+        if let Some(custom_embedder) = env.get_str("EMBEDDER_MODEL_PATH") {
+            models.embedder.path = custom_embedder;
+            models.embedder.sha256.clear();
+        }
+
+        if models.embedding_dimension != 512 {
             return Err(AlgoError::ModelLoad {
                 reason: format!(
                     "EdgeFace embedding_dimension 必须为 512，实际 {}",
-                    manifest.models.embedding_dimension
+                    models.embedding_dimension
                 ),
             });
         }
         validate_input_manifest(
             "detector",
-            &manifest.models.detector.input,
+            &models.detector.input,
             640,
             384,
             [0.0, 0.0, 0.0],
@@ -217,7 +293,7 @@ impl LoadedPackage {
         )?;
         validate_input_manifest(
             "embedder",
-            &manifest.models.embedder.input,
+            &models.embedder.input,
             112,
             112,
             [127.5, 127.5, 127.5],
@@ -225,30 +301,24 @@ impl LoadedPackage {
         )?;
         validate_model_outputs(
             "detector",
-            &manifest.models.detector.outputs,
+            &models.detector.outputs,
             &DETECTOR_OUTPUT_SHAPES,
             &["nchw"],
         )?;
         validate_model_outputs(
             "embedder",
-            &manifest.models.embedder.outputs,
+            &models.embedder.outputs,
             &[[1, 512, 1, 1]],
             &["nc", "nchw"],
         )?;
 
-        let detector_path = verify_model(
-            &root,
-            &manifest.models.detector,
-            Some("DETECTOR_MODEL_PATH"),
-        )?;
-        let embedder_path = verify_model(
-            &root,
-            &manifest.models.embedder,
-            Some("EMBEDDER_MODEL_PATH"),
-        )?;
+        let detector_path = verify_model(&root, &models.detector)?;
+        let embedder_path = verify_model(&root, &models.embedder)?;
+        manifest.models = Some(models.clone());
         Ok(Self {
             root,
             manifest,
+            models,
             detector_path,
             embedder_path,
         })
@@ -327,11 +397,7 @@ fn validate_model_outputs(
     }
     Ok(())
 }
-fn verify_model(
-    root: &Path,
-    model: &ModelManifest,
-    env_var_name: Option<&str>,
-) -> Result<PathBuf, AlgoError> {
+fn verify_model(root: &Path, model: &ModelManifest) -> Result<PathBuf, AlgoError> {
     let relative = Path::new(&model.path);
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
@@ -345,29 +411,6 @@ fn verify_model(
         return Err(AlgoError::ModelLoad {
             reason: format!("模型路径不安全: {}", model.path),
         });
-    }
-
-    // 优先使用环境变量（如果指定）
-    if let Some(env_name) = env_var_name {
-        if let Ok(env_path) = std::env::var(env_name) {
-            let env_path_obj = Path::new(&env_path);
-            let path = if env_path_obj.is_absolute() {
-                env_path_obj
-                    .canonicalize()
-                    .map_err(|error| AlgoError::ModelLoad {
-                        reason: format!("环境变量 {env_name} 指向的模型文件无法规范化: {error}"),
-                    })?
-            } else {
-                root.join(env_path_obj)
-                    .canonicalize()
-                    .map_err(|error| AlgoError::ModelLoad {
-                        reason: format!("环境变量 {env_name} 指向的模型文件无法规范化: {error}"),
-                    })?
-            };
-            if path.is_file() {
-                return Ok(path);
-            }
-        }
     }
 
     let path = root
@@ -418,7 +461,7 @@ mod tests {
     fn package_manifest_matches_checked_in_models() {
         let package = LoadedPackage::load(Path::new(env!("CARGO_MANIFEST_DIR")))
             .expect("checked-in RKNN manifest and model hashes must be valid");
-        assert_eq!(package.manifest.models.detector.outputs.len(), 12);
-        assert_eq!(package.manifest.models.embedding_dimension, 512);
+        assert_eq!(package.models.detector.outputs.len(), 12);
+        assert_eq!(package.models.embedding_dimension, 512);
     }
 }

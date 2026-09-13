@@ -152,6 +152,7 @@ fn main() {
     eprintln!("fire_smoke_detection_run_local 仅支持在 Linux/Rockchip 平台上运行");
 }
 
+#[cfg(target_os = "linux")]
 fn get_arg(args: &[String], key: &str, default: &str) -> String {
     args.iter()
         .position(|a| a == key)
@@ -160,6 +161,7 @@ fn get_arg(args: &[String], key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+#[cfg(target_os = "linux")]
 fn draw_rect(img: &mut image::RgbImage, x1: i32, y1: i32, x2: i32, y2: i32, color: image::Rgb<u8>) {
     let max_x = img.width() as i32 - 1;
     let max_y = img.height() as i32 - 1;
@@ -177,6 +179,7 @@ fn draw_rect(img: &mut image::RgbImage, x1: i32, y1: i32, x2: i32, y2: i32, colo
     }
 }
 
+#[cfg(target_os = "linux")]
 struct Stats {
     avg: f64,
     p50: f64,
@@ -184,6 +187,7 @@ struct Stats {
     fps: f64,
 }
 
+#[cfg(target_os = "linux")]
 fn compute_stats(samples: &mut [f64]) -> Stats {
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let sum: f64 = samples.iter().sum();

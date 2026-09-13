@@ -21,7 +21,7 @@ help:
 		'make clean     remove package build artifacts'
 
 build:
-	cd $(WORKSPACE_ROOT) && $(CARGO_ZIGBUILD) build -p $(PACKAGE) --release --target $(TARGET)
+	cd $(WORKSPACE_ROOT) && $(CARGO_ZIGBUILD) -p $(PACKAGE) --release --target $(TARGET)
 	@mkdir -p lib
 	cp $(WORKSPACE_ROOT)/target/$(TARGET)/release/libface_recognition.so $(LIB)
 

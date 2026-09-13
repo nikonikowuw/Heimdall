@@ -40,7 +40,9 @@ impl AlgoPlugin for FaceRecognizer {
     type Config = InstanceConfig;
 
     #[cfg(target_os = "macos")]
-    fn init(ctx: &InitContext<'_>, config: Self::Config) -> Result<Self, AlgoError> {
+    fn init(ctx: &InitContext<'_>, mut config: Self::Config) -> Result<Self, AlgoError> {
+        let env = ctx.load_env();
+        config.apply_env(&env);
         config
             .validate()
             .map_err(|reason| AlgoError::ConfigParse { reason })?;
@@ -57,7 +59,9 @@ impl AlgoPlugin for FaceRecognizer {
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn init(_ctx: &InitContext<'_>, config: Self::Config) -> Result<Self, AlgoError> {
+    fn init(ctx: &InitContext<'_>, mut config: Self::Config) -> Result<Self, AlgoError> {
+        let env = ctx.load_env();
+        config.apply_env(&env);
         config
             .validate()
             .map_err(|reason| AlgoError::ConfigParse { reason })?;

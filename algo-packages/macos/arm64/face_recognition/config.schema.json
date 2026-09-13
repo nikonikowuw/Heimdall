@@ -7,46 +7,50 @@
   "properties": {
     "detection_confidence_threshold": {
       "type": "number",
+      "title": "检测置信度阈值",
+      "description": "人脸检测框置信度过滤阈值，低于该值的候选框将被过滤",
       "minimum": 0.0,
       "maximum": 1.0,
       "default": 0.5
     },
     "min_face_size": {
       "type": "integer",
+      "title": "最小人脸尺寸",
+      "description": "人脸框最小边长像素限制（低于该尺寸的人脸将被过滤）",
       "minimum": 1,
       "default": 30
     },
-    "quality_thresholds": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "min_score": {
-          "type": "number",
-          "minimum": 0.0,
-          "maximum": 1.0,
-          "default": 0.3
-        },
-        "max_yaw": {
-          "type": "number",
-          "minimum": 0.0,
-          "maximum": 180.0,
-          "default": 45.0
-        },
-        "max_pitch": {
-          "type": "number",
-          "minimum": 0.0,
-          "maximum": 90.0,
-          "default": 30.0
-        },
-        "max_blur": {
-          "type": "number",
-          "minimum": 0.0,
-          "maximum": 1.0,
-          "default": 0.7
-        }
-      },
-      "default": {}
+    "quality_min_score": {
+      "type": "number",
+      "title": "最小人脸质量分数",
+      "description": "人脸综合质量门控得分，低于此阈值的人脸不参与识别比对",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.3
+    },
+    "quality_max_yaw": {
+      "type": "number",
+      "title": "最大偏航角 (Yaw)",
+      "description": "人脸水平偏转最大角度限制，超过此角度的大侧脸将被过滤",
+      "minimum": 0.0,
+      "maximum": 180.0,
+      "default": 45.0
+    },
+    "quality_max_pitch": {
+      "type": "number",
+      "title": "最大俯仰角 (Pitch)",
+      "description": "人脸垂直俯仰最大角度限制，超过此角度的低头或仰头人脸将被过滤",
+      "minimum": 0.0,
+      "maximum": 90.0,
+      "default": 30.0
+    },
+    "quality_max_blur": {
+      "type": "number",
+      "title": "最大模糊度分数",
+      "description": "模糊度代理评分上限，超过此阈值的模糊人脸将被过滤",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.7
     }
-  },
-  "required": []
+  }
 }

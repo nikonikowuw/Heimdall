@@ -210,6 +210,38 @@ unsafe extern "C" fn(
 - INT8 DFL 路径保持 `want_float=0`，先按 `(raw_cls-zp)*scale >= conf_thresh` 剪枝，只对候选网格执行 16-bin softmax；通用解析器通过 `Yolov8RknnConfig.dfl_bins` 和 `num_classes` 参数化，不硬编码为特定模型。
 - `RknnOutputsGuard` 在所有退出路径调用 `rknn_outputs_release`；同一 context 非线程安全，必须绑定所属 Worker。
 
+## 算法包私有环境与参数调优 (.env)
+
+为满足边缘现场调优与快速迭代需求，算法包支持通过根目录下的 `.env` 文件调试模型路径与运行时超参数，实现**免重新编译秒级生效**，同时严格遵循进程级安全隔离规范。
+
+### 1. 私有作用域与零全局泄漏 (Package-Scoped Isolation)
+- **严格红线**：算法包严禁调用 `std::env::set_var`，严禁在多线程环境中重写宿主操作系统的全局 `environ` 指针，彻底杜绝数据竞争与多算法包相互污染。
+- **纯内存局部解析**：算法包在 `init(ctx, config)` 阶段通过 `ctx.load_env()`（基于 `algo_sdk::env::PackageEnv`）只读加载 `package_root/.env`，解析为包实例私有的只读字典，生命周期仅限于当前包内部。
+- **发布隔离**：生产打包脚本（`Makefile`）必须通过 `--exclude='.env'` 排除本地调试配置文件；算法包源码中保留带详细参数注解的 `.env.example` 作为现场调优范例。
+
+### 2. 三级参数覆盖优先级阶梯 (Precedence Hierarchy)
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ 【第一级 · 最高级】 宿主显式下发的任务配置 (task.parameters)      │  <-- 针对单路通道/任务的个性化配置严格受保护
+└──────────────────────────────┬──────────────────────────────┘
+                               │ (宿主未显式提供该参数时回退)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 【第二级 · 局部调试】 算法包私有 .env (package_root/.env)         │  <-- 独立 run_local / 本地基线调试免编译即改即生效
+└──────────────────────────────┬──────────────────────────────┘
+                               │ (.env 也未提供该参数时回退)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 【第三级 · 兜底保底】 代码硬编码固定默认值 (Hardcoded Defaults)    │  <-- 算法内部官方基准常数保底
+└─────────────────────────────────────────────────────────────┘
+```
+算法包配置结构体（`InstanceConfig`）在反序列化时记录宿主显式下发的字段集合（`explicit_fields`），在 `config.apply_env(&env)` 时**仅对宿主未下发的字段进行覆盖**，确保生产环境下宿主任务调度与控制台配置拥有绝对权威。
+
+### 3. 模型路径解析契约
+- 模型文件属于平台专属权重资产，不强制在 `manifest.json` 中强行绑定；
+- 遵循解析顺序：`package_root/.env` 指定路径（如 `MODEL_PATH` / `DETECTOR_MODEL_PATH`） → 约定的固定模型文件路径（`model/*.rknn` 或 `model/*.mlpackage`）；
+- `PackageEnv::resolve_model_path()` 强制防路径穿越检查，拒绝任何包含 `..` 的相对路径，确保模型路径安全规范化在合法物理文件系统内。
+
 ## 验证与已知差异
 
 [testing.rs](../../../crates/algo-sdk/src/testing.rs) 提供 `MockFrameBuilder`、`MockEmitter`、`MockWeights/MockSession`；图片/硬件辅助分别由 `testing-image/testing-hardware` 启用。

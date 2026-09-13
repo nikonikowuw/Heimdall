@@ -175,11 +175,10 @@ impl InferenceWorker {
     fn start(package: &LoadedPackage) -> Result<Arc<Self>, AlgoError> {
         let runtime = RknnRuntime::load(&package.root)?;
         let detector_contract = RknnModelContract {
-            input_width: package.manifest.models.detector.input.width,
-            input_height: package.manifest.models.detector.input.height,
-            input_channels: package.manifest.models.detector.input.channels,
+            input_width: package.models.detector.input.width,
+            input_height: package.models.detector.input.height,
+            input_channels: package.models.detector.input.channels,
             output_shapes: package
-                .manifest
                 .models
                 .detector
                 .outputs
@@ -188,11 +187,10 @@ impl InferenceWorker {
                 .collect(),
         };
         let embedder_contract = RknnModelContract {
-            input_width: package.manifest.models.embedder.input.width,
-            input_height: package.manifest.models.embedder.input.height,
-            input_channels: package.manifest.models.embedder.input.channels,
+            input_width: package.models.embedder.input.width,
+            input_height: package.models.embedder.input.height,
+            input_channels: package.models.embedder.input.channels,
             output_shapes: package
-                .manifest
                 .models
                 .embedder
                 .outputs
@@ -435,10 +433,10 @@ pub fn shared_models(package_root: &Path) -> Result<Arc<SharedModels>, AlgoError
     let worker = InferenceWorker::start(&package)?;
     let models = Arc::new(SharedModels {
         worker,
-        detector_width: package.manifest.models.detector.input.width,
-        detector_height: package.manifest.models.detector.input.height,
-        embedder_width: package.manifest.models.embedder.input.width,
-        embedder_height: package.manifest.models.embedder.input.height,
+        detector_width: package.models.detector.input.width,
+        detector_height: package.models.detector.input.height,
+        embedder_width: package.models.embedder.input.width,
+        embedder_height: package.models.embedder.input.height,
     });
 
     let mut registry = shared_model_registry()
