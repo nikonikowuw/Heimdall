@@ -1,0 +1,7 @@
+target/
+result.jpg
+*.tar.gz
+lib/*.so
+lib/*.dylib
+.env
+.DS_Store

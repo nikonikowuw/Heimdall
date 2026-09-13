@@ -196,7 +196,7 @@ impl std::fmt::Debug for RknnRuntime {
 impl RknnRuntime {
     /// 动态查找并加载 librknnrt.so
     pub fn load(package_root: &Path) -> Result<Arc<Self>, AlgoError> {
-        let candidates = vec![
+        let candidates = [
             package_root.join("lib/librknnrt.so"),
             package_root.join("lib64/librknnrt.so"),
             std::path::PathBuf::from("librknnrt.so"),
@@ -557,14 +557,9 @@ impl RknnSession {
             type_: RknnTensorType::Uint8,
             ..Default::default()
         };
-        input_attr.name[..6].copy_from_slice(&[
-            b'i' as c_char,
-            b'm' as c_char,
-            b'a' as c_char,
-            b'g' as c_char,
-            b'e' as c_char,
-            b's' as c_char,
-        ]);
+        for (dst, &src) in input_attr.name.iter_mut().zip(b"images") {
+            *dst = src as c_char;
+        }
 
         // 回退模式输出单浮点张量 [1, 84, 5040]（4 bbox + 2 cls + 78 padding = 84）
         let mut output_attr = RknnTensorAttr {
@@ -575,15 +570,9 @@ impl RknnSession {
             type_: RknnTensorType::Float32,
             ..Default::default()
         };
-        output_attr.name[..7].copy_from_slice(&[
-            b'o' as c_char,
-            b'u' as c_char,
-            b't' as c_char,
-            b'p' as c_char,
-            b'u' as c_char,
-            b't' as c_char,
-            b'0' as c_char,
-        ]);
+        for (dst, &src) in output_attr.name.iter_mut().zip(b"output0") {
+            *dst = src as c_char;
+        }
 
         Ok(Self {
             backend: RknnBackend::Fallback,
@@ -600,8 +589,8 @@ impl RknnSession {
     /// 构造模拟输出张量数据（用于 debug_cpu_fallback_path）
     ///
     /// 模拟 2 个检测结果：
-    /// - 锚点 10: Hardhat (class 0), 置信度 0.92, 中心 (320, 192), 尺寸 (100, 80)
-    /// - 锚点 25: NO-Hardhat (class 1), 置信度 0.88, 中心 (480, 300), 尺寸 (120, 90)
+    /// - 锚点 10: fire (class 0), 置信度 0.92, 中心 (320, 192), 尺寸 (100, 80)
+    /// - 锚点 25: smoke (class 1), 置信度 0.88, 中心 (480, 300), 尺寸 (120, 90)
     fn generate_fallback_outputs() -> Vec<f32> {
         let mut net_out = vec![0.0f32; 84 * 5040];
         let anchor_a = 10;
@@ -609,14 +598,14 @@ impl RknnSession {
         net_out[5040 + anchor_a] = 192.0;
         net_out[2 * 5040 + anchor_a] = 100.0;
         net_out[3 * 5040 + anchor_a] = 80.0;
-        net_out[4 * 5040 + anchor_a] = 0.92; // class 0: Hardhat
+        net_out[4 * 5040 + anchor_a] = 0.92; // class 0: fire
 
         let anchor_b = 25;
         net_out[anchor_b] = 480.0;
         net_out[5040 + anchor_b] = 300.0;
         net_out[2 * 5040 + anchor_b] = 120.0;
         net_out[3 * 5040 + anchor_b] = 90.0;
-        net_out[(4 + 1) * 5040 + anchor_b] = 0.88; // class 1: NO-Hardhat
+        net_out[(4 + 1) * 5040 + anchor_b] = 0.88; // class 1: smoke
 
         net_out
     }
@@ -649,21 +638,34 @@ impl RknnSession {
                     });
                 }
 
-                // SAFETY: 执行 NPU 推理运算
-                let ret = unsafe { (runtime.rknn_run)(*ctx, null_mut()) };
-                if ret != RKNN_SUCC {
-                    return Err(AlgoError::Internal {
-                        reason: format!("rknn_run 推理失败，错误码: {ret}"),
-                    });
-                }
-
-                self.get_hardware_outputs(runtime, *ctx, process_fn)
+                self.run_and_get_outputs(runtime, *ctx, process_fn)
             }
             RknnBackend::Fallback => {
                 let net_out = Self::generate_fallback_outputs();
                 process_fn(&RknnInferenceOutput::SingleFloat(&net_out))
             }
         }
+    }
+
+    /// 触发 NPU 推理并获取硬件输出张量视图
+    fn run_and_get_outputs<F, R>(
+        &self,
+        runtime: &Arc<RknnRuntime>,
+        ctx: RknnContext,
+        process_fn: F,
+    ) -> Result<R, AlgoError>
+    where
+        F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
+    {
+        // SAFETY: 执行 NPU 推理运算
+        let ret = unsafe { (runtime.rknn_run)(ctx, null_mut()) };
+        if ret != RKNN_SUCC {
+            return Err(AlgoError::Internal {
+                reason: format!("rknn_run 推理失败，错误码: {ret}"),
+            });
+        }
+
+        self.get_hardware_outputs(runtime, ctx, process_fn)
     }
 
     /// 执行硬件 DMA-BUF 零拷贝直通推理
@@ -703,15 +705,7 @@ impl RknnSession {
                 });
             }
 
-            // SAFETY: 触发 NPU 推理运算
-            let ret = unsafe { (runtime.rknn_run)(ctx, null_mut()) };
-            if ret != RKNN_SUCC {
-                return Err(AlgoError::Internal {
-                    reason: format!("rknn_run 推理失败，错误码: {ret}"),
-                });
-            }
-
-            return self.get_hardware_outputs(&runtime, ctx, process_fn);
+            return self.run_and_get_outputs(&runtime, ctx, process_fn);
         }
 
         // 降级拦截：librknnrt.so 版本不支持零拷贝 API，根据契约拒绝伪装为硬件加速
@@ -786,17 +780,15 @@ impl RknnSession {
             }
 
             // LRU 淘汰：若缓存条目达到上限，淘汰最久未访问的条目
-            while dma_mem_cache.len() >= MAX_DMA_MEM_CACHE {
-                let oldest_fd = dma_mem_cache
+            if dma_mem_cache.len() >= MAX_DMA_MEM_CACHE {
+                if let Some(oldest_fd) = dma_mem_cache
                     .iter()
                     .min_by_key(|(_, entry)| entry.last_used)
-                    .map(|(&fd, _)| fd);
-                if let Some(fd) = oldest_fd {
-                    if let Some(mut evicted) = dma_mem_cache.remove(&fd) {
+                    .map(|(&fd, _)| fd)
+                {
+                    if let Some(mut evicted) = dma_mem_cache.remove(&oldest_fd) {
                         evicted.release(runtime, ctx);
                     }
-                } else {
-                    break;
                 }
             }
 
@@ -868,15 +860,17 @@ impl RknnSession {
         F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
     {
         let n_out = self.output_attrs.len();
-        // 9 输出张量 = 安全帽模型多分支 INT8 输出；2 输出 = 简化模型
+        // 9 输出张量 = YOLOv8 烟火多分支 INT8 优化输出；1 输出 = 浮点合并输出
         let is_multi_int8 = n_out > 1;
 
-        let mut outputs = vec![RknnOutput::default(); n_out];
-        for (i, out) in outputs.iter_mut().enumerate() {
-            out.index = i as u32;
-            out.want_float = if is_multi_int8 { 0 } else { 1 };
-            out.is_prealloc = 0;
-        }
+        let mut outputs: Vec<RknnOutput> = (0..n_out)
+            .map(|i| RknnOutput {
+                index: i as u32,
+                want_float: u8::from(!is_multi_int8),
+                is_prealloc: 0,
+                ..Default::default()
+            })
+            .collect();
 
         // SAFETY: outputs 为分配好的连续结构体切片
         let ret = unsafe {
@@ -892,20 +886,25 @@ impl RknnSession {
         let outputs_guard = RknnOutputsGuard::new(runtime, ctx, outputs);
 
         if is_multi_int8 {
-            let mut branch_outputs = Vec::with_capacity(n_out);
-            for (i, out) in outputs_guard.outputs.iter().enumerate() {
-                let attr = &self.output_attrs[i];
-                // SAFETY: out.buf 由 rknn_outputs_get 填充且大小为 out.size
-                let slice =
-                    unsafe { std::slice::from_raw_parts(out.buf as *const i8, out.size as usize) };
-                branch_outputs.push(RknnTensorOutput {
-                    index: i as u32,
-                    dims: [attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3]],
-                    scale: attr.scale,
-                    zp: attr.zp,
-                    data: slice,
-                });
-            }
+            let branch_outputs = outputs_guard
+                .outputs
+                .iter()
+                .zip(&self.output_attrs)
+                .enumerate()
+                .map(|(i, (out, attr))| {
+                    // SAFETY: out.buf 由 rknn_outputs_get 填充且大小为 out.size
+                    let data = unsafe {
+                        std::slice::from_raw_parts(out.buf as *const i8, out.size as usize)
+                    };
+                    RknnTensorOutput {
+                        index: i as u32,
+                        dims: [attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3]],
+                        scale: attr.scale,
+                        zp: attr.zp,
+                        data,
+                    }
+                })
+                .collect();
             process_fn(&RknnInferenceOutput::MultiBranch(branch_outputs))
         } else {
             let elem_count = (outputs_guard.outputs[0].size as usize) / std::mem::size_of::<f32>();

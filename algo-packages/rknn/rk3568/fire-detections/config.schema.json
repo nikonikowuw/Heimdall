@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "烟火检测算法配置 (RK3568)",
+  "description": "基于 YOLOv8 的轻量级烟火识别算法配置 (Rockchip RK3568)，检测 fire (火焰) 与 smoke (烟雾)",
+  "additionalProperties": false,
+  "required": [
+    "confidence_threshold",
+    "iou_threshold"
+  ],
+  "properties": {
+    "confidence_threshold": {
+      "type": "number",
+      "title": "置信度阈值",
+      "description": "检测框置信度低于该值的结果将被过滤",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.25
+    },
+    "iou_threshold": {
+      "type": "number",
+      "title": "IoU 阈值",
+      "description": "非极大值抑制使用的交并比阈值",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.45
+    },
+    "target_classes": {
+      "type": "array",
+      "title": "目标监控类别",
+      "description": "需要触发告警的目标类别列表，可选 [\"fire\", \"smoke\"]",
+      "items": {
+        "type": "string",
+        "enum": ["fire", "smoke"]
+      },
+      "default": ["fire", "smoke"]
+    },
+    "custom_alarm_label": {
+      "type": "string",
+      "title": "自定义告警标签",
+      "description": "为告警附加自定义场景标识（可选，留空则使用模型原始类别名）",
+      "maxLength": 64,
+      "default": ""
+    },
+    "confirm_window": {
+      "type": "integer",
+      "title": "时序确认窗口大小",
+      "description": "用于过滤瞬态反光与单帧噪点的多帧滑动窗口大小（帧数）",
+      "minimum": 1,
+      "maximum": 30,
+      "default": 5
+    },
+    "confirm_threshold": {
+      "type": "integer",
+      "title": "时序确认命中阈值",
+      "description": "滑动窗口内需命中的最小帧数，达到此阈值方确认有效检出",
+      "minimum": 1,
+      "maximum": 30,
+      "default": 3
+    },
+    "temporal_variance_threshold": {
+      "type": "number",
+      "title": "颜色方差滤波阈值",
+      "description": "当提取候选区域像素灰度时，低于此方差的候选框被判定为稳定光源误报",
+      "minimum": 0.0,
+      "maximum": 500.0,
+      "default": 50.0
+    }
+  }
+}

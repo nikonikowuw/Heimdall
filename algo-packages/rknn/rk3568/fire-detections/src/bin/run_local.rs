@@ -165,15 +165,17 @@ fn get_arg(args: &[String], key: &str, default: &str) -> String {
 fn draw_rect(img: &mut image::RgbImage, x1: i32, y1: i32, x2: i32, y2: i32, color: image::Rgb<u8>) {
     let max_x = img.width() as i32 - 1;
     let max_y = img.height() as i32 - 1;
+
+    let y1c = y1.clamp(0, max_y) as u32;
+    let y2c = y2.clamp(0, max_y) as u32;
     for px in x1.clamp(0, max_x)..=x2.clamp(0, max_x) {
-        let y1c = y1.clamp(0, max_y) as u32;
-        let y2c = y2.clamp(0, max_y) as u32;
         img.put_pixel(px as u32, y1c, color);
         img.put_pixel(px as u32, y2c, color);
     }
+
+    let x1c = x1.clamp(0, max_x) as u32;
+    let x2c = x2.clamp(0, max_x) as u32;
     for py in y1.clamp(0, max_y)..=y2.clamp(0, max_y) {
-        let x1c = x1.clamp(0, max_x) as u32;
-        let x2c = x2.clamp(0, max_x) as u32;
         img.put_pixel(x1c, py as u32, color);
         img.put_pixel(x2c, py as u32, color);
     }
@@ -189,7 +191,7 @@ struct Stats {
 
 #[cfg(target_os = "linux")]
 fn compute_stats(samples: &mut [f64]) -> Stats {
-    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    samples.sort_unstable_by(|a, b| a.total_cmp(b));
     let sum: f64 = samples.iter().sum();
     let avg = sum / samples.len() as f64;
     let p50 = samples[samples.len() / 2];

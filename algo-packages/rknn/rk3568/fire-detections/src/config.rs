@@ -8,31 +8,14 @@ use serde::Deserialize;
 /// 模型支持的类别
 pub const FIRE_SMOKE_CLASSES: [&str; 2] = ["fire", "smoke"];
 
-fn default_confidence() -> f32 {
-    0.25
-}
-
-fn default_iou() -> f32 {
-    0.45
-}
+pub const DEFAULT_CONFIDENCE: f32 = 0.25;
+pub const DEFAULT_IOU: f32 = 0.45;
+pub const DEFAULT_CONFIRM_WINDOW: usize = 5;
+pub const DEFAULT_CONFIRM_THRESHOLD: usize = 3;
+pub const DEFAULT_TEMPORAL_VARIANCE_THRESHOLD: f32 = 50.0;
 
 fn default_target_classes() -> Vec<String> {
     vec!["fire".to_string(), "smoke".to_string()]
-}
-
-/// 多帧确认窗口大小（帧数）
-fn default_confirm_window() -> usize {
-    5
-}
-
-/// 多帧确认阈值（窗口内需命中帧数）
-fn default_confirm_threshold() -> usize {
-    3
-}
-
-/// 时序颜色方差验证阈值（低于此值判定为稳定光源误报）
-fn default_temporal_variance_threshold() -> f32 {
-    50.0
 }
 
 #[derive(Deserialize, Default)]
@@ -81,54 +64,41 @@ impl<'de> Deserialize<'de> for InstanceConfig {
         let raw = RawInstanceConfig::deserialize(deserializer)?;
         let mut explicit_fields = HashSet::new();
 
-        let confidence_threshold = if let Some(v) = raw.confidence_threshold {
-            explicit_fields.insert("confidence_threshold".to_string());
-            v
-        } else {
-            default_confidence()
-        };
+        macro_rules! track_field {
+            ($opt:expr, $name:ident, $default:expr) => {
+                match $opt {
+                    Some(v) => {
+                        explicit_fields.insert(stringify!($name).to_string());
+                        v
+                    }
+                    None => $default,
+                }
+            };
+        }
 
-        let iou_threshold = if let Some(v) = raw.iou_threshold {
-            explicit_fields.insert("iou_threshold".to_string());
-            v
-        } else {
-            default_iou()
-        };
-
-        let target_classes = if let Some(v) = raw.target_classes {
-            explicit_fields.insert("target_classes".to_string());
-            v
-        } else {
-            default_target_classes()
-        };
-
-        let custom_alarm_label = if let Some(v) = raw.custom_alarm_label {
+        let confidence_threshold = track_field!(
+            raw.confidence_threshold,
+            confidence_threshold,
+            DEFAULT_CONFIDENCE
+        );
+        let iou_threshold = track_field!(raw.iou_threshold, iou_threshold, DEFAULT_IOU);
+        let target_classes =
+            track_field!(raw.target_classes, target_classes, default_target_classes());
+        let custom_alarm_label = raw.custom_alarm_label.inspect(|_| {
             explicit_fields.insert("custom_alarm_label".to_string());
-            Some(v)
-        } else {
-            None
-        };
-
-        let confirm_window = if let Some(v) = raw.confirm_window {
-            explicit_fields.insert("confirm_window".to_string());
-            v
-        } else {
-            default_confirm_window()
-        };
-
-        let confirm_threshold = if let Some(v) = raw.confirm_threshold {
-            explicit_fields.insert("confirm_threshold".to_string());
-            v
-        } else {
-            default_confirm_threshold()
-        };
-
-        let temporal_variance_threshold = if let Some(v) = raw.temporal_variance_threshold {
-            explicit_fields.insert("temporal_variance_threshold".to_string());
-            v
-        } else {
-            default_temporal_variance_threshold()
-        };
+        });
+        let confirm_window =
+            track_field!(raw.confirm_window, confirm_window, DEFAULT_CONFIRM_WINDOW);
+        let confirm_threshold = track_field!(
+            raw.confirm_threshold,
+            confirm_threshold,
+            DEFAULT_CONFIRM_THRESHOLD
+        );
+        let temporal_variance_threshold = track_field!(
+            raw.temporal_variance_threshold,
+            temporal_variance_threshold,
+            DEFAULT_TEMPORAL_VARIANCE_THRESHOLD
+        );
 
         Ok(Self {
             confidence_threshold,
@@ -146,13 +116,13 @@ impl<'de> Deserialize<'de> for InstanceConfig {
 impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
-            confidence_threshold: default_confidence(),
-            iou_threshold: default_iou(),
+            confidence_threshold: DEFAULT_CONFIDENCE,
+            iou_threshold: DEFAULT_IOU,
             target_classes: default_target_classes(),
             custom_alarm_label: None,
-            confirm_window: default_confirm_window(),
-            confirm_threshold: default_confirm_threshold(),
-            temporal_variance_threshold: default_temporal_variance_threshold(),
+            confirm_window: DEFAULT_CONFIRM_WINDOW,
+            confirm_threshold: DEFAULT_CONFIRM_THRESHOLD,
+            temporal_variance_threshold: DEFAULT_TEMPORAL_VARIANCE_THRESHOLD,
             explicit_fields: HashSet::new(),
         }
     }
@@ -166,34 +136,25 @@ impl InstanceConfig {
     /// 2. 宿主未传递该字段时：优先使用 `.env` 局部配置；
     /// 3. 若 `.env` 也未设置：维持代码硬编码默认值。
     pub fn apply_env(&mut self, env: &PackageEnv) {
-        if !self.explicit_fields.contains("confidence_threshold") {
-            if let Some(v) = env.get_f32("confidence_threshold") {
-                self.confidence_threshold = v;
-            }
+        macro_rules! apply_env_field {
+            ($field:ident, $getter:ident) => {
+                if !self.explicit_fields.contains(stringify!($field)) {
+                    if let Some(v) = env.$getter(stringify!($field)) {
+                        self.$field = v.into();
+                    }
+                }
+            };
         }
-        if !self.explicit_fields.contains("iou_threshold") {
-            if let Some(v) = env.get_f32("iou_threshold") {
-                self.iou_threshold = v;
-            }
-        }
+
+        apply_env_field!(confidence_threshold, get_f32);
+        apply_env_field!(iou_threshold, get_f32);
+        apply_env_field!(confirm_window, get_usize);
+        apply_env_field!(confirm_threshold, get_usize);
+        apply_env_field!(temporal_variance_threshold, get_f32);
+
         if !self.explicit_fields.contains("custom_alarm_label") {
             if let Some(v) = env.get_str("custom_alarm_label") {
                 self.custom_alarm_label = Some(v);
-            }
-        }
-        if !self.explicit_fields.contains("confirm_window") {
-            if let Some(v) = env.get_usize("confirm_window") {
-                self.confirm_window = v;
-            }
-        }
-        if !self.explicit_fields.contains("confirm_threshold") {
-            if let Some(v) = env.get_usize("confirm_threshold") {
-                self.confirm_threshold = v;
-            }
-        }
-        if !self.explicit_fields.contains("temporal_variance_threshold") {
-            if let Some(v) = env.get_f32("temporal_variance_threshold") {
-                self.temporal_variance_threshold = v;
             }
         }
     }
@@ -210,14 +171,11 @@ impl ClassMask {
         if classes.is_empty() {
             return Self { mask: 0b11 };
         }
-        let mut mask = 0u8;
-        for c in classes {
-            match c.as_str() {
-                "fire" => mask |= 0b01,
-                "smoke" => mask |= 0b10,
-                _ => {}
-            }
-        }
+        let mask = classes.iter().fold(0u8, |acc, c| match c.as_str() {
+            "fire" => acc | 0b01,
+            "smoke" => acc | 0b10,
+            _ => acc,
+        });
         Self { mask }
     }
 

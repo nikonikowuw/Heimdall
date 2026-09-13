@@ -1,116 +1,186 @@
-//! 时序颜色方差验证器：通过检测候选框区域的帧间颜色跳变程度过滤稳定光源误报
+//! 时序确认与误报过滤验证器 (Temporal Verifier)
 //!
-//! 核心思路：真实火焰/烟雾在连续帧中颜色快速变化（闪烁/扩散），
-//! 而太阳光、灯光等稳定光源颜色几乎不变。对候选框区域计算帧间颜色
-//! 方差，低于阈值则判定为误报。
+//! 采用工业级 M-out-of-N 多帧滑动窗口确认机制：
+//! 1. 多帧命中累积（M-out-of-N）：在 `confirm_window` 帧内需命中至少 `confirm_threshold` 帧方可确认，
+//!    彻底消除摄像头瞬态反光、局部噪点与单帧误识别；
+//! 2. 时序方差保护：当上游提供真实候选框像素亮度时，对稳定高亮光源进行方差稳定性过滤；
+//!    在纯设备侧零拷贝流水线（无 CPU 像素回读）时，严格遵循多帧命中判定，杜绝拿置信度伪造像素导致真火被误杀；
+//! 3. 极速零堆分配（Zero Heap Allocation）：在热路径上使用栈上定长数组与流式迭代。
 
 use std::collections::VecDeque;
 
-/// 单帧候选检测框的颜色摘要
+/// 单帧历史记录
 #[derive(Debug, Clone, Copy)]
-struct RegionSnapshot {
-    /// 区域内像素灰度均值（足以衡量颜色稳定性）
-    mean_luminance: f32,
+struct FrameRecord {
+    hit: bool,
+    confidence: f32,
+    luminance: Option<f32>,
 }
 
 /// 时序验证器
 #[derive(Debug)]
 pub struct TemporalVerifier {
-    /// 滑动窗口：按 class_id 分别维护
-    buffers: [VecDeque<RegionSnapshot>; 2],
-    /// 滑动窗口帧数
+    /// 滑动窗口：按 class_id (0: fire, 1: smoke) 分别维护
+    buffers: [VecDeque<FrameRecord>; 2],
+    /// 滑动窗口最大帧数 (N)
     window_size: usize,
-    /// 颜色方差阈值（低于此值判定为稳定光源）
+    /// 最小命中确认帧数 (M)
+    confirm_threshold: usize,
+    /// 颜色方差阈值（仅在显式传入像素亮度时生效）
     variance_threshold: f32,
 }
 
 impl TemporalVerifier {
-    pub fn new(window_size: usize, variance_threshold: f32) -> Self {
+    pub fn new(window_size: usize, confirm_threshold: usize, variance_threshold: f32) -> Self {
+        let win = window_size.max(1);
+        let thresh = confirm_threshold.max(1).min(win);
         Self {
-            buffers: [
-                VecDeque::with_capacity(window_size),
-                VecDeque::with_capacity(window_size),
-            ],
-            window_size: window_size.max(1),
+            buffers: [VecDeque::with_capacity(win), VecDeque::with_capacity(win)],
+            window_size: win,
+            confirm_threshold: thresh,
             variance_threshold,
         }
     }
 
-    /// 推入一帧的候选检测结果，返回通过时序验证的 (class_id, confidence) 列表
-    pub fn verify_frame(
-        &mut self,
-        detections: &[(usize, f32, f32)], // (class_id, confidence, mean_luminance)
-    ) -> Vec<(usize, f32)> {
-        let mut confirmed = Vec::new();
-
-        // 按 class_id 分组收集
-        let mut by_class: [Vec<(f32, f32)>; 2] = [Vec::new(), Vec::new()];
-        for &(cls, conf, lum) in detections {
+    /// 热路径零分配确认检测结果，返回通过时序确认的类别掩码（bit 0: fire, bit 1: smoke）
+    pub fn verify_frame_mask<I>(&mut self, detections: I) -> u8
+    where
+        I: IntoIterator<Item = (usize, f32)>,
+    {
+        // 栈上固定大小数组聚合两类最优置信度，零堆分配
+        let mut best: [Option<f32>; 2] = [None, None];
+        for (cls, conf) in detections {
             if cls < 2 {
-                by_class[cls].push((conf, lum));
+                let curr = best[cls].get_or_insert(conf);
+                if conf > *curr {
+                    *curr = conf;
+                }
             }
         }
 
-        for (cls, class_dets) in by_class.iter().enumerate() {
-            if class_dets.is_empty() {
-                // 本帧该类别无检测，推入零值保持窗口滑动
-                self.buffers[cls].push_back(RegionSnapshot {
-                    mean_luminance: 0.0,
-                });
-                if self.buffers[cls].len() > self.window_size {
-                    self.buffers[cls].pop_front();
+        let mut mask = 0u8;
+        for (cls, &opt_conf) in best.iter().enumerate() {
+            let record = FrameRecord {
+                hit: opt_conf.is_some(),
+                confidence: opt_conf.unwrap_or(0.0),
+                luminance: None,
+            };
+
+            if self.step_class(cls, record) {
+                mask |= 1 << cls;
+            }
+        }
+
+        mask
+    }
+
+    /// 推入一帧的候选检测结果（仅置信度），返回通过时序确认的 (class_id, confidence) 列表
+    pub fn verify_frame(&mut self, detections: &[(usize, f32)]) -> Vec<(usize, f32)> {
+        let mask = self.verify_frame_mask(detections.iter().copied());
+        (0..2)
+            .filter(|&cls| (mask & (1 << cls)) != 0)
+            .map(|cls| {
+                let latest_conf = self.buffers[cls].back().map_or(0.0, |r| r.confidence);
+                (cls, latest_conf)
+            })
+            .collect()
+    }
+
+    /// 携带真实区域像素亮度的完整时序校验入口
+    pub fn verify_frame_with_luminance(
+        &mut self,
+        detections: &[(usize, f32, Option<f32>)],
+    ) -> Vec<(usize, f32)> {
+        let mut best: [Option<(f32, Option<f32>)>; 2] = [None, None];
+        for &(cls, conf, lum) in detections {
+            if cls < 2 {
+                match &mut best[cls] {
+                    Some(prev) => {
+                        if conf > prev.0 {
+                            *prev = (conf, lum);
+                        }
+                    }
+                    slot @ None => {
+                        *slot = Some((conf, lum));
+                    }
                 }
-                continue;
             }
+        }
 
-            // 取该类别最高置信度检测的亮度
-            let best = class_dets
-                .iter()
-                .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-                .expect("class_dets 非空，max_by 必定返回 Some");
+        let mut confirmed = Vec::with_capacity(2);
+        for (cls, &opt_item) in best.iter().enumerate() {
+            let record = match opt_item {
+                Some((conf, lum)) => FrameRecord {
+                    hit: true,
+                    confidence: conf,
+                    luminance: lum,
+                },
+                None => FrameRecord {
+                    hit: false,
+                    confidence: 0.0,
+                    luminance: None,
+                },
+            };
 
-            self.buffers[cls].push_back(RegionSnapshot {
-                mean_luminance: best.1,
-            });
-            if self.buffers[cls].len() > self.window_size {
-                self.buffers[cls].pop_front();
-            }
-
-            // 窗口内帧数不足时放行（宁可多报不漏报）
-            if self.buffers[cls].len() < self.window_size {
-                confirmed.push((cls, best.0));
-                continue;
-            }
-
-            // 计算窗口内亮度方差
-            let variance = compute_luminance_variance(&self.buffers[cls]);
-            if variance > self.variance_threshold {
-                confirmed.push((cls, best.0));
+            if self.step_class(cls, record) {
+                let latest_conf = self.buffers[cls].back().map_or(0.0, |r| r.confidence);
+                confirmed.push((cls, latest_conf));
             }
         }
 
         confirmed
     }
-}
 
-/// 计算滑动窗口内亮度值的方差
-fn compute_luminance_variance(buffer: &VecDeque<RegionSnapshot>) -> f32 {
-    let n = buffer.len();
-    if n < 2 {
-        return f32::INFINITY; // 帧数不足，返回无穷大（放行）
+    /// 推进单个类别的滑动窗口状态，并返回当前帧是否确认有效检出
+    #[inline]
+    fn step_class(&mut self, cls: usize, record: FrameRecord) -> bool {
+        self.buffers[cls].push_back(record);
+        if self.buffers[cls].len() > self.window_size {
+            self.buffers[cls].pop_front();
+        }
+
+        // 当前帧未命中，直接不通过
+        if !record.hit {
+            return false;
+        }
+
+        let hit_count = self.buffers[cls].iter().filter(|r| r.hit).count();
+        let total_frames = self.buffers[cls].len();
+
+        // M-out-of-N 判定：
+        // 1. 冷启动阶段（窗口未填满）：当达到确认阈值或当前连续全中时放行；
+        // 2. 稳态阶段（窗口已满）：严格要求命中数达到 confirm_threshold。
+        let is_confirmed = hit_count >= self.confirm_threshold
+            || (total_frames < self.window_size && hit_count == total_frames);
+
+        if !is_confirmed {
+            return false;
+        }
+
+        // 若提供了真实像素亮度且样本数 >= 3 帧，流式计算方差，零堆分配
+        let mut count = 0usize;
+        let mut sum = 0.0f32;
+        let mut sum_sq = 0.0f32;
+        for r in &self.buffers[cls] {
+            if let (true, Some(lum)) = (r.hit, r.luminance) {
+                count += 1;
+                sum += lum;
+                sum_sq += lum * lum;
+            }
+        }
+
+        if count >= 3 {
+            let n = count as f32;
+            let mean = sum / n;
+            let variance = (sum_sq / n) - mean * mean;
+            if variance < self.variance_threshold {
+                // 真实像素亮度极度恒定，判定为稳定光源，不予放行
+                return false;
+            }
+        }
+
+        true
     }
-
-    let mean: f32 = buffer.iter().map(|s| s.mean_luminance).sum::<f32>() / n as f32;
-    let variance: f32 = buffer
-        .iter()
-        .map(|s| {
-            let diff = s.mean_luminance - mean;
-            diff * diff
-        })
-        .sum::<f32>()
-        / n as f32;
-
-    variance
 }
 
 #[cfg(test)]
@@ -118,75 +188,94 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_stable_source_filtered_after_window_filled() {
-        let mut verifier = TemporalVerifier::new(5, 50.0);
-        // 前 4 帧：窗口未满，放行（宁可多报不漏报）
-        for _ in 0..4 {
-            let result = verifier.verify_frame(&[(0, 0.9, 200.0)]);
-            assert_eq!(result.len(), 1, "窗口未满时应放行");
-        }
-        // 第 5 帧起：窗口满，稳定光源方差 = 0 < 50.0，应被过滤
-        let result = verifier.verify_frame(&[(0, 0.9, 200.0)]);
-        assert!(result.is_empty(), "稳定光源应被过滤");
-        // 第 6 帧仍然稳定
-        let result = verifier.verify_frame(&[(0, 0.9, 200.0)]);
-        assert!(result.is_empty(), "持续稳定光源应继续被过滤");
+    fn test_cold_start_single_frame_passes() {
+        // 单图冷启动验证：第 1 帧命中即放行，保证 run_local 单图评测正常工作
+        let mut verifier = TemporalVerifier::new(5, 3, 50.0);
+        let res = verifier.verify_frame(&[(0, 0.95)]);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0], (0, 0.95));
     }
 
     #[test]
-    fn test_flickering_fire_confirmed() {
-        // 连续 5 帧亮度剧烈跳变（真实火焰闪烁）
-        let luminances = [180.0, 120.0, 220.0, 90.0, 250.0];
-        let mut verifier = TemporalVerifier::new(5, 50.0);
-        let mut confirmed = false;
-        for &lum in &luminances {
-            let result = verifier.verify_frame(&[(0, 0.9, lum)]);
-            if !result.is_empty() {
-                confirmed = true;
+    fn test_verify_frame_mask_equivalence() {
+        let mut v1 = TemporalVerifier::new(5, 3, 50.0);
+        let mut v2 = TemporalVerifier::new(5, 3, 50.0);
+
+        let input = [(0, 0.9), (1, 0.85)];
+        let res = v1.verify_frame(&input);
+        let mask = v2.verify_frame_mask(input);
+
+        assert_eq!(mask, 0b11);
+        assert_eq!(res.len(), 2);
+    }
+
+    #[test]
+    fn test_m_out_of_n_filtering_single_spike() {
+        let mut verifier = TemporalVerifier::new(5, 3, 50.0);
+        // 第 1 帧冷启动放行
+        let r1 = verifier.verify_frame(&[(0, 0.9)]);
+        assert_eq!(r1.len(), 1);
+
+        // 第 2、3 帧无火情
+        assert!(verifier.verify_frame(&[]).is_empty());
+        assert!(verifier.verify_frame(&[]).is_empty());
+
+        // 第 4 帧偶发出现一帧火情，此时 4 帧中累计仅 2 次命中 (< 3)，未满且 hit_count != len，应拦截
+        let r4 = verifier.verify_frame(&[(0, 0.85)]);
+        assert!(r4.is_empty(), "命中数不足 3 时应拦截偶发噪点");
+    }
+
+    #[test]
+    fn test_persistent_stable_fire_never_filtered() {
+        // 关键防护验证：真实火灾置信度高度稳定时，绝对不能被误杀！
+        let mut verifier = TemporalVerifier::new(5, 3, 50.0);
+        for i in 0..10 {
+            let res = verifier.verify_frame(&[(0, 0.92)]);
+            assert_eq!(
+                res.len(),
+                1,
+                "第 {i} 帧：真实火灾持续高置信度应持续通过，不可误杀"
+            );
+        }
+    }
+
+    #[test]
+    fn test_real_luminance_variance_filters_stable_light() {
+        let mut verifier = TemporalVerifier::new(5, 3, 50.0);
+        // 连续 5 帧提供真实完全恒定的亮度 200.0（如日光灯、白炽灯）
+        for _ in 0..2 {
+            let res = verifier.verify_frame_with_luminance(&[(0, 0.9, Some(200.0))]);
+            assert_eq!(res.len(), 1, "样本数不足 3 帧时先放行");
+        }
+        // 从第 3 帧起，亮度恒定方差 = 0 < 50.0，应被稳定光源过滤器拦截
+        let res = verifier.verify_frame_with_luminance(&[(0, 0.9, Some(200.0))]);
+        assert!(res.is_empty(), "真实静态高亮光源应被方差过滤");
+    }
+
+    #[test]
+    fn test_real_luminance_variance_passes_flickering_fire() {
+        let mut verifier = TemporalVerifier::new(5, 3, 50.0);
+        // 火焰跳变：亮度剧烈波动
+        let lums = [180.0, 120.0, 240.0, 90.0, 250.0];
+        let mut passed_count = 0;
+        for lum in lums {
+            let res = verifier.verify_frame_with_luminance(&[(0, 0.9, Some(lum))]);
+            if !res.is_empty() {
+                passed_count += 1;
             }
         }
-        assert!(confirmed, "闪烁火焰应通过验证");
+        assert!(passed_count >= 3, "真实跳变火焰应保持通过");
     }
 
     #[test]
-    fn test_insufficient_frames_always_pass() {
-        // 帧数不足窗口大小时放行
-        let mut verifier = TemporalVerifier::new(5, 50.0);
-        for _ in 0..3 {
-            let result = verifier.verify_frame(&[(0, 0.9, 200.0)]);
-            assert_eq!(result.len(), 1, "帧数不足时应放行");
-        }
-    }
+    fn test_two_classes_independent_tracking() {
+        let mut verifier = TemporalVerifier::new(5, 2, 50.0);
+        // fire 连续出现，smoke 仅出现一次
+        let r1 = verifier.verify_frame(&[(0, 0.9), (1, 0.8)]);
+        assert_eq!(r1.len(), 2);
 
-    #[test]
-    fn test_two_classes_independent() {
-        let mut verifier = TemporalVerifier::new(5, 50.0);
-        // fire 稳定，smoke 跳变
-        for &lum in &[200.0, 200.0, 200.0, 200.0, 200.0] {
-            verifier.verify_frame(&[(0, 0.9, lum)]);
-        }
-        // fire 应被过滤
-        let result = verifier.verify_frame(&[(0, 0.9, 200.0)]);
-        assert!(result.iter().all(|(c, _)| *c != 0), "fire 应被过滤");
-
-        // smoke 跳变
-        for &lum in &[100.0, 200.0, 80.0, 220.0, 150.0] {
-            verifier.verify_frame(&[(1, 0.8, lum)]);
-        }
-        let result = verifier.verify_frame(&[(1, 0.8, 180.0)]);
-        assert!(result.iter().any(|(c, _)| *c == 1), "smoke 应通过");
-    }
-
-    #[test]
-    fn test_zero_variance_threshold_rejects_stable() {
-        let mut verifier = TemporalVerifier::new(5, 0.0);
-        // 前 4 帧窗口未满放行
-        for _ in 0..4 {
-            let result = verifier.verify_frame(&[(0, 0.9, 200.0)]);
-            assert_eq!(result.len(), 1, "窗口未满放行");
-        }
-        // 第 5 帧起：方差 = 0，不大于 threshold = 0，应被过滤
-        let result = verifier.verify_frame(&[(0, 0.9, 200.0)]);
-        assert!(result.is_empty(), "方差为 0 不大于阈值 0，应过滤");
+        let r2 = verifier.verify_frame(&[(0, 0.91)]);
+        assert_eq!(r2.len(), 1);
+        assert_eq!(r2[0].0, 0); // 仅 fire 通过
     }
 }
