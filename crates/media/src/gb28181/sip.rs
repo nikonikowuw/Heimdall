@@ -585,7 +585,7 @@ impl Gb28181SipServer {
 
         let cfg = self.config.read().clone();
         let ssrc = generate_gb28181_ssrc(&cfg.sip_domain);
-        let call_id = format!("{}_{}", current_mono_ms(), uuid::Uuid::new_v4().simple());
+        let call_id = format!("{}_{}", current_mono_ms(), uuid::Uuid::now_v7().simple());
         let from_tag = format!("{:x}", rand_u32());
         let server_ip = self.server_ip.read().clone();
 

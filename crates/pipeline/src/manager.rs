@@ -1154,7 +1154,7 @@ mod tests {
     async fn test_pipeline_manager_on_demand_and_snapshot() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_pipe_evidence_{}",
-            uuid::Uuid::new_v4().simple()
+            uuid::Uuid::now_v7().simple()
         ));
         let manager = PipelineManager::with_evidence_dir(&temp_dir);
 
@@ -1222,7 +1222,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_demand_decoder_lifecycle() {
         let temp_dir =
-            std::env::temp_dir().join(format!("test_lifecycle_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("test_lifecycle_{}", uuid::Uuid::now_v7().simple()));
         let manager = PipelineManager::with_evidence_dir(&temp_dir);
         let cam_id = "cam_lifecycle_001";
 
@@ -1288,7 +1288,7 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_manager_tracking_and_rules_evaluation() {
         let temp_dir =
-            std::env::temp_dir().join(format!("test_eval_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("test_eval_{}", uuid::Uuid::now_v7().simple()));
         let manager = PipelineManager::with_evidence_dir(&temp_dir);
         let cam_id = "cam_eval_001";
 
@@ -1354,7 +1354,7 @@ mod tests {
     #[tokio::test]
     async fn test_vpu_concurrency_limiter_and_graceful_fallback() {
         let temp_dir =
-            std::env::temp_dir().join(format!("test_vpu_limit_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("test_vpu_limit_{}", uuid::Uuid::now_v7().simple()));
         let manager =
             PipelineManager::with_all_options(&temp_dir, SnapshotConfig::default(), 1, 10);
         let cam_id = "cam_vpu_limit_test";
@@ -1401,7 +1401,7 @@ mod tests {
     async fn test_main_decoded_ring_fallback_is_not_marked_as_sub_stream() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_main_ring_fallback_{}",
-            uuid::Uuid::new_v4().simple()
+            uuid::Uuid::now_v7().simple()
         ));
         let manager =
             PipelineManager::with_all_options(&temp_dir, SnapshotConfig::default(), 1, 10);

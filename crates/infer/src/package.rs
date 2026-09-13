@@ -82,7 +82,7 @@ impl AlgoPackage {
         let inst_id_c = CString::new(instance_id).map_err(|_| InferError::Execution {
             reason: "instance_id 包含非法空字节".to_string(),
         })?;
-        let run_id = uuid::Uuid::new_v4().to_string();
+        let run_id = uuid::Uuid::now_v7().to_string();
         let run_id_c = CString::new(run_id.as_str()).map_err(|_| InferError::Execution {
             reason: "run_id 包含非法空字节".to_string(),
         })?;

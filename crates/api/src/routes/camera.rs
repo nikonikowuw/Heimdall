@@ -81,7 +81,7 @@ async fn create_camera(
         return Err(ApiError::BadRequest("RTSP 地址不能为空".to_string()));
     }
 
-    let camera_id = uuid::Uuid::new_v4().to_string();
+    let camera_id = uuid::Uuid::now_v7().to_string();
     let protocol = req
         .protocol
         .map(|p| p.as_str().to_string())

@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_load_from_temp_file() {
-        let unique_id = uuid::Uuid::new_v4();
+        let unique_id = uuid::Uuid::now_v7();
         let dir = std::env::temp_dir().join(format!("algo_sdk_env_test_{unique_id}"));
         std::fs::create_dir_all(&dir).expect("创建临时目录失败");
         let env_file = dir.join(".env");
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_resolve_model_path_safety() {
-        let unique_id = uuid::Uuid::new_v4();
+        let unique_id = uuid::Uuid::now_v7();
         let dir = std::env::temp_dir().join(format!("algo_sdk_env_safety_test_{unique_id}"));
         let model_dir = dir.join("model");
         std::fs::create_dir_all(&model_dir).expect("创建模型目录失败");

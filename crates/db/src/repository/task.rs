@@ -274,7 +274,7 @@ impl TaskRepo {
                     let now = chrono::Utc::now();
                     let inserted = InstActiveModel {
                         id: sea_orm::ActiveValue::NotSet,
-                        instance_id: Set(uuid::Uuid::new_v4().to_string()),
+                        instance_id: Set(uuid::Uuid::now_v7().to_string()),
                         task_id: Set(task.id),
                         camera_id: Set(params.camera_id.clone()),
                         algorithm_id: Set(instance.algorithm_id.clone()),

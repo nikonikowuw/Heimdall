@@ -844,11 +844,11 @@ pub(crate) fn encode_and_save_snapshot(
     let height = frame.height;
 
     // 2. 生成唯一图片 ID 与落盘相对路径。只有两个 bitstream 都准备好后才创建产物。
-    let image_id = format!("img_{}_{}", now_compact_ts(), uuid::Uuid::new_v4().simple());
+    let image_id = format!("img_{}_{}", now_compact_ts(), uuid::Uuid::now_v7().simple());
     let crop_image_id = format!(
         "crop_{}_{}",
         now_compact_ts(),
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     );
 
     let cam_dir = base_evidence_dir.join(camera_id);
@@ -902,7 +902,7 @@ pub(crate) fn encode_and_save_snapshot(
 /// 工业级加固：当检测到存储分区被硬件只读挂载 (Read-Only Filesystem) 或无权写入时，
 /// 启动工业级应急容灾转存至系统内存盘 (tmpfs) 保全关键告警证据。
 fn atomic_write_file(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
-    let tmp_path = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4().simple()));
+    let tmp_path = path.with_extension(format!("tmp.{}", uuid::Uuid::now_v7().simple()));
     match fs::write(&tmp_path, data) {
         Ok(_) => {
             if let Err(e) = fs::rename(&tmp_path, path) {
@@ -953,7 +953,7 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_engine_fallback_flow() {
         let temp_dir =
-            std::env::temp_dir().join(format!("test_evidence_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("test_evidence_{}", uuid::Uuid::now_v7().simple()));
         let engine = SnapshotEngine::new(&temp_dir);
 
         // 创建模拟子流帧 (320x240 NV12)
@@ -1055,7 +1055,7 @@ mod tests {
     fn test_snapshot_config_hot_update_is_atomic() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_snapshot_config_{}",
-            uuid::Uuid::new_v4().simple()
+            uuid::Uuid::now_v7().simple()
         ));
         let engine = SnapshotEngine::new(temp_dir);
         let mut updated = engine.config();
@@ -1112,7 +1112,7 @@ mod tests {
     async fn test_snapshot_worker_queue_overload_protection() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_evidence_ovl_{}",
-            uuid::Uuid::new_v4().simple()
+            uuid::Uuid::now_v7().simple()
         ));
         let engine = SnapshotEngine::new(&temp_dir);
 
@@ -1170,7 +1170,7 @@ mod tests {
     fn test_snapshot_saves_both_full_and_crop_files_transactionally() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_evidence_clean_{}",
-            uuid::Uuid::new_v4().simple()
+            uuid::Uuid::now_v7().simple()
         ));
         let cam_dir = temp_dir.join("cam_clean");
         fs::create_dir_all(&cam_dir).expect("创建测试证据目录失败");

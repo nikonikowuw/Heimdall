@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn test_thermal_guard_decision_logic() {
         let temp_dir =
-            std::env::temp_dir().join(format!("test_thermal_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("test_thermal_{}", uuid::Uuid::now_v7().simple()));
         fs::create_dir_all(&temp_dir).expect("创建测试临时目录成功");
         let temp_file = temp_dir.join("temp");
 
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn test_multi_zone_hotspot_peak_detection() {
         let temp_dir =
-            std::env::temp_dir().join(format!("test_multizone_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("test_multizone_{}", uuid::Uuid::now_v7().simple()));
         fs::create_dir_all(&temp_dir).expect("创建测试临时目录成功");
 
         let z0_dir = temp_dir.join("thermal_zone0");

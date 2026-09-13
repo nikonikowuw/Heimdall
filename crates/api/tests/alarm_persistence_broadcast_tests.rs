@@ -161,7 +161,7 @@ async fn test_alarm_persistence_and_ws_broadcast_flow() {
     let mut ws_rx = state.event_broadcaster.subscribe();
 
     // 3. 模拟管线触发一条告警并发布
-    let event_id = uuid::Uuid::new_v4().to_string();
+    let event_id = uuid::Uuid::now_v7().to_string();
     let mock_event = create_mock_alarm_event(&event_id, "CAM-01", true, 1741100000000);
     state
         .pipeline
@@ -227,7 +227,7 @@ async fn test_alarm_persistence_with_failed_evidence() {
     let mut ws_rx = state.event_broadcaster.subscribe();
 
     // 模拟快照生成失败场景（with_snapshot = false）
-    let event_id = uuid::Uuid::new_v4().to_string();
+    let event_id = uuid::Uuid::now_v7().to_string();
     let mock_event = create_mock_alarm_event(&event_id, "CAM-02", false, 1741100050000);
     state
         .pipeline
@@ -378,7 +378,7 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
     let mut ws_rx = state.event_broadcaster.subscribe();
 
     // 构建一个识别类客观通行抓拍事件
-    let capture_id = uuid::Uuid::new_v4().to_string();
+    let capture_id = uuid::Uuid::now_v7().to_string();
     let mock_capture = PipelineCaptureEvent {
         capture_id: capture_id.clone(),
         camera_id: "CAM-01".to_string(),

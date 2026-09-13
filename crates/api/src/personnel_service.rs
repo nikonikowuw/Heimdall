@@ -203,7 +203,7 @@ impl PersonnelService {
                 }
                 s
             }
-            _ => format!("sub_{}", uuid::Uuid::new_v4().simple()),
+            _ => uuid::Uuid::now_v7().to_string(),
         };
 
         if !self.algo_registry.is_face_extraction_ready().await {
@@ -219,7 +219,7 @@ impl PersonnelService {
 
         for (idx, raw_img) in raw_images.into_iter().enumerate() {
             let is_primary = idx == 0;
-            let face_id = format!("face_{}", uuid::Uuid::new_v4().simple());
+            let face_id = uuid::Uuid::now_v7().to_string();
             let meta = self
                 .process_and_save_face(
                     &subject_id,
@@ -411,7 +411,7 @@ impl PersonnelService {
         let mut extracted_metas = Vec::with_capacity(raw_images.len());
 
         for raw_img in raw_images {
-            let face_id = format!("face_{}", uuid::Uuid::new_v4().simple());
+            let face_id = uuid::Uuid::now_v7().to_string();
             let meta = self
                 .process_and_save_face(subject_id, &face_id, raw_img, false, &mut rollback_guard)
                 .await?;

@@ -230,7 +230,7 @@ mod tests {
     async fn storage_status_returns_disk_usage_when_cleaner_is_configured() {
         let evidence_dir = std::env::temp_dir().join(format!(
             "heimdall-storage-status-{}",
-            uuid::Uuid::new_v4().simple()
+            uuid::Uuid::now_v7().simple()
         ));
         fs::create_dir_all(&evidence_dir).expect("创建临时 evidence 目录失败");
 

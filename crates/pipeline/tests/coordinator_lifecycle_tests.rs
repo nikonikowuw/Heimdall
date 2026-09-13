@@ -92,7 +92,7 @@ fn create_packet(pts_ms: i64, is_keyframe: bool) -> Arc<EncodedPacket> {
 async fn test_coordinator_full_lifecycle_and_events() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_lifecycle_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -197,7 +197,7 @@ async fn test_coordinator_full_lifecycle_and_events() {
 async fn test_coordinator_idempotency_and_reconfiguration() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_idempotency_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -292,7 +292,7 @@ async fn test_coordinator_idempotency_and_reconfiguration() {
 async fn test_coordinator_validation_and_rollback() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_validation_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -358,7 +358,7 @@ async fn test_coordinator_validation_and_rollback() {
 async fn test_coordinator_alarm_trigger_and_event_broadcast() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_alarm_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -460,7 +460,7 @@ async fn test_coordinator_alarm_trigger_and_event_broadcast() {
 async fn test_coordinator_validation_detailed() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_validation_det_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -541,7 +541,7 @@ async fn test_coordinator_validation_detailed() {
 async fn test_coordinator_concurrent_starts_serialized() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_concurrent_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -637,7 +637,7 @@ async fn test_coordinator_concurrent_starts_serialized() {
 async fn test_coordinator_start_cancellation_safety() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_cancel_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -698,7 +698,7 @@ async fn test_coordinator_start_cancellation_safety() {
 async fn test_coordinator_alarm_evidence_failure_preserves_alarm() {
     let temp_base = std::env::temp_dir().join(format!(
         "test_coord_fail_ev_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_base).unwrap();
 
@@ -808,7 +808,7 @@ async fn test_coordinator_alarm_evidence_failure_preserves_alarm() {
 async fn test_coordinator_empty_tracks_broadcast() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_empty_tracks_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -925,7 +925,7 @@ impl Drop for DropTrackingDecoder {
 async fn test_coordinator_startup_failure_disposes_decoder_on_rollback() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_decoder_drop_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -1000,7 +1000,7 @@ async fn test_coordinator_startup_failure_disposes_decoder_on_rollback() {
 async fn test_coordinator_stop_all_parallel_and_worker_handle() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_stop_all_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -1091,7 +1091,7 @@ async fn test_ai_task_lease_raii_protection() {
 async fn test_coordinator_multi_algorithm_instances() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_coord_multi_algo_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 

@@ -370,7 +370,7 @@ impl CaptureDispatchService {
             types::RecognitionStatus::PendingReview
         };
 
-        let recognition_id = format!("rec_{}", uuid::Uuid::new_v4().simple());
+        let recognition_id = uuid::Uuid::now_v7().to_string();
         let recognized_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
             .unwrap_or_else(chrono::Utc::now);
 

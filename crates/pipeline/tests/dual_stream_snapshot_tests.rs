@@ -24,7 +24,7 @@ fn make_packet(pts_ms: i64, is_keyframe: bool) -> Arc<EncodedPacket> {
 async fn test_dual_stream_main_stream_target_decode_flow() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_dual_stream_int_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     let manager = PipelineManager::with_evidence_dir(&temp_dir);
     let cam_id = "cam_test_hq_001";
@@ -105,7 +105,7 @@ async fn test_dual_stream_main_stream_target_decode_flow() {
 async fn test_dual_stream_fallback_to_sub_stream() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_dual_stream_fallback_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     let manager = PipelineManager::with_evidence_dir(&temp_dir);
     let cam_id = "cam_test_fallback_002";
@@ -146,7 +146,7 @@ async fn test_dual_stream_fallback_to_sub_stream() {
 async fn test_large_gop_fast_mode_within_threshold() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_large_gop_fast_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     let config = SnapshotConfig {
         phase_diff_threshold_ms: 500,
@@ -211,7 +211,7 @@ async fn test_large_gop_fast_mode_within_threshold() {
 async fn test_large_gop_sub_stream_reuse_on_large_gap() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_large_gop_sub_reuse_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     // 配置大偏差直接复用子码流
     let config = SnapshotConfig {
@@ -279,7 +279,7 @@ async fn test_large_gop_sub_stream_reuse_on_large_gap() {
 async fn test_large_gop_adaptive_burst_decode() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_large_gop_burst_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     // 默认自适应双模配置 (max_burst_packets = 30，测试环境中放宽超时预算防止 debug 模式 CPU 抖动)
     let config = SnapshotConfig {
@@ -345,7 +345,7 @@ async fn test_large_gop_adaptive_burst_decode() {
 async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_large_gop_overflow_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     // 限制最大追帧包数为 15 包
     let config = SnapshotConfig {
@@ -411,7 +411,7 @@ async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
 async fn test_large_gop_burst_timeout_budget_fuse() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_large_gop_fuse_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     // 配置极其严苛的追帧耗时预算 (0ms 立即超时熔断)
     let config = SnapshotConfig {
@@ -477,7 +477,7 @@ async fn test_large_gop_burst_timeout_budget_fuse() {
 async fn test_scheme3_main_stream_zero_decode_direct_passthrough() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_scheme3_zero_decode_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     let manager = PipelineManager::with_evidence_dir(&temp_dir);
     let cam_id = "cam_scheme3_main_direct";
@@ -535,7 +535,7 @@ async fn test_scheme3_main_stream_zero_decode_direct_passthrough() {
 async fn test_scheme3_tolerance_matching_and_fallback() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_scheme3_tolerance_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     let manager = PipelineManager::with_evidence_dir(&temp_dir);
     let cam_id = "cam_scheme3_tol";

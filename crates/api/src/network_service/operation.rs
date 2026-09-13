@@ -81,7 +81,7 @@ impl NetworkOperationManager {
 
         let now = chrono::Utc::now().timestamp_millis();
         let deadline = now + DEFAULT_TRIAL_TIMEOUT_MS;
-        let op_id = uuid::Uuid::new_v4().to_string();
+        let op_id = uuid::Uuid::now_v7().to_string();
 
         let operation = NetworkChangeOperation {
             id: op_id.clone(),

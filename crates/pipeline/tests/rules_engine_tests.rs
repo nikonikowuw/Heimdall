@@ -63,7 +63,7 @@ impl EvictionStore for DbEvictionStore {
 async fn test_full_pipeline_rules_evidence_and_eviction() {
     let temp_evidence_dir = std::env::temp_dir().join(format!(
         "test_evidence_e2e_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     fs::create_dir_all(&temp_evidence_dir).unwrap();
 
@@ -125,7 +125,7 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
 
     let now = chrono::Utc::now();
     let alarm_model = alarm::ActiveModel {
-        event_id: Set(format!("evt_{}", uuid::Uuid::new_v4().simple())),
+        event_id: Set(uuid::Uuid::now_v7().to_string()),
         camera_id: Set(cam_id.to_string()),
         alarm_type_id: Set("line_cross".to_string()),
         occurred_at: Set(now),
@@ -153,7 +153,7 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
     fs::write(&cap_crop_path, b"fake_cap_crop").unwrap();
 
     let cap_model = capture::ActiveModel {
-        capture_id: Set(format!("cap_{}", uuid::Uuid::new_v4().simple())),
+        capture_id: Set(uuid::Uuid::now_v7().to_string()),
         camera_id: Set(cam_id.to_string()),
         track_id: Set(tracked2[0].track_id as i64),
         target_label: Set("person".to_string()),

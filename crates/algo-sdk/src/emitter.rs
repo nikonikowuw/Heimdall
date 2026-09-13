@@ -176,7 +176,7 @@ impl<'a> ResultEmitter<'a> {
     pub fn emit_detections(&mut self, boxes: &[NormBox]) -> Result<(), AlgoError> {
         let envelope = JsonAlarmEnvelope {
             schema_version: 1,
-            event_id: Uuid::new_v4(),
+            event_id: Uuid::now_v7(),
             objects: BoxesSerializer(boxes),
         };
 

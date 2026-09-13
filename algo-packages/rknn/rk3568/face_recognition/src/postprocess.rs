@@ -85,7 +85,7 @@ pub fn emit_tracked_results(
     }
 
     let envelope = FaceRecognitionEnvelope {
-        event_id: Uuid::new_v4(),
+        event_id: Uuid::now_v7(),
         tracks,
         faces,
         objects,

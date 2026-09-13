@@ -114,7 +114,7 @@ impl AlarmDispatchService {
             .as_ref()
             .map(|snap| db::entity::capture::ActiveModel {
                 id: sea_orm::NotSet,
-                capture_id: Set(uuid::Uuid::new_v4().to_string()),
+                capture_id: Set(uuid::Uuid::now_v7().to_string()),
                 camera_id: Set(event.camera_id.clone()),
                 track_id: Set(event.alarm.tracked_object.track_id as i64),
                 target_label: Set(event.alarm.tracked_object.label.clone()),

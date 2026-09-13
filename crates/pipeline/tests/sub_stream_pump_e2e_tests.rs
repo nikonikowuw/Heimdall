@@ -50,7 +50,7 @@ impl InferenceBackend for E2eMockInferBackend {
 #[tokio::test]
 async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
     let temp_dir =
-        std::env::temp_dir().join(format!("test_pump_e2e_{}", uuid::Uuid::new_v4().simple()));
+        std::env::temp_dir().join(format!("test_pump_e2e_{}", uuid::Uuid::now_v7().simple()));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
     let manager = Arc::new(PipelineManager::with_evidence_dir(&temp_dir));
@@ -193,7 +193,7 @@ async fn test_sub_stream_pump_and_inference_worker_e2e_lifecycle() {
 async fn test_sub_stream_pump_motion_gate_skips_static_host_frames() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_pump_motion_gate_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -254,7 +254,7 @@ async fn test_sub_stream_pump_motion_gate_skips_static_host_frames() {
 async fn test_sub_stream_pump_managed_worker_lifecycle() {
     let temp_dir = std::env::temp_dir().join(format!(
         "test_pump_managed_worker_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -359,7 +359,7 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
 
     let temp_dir = std::env::temp_dir().join(format!(
         "test_real_macos_pump_e2e_{}",
-        uuid::Uuid::new_v4().simple()
+        uuid::Uuid::now_v7().simple()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
 

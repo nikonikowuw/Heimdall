@@ -567,7 +567,7 @@ impl AnalysisPump {
                                         // 识别类算法：通行抓拍处理 (不产生告警，直接落地 capture_records)
                                         if !outcome.captures.is_empty() {
                                             for target in outcome.captures {
-                                                let capture_id = uuid::Uuid::new_v4().to_string();
+                                                let capture_id = uuid::Uuid::now_v7().to_string();
                                                 let crop_bbox = target.face_bbox().unwrap_or(target.bbox);
                                                 let snapshot = trigger_target_snapshot(
                                                     &pipeline_mgr_infer,
@@ -606,7 +606,7 @@ impl AnalysisPump {
                                                 .alarms_triggered
                                                 .fetch_add(outcome.alarms.len() as u64, Ordering::Relaxed);
                                             for alarm in outcome.alarms {
-                                                let event_id = uuid::Uuid::new_v4().to_string();
+                                                let event_id = uuid::Uuid::now_v7().to_string();
                                                 let (snapshot, evidence_status, evidence_error) =
                                                     match trigger_target_snapshot(
                                                         &pipeline_mgr_infer,

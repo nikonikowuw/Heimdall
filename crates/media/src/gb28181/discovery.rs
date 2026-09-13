@@ -27,7 +27,7 @@ pub async fn scan_lan_cameras(timeout: Duration) -> Result<Vec<DiscoveredDevice>
     // 设置广播权限
     let _ = socket.set_broadcast(true);
 
-    let msg_id = format!("uuid:{}", uuid::Uuid::new_v4());
+    let msg_id = format!("uuid:{}", uuid::Uuid::now_v7());
     let probe_xml = format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n\
          <Envelope xmlns=\"http://www.w3.org/2003/05/soap-envelope\" \

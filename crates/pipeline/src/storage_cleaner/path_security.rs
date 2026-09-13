@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_path_security_rejections() {
-        let temp_dir = std::env::temp_dir().join(format!("test_sec_{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!("test_sec_{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         // 1. 空路径

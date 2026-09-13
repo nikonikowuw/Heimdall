@@ -1005,7 +1005,7 @@ mod tests {
     #[tokio::test]
     async fn test_continuous_drain_loop_multi_batch() {
         let temp_dir =
-            std::env::temp_dir().join(format!("test_drain_loop_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("test_drain_loop_{}", uuid::Uuid::now_v7().simple()));
         fs::create_dir_all(&temp_dir).unwrap();
 
         // 构造 5 个抓拍记录
@@ -1065,7 +1065,7 @@ mod tests {
     async fn test_two_phase_atomic_eviction_and_metrics() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_eviction_twophase_{}",
-            uuid::Uuid::new_v4().simple()
+            uuid::Uuid::now_v7().simple()
         ));
         fs::create_dir_all(&temp_dir).unwrap();
 
@@ -1120,7 +1120,7 @@ mod tests {
     async fn test_startup_tombstone_sweep_and_orphan_reconciliation() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_sweep_orphan_{}",
-            uuid::Uuid::new_v4().simple()
+            uuid::Uuid::now_v7().simple()
         ));
         fs::create_dir_all(&temp_dir).unwrap();
 

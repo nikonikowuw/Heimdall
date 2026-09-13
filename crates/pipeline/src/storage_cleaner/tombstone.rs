@@ -48,7 +48,7 @@ pub fn quarantine_file(
         .unwrap_or("evidence.jpg");
 
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let unique_id = uuid::Uuid::new_v4().simple();
+    let unique_id = uuid::Uuid::now_v7().simple();
     let tombstone_filename = format!("{now_ms}_{unique_id}_{original_name}");
     let dest_path = tombstone_dir.join(tombstone_filename);
 
