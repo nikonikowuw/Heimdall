@@ -236,18 +236,20 @@ fn greedy_nms_by<T>(items: &mut Vec<T>, iou_threshold: f32, mut iou_fn: impl FnM
     if items.len() <= 1 {
         return;
     }
-    let mut kept = Vec::with_capacity(items.len());
-    for item in items.drain(..) {
-        if kept.iter().all(|prev| iou_fn(prev, &item) < iou_threshold) {
-            kept.push(item);
+    let mut kept_len = 0;
+    for i in 0..items.len() {
+        let overlaps = (0..kept_len).any(|j| iou_fn(&items[j], &items[i]) >= iou_threshold);
+        if !overlaps {
+            items.swap(kept_len, i);
+            kept_len += 1;
         }
     }
-    *items = kept;
+    items.truncate(kept_len);
 }
 
 /// 对人体候选框执行类别无关 NMS。
 pub fn nms_persons(persons: &mut Vec<PersonCandidate>, iou_threshold: f32) {
-    persons.sort_by(|left, right| right.score.total_cmp(&left.score));
+    persons.sort_unstable_by(|left, right| right.score.total_cmp(&left.score));
     greedy_nms_by(persons, iou_threshold, |a, b| {
         crate::bytetrack::box_iou(&a.bbox, &b.bbox)
     });
@@ -294,7 +296,7 @@ pub fn unmap_persons_letterbox(
 
 /// 对同一张图的人脸候选执行类别无关 NMS。
 pub fn nms(faces: &mut Vec<RawFace>, iou_threshold: f32) {
-    faces.sort_by(|left, right| right.score.total_cmp(&left.score));
+    faces.sort_unstable_by(|left, right| right.score.total_cmp(&left.score));
     greedy_nms_by(faces, iou_threshold, |a, b| a.iou(b));
 }
 

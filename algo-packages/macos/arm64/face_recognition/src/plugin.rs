@@ -157,25 +157,31 @@ impl AlgoPlugin for FaceRecognizer {
                             &quality,
                             frame.frame_id() as usize,
                         ) {
-                        match face_alignment_matrix(frame.width(), frame.height(), &face.landmarks)
-                            .map_err(|error| error.to_string())
-                            .and_then(|matrix| {
-                                // SAFETY: source_pixelbuffer 来自当前 SafeFrame，且本次调用同步完成；
-                                // EdgeFace 不会保存该裸指针或把它交给异步任务。
-                                unsafe {
-                                    self.models
-                                        .predict_embedding_from_pixelbuffer(
-                                            source_pixelbuffer,
-                                            frame.width(),
-                                            frame.height(),
-                                            matrix,
-                                        )
-                                        .map_err(|error| error.to_string())
+                        let extract = || -> Result<[f32; 512], AlgoError> {
+                            let matrix = face_alignment_matrix(
+                                frame.width(),
+                                frame.height(),
+                                &face.landmarks,
+                            )
+                            .map_err(|reason| {
+                                AlgoError::Preprocess {
+                                    reason: reason.to_string(),
                                 }
-                            })
-                            .and_then(|values| {
-                                normalize_embedding(&values).map_err(|error| error.to_string())
-                            }) {
+                            })?;
+                            // SAFETY: source_pixelbuffer 来自当前 SafeFrame，且本次调用同步完成；
+                            // EdgeFace 不会保存该裸指针或把它交给异步任务。
+                            let values = unsafe {
+                                self.models.predict_embedding_from_pixelbuffer(
+                                    source_pixelbuffer,
+                                    frame.width(),
+                                    frame.height(),
+                                    matrix,
+                                )?
+                            };
+                            normalize_embedding(&values)
+                        };
+
+                        match extract() {
                             Ok(normalized) => {
                                 let fused = self.best_shots.update_with_fusion(
                                     internal_track_id,
@@ -198,7 +204,7 @@ impl AlgoPlugin for FaceRecognizer {
                                     frame.frame_id() as usize,
                                 );
                                 tracing::warn!(
-                                    error = %error,
+                                    %error,
                                     "best-shot CoreML 设备侧 EdgeFace 提取失败，保留检测结果并允许后续重试"
                                 );
                                 None

@@ -85,7 +85,7 @@ pub fn associate_persons_and_faces(
     }
 
     // 按距离代价升序排序（最优先匹配）
-    matches.sort_by(|a, b| a.0.total_cmp(&b.0));
+    matches.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
 
     let mut results = Vec::new();
 
@@ -160,7 +160,7 @@ pub fn match_tracks_to_associated(
     }
 
     // 优先匹配重合度最高的对
-    pairs.sort_by(|x, y| y.0.total_cmp(&x.0));
+    pairs.sort_unstable_by(|x, y| y.0.total_cmp(&x.0));
 
     let mut track_matched = vec![false; active_tracks.len()];
     let mut assoc_matched = vec![false; associated.len()];

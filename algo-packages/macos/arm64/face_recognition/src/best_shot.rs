@@ -103,19 +103,11 @@ impl BestShotManager {
             None => true,
             Some(prev) if prev.embedding.is_empty() => true,
             Some(prev) => {
-                // 条件 1: 质量显著高于历史最高质量，触发刷新与强化融合
-                if new_quality.score > prev.quality.score + delta {
-                    return true;
-                }
-                // 条件 2: 融合帧数未达上限，且距离上次提取已间隔足够帧数，且达到融合及格质量
-                if prev.fused_count < MAX_FUSED_FRAMES
-                    && current_frame_id.saturating_sub(prev.last_extract_frame_id)
-                        >= MIN_FUSION_FRAME_INTERVAL
-                    && new_quality.score >= MIN_FUSION_QUALITY_SCORE
-                {
-                    return true;
-                }
-                false
+                new_quality.score > prev.quality.score + delta
+                    || (prev.fused_count < MAX_FUSED_FRAMES
+                        && current_frame_id.saturating_sub(prev.last_extract_frame_id)
+                            >= MIN_FUSION_FRAME_INTERVAL
+                        && new_quality.score >= MIN_FUSION_QUALITY_SCORE)
             }
         }
     }
@@ -154,11 +146,13 @@ impl BestShotManager {
             });
 
         if record.embedding.len() == 512 {
-            let mut current = [0.0f32; 512];
-            current.copy_from_slice(&record.embedding);
+            let current: &[f32; 512] = match record.embedding.as_slice().try_into() {
+                Ok(arr) => arr,
+                Err(_) => return *new_embedding,
+            };
 
             // 防漂移校验 (Anti-Drift Outlier Defense)
-            let sim = crate::cosine_similarity(new_embedding, &current);
+            let sim = crate::cosine_similarity(new_embedding, current);
             if sim < DRIFT_REJECTION_SIMILARITY {
                 tracing::warn!(
                     track_id,
@@ -167,7 +161,7 @@ impl BestShotManager {
                     "特征融合防漂移校验拦截：新特征与历史融合特征余弦相似度过低，拒绝污染特征池"
                 );
                 record.last_extract_frame_id = frame_id;
-                return current;
+                return *current;
             }
 
             // 超球面加权累加与归一化
@@ -260,30 +254,28 @@ impl BestShotManager {
         quality: FaceQuality,
         frame_id: usize,
     ) {
-        if let Some(record) = self.records.get_mut(&track_id) {
-            record.last_extract_frame_id = frame_id;
-            if quality.score > record.quality.score {
-                record.bbox = bbox;
-                record.landmarks = landmarks;
-                record.score = score;
-                record.quality = quality;
-            }
-        } else {
-            self.records.insert(
-                track_id,
-                BestShotRecord {
-                    bbox,
-                    landmarks,
-                    score,
-                    quality,
-                    embedding: Vec::new(),
-                    frame_id,
-                    fused_count: 0,
-                    total_weight: 0.0,
-                    last_extract_frame_id: frame_id,
-                },
-            );
-        }
+        self.records
+            .entry(track_id)
+            .and_modify(|record| {
+                record.last_extract_frame_id = frame_id;
+                if quality.score > record.quality.score {
+                    record.bbox = bbox;
+                    record.landmarks = landmarks;
+                    record.score = score;
+                    record.quality = quality;
+                }
+            })
+            .or_insert_with(|| BestShotRecord {
+                bbox,
+                landmarks,
+                score,
+                quality,
+                embedding: Vec::new(),
+                frame_id,
+                fused_count: 0,
+                total_weight: 0.0,
+                last_extract_frame_id: frame_id,
+            });
     }
 
     /// 清理已消亡航迹对应的最优抓拍记录，防止内存泄漏

@@ -386,8 +386,8 @@ impl ByteTracker {
         }
 
         // 2. 将输入检测按置信度切分为高分 (dets_high) 与低分 (dets_low)
-        let mut dets_high = Vec::new();
-        let mut dets_low = Vec::new();
+        let mut dets_high = Vec::with_capacity(detections.len());
+        let mut dets_low = Vec::with_capacity(detections.len() / 2);
 
         for det in detections {
             if det.score >= self.config.track_thresh {
@@ -496,15 +496,10 @@ impl ByteTracker {
         }
 
         // 8. 整合存活航迹
-        let mut updated_tracked = Vec::new();
-        for track in self.tracked_stracks.drain(..) {
-            if track.status == TrackStatus::Tracked {
-                updated_tracked.push(track);
-            }
-        }
-        updated_tracked.extend(reactivated_tracks);
-        updated_tracked.extend(new_stracks);
-        self.tracked_stracks = updated_tracked;
+        self.tracked_stracks
+            .retain(|track| track.status == TrackStatus::Tracked);
+        self.tracked_stracks.extend(reactivated_tracks);
+        self.tracked_stracks.extend(new_stracks);
 
         // 9. 更新与清理超时 lost_stracks
         self.lost_stracks.extend(newly_lost);
@@ -548,14 +543,14 @@ pub fn kuhn_munkres_match(
     }
 
     let dim = n.max(m);
-    // 构造 dim x dim 权重矩阵 (以 10000 放大为整数以杜绝浮点精度丢失)
-    let mut weight = vec![vec![0i64; dim]; dim];
+    // 构造 dim x dim 展平连续权重矩阵 (以 10000 放大为整数以杜绝浮点精度丢失)
+    let mut weight = vec![0i64; dim * dim];
 
     for (t_idx, track) in tracks.iter().enumerate() {
         for (d_idx, det) in dets.iter().enumerate() {
             let iou = box_iou(&track.bbox, &det.bbox);
             if iou >= threshold {
-                weight[t_idx][d_idx] = (iou * 10000.0) as i64;
+                weight[t_idx * dim + d_idx] = (iou * 10000.0) as i64;
             }
         }
     }
@@ -567,40 +562,46 @@ pub fn kuhn_munkres_match(
     let mut match_y: Vec<Option<usize>> = vec![None; dim]; // match_y[j] = Some(i) 表示右部 j 匹配左部 i
 
     // 初始化左顶标为行最大值
-    for (i, row) in weight.iter().enumerate().take(dim) {
-        let mut max_w = 0i64;
-        for &w in row.iter().take(dim) {
-            if w > max_w {
-                max_w = w;
-            }
-        }
-        lx[i] = max_w;
+    for (i, target) in lx.iter_mut().enumerate() {
+        let row_offset = i * dim;
+        *target = weight[row_offset..row_offset + dim]
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0);
     }
+
+    // 预分配增广路搜索辅助缓冲区，循环复用避免每轮重新申请堆内存
+    let mut slack = vec![i64::MAX; dim];
+    let mut slack_x = vec![0usize; dim];
+    let mut prev = vec![None; dim];
+    let mut vis_x = vec![false; dim];
+    let mut vis_y = vec![false; dim];
+    let mut queue = VecDeque::with_capacity(dim);
 
     // 为每个左部节点寻找增广路 (带 slack 优化的 O(V^3) 实现)
     for root in 0..dim {
-        let mut slack = vec![i64::MAX; dim];
-        let mut slack_x = vec![0usize; dim];
-        let mut prev = vec![None; dim];
-        let mut vis_x = vec![false; dim];
-        let mut vis_y = vec![false; dim];
-
-        let mut queue = VecDeque::new();
+        slack_x.fill(root);
+        prev.fill(None);
+        vis_x.fill(false);
+        vis_y.fill(false);
+        queue.clear();
         queue.push_back(root);
         vis_x[root] = true;
 
+        let root_offset = root * dim;
         for j in 0..dim {
-            slack[j] = lx[root] + ly[j] - weight[root][j];
-            slack_x[j] = root;
+            slack[j] = lx[root] + ly[j] - weight[root_offset + j];
         }
 
         let mut matched_y_idx = None;
 
         'augment: loop {
             while let Some(u) = queue.pop_front() {
+                let u_offset = u * dim;
                 for v in 0..dim {
                     if !vis_y[v] {
-                        let delta = lx[u] + ly[v] - weight[u][v];
+                        let delta = lx[u] + ly[v] - weight[u_offset + v];
                         if delta == 0 {
                             vis_y[v] = true;
                             prev[v] = Some(u);
@@ -677,13 +678,13 @@ pub fn kuhn_munkres_match(
     }
 
     // 提取有效匹配
-    let mut matches = Vec::new();
+    let mut matches = Vec::with_capacity(n.min(m));
     let mut matched_tracks = vec![false; n];
     let mut matched_dets = vec![false; m];
 
     for (t_idx, maybe_d) in match_x.into_iter().take(n).enumerate() {
         if let Some(d_idx) = maybe_d {
-            if d_idx < m && weight[t_idx][d_idx] > 0 {
+            if d_idx < m && weight[t_idx * dim + d_idx] > 0 {
                 matches.push((t_idx, d_idx));
                 matched_tracks[t_idx] = true;
                 matched_dets[d_idx] = true;
