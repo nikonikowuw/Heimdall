@@ -25,11 +25,11 @@ mod macos {
     use algo_sdk::testing::MockFrameBuilder;
 
     use face_recognition_coreml::align::align_face;
-    use face_recognition_coreml::association::associate_persons_and_faces;
-    use face_recognition_coreml::best_shot::BestShotManager;
-    use face_recognition_coreml::bytetrack::{
-        box_iou, ByteTrackConfig, ByteTracker, TrackDetection,
+    use face_recognition_coreml::association::{
+        associate_persons_and_faces, match_tracks_to_associated,
     };
+    use face_recognition_coreml::best_shot::BestShotManager;
+    use face_recognition_coreml::bytetrack::{ByteTrackConfig, ByteTracker, TrackDetection};
     use face_recognition_coreml::config::InstanceConfig;
     use face_recognition_coreml::coreml::{CoreMlFaceModels, CoreMlRunner};
     use face_recognition_coreml::detect::{
@@ -137,17 +137,20 @@ mod macos {
         let mut embed_infer_ms = 0.0;
         let mut norm_ms = 0.0;
 
+        // 5. 将活跃航迹互斥映射回关联的人脸，并执行质量门控与动态择优抓拍
         let mut results = Vec::with_capacity(active_tracks.len());
         let mut active_track_ids = Vec::with_capacity(active_tracks.len());
 
-        for track in &active_tracks {
+        let matched_assocs = match_tracks_to_associated(&active_tracks, &associated, 0.30);
+
+        for (track, best_assoc) in active_tracks.iter().zip(matched_assocs) {
             active_track_ids.push(track.track_id);
 
-            let best_assoc = associated
-                .iter()
-                .find(|a| box_iou(&track.bbox, &a.person_bbox) >= 0.35);
-            let attached_face = best_assoc.and_then(|a| a.attached_face);
-            let is_pseudo = best_assoc.map(|a| a.is_pseudo_body).unwrap_or(false);
+            let attached_face = best_assoc.as_ref().and_then(|a| a.attached_face);
+            let is_pseudo = best_assoc
+                .as_ref()
+                .map(|a| a.is_pseudo_body)
+                .unwrap_or(false);
 
             let mut face_result = None;
             if let Some(face) = attached_face {

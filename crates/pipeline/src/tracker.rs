@@ -9,6 +9,77 @@
 use std::collections::{HashMap, HashSet};
 use types::{BoundingBox, Detection, DetectionRuleRole, TrackedObject};
 
+/// 边界框四维速度向量 (dx1, dy1, dx2, dy2)
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Velocity {
+    pub dx1: f32,
+    pub dy1: f32,
+    pub dx2: f32,
+    pub dy2: f32,
+}
+
+impl Velocity {
+    pub const ZERO: Self = Self {
+        dx1: 0.0,
+        dy1: 0.0,
+        dx2: 0.0,
+        dy2: 0.0,
+    };
+
+    pub fn new(dx1: f32, dy1: f32, dx2: f32, dy2: f32) -> Self {
+        Self { dx1, dy1, dx2, dy2 }
+    }
+
+    /// 应用阻尼系数进行速度衰减
+    #[inline]
+    pub fn damped(&self, factor: f32) -> Self {
+        Self {
+            dx1: self.dx1 * factor,
+            dy1: self.dy1 * factor,
+            dx2: self.dx2 * factor,
+            dy2: self.dy2 * factor,
+        }
+    }
+
+    /// 基于跨帧时间与当前观测平滑更新速度估计 (EMA 滤波)
+    ///
+    /// `elapsed_frames`: 距上一次有效观测的帧间隔 (至少为 1)，避免多帧累计位移导致瞬时速度脉冲畸变
+    #[inline]
+    pub fn update_smoothed(
+        &self,
+        current: &BoundingBox,
+        target: &BoundingBox,
+        elapsed_frames: usize,
+    ) -> Self {
+        let dt = (elapsed_frames.max(1)) as f32;
+        let inst_dx1 = (target.x1 - current.x1) / dt;
+        let inst_dy1 = (target.y1 - current.y1) / dt;
+        let inst_dx2 = (target.x2 - current.x2) / dt;
+        let inst_dy2 = (target.y2 - current.y2) / dt;
+
+        Self {
+            dx1: inst_dx1 * 0.7 + self.dx1 * 0.3,
+            dy1: inst_dy1 * 0.7 + self.dy1 * 0.3,
+            dx2: inst_dx2 * 0.7 + self.dx2 * 0.3,
+            dy2: inst_dy2 * 0.7 + self.dy2 * 0.3,
+        }
+    }
+
+    /// 基于阻尼累积量外推预测边界框
+    ///
+    /// `lost_frames`: 当前连续丢失帧数。当 lost_frames = 0 时为正常单步预测 (scale = 1.0)；
+    /// 当连续丢失多帧时，沿几何阻尼级数累积 S(k) = 2 * (1 - 0.5^(k+1)) 单调平滑外推，彻底杜绝逆向回缩。
+    #[inline]
+    pub fn extrapolate(&self, bbox: &BoundingBox, lost_frames: usize) -> BoundingBox {
+        let scale = 2.0 * (1.0 - 0.5f32.powi((lost_frames as i32) + 1));
+        let x1 = (bbox.x1 + self.dx1 * scale).clamp(0.0, 1.0);
+        let y1 = (bbox.y1 + self.dy1 * scale).clamp(0.0, 1.0);
+        let x2 = (bbox.x2 + self.dx2 * scale).clamp(x1, 1.0);
+        let y2 = (bbox.y2 + self.dy2 * scale).clamp(y1, 1.0);
+        BoundingBox::new(x1, y1, x2, y2)
+    }
+}
+
 /// 航迹跟踪内部状态
 #[derive(Debug, Clone)]
 struct TrackState {
@@ -17,6 +88,8 @@ struct TrackState {
     label: String,
     confidence: f32,
     bbox: BoundingBox,
+    /// 速度估计向量 (dx1, dy1, dx2, dy2)
+    velocity: Velocity,
     trajectory: Vec<(f64, f64)>,
     lost_frames: usize,
 }
@@ -66,15 +139,24 @@ impl SimpleTracker {
         let mut matched_tracks = vec![false; num_tracks];
         let mut matched_dets = vec![false; num_dets];
 
-        // 1. 贪婪匹配现有航迹与当前帧检测
+        // 1. 结合运动外推预测执行二分图匹配
         if num_tracks > 0 && num_dets > 0 {
-            // 计算所有候选对的 IoU
+            // 计算各航迹的时间外推预测框 (带速度阻尼保护)
+            let predicted_boxes: Vec<BoundingBox> = self
+                .tracks
+                .iter()
+                .map(|t| t.velocity.extrapolate(&t.bbox, t.lost_frames))
+                .collect();
+
+            // 计算所有候选对的综合 IoU (取原始框与预测框的最大重合度)
             let mut matches: Vec<(usize, usize, f32)> = Vec::with_capacity(num_tracks * num_dets);
             for (t_idx, track) in self.tracks.iter().enumerate() {
                 for (d_idx, det) in detections.iter().enumerate() {
                     // 同一标签或类别优先匹配
                     if track.class_id == det.class_id {
-                        let iou = compute_iou(&track.bbox, &det.bbox);
+                        let iou_static = compute_iou(&track.bbox, &det.bbox);
+                        let iou_pred = compute_iou(&predicted_boxes[t_idx], &det.bbox);
+                        let iou = iou_static.max(iou_pred);
                         if iou >= self.iou_threshold {
                             matches.push((t_idx, d_idx, iou));
                         }
@@ -90,9 +172,14 @@ impl SimpleTracker {
                     matched_tracks[t_idx] = true;
                     matched_dets[d_idx] = true;
 
-                    // 更新航迹状态
+                    // 平滑估计速度向量并更新航迹状态
                     let det = &detections[d_idx];
                     let track = &mut self.tracks[t_idx];
+                    track.velocity = track.velocity.update_smoothed(
+                        &track.bbox,
+                        &det.bbox,
+                        track.lost_frames + 1,
+                    );
                     track.bbox = det.bbox;
                     track.confidence = det.confidence;
                     track.lost_frames = 0;
@@ -119,6 +206,7 @@ impl SimpleTracker {
                     label: det.label,
                     confidence: det.confidence,
                     bbox: det.bbox,
+                    velocity: Velocity::ZERO,
                     trajectory: vec![bottom_center],
                     lost_frames: 0,
                 });
@@ -266,6 +354,90 @@ mod tests {
         assert_eq!(res2.len(), 1);
         assert_eq!(res2[0].track_id, track_id, "Track ID 必须在帧间保持连续！");
         assert_eq!(res2[0].trajectory.len(), 2, "轨迹历史记录递增");
+    }
+
+    #[test]
+    fn test_tracker_high_speed_motion_continuity() {
+        let mut tracker = SimpleTracker::new();
+
+        // 模拟高速位移目标 (帧间中心点位移较大，导致纯静态 IoU 低于 0.3)
+        // 帧 1: [0.10, 0.10, 0.18, 0.18] (尺寸 0.08 x 0.08)
+        let det1 = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            bbox: BoundingBox::new(0.10, 0.10, 0.18, 0.18),
+        }];
+        let res1 = tracker.update(det1);
+        assert_eq!(res1.len(), 1);
+        let tid = res1[0].track_id;
+
+        // 帧 2: 平移至 [0.12, 0.12, 0.20, 0.20] (位移 dx=0.02, 建立初速度估计)
+        let det2 = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.93,
+            bbox: BoundingBox::new(0.12, 0.12, 0.20, 0.20),
+        }];
+        let res2 = tracker.update(det2);
+        assert_eq!(res2.len(), 1);
+        assert_eq!(res2[0].track_id, tid);
+
+        // 帧 3: 目标持续高速移动至 [0.155, 0.155, 0.235, 0.235] (位移 dx=0.035)
+        // 此时与帧 2 静态框交集较小 (纯静态 IoU 低于 0.3 门限)，但运动预测框精准捕获
+        let det3 = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.91,
+            bbox: BoundingBox::new(0.155, 0.155, 0.235, 0.235),
+        }];
+        let res3 = tracker.update(det3);
+        assert_eq!(res3.len(), 1);
+        assert_eq!(res3[0].track_id, tid, "基于速度预测成功关联高速目标！");
+    }
+
+    #[test]
+    fn test_tracker_lost_frames_extrapolation_and_recovery() {
+        let mut tracker = SimpleTracker::new();
+
+        // 帧 1: 建立航迹 [0.10, 0.10, 0.20, 0.20]
+        let det1 = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            bbox: BoundingBox::new(0.10, 0.10, 0.20, 0.20),
+        }];
+        let res1 = tracker.update(det1);
+        let tid = res1[0].track_id;
+
+        // 帧 2: 建立初速度 [0.12, 0.12, 0.22, 0.22] (dx = 0.02)
+        let det2 = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            bbox: BoundingBox::new(0.12, 0.12, 0.22, 0.22),
+        }];
+        let res2 = tracker.update(det2);
+        assert_eq!(res2[0].track_id, tid);
+
+        // 帧 3: 目标发生短暂遮挡丢失 1 帧
+        let res3 = tracker.update(vec![]);
+        assert!(res3.is_empty(), "失联帧不输出活跃目标");
+
+        // 帧 4: 目标在连续位移后重新现身 [0.155, 0.155, 0.255, 0.255]
+        // 经过跨 2 帧外推预测成功挽救召回，且速度平滑除以时间 dt，避免脉冲暴增
+        let det4 = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            bbox: BoundingBox::new(0.155, 0.155, 0.255, 0.255),
+        }];
+        let res4 = tracker.update(det4);
+        assert_eq!(res4.len(), 1);
+        assert_eq!(
+            res4[0].track_id, tid,
+            "短暂失联后基于几何阻尼外推成功重连目标"
+        );
     }
 
     #[test]

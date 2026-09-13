@@ -108,20 +108,21 @@ impl AlgoPlugin for FaceRecognizer {
             .collect();
         let active_tracks = self.tracker.update(&track_dets);
 
-        // 5. 将活跃航迹映射回关联的人脸，并执行质量门控与动态择优抓拍
+        // 5. 将活跃航迹互斥映射回关联的人脸，并执行质量门控与动态择优抓拍
         let mut tracked_outputs = Vec::with_capacity(active_tracks.len());
         let mut active_track_ids = Vec::with_capacity(active_tracks.len());
 
-        for track in &active_tracks {
+        let matched_assocs =
+            crate::association::match_tracks_to_associated(&active_tracks, &associated, 0.30);
+
+        for (track, best_assoc) in active_tracks.iter().zip(matched_assocs) {
             active_track_ids.push(track.track_id);
 
-            // 在当前关联对中寻找重合度最高的匹配
-            let best_assoc = associated
-                .iter()
-                .find(|a| crate::bytetrack::box_iou(&track.bbox, &a.person_bbox) >= 0.35);
-
-            let attached_face = best_assoc.and_then(|a| a.attached_face);
-            let is_pseudo = best_assoc.map(|a| a.is_pseudo_body).unwrap_or(false);
+            let attached_face = best_assoc.as_ref().and_then(|a| a.attached_face);
+            let is_pseudo = best_assoc
+                .as_ref()
+                .map(|a| a.is_pseudo_body)
+                .unwrap_or(false);
 
             let mut face_detail = None;
             if let Some(face) = attached_face {

@@ -140,6 +140,43 @@ pub fn associate_persons_and_faces(
     results
 }
 
+/// 为当前活跃的航迹列表互斥关联最佳的人体-人脸对
+///
+/// 遵循全局单射匹配原则，按 IoU 降序贪婪提取不相交对，保证同一目标绝不被多路航迹串挂。
+/// 返回与 `active_tracks` 严格一一对应的 `Vec<Option<AssociatedPerson>>`。
+pub fn match_tracks_to_associated(
+    active_tracks: &[crate::bytetrack::STrack],
+    associated: &[AssociatedPerson],
+    iou_threshold: f32,
+) -> Vec<Option<AssociatedPerson>> {
+    let mut pairs = Vec::with_capacity(active_tracks.len() * associated.len());
+    for (t_idx, track) in active_tracks.iter().enumerate() {
+        for (a_idx, a) in associated.iter().enumerate() {
+            let iou = crate::bytetrack::box_iou(&track.bbox, &a.person_bbox);
+            if iou >= iou_threshold {
+                pairs.push((iou, t_idx, a_idx));
+            }
+        }
+    }
+
+    // 优先匹配重合度最高的对
+    pairs.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut track_matched = vec![false; active_tracks.len()];
+    let mut assoc_matched = vec![false; associated.len()];
+    let mut results = vec![None; active_tracks.len()];
+
+    for (_iou, t_idx, a_idx) in pairs {
+        if !track_matched[t_idx] && !assoc_matched[a_idx] {
+            track_matched[t_idx] = true;
+            assoc_matched[a_idx] = true;
+            results[t_idx] = Some(associated[a_idx].clone());
+        }
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +223,41 @@ mod tests {
         assert!(associated[0].is_pseudo_body);
         assert!(associated[0].person_bbox[2] > faces[0].bbox[2]);
         assert!(associated[0].person_bbox[3] > faces[0].bbox[3]);
+    }
+
+    #[test]
+    fn test_match_tracks_to_associated_mutual_exclusivity() {
+        use crate::bytetrack::{STrack, TrackDetection};
+
+        let det0 = TrackDetection {
+            bbox: [0.1, 0.1, 0.2, 0.4],
+            score: 0.9,
+            class_id: 0,
+        };
+        let det1 = TrackDetection {
+            bbox: [0.12, 0.1, 0.2, 0.4],
+            score: 0.85,
+            class_id: 0,
+        };
+        let mut t0 = STrack::new(&det0, 1);
+        t0.activate(1, 1);
+        let mut t1 = STrack::new(&det1, 1);
+        t1.activate(2, 1);
+
+        let active_tracks = vec![t0, t1];
+        // 只有一个目标人体框，且两路航迹均与其有重叠
+        let associated = vec![AssociatedPerson {
+            person_bbox: [0.1, 0.1, 0.2, 0.4],
+            person_score: 0.95,
+            is_pseudo_body: false,
+            attached_face: None,
+        }];
+
+        let matches = match_tracks_to_associated(&active_tracks, &associated, 0.30);
+        assert_eq!(matches.len(), 2);
+        // t0 与目标完美重合 (IoU 1.0)，优先获得该目标
+        assert!(matches[0].is_some());
+        // t1 虽与目标有重合，但因目标已被 t0 独占互斥，故为 None，杜绝串挂
+        assert!(matches[1].is_none(), "必须保证单射性，杜绝多航迹争抢串挂！");
     }
 }

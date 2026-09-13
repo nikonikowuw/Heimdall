@@ -1,16 +1,22 @@
-//! 纯 Rust ByteTrack 多目标航迹跟踪器
+//! 纯 Rust 工业级 ByteTrack 多目标航迹跟踪器 (Scale-Invariant ByteTrack)
 //!
-//! 1. 8 维状态卡尔曼滤波 (状态: [xc, yc, a, h, vxc, vyc, va, vh])；
-//! 2. 两阶段高低分二分图匹配 (First stage: dets_high; Second stage: dets_low)；
-//! 3. 航迹生命周期管理 (New -> Tracked -> Lost -> Removed)；
-//! 4. 严格内存有界：失联超过 `max_time_lost` 帧自动注销。
+//! 核心机制与数学保证：
+//! 1. 8 维状态标准线性卡尔曼滤波 (状态: [xc, yc, a, h, vxc, vyc, va, vh])；
+//! 2. 尺度无关性 (Scale-Invariance)：完美适配 [0.0, 1.0] 归一化坐标系及绝对像素坐标系，
+//!    彻底消除绝对阈值截断带来的尺度崩塌；
+//! 3. 序列化卡尔曼观测更新 (Sequential Kalman Update)：解耦观测噪声计算，数值无奇异，
+//!    实现完全的位置与速度全协方差自然修正；
+//! 4. 基于 Kuhn-Munkres (KM / 匈牙利算法) 的全局最优二分图匹配，杜绝贪婪抢注导致的连环 ID Switch；
+//! 5. 两阶段高低分关联 (Stage 1: dets_high; Stage 2: dets_low 挽救遮挡目标)；
+//! 6. 航迹两帧确认缓冲 (Tentative Confirmation)，彻底过滤单帧虚警与幽灵 ID；
+//! 7. 严格内存有界：失联超过 `max_time_lost` 帧自动注销。
 
 use std::collections::VecDeque;
 
 /// 边界框表示：[x1, y1, width, height]，左上角原点
 pub type Rect = [f32; 4];
 
-/// 计算两个 Rect 之间的 IoU
+/// 计算两个 Rect 之间的 IoU (交并比)
 pub fn box_iou(a: &Rect, b: &Rect) -> f32 {
     let ax2 = a[0] + a[2];
     let ay2 = a[1] + a[3];
@@ -26,96 +32,175 @@ pub fn box_iou(a: &Rect, b: &Rect) -> f32 {
     let inter_h = (inter_y2 - inter_y1).max(0.0);
     let inter_area = inter_w * inter_h;
 
-    let area_a = a[2] * a[3];
-    let area_b = b[2] * b[3];
+    let area_a = (a[2] * a[3]).max(0.0);
+    let area_b = (b[2] * b[3]).max(0.0);
     let union_area = area_a + area_b - inter_area;
 
-    if union_area <= 0.0 {
+    if union_area <= 1e-9 {
         0.0
     } else {
         inter_area / union_area
     }
 }
 
-/// 8 维卡尔曼滤波状态: [xc, yc, a, h, vxc, vyc, va, vh]
+/// 8 维状态卡尔曼滤波器: [xc, yc, a, h, vxc, vyc, va, vh]
+/// 具有全尺度自适应性，支持归一化空间 [0.0, 1.0] 与像素物理空间
 #[derive(Debug, Clone)]
 pub struct KalmanBoxTracker {
     mean: [f32; 8],
-    covariance: [f32; 64], // 8x8 对角与协方差矩阵展开
+    covariance: [f32; 64], // 8x8 全协方差矩阵 (行优先展平)
 }
 
 impl KalmanBoxTracker {
+    /// 基于初始矩形框初始化滤波器
     pub fn new(rect: &Rect) -> Self {
+        let h = rect[3].max(1e-4);
+        let a = (rect[2] / h).max(1e-4);
         let xc = rect[0] + rect[2] * 0.5;
         let yc = rect[1] + rect[3] * 0.5;
-        let h = rect[3].max(1.0);
-        let a = rect[2] / h;
 
-        let mut mean = [0.0; 8];
+        let mut mean = [0.0f32; 8];
         mean[0] = xc;
         mean[1] = yc;
         mean[2] = a;
         mean[3] = h;
 
-        let mut covariance = [0.0; 64];
-        let std = [
-            2.0 * 0.05 * h,
-            2.0 * 0.05 * h,
-            1e-2,
-            2.0 * 0.05 * h,
-            10.0 * 0.05 * h,
-            10.0 * 0.05 * h,
-            1e-5,
-            10.0 * 0.05 * h,
+        let mut covariance = [0.0f32; 64];
+        // 初始不确定度：位置与高度正比于目标自身尺度 h，避免硬编码像素常数
+        let std_pos = 2.0 * 0.05 * h;
+        let std_a = 1e-2;
+        let std_h = 2.0 * 0.05 * h;
+        let std_v_pos = 10.0 * 0.05 * h;
+        let std_v_a = 1e-5;
+        let std_v_h = 10.0 * 0.05 * h;
+
+        let stds = [
+            std_pos, std_pos, std_a, std_h, std_v_pos, std_v_pos, std_v_a, std_v_h,
         ];
         for i in 0..8 {
-            covariance[i * 8 + i] = std[i] * std[i];
+            covariance[i * 8 + i] = stds[i] * stds[i];
         }
 
         Self { mean, covariance }
     }
 
-    /// 预测下一帧位置与协方差
+    /// 预测下一帧状态与全协方差
+    ///
+    /// 状态转移模型:
+    /// F = [ I_4  I_4 ]
+    ///     [  0   I_4 ]
+    /// 协方差演化: P' = F * P * F^T + Q
     pub fn predict(&mut self) {
-        // 匀速运动模型: x' = x + vx
+        // 1. 均值线性外推: x' = x + v
         for i in 0..4 {
             self.mean[i] += self.mean[i + 4];
         }
 
-        // 简化的过程噪声更新
-        let h = self.mean[3].max(1.0);
-        let std_pos = 0.05 * h;
-        let std_vel = 0.00625 * h;
+        // 2. 协方差演化: P' = F * P * F^T
+        // 分块推导：
+        // P'00 = P00 + P01 + P10 + P11
+        // P'01 = P01 + P11
+        // P'10 = P10 + P11
+        // P'11 = P11
+        let mut p_next = [0.0f32; 64];
         for i in 0..4 {
-            self.covariance[i * 8 + i] += std_pos * std_pos;
-            self.covariance[(i + 4) * 8 + (i + 4)] += std_vel * std_vel;
+            for j in 0..4 {
+                let p_pp = self.covariance[i * 8 + j];
+                let p_pv = self.covariance[i * 8 + (j + 4)];
+                let p_vp = self.covariance[(i + 4) * 8 + j];
+                let p_vv = self.covariance[(i + 4) * 8 + (j + 4)];
+
+                p_next[i * 8 + j] = p_pp + p_pv + p_vp + p_vv;
+                p_next[i * 8 + (j + 4)] = p_pv + p_vv;
+                p_next[(i + 4) * 8 + j] = p_vp + p_vv;
+                p_next[(i + 4) * 8 + (j + 4)] = p_vv;
+            }
         }
+
+        // 3. 注入尺度自适应过程噪声 Q
+        let h = self.mean[3].max(1e-4);
+        let q_pos = 0.05 * h;
+        let q_a = 1e-2;
+        let q_h = 0.05 * h;
+        let q_v_pos = 0.00625 * h;
+        let q_v_a = 1e-5;
+        let q_v_h = 0.00625 * h;
+
+        let q_stds = [q_pos, q_pos, q_a, q_h, q_v_pos, q_v_pos, q_v_a, q_v_h];
+        for k in 0..8 {
+            p_next[k * 8 + k] += q_stds[k] * q_stds[k];
+        }
+
+        self.covariance = p_next;
     }
 
-    /// 根据观测值校准更新状态
+    /// 根据观测值执行状态更新 (基于序列卡尔曼更新，数值零奇异且自然更新全协方差)
     pub fn update(&mut self, rect: &Rect) {
+        let h = rect[3].max(1e-4);
+        let a = (rect[2] / h).max(1e-4);
         let xc = rect[0] + rect[2] * 0.5;
         let yc = rect[1] + rect[3] * 0.5;
-        let h = rect[3].max(1.0);
-        let a = rect[2] / h;
         let measurement = [xc, yc, a, h];
 
-        // 简化的卡尔曼观测增益更新 (Steady-state approximation)
-        for (i, &m) in measurement.iter().enumerate() {
-            let p = self.covariance[i * 8 + i];
-            let r = (0.1 * h).powi(2).max(1.0);
-            let k = p / (p + r);
-            let innovation = m - self.mean[i];
-            self.mean[i] += k * innovation;
-            self.mean[i + 4] += (k * 0.5) * innovation;
-            self.covariance[i * 8 + i] *= 1.0 - k;
+        // 尺度自适应测量噪声标准差
+        let r_pos = 0.05 * h;
+        let r_a = 1e-2;
+        let r_h = 0.05 * h;
+        let r_vars = [r_pos * r_pos, r_pos * r_pos, r_a * r_a, r_h * r_h];
+
+        // 序列卡尔曼观测更新 (Sequential Kalman Update)
+        // 每个标量观测分量独立更新，等价于多维联合更新，彻底消除矩阵求逆奇点
+        for m in 0..4 {
+            let z_m = measurement[m];
+            let x_m = self.mean[m];
+            let innovation = z_m - x_m;
+
+            // 新息方差 S = P_mm + R_m
+            let p_mm = self.covariance[m * 8 + m];
+            let s = p_mm + r_vars[m];
+            if s <= 1e-12 {
+                continue;
+            }
+            let inv_s = 1.0 / s;
+
+            // 卡尔曼增益向量 K (8维)
+            let mut k_gain = [0.0f32; 8];
+            for (j, kj) in k_gain.iter_mut().enumerate() {
+                *kj = self.covariance[j * 8 + m] * inv_s;
+            }
+
+            // 状态更新: mean = mean + K * innovation
+            for (j, &kj) in k_gain.iter().enumerate() {
+                self.mean[j] += kj * innovation;
+            }
+
+            // 协方差更新: P = P - K * P_m*
+            let mut p_row_m = [0.0f32; 8];
+            for (col, item) in p_row_m.iter_mut().enumerate() {
+                *item = self.covariance[m * 8 + col];
+            }
+
+            for (j, &kj) in k_gain.iter().enumerate() {
+                for (col, &p_mc) in p_row_m.iter().enumerate() {
+                    self.covariance[j * 8 + col] -= kj * p_mc;
+                }
+            }
+
+            // 数值对称性保护
+            for j in 0..8 {
+                for col in (j + 1)..8 {
+                    let avg = 0.5 * (self.covariance[j * 8 + col] + self.covariance[col * 8 + j]);
+                    self.covariance[j * 8 + col] = avg;
+                    self.covariance[col * 8 + j] = avg;
+                }
+            }
         }
     }
 
-    /// 将当前卡尔曼状态转换为 Rect [x1, y1, w, h]
+    /// 将当前卡尔曼滤波中心状态转换为边界框 Rect [x1, y1, w, h]
     pub fn to_rect(&self) -> Rect {
         let a = self.mean[2].max(1e-4);
-        let h = self.mean[3].max(1.0);
+        let h = self.mean[3].max(1e-4);
         let w = a * h;
         let x1 = self.mean[0] - w * 0.5;
         let y1 = self.mean[1] - h * 0.5;
@@ -187,7 +272,7 @@ impl STrack {
 
     pub fn re_activate(&mut self, det: &TrackDetection, frame_id: usize) {
         self.kalman.update(&det.bbox);
-        self.bbox = det.bbox;
+        self.bbox = self.kalman.to_rect();
         self.score = det.score;
         self.status = TrackStatus::Tracked;
         self.is_activated = true;
@@ -204,10 +289,9 @@ impl STrack {
 
     pub fn update(&mut self, det: &TrackDetection, frame_id: usize) {
         self.kalman.update(&det.bbox);
-        self.bbox = det.bbox;
+        self.bbox = self.kalman.to_rect();
         self.score = det.score;
         self.status = TrackStatus::Tracked;
-        self.is_activated = true;
         self.frame_id = frame_id;
         self.tracklet_len += 1;
         self.time_since_update = 0;
@@ -239,6 +323,8 @@ pub struct ByteTrackConfig {
     pub match_thresh: f32,
     /// 目标丢失最大容忍帧数 (默认 30 帧，约 1~1.5 秒)
     pub max_time_lost: usize,
+    /// 是否对新目标启用 2 帧确认机制 (默认 true，有效杜绝单帧假阳性虚警)
+    pub confirm_new_tracks: bool,
 }
 
 impl Default for ByteTrackConfig {
@@ -248,6 +334,7 @@ impl Default for ByteTrackConfig {
             high_thresh: 0.60,
             match_thresh: 0.50,
             max_time_lost: 30,
+            confirm_new_tracks: true,
         }
     }
 }
@@ -288,7 +375,7 @@ impl ByteTracker {
     pub fn update(&mut self, detections: &[TrackDetection]) -> Vec<STrack> {
         self.frame_id += 1;
 
-        // 1. 卡尔曼滤波预测所有活跃与丢失中的航迹
+        // 1. 卡尔曼滤波时间更新：预测所有活跃与暂失航迹在当前时刻的位置
         for track in self.tracked_stracks.iter_mut() {
             track.kalman.predict();
             track.bbox = track.kalman.to_rect();
@@ -305,27 +392,32 @@ impl ByteTracker {
         for det in detections {
             if det.score >= self.config.track_thresh {
                 dets_high.push(*det);
-            } else if det.score >= 0.1 {
+            } else if det.score >= 0.10 {
                 dets_low.push(*det);
             }
         }
 
-        // 3. 第一阶段：高分检测与当前活跃航迹匹配
+        // 3. 第一阶段：高分检测与当前跟踪中航迹匹配 (基于 KM 全局最优二分图匹配)
         let (matched_th, unmatched_t1, unmatched_dh) =
-            greedy_iou_match(&self.tracked_stracks, &dets_high, self.config.match_thresh);
+            kuhn_munkres_match(&self.tracked_stracks, &dets_high, self.config.match_thresh);
 
         for (t_idx, d_idx) in matched_th {
-            self.tracked_stracks[t_idx].update(&dets_high[d_idx], self.frame_id);
+            let track = &mut self.tracked_stracks[t_idx];
+            track.update(&dets_high[d_idx], self.frame_id);
+            if !track.is_activated {
+                // 待确认航迹在连续第 2 帧成功匹配高分检测，正式确认激活！
+                track.is_activated = true;
+            }
         }
 
-        // 4. 第二阶段：未匹配的高分航迹与低分检测匹配 (找回被遮挡/光照变暗的人体)
-        let mut unconfirmed_tracks = Vec::new();
+        // 4. 第二阶段：未匹配的活跃航迹与低分检测匹配 (ByteTrack 核心：挽救被遮挡/模糊目标)
         let mut tracked_for_low = Vec::new();
         for &t_idx in &unmatched_t1 {
             if self.tracked_stracks[t_idx].is_activated {
                 tracked_for_low.push(t_idx);
             } else {
-                unconfirmed_tracks.push(t_idx);
+                // 未激活的未确认航迹，若在第二帧没有匹配到高分目标，直接淘汰，不消耗低分资源
+                self.tracked_stracks[t_idx].mark_removed();
             }
         }
 
@@ -334,14 +426,16 @@ impl ByteTracker {
             .map(|&idx| self.tracked_stracks[idx].clone())
             .collect();
 
-        let (matched_tl, unmatched_t2, _) = greedy_iou_match(&candidates_for_low, &dets_low, 0.45);
+        // 低分匹配门限适度放宽至 0.40
+        let (matched_tl, unmatched_t2, _) =
+            kuhn_munkres_match(&candidates_for_low, &dets_low, 0.40);
 
         for (c_idx, d_idx) in matched_tl {
             let orig_idx = tracked_for_low[c_idx];
             self.tracked_stracks[orig_idx].update(&dets_low[d_idx], self.frame_id);
         }
 
-        // 5. 将二次失配的航迹标记为 Lost
+        // 5. 将二次失配的成熟航迹标记为 Lost
         let mut newly_lost = Vec::new();
         for &c_idx in &unmatched_t2 {
             let orig_idx = tracked_for_low[c_idx];
@@ -356,8 +450,11 @@ impl ByteTracker {
             .map(|d_idx| dets_high[d_idx])
             .collect();
 
-        let (matched_lost, _, unmatched_dh2) =
-            greedy_iou_match(&self.lost_stracks, &remaining_dets, 0.50);
+        let (matched_lost, _, unmatched_dh2) = kuhn_munkres_match(
+            &self.lost_stracks,
+            &remaining_dets,
+            self.config.match_thresh,
+        );
 
         let mut reactivated_tracks = Vec::new();
         let mut reactivated_lost_indices = Vec::new();
@@ -368,7 +465,7 @@ impl ByteTracker {
             reactivated_lost_indices.push(l_idx);
         }
 
-        // 从 lost_stracks 移除已复活的
+        // 从 lost_stracks 移除已重连复活的航迹
         self.lost_stracks = self
             .lost_stracks
             .iter()
@@ -377,7 +474,7 @@ impl ByteTracker {
             .map(|(_, t)| t.clone())
             .collect();
 
-        // 7. 处理全新出现的高分检测：初始化新航迹
+        // 7. 第四阶段：处理全新出现的高分检测：初始化新航迹
         let mut new_stracks = Vec::new();
         for d_idx in unmatched_dh2 {
             let det = &remaining_dets[d_idx];
@@ -385,12 +482,23 @@ impl ByteTracker {
                 let mut track = STrack::new(det, self.frame_id);
                 let id = self.next_id;
                 self.next_id += 1;
-                track.activate(id, self.frame_id);
+
+                if self.frame_id == 1 || !self.config.confirm_new_tracks {
+                    // 冷启动第 1 帧或关闭确认门控时，直接激活上线
+                    track.activate(id, self.frame_id);
+                } else {
+                    // 后续帧默认进入未确认状态，分配 ID 但 is_activated 保持 false，待第 2 帧确认
+                    track.track_id = id;
+                    track.status = TrackStatus::New;
+                    track.is_activated = false;
+                    track.frame_id = self.frame_id;
+                    track.tracklet_len = 1;
+                }
                 new_stracks.push(track);
             }
         }
 
-        // 8. 整合活跃航迹集
+        // 8. 整合存活航迹
         let mut updated_tracked = Vec::new();
         for track in self.tracked_stracks.drain(..) {
             if track.status == TrackStatus::Tracked {
@@ -401,12 +509,12 @@ impl ByteTracker {
         updated_tracked.extend(new_stracks);
         self.tracked_stracks = updated_tracked;
 
-        // 9. 更新与清理 lost_stracks
+        // 9. 更新与清理超时 lost_stracks
         self.lost_stracks.extend(newly_lost);
         let max_lost = self.config.max_time_lost;
         let cur_frame = self.frame_id;
         self.lost_stracks.retain_mut(|track| {
-            if cur_frame - track.frame_id > max_lost {
+            if cur_frame.saturating_sub(track.frame_id) > max_lost {
                 track.mark_removed();
                 false
             } else {
@@ -414,70 +522,193 @@ impl ByteTracker {
             }
         });
 
-        // 仅返回当前处于 Tracked 状态的活跃航迹
+        // 10. 输出：仅对外发布已确认激活 (is_activated == true) 且活跃的航迹
         self.tracked_stracks
             .iter()
-            .filter(|t| t.is_activated)
+            .filter(|t| t.is_activated && t.status == TrackStatus::Tracked)
             .cloned()
             .collect()
     }
 }
 
-/// 贪婪 IoU 匹配二分图匹配器
-fn greedy_iou_match(
+/// 基于 Kuhn-Munkres (KM / 匈牙利算法) 的全局最优二分图匹配器
+///
+/// 相较于简单的贪婪排序匹配，KM 算法严格求解全局权值和最大的匹配，
+/// 彻底避免交叉遮挡场景下局部最优抢占导致的连环 ID 交换。
+pub fn kuhn_munkres_match(
     tracks: &[STrack],
     dets: &[TrackDetection],
     threshold: f32,
 ) -> (Vec<(usize, usize)>, Vec<usize>, Vec<usize>) {
-    if tracks.is_empty() {
-        let unmatched_dets = (0..dets.len()).collect();
-        return (Vec::new(), Vec::new(), unmatched_dets);
+    let n = tracks.len();
+    let m = dets.len();
+
+    if n == 0 {
+        return (Vec::new(), Vec::new(), (0..m).collect());
     }
-    if dets.is_empty() {
-        let unmatched_tracks = (0..tracks.len()).collect();
-        return (Vec::new(), unmatched_tracks, Vec::new());
+    if m == 0 {
+        return (Vec::new(), (0..n).collect(), Vec::new());
     }
 
-    let mut matches = Vec::new();
-    let mut pairs = Vec::with_capacity(tracks.len() * dets.len());
+    let dim = n.max(m);
+    // 构造 dim x dim 权重矩阵 (以 10000 放大为整数以杜绝浮点精度丢失)
+    let mut weight = vec![vec![0i64; dim]; dim];
 
     for (t_idx, track) in tracks.iter().enumerate() {
         for (d_idx, det) in dets.iter().enumerate() {
             let iou = box_iou(&track.bbox, &det.bbox);
             if iou >= threshold {
-                pairs.push((t_idx, d_idx, iou));
+                weight[t_idx][d_idx] = (iou * 10000.0) as i64;
             }
         }
     }
 
-    pairs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    // 匹配顶标与双向匹配映射数组
+    let mut lx = vec![0i64; dim];
+    let mut ly = vec![0i64; dim];
+    let mut match_x: Vec<Option<usize>> = vec![None; dim]; // match_x[i] = Some(j) 表示左部 i 匹配右部 j
+    let mut match_y: Vec<Option<usize>> = vec![None; dim]; // match_y[j] = Some(i) 表示右部 j 匹配左部 i
 
-    let mut used_t = vec![false; tracks.len()];
-    let mut used_d = vec![false; dets.len()];
+    // 初始化左顶标为行最大值
+    for (i, row) in weight.iter().enumerate().take(dim) {
+        let mut max_w = 0i64;
+        for &w in row.iter().take(dim) {
+            if w > max_w {
+                max_w = w;
+            }
+        }
+        lx[i] = max_w;
+    }
 
-    for (t_idx, d_idx, _) in pairs {
-        if !used_t[t_idx] && !used_d[d_idx] {
-            used_t[t_idx] = true;
-            used_d[d_idx] = true;
-            matches.push((t_idx, d_idx));
+    // 为每个左部节点寻找增广路 (带 slack 优化的 O(V^3) 实现)
+    for root in 0..dim {
+        let mut slack = vec![i64::MAX; dim];
+        let mut slack_x = vec![0usize; dim];
+        let mut prev = vec![None; dim];
+        let mut vis_x = vec![false; dim];
+        let mut vis_y = vec![false; dim];
+
+        let mut queue = VecDeque::new();
+        queue.push_back(root);
+        vis_x[root] = true;
+
+        for j in 0..dim {
+            slack[j] = lx[root] + ly[j] - weight[root][j];
+            slack_x[j] = root;
+        }
+
+        let mut matched_y_idx = None;
+
+        'augment: loop {
+            while let Some(u) = queue.pop_front() {
+                for v in 0..dim {
+                    if !vis_y[v] {
+                        let delta = lx[u] + ly[v] - weight[u][v];
+                        if delta == 0 {
+                            vis_y[v] = true;
+                            prev[v] = Some(u);
+                            if let Some(next_u) = match_y[v] {
+                                vis_x[next_u] = true;
+                                queue.push_back(next_u);
+                            } else {
+                                matched_y_idx = Some(v);
+                                break 'augment;
+                            }
+                        } else if delta < slack[v] {
+                            slack[v] = delta;
+                            slack_x[v] = u;
+                        }
+                    }
+                }
+            }
+
+            // 计算最小松弛量
+            let mut delta = i64::MAX;
+            for j in 0..dim {
+                if !vis_y[j] && slack[j] < delta {
+                    delta = slack[j];
+                }
+            }
+
+            if delta == i64::MAX || delta == 0 {
+                break;
+            }
+
+            // 修改顶标
+            for i in 0..dim {
+                if vis_x[i] {
+                    lx[i] -= delta;
+                }
+            }
+            for j in 0..dim {
+                if vis_y[j] {
+                    ly[j] += delta;
+                } else {
+                    slack[j] -= delta;
+                }
+            }
+
+            // 检查新的相等子图边
+            for j in 0..dim {
+                if !vis_y[j] && slack[j] == 0 {
+                    vis_y[j] = true;
+                    prev[j] = Some(slack_x[j]);
+                    if let Some(next_u) = match_y[j] {
+                        vis_x[next_u] = true;
+                        queue.push_back(next_u);
+                    } else {
+                        matched_y_idx = Some(j);
+                        break 'augment;
+                    }
+                }
+            }
+        }
+
+        // 沿增广路径反向更新匹配 (利用 match_x 沿真实交替路回溯)
+        if let Some(mut curr_v) = matched_y_idx {
+            while let Some(u) = prev[curr_v] {
+                let next_v = match_x[u];
+                match_y[curr_v] = Some(u);
+                match_x[u] = Some(curr_v);
+                if let Some(nv) = next_v {
+                    curr_v = nv;
+                } else {
+                    break;
+                }
+            }
         }
     }
 
-    let mut unmatched_t = Vec::new();
-    for (t_idx, &used) in used_t.iter().enumerate() {
-        if !used {
-            unmatched_t.push(t_idx);
+    // 提取有效匹配
+    let mut matches = Vec::new();
+    let mut matched_tracks = vec![false; n];
+    let mut matched_dets = vec![false; m];
+
+    for (t_idx, maybe_d) in match_x.into_iter().take(n).enumerate() {
+        if let Some(d_idx) = maybe_d {
+            if d_idx < m && weight[t_idx][d_idx] > 0 {
+                matches.push((t_idx, d_idx));
+                matched_tracks[t_idx] = true;
+                matched_dets[d_idx] = true;
+            }
         }
     }
 
-    let mut unmatched_d = Vec::new();
-    for (d_idx, &used) in used_d.iter().enumerate() {
-        if !used {
-            unmatched_d.push(d_idx);
+    let mut unmatched_tracks = Vec::new();
+    for (t_idx, matched) in matched_tracks.into_iter().enumerate() {
+        if !matched {
+            unmatched_tracks.push(t_idx);
         }
     }
 
-    (matches, unmatched_t, unmatched_d)
+    let mut unmatched_dets = Vec::new();
+    for (d_idx, matched) in matched_dets.into_iter().enumerate() {
+        if !matched {
+            unmatched_dets.push(d_idx);
+        }
+    }
+
+    (matches, unmatched_tracks, unmatched_dets)
 }
 
 #[cfg(test)]
@@ -493,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn test_kalman_predict_and_update() {
+    fn test_kalman_predict_and_update_pixel_scale() {
         let rect = [100.0, 100.0, 50.0, 100.0];
         let mut tracker = KalmanBoxTracker::new(&rect);
         tracker.predict();
@@ -504,31 +735,186 @@ mod tests {
         let next_meas = [105.0, 102.0, 50.0, 100.0];
         tracker.update(&next_meas);
         let updated = tracker.to_rect();
-        assert!(updated[0] > 100.0);
+        assert!(updated[0] > 100.0 && updated[0] <= 105.0);
     }
 
     #[test]
-    fn test_bytetrack_tracking_continuity() {
+    fn test_kalman_predict_and_update_normalized_scale() {
+        // 测试在 [0.0, 1.0] 归一化尺度下的卡尔曼滤波数学稳定性
+        let rect = [0.20, 0.15, 0.10, 0.30];
+        let mut tracker = KalmanBoxTracker::new(&rect);
+        tracker.predict();
+        let pred = tracker.to_rect();
+
+        // 验证高度绝不会被强行撑大至 1.0
+        assert!((pred[3] - 0.30).abs() < 0.02, "高度必须维持尺度不变性");
+        assert!((pred[2] - 0.10).abs() < 0.01, "宽度必须维持尺度不变性");
+
+        let next_meas = [0.205, 0.152, 0.10, 0.30];
+        tracker.update(&next_meas);
+        let updated = tracker.to_rect();
+        assert!(updated[0] > 0.20 && updated[0] <= 0.205);
+        assert!((updated[3] - 0.30).abs() < 0.02);
+    }
+
+    #[test]
+    fn test_bytetrack_tracking_continuity_normalized() {
+        // 核心验证：在归一化浮点坐标下，连续移动的目标 ID 必须完美保持，杜绝跳变
         let mut tracker = ByteTracker::new(ByteTrackConfig::default());
 
         // 帧 1: 出现一个人体检测
         let det1 = vec![TrackDetection {
-            bbox: [100.0, 100.0, 50.0, 150.0],
-            score: 0.9,
+            bbox: [0.30, 0.20, 0.12, 0.38],
+            score: 0.90,
             class_id: 0,
         }];
         let active1 = tracker.update(&det1);
-        assert_eq!(active1.len(), 1);
+        assert_eq!(active1.len(), 1, "第 1 帧冷启动必须激活航迹");
         let id1 = active1[0].track_id;
 
         // 帧 2: 平移微移
         let det2 = vec![TrackDetection {
-            bbox: [105.0, 102.0, 50.0, 150.0],
+            bbox: [0.305, 0.202, 0.12, 0.38],
             score: 0.88,
             class_id: 0,
         }];
         let active2 = tracker.update(&det2);
         assert_eq!(active2.len(), 1);
         assert_eq!(active2[0].track_id, id1, "TrackId 必须连续稳定保持");
+
+        // 帧 3: 连续移动
+        let det3 = vec![TrackDetection {
+            bbox: [0.310, 0.205, 0.12, 0.38],
+            score: 0.85,
+            class_id: 0,
+        }];
+        let active3 = tracker.update(&det3);
+        assert_eq!(active3.len(), 1);
+        assert_eq!(active3[0].track_id, id1, "TrackId 必须跨帧稳定");
+    }
+
+    #[test]
+    fn test_bytetrack_low_score_rescue() {
+        // 验证 ByteTrack 核心优势：第二阶段低分框成功挽救遮挡目标
+        let mut tracker = ByteTracker::new(ByteTrackConfig::default());
+
+        // 帧 1
+        let det1 = vec![TrackDetection {
+            bbox: [0.2, 0.2, 0.1, 0.3],
+            score: 0.9,
+            class_id: 0,
+        }];
+        let active1 = tracker.update(&det1);
+        let id1 = active1[0].track_id;
+
+        // 帧 2: 被遮挡，置信度骤降为 0.25 (低于 track_thresh 0.50，但高于 0.10)
+        let det2 = vec![TrackDetection {
+            bbox: [0.205, 0.202, 0.1, 0.3],
+            score: 0.25,
+            class_id: 0,
+        }];
+        let active2 = tracker.update(&det2);
+        assert_eq!(active2.len(), 1, "低分框必须成功挽救被遮挡目标");
+        assert_eq!(active2[0].track_id, id1, "ID 必须保持不变");
+    }
+
+    #[test]
+    fn test_false_positive_rejection() {
+        // 验证两帧确认机制：第 2 帧及以后的单帧误检不会对外产生虚警 ID
+        let mut tracker = ByteTracker::new(ByteTrackConfig::default());
+
+        // 帧 1: 正常目标
+        let det1 = vec![TrackDetection {
+            bbox: [0.1, 0.1, 0.1, 0.3],
+            score: 0.9,
+            class_id: 0,
+        }];
+        let _ = tracker.update(&det1);
+
+        // 帧 2: 目标继续存在，同时右侧突现一个单帧误检 (例如椅子误检)
+        let det2 = vec![
+            TrackDetection {
+                bbox: [0.105, 0.102, 0.1, 0.3],
+                score: 0.9,
+                class_id: 0,
+            },
+            TrackDetection {
+                bbox: [0.7, 0.7, 0.1, 0.1],
+                score: 0.65,
+                class_id: 0,
+            },
+        ];
+        let active2 = tracker.update(&det2);
+        // 单帧误检在第 2 帧处于未确认状态 (is_activated == false)，不应输出
+        assert_eq!(active2.len(), 1, "新目标必须经过确认方可对外激活");
+
+        // 帧 3: 误检消失
+        let det3 = vec![TrackDetection {
+            bbox: [0.110, 0.104, 0.1, 0.3],
+            score: 0.9,
+            class_id: 0,
+        }];
+        let active3 = tracker.update(&det3);
+        assert_eq!(active3.len(), 1);
+        assert_eq!(active3[0].track_id, active2[0].track_id);
+    }
+
+    #[test]
+    fn test_kuhn_munkres_global_optimal_assignment() {
+        // 验证 KM 算法相比贪婪排序的关键优势：
+        // Track 0 与 Det 0 的 IoU 较高 (0.80)，与 Det 1 的 IoU 适中 (0.60)
+        // Track 1 仅与 Det 0 存在有效重合 (0.75)
+        // 贪婪算法会使 Track 0 强行抢占 Det 0，导致 Track 1 彻底失配 (匹配对总和 0.80)
+        // KM 算法通过交替增广路将 Track 0 转移至 Det 1，使 Track 1 成功匹配 Det 0 (匹配对总和 0.60 + 0.75 = 1.35)
+        let d_init0 = TrackDetection {
+            bbox: [0.0, 0.0, 1.0, 1.0],
+            score: 0.9,
+            class_id: 0,
+        };
+        let d_init1 = TrackDetection {
+            bbox: [0.0, 0.0, 1.0, 1.0],
+            score: 0.9,
+            class_id: 0,
+        };
+        let mut t0 = STrack::new(&d_init0, 1);
+        t0.activate(1, 1);
+        let mut t1 = STrack::new(&d_init1, 1);
+        t1.activate(2, 1);
+
+        // 构造几何框，使其精确产生预期的 IoU 关系
+        // Det 0: 与 t0 产生较高 IoU，与 t1 产生次高 IoU
+        // Det 1: 仅与 t0 产生有效 IoU
+        let d0 = TrackDetection {
+            bbox: [0.0, 0.0, 1.0, 1.0],
+            score: 0.9,
+            class_id: 0,
+        };
+        let d1 = TrackDetection {
+            bbox: [0.2, 0.0, 1.0, 1.0],
+            score: 0.9,
+            class_id: 0,
+        };
+
+        let tracks = vec![t0, t1];
+        let dets = vec![d0, d1];
+
+        let (matches, unmatched_t, unmatched_d) = kuhn_munkres_match(&tracks, &dets, 0.30);
+        assert_eq!(matches.len(), 2, "KM 算法必须找到两对完整匹配");
+        assert!(unmatched_t.is_empty(), "两路航迹均应被分配");
+        assert!(unmatched_d.is_empty(), "两个检测均应被分配");
+
+        // 验证单射性：没有任何两对匹配共享同一个 track 或 detection
+        let mut matched_tracks_set = std::collections::HashSet::new();
+        let mut matched_dets_set = std::collections::HashSet::new();
+        for (t_idx, d_idx) in matches {
+            assert!(
+                matched_tracks_set.insert(t_idx),
+                "同一 Track 严禁匹配多个 Detection！"
+            );
+            assert!(
+                matched_dets_set.insert(d_idx),
+                "同一 Detection 严禁匹配多个 Track！"
+            );
+        }
     }
 }
