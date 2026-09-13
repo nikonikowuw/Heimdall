@@ -25,10 +25,8 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | 文档 | 说明 | 重点关注 |
 | :--- | :--- | :--- |
 | [🧭 规范导航](./guides/index.md) | 规范体系入口与 Pre-Development Checklist | 需求归属、门禁检查点 |
-| [🏗️ 架构概览](./guides/architecture-overview.md) | 系统层级划分、数据流向与边界 | Crate 职责边界、单向依赖原则 |
-| [⏱️ 边缘资源约束](./guides/edge-constraints-guide.md) | 边缘环境算力、内存与 IO 预算 | 逐帧时间预算、队列上限、防阻塞 |
-| [🔄 跨层数据流](./guides/cross-layer-thinking-guide.md) | FFI、DTO、WebSocket 与 DB 契约 | 13 位 Unix 毫秒、归一化坐标、无损映射 |
-| [🧩 代码复用思考](./guides/code-reuse-thinking-guide.md) | 公共逻辑抽象与防过度设计 | 共享类型提取、单一职责 |
+| [🏗️ 架构概览](./guides/architecture-overview.md) | 系统层级划分、运行时数据流与代码复用原则 | Crate 职责边界、单向依赖、三大路径拓扑 |
+| [⚖️ 全局约定](./guides/conventions.md) | 跨层唯一不可妥协硬约束大全 | 13位毫秒、归一化坐标、队列上限、CMA预算、原子淘汰 |
 
 ### 2. 后端工程规范 (Backend Specs)
 
@@ -68,16 +66,15 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 
 ### 4. 专项设计方案 (Design Specifications)
 
-系统关键子系统与架构升级的详细技术设计（含规划草案与已落地实现）。
+系统关键子系统与架构升级的详细技术设计。
 
 | 文档 | 说明 | 重点关注 |
 | :--- | :--- | :--- |
 | [📹 录像与回放引擎（规划草案）](./designs/video-recording-and-playback-engine.md) | 纯流直封装 MP4 切片、事件前置缓冲与时间轴回放 | 零转码开销、配置契约与可选启闭、eMMC 寿命防护 |
-| [🎯 运动门控引擎](./designs/motion-detection-gating-engine.md) | 基于 Y 平面差分的轻量级前置门控 | 0 次无效推理、余晖保活、多边形遮罩 |
-| [⚡ 实时预览改造 (已归档)](./archive/realtime-preview-overhaul.md) | StreamHub 隔离分发与 HTTP-FLV/WebCodecs | 每消费者 Mailbox 隔离、GOP 对齐恢复 |
-| [👤 人脸识别分析包 (已归档)](./archive/face-recognition-pipeline.md) | macOS CoreML 人体/人脸检测、宿主航迹、低频特征提取与识别事件边界 | trackId 不进入插件结果，Embedding 仅作为后端 sidecar，不进入前端 |
-| [🛰️ 国标接入与设备发现引擎 (已归档)](./archive/gb28181-native-ingest-engine.md) | 纯 Rust 原生 GB28181 接入、PS 容错解复用与局域网设备发现 | 纯 Rust 闭环、零二次转码、目录树扫描、33-bit PTS 翻转防御 |
-| [📸 快照硬件 JPEG 编码与裁剪 (已归档)](./archive/snapshot-hardware-jpeg-encoding.md) | Snapshot 路径全链路硬件加速与多级降级 | 零 CPU 像素拷贝、RGA 16 字节对齐、Scratchpad 复用、双流快照兜底 |
+| [🎯 运动门控引擎](./designs/motion-detection-gating-engine.md) | 基于 Y 平面差分的轻量级前置门控 | 0 次无效推理、O(1) 调度、余晖保活、多边形遮罩 |
+| [🛰️ FFmpeg 协议兼容对照](./designs/ffmpeg-compatibility-reference.md) | 以 FFmpeg 为基准的 RTSP/RTP 接入与时钟映射 | 协议错误分类、RTP 回绕保护、Annex-B 封装 |
+
+> *注：已落地历史方案（实时预览改造、人脸识别分析包、国标 GB28181、快照硬件 JPEG 编码）已移入仓库历史案卷目录 `docs/archive/`。*
 
 ---
 

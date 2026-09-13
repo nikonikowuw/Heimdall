@@ -211,6 +211,11 @@ unsafe extern "C" fn(
 - INT8 DFL 路径保持 `want_float=0`，先按 `(raw_cls-zp)*scale >= conf_thresh` 剪枝，只对候选网格执行 16-bin softmax；通用解析器通过 `Yolov8RknnConfig.dfl_bins` 和 `num_classes` 参数化，不硬编码为特定模型。
 - `RknnOutputsGuard` 在所有退出路径调用 `rknn_outputs_release`；同一 context 非线程安全，必须绑定所属 Worker。
 
+### RGA 输入对齐诊断与连续失败追踪
+- **诊断日志**：`source_layout()` 仅在错误分支打 `tracing::error!` 记录上下文（frame_id、stride、format），热路径入口不打 debug 日志。
+- **失败追踪 (`FailureTracker`)**：基于 `AtomicU64` 纯计数；连续失败递增，成功时 `record_success()` 重置并打恢复日志，`flush()` 时 `reset()` 静默清零；默认阈值 30 帧（约 1 秒 @30fps）。
+- **状态暴露**：连续失败属于硬件内部状态，通过日志与健康检查暴露，不通过 `ResultEmitter` 向前端推送非业务系统告警。
+
 ## 算法包私有环境与参数调优 (.env)
 
 为满足边缘现场调优与快速迭代需求，算法包支持通过根目录下的 `.env` 文件调试模型路径与运行时超参数，实现**免重新编译秒级生效**，同时严格遵循进程级安全隔离规范。

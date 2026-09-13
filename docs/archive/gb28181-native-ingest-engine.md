@@ -3,7 +3,7 @@
 > **状态**: 已实现 (Implemented)；SIP UAS 状态机、PS 容错解复用、RTP 抖动缓冲、动态端口池、ONVIF 嗅探与前端纳管已闭环落地
 > **作者**: Heimdall Engineering
 > **日期**: 2026-09-13
-> **关联规范**: [AGENTS.md](../../../AGENTS.md)、[媒体管线](../backend/media-pipeline.md)、[并发模型](../backend/concurrency-guidelines.md)、[实时预览重构](../archive/realtime-preview-overhaul.md)、[API 规范](../backend/api-guidelines.md)、[数据库规范](../backend/database-guidelines.md)
+> **关联规范**: [AGENTS.md](../../AGENTS.md)、[媒体管线](../nuwa/backend/media-pipeline.md)、[并发模型](../nuwa/backend/concurrency-guidelines.md)、[实时预览重构](./realtime-preview-overhaul.md)、[API 规范](../nuwa/backend/api-guidelines.md)、[数据库规范](../nuwa/backend/database-guidelines.md)
 > **代码落地**:
 >
 > - `crates/media/src/gb28181/` (`Gb28181SipServer`, `PsDemuxer`, `JitterBuffer`, `PortPool`, `Gb28181Ingestor`, `scan_lan_cameras`)
@@ -34,7 +34,7 @@ Heimdall 在单二进制启动时，直接在 `crates/app` 中拉起一个常驻
 
 | 机制 / 维度 | 外部进程桥接方案 (如 ZLMediaKit/WVP) | Heimdall 纯 Rust 原生服务端方案 | 架构决策理由 |
 | :--- | :--- | :--- | :--- |
-| **交付形态** | 多进程/多容器协同，需额外维护 SIP 进程与环境 | **单二进制原生嵌入**，无外部运行时依赖 | 严格契合 [AGENTS.md](../../../AGENTS.md) 单二进制交付契约 |
+| **交付形态** | 多进程/多容器协同，需额外维护 SIP 进程与环境 | **单二进制原生嵌入**，无外部运行时依赖 | 严格契合 [AGENTS.md](../../AGENTS.md) 单二进制交付契约 |
 | **信令与媒体开销** | 跨进程多级缓冲与两次本地 TCP 协议栈转发 | 统一异步运行时，PS 解包后 `Bytes` 直达 `StreamHub`，**0 额外拷贝** | 极致能效，满足低功耗边缘芯片资源预算 |
 | **内存安全与稳定性** | 易因安防厂商私有畸变 PS 包引发 C/C++ 内存越界 Crash | **Rust 严格所有权与安全状态机**，RAII 管理端口与生命周期 | 杜绝野指针、UAF、内存泄漏与死锁隐患 |
 | **异常恢复协同** | 进程间无法精确协同 Epoch，IPC 断流重连易花屏串流 | 深度接入 `StreamHub` 的 `SourceReset` 与 `GopSnapshot` 契约 | 源流断开或重连时秒级无损对齐与原子恢复 |
@@ -232,7 +232,7 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
 
 ### 4.4 纯视频管线与音频强隔离
 
-严格遵循 Nuwa [媒体管线](../backend/media-pipeline.md) 的硬件隔离红线：
+严格遵循 Nuwa [媒体管线](../nuwa/backend/media-pipeline.md) 的硬件隔离红线：
 
 - 解析出 `0xC0..=0xDF`（音频 PES）时，封装为 `StreamTag::Audio` 进入总线；
 - `AnalysisPump`（AI 硬解）与 `MainStreamRingBuffer` 在订阅时**强制过滤音频包**，确保只有纯 Annex-B 视频 NALU 送往 MPP / DVPP / VideoToolbox 底层硬件，杜绝冲撞硬件内核。
@@ -410,7 +410,7 @@ CREATE TABLE IF NOT EXISTS gb28181_devices (
 
 ### 7.2 RESTful API 路由定义
 
-遵循 [API 规范](../backend/api-guidelines.md)（根信封 `{ code: 0, message: "success", data, timestamp }`，13位毫秒，camelCase）：
+遵循 [API 规范](../nuwa/backend/api-guidelines.md)（根信封 `{ code: 0, message: "success", data, timestamp }`，13位毫秒，camelCase）：
 
 | 方法 | 路径 | 说明 |
 | :--- | :--- | :--- |
@@ -435,7 +435,7 @@ CREATE TABLE IF NOT EXISTS gb28181_devices (
 
 ### 8.2 并发与异步红线
 
-遵循 [并发模型](../backend/concurrency-guidelines.md)：
+遵循 [并发模型](../nuwa/backend/concurrency-guidelines.md)：
 
 - **Tokio Worker 零阻塞**：SIP 消息处理与轻量 PS 解析在 Tokio 协程中异步流转；所有视频解码与推理严格隔离在专有的硬件专用线程中；
 - **锁粒度控制**：设备路由表采用 `parking_lot::RwLock`，持锁期间严禁跨越 `.await` 或网络 I/O。

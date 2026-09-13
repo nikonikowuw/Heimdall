@@ -4,20 +4,16 @@
 
 ## Pre-Development Checklist
 
-1. 阅读 [全局约定](./conventions.md)，确认时间、坐标、队列、资源释放等跨层硬约束。
-2. 阅读 [架构概览](./architecture-overview.md)，确认代码归属和依赖方向。
-3. 按变更范围进入下方对应专题列表，逐个读取。
-4. 涉及接口、帧、配置或持久化边界时，加读 [跨层数据流](./cross-layer-thinking-guide.md)。
+1. 阅读 [全局约定](./conventions.md)，确认时间、坐标、队列、CMA/内存预算、DTO 契约及资源释放硬约束。
+2. 阅读 [架构概览](./architecture-overview.md)，确认代码归属、依赖方向与抽象复用原则。
+3. 按变更范围进入下方对应后端或前端专题，逐个读取。
 
-## 跨层指南
+## 核心总纲
 
-| 指南 | 触发条件 |
+| 指南 | 核心关注 |
 | --- | --- |
-| [全局约定](./conventions.md) | 时间、坐标、队列、资源释放、测试、存储保护 |
-| [架构概览](./architecture-overview.md) | 确认 crate 职责、数据流、平台边界 |
-| [边缘资源约束](./edge-constraints-guide.md) | 新增逐帧工作、队列、缓存、写盘或阻塞调用 |
-| [代码复用](./code-reuse-thinking-guide.md) | 新增公共逻辑、修改常量、枚举或重复解析 |
-| [跨层数据流](./cross-layer-thinking-guide.md) | 修改 FFI、DTO、事件、坐标、配置或数据库映射 |
+| [全局约定](./conventions.md) | 时间、坐标、队列通道、内存预算、DTO契约、资源释放、存储保护 |
+| [架构概览](./architecture-overview.md) | Crate 职责边界、单向依赖、三大路径拓扑、抽象与复用原则 |
 
 ## 后端专题
 

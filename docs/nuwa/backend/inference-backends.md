@@ -36,7 +36,7 @@ async fn detect(&self, frame: &FrameRef) -> Result<Vec<Detection>, InferError>;
 
 系统级规则、跟踪与平台无关后处理归 `pipeline`；模型私有张量解码留在算法包并复用 SDK 数学工具。
 SDK 内置 NMS 等特殊路径必须适配成同一对外结果，不能把平台张量/错误码泄露给上层。
-坐标去 padding 和逆缩放共用预处理参数，最终格式与时间基准一致，详见 [跨层检查](../guides/cross-layer-thinking-guide.md)。
+坐标去 padding 和逆缩放共用预处理参数，最终格式与时间基准一致，详见 [全局约定](../guides/conventions.md#跨层数据流与-dto-契约)。
 
 CoreML 计算单元、RKNN 核心掩码、映射缓存和输出 RAII 的约束统一放在 SDK 的 [Apple Silicon](./algo-sdk-guidelines.md#apple-silicon) / [Rockchip RKNN](./algo-sdk-guidelines.md#rockchip-rknn) 小节，避免两处漂移。
 

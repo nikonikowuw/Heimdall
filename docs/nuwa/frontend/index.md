@@ -6,7 +6,7 @@
 
 所有前端专题的完整索引与触发条件已收敛在 [规范导航](../guides/index.md)，以该页为准。
 
-对接接口时同时阅读 [API 规范](../backend/api-guidelines.md) 和 [跨层数据流](../guides/cross-layer-thinking-guide.md)。
+对接接口时同时阅读 [API 规范](../backend/api-guidelines.md) 和 [全局约定](../guides/conventions.md#跨层数据流与-dto-契约)。
 
 ## Quality Check
 

@@ -3,7 +3,7 @@
 > **状态**: 已实现 (Implemented)；Rockchip (MPP JPEGE + RGA Scratchpad) 与 CPU 兜底已全链路落地并验证，macOS / Ascend 预留多级硬件通道降级
 > **作者**: Heimdall Engineering
 > **日期**: 2026-09-12
-> **关联规范**: [AGENTS.md](../../../AGENTS.md)、[媒体管线](../backend/media-pipeline.md)、[算法 SDK](../backend/algo-sdk-guidelines.md)、[并发模型](../backend/concurrency-guidelines.md)、[FFI 边界](../backend/ffi-guidelines.md)
+> **关联规范**: [AGENTS.md](../../AGENTS.md)、[媒体管线](../nuwa/backend/media-pipeline.md)、[算法 SDK](../nuwa/backend/algo-sdk-guidelines.md)、[并发模型](../nuwa/backend/concurrency-guidelines.md)、[FFI 边界](../nuwa/backend/ffi-guidelines.md)
 > **代码落地**:
 >
 > - `crates/media/src/encoders/mod.rs` (`DeviceSnapEncoder`, `SnapEncoder`, `compute_crop_roi`)
@@ -87,7 +87,7 @@
 
 - 裁剪 + 编码能力抽象为 `media` 层的 trait
 - 上层 `pipeline::snapshot` 不感知底层是硬件还是 CPU 回退
-- 遵循 [FFI 规范](../backend/ffi-guidelines.md)：`unsafe`、裸指针集中在 FFI/sys 边界
+- 遵循 [FFI 规范](../nuwa/backend/ffi-guidelines.md)：`unsafe`、裸指针集中在 FFI/sys 边界
 
 ### 2.3 并发与线程模型
 

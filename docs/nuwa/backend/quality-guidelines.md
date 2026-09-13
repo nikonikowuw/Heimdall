@@ -26,7 +26,7 @@
 
 ## 审查重点
 
-检查 [资源预算](../guides/edge-constraints-guide.md)、[并发](./concurrency-guidelines.md)、[FFI](./ffi-guidelines.md) 与 [跨层契约](../guides/cross-layer-thinking-guide.md)。
+检查 [全局约定](../guides/conventions.md)（资源预算/跨层契约）、[并发](./concurrency-guidelines.md) 与 [FFI](./ffi-guidelines.md)。
 重点核对错误/取消路径的 RAII、无阻塞反压、热路径预分配、平台隔离和准确的 SAFETY 说明。
 
 ## 既有系统服务的回归点
