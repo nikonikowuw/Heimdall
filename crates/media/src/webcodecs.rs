@@ -37,6 +37,30 @@ pub struct WebCodecsFrameHeader {
     pub pts_ms: i64,
 }
 
+/// 构造 12 字节的固定栈上 WebCodecs 帧头元数据
+///
+/// 消除中间堆分配，可供向量化 I/O 或切片组装直接复用
+pub fn build_webcodecs_header(
+    packet: &EncodedPacket,
+    flags: u8,
+) -> Option<[u8; WEBCODECS_FRAME_HEADER_LEN]> {
+    if !packet.codec.is_video() || packet.stream_tag == types::StreamTag::Audio {
+        return None;
+    }
+    let codec_byte = match packet.codec {
+        CodecType::H264 => 0x01,
+        CodecType::H265 => 0x02,
+        CodecType::Aac => return None,
+    };
+    let mut header = [0u8; WEBCODECS_FRAME_HEADER_LEN];
+    header[0] = WEBCODECS_PROTOCOL_VERSION;
+    header[1] = codec_byte;
+    header[2] = if packet.is_keyframe { 0x01 } else { 0x00 };
+    header[3] = flags;
+    header[4..12].copy_from_slice(&packet.pts_ms.to_be_bytes());
+    Some(header)
+}
+
 /// 将内部 EncodedPacket 序列化为 12 字节二进制帧头的 WebCodecs 传输包
 ///
 /// 若传入音频包或非视频包，安全返回空 `Bytes`。
@@ -46,20 +70,12 @@ pub fn pack_webcodecs_frame(packet: &EncodedPacket) -> Bytes {
 
 /// 将视频帧序列化并携带显式控制 flags（例如 Replay/SourceReset 后的不连续点）。
 pub fn pack_webcodecs_frame_with_flags(packet: &EncodedPacket, flags: u8) -> Bytes {
-    if !packet.codec.is_video() || packet.stream_tag == types::StreamTag::Audio {
-        return Bytes::new();
-    }
-    let mut buf = BytesMut::with_capacity(WEBCODECS_FRAME_HEADER_LEN + packet.payload.len());
-    buf.put_u8(WEBCODECS_PROTOCOL_VERSION);
-    let codec_byte = match packet.codec {
-        CodecType::H264 => 0x01,
-        CodecType::H265 => 0x02,
-        CodecType::Aac => return Bytes::new(),
+    let header = match build_webcodecs_header(packet, flags) {
+        Some(h) => h,
+        None => return Bytes::new(),
     };
-    buf.put_u8(codec_byte);
-    buf.put_u8(if packet.is_keyframe { 0x01 } else { 0x00 });
-    buf.put_u8(flags);
-    buf.put_i64(packet.pts_ms);
+    let mut buf = BytesMut::with_capacity(WEBCODECS_FRAME_HEADER_LEN + packet.payload.len());
+    buf.put_slice(&header);
     buf.put_slice(&packet.payload);
     buf.freeze()
 }
@@ -160,5 +176,58 @@ mod tests {
         let mut bad_codec = vec![0x01; 12];
         bad_codec[1] = 0xFF;
         assert!(unpack_webcodecs_frame(&bad_codec).is_none());
+    }
+
+    #[test]
+    fn test_build_webcodecs_header_layout_and_flags() {
+        let packet_h264 = EncodedPacket {
+            pts_ms: 0x0102_0304_0506_0708,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[0x65]),
+            ..Default::default()
+        };
+        let header = build_webcodecs_header(&packet_h264, WEBCODECS_FLAG_DISCONTINUITY)
+            .expect("should build h264 header");
+        assert_eq!(header[0], WEBCODECS_PROTOCOL_VERSION);
+        assert_eq!(header[1], 0x01); // H264
+        assert_eq!(header[2], 0x01); // Keyframe
+        assert_eq!(header[3], WEBCODECS_FLAG_DISCONTINUITY);
+        assert_eq!(&header[4..12], &0x0102_0304_0506_0708i64.to_be_bytes());
+
+        let packet_h265 = EncodedPacket {
+            pts_ms: 12345,
+            is_keyframe: false,
+            codec: CodecType::H265,
+            payload: Bytes::from_static(&[0x01]),
+            ..Default::default()
+        };
+        let header265 = build_webcodecs_header(&packet_h265, 0).expect("should build h265 header");
+        assert_eq!(header265[0], WEBCODECS_PROTOCOL_VERSION);
+        assert_eq!(header265[1], 0x02); // H265
+        assert_eq!(header265[2], 0x00); // Non-keyframe
+        assert_eq!(header265[3], 0x00);
+        assert_eq!(&header265[4..12], &12345i64.to_be_bytes());
+    }
+
+    #[test]
+    fn test_build_webcodecs_header_rejects_audio() {
+        let audio_pkt = EncodedPacket {
+            pts_ms: 100,
+            is_keyframe: true,
+            codec: CodecType::Aac,
+            payload: Bytes::from_static(&[0xFF, 0xF1]),
+            stream_tag: types::StreamTag::Audio,
+        };
+        assert!(build_webcodecs_header(&audio_pkt, 0).is_none());
+
+        let video_with_audio_tag = EncodedPacket {
+            pts_ms: 100,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[0x65]),
+            stream_tag: types::StreamTag::Audio,
+        };
+        assert!(build_webcodecs_header(&video_with_audio_tag, 0).is_none());
     }
 }

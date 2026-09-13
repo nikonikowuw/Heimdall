@@ -27,145 +27,174 @@ impl Default for RingBufferConfig {
     }
 }
 
+#[derive(Debug, Default)]
+struct RingBufferInner {
+    queue: VecDeque<Arc<EncodedPacket>>,
+    keyframe_count: usize,
+}
+
 /// 主码流内存环形队列
 #[derive(Debug)]
 pub struct MainStreamRingBuffer {
     config: RingBufferConfig,
-    queue: RwLock<VecDeque<Arc<EncodedPacket>>>,
+    inner: RwLock<RingBufferInner>,
 }
 
 impl MainStreamRingBuffer {
     pub fn new(config: RingBufferConfig) -> Self {
         Self {
             config,
-            queue: RwLock::new(VecDeque::with_capacity(128)),
+            inner: RwLock::new(RingBufferInner {
+                queue: VecDeque::with_capacity(128),
+                keyframe_count: 0,
+            }),
         }
     }
 
     /// 向环形队列压入一个主码流压缩数据包
     pub fn push(&self, packet: Arc<EncodedPacket>) {
-        let mut queue = self.queue.write().unwrap_or_else(|e| e.into_inner());
-        queue.push_back(packet);
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        if packet.is_keyframe {
+            inner.keyframe_count += 1;
+        }
+        inner.queue.push_back(packet);
 
         // 执行按容量与时长的智能修剪
-        self.prune(&mut queue);
+        self.prune(&mut inner);
     }
 
     /// 根据指定时标精确提取从前置关键帧开始直至目标帧的完整 GOP 序列
     ///
     /// 保证返回的切片以关键帧 (I 帧) 为首包，后续帧按 PTS 单调递增，供快进解码。
     pub fn get_gop_for_timestamp(&self, target_pts_ms: i64) -> Option<Vec<Arc<EncodedPacket>>> {
-        let queue = self.queue.read().unwrap_or_else(|e| e.into_inner());
-        if queue.is_empty() {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        if inner.queue.is_empty() {
             return None;
         }
 
         // 1. 查找最接近目标时间戳的包索引 (使用 saturating 算术防止极端时间戳溢出)
-        let target_idx = queue
+        let target_idx = inner
+            .queue
             .iter()
             .enumerate()
             .min_by_key(|(_, pkt)| pkt.pts_ms.saturating_sub(target_pts_ms).saturating_abs())
             .map(|(idx, _)| idx)?;
 
         // 2. 从 target_idx 向前倒序寻找最近的关键帧 (I-Frame)
-        let keyframe_idx = (0..=target_idx).rev().find(|&idx| queue[idx].is_keyframe)?;
+        let keyframe_idx = (0..=target_idx)
+            .rev()
+            .find(|&idx| inner.queue[idx].is_keyframe)?;
 
         // 3. 截取 [keyframe_idx..=target_idx] 范围内的全部包
-        Some(queue.range(keyframe_idx..=target_idx).cloned().collect())
+        Some(
+            inner
+                .queue
+                .range(keyframe_idx..=target_idx)
+                .cloned()
+                .collect(),
+        )
     }
 
     /// 根据时标向后查找最近的前置关键帧 (I-Frame)
     pub fn find_prior_keyframe(&self, target_pts_ms: i64) -> Option<Arc<EncodedPacket>> {
-        let queue = self.queue.read().unwrap_or_else(|e| e.into_inner());
-        if queue.is_empty() {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        if inner.queue.is_empty() {
             return None;
         }
 
-        let target_idx = queue
+        let target_idx = inner
+            .queue
             .iter()
             .enumerate()
             .min_by_key(|(_, pkt)| pkt.pts_ms.saturating_sub(target_pts_ms).saturating_abs())
             .map(|(idx, _)| idx)?;
 
-        let keyframe_idx = (0..=target_idx).rev().find(|&idx| queue[idx].is_keyframe)?;
-        Some(queue[keyframe_idx].clone())
+        let keyframe_idx = (0..=target_idx)
+            .rev()
+            .find(|&idx| inner.queue[idx].is_keyframe)?;
+        Some(inner.queue[keyframe_idx].clone())
     }
 
     /// 获取当前队列中最老的数据包时间戳
     pub fn oldest_pts(&self) -> Option<i64> {
-        self.queue
+        self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            .queue
             .front()
             .map(|p| p.pts_ms)
     }
 
     /// 获取当前队列中最新的数据包时间戳
     pub fn newest_pts(&self) -> Option<i64> {
-        self.queue
+        self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            .queue
             .back()
             .map(|p| p.pts_ms)
     }
 
     /// 获取当前队列中最新的视频编码格式
     pub fn latest_codec(&self) -> Option<types::CodecType> {
-        self.queue
+        self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            .queue
             .back()
             .map(|p| p.codec)
     }
 
     /// 获取当前队列中包的数量
     pub fn len(&self) -> usize {
-        self.queue.read().unwrap_or_else(|e| e.into_inner()).len()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .queue
+            .len()
     }
 
     /// 检查队列是否为空
     pub fn is_empty(&self) -> bool {
-        self.queue
+        self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            .queue
             .is_empty()
     }
 
     /// 清空队列
     pub fn clear(&self) {
-        self.queue
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.queue.clear();
+        inner.keyframe_count = 0;
     }
 
-    /// 队列修剪逻辑：保持最新 2~3.5 秒，且始终保全最近的完整 GOP
-    fn prune(&self, queue: &mut VecDeque<Arc<EncodedPacket>>) {
-        if queue.is_empty() {
+    /// 队列修剪逻辑：保持最新 2~3.5 秒，且始终保全最近的完整 GOP (O(1) 关键帧跟踪)
+    fn prune(&self, inner: &mut RingBufferInner) {
+        if inner.queue.is_empty() {
             return;
         }
 
-        let newest_pts = match queue.back() {
+        let newest_pts = match inner.queue.back() {
             Some(p) => p.pts_ms,
             None => return,
         };
 
-        let mut keyframe_count = queue.iter().filter(|p| p.is_keyframe).count();
-
         // 当超出时间跨度或达到包上限，并且队列里至少有两个关键帧时，可以安全丢弃老关键帧及其之前的包
-        while queue.len() > 1 && keyframe_count >= 2 {
-            let oldest_pts = queue.front().map(|p| p.pts_ms).unwrap_or(0);
+        while inner.queue.len() > 1 && inner.keyframe_count >= 2 {
+            let oldest_pts = inner.queue.front().map(|p| p.pts_ms).unwrap_or(0);
             let duration = newest_pts.saturating_sub(oldest_pts);
             // 工业级时钟防护：若检测到时标严重倒退 (PTS 回绕或 NTP 跳回 > 1s)，或者超出最大缓存时长/包上限
             let clock_regressed = oldest_pts > newest_pts + 1000;
 
             if duration > self.config.max_duration_ms
-                || queue.len() > self.config.max_packets
+                || inner.queue.len() > self.config.max_packets
                 || clock_regressed
             {
-                if let Some(removed) = queue.pop_front() {
+                if let Some(removed) = inner.queue.pop_front() {
                     if removed.is_keyframe {
-                        keyframe_count = keyframe_count.saturating_sub(1);
+                        inner.keyframe_count = inner.keyframe_count.saturating_sub(1);
                     }
                 }
             } else {
@@ -177,8 +206,12 @@ impl MainStreamRingBuffer {
         // 若摄像头异常导致连续数百包未发送 I 帧 (keyframe_count < 2)，且队列长度超出 max_packets 的 2 倍，
         // 强制执行队首丢包，保全进程物理内存不被异常码流打爆
         let hard_limit = self.config.max_packets.saturating_mul(2).max(64);
-        while queue.len() > hard_limit {
-            queue.pop_front();
+        while inner.queue.len() > hard_limit {
+            if let Some(removed) = inner.queue.pop_front() {
+                if removed.is_keyframe {
+                    inner.keyframe_count = inner.keyframe_count.saturating_sub(1);
+                }
+            }
         }
     }
 }

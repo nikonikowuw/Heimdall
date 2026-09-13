@@ -206,6 +206,77 @@ impl FlvMuxer {
         }
     }
 
+    /// 根据已切分的 NALU 单元直接封装为 FLV Video Tag（复用切分结果，消除二次切分与堆分配）
+    ///
+    /// - `dts_ms`: FLV Tag Header 记录的解码时间戳（单调递增）
+    /// - `cts_ms`: FLV Video Header 记录的合成时间偏移（CTS = PTS - DTS，必须 >= 0）
+    pub fn nalus_to_flv_tag_with_dts_cts(
+        codec: CodecType,
+        is_keyframe: bool,
+        nalus: &[&[u8]],
+        dts_ms: u32,
+        cts_ms: u32,
+    ) -> Bytes {
+        if !codec.is_video() || nalus.is_empty() {
+            return Bytes::new();
+        }
+
+        let is_vcl = |nalu: &[u8]| match codec {
+            CodecType::H264 => !nalu.is_empty() && !matches!(nalu[0] & 0x1F, 7..=9),
+            CodecType::H265 => nalu.len() >= 2 && !(32..=35).contains(&((nalu[0] >> 1) & 0x3F)),
+            CodecType::Aac => false,
+        };
+
+        let mut total_payload_len = 0;
+        let mut vcl_count = 0;
+        for &nalu in nalus {
+            if is_vcl(nalu) {
+                total_payload_len += 4 + nalu.len();
+                vcl_count += 1;
+            }
+        }
+
+        if vcl_count == 0 {
+            return Bytes::new();
+        }
+
+        let mut body = match codec {
+            CodecType::H264 => {
+                let mut b = BytesMut::with_capacity(5 + total_payload_len);
+                let frame_type = if is_keyframe { 0x17 } else { 0x27 };
+                b.put_u8(frame_type);
+                b.put_u8(0x01); // AVCPacketType = 1 (NALU)
+                                // 3 字节大端序 CompositionTime
+                b.put_u8(((cts_ms >> 16) & 0xFF) as u8);
+                b.put_u8(((cts_ms >> 8) & 0xFF) as u8);
+                b.put_u8((cts_ms & 0xFF) as u8);
+                b
+            }
+            CodecType::H265 => {
+                let mut b = BytesMut::with_capacity(8 + total_payload_len);
+                // Enhanced FLV: IsExHeader(0x80) | FrameType(0x10 / 0x20) | PacketType(0x01 = CodedFrames)
+                let header_byte = 0x80 | (if is_keyframe { 0x10 } else { 0x20 }) | 0x01;
+                b.put_u8(header_byte);
+                b.put_slice(b"hvc1"); // FourCC
+                                      // 3 字节大端序 CompositionTime
+                b.put_u8(((cts_ms >> 16) & 0xFF) as u8);
+                b.put_u8(((cts_ms >> 8) & 0xFF) as u8);
+                b.put_u8((cts_ms & 0xFF) as u8);
+                b
+            }
+            CodecType::Aac => return Bytes::new(),
+        };
+
+        for &nalu in nalus {
+            if is_vcl(nalu) {
+                body.put_u32(nalu.len() as u32);
+                body.put_slice(nalu);
+            }
+        }
+
+        Self::wrap_tag(0x09, dts_ms, &body)
+    }
+
     /// 将单个 EncodedPacket 按照指定的 DTS 与 CTS 封装为 FLV Video Tag
     ///
     /// - `dts_ms`: FLV Tag Header 记录的解码时间戳（单调递增）
@@ -220,51 +291,7 @@ impl FlvMuxer {
             return Bytes::new();
         }
 
-        let is_vcl = |nalu: &[u8]| match pkt.codec {
-            CodecType::H264 => !nalu.is_empty() && !matches!(nalu[0] & 0x1F, 7..=9),
-            CodecType::H265 => nalu.len() >= 2 && !(32..=35).contains(&((nalu[0] >> 1) & 0x3F)),
-            CodecType::Aac => false,
-        };
-
-        let vcl_nalus: Vec<&[u8]> = nalus.into_iter().filter(|n| is_vcl(n)).collect();
-        if vcl_nalus.is_empty() {
-            return Bytes::new();
-        }
-
-        let total_payload_len: usize = vcl_nalus.iter().map(|n| 4 + n.len()).sum();
-        let mut body = match pkt.codec {
-            CodecType::H264 => {
-                let mut b = BytesMut::with_capacity(5 + total_payload_len);
-                let frame_type = if pkt.is_keyframe { 0x17 } else { 0x27 };
-                b.put_u8(frame_type);
-                b.put_u8(0x01); // AVCPacketType = 1 (NALU)
-                                // 3 字节大端序 CompositionTime
-                b.put_u8(((cts_ms >> 16) & 0xFF) as u8);
-                b.put_u8(((cts_ms >> 8) & 0xFF) as u8);
-                b.put_u8((cts_ms & 0xFF) as u8);
-                b
-            }
-            CodecType::H265 => {
-                let mut b = BytesMut::with_capacity(8 + total_payload_len);
-                // Enhanced FLV: IsExHeader(0x80) | FrameType(0x10 / 0x20) | PacketType(0x01 = CodedFrames)
-                let header_byte = 0x80 | (if pkt.is_keyframe { 0x10 } else { 0x20 }) | 0x01;
-                b.put_u8(header_byte);
-                b.put_slice(b"hvc1"); // FourCC
-                                      // 3 字节大端序 CompositionTime
-                b.put_u8(((cts_ms >> 16) & 0xFF) as u8);
-                b.put_u8(((cts_ms >> 8) & 0xFF) as u8);
-                b.put_u8((cts_ms & 0xFF) as u8);
-                b
-            }
-            CodecType::Aac => return Bytes::new(),
-        };
-
-        for nalu in vcl_nalus {
-            body.put_u32(nalu.len() as u32);
-            body.put_slice(nalu);
-        }
-
-        Self::wrap_tag(0x09, dts_ms, &body)
+        Self::nalus_to_flv_tag_with_dts_cts(pkt.codec, pkt.is_keyframe, &nalus, dts_ms, cts_ms)
     }
 
     /// 将单个 EncodedPacket 封装为 FLV Video Tag (单调滤波兜底接口，CTS 默认 0)
@@ -716,45 +743,60 @@ impl FlvStreamPipeline {
             return Vec::new();
         }
 
-        // 1. 提取当前数据包中携带的参数集（自动剥离可能携带的 Annex B 起始码）
-        match pkt.codec {
-            CodecType::H264 => {
-                for nalu in &nalus {
-                    if !nalu.is_empty() {
+        // 1. 仅在关键帧、未就绪 Sequence Header 或携带参数集时提取（非关键普通切片短路，消除 95%+ 冗余检测开销）
+        let should_check_params = pkt.is_keyframe
+            || !self.sent_sequence_header
+            || nalus.iter().any(|nalu| {
+                let clean = strip_nalu_start_code(nalu);
+                match pkt.codec {
+                    CodecType::H264 => !clean.is_empty() && matches!(clean[0] & 0x1F, 7 | 8),
+                    CodecType::H265 => {
+                        clean.len() >= 2 && (32..=34).contains(&((clean[0] >> 1) & 0x3F))
+                    }
+                    CodecType::Aac => false,
+                }
+            });
+        if should_check_params {
+            match pkt.codec {
+                CodecType::H264 => {
+                    for nalu in &nalus {
+                        if !nalu.is_empty() {
+                            let clean = strip_nalu_start_code(nalu);
+                            match clean[0] & 0x1F {
+                                7 => self.sps_buf = Some(Bytes::copy_from_slice(clean)),
+                                8 => self.pps_buf = Some(Bytes::copy_from_slice(clean)),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                CodecType::H265 => {
+                    for nalu in &nalus {
                         let clean = strip_nalu_start_code(nalu);
-                        match clean[0] & 0x1F {
-                            7 => self.sps_buf = Some(Bytes::copy_from_slice(clean)),
-                            8 => self.pps_buf = Some(Bytes::copy_from_slice(clean)),
-                            _ => {}
+                        if clean.len() >= 2 {
+                            match (clean[0] >> 1) & 0x3F {
+                                32 => self.vps_buf = Some(Bytes::copy_from_slice(clean)),
+                                33 => self.sps_buf = Some(Bytes::copy_from_slice(clean)),
+                                34 => self.pps_buf = Some(Bytes::copy_from_slice(clean)),
+                                _ => {}
+                            }
                         }
                     }
                 }
+                CodecType::Aac => return Vec::new(),
             }
-            CodecType::H265 => {
-                for nalu in &nalus {
-                    let clean = strip_nalu_start_code(nalu);
-                    if clean.len() >= 2 {
-                        match (clean[0] >> 1) & 0x3F {
-                            32 => self.vps_buf = Some(Bytes::copy_from_slice(clean)),
-                            33 => self.sps_buf = Some(Bytes::copy_from_slice(clean)),
-                            34 => self.pps_buf = Some(Bytes::copy_from_slice(clean)),
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            CodecType::Aac => return Vec::new(),
         }
 
         // 2. 检测参数集指纹是否发生动态突变 (如安防 IPC 白天/黑夜模式切换、分辨率 1080P -> 720P 切换)
-        let sps_changed = self.sps_buf.is_some() && self.sps_buf != self.active_sps;
-        let pps_changed = self.pps_buf.is_some() && self.pps_buf != self.active_pps;
-        let vps_changed = match pkt.codec {
-            CodecType::H265 => self.vps_buf.is_some() && self.vps_buf != self.active_vps,
-            CodecType::H264 | CodecType::Aac => false,
+        let is_mutation = should_check_params && self.sent_sequence_header && {
+            let sps_changed = self.sps_buf.is_some() && self.sps_buf != self.active_sps;
+            let pps_changed = self.pps_buf.is_some() && self.pps_buf != self.active_pps;
+            let vps_changed = match pkt.codec {
+                CodecType::H265 => self.vps_buf.is_some() && self.vps_buf != self.active_vps,
+                CodecType::H264 | CodecType::Aac => false,
+            };
+            sps_changed || pps_changed || vps_changed
         };
-
-        let is_mutation = self.sent_sequence_header && (sps_changed || pps_changed || vps_changed);
         let is_initial =
             !self.sent_sequence_header && self.sps_buf.is_some() && self.pps_buf.is_some();
 
@@ -881,8 +923,9 @@ impl FlvStreamPipeline {
             }
         }
 
-        // 7. 封装并输出当前数据帧 Video Tag
-        let tag = FlvMuxer::packet_to_flv_tag_with_dts_cts(pkt, dts, cts);
+        // 7. 封装并输出当前数据帧 Video Tag（复用已切分的 NALU 单元，避免二次解析与多余堆分配）
+        let tag =
+            FlvMuxer::nalus_to_flv_tag_with_dts_cts(pkt.codec, pkt.is_keyframe, &nalus, dts, cts);
         if !tag.is_empty() {
             self.frame_count += 1;
             self.last_flv_ts = dts;
@@ -1380,6 +1423,43 @@ mod tests {
         let tags_mutated = pipeline.process_packet(&make_h265_pkt(&sps_v2, 2000));
         assert_eq!(tags_mutated.len(), 2);
         assert_eq!(tags_mutated[0][11], 0x90);
+        assert_eq!(pipeline.active_sps.as_deref(), Some(&sps_v2[..]));
+    }
+
+    #[test]
+    fn test_dynamic_sps_mutation_on_isolated_non_keyframe_packet() {
+        let mut pipeline = FlvStreamPipeline::new(false);
+
+        // 初始关键帧携带 SPS 720P
+        let sps_v1 = [0x67, 0x42, 0x00, 0x1E];
+        let _pps = [0x68, 0xCE];
+        let initial_keyframe = EncodedPacket {
+            pts_ms: 100,
+            is_keyframe: true,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[
+                0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
+                0x00, 0x00, 0x00, 0x01, 0x65, 0x88,
+            ]),
+            ..Default::default()
+        };
+        let init_tags = pipeline.process_packet(&initial_keyframe);
+        assert_eq!(init_tags.len(), 2);
+        assert_eq!(pipeline.active_sps.as_deref(), Some(&sps_v1[..]));
+
+        // 单 NALU 码流中，SPS 突变以独立 RTP 包到达且 is_keyframe 标记为 false
+        let sps_v2 = [0x67, 0x64, 0x00, 0x28];
+        let isolated_sps_pkt = EncodedPacket {
+            pts_ms: 200,
+            is_keyframe: false, // 独立参数包未标记关键帧
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x28]),
+            ..Default::default()
+        };
+        // 提取到突变 SPS 并立即派发新的 Sequence Header
+        let tags = pipeline.process_packet(&isolated_sps_pkt);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0][12], 0x00); // Sequence Header Tag
         assert_eq!(pipeline.active_sps.as_deref(), Some(&sps_v2[..]));
     }
 

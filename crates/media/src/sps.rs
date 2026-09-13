@@ -14,6 +14,8 @@ pub struct SpsInfo {
 }
 
 /// 将字节切片中的 Annex B NALU 单元拆分（支持 0x00000001 与 0x000001 起始码）
+///
+/// 单趟线性扫描，消除中间 start_codes 堆分配开销
 pub fn split_annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
     let len = data.len();
     if len < 3 {
@@ -24,37 +26,40 @@ pub fn split_annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
         };
     }
 
-    let mut start_codes = Vec::new();
+    let mut nalus = Vec::with_capacity(4);
     let mut i = 0;
+    let mut current_payload_start: Option<usize> = None;
+
     while i < len - 2 {
         if data[i] == 0 && data[i + 1] == 0 {
-            if i + 3 < len && data[i + 2] == 0 && data[i + 3] == 1 {
-                start_codes.push((i, i + 4));
-                i += 4;
-                continue;
+            let sc_len = if i + 3 < len && data[i + 2] == 0 && data[i + 3] == 1 {
+                Some(4)
             } else if data[i + 2] == 1 {
-                start_codes.push((i, i + 3));
-                i += 3;
+                Some(3)
+            } else {
+                None
+            };
+
+            if let Some(len_sc) = sc_len {
+                if let Some(start) = current_payload_start {
+                    if start < i {
+                        nalus.push(&data[start..i]);
+                    }
+                }
+                current_payload_start = Some(i + len_sc);
+                i += len_sc;
                 continue;
             }
         }
         i += 1;
     }
 
-    if start_codes.is_empty() {
-        return vec![data];
-    }
-
-    let mut nalus = Vec::with_capacity(start_codes.len());
-    for (idx, &(_, payload_start)) in start_codes.iter().enumerate() {
-        let payload_end = if idx + 1 < start_codes.len() {
-            start_codes[idx + 1].0
-        } else {
-            len
-        };
-        if payload_start < payload_end {
-            nalus.push(&data[payload_start..payload_end]);
+    if let Some(start) = current_payload_start {
+        if start < len {
+            nalus.push(&data[start..len]);
         }
+    } else {
+        nalus.push(data);
     }
 
     nalus
