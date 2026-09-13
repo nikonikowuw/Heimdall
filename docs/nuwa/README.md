@@ -1,6 +1,6 @@
 # Nuwa (女娲) 工程规范与架构体系
 
-> **Heimdall 系统的技术规范、设计哲学与工程实现守则**  
+> **Heimdall 系统的技术规范、设计哲学与工程实现守则**
 > *Engineering Specifications & Architectural Standards for Heimdall*
 
 ---
@@ -21,6 +21,7 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 ## 📚 规范导航索引 (Specification Index)
 
 ### 1. 全局思考与跨层指南 (Guides)
+
 | 文档 | 说明 | 重点关注 |
 | :--- | :--- | :--- |
 | [🧭 规范导航](./guides/index.md) | 规范体系入口与 Pre-Development Checklist | 需求归属、门禁检查点 |
@@ -30,6 +31,7 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | [🧩 代码复用思考](./guides/code-reuse-thinking-guide.md) | 公共逻辑抽象与防过度设计 | 共享类型提取、单一职责 |
 
 ### 2. 后端工程规范 (Backend Specs)
+
 适用于 Rust Workspace、C/C++ 硬件垫片及算法沙箱集成。
 
 | 文档 | 说明 | 重点关注 |
@@ -49,6 +51,7 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | [🧪 质量与测试](./backend/quality-guidelines.md) | 单元测试、集成测试与真机标记 | `#[ignore]` 硬件测试、边界验证 |
 
 ### 3. 前端工程规范 (Frontend Specs)
+
 适用于 `web/` 的 Vite + React 19 + TypeScript 现代化控制台。
 
 | 文档 | 说明 | 重点关注 |
@@ -64,21 +67,24 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | [🧪 质量与构建](./frontend/quality-guidelines.md) | ESLint、TypeScript 门禁与端到端测试 | 零 Warning 门禁、构建产物尺寸监控 |
 
 ### 4. 专项设计方案 (Design Specifications)
+
 系统关键子系统与架构升级的详细技术设计（含规划草案与已落地实现）。
 
 | 文档 | 说明 | 重点关注 |
 | :--- | :--- | :--- |
 | [📹 录像与回放引擎（规划草案）](./designs/video-recording-and-playback-engine.md) | 纯流直封装 MP4 切片、事件前置缓冲与时间轴回放 | 零转码开销、配置契约与可选启闭、eMMC 寿命防护 |
 | [🎯 运动门控引擎](./designs/motion-detection-gating-engine.md) | 基于 Y 平面差分的轻量级前置门控 | 0 次无效推理、余晖保活、多边形遮罩 |
-| [⚡ 实时预览改造](./designs/realtime-preview-overhaul.md) | StreamHub 隔离分发与 HTTP-FLV/WebCodecs | 每消费者 Mailbox 隔离、GOP 对齐恢复 |
-| [👤 人脸识别分析包](./designs/face-recognition-pipeline.md) | macOS CoreML 人体/人脸检测、宿主航迹、低频特征提取与识别事件边界 | trackId 不进入插件结果，Embedding 仅作为后端 sidecar，不进入前端 |
-| [🛰️ 国标接入与设备发现（规划草案）](./designs/gb28181-native-ingest-engine.md) | 纯 Rust 原生 GB28181 接入、PS 容错解复用与局域网设备发现 | 纯 Rust 闭环、零二次转码、目录树扫描、33-bit PTS 翻转防御 |
+| [⚡ 实时预览改造 (已归档)](./archive/realtime-preview-overhaul.md) | StreamHub 隔离分发与 HTTP-FLV/WebCodecs | 每消费者 Mailbox 隔离、GOP 对齐恢复 |
+| [👤 人脸识别分析包 (已归档)](./archive/face-recognition-pipeline.md) | macOS CoreML 人体/人脸检测、宿主航迹、低频特征提取与识别事件边界 | trackId 不进入插件结果，Embedding 仅作为后端 sidecar，不进入前端 |
+| [🛰️ 国标接入与设备发现引擎 (已归档)](./archive/gb28181-native-ingest-engine.md) | 纯 Rust 原生 GB28181 接入、PS 容错解复用与局域网设备发现 | 纯 Rust 闭环、零二次转码、目录树扫描、33-bit PTS 翻转防御 |
+| [📸 快照硬件 JPEG 编码与裁剪 (已归档)](./archive/snapshot-hardware-jpeg-encoding.md) | Snapshot 路径全链路硬件加速与多级降级 | 零 CPU 像素拷贝、RGA 16 字节对齐、Scratchpad 复用、双流快照兜底 |
 
 ---
 
 ## 🚦 质量门禁检查命令 (Quality Gate)
 
 ### 后端门禁 (Rust / Native)
+
 ```bash
 cargo fmt --all
 if [ -d native ]; then
@@ -90,6 +96,7 @@ cargo test --workspace
 ```
 
 ### 前端门禁 (Web Console)
+
 ```bash
 cd web
 pnpm format

@@ -1,8 +1,8 @@
 # Design: 运动检测与前置门控引擎 (Motion Detection & Gating Engine)
 
 > **状态**: Milestone 1/2 已实现（Host 帧与 Apple Unified Memory 路径）；Milestone 3 嵌入式硬件缩略图（RK3588 RGA / 昇腾 VPC）待接入
-> **作者**: Heimdall Engineering  
-> **日期**: 2025-07-25  
+> **作者**: Heimdall Engineering
+> **日期**: 2025-07-25
 > **关联规范**: [媒体管线](../nuwa/backend/media-pipeline.md)、[算法 SDK](../nuwa/backend/algo-sdk-guidelines.md)、[并发模型](../nuwa/backend/concurrency-guidelines.md)、[FFI 边界](../nuwa/backend/ffi-guidelines.md)
 
 ---
@@ -14,6 +14,7 @@
 Heimdall 定位于工业级边缘视频分析流媒体服务，面向 8~32 路摄像机的高并发视频流，且多部署在无风扇嵌入式计算盒（如 Rockchip RK3588、华为昇腾 Atlas 200I DK A2、Apple Silicon 等）上。
 
 在实际安防与监控场景中，大部分摄像头（如夜间仓库、空旷周界、走廊通道）在 **80%~95%** 的时间内画面处于相对静止状态。若将每一帧解码后的图像无差别地送入 NPU 执行深度学习目标检测模型，将导致：
+
 1. **能耗与温度飙升**：NPU 核心长期满负荷运转，在嵌入式盒子上快速达到温控警戒线（80℃+），触发系统级频率降级（Thermal Throttling）；
 2. **多路并发吞吐受限**：无效的静态帧持续占用有限的 NPU 算力与总线带宽，挤占了真正发生告警通道的计算资源；
 3. **硬件资源磨损**：在离网/太阳能供电等边缘边缘边缘节点上，造成不必要的电力耗尽。
@@ -146,11 +147,13 @@ pub enum YPlaneSource<'a> {
 ```
 
 #### 4.1.1 方案 A：Host 内存帧（CPU 软解 / 开发调试）
+
 - 直接从 `FrameHandle::Host(bytes)` 中截取 Y 平面：
   - NV12 / YUV420p 前 $W \times H$（或 $\text{hor\_stride} \times \text{ver\_stride}$）字节即为连续的 8 位亮度灰度数据；
   - 采用零拷贝切片借用，内存读取开销极低。
 
 #### 4.1.2 方案 B：Rockchip RK3588 / RK3568（MPP 解码 $\to$ DMA-BUF 载体）
+
 - **实现路径**：利用已有的 `rga_crop` 基础设施与 RGA 2D 硬件加速器。
 - **操作步骤**：
   1. 解码器输出 DMA-BUF 帧（例如子码流 640x360 NV12）；
@@ -159,6 +162,7 @@ pub enum YPlaneSource<'a> {
   4. **性能损耗**：14.4 KB 的 D2H 总线传输耗时 $< 10\mu s$，彻底打破“硬件加速帧无法做运动检测”的瓶颈，同时严格保护 1080P/4K 主干直通管线不发生全图读回。
 
 #### 4.1.3 方案 C：华为昇腾 Atlas / CANN（DVPP 解码 $\to$ DeviceMemory 载体）
+
 - **实现路径**：利用 DVPP **VPC (Video Processing Component)**。
 - **操作步骤**：
   1. 解码输出显存指针后，调用 VPC 异步缩放算子生成极小分辨率 Y 分量；
@@ -166,6 +170,7 @@ pub enum YPlaneSource<'a> {
   3. 后续在 OS Worker 专用线程内完成差分。
 
 #### 4.1.4 方案 D：Apple Silicon（VideoToolbox $\to$ CVPixelBuffer 载体）
+
 - 直接通过 `CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0)` 获取 Y 平面地址。在 Unified Memory（统一内存架构）下，CPU 访问该指针完全是零拷贝总线访问，无需任何显存回读。
 
 ---
@@ -371,6 +376,7 @@ match decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
 ### 7.2 端到端跳帧能效收益预估
 
 假设一路 1080P@25fps 摄像机，配置子码流 640×360@15fps 进行 AI 分析：
+
 - **静态场景（如夜间走廊）**：
   - 运动门控拦截率：$\approx 90\%$；
   - 实际送入 NPU 的帧率：由原先的 15 fps 降至 $0.5 \text{ fps}$（保活周期 2000ms）；
@@ -384,16 +390,19 @@ match decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
 ## 8. 实施计划与演进路线图
 
 ### 阶段一：纯 Rust 算法升级与配置遥测闭环（Milestone 1）
+
 - [x] 重写 `crates/pipeline/src/motion_gate.rs`：废弃脆弱的 `DefaultHasher`，实现 Y 通道差分与 $8\times 8$ 网格聚合；当前 Host 路径由编译器负责自动向量化，显式 NEON/AVX2 优化留作后续性能迭代；
 - [x] 增加 `motion_hold_frames` 余晖机制，支持保活平滑；
 - [x] 改造 `StartCameraPipelineParams` 与 `AnalysisPump`：由 `motion_gate_enabled: bool` 升级为透传完整的 `Option<MotionGateConfig>`，彻底打通数据库与前端配置链；
 - [x] 闭环遥测数据：计算 `motion_score` 并通过 `camera.telemetry` 接入 `CameraTelemetryEvent`，驱动 Web 端 `LivePlayer` 动态热度条展示。
 
 ### 阶段二：空间遮罩（Mask）与多防区联动（Milestone 2）
+
 - [x] 实现 `MaskBitmap` 快速光栅化，在差分计算中跳过配置了 `DetectionRuleRole::Mask` 的区域；
 - [x] 支持按任务布防的 `DetectionRuleRole::Roi` 执行正向过滤，防区外运动直接抑制，杜绝无效唤醒。
 
 ### 阶段三：硬件设备帧微缩支持（Milestone 3）
+
 - [x] 针对 macOS Apple Silicon 平台的 `CVPixelBuffer` 硬件帧，打通 Unified Memory 零拷贝只读 Y 平面直通；
 - [ ] 针对 Linux RK3588 平台的 DMA-BUF 物理帧，接入 RGA 异步微缩图流程；
 - [ ] 针对华为昇腾平台，接入 VPC 异步下采样流程，实现嵌入式硬解路径下的原生节能闭环。
@@ -403,11 +412,13 @@ match decoder.decode_packet(&pkt.payload, pkt.pts_ms).await {
 ## 9. 验收门禁与测试计划
 
 ### 9.1 单元测试（Unit Tests）
+
 1. **抗噪性测试**：注入带有 $\pm 5$ 随机高斯噪声的连续静态灰度图，断言 `should_skip == true`，绝对不被噪声误触发；
 2. **运动触发测试**：注入局部产生 $20 \times 20$ 像素（变动量 40）的运动图块，断言准确触发 `should_skip == false` 且 `motion_score > 0`；
 3. **保活周期测试**：维持静止帧输入，时间跨越超过 `keepalive_interval_ms`，断言立即放行一帧且 `is_keepalive == true`；
 4. **余晖平滑测试**：发生单帧运动后恢复静止，断言后续 $N$ 帧在余晖窗口内保持放行。
 
 ### 9.2 跨层集成验证（E2E Tests）
+
 - 启动完整 Coordinator 测试管线，监控 `PipelineMetrics::frames_skipped_motion` 指标，验证静止流下跳帧计数线性稳定增长；
 - 启动前端任务配置界面，修改 `threshold` 与 `keepaliveIntervalMs`，验证后端数据库原子持久化且运行时动态平滑生效。

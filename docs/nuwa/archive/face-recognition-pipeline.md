@@ -39,7 +39,7 @@ face_recognition::instance_process (dedicated inference worker)
         +-- best-shot gate (low frequency)
         +-- Core Image affine warp on native CVPixelBuffer
         +-- EdgeFace: CVPixelBuffer -> CoreML/ANE (synchronous)
-        |       
+        |
         v
 AV_RESULT_RECOGNITION JSON: schema_version + objects[]
         |
@@ -127,6 +127,7 @@ The EdgeFace model is loaded in the shared CoreML model holder because the same 
 ### 6.1 Temporal Spherical Feature Fusion & Anti-Drift Defense
 
 To improve recognition accuracy and signal-to-noise ratio in dynamic edge surveillance, `BestShotManager` introduces a temporal feature fusion strategy:
+
 - **Temporal Gating & Budget**: Feature extraction triggers on the first quality-gated face. Subsequent extractions for the same track occur only when face quality significantly improves ($\Delta Q > 0.08$) or when at least 6 frames have elapsed with a qualified quality score ($Q \ge 0.50$), capped at a maximum of 4 fused frames per track to preserve edge NPU throughput.
 - **Hyperspherical Weighted Aggregation**: Extracted 512-dimensional vectors are incrementally weighted by $w_i = Q_i^2$ and reprojected to the unit hypersphere:
   $$\mathbf{v}_{\text{fused}} = \frac{\sum_{i=1}^M w_i \cdot \mathbf{v}_i}{\left\|\sum_{i=1}^M w_i \cdot \mathbf{v}_i\right\|_2}$$

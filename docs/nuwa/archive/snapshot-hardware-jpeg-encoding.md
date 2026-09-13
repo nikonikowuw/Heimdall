@@ -1,9 +1,17 @@
 # Design: Snapshot 路径全链路硬件 JPEG 编码与设备侧裁剪
 
-> **状态**: Draft  
-> **作者**: Heimdall Engineering  
-> **日期**: 2025-07-21  
-> **关联规范**: [媒体管线](../nuwa/backend/media-pipeline.md)、[算法 SDK](../nuwa/backend/algo-sdk-guidelines.md)、[并发模型](../nuwa/backend/concurrency-guidelines.md)、[FFI 边界](../nuwa/backend/ffi-guidelines.md)
+> **状态**: 已实现 (Implemented)；Rockchip (MPP JPEGE + RGA Scratchpad) 与 CPU 兜底已全链路落地并验证，macOS / Ascend 预留多级硬件通道降级
+> **作者**: Heimdall Engineering
+> **日期**: 2026-09-12
+> **关联规范**: [AGENTS.md](../../../AGENTS.md)、[媒体管线](../backend/media-pipeline.md)、[算法 SDK](../backend/algo-sdk-guidelines.md)、[并发模型](../backend/concurrency-guidelines.md)、[FFI 边界](../backend/ffi-guidelines.md)
+> **代码落地**:
+>
+> - `crates/media/src/encoders/mod.rs` (`DeviceSnapEncoder`, `SnapEncoder`, `compute_crop_roi`)
+> - `crates/media/src/encoders/mpp_snap.rs` (`MppSnapEncoder` - RGA Scratchpad + MPP JPEGE)
+> - `crates/media/src/encoders/cpu.rs` (`CpuSnapEncoder`)
+> - `crates/pipeline/src/snapshot.rs` (`SnapshotEngine` 多级降级、质量路由与写盘)
+> - `crates/api/src/routes/system/snapshot.rs` (快照参数配置 REST API)
+> - `web/src/features/system/StorageSettings.tsx` (图片编码质量配置 UI)
 
 ---
 
@@ -41,25 +49,25 @@
 
 三个平台均具备设备侧 JPEG 编码能力，部分平台还支持设备侧裁剪（RGA/DVPP crop）：
 
-| 平台           | JPEG 编码                     | 设备侧 Crop                   | DMA-BUF 串联          | 现有封装 |
+| 平台 | JPEG 编码 | 设备侧 Crop | DMA-BUF 串联 | 现有封装 |
 | ------------ | --------------------------- | -------------------------- | ------------------- | ---- |
-| Rockchip MPP | VPU JPEG 模式                 | RGA `crop_and_scale`       | MPP ← DMA-BUF ← RGA | 仅解码器 |
-| Apple VT     | `VTCompressionSession` JPEG | Core Image / Metal compute | CVPixelBuffer 零拷贝   | 仅解码器 |
-| Ascend DVPP  | `acldvppJpegEncode`         | `acldvppCrop`              | DVPP ← DeviceMemory | 仅解码器 |
-| CPU fallback | libjpeg-turbo               | `crop_with_padding`        | N/A                 | 已实现  |
+| Rockchip MPP | VPU JPEG 模式 | RGA `crop_and_scale` | MPP ← DMA-BUF ← RGA | 仅解码器 |
+| Apple VT | `VTCompressionSession` JPEG | Core Image / Metal compute | CVPixelBuffer 零拷贝 | 仅解码器 |
+| Ascend DVPP | `acldvppJpegEncode` | `acldvppCrop` | DVPP ← DeviceMemory | 仅解码器 |
+| CPU fallback | libjpeg-turbo | `crop_with_padding` | N/A | 已实现 |
 
 **决策：采用全链路硬件方案（方案 B）**，全景大图与特写裁剪均走设备侧处理，消除所有 CPU 像素操作。
 
 ### 1.3 方案对比与决策依据
 
-| 维度       | 方案 A（仅全景 HW）        | **方案 B（全景+特写 HW）**                   |
+| 维度 | 方案 A（仅全景 HW） | **方案 B（全景+特写 HW）** |
 | -------- | ------------------- | ------------------------------------ |
-| 全景路径     | D2H → HW JPEG       | HW JPEG（无 D2H）                       |
-| 特写路径     | CPU crop → CPU JPEG | RGA/DVPP crop → HW JPEG              |
-| 端到端延迟    | 9-26ms（改善 15-25%）   | **2.5-7ms（改善 60-75%）**               |
-| D2H 数据量  | 3.2MB（仍需 RGB）       | **~200KB + ~50KB（仅 JPEG bitstream）** |
-| CPU 像素操作 | NV12→RGB 仍存在        | **完全消除**                             |
-| 实现复杂度    | 低                   | 中高（需 RGA/DVPP crop 串联）               |
+| 全景路径 | D2H → HW JPEG | HW JPEG（无 D2H） |
+| 特写路径 | CPU crop → CPU JPEG | RGA/DVPP crop → HW JPEG |
+| 端到端延迟 | 9-26ms（改善 15-25%） | **2.5-7ms（改善 60-75%）** |
+| D2H 数据量 | 3.2MB（仍需 RGB） | **~200KB + ~50KB（仅 JPEG bitstream）** |
+| CPU 像素操作 | NV12→RGB 仍存在 | **完全消除** |
+| 实现复杂度 | 低 | 中高（需 RGA/DVPP crop 串联） |
 
 方案 B 的关键收益：**将 D2H 数据量从 3.2MB 缩减到 ~250KB（13× 减少），端到端延迟从 11-33ms 降至 2.5-7ms**。在 4 路同时告警场景下，每路节省 8-26ms，累计减少 CPU 占用约 40-100ms。
 
@@ -79,7 +87,7 @@
 
 - 裁剪 + 编码能力抽象为 `media` 层的 trait
 - 上层 `pipeline::snapshot` 不感知底层是硬件还是 CPU 回退
-- 遵循 [FFI 规范](../nuwa/backend/ffi-guidelines.md)：`unsafe`、裸指针集中在 FFI/sys 边界
+- 遵循 [FFI 规范](../backend/ffi-guidelines.md)：`unsafe`、裸指针集中在 FFI/sys 边界
 
 ### 2.3 并发与线程模型
 
@@ -889,13 +897,13 @@ impl SnapEncoder {
 
 **容量规划**：
 
-| 平台                  | 编码实例数 | CMA 占用  | 吞吐能力     | 告警负载 |
+| 平台 | 编码实例数 | CMA 占用 | 吞吐能力 | 告警负载 |
 | ------------------- | ----- | ------- | -------- | ---- |
-| RK3568              | **1** | ~2-4MB  | ~330 帧/秒 | ~3%  |
-| RK3588              | **1** | ~2-4MB  | ~500 帧/秒 | ~2%  |
-| macOS Apple Silicon | **1** | N/A     | ~500 帧/秒 | ~2%  |
-| Ascend 910B         | **1** | DVPP 通道 | ~200 帧/秒 | ~5%  |
-| x86 (CPU fallback)  | **1** | N/A     | ~100 帧/秒 | ~10% |
+| RK3568 | **1** | ~2-4MB | ~330 帧/秒 | ~3% |
+| RK3588 | **1** | ~2-4MB | ~500 帧/秒 | ~2% |
+| macOS Apple Silicon | **1** | N/A | ~500 帧/秒 | ~2% |
+| Ascend 910B | **1** | DVPP 通道 | ~200 帧/秒 | ~5% |
+| x86 (CPU fallback) | **1** | N/A | ~100 帧/秒 | ~10% |
 
 ### 5.2 线程模型
 
@@ -1073,13 +1081,13 @@ async fn test_snapshot_hw_crop_fallback_to_cpu() {
 
 ### 6.3 真机验证矩阵
 
-| 平台                  | 全景 HW      | 特写 HW crop          | 1080p 全景延迟 | 1080p 特写延迟 |
+| 平台 | 全景 HW | 特写 HW crop | 1080p 全景延迟 | 1080p 特写延迟 |
 | ------------------- | ---------- | ------------------- | ---------- | ---------- |
-| RK3568              | MPP VPU    | RGA → MPP           | < 3ms      | < 5ms      |
-| RK3588              | MPP VPU    | RGA → MPP           | < 2ms      | < 4ms      |
-| macOS Apple Silicon | VT JPEG    | IOSurface crop → VT | < 2ms      | < 3ms      |
-| Ascend 910B         | DVPP JPEGE | DVPP crop → DVPP    | < 5ms      | < 7ms      |
-| x86 开发机             | CPU only   | CPU only            | 8-15ms     | 10-18ms    |
+| RK3568 | MPP VPU | RGA → MPP | < 3ms | < 5ms |
+| RK3588 | MPP VPU | RGA → MPP | < 2ms | < 4ms |
+| macOS Apple Silicon | VT JPEG | IOSurface crop → VT | < 2ms | < 3ms |
+| Ascend 910B | DVPP JPEGE | DVPP crop → DVPP | < 5ms | < 7ms |
+| x86 开发机 | CPU only | CPU only | 8-15ms | 10-18ms |
 
 ---
 
@@ -1093,12 +1101,12 @@ async fn test_snapshot_hw_crop_fallback_to_cpu() {
 
 ### 7.2 Nuwa 规范更新
 
-| 文件                          | 更新内容                                                                      |
+| 文件 | 更新内容 |
 | --------------------------- | ------------------------------------------------------------------------- |
-| `media-pipeline.md`         | 三路径表格中 `snapshot_readback_path` 更新为"设备 crop + 设备 JPEG 编码 → 仅压缩后 D2H → 写盘" |
-| `api-guidelines.md`         | 新增 `GET/PUT /api/v1/system/snapshot/config` 端点                            |
-| `concurrency-guidelines.md` | 新增编码器 Worker 归属说明                                                         |
-| `ffi-guidelines.md`         | 新增 MPP/RGA/VT/DVPP JPEG 编码与 crop FFI 边界约束                                 |
+| `media-pipeline.md` | 三路径表格中 `snapshot_readback_path` 更新为"设备 crop + 设备 JPEG 编码 → 仅压缩后 D2H → 写盘" |
+| `api-guidelines.md` | 新增 `GET/PUT /api/v1/system/snapshot/config` 端点 |
+| `concurrency-guidelines.md` | 新增编码器 Worker 归属说明 |
+| `ffi-guidelines.md` | 新增 MPP/RGA/VT/DVPP JPEG 编码与 crop FFI 边界约束 |
 
 ### 7.3 Feature Flag
 
@@ -1119,28 +1127,28 @@ hw-snap-dvpp = ["dvpp"]           # Ascend: DVPP crop + DVPP JPEGE
 
 ## 8. 风险与缓解
 
-| 风险                           | 影响                    | 缓解措施                                                          |
+| 风险 | 影响 | 缓解措施 |
 | ---------------------------- | --------------------- | ------------------------------------------------------------- |
-| MPP 编码与解码共享 VPU              | 高帧率解码期间编码需排队          | VPU 编解码可在不同上下文并行；告警低频（~1-5次/秒），单实例串行 1-3ms/帧，排队延迟可忽略          |
-| RGA 输出动态分配引发 CMA 碎片          | 长时间运行后 CMA 耗尽致 Crash  | 采用固定最大容量的 `DmaBufScratchpad` 单画板模式，启动常驻，不随尺寸动态分配              |
-| RGA → MPP DMA-BUF 跨 IP 缓存不一致 | 抓拍图片局部花屏、斑马条纹或绿屏      | RGA 写入后显式执行 `DMA_BUF_IOCTL_SYNC` 发起硬件 Cache Flush             |
-| 色彩空间未做 Full Range 重映射        | 抓拍图片发灰泛白，对比度降低        | MPP/DVPP 编码配置中显式指定 `MPP_FRAME_RANGE_JPEG` / BT.601 Full Range |
-| VideoToolbox session 频繁创建    | macOS 特写尺寸动态变化导致编码变慢  | 全景 Session 常驻复用；特写采用固定尺寸 Letterbox 或 Metal 预处理，杜绝逐帧 Create    |
-| DVPP crop 内存对齐不满足            | 输入帧不满足 16×2 对齐        | 编码前检查并拒绝不合规帧；fallback 到 CPU                                   |
-| JPEG 编码器上下文内存泄漏              | 长时间运行后内存增长            | RAII 管理 + 停机时强制释放 + 生命周期测试                                    |
-| 特写裁剪尺寸低于硬件编码下限               | 极小 bbox 导致 VPU 驱动报错拒编 | `compute_crop_roi` 强制增加 $\ge 32\times 32$ 偶数对齐钳位与平移保护         |
+| MPP 编码与解码共享 VPU | 高帧率解码期间编码需排队 | VPU 编解码可在不同上下文并行；告警低频（~1-5次/秒），单实例串行 1-3ms/帧，排队延迟可忽略 |
+| RGA 输出动态分配引发 CMA 碎片 | 长时间运行后 CMA 耗尽致 Crash | 采用固定最大容量的 `DmaBufScratchpad` 单画板模式，启动常驻，不随尺寸动态分配 |
+| RGA → MPP DMA-BUF 跨 IP 缓存不一致 | 抓拍图片局部花屏、斑马条纹或绿屏 | RGA 写入后显式执行 `DMA_BUF_IOCTL_SYNC` 发起硬件 Cache Flush |
+| 色彩空间未做 Full Range 重映射 | 抓拍图片发灰泛白，对比度降低 | MPP/DVPP 编码配置中显式指定 `MPP_FRAME_RANGE_JPEG` / BT.601 Full Range |
+| VideoToolbox session 频繁创建 | macOS 特写尺寸动态变化导致编码变慢 | 全景 Session 常驻复用；特写采用固定尺寸 Letterbox 或 Metal 预处理，杜绝逐帧 Create |
+| DVPP crop 内存对齐不满足 | 输入帧不满足 16×2 对齐 | 编码前检查并拒绝不合规帧；fallback 到 CPU |
+| JPEG 编码器上下文内存泄漏 | 长时间运行后内存增长 | RAII 管理 + 停机时强制释放 + 生命周期测试 |
+| 特写裁剪尺寸低于硬件编码下限 | 极小 bbox 导致 VPU 驱动报错拒编 | `compute_crop_roi` 强制增加 $\ge 32\times 32$ 偶数对齐钳位与平移保护 |
 
 ---
 
 ## 9. 实现优先级
 
-| 阶段     | 内容                                                                                                                                 | 预期收益                    |
+| 阶段 | 内容 | 预期收益 |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| **P0** | `DeviceSnapEncoder` trait + `CpuSnapEncoder` + `SnapEncoder`(单实例串行) + `compute_crop_roi` + CPU fallback 重构 + `SnapshotConfig` 质量字段 | 架构就绪，CPU 路径行为不变         |
-| **P1** | **Rockchip `MppSnapEncoder`**：MPP JPEGE + RGA crop 串联 + RGA 输出 DMA-BUF 池                                                           | **全景 + 特写全链路硬件化（主力平台）** |
-| **P2** | **Apple `VtSnapEncoder`**：VT JPEG + IOSurface crop                                                                                 | macOS/iOS 全链路硬件化        |
-| **P3** | **Ascend `DvppSnapEncoder`**：DVPP crop + DVPP JPEGE                                                                                | 昇腾全链路硬件化                |
-| **P4** | `GET/PUT /api/v1/system/snapshot/config` + `StorageSettings.tsx` 新增图片编码 Section                                                    | 用户可配置                   |
+| **P0** | `DeviceSnapEncoder` trait + `CpuSnapEncoder` + `SnapEncoder`(单实例串行) + `compute_crop_roi` + CPU fallback 重构 + `SnapshotConfig` 质量字段 | 架构就绪，CPU 路径行为不变 |
+| **P1** | **Rockchip `MppSnapEncoder`**：MPP JPEGE + RGA crop 串联 + RGA 输出 DMA-BUF 池 | **全景 + 特写全链路硬件化（主力平台）** |
+| **P2** | **Apple `VtSnapEncoder`**：VT JPEG + IOSurface crop | macOS/iOS 全链路硬件化 |
+| **P3** | **Ascend `DvppSnapEncoder`**：DVPP crop + DVPP JPEGE | 昇腾全链路硬件化 |
+| **P4** | `GET/PUT /api/v1/system/snapshot/config` + `StorageSettings.tsx` 新增图片编码 Section | 用户可配置 |
 
 ---
 
@@ -1263,9 +1271,9 @@ impl SnapshotConfig {
 
 复用现有 `SystemConfigRepo` + `routes/system/` 模式：
 
-| 方法  | 端点                               | 说明          |
+| 方法 | 端点 | 说明 |
 | --- | -------------------------------- | ----------- |
-| GET | `/api/v1/system/snapshot/config` | 获取当前快照配置    |
+| GET | `/api/v1/system/snapshot/config` | 获取当前快照配置 |
 | PUT | `/api/v1/system/snapshot/config` | 更新快照配置（热生效） |
 
 ```rust
@@ -1355,13 +1363,13 @@ StorageSettings 页面布局：
 
 1080p 全景大图在不同质量下的文件体积（RK3568 实测基线）：
 
-| 质量           | 文件体积       | 相对 q85 | 30 天 × 100 路 × 5 次/天 |
+| 质量 | 文件体积 | 相对 q85 | 30 天 × 100 路 × 5 次/天 |
 | ------------ | ---------- | ------ | -------------------- |
-| q75          | ~120KB     | -40%   | ~54GB                |
-| q80          | ~160KB     | -20%   | ~72GB                |
-| **q85 (默认)** | **~200KB** | **基准** | **~90GB**            |
-| q90          | ~280KB     | +40%   | ~126GB               |
-| q95          | ~350KB     | +75%   | ~158GB               |
+| q75 | ~120KB | -40% | ~54GB |
+| q80 | ~160KB | -20% | ~72GB |
+| **q85 (默认)** | **~200KB** | **基准** | **~90GB** |
+| q90 | ~280KB | +40% | ~126GB |
+| q95 | ~350KB | +75% | ~158GB |
 
 边缘设备典型存储预算 256GB-1TB，q85 全景 + q90 特写的默认配置在多数场景下经济合理。用户可根据存储水位灵活调整。
 
@@ -1396,10 +1404,10 @@ impl SnapshotEngine {
 
 单实例串行模型下，buffer 数量由管线时序决定，与并发告警数无关：
 
-| Buffer     | 用途                       | 生命周期                          |
+| Buffer | 用途 | 生命周期 |
 | ---------- | ------------------------ | ----------------------------- |
-| `crop_buf` | `acldvppCrop` 裁剪输出       | crop 完成 → 送入 JPEGE → 编码开始后可释放 |
-| `jpeg_buf` | `acldvppJpegEncode` 编码输出 | 编码完成 → D2H 拷贝 → 写盘后可释放        |
+| `crop_buf` | `acldvppCrop` 裁剪输出 | crop 完成 → 送入 JPEGE → 编码开始后可释放 |
+| `jpeg_buf` | `acldvppJpegEncode` 编码输出 | 编码完成 → D2H 拷贝 → 写盘后可释放 |
 
 **全景→特写串行执行时的 buffer 复用**：全景 JPEG 输出 buffer 在 D2H 完成后立即释放，被特写 crop 复用。峰值持有量始终为 2。
 
@@ -1407,11 +1415,11 @@ impl SnapshotEngine {
 
 DVPP 输出 buffer 必须通过 `acldvppMalloc` 分配（64 字节对齐）：
 
-| 分辨率               | crop_buf (NV12) | jpeg_buf (压缩后 10%) | 合计         | 占 CMA 比例 (16MB) |
+| 分辨率 | crop_buf (NV12) | jpeg_buf (压缩后 10%) | 合计 | 占 CMA 比例 (16MB) |
 | ----------------- | --------------- | ------------------ | ---------- | --------------- |
-| 1080p (1920×1088) | 3.1MB           | ~300KB             | **3.4MB**  | 21%             |
-| 2K (2560×1440)    | 5.5MB           | ~550KB             | **6.1MB**  | 38%             |
-| 4K (3840×2160)    | 12.4MB          | ~1.2MB             | **13.6MB** | 85%             |
+| 1080p (1920×1088) | 3.1MB | ~300KB | **3.4MB** | 21% |
+| 2K (2560×1440) | 5.5MB | ~550KB | **6.1MB** | 38% |
+| 4K (3840×2160) | 12.4MB | ~1.2MB | **13.6MB** | 85% |
 
 4K 场景接近 CMA 上限，初始化时需检查剩余 CMA，不足则降级到 CPU 路径。
 
@@ -1468,10 +1476,10 @@ impl Drop for DvppOutputPool {
 
 **结论：约束分两层，作用在不同对象上**：
 
-| 约束            | 作用对象                                    | 要求                    | 影响                     |
+| 约束 | 作用对象 | 要求 | 影响 |
 | ------------- | --------------------------------------- | --------------------- | ---------------------- |
-| **逻辑尺寸偶数**    | src_rect/dst_rect 的 x, y, width, height | **RGA2 + RGA3 均强制**   | crop 宽高必须偶数，x/y 坐标必须偶数 |
-| **stride 对齐** | buffer 的 w_stride                       | RGA2: 4px; RGA3: 16px | DMA-BUF 分配容量           |
+| **逻辑尺寸偶数** | src_rect/dst_rect 的 x, y, width, height | **RGA2 + RGA3 均强制** | crop 宽高必须偶数，x/y 坐标必须偶数 |
+| **stride 对齐** | buffer 的 w_stride | RGA2: 4px; RGA3: 16px | DMA-BUF 分配容量 |
 
 ### 12.2 crop 坐标的完整对齐流程
 
@@ -1506,14 +1514,14 @@ impl Drop for DvppOutputPool {
 
 **关键区分**：
 
-| 层面               | 值       | 对齐要求                  | 由谁决定         |
+| 层面 | 值 | 对齐要求 | 由谁决定 |
 | ---------------- | ------- | --------------------- | ------------ |
-| **RGA 逻辑宽度**     | 500     | **必须偶数**              | NV12 格式约束    |
-| **RGA 逻辑高度**     | 300     | **必须偶数**              | NV12 格式约束    |
-| **RGA x/y 坐标**   | 100, 50 | **必须偶数**              | NV12 色度平面约束  |
-| **RGA w_stride** | 512     | RGA2: 4px; RGA3: 16px | 硬件 stride 约束 |
-| **MPP 可见尺寸**     | 500×300 | **不需要额外对齐**           | = RGA 逻辑尺寸   |
-| **MPP stride**   | 512     | 跟随 RGA 输出             |              |
+| **RGA 逻辑宽度** | 500 | **必须偶数** | NV12 格式约束 |
+| **RGA 逻辑高度** | 300 | **必须偶数** | NV12 格式约束 |
+| **RGA x/y 坐标** | 100, 50 | **必须偶数** | NV12 色度平面约束 |
+| **RGA w_stride** | 512 | RGA2: 4px; RGA3: 16px | 硬件 stride 约束 |
+| **MPP 可见尺寸** | 500×300 | **不需要额外对齐** | = RGA 逻辑尺寸 |
+| **MPP stride** | 512 | 跟随 RGA 输出 | |
 
 ### 12.3 compute_crop_roi 实现
 
@@ -1704,10 +1712,10 @@ pub struct SnapshotConfig {
 
 **默认值策略**：
 
-| 码流  | 全景质量 | 特写质量 | 理由             |
+| 码流 | 全景质量 | 特写质量 | 理由 |
 | --- | ---- | ---- | -------------- |
-| 主码流 | 90   | 95   | 高清取证，人脸/车牌需要细节 |
-| 子码流 | 80   | 85   | 低分辨率图，高质量无意义   |
+| 主码流 | 90 | 95 | 高清取证，人脸/车牌需要细节 |
+| 子码流 | 80 | 85 | 低分辨率图，高质量无意义 |
 
 ### 14.3 自动路由
 

@@ -1,9 +1,16 @@
 # Design: 国标 GB/T 28181 纯 Rust 原生接入与设备发现引擎 (GB28181 Native Ingest & Discovery Engine)
 
-> **状态**: Draft  
-> **作者**: Heimdall Engineering  
-> **日期**: 2025-02-18  
-> **关联规范**: [AGENTS.md](../../../AGENTS.md)、[媒体管线](../backend/media-pipeline.md)、[并发模型](../backend/concurrency-guidelines.md)、[实时预览重构](./realtime-preview-overhaul.md)、[API 规范](../backend/api-guidelines.md)、[数据库规范](../backend/database-guidelines.md)
+> **状态**: 已实现 (Implemented)；SIP UAS 状态机、PS 容错解复用、RTP 抖动缓冲、动态端口池、ONVIF 嗅探与前端纳管已闭环落地
+> **作者**: Heimdall Engineering
+> **日期**: 2026-09-13
+> **关联规范**: [AGENTS.md](../../../AGENTS.md)、[媒体管线](../backend/media-pipeline.md)、[并发模型](../backend/concurrency-guidelines.md)、[实时预览重构](../archive/realtime-preview-overhaul.md)、[API 规范](../backend/api-guidelines.md)、[数据库规范](../backend/database-guidelines.md)
+> **代码落地**:
+>
+> - `crates/media/src/gb28181/` (`Gb28181SipServer`, `PsDemuxer`, `JitterBuffer`, `PortPool`, `Gb28181Ingestor`, `scan_lan_cameras`)
+> - `crates/media/src/media_ingestor.rs` & `stream_hub.rs` (接入层与连接复用)
+> - `crates/db/src/` (`SysGb28181ConfigRepo`, `Gb28181DeviceRepo`, migration `V11`)
+> - `crates/api/src/routes/system/gb28181.rs` (REST API 端点)
+> - `web/src/features/` (`Gb28181Settings.tsx`, `BatchImportGbModal.tsx`, `LanDiscoveryModal.tsx`, `CameraModal.tsx`)
 
 ---
 
@@ -14,6 +21,7 @@
 Heimdall 当前的媒体接入能力主要面向客户端拉流（Client-Pull）的 RTSP 协议（由 `retina_ingest` 驱动），下游衔接统一的 `StreamHub` 隔离分发与异构硬件加速管线（MPP / DVPP / VideoToolbox）。
 
 在安防工业化落地中，**GB/T 28181（公共安全视频监控联网系统）** 是国内强制性行业标准：
+
 1. **行业存量标准设备接入**：大量安防 IPC、热成像仪及多通道 NVR 仅提供 GB28181 主动注册与点播接口，缺乏可直接拉取的 RTSP 地址；
 2. **多通道批量纳管**：单个 NVR 下挂载 4~64 个物理摄像头通道，急需支持**自动目录扫描（Catalog Query）**，一键同步通道列表，杜绝逐路配置 RTSP 的运维成本；
 3. **局域网设备自发现**：边缘一体机（盒子）在工业现场开箱即用时，需支持一键“局域网扫描”，快速嗅探并纳管新接入的摄像机。
@@ -103,18 +111,23 @@ pub trait MediaIngestor: Send + Sync + 'static {
 ## 3. 控制面：SIP 协议栈与信令服务设计
 
 ### 3.1 监听器架构与系统部署约束
+
 - **网络绑定**：默认绑定 `0.0.0.0:5060`，支持 UDP 与 TCP 并行双栈；
 - **Linux 权限模型约束**：
   - Linux 下 $<1024$ 端口默认受限。二进制部署时通过文件能力授权：
+
     ```bash
     sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/heimdall
     ```
+
   - Docker 容器部署时通过端口映射放行：
+
     ```bash
     -p 5060:5060/udp -p 5060:5060/tcp -p 30000-30500:30000-30500/udp
     ```
 
 ### 3.2 注册与 Digest 鉴权状态机
+
 遵循 RFC 3261 与 GB/T 28181-2016 第 9.1 节规范：
 
 ```
@@ -137,7 +150,9 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
   - 心跳超时判定：默认 3 个心跳周期（$3 \times 60\text{s} = 180\text{s}$）无响应原子更新设备为 `Offline`。
 
 ### 3.3 按需点播（INVITE）与闲时停流（BYE）
+
 依托 `StreamHub` 现有的引用计数机制（`active_viewers` 与 `ai_task_refs`）：
+
 1. **触发点播**：当某个通道的活跃消费者从 0 变为 1 时，`Gb28181Ingestor` 启动并通知 `Gb28181SipServer`：
    - 向 `PortPool` 申请一对空闲端口（如 RTP: `30004`，RTCP: `30005`）；
    - 生成 10 位国标 SSRC（格式为 `0` + 域编码后4位 + 5位流水号）；
@@ -146,8 +161,11 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
 2. **触发停流**：通道活跃消费者归零后，启动 10 秒 Cooldown 定时器。超时确认无新连接后发送 `cancel_signal`，`Gb28181Ingestor` 发送 SIP `BYE`，设备停流并归还端口。
 
 ### 3.4 目录树扫描（Catalog Query）与多通道批量同步
+
 当 NVR 或多目全景相机首次注册成功，或前端主动触发“同步通道”时：
+
 1. 向设备发送 SIP `MESSAGE`，载荷为标准 XML：
+
    ```xml
    <?xml version="1.0" encoding="GB2312"?>
    <Query>
@@ -156,6 +174,7 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
      <DeviceID>34020000001180000001</DeviceID>
    </Query>
    ```
+
 2. 解析设备返回的 `<DeviceList Num="N">`，提取通道国标 ID（20位）、通道名称、在线状态及 PTZ 属性；
 3. 在单一 SQLite 事务中基于 `(gb28181_device_id, gb28181_channel_id)` 联合键批量 upsert `cameras` 表。
 
@@ -164,6 +183,7 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
 ## 4. 数据面：RTP 传输与 MPEG-PS 流式解复用引擎
 
 ### 4.1 传输模式与乱序重组
+
 - **TCP 被动模式（RFC 4571）**：生产环境默认推荐。每个 RTP 包前置 2 字节大端网络长度，天然规避丢包乱序；
 - **UDP 模式**：兼容支持。内置容量为 64 包的 `Bounded JitterBuffer`，依据 RTP 16 位 Sequence Number 重排，超时空洞包强制弃帧并下发 `Discontinuity` 标记。
 
@@ -199,6 +219,7 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
 ```
 
 ### 4.3 现场极端畸变防御策略
+
 1. **缺失 PSM 时的启发式自愈探测（Heuristic Codec Sniffing）**：
    - 现场大量低端 IPC 不发送 `0xBC`（PSM）。解复用器内置特征嗅探：跳过 PES Header，在载荷前 32 字节内搜索 `0x00000001`：
      - 若后继字节为 `0x67`（SPS）或 `0x65`（IDR），自动识别并固化为 `CodecType::H264`；
@@ -210,7 +231,9 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
    - 报文畸变或遇到未知扩展头时，不中断连接，逐字节滑动搜寻下一个 `0x000001BA` 或 `0x000001E0`，跳过破损切片并在下一关键帧恢复解码。
 
 ### 4.4 纯视频管线与音频强隔离
+
 严格遵循 Nuwa [媒体管线](../backend/media-pipeline.md) 的硬件隔离红线：
+
 - 解析出 `0xC0..=0xDF`（音频 PES）时，封装为 `StreamTag::Audio` 进入总线；
 - `AnalysisPump`（AI 硬解）与 `MainStreamRingBuffer` 在订阅时**强制过滤音频包**，确保只有纯 Annex-B 视频 NALU 送往 MPP / DVPP / VideoToolbox 底层硬件，杜绝冲撞硬件内核。
 
@@ -219,6 +242,7 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
 ## 5. 局域网物理设备主动嗅探扩展 (Active LAN Discovery)
 
 解决全新摄像头开箱插线后免配置快速纳管问题：
+
 - **ONVIF WS-Discovery 组播引擎**：基于 `tokio::net::UdpSocket` 向 `239.255.255.250:3702` 发送 `Probe` 广播，3 秒内平滑收口，解析摄像机 IP、MAC、厂商与 ONVIF 接口；
 - **RTSP 快速探活**：对目标网段并发探测 554 端口，提取有效流路径。
 
@@ -312,26 +336,34 @@ Device (IPC/NVR)                        Heimdall (SIP Server)
 所有被纳管的摄像头统一聚集在 `/cameras` 页面，针对 GB28181“一台 NVR 注册后上报 16~64 个通道”的安防特性，交互设计如下：
 
 #### 1. 列表呈现与协议徽标（Badge）
+
 所有摄像头在网格或列表中统一呈现，卡片打上协议徽标：
+
 - `[RTSP]`：自填 URL 接入设备；
 - `[GB28181]`：国标注册设备，副标题显示物理上级设备（如 `海康16路NVR - 通道01`）。
 - 顶部支持按协议类型快速过滤：`[全部 (18)]`、`[RTSP (2)]`、`[GB28181 (16)]`。
 
 #### 2. 未纳管通道发现条（Inbox Banner）与批量导入抽屉
+
 当 NVR 首次注册成功并通过 Catalog 扫描出多通道时，`/cameras` 顶部自动展示非阻塞的待纳管横幅：
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │ [📡] 检测到新注册的国标设备「海康威视 16路 NVR」，发现 16 个可用通道             │
 │      当前已纳管: 0 / 16 通道                       [ 批量纳管通道 ]  [ 忽略 ]    │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
+
 点击 **[ 批量纳管通道 ]** 打开抽屉（Drawer），支持：
+
 - 勾选需要用于 AI 分析与预览的通道（支持全选/反选）；
 - 批量设置初始码流模式（`auto` / `main` / `sub`）；
 - 点击“一键导入资产池”，选中的通道立即批量落入 `cameras` 表，进入主网格开始工作。
 
 #### 3. 摄像头接入弹窗 (`CameraModal.tsx`)
+
 手动添加摄像头时，顶部提供协议切换：
+
 - **RTSP 模式**：输入主/子码流 RTSP 地址（原有逻辑）；
 - **GB28181 模式**：通过树状下拉选择器（Tree Select）在已注册的设备与通道中直接勾选，并提供“一键扫描局域网新摄像头（ONVIF）”快捷入口。
 
@@ -393,6 +425,7 @@ CREATE TABLE IF NOT EXISTS gb28181_devices (
 ## 8. 资源约束、异常防御与并发模型
 
 ### 8.1 物理资源严格受界 (Bounded Budgets)
+
 1. **RTP 端口池 RAII 租约**：
    - 端口分配返回 `Arc<PortLease>`，任务完成、异常中断或 Drop 时自动回收，物理杜绝端口泄漏；
 2. **防僵尸 Dialog 机制**：
@@ -401,7 +434,9 @@ CREATE TABLE IF NOT EXISTS gb28181_devices (
    - 单个 PS 帧缓冲上限为 10MB，超限立即告警并重置状态机，防畸变包造成 OOM。
 
 ### 8.2 并发与异步红线
+
 遵循 [并发模型](../backend/concurrency-guidelines.md)：
+
 - **Tokio Worker 零阻塞**：SIP 消息处理与轻量 PS 解析在 Tokio 协程中异步流转；所有视频解码与推理严格隔离在专有的硬件专用线程中；
 - **锁粒度控制**：设备路由表采用 `parking_lot::RwLock`，持锁期间严禁跨越 `.await` 或网络 I/O。
 
@@ -410,18 +445,22 @@ CREATE TABLE IF NOT EXISTS gb28181_devices (
 ## 9. 分阶段实施与验证计划
 
 ### 阶段一：PS 解封装器与 RTP 乱序重组开发（Data Plane）
+
 - [ ] 在 `crates/media` 中实现 `gb28181/ps` 模块（`PsDemuxer`、`PtsUnwrapper`、`JitterBuffer`）；
 - [ ] 导入海康/大华真实国标 PCAP 数据包进行单元测试，断言平滑输出连续 Annex-B NALU 与单调 PTS。
 
 ### 阶段二：SIP 原生服务端与设备会话表（Control Plane）
+
 - [ ] 在 `crates/media` 中实现 `gb28181/sip` 模块，绑定 5060 监听器；
 - [ ] 实现 Digest MD5 鉴权、Keepalive 心跳与 Catalog XML 通道批量入库；
 - [ ] 编写模拟 IPC 测试脚本，验证注册、保活与点播停流事务。
 
 ### 阶段三：StreamHub 解耦与 AI 硬解链路联调
+
 - [ ] 重构 `stream_hub.rs` 提取 `MediaIngestor` Trait，接入 `Gb28181Ingestor`；
 - [ ] 在 RK3588 (MPP) / 华为昇腾 (DVPP) 上进行 24 小时常驻解码与 AI 分析压测，验证纯视频管线无音频污染。
 
 ### 阶段四：前端系统设置与摄像头管理接入
+
 - [ ] 在 Web 控制台 `SettingsPage` 实现「国标服务」配置 Tab 与状态看板；
 - [ ] 在 `CameraModal` 中实现 GB28181 协议切换、设备通道树选择与局域网一键嗅探向导。

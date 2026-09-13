@@ -1,8 +1,8 @@
 # Design: 边缘流媒体录像与回放引擎 (Video Recording & Playback Engine)
 
-> **状态**: Draft  
-> **作者**: Heimdall Engineering  
-> **日期**: 2025-07-28  
+> **状态**: Draft
+> **作者**: Heimdall Engineering
+> **日期**: 2025-07-28
 > **关联规范**: [AGENTS.md](../../../AGENTS.md)、[媒体管线](../backend/media-pipeline.md)、[并发模型](../backend/concurrency-guidelines.md)、[数据库规范](../backend/database-guidelines.md)、[API 规范](../backend/api-guidelines.md)、[存储防护与自适应淘汰](../../../crates/pipeline/src/storage_cleaner/mod.rs)
 
 ---
@@ -14,6 +14,7 @@
 Heimdall 当前核心架构聚焦于**“高并发实时流接入 (`StreamHub`) + 异构硬件零拷贝推理 (`infer_fast_path`) + 靶向低频高保真快照 (`snapshot_readback_path`)”**。
 
 在实际工业安防与边缘智能监控落地中，客户存在强烈的“事后视频取证与连续追溯”诉求：
+
 1. **单帧快照证据链不完整**：目前告警发生时仅抓取单帧全景大图与特写裁切图（JPEG），缺乏事发前 5~10 秒与事发后 10~30 秒的动态视频片段，难以还原人员走位、动作意图与连续行径；
 2. **缺乏全天巡检回溯能力**：对于未触发预设 AI 算法规则的突发事件（如漏水、火情隐患未达标、物品遗失），系统因无连续录像而无法调取历史录像进行复盘；
 3. **传统 NVR 方案割裂**：用户若要具备录像能力，通常需要并列部署一套昂贵的传统海康/大华硬件 NVR 或重量级第三方流媒体服务，造成拉流带宽翻倍、边缘设备重复堆叠与运维割裂。
@@ -152,11 +153,13 @@ pub enum RecordingMode {
 ```
 
 当 `enabled == false` 或 `mode == RecordingMode::Disabled` 时：
+
 1. **0 额外线程**：系统不启动该摄像头的 `RecordingWorker` 任务；
 2. **0 订阅开销**：`StreamHub` 不为该通道挂载 `ConsumerKind::Recording` 消费者邮箱；
 3. **0 磁盘写放大**：告警触发时严格维持当前轻量化逻辑，仅调用 `SnapshotEngine` 生成全景与特写 JPEG。
 
 ### 4.1 模式 A：连续录像 (Continuous 24/7)
+
 - **适用场景**：外挂大容量机械硬盘（HDD）或企业级 SSD，关键重要防区（如大门、财务室）；
 - **工作机制**：
   1. `RecordingCoordinator` 持续接收并打包所有 `EncodedPacket`；
@@ -164,6 +167,7 @@ pub enum RecordingMode {
   3. 写入 `record_segments` 表，初始标记 `has_alarm = false`；若该时间段内有 AI 告警触发，则异步反写标记 `has_alarm = true` 并关联 `alarm_id`。
 
 ### 4.2 模式 B：事件触发录像 (Event-only / Motion-based，边缘强烈推荐)
+
 - **适用场景**：板载 eMMC 存储受限、对写入寿命敏感的无风扇嵌入式工控机；
 - **工作机制**：
   1. **日常巡航（静默期）**：数据包仅写入内存中定长的 `PreCaptureRingBuffer`（保留最近 5~15 秒），**磁盘完全不写，0 闪存损耗**；
@@ -174,6 +178,7 @@ pub enum RecordingMode {
   3. **封口写盘**：生成一段完整的事件 MP4，关联 `alarm_id` 落库。
 
 ### 4.3 模式 C：双流能效混合录像 (Dual-stream Hybrid)
+
 - **日常状态**：对低码率**子码流（Sub Stream）**执行连续 24/7 录像（文件体积极小，码率约 300~500Kbps）；
 - **事件状态**：一旦 AI 检测到告警，立即激活**主码流（Main Stream 1080P/4K）**的高清事件录像切片；
 - **回放呈现**：日常看低码率巡检，事件发生点自动无缝切换为 4K 高保真视频。
@@ -218,6 +223,7 @@ $$\text{Memory Usage} = \left(\frac{\text{Bitrate}}{8}\times \text{Duration (s)}
 ### 5.1 媒体层扩展：`ConsumerKind::Recording` 与纯 Rust MP4 封装
 
 #### 5.1.1 分发器扩展 (`crates/media/src/dispatcher.rs`)
+
 在现有 `ConsumerKind` 枚举中新增录像类型，配置独立的 `MailboxConfig`：
 
 ```rust
@@ -233,10 +239,12 @@ pub enum ConsumerKind {
 ```
 
 录像消费者邮箱配置：
+
 - **容量上限**：`capacity = 512`（可缓冲约 15~20 秒 25fps 数据，应对存储 Flush 抖动）；
 - **慢读溢出策略**：丢弃非关键 P/B 帧，优先保障当前正在写入切片的完整性；若严重超时，触发 `StreamItem::SourceReset` 重新对齐。
 
 #### 5.1.2 纯 Rust MP4 容器封装器 (`crates/media/src/recording/`)
+
 新增模块 `crates/media/src/recording/mp4_muxer.rs`，实现轻量级 ISOBMFF / fMP4 封装：
 
 ```rust
@@ -265,6 +273,7 @@ pub struct CompletedSegment {
 ```
 
 **核心封装技术要点**：
+
 1. **AVCC / HVCC 转换**：
    - RTSP 接入层提供的是 Annex-B 格式（`0x00000001` 分隔符）；
    - MP4 容器要求使用 Length-prefixed 格式（NALU 前缀 4 字节大端长度）；
@@ -273,12 +282,13 @@ pub struct CompletedSegment {
    - 传统 MP4 的 `moov` 往往在文件末尾，导致浏览器必须完全下载或执行多次 Range 请求查找末尾才能开始播放；
    - 封装器采用内存累积索引，在 `finalize()` 时将 `moov` 置于 `mdat` 之前（FastStart 模式），或者采用 **Fragmented MP4 (fMP4)** 结构（`moof` + `mdat` 串行写入），实现**天然流式可播**与**异常断电零损坏**。
 3. **I 帧对齐分割判定**：
+
    ```rust
    // 判定当前包是否应该作为新切片的起点
    let duration_so_far = current_packet.pts_ms - segment_start_pts;
-   if current_packet.is_keyframe 
-       && (duration_so_far >= config.target_segment_duration_ms 
-           || duration_so_far >= config.max_segment_duration_ms) 
+   if current_packet.is_keyframe
+       && (duration_so_far >= config.target_segment_duration_ms
+           || duration_so_far >= config.max_segment_duration_ms)
    {
        // 闭合当前切片，产生 CompletedSegment
        // 开启新切片并以当前关键帧为首包
@@ -311,11 +321,11 @@ CREATE TABLE record_segments (
 );
 
 -- 时间轴查询复合索引 (覆盖 camera_id 与时间范围过滤)
-CREATE INDEX idx_record_segments_camera_time 
+CREATE INDEX idx_record_segments_camera_time
 ON record_segments (camera_id, start_time_ms, end_time_ms);
 
 -- 状态与淘汰检索索引
-CREATE INDEX idx_record_segments_eviction 
+CREATE INDEX idx_record_segments_eviction
 ON record_segments (status, has_alarm, start_time_ms);
 ```
 
@@ -334,6 +344,7 @@ Level 4 (最后防线) ─► 空间绝望水位 (Critical Level < 5%)，触发�
 
 **两阶段原子销毁**：
 淘汰执行过程严格遵循 `StorageCleaner` 的两阶段状态机：
+
 1. `mark_segments_deleting(&[id])` $\to$ 更新 DB 为 `deleting`；
 2. `rename()` 物理文件至 `.tombstone/` 隔离区；
 3. `delete_record_segments(&[id])` $\to$ 在单个 SQLite 事务中彻底移除记录；
@@ -346,12 +357,14 @@ Level 4 (最后防线) ─► 空间绝望水位 (Critical Level < 5%)，触发�
 全部接口遵循统一根信封格式：`{ "code": 0, "message": "success", "data": T, "timestamp": ms }`。
 
 #### 1. 查询时间轴分布 (Timeline Query)
+
 - **路径**：`GET /api/v1/cameras/{camera_id}/recordings/timeline`
 - **入参**：
   - `startMs`: `i64` (13位 UTC 毫秒)
   - `endMs`: `i64` (13位 UTC 毫秒)
   - `streamType`: 可选 `'main' | 'sub'`，默认 `'main'`
 - **出参**：
+
   ```json
   {
     "code": 0,
@@ -384,6 +397,7 @@ Level 4 (最后防线) ─► 空间绝望水位 (Critical Level < 5%)，触发�
   ```
 
 #### 2. 点播流式传输切片 (Segment Streaming)
+
 - **路径**：`GET /api/v1/recordings/{segment_id}/stream`
 - **协议契约**：
   - 必须支持标准 **HTTP 206 Partial Content**（`Range: bytes=bytes_start-bytes_end`）；
@@ -391,6 +405,7 @@ Level 4 (最后防线) ─► 空间绝望水位 (Critical Level < 5%)，触发�
   - 响应头包含：`Content-Type: video/mp4`、`Accept-Ranges: bytes`、`Content-Range`。浏览器原生 HTML5 `<video>`、MSE 或 Video.js 即可直接实现秒开与拖动定位。
 
 #### 3. 跨切片事件导出 (Export Clip)
+
 - **路径**：`POST /api/v1/recordings/export`
 - **功能**：指定 `startMs` 与 `endMs`，后端在后台将命中的多段 10 秒 MP4 切片无缝拼接为单个连续的 MP4 导出文件，供用户一键下载取证。
 
@@ -419,6 +434,7 @@ Level 4 (最后防线) ─► 空间绝望水位 (Critical Level < 5%)，触发�
 在 RK3588、华为昇腾 Atlas 200I、RK3568 等嵌入式计算盒上引入录像，必须严格防范以下物理陷阱：
 
 ### 6.1 eMMC 闪存磨损与写放大抑制
+
 - **风险**：消费级 32GB/64GB eMMC 颗粒的 P/E 寿命通常仅为 1000~3000 次。若 8 路 1080P 视频以 4Mbps 持续全天写入，每天写入量可达约 350GB，eMMC 会在短短几个月内产生坏道并进入只读熔断；
 - **硬核防范对策**：
   1. **默认模式约束**：在未检测到外挂 NVMe SSD 或外挂机械硬盘时，系统默认配置为**“事件触发录像（Mode B）”**，禁止盲目开启多路 24/7 全量高清录像；
@@ -426,12 +442,14 @@ Level 4 (最后防线) ─► 空间绝望水位 (Critical Level < 5%)，触发�
   3. **实时磨损监控**：深度联动 `detect_emmc_health()`，从 `/sys/block/mmcblk*/device/life_time` 读取 Type A/B 磨损比例，寿命损耗达到 80% 时在运维总线发出警告。
 
 ### 6.2 断网重连与时序突变隔离 (SourceReset)
+
 - **风险**：网络抖动或摄像头重启后，RTSP 的 PTS 时间戳可能会突变为 0，或产生数小时的跨度跃迁；
 - **对策**：
   - `RecordingCoordinator` 监听分发总线的 `StreamItem::SourceReset { epoch }`；
   - 一旦发生重连，无论当前切片录制了多少秒，**立即强制闭合当前切片**，新切片重新从新物理连接的第一个 IDR 帧开始建立单调时基，杜绝生成时间戳倒流、导致播放器直接 Crash 的畸形文件。
 
 ### 6.3 异常掉电安全性
+
 - **风险**：边缘设备常被暴力拔电源。如果采用传统 MP4 结构且在关机瞬间未能将末尾 `moov` 写入磁盘，整个几百兆的文件将彻底变为不可播放的废品；
 - **对策**：
   - 采用 **Fragmented MP4 (fMP4)** 标准格式，每个 GOP 即为一个独立的 Movie Fragment (`moof` + `mdat`)；
