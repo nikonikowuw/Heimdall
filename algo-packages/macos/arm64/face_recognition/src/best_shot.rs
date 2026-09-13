@@ -138,83 +138,78 @@ impl BestShotManager {
     ) -> [f32; 512] {
         let weight = quality.score.clamp(0.1, 1.0).powi(2);
 
-        if let Some(record) = self.records.get_mut(&track_id) {
-            if record.embedding.len() == 512 {
-                let mut current_arr = [0.0f32; 512];
-                current_arr.copy_from_slice(&record.embedding);
+        let record = self
+            .records
+            .entry(track_id)
+            .or_insert_with(|| BestShotRecord {
+                bbox,
+                landmarks,
+                score,
+                quality,
+                embedding: Vec::new(),
+                frame_id,
+                fused_count: 0,
+                total_weight: 0.0,
+                last_extract_frame_id: frame_id,
+            });
 
-                // 防漂移校验 (Anti-Drift Outlier Defense)
-                let sim = crate::cosine_similarity(new_embedding, &current_arr);
-                if sim < DRIFT_REJECTION_SIMILARITY {
-                    tracing::warn!(
-                        track_id,
-                        similarity = sim,
-                        threshold = DRIFT_REJECTION_SIMILARITY,
-                        "特征融合防漂移校验拦截：新特征与历史融合特征余弦相似度过低，拒绝污染特征池"
-                    );
-                    record.last_extract_frame_id = frame_id;
-                    return current_arr;
-                }
+        if record.embedding.len() == 512 {
+            let mut current = [0.0f32; 512];
+            current.copy_from_slice(&record.embedding);
 
-                // 超球面加权累加与归一化
-                let prev_weight = record.total_weight;
-                let new_total_weight = prev_weight + weight;
-                let mut accumulated = [0.0f32; 512];
-                let mut norm_sq = 0.0f32;
-                for (acc, (&curr, &new)) in accumulated
-                    .iter_mut()
-                    .zip(current_arr.iter().zip(new_embedding))
-                {
-                    let val = curr * prev_weight + new * weight;
-                    *acc = val;
-                    norm_sq += val * val;
-                }
-
-                let fused = if norm_sq > 1e-12 {
-                    let inv_norm = 1.0 / norm_sq.sqrt();
-                    accumulated.map(|v| v * inv_norm)
-                } else {
-                    *new_embedding
-                };
-
-                if quality.score > record.quality.score {
-                    record.bbox = bbox;
-                    record.landmarks = landmarks;
-                    record.score = score;
-                    record.quality = quality;
-                }
-                record.embedding = fused.to_vec();
-                record.fused_count += 1;
-                record.total_weight = new_total_weight;
+            // 防漂移校验 (Anti-Drift Outlier Defense)
+            let sim = crate::cosine_similarity(new_embedding, &current);
+            if sim < DRIFT_REJECTION_SIMILARITY {
+                tracing::warn!(
+                    track_id,
+                    similarity = sim,
+                    threshold = DRIFT_REJECTION_SIMILARITY,
+                    "特征融合防漂移校验拦截：新特征与历史融合特征余弦相似度过低，拒绝污染特征池"
+                );
                 record.last_extract_frame_id = frame_id;
+                return current;
+            }
 
-                fused
+            // 超球面加权累加与归一化
+            let prev_weight = record.total_weight;
+            let mut fused = [0.0f32; 512];
+            let mut norm_sq = 0.0f32;
+            for (out, (&curr, &new)) in fused.iter_mut().zip(current.iter().zip(new_embedding)) {
+                let val = curr * prev_weight + new * weight;
+                *out = val;
+                norm_sq += val * val;
+            }
+
+            if norm_sq > 1e-12 {
+                let inv_norm = 1.0 / norm_sq.sqrt();
+                for v in &mut fused {
+                    *v *= inv_norm;
+                }
             } else {
+                fused = *new_embedding;
+            }
+
+            if quality.score > record.quality.score {
                 record.bbox = bbox;
                 record.landmarks = landmarks;
                 record.score = score;
                 record.quality = quality;
-                record.embedding = new_embedding.to_vec();
-                record.fused_count = 1;
-                record.total_weight = weight;
-                record.last_extract_frame_id = frame_id;
-                *new_embedding
             }
+            record.embedding = fused.to_vec();
+            record.fused_count += 1;
+            record.total_weight = prev_weight + weight;
+            record.last_extract_frame_id = frame_id;
+
+            fused
         } else {
-            self.records.insert(
-                track_id,
-                BestShotRecord {
-                    bbox,
-                    landmarks,
-                    score,
-                    quality,
-                    embedding: new_embedding.to_vec(),
-                    frame_id,
-                    fused_count: 1,
-                    total_weight: weight,
-                    last_extract_frame_id: frame_id,
-                },
-            );
+            record.bbox = bbox;
+            record.landmarks = landmarks;
+            record.score = score;
+            record.quality = quality;
+            record.embedding = new_embedding.to_vec();
+            record.fused_count = 1;
+            record.total_weight = weight;
+            record.last_extract_frame_id = frame_id;
             *new_embedding
         }
     }

@@ -43,11 +43,11 @@ impl RawFace {
     }
 }
 
+#[inline]
 fn confidence_value(value: f32) -> f32 {
     if !value.is_finite() {
-        return 0.0;
-    }
-    if (0.0..=1.0).contains(&value) {
+        0.0
+    } else if (0.0..=1.0).contains(&value) {
         value
     } else {
         1.0 / (1.0 + (-value).exp())
@@ -67,17 +67,12 @@ impl FaceTensorFormat {
     pub fn detect(len: usize) -> Self {
         if len == 0 {
             Self::Unknown
-        } else if len == 5040 * YOLOV8_FACE_FIELDS {
-            Self::YoloV8
+        } else if len == 5040 * YOLOV8_FACE_FIELDS || len.is_multiple_of(YOLOV8_FACE_FIELDS) {
+            Self::YoloV8 // 公倍数时优先采用 YOLOv8
+        } else if len.is_multiple_of(YOLOV5_FACE_FIELDS) {
+            Self::YoloV5
         } else {
-            let is_v8 = len.is_multiple_of(YOLOV8_FACE_FIELDS);
-            let is_v5 = len.is_multiple_of(YOLOV5_FACE_FIELDS);
-            match (is_v8, is_v5) {
-                (true, false) => Self::YoloV8,
-                (false, true) => Self::YoloV5,
-                (true, true) => Self::YoloV8, // 公倍数时优先采用 YOLOv8
-                (false, false) => Self::Unknown,
-            }
+            Self::Unknown
         }
     }
 }
@@ -265,16 +260,18 @@ fn unmap_bbox_rect(
     orig_h: f32,
     score: f32,
 ) -> [f32; 4] {
-    let p1 = map_point([bbox[0], bbox[1]], mode, orig_w, orig_h);
-    let p2 = map_point([bbox[0] + bbox[2], bbox[1] + bbox[3]], mode, orig_w, orig_h);
+    let [x, y, w, h] = bbox;
+    let p1 = map_point([x, y], mode, orig_w, orig_h);
+    let p2 = map_point([x + w, y + h], mode, orig_w, orig_h);
 
-    let unmapped_x = p1[0].min(p2[0]);
-    let unmapped_y = p1[1].min(p2[1]);
-    let unmapped_w = (p2[0] - p1[0]).abs();
-    let unmapped_h = (p2[1] - p1[1]).abs();
-
-    let mut normalized =
-        algo_sdk::math::NormBox::new(unmapped_x, unmapped_y, unmapped_w, unmapped_h, score, 0);
+    let mut normalized = algo_sdk::math::NormBox::new(
+        p1[0].min(p2[0]),
+        p1[1].min(p2[1]),
+        (p2[0] - p1[0]).abs(),
+        (p2[1] - p1[1]).abs(),
+        score,
+        0,
+    );
     clamp_bbox(&mut normalized);
     [normalized.x, normalized.y, normalized.w, normalized.h]
 }
@@ -290,7 +287,7 @@ pub fn unmap_persons_letterbox(
         return;
     }
     let (orig_w, orig_h) = (orig_width as f32, orig_height as f32);
-    for person in persons.iter_mut() {
+    for person in persons {
         person.bbox = unmap_bbox_rect(person.bbox, mode, orig_w, orig_h, person.score);
     }
 }

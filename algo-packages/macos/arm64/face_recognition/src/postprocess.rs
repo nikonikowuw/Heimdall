@@ -55,10 +55,9 @@ pub fn encode_embedding(embedding: &[f32]) -> Result<String, AlgoError> {
         });
     }
 
-    let mut bytes = [0u8; 512 * 4];
-    for (src, chunk) in embedding.iter().zip(bytes.as_chunks_mut::<4>().0) {
-        chunk.copy_from_slice(&src.to_le_bytes());
-    }
+    // SAFETY: f32 与 [u8; 4] 内存尺寸与对齐兼容，macOS ARM64 为小端序，与 to_le_bytes 等价且避免逐元素拷贝。
+    let bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(embedding.as_ptr().cast::<u8>(), 512 * 4) };
     Ok(STANDARD.encode(bytes))
 }
 

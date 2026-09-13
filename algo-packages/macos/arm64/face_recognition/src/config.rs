@@ -1,7 +1,13 @@
-use std::collections::HashSet;
-
 use algo_sdk::env::PackageEnv;
 use serde::Deserialize;
+
+const FIELD_DETECTION_CONF: u8 = 1 << 0;
+const FIELD_PERSON_CONF: u8 = 1 << 1;
+const FIELD_MIN_FACE_SIZE: u8 = 1 << 2;
+const FIELD_QUALITY_MIN_SCORE: u8 = 1 << 3;
+const FIELD_QUALITY_MAX_YAW: u8 = 1 << 4;
+const FIELD_QUALITY_MAX_PITCH: u8 = 1 << 5;
+const FIELD_QUALITY_MAX_BLUR: u8 = 1 << 6;
 
 #[derive(Deserialize, Default)]
 struct RawQualityThresholds {
@@ -44,8 +50,8 @@ pub struct InstanceConfig {
     pub min_face_size: u32,
     pub quality_thresholds: QualityThresholds,
 
-    /// 记录宿主任务配置显式下发的参数名（用于执行三级优先级隔离）
-    explicit_fields: HashSet<String>,
+    /// 记录宿主任务配置显式下发的参数位掩码（用于执行三级优先级隔离）
+    explicit_fields: u8,
 }
 
 impl Default for InstanceConfig {
@@ -55,7 +61,7 @@ impl Default for InstanceConfig {
             person_confidence_threshold: 0.4,
             min_face_size: 30,
             quality_thresholds: QualityThresholds::default(),
-            explicit_fields: HashSet::new(),
+            explicit_fields: 0,
         }
     }
 }
@@ -66,80 +72,79 @@ impl<'de> Deserialize<'de> for InstanceConfig {
         D: serde::Deserializer<'de>,
     {
         let raw = RawInstanceConfig::deserialize(deserializer)?;
-        let mut explicit = HashSet::new();
-        let set_f32 =
-            |explicit: &mut HashSet<String>, name: &str, opt: Option<f32>, target: &mut f32| {
-                if let Some(val) = opt {
-                    explicit.insert(name.to_string());
-                    *target = val;
-                }
-            };
+        let mut explicit = 0u8;
+        let set_f32 = |explicit: &mut u8, mask: u8, opt: Option<f32>, target: &mut f32| {
+            if let Some(val) = opt {
+                *explicit |= mask;
+                *target = val;
+            }
+        };
 
         let mut config = Self::default();
         set_f32(
             &mut explicit,
-            "detection_confidence_threshold",
+            FIELD_DETECTION_CONF,
             raw.detection_confidence_threshold,
             &mut config.detection_confidence_threshold,
         );
         set_f32(
             &mut explicit,
-            "person_confidence_threshold",
+            FIELD_PERSON_CONF,
             raw.person_confidence_threshold,
             &mut config.person_confidence_threshold,
         );
         if let Some(v) = raw.min_face_size {
-            explicit.insert("min_face_size".to_string());
+            explicit |= FIELD_MIN_FACE_SIZE;
             config.min_face_size = v;
         }
 
         if let Some(nested) = raw.quality_thresholds {
             set_f32(
                 &mut explicit,
-                "quality_min_score",
+                FIELD_QUALITY_MIN_SCORE,
                 nested.min_score,
                 &mut config.quality_thresholds.min_score,
             );
             set_f32(
                 &mut explicit,
-                "quality_max_yaw",
+                FIELD_QUALITY_MAX_YAW,
                 nested.max_yaw,
                 &mut config.quality_thresholds.max_yaw,
             );
             set_f32(
                 &mut explicit,
-                "quality_max_pitch",
+                FIELD_QUALITY_MAX_PITCH,
                 nested.max_pitch,
                 &mut config.quality_thresholds.max_pitch,
             );
             set_f32(
                 &mut explicit,
-                "quality_max_blur",
+                FIELD_QUALITY_MAX_BLUR,
                 nested.max_blur,
                 &mut config.quality_thresholds.max_blur,
             );
         }
         set_f32(
             &mut explicit,
-            "quality_min_score",
+            FIELD_QUALITY_MIN_SCORE,
             raw.quality_min_score,
             &mut config.quality_thresholds.min_score,
         );
         set_f32(
             &mut explicit,
-            "quality_max_yaw",
+            FIELD_QUALITY_MAX_YAW,
             raw.quality_max_yaw,
             &mut config.quality_thresholds.max_yaw,
         );
         set_f32(
             &mut explicit,
-            "quality_max_pitch",
+            FIELD_QUALITY_MAX_PITCH,
             raw.quality_max_pitch,
             &mut config.quality_thresholds.max_pitch,
         );
         set_f32(
             &mut explicit,
-            "quality_max_blur",
+            FIELD_QUALITY_MAX_BLUR,
             raw.quality_max_blur,
             &mut config.quality_thresholds.max_blur,
         );
@@ -157,8 +162,8 @@ impl InstanceConfig {
     /// 2. 宿主未传递该字段时：优先使用 `.env` 局部配置；
     /// 3. 若 `.env` 也未设置：维持代码硬编码默认值。
     pub fn apply_env(&mut self, env: &PackageEnv) {
-        let apply_f32 = |key: &str, target: &mut f32| {
-            if !self.explicit_fields.contains(key) {
+        let apply_f32 = |mask: u8, key: &str, target: &mut f32| {
+            if self.explicit_fields & mask == 0 {
                 if let Some(v) = env.get_f32(key) {
                     *target = v;
                 }
@@ -166,22 +171,40 @@ impl InstanceConfig {
         };
 
         apply_f32(
+            FIELD_DETECTION_CONF,
             "detection_confidence_threshold",
             &mut self.detection_confidence_threshold,
         );
         apply_f32(
+            FIELD_PERSON_CONF,
             "person_confidence_threshold",
             &mut self.person_confidence_threshold,
         );
-        if !self.explicit_fields.contains("min_face_size") {
+        if self.explicit_fields & FIELD_MIN_FACE_SIZE == 0 {
             if let Some(v) = env.get_u32("min_face_size") {
                 self.min_face_size = v;
             }
         }
-        apply_f32("quality_min_score", &mut self.quality_thresholds.min_score);
-        apply_f32("quality_max_yaw", &mut self.quality_thresholds.max_yaw);
-        apply_f32("quality_max_pitch", &mut self.quality_thresholds.max_pitch);
-        apply_f32("quality_max_blur", &mut self.quality_thresholds.max_blur);
+        apply_f32(
+            FIELD_QUALITY_MIN_SCORE,
+            "quality_min_score",
+            &mut self.quality_thresholds.min_score,
+        );
+        apply_f32(
+            FIELD_QUALITY_MAX_YAW,
+            "quality_max_yaw",
+            &mut self.quality_thresholds.max_yaw,
+        );
+        apply_f32(
+            FIELD_QUALITY_MAX_PITCH,
+            "quality_max_pitch",
+            &mut self.quality_thresholds.max_pitch,
+        );
+        apply_f32(
+            FIELD_QUALITY_MAX_BLUR,
+            "quality_max_blur",
+            &mut self.quality_thresholds.max_blur,
+        );
     }
 
     /// 校验来自 ABI 配置 JSON 的数值范围。

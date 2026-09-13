@@ -59,30 +59,22 @@ fn shared_model_slot() -> &'static Mutex<Option<Arc<CoreMlFaceModels>>> {
 }
 
 #[cfg(target_os = "macos")]
+fn lock_model_slot(
+) -> Result<std::sync::MutexGuard<'static, Option<Arc<CoreMlFaceModels>>>, AlgoError> {
+    shared_model_slot().lock().map_err(|_| AlgoError::Internal {
+        reason: "CoreML 模型共享锁已中毒".to_string(),
+    })
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn shared_models(package_root: &Path) -> Result<Arc<CoreMlFaceModels>, AlgoError> {
-    {
-        let guard = shared_model_slot()
-            .lock()
-            .map_err(|_| AlgoError::Internal {
-                reason: "CoreML 模型共享锁已中毒".to_string(),
-            })?;
-        if let Some(models) = guard.as_ref() {
-            return Ok(Arc::clone(models));
-        }
+    if let Some(models) = lock_model_slot()?.as_ref() {
+        return Ok(Arc::clone(models));
     }
 
     let models = Arc::new(CoreMlFaceModels::load(package_root)?);
-    let mut guard = shared_model_slot()
-        .lock()
-        .map_err(|_| AlgoError::Internal {
-            reason: "CoreML 模型共享锁已中毒".to_string(),
-        })?;
-    if let Some(existing) = guard.as_ref() {
-        Ok(Arc::clone(existing))
-    } else {
-        *guard = Some(Arc::clone(&models));
-        Ok(models)
-    }
+    let mut guard = lock_model_slot()?;
+    Ok(Arc::clone(guard.get_or_insert(models)))
 }
 
 #[cfg(target_os = "macos")]
@@ -112,9 +104,13 @@ pub(crate) fn close_shared_models(_package_root: &std::path::Path) {}
 /// 计算两个 512D 特征向量之间的余弦相似度。
 ///
 /// 若两向量已完成 L2 归一化，余弦相似度即为其点积；返回值限制在 `[-1.0, 1.0]` 区间内。
+#[inline]
 pub fn cosine_similarity(a: &[f32; 512], b: &[f32; 512]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    dot.clamp(-1.0, 1.0)
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| x * y)
+        .sum::<f32>()
+        .clamp(-1.0, 1.0)
 }
 
 #[cfg(target_os = "macos")]
@@ -162,7 +158,8 @@ pub fn normalize_embedding(values: &[f32]) -> Result<[f32; 512], AlgoError> {
             reason: format!("EdgeFace 输出维度不足: {} < 512", values.len()),
         });
     }
-    let norm = values[..512]
+    let src = &values[..512];
+    let norm = src
         .iter()
         .map(|value| (*value as f64) * (*value as f64))
         .sum::<f64>()
@@ -172,9 +169,10 @@ pub fn normalize_embedding(values: &[f32]) -> Result<[f32; 512], AlgoError> {
             reason: "EdgeFace embedding L2 范数无效".to_string(),
         });
     }
+    let inv_norm = 1.0 / norm;
     let mut embedding = [0.0f32; 512];
-    for (target, source) in embedding.iter_mut().zip(values.iter().take(512)) {
-        *target = (*source as f64 / norm) as f32;
+    for (target, source) in embedding.iter_mut().zip(src) {
+        *target = (*source as f64 * inv_norm) as f32;
     }
     Ok(embedding)
 }

@@ -133,13 +133,9 @@ impl AlgoPlugin for FaceRecognizer {
                 .iter()
                 .filter_map(|t| {
                     let iou = crate::bytetrack::box_iou(&t.bbox, &candidate.person_bbox);
-                    if iou >= 0.25 {
-                        Some((iou, t.track_id))
-                    } else {
-                        None
-                    }
+                    (iou >= 0.25).then_some((iou, t.track_id))
                 })
-                .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+                .max_by(|a, b| a.0.total_cmp(&b.0))
                 .map(|(_, id)| id)
                 .unwrap_or((a_idx + 1) as u64);
 

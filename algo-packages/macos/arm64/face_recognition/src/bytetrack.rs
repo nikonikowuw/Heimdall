@@ -465,14 +465,11 @@ impl ByteTracker {
             reactivated_lost_indices.push(l_idx);
         }
 
-        // 从 lost_stracks 移除已重连复活的航迹
-        self.lost_stracks = self
-            .lost_stracks
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| !reactivated_lost_indices.contains(idx))
-            .map(|(_, t)| t.clone())
-            .collect();
+        // 从 lost_stracks 移除已重连复活的航迹 (降序 swap_remove 避免索引偏移与多余克隆)
+        reactivated_lost_indices.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in reactivated_lost_indices {
+            self.lost_stracks.swap_remove(idx);
+        }
 
         // 7. 第四阶段：处理全新出现的高分检测：初始化新航迹
         let mut new_stracks = Vec::new();
@@ -694,19 +691,17 @@ pub fn kuhn_munkres_match(
         }
     }
 
-    let mut unmatched_tracks = Vec::new();
-    for (t_idx, matched) in matched_tracks.into_iter().enumerate() {
-        if !matched {
-            unmatched_tracks.push(t_idx);
-        }
-    }
+    let unmatched_tracks: Vec<usize> = matched_tracks
+        .into_iter()
+        .enumerate()
+        .filter_map(|(t_idx, matched)| (!matched).then_some(t_idx))
+        .collect();
 
-    let mut unmatched_dets = Vec::new();
-    for (d_idx, matched) in matched_dets.into_iter().enumerate() {
-        if !matched {
-            unmatched_dets.push(d_idx);
-        }
-    }
+    let unmatched_dets: Vec<usize> = matched_dets
+        .into_iter()
+        .enumerate()
+        .filter_map(|(d_idx, matched)| (!matched).then_some(d_idx))
+        .collect();
 
     (matches, unmatched_tracks, unmatched_dets)
 }

@@ -105,24 +105,19 @@ pub fn estimate_similarity_checked(
     src: &[[f32; 2]; 5],
     dst: &[[f64; 2]; 5],
 ) -> Result<AffineMatrix2D, &'static str> {
-    let n = src.len() as f64;
-    if n == 0.0 {
-        return Err("输入点集为空");
-    }
-
-    // 1. 计算源点集与目标点集的质心 (Centroids)
+    // 1. 计算源点集与目标点集的质心 (Centroids, 固定 5 点)
     let (mut src_cx, mut src_cy) = (0.0f64, 0.0f64);
     let (mut dst_cx, mut dst_cy) = (0.0f64, 0.0f64);
-    for (s, d) in src.iter().zip(dst.iter()) {
+    for (s, d) in src.iter().zip(dst) {
         src_cx += s[0] as f64;
         src_cy += s[1] as f64;
         dst_cx += d[0];
         dst_cy += d[1];
     }
-    src_cx /= n;
-    src_cy /= n;
-    dst_cx /= n;
-    dst_cy /= n;
+    src_cx /= 5.0;
+    src_cy /= 5.0;
+    dst_cx /= 5.0;
+    dst_cy /= 5.0;
 
     // 2. 中心化并计算方差与协方差
     let mut src_var = 0.0f64;
