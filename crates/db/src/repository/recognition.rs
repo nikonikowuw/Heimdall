@@ -1,3 +1,4 @@
+use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -17,13 +18,24 @@ pub struct UpdateRecognitionReviewParams<'a> {
     pub selected_similarity: Option<f32>,
 }
 
-fn build_filter_query(camera_id: Option<&str>, status: Option<&str>) -> sea_orm::Select<Entity> {
+fn build_filter_query(
+    camera_id: Option<&str>,
+    status: Option<&str>,
+    start_time: Option<DateTimeUtc>,
+    end_time: Option<DateTimeUtc>,
+) -> sea_orm::Select<Entity> {
     let mut query = Entity::find();
     if let Some(cid) = camera_id.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::CameraId.eq(cid));
     }
     if let Some(st) = status.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::Status.eq(st));
+    }
+    if let Some(start) = start_time {
+        query = query.filter(Column::RecognizedAt.gte(start));
+    }
+    if let Some(end) = end_time {
+        query = query.filter(Column::RecognizedAt.lte(end));
     }
     query
 }
@@ -38,17 +50,19 @@ impl RecognitionRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        Self::list_filtered(db, camera_id, None, limit, offset).await
+        Self::list_filtered(db, camera_id, None, None, None, limit, offset).await
     }
 
     pub async fn list_filtered(
         db: &DatabaseConnection,
         camera_id: Option<&str>,
         status: Option<&str>,
+        start_time: Option<DateTimeUtc>,
+        end_time: Option<DateTimeUtc>,
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        build_filter_query(camera_id, status)
+        build_filter_query(camera_id, status, start_time, end_time)
             .order_by_desc(Column::RecognizedAt)
             .limit(limit)
             .offset(offset)
@@ -61,8 +75,10 @@ impl RecognitionRepo {
         db: &DatabaseConnection,
         camera_id: Option<&str>,
         status: Option<&str>,
+        start_time: Option<DateTimeUtc>,
+        end_time: Option<DateTimeUtc>,
     ) -> Result<u64, DbError> {
-        build_filter_query(camera_id, status)
+        build_filter_query(camera_id, status, start_time, end_time)
             .count(db)
             .await
             .map_err(DbError::from)

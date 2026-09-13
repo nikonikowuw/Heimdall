@@ -115,6 +115,15 @@ pub struct EvidenceQuery {
     pub offset: u64,
 }
 
+impl EvidenceQuery {
+    pub fn time_range(&self) -> (Option<DateTime<chrono::Utc>>, Option<DateTime<chrono::Utc>>) {
+        (
+            self.start_time.and_then(DateTime::from_timestamp_millis),
+            self.end_time.and_then(DateTime::from_timestamp_millis),
+        )
+    }
+}
+
 fn default_limit() -> u64 {
     20
 }
@@ -147,9 +156,7 @@ async fn count_captures(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<EvidenceCountDto>, ApiError> {
-    let start_utc = params.start_time.and_then(DateTime::from_timestamp_millis);
-    let end_utc = params.end_time.and_then(DateTime::from_timestamp_millis);
-
+    let (start_utc, end_utc) = params.time_range();
     let total = CaptureRepo::count_filtered(
         &state.db,
         params.camera_id.as_deref(),
@@ -165,10 +172,13 @@ async fn count_recognitions(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<EvidenceCountDto>, ApiError> {
+    let (start_utc, end_utc) = params.time_range();
     let total = RecognitionRepo::count_filtered(
         &state.db,
         params.camera_id.as_deref(),
         params.status.as_deref(),
+        start_utc,
+        end_utc,
     )
     .await?;
     Ok(ApiResponse::success(EvidenceCountDto { total }))
@@ -178,9 +188,7 @@ async fn list_captures(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<Vec<CaptureDto>>, ApiError> {
-    let start_utc = params.start_time.and_then(DateTime::from_timestamp_millis);
-    let end_utc = params.end_time.and_then(DateTime::from_timestamp_millis);
-
+    let (start_utc, end_utc) = params.time_range();
     let list = CaptureRepo::list_filtered(
         &state.db,
         params.camera_id.as_deref(),
@@ -199,10 +207,13 @@ async fn list_recognitions(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<Vec<RecognitionDto>>, ApiError> {
+    let (start_utc, end_utc) = params.time_range();
     let list = RecognitionRepo::list_filtered(
         &state.db,
         params.camera_id.as_deref(),
         params.status.as_deref(),
+        start_utc,
+        end_utc,
         params.limit,
         params.offset,
     )

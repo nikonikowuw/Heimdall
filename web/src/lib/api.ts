@@ -343,22 +343,33 @@ export const evidenceApi = {
   listRecognitions(params?: {
     cameraId?: string
     status?: string
+    startTime?: number
+    endTime?: number
     limit?: number
     offset?: number
   }): Promise<RecognitionRecord[]> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       status: params?.status,
+      start_time: params?.startTime,
+      end_time: params?.endTime,
       limit: params?.limit,
       offset: params?.offset,
     })
     return api.get<RecognitionRecord[]>(`/evidence/recognitions${qs}`)
   },
 
-  countRecognitions(params?: { cameraId?: string; status?: string }): Promise<{ total: number }> {
+  countRecognitions(params?: {
+    cameraId?: string
+    status?: string
+    startTime?: number
+    endTime?: number
+  }): Promise<{ total: number }> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       status: params?.status,
+      start_time: params?.startTime,
+      end_time: params?.endTime,
     })
     return api.get<{ total: number }>(`/evidence/recognitions/count${qs}`)
   },
