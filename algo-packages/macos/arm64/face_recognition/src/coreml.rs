@@ -253,7 +253,12 @@ impl OwnedPixelBuffer {
             // SAFETY: y * row_bytes 位于锁定 surface 内，row_len <= row_bytes。
             let dst = unsafe { std::slice::from_raw_parts_mut(base.add(y * row_bytes), row_len) };
             let src = &rgb[y * width_usize * 3..(y + 1) * width_usize * 3];
-            for (src_pixel, dst_pixel) in src.chunks_exact(3).zip(dst.chunks_exact_mut(4)) {
+            for (src_pixel, dst_pixel) in src
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .zip(dst.as_chunks_mut::<4>().0)
+            {
                 dst_pixel[0] = src_pixel[2];
                 dst_pixel[1] = src_pixel[1];
                 dst_pixel[2] = src_pixel[0];
@@ -843,33 +848,17 @@ pub struct CoreMlFaceModels {
 
 impl CoreMlFaceModels {
     pub fn load(package_root: &Path) -> Result<Self, AlgoError> {
-        Self::load_with_person_model(package_root, "person_detect.mlpackage")
-    }
-
-    pub fn load_with_person_model(
-        package_root: &Path,
-        person_model_name: &str,
-    ) -> Result<Self, AlgoError> {
         let detector_model_name = if package_root.join("model/yolov8_face.mlpackage").exists() {
             "yolov8_face.mlpackage"
         } else {
             "yolov5n_face.mlpackage"
         };
 
-        let person_detector = if package_root.join("model").join(person_model_name).exists() {
+        // 人体检测使用 yolo26n（输出 [1, 300, 6] xyxy+class 格式）
+        let person_detector = if package_root.join("model/yolo26n.mlpackage").exists() {
             Some(CoreMlRunner::load_model(
                 package_root,
-                person_model_name,
-                "image",
-                "var_911",
-            )?)
-        } else if package_root
-            .join("model/person_detect_640x384.mlpackage")
-            .exists()
-        {
-            Some(CoreMlRunner::load_model(
-                package_root,
-                "person_detect_640x384.mlpackage",
+                "yolo26n.mlpackage",
                 "image",
                 "var_911",
             )?)

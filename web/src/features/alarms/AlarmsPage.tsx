@@ -21,23 +21,15 @@ import type {
   AlarmStatus,
   Camera,
   CaptureRecord,
+  FaceCandidateItem,
   RecognitionRecord,
 } from '../../types'
+import { RecognitionContent } from './components/RecognitionContent'
+import { RecognitionReviewModal } from './components/RecognitionReviewModal'
+import { formatTimestamp } from './utils'
 
 type EvidenceTab = 'alarms' | 'captures' | 'recognition'
 type ViewMode = 'cards' | 'table'
-
-function formatTimestamp(val?: number | string | null): string {
-  if (!val) return '-'
-  if (typeof val === 'number') {
-    return new Date(val).toLocaleString()
-  }
-  const parsed = Date.parse(val)
-  if (!Number.isNaN(parsed)) {
-    return new Date(parsed).toLocaleString()
-  }
-  return String(val)
-}
 
 function getRuleTypeLabel(ruleType: string | undefined, t: (key: string) => string): string {
   return ruleType === 'line' ? t('types.lineCrossing') : t('types.regionIntrusion')
@@ -451,109 +443,6 @@ function CapturesContent({ captures, onSelect, t }: CapturesContentProps): React
   )
 }
 
-interface RecognitionCardItemProps {
-  recognition: RecognitionRecord
-  t: (key: string) => string
-}
-
-function RecognitionCardItem({ recognition, t }: RecognitionCardItemProps): React.ReactElement {
-  return (
-    <div className="flex flex-col space-y-3.5 rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5 shadow-sm transition-all hover:border-emerald-500/40 hover:shadow-md">
-      <div className="flex items-center justify-between gap-3">
-        {/* 现场抓拍特写 */}
-        <div className="flex flex-1 flex-col items-center gap-1.5">
-          <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black/90 shadow-xs">
-            {recognition.fieldCropPath ? (
-              <img
-                src={evidenceApi.getImageUrl(recognition.fieldCropPath)}
-                alt="Site Crop"
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                {t('card.siteCrop')}
-              </div>
-            )}
-          </div>
-          <span className="text-[10px] font-medium text-[var(--text-secondary)]">
-            {t('card.siteCrop')}
-          </span>
-        </div>
-
-        {/* 相似度分值徽标 */}
-        <div className="flex flex-col items-center gap-1 px-1">
-          <span className="font-mono text-[9px] font-bold text-emerald-500 uppercase">
-            {t('card.match')}
-          </span>
-          <div className="flex h-11 w-11 items-center justify-center rounded-full border border-emerald-500/40 bg-emerald-500/15 font-mono text-xs font-bold text-emerald-500 shadow-xs">
-            {((recognition.similarity ?? 0) * 100).toFixed(0)}%
-          </div>
-          <span className="text-[9px] text-[var(--text-muted)]">{t('card.similarity')}</span>
-        </div>
-
-        {/* 底库登记照 */}
-        <div className="flex flex-1 flex-col items-center gap-1.5">
-          <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black/90 shadow-xs">
-            {recognition.registeredPhotoPath ? (
-              <img
-                src={evidenceApi.getImageUrl(recognition.registeredPhotoPath)}
-                alt="Registered"
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-xs text-slate-500">
-                {t('card.registeredPhoto')}
-              </div>
-            )}
-          </div>
-          <span className="text-[10px] font-medium text-[var(--text-secondary)]">
-            {t('card.registeredPhoto')}
-          </span>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-[var(--border)] pt-2 text-xs">
-        <div>
-          <span className="font-semibold text-[var(--text-primary)]">
-            {recognition.subjectName}
-          </span>
-          <span className="ml-1.5 font-mono text-[10px] text-[var(--text-muted)]">
-            ID: {recognition.subjectId}
-          </span>
-        </div>
-        <span className="font-mono text-[10px] text-[var(--text-muted)]">
-          {recognition.cameraId} · {formatTimestamp(recognition.recognizedAt)}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-interface RecognitionContentProps {
-  recognitions: RecognitionRecord[]
-  t: (key: string) => string
-}
-
-function RecognitionContent({ recognitions, t }: RecognitionContentProps): React.ReactElement {
-  if (recognitions.length === 0) {
-    return (
-      <div className="py-24 text-center text-[var(--text-muted)]">
-        <UserCheck className="mx-auto mb-2 h-8 w-8 opacity-40" />
-        <p className="font-medium text-[var(--text-secondary)]">{t('empty.recognitions')}</p>
-        <p className="text-xs opacity-75">{t('empty.recognitionsDesc')}</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {recognitions.map((rec) => (
-        <RecognitionCardItem key={rec.id} recognition={rec} t={t} />
-      ))}
-    </div>
-  )
-}
-
 interface AlarmLightboxModalProps {
   alarm: AlarmRecord
   onClose: () => void
@@ -819,6 +708,7 @@ export function AlarmsPage(): React.ReactElement {
   const [lightboxAlarm, setLightboxAlarm] = useState<AlarmRecord | null>(null)
   const [lightboxCapture, setLightboxCapture] = useState<CaptureRecord | null>(null)
   const [cropPreviewAlarm, setCropPreviewAlarm] = useState<AlarmRecord | null>(null)
+  const [reviewModalRec, setReviewModalRec] = useState<RecognitionRecord | null>(null)
 
   useEffect(() => {
     let isMounted = true
@@ -878,6 +768,7 @@ export function AlarmsPage(): React.ReactElement {
       } else if (activeTab === 'recognition') {
         const list = await evidenceApi.listRecognitions({
           cameraId: camId,
+          status: statusParam,
           limit: pageSize,
           offset,
         })
@@ -912,6 +803,31 @@ export function AlarmsPage(): React.ReactElement {
     }
   }
 
+  const handleReviewRecognition = async (
+    rec: RecognitionRecord,
+    status: 'confirmed' | 'rejected',
+    candidate?: FaceCandidateItem,
+  ): Promise<void> => {
+    try {
+      const updated = await evidenceApi.reviewRecognition(rec.recognitionId, {
+        status,
+        subjectId: candidate?.subjectId ?? (status === 'confirmed' ? rec.subjectId : undefined),
+        subjectName:
+          candidate?.subjectName ?? (status === 'confirmed' ? rec.subjectName : undefined),
+        photoRelPath: candidate?.photoRelPath,
+        similarity: candidate?.similarity ?? (status === 'confirmed' ? rec.similarity : undefined),
+      })
+      setRecognitions((prev) =>
+        prev.map((r) => (r.recognitionId === rec.recognitionId ? updated : r)),
+      )
+      if (reviewModalRec && reviewModalRec.recognitionId === rec.recognitionId) {
+        setReviewModalRec(null)
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   let currentItemCount = alarms.length
   if (activeTab === 'captures') {
     currentItemCount = captures.length
@@ -930,7 +846,7 @@ export function AlarmsPage(): React.ReactElement {
           <div>
             <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('title')}</h2>
             <p className="text-xs text-[var(--text-muted)]">
-              {t(`tabs.${activeTab}`)} · 1080P/4K 全链路原子闭环
+              {t(`tabs.${activeTab}`)} · {t('subtitleSuffix')}
             </p>
           </div>
         </div>
@@ -940,6 +856,7 @@ export function AlarmsPage(): React.ReactElement {
           <button
             onClick={() => {
               setActiveTab('alarms')
+              setSelectedStatus('all')
               setPage(1)
             }}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-all ${
@@ -960,6 +877,7 @@ export function AlarmsPage(): React.ReactElement {
           <button
             onClick={() => {
               setActiveTab('captures')
+              setSelectedStatus('all')
               setPage(1)
             }}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-all ${
@@ -980,6 +898,7 @@ export function AlarmsPage(): React.ReactElement {
           <button
             onClick={() => {
               setActiveTab('recognition')
+              setSelectedStatus('all')
               setPage(1)
             }}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-all ${
@@ -1042,6 +961,20 @@ export function AlarmsPage(): React.ReactElement {
               <option value="all">{t('statusFilter.all')}</option>
               <option value="unprocessed">{t('statusFilter.unprocessed')}</option>
               <option value="processed">{t('statusFilter.processed')}</option>
+            </select>
+          )}
+
+          {/* 识别对账状态筛选 */}
+          {activeTab === 'recognition' && (
+            <select
+              value={selectedStatus}
+              onChange={(e) => handleFilterChange(setSelectedStatus, e.target.value)}
+              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+            >
+              <option value="all">{t('statusFilter.all')}</option>
+              <option value="confirmed">{t('statusFilter.confirmed')}</option>
+              <option value="pending_review">{t('statusFilter.pendingReview')}</option>
+              <option value="rejected">{t('statusFilter.rejected')}</option>
             </select>
           )}
 
@@ -1146,7 +1079,14 @@ export function AlarmsPage(): React.ReactElement {
           <CapturesContent captures={captures} onSelect={setLightboxCapture} t={t} />
         )}
 
-        {activeTab === 'recognition' && <RecognitionContent recognitions={recognitions} t={t} />}
+        {activeTab === 'recognition' && (
+          <RecognitionContent
+            recognitions={recognitions}
+            onOpenReview={setReviewModalRec}
+            onQuickReview={(recognition, status) => handleReviewRecognition(recognition, status)}
+            t={t}
+          />
+        )}
       </div>
 
       {/* 分页控制栏 */}
@@ -1186,6 +1126,16 @@ export function AlarmsPage(): React.ReactElement {
         <CaptureLightboxModal
           capture={lightboxCapture}
           onClose={() => setLightboxCapture(null)}
+          t={t}
+        />
+      )}
+
+      {/* 识别对账 Top-5 候选人核验 Modal */}
+      {reviewModalRec && (
+        <RecognitionReviewModal
+          recognition={reviewModalRec}
+          onClose={() => setReviewModalRec(null)}
+          onReview={handleReviewRecognition}
           t={t}
         />
       )}

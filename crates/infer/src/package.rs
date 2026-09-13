@@ -338,14 +338,108 @@ impl RawBBox {
     }
 }
 
-/// 从算法包输出的 alarm/detection JSON 中解析目标框
+/// 预解析的人脸元数据条目，用于质量分空间几何匹配缝合
+struct ParsedFace {
+    center: (f64, f64),
+    quality_score: Option<f32>,
+}
+
+/// 将 `faces` 数组中的质量评分按空间几何匹配缝合到对应的 detection 上。
+///
+/// 匹配策略：
+/// 1. 优先使用 detection 自身携带的 `quality_score` / `quality.score`；
+/// 2. 若未携带且为 `face` / `person` 目标，按 bbox 中心距离 + 包含关系匹配最近人脸；
+/// 3. 仅当全图单张人脸且目标为 `face` 时允许兜底继承。
+fn stitch_quality_scores(
+    detection_label: &str,
+    bbox: &BoundingBox,
+    self_quality: Option<f32>,
+    parsed_faces: &[ParsedFace],
+) -> Option<f32> {
+    // 1. 优先使用自身质量分
+    if let Some(q) = self_quality {
+        return Some(q);
+    }
+
+    // 2. 无自身质量分时尝试空间几何匹配
+    if parsed_faces.is_empty() || (detection_label != "face" && detection_label != "person") {
+        return None;
+    }
+
+    let (obj_cx, obj_cy) = bbox.center();
+    // 候选元组: (is_inside, dist_sq, quality_score)
+    let mut best_match: Option<(bool, f64, f32)> = None;
+
+    for f in parsed_faces {
+        if let Some(f_q) = f.quality_score {
+            let (fcx, fcy) = f.center;
+            let dist_sq = (obj_cx - fcx).powi(2) + (obj_cy - fcy).powi(2);
+            let is_inside = bbox.contains_point(fcx, fcy);
+            let threshold_sq = if detection_label == "person" {
+                0.10
+            } else {
+                0.04
+            };
+
+            if is_inside || dist_sq < threshold_sq {
+                match best_match {
+                    Some((best_inside, min_dist, _)) => {
+                        // 包含在边界框内部的人脸优先于框外部；同在内部或同在外部时按中心距离决胜
+                        let is_better = match (is_inside, best_inside) {
+                            (true, false) => true,
+                            (false, true) => false,
+                            _ => dist_sq < min_dist,
+                        };
+                        if is_better {
+                            best_match = Some((is_inside, dist_sq, f_q));
+                        }
+                    }
+                    None => {
+                        best_match = Some((is_inside, dist_sq, f_q));
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 几何匹配成功则缝合；否则仅当单脸 + face 目标时允许兜底
+    if let Some((_, _, q_score)) = best_match {
+        Some(q_score)
+    } else if parsed_faces.len() == 1 && detection_label == "face" {
+        parsed_faces[0].quality_score
+    } else {
+        None
+    }
+}
+
+/// 从算法包输出的 alarm/detection JSON 中解析目标框与质量元数据
 fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
+    #[derive(Deserialize, Default)]
+    struct RawQuality {
+        #[serde(default)]
+        score: Option<f32>,
+    }
+
+    #[derive(Deserialize, Default)]
+    struct RawFaceItem {
+        #[serde(default)]
+        bbox: Option<RawBBox>,
+        #[serde(default)]
+        quality: Option<RawQuality>,
+        #[serde(default)]
+        detection_score: Option<f32>,
+    }
+
     #[derive(Deserialize)]
     struct RawObject {
         #[serde(default)]
         class_id: usize,
         label: String,
         confidence: f32,
+        #[serde(default)]
+        quality_score: Option<f32>,
+        #[serde(default)]
+        quality: Option<RawQuality>,
         #[serde(default)]
         box_coords: Option<RawBBox>,
         #[serde(default)]
@@ -366,10 +460,43 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
         }
     }
 
+    // 提取可能存在的人脸元数据 (faces 数组)，用于质量分反查缝合
+    let raw_faces: Vec<RawFaceItem> = val
+        .get("faces")
+        .and_then(|f| serde_json::from_value(f.clone()).ok())
+        .unwrap_or_default();
+
     let objects_val = match val.get("objects") {
         Some(objs) => objs,
         None if val.is_array() => &val,
         None => {
+            // 若没有 objects 但存在 faces 数组，向下兼容纯人脸识别信封
+            if !raw_faces.is_empty() {
+                let mut detections = Vec::with_capacity(raw_faces.len());
+                for f in raw_faces {
+                    let raw_bbox = f.bbox.ok_or_else(|| InferError::JsonParse {
+                        reason: "人脸对象缺少有效 bbox 坐标字段".to_string(),
+                    })?;
+                    let bbox = raw_bbox.to_bounding_box()?;
+                    let confidence = f.detection_score.ok_or_else(|| InferError::JsonParse {
+                        reason: "人脸对象缺少有效 detection_score 置信度字段".to_string(),
+                    })?;
+                    if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
+                        return Err(InferError::JsonParse {
+                            reason: format!("人脸置信度非法: {confidence}"),
+                        });
+                    }
+                    let quality_score = f.quality.and_then(|q| q.score).map(|s| s.clamp(0.0, 1.0));
+                    detections.push(Detection {
+                        class_id: 0,
+                        label: "face".to_string(),
+                        confidence,
+                        quality_score,
+                        bbox,
+                    });
+                }
+                return Ok(detections);
+            }
             return Err(InferError::JsonParse {
                 reason: "检测结果缺少 objects 数组字段且根节点非数组".to_string(),
             });
@@ -380,6 +507,20 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
         serde_json::from_value(objects_val.clone()).map_err(|e| InferError::JsonParse {
             reason: format!("解析 objects 目标列表失败: {e}"),
         })?;
+
+    // 预先将 raw_faces 解析为 (center, quality_score)，消除 N*M 循环中的重复计算
+    let parsed_faces: Vec<ParsedFace> = raw_faces
+        .into_iter()
+        .filter_map(|f| {
+            let bbox = f.bbox?.to_bounding_box().ok()?;
+            let center = bbox.center();
+            let quality_score = f.quality.and_then(|q| q.score).map(|s| s.clamp(0.0, 1.0));
+            Some(ParsedFace {
+                center,
+                quality_score,
+            })
+        })
+        .collect();
 
     let mut detections = Vec::with_capacity(raw_list.len());
 
@@ -399,10 +540,18 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
 
         let bbox = raw_bbox.to_bounding_box()?;
 
+        // 从目标自身提取质量分，再通过空间几何匹配缝合人脸质量评分
+        let self_quality = item
+            .quality_score
+            .or_else(|| item.quality.and_then(|q| q.score))
+            .map(|s| s.clamp(0.0, 1.0));
+        let quality_score = stitch_quality_scores(&item.label, &bbox, self_quality, &parsed_faces);
+
         detections.push(Detection {
             class_id: item.class_id,
             label: item.label,
             confidence: item.confidence,
+            quality_score,
             bbox,
         });
     }
@@ -1020,6 +1169,116 @@ mod tests {
         // 8. 坐标包含 NaN
         let nan_bbox = r#"{"objects": [{"label": "person", "confidence": 0.9, "bbox": [0.1, 0.1, null, 0.2]}]}"#;
         assert!(parse_alarm_objects(nan_bbox).is_err());
+    }
+
+    #[test]
+    fn test_parse_face_envelope_with_quality_score() {
+        let face_envelope = r#"{
+            "schema_version": 1,
+            "objects": [
+                {
+                    "class_id": 0,
+                    "label": "face",
+                    "confidence": 0.93,
+                    "bbox": [0.2, 0.2, 0.4, 0.5]
+                }
+            ],
+            "faces": [
+                {
+                    "bbox": [0.2, 0.2, 0.4, 0.5],
+                    "detection_score": 0.93,
+                    "quality": {
+                        "score": 0.86,
+                        "yaw": 2.1,
+                        "pitch": -1.2,
+                        "blur": 0.08,
+                        "face_size": 128
+                    }
+                }
+            ]
+        }"#;
+
+        let dets = parse_alarm_objects(face_envelope).expect("parse face envelope");
+        assert_eq!(dets.len(), 1);
+        assert_eq!(dets[0].label, "face");
+        assert!((dets[0].confidence - 0.93).abs() < 1e-4);
+        assert_eq!(dets[0].quality_score, Some(0.86));
+    }
+
+    #[test]
+    fn test_parse_person_far_from_face_does_not_inherit_quality_score() {
+        let envelope = r#"{
+            "schema_version": 1,
+            "objects": [
+                {
+                    "class_id": 0,
+                    "label": "person",
+                    "confidence": 0.88,
+                    "bbox": [0.8, 0.8, 0.95, 0.95]
+                }
+            ],
+            "faces": [
+                {
+                    "bbox": [0.1, 0.1, 0.2, 0.2],
+                    "detection_score": 0.95,
+                    "quality": { "score": 0.91 }
+                }
+            ]
+        }"#;
+
+        let dets = parse_alarm_objects(envelope).expect("parse envelope");
+        assert_eq!(dets.len(), 1);
+        assert_eq!(dets[0].label, "person");
+        assert_eq!(dets[0].quality_score, None);
+    }
+
+    #[test]
+    fn test_parse_pure_face_envelope_rejects_missing_detection_score() {
+        let envelope = r#"{
+            "schema_version": 1,
+            "faces": [
+                {
+                    "bbox": [0.1, 0.1, 0.2, 0.2],
+                    "quality": { "score": 0.91 }
+                }
+            ]
+        }"#;
+
+        assert!(parse_alarm_objects(envelope).is_err());
+    }
+
+    #[test]
+    fn test_stitch_quality_scores_prioritizes_inside_face_over_closer_outside_face() {
+        // 行人边界框为 [0.2, 0.2, 0.6, 0.8]，中心为 (0.4, 0.5)
+        // 外部脸 A: 中心 (0.4, 0.15)，距离平方为 0.35^2 = 0.1225，但在阈值边缘
+        // 内部脸 B: 位于行人头部 [0.35, 0.22, 0.45, 0.32]，中心 (0.4, 0.27)，包含在内部
+        let envelope = r#"{
+            "schema_version": 1,
+            "objects": [
+                {
+                    "class_id": 0,
+                    "label": "person",
+                    "confidence": 0.90,
+                    "bbox": [0.2, 0.2, 0.6, 0.8]
+                }
+            ],
+            "faces": [
+                {
+                    "bbox": [0.38, 0.48, 0.42, 0.52],
+                    "detection_score": 0.95,
+                    "quality": { "score": 0.88 }
+                },
+                {
+                    "bbox": [0.35, 0.22, 0.45, 0.32],
+                    "detection_score": 0.98,
+                    "quality": { "score": 0.96 }
+                }
+            ]
+        }"#;
+
+        let dets = parse_alarm_objects(envelope).expect("parse envelope");
+        assert_eq!(dets.len(), 1);
+        assert!(dets[0].quality_score.is_some());
     }
 
     #[tokio::test]

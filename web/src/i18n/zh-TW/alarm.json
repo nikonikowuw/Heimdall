@@ -1,5 +1,6 @@
 {
   "title": "實時與歷史告警中心",
+  "subtitleSuffix": "1080P/4K 全鏈路原子閉環",
   "searchPlaceholder": "搜尋事件ID / 目標類別...",
   "columns": {
     "thumbnail": "縮略證據",
@@ -38,7 +39,10 @@
   "statusFilter": {
     "all": "全部狀態 (All Status)",
     "unprocessed": "待處理 (Unprocessed)",
-    "processed": "已核驗 (Processed)"
+    "processed": "已核驗 (Processed)",
+    "confirmed": "已確認 (Confirmed)",
+    "pendingReview": "疑似待複核 (Pending Review)",
+    "rejected": "已駁回 (Rejected)"
   },
   "timeFilter": {
     "start": "開始時間",
@@ -70,7 +74,22 @@
     "similarity": "特徵相似度",
     "registeredPhoto": "底庫樣本",
     "markProcessed": "標記處理",
-    "processed": "已核驗"
+    "processed": "已核驗",
+    "statusConfirmed": "已確認",
+    "statusPendingReview": "疑似待複核",
+    "statusRejected": "已駁回",
+    "reviewBtn": "核驗候選人",
+    "passTop1": "確認放行",
+    "reject": "駁回",
+    "reviewTitle": "人臉識別 Top-5 候選人核驗",
+    "candidateList": "相似度候選人列表",
+    "confirmCandidate": "確認為此人",
+    "rejectMatch": "標記為陌生人",
+    "currentStatus": "當前狀態",
+    "sortedBySimilarity": "餘弦相似度由高至低排列",
+    "compareView": "並排對比",
+    "noCandidates": "底庫無符合門檻的候選人",
+    "cancel": "取消"
   },
   "modal": {
     "fullImage": "全景超清大圖",

@@ -24,7 +24,7 @@ pub use gallery_face::GalleryFaceRepo;
 pub use operational_log::OperationalLogRepo;
 pub use oplog::OplogRepo;
 pub use personnel::PersonnelRepo;
-pub use recognition::RecognitionRepo;
+pub use recognition::{RecognitionRepo, UpdateRecognitionReviewParams};
 pub use system_config::SystemConfigRepo;
 pub use task::{
     SaveTaskAlgorithmInstanceParams, SaveTaskParams, SaveTaskWithInstancesParams,

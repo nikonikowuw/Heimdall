@@ -1,0 +1,42 @@
+import React from 'react'
+import { UserCheck } from 'lucide-react'
+import type { RecognitionRecord } from '../../../types'
+import { RecognitionCardItem } from './RecognitionCardItem'
+
+export interface RecognitionContentProps {
+  recognitions: RecognitionRecord[]
+  onOpenReview: (rec: RecognitionRecord) => void
+  onQuickReview: (rec: RecognitionRecord, status: 'confirmed' | 'rejected') => void
+  t: (key: string) => string
+}
+
+export function RecognitionContent({
+  recognitions,
+  onOpenReview,
+  onQuickReview,
+  t,
+}: RecognitionContentProps): React.ReactElement {
+  if (recognitions.length === 0) {
+    return (
+      <div className="py-24 text-center text-[var(--text-muted)]">
+        <UserCheck className="mx-auto mb-2 h-8 w-8 opacity-40" />
+        <p className="font-medium text-[var(--text-secondary)]">{t('empty.recognitions')}</p>
+        <p className="text-xs opacity-75">{t('empty.recognitionsDesc')}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+      {recognitions.map((recognition) => (
+        <RecognitionCardItem
+          key={recognition.id}
+          recognition={recognition}
+          onOpenReview={onOpenReview}
+          onQuickReview={onQuickReview}
+          t={t}
+        />
+      ))}
+    </div>
+  )
+}

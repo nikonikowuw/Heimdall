@@ -1,5 +1,6 @@
 {
   "title": "实时与历史告警中心",
+  "subtitleSuffix": "1080P/4K 全链路原子闭环",
   "searchPlaceholder": "搜索事件ID / 目标类别...",
   "columns": {
     "thumbnail": "缩略证据",
@@ -38,7 +39,10 @@
   "statusFilter": {
     "all": "全部状态 (All Status)",
     "unprocessed": "待处理 (Unprocessed)",
-    "processed": "已核验 (Processed)"
+    "processed": "已核验 (Processed)",
+    "confirmed": "已确认 (Confirmed)",
+    "pendingReview": "疑似待复核 (Pending Review)",
+    "rejected": "已驳回 (Rejected)"
   },
   "timeFilter": {
     "start": "开始时间",
@@ -70,7 +74,22 @@
     "similarity": "特征相似度",
     "registeredPhoto": "底库样本",
     "markProcessed": "标记处理",
-    "processed": "已核验"
+    "processed": "已核验",
+    "statusConfirmed": "已确认",
+    "statusPendingReview": "疑似待复核",
+    "statusRejected": "已驳回",
+    "reviewBtn": "核验候选人",
+    "passTop1": "确认放行",
+    "reject": "驳回",
+    "reviewTitle": "人脸识别 Top-5 候选人核验",
+    "candidateList": "相似度候选人列表",
+    "confirmCandidate": "确认为此人",
+    "rejectMatch": "标记为陌生人",
+    "currentStatus": "当前状态",
+    "sortedBySimilarity": "余弦相似度由高至低排列",
+    "compareView": "并排对比",
+    "noCandidates": "底库无符合门槛的候选人",
+    "cancel": "取消"
   },
   "modal": {
     "fullImage": "全景超清大图",

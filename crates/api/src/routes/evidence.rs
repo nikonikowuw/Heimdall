@@ -1,14 +1,15 @@
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Json, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 
 use db::{CaptureRepo, RecognitionRepo};
 
+use crate::capture_service::{isolate_gallery_evidence_photo, normalize_evidence_relative_path};
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
@@ -66,12 +67,21 @@ pub struct RecognitionDto {
     pub similarity: f32,
     pub field_crop_path: String,
     pub registered_photo_path: String,
+    pub status: String,
+    pub candidates: Vec<types::FaceCandidateItem>,
+    pub reviewer_id: Option<String>,
+    pub reviewed_at: Option<i64>,
     pub recognized_at: i64,
     pub created_at: i64,
 }
 
 impl From<db::entity::recognition::Model> for RecognitionDto {
     fn from(m: db::entity::recognition::Model) -> Self {
+        let candidates = m
+            .candidates_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
         Self {
             id: m.id,
             recognition_id: m.recognition_id,
@@ -82,6 +92,10 @@ impl From<db::entity::recognition::Model> for RecognitionDto {
             similarity: m.similarity,
             field_crop_path: m.field_crop_path,
             registered_photo_path: m.registered_photo_path,
+            status: m.status,
+            candidates,
+            reviewer_id: m.reviewer_id,
+            reviewed_at: m.reviewed_at.map(|t| t.timestamp_millis()),
             recognized_at: m.recognized_at.timestamp_millis(),
             created_at: m.created_at.timestamp_millis(),
         }
@@ -92,6 +106,7 @@ impl From<db::entity::recognition::Model> for RecognitionDto {
 pub struct EvidenceQuery {
     pub camera_id: Option<String>,
     pub target_label: Option<String>,
+    pub status: Option<String>,
     pub start_time: Option<i64>,
     pub end_time: Option<i64>,
     #[serde(default = "default_limit")]
@@ -109,6 +124,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/captures", get(list_captures))
         .route("/recognitions", get(list_recognitions))
+        .route(
+            "/recognitions/{recognition_id}/review",
+            post(review_recognition),
+        )
 }
 
 /// 证据图片提供路由（支持 Header 或 ?token= 校验）
@@ -141,15 +160,91 @@ async fn list_recognitions(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<Vec<RecognitionDto>>, ApiError> {
-    let list = RecognitionRepo::list_recent(
+    let list = RecognitionRepo::list_filtered(
         &state.db,
         params.camera_id.as_deref(),
+        params.status.as_deref(),
         params.limit,
         params.offset,
     )
     .await?;
     let dtos = list.into_iter().map(RecognitionDto::from).collect();
     Ok(ApiResponse::success(dtos))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRecognitionRequest {
+    pub status: String,
+    pub subject_id: Option<String>,
+    pub subject_name: Option<String>,
+    pub photo_rel_path: Option<String>,
+    pub similarity: Option<f32>,
+}
+
+async fn review_recognition(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(recognition_id): Path<String>,
+    Json(req): Json<ReviewRecognitionRequest>,
+) -> Result<ApiResponse<RecognitionDto>, ApiError> {
+    let status_enum = req
+        .status
+        .parse::<types::RecognitionStatus>()
+        .map_err(|_| ApiError::BadRequest("状态必须为 confirmed 或 rejected".to_string()))?;
+    if status_enum == types::RecognitionStatus::PendingReview {
+        return Err(ApiError::BadRequest(
+            "审核结果状态必须为 confirmed 或 rejected".to_string(),
+        ));
+    }
+
+    // 若核验指定了候选底库照片，执行安全证据隔离复制并更新记录引用
+    let mut updated_photo_rel: Option<String> = None;
+    if let Some(photo) = req.photo_rel_path.as_deref() {
+        let base_dir = state.pipeline.snapshot_engine().base_evidence_dir();
+        if let Some(isolated) =
+            isolate_gallery_evidence_photo(base_dir, photo, &recognition_id).await
+        {
+            updated_photo_rel = Some(isolated);
+        }
+    }
+
+    let updated = RecognitionRepo::update_review_status(
+        &state.db,
+        db::UpdateRecognitionReviewParams {
+            recognition_id: &recognition_id,
+            status: status_enum.as_str(),
+            reviewer_id: Some(&user.username),
+            selected_subject_id: req.subject_id.as_deref(),
+            selected_subject_name: req.subject_name.as_deref(),
+            selected_photo_path: updated_photo_rel.as_deref(),
+            selected_similarity: req.similarity,
+        },
+    )
+    .await?
+    .ok_or_else(|| ApiError::NotFound("识别记录不存在".to_string()))?;
+
+    let dto = RecognitionDto::from(updated);
+
+    // 广播对账状态变更事件，通知全网监控终端
+    let _ = state
+        .event_broadcaster
+        .send(crate::state::WsBroadcastEvent {
+            topic: types::TOPIC_RECOGNITION_STATUS_CHANGED.to_string(),
+            payload: serde_json::json!({
+                "recognitionId": dto.recognition_id,
+                "status": dto.status,
+                "reviewerId": dto.reviewer_id,
+                "reviewedAt": dto.reviewed_at,
+                "subjectId": dto.subject_id,
+                "subjectName": dto.subject_name,
+                "similarity": dto.similarity,
+                "registeredPhotoPath": dto.registered_photo_path,
+            }),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        });
+
+    Ok(ApiResponse::success(dto))
 }
 
 /// 安全提供证据图片（受权鉴保护，防止越权与路径穿越）
@@ -159,7 +254,10 @@ async fn serve_evidence_image(
     headers: HeaderMap,
     Path(path): Path<String>,
 ) -> Result<Response, StatusCode> {
-    let clean_path = path.trim_start_matches('/').trim_start_matches('\\');
+    let clean_path = match normalize_evidence_relative_path(&path) {
+        Some(c) => c,
+        None => return Err(StatusCode::FORBIDDEN),
+    };
     let camera_id = clean_path.split(['/', '\\']).next().unwrap_or("unknown");
     let client_ip = headers
         .get("x-forwarded-for")
@@ -182,8 +280,8 @@ async fn serve_evidence_image(
         "证据图片访问"
     );
 
-    // 严防路径穿越与空路径
-    if clean_path.is_empty() || clean_path.contains("..") {
+    // 严防路径穿越与空路径 (normalize_evidence_relative_path 已校验)
+    if clean_path.is_empty() {
         return Err(StatusCode::FORBIDDEN);
     }
 

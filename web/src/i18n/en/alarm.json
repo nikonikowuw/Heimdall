@@ -1,5 +1,6 @@
 {
   "title": "Real-time & Historical Alarm Center",
+  "subtitleSuffix": "1080P/4K End-to-End Atomic Evidence Pipeline",
   "searchPlaceholder": "Search event ID / target class...",
   "columns": {
     "thumbnail": "Evidence",
@@ -38,7 +39,10 @@
   "statusFilter": {
     "all": "All Status",
     "unprocessed": "Unprocessed",
-    "processed": "Processed"
+    "processed": "Processed",
+    "confirmed": "Confirmed",
+    "pendingReview": "Pending Review",
+    "rejected": "Rejected"
   },
   "timeFilter": {
     "start": "Start Time",
@@ -70,7 +74,22 @@
     "similarity": "Similarity",
     "registeredPhoto": "Gallery Photo",
     "markProcessed": "Process",
-    "processed": "Resolved"
+    "processed": "Resolved",
+    "statusConfirmed": "Confirmed",
+    "statusPendingReview": "Pending Review",
+    "statusRejected": "Rejected",
+    "reviewBtn": "Review Candidates",
+    "passTop1": "Confirm Top-1",
+    "reject": "Reject",
+    "reviewTitle": "Top-5 Candidate Review",
+    "candidateList": "Candidate List",
+    "confirmCandidate": "Confirm Selection",
+    "rejectMatch": "Mark as Stranger",
+    "currentStatus": "Current Status",
+    "sortedBySimilarity": "Sorted by Cosine Similarity (High to Low)",
+    "compareView": "Side-by-Side Comparison",
+    "noCandidates": "No candidates meeting threshold",
+    "cancel": "Cancel"
   },
   "modal": {
     "fullImage": "4K/1080P Full Frame",

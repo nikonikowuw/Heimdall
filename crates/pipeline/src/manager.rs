@@ -1290,6 +1290,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.2, 0.2, 0.4, 0.4),
         }];
 
@@ -1306,6 +1307,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.96,
+            quality_score: None,
             bbox: BoundingBox::new(0.21, 0.21, 0.41, 0.41),
         }];
 
@@ -1593,6 +1595,7 @@ mod tests {
                 class_id: 0,
                 label: "person".to_string(),
                 confidence: 0.9,
+                quality_score: None,
                 bbox: BoundingBox::new(0.1, 0.1, 0.4, 0.4),
                 trajectory: vec![],
             },
@@ -1638,6 +1641,7 @@ mod tests {
                 class_id: 0,
                 label: "face".to_string(),
                 confidence: 0.98,
+                quality_score: Some(0.85),
                 bbox: types::BoundingBox::new(0.2, 0.2, 0.5, 0.5),
                 trajectory: vec![],
             },
@@ -1713,6 +1717,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: types::BoundingBox::new(0.1, 0.2, 0.3, 0.4),
         };
 
@@ -1736,6 +1741,7 @@ mod tests {
             class_id: 0,
             label: "face".to_string(),
             confidence: 0.95,
+            quality_score: Some(0.88),
             bbox: types::BoundingBox::new(0.2, 0.2, 0.4, 0.4),
         };
         let rec_outcome = manager

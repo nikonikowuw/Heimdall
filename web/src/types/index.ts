@@ -109,6 +109,7 @@ export interface TrackedBBox {
   trackId: number
   label: string
   confidence: number
+  qualityScore?: number
   bbox: [number, number, number, number] // [x1, y1, x2, y2] 归一化坐标 0.0 ~ 1.0
   trajectory?: [number, number][]
 }
@@ -193,6 +194,17 @@ export interface CaptureRecord {
   createdAt: number
 }
 
+export type RecognitionStatus = 'confirmed' | 'pending_review' | 'rejected'
+
+export interface FaceCandidateItem {
+  rank: number
+  subjectId: string
+  subjectName: string
+  similarity: number
+  faceId: string
+  photoRelPath?: string
+}
+
 export interface RecognitionRecord {
   id: number
   recognitionId: string
@@ -203,6 +215,10 @@ export interface RecognitionRecord {
   similarity: number
   fieldCropPath: string
   registeredPhotoPath: string
+  status: RecognitionStatus
+  candidates?: FaceCandidateItem[]
+  reviewerId?: string | null
+  reviewedAt?: number | null
   recognizedAt: number
   createdAt: number
 }

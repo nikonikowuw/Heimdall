@@ -405,6 +405,7 @@ mod tests {
                 class_id: 0,
                 label: "person".to_string(),
                 confidence: 0.95,
+                quality_score: None,
                 bbox: BoundingBox::new(0.1, 0.1, 0.2, 0.2),
             }])
         }

@@ -73,3 +73,78 @@ pub struct FaceMatchResult {
     pub photo_rel_path: String,
     pub similarity: f32,
 }
+
+/// 1:N 人脸特征检索 Top-K 候选人明细项
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceCandidateItem {
+    pub rank: usize,
+    pub subject_id: String,
+    pub subject_name: String,
+    pub face_id: String,
+    pub photo_rel_path: String,
+    pub similarity: f32,
+}
+
+/// 识别对账审核状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RecognitionStatus {
+    /// 高置信自动确认放行
+    #[default]
+    Confirmed,
+    /// 位于疑似区间，等待人工核验
+    PendingReview,
+    /// 人工复核已驳回或标记为陌生人
+    Rejected,
+}
+
+impl RecognitionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Confirmed => "confirmed",
+            Self::PendingReview => "pending_review",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+impl std::str::FromStr for RecognitionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "confirmed" => Ok(Self::Confirmed),
+            "pending_review" | "pending" => Ok(Self::PendingReview),
+            "rejected" => Ok(Self::Rejected),
+            other => Err(format!("未知的识别状态: {other}")),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_recognition_status_from_str() {
+        assert_eq!(
+            "confirmed".parse::<RecognitionStatus>().unwrap(),
+            RecognitionStatus::Confirmed
+        );
+        assert_eq!(
+            "pending_review".parse::<RecognitionStatus>().unwrap(),
+            RecognitionStatus::PendingReview
+        );
+        assert_eq!(
+            "pending".parse::<RecognitionStatus>().unwrap(),
+            RecognitionStatus::PendingReview
+        );
+        assert_eq!(
+            "rejected".parse::<RecognitionStatus>().unwrap(),
+            RecognitionStatus::Rejected
+        );
+        assert!("invalid_status".parse::<RecognitionStatus>().is_err());
+    }
+}

@@ -289,15 +289,30 @@ export const evidenceApi = {
 
   listRecognitions(params?: {
     cameraId?: string
+    status?: string
     limit?: number
     offset?: number
   }): Promise<RecognitionRecord[]> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
+      status: params?.status,
       limit: params?.limit,
       offset: params?.offset,
     })
     return api.get<RecognitionRecord[]>(`/evidence/recognitions${qs}`)
+  },
+
+  reviewRecognition(
+    recognitionId: string,
+    data: {
+      status: 'confirmed' | 'rejected'
+      subjectId?: string
+      subjectName?: string
+      photoRelPath?: string
+      similarity?: number
+    },
+  ): Promise<RecognitionRecord> {
+    return api.post<RecognitionRecord>(`/evidence/recognitions/${recognitionId}/review`, data)
   },
 
   getImageUrl(relPath: string): string {

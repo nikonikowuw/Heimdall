@@ -422,25 +422,13 @@ mod macos {
         println!(
             "================================================================================"
         );
-        println!(
-            "  人体检测模型横向对比: 640x384 vs 384x216 (384x224 Stride-32 对齐) (CoreML ANE)"
-        );
+        println!("  人体检测性能基准: yolo26n 640x384 (CoreML ANE)");
         println!(
             "================================================================================"
         );
 
-        let runner_640 = CoreMlRunner::load_model(
-            package_root,
-            "person_detect_640x384.mlpackage",
-            "image",
-            "var_911",
-        )?;
-        let runner_384 = CoreMlRunner::load_model(
-            package_root,
-            "person_detect_384x216.mlpackage",
-            "image",
-            "var_911",
-        )?;
+        let runner_person =
+            CoreMlRunner::load_model(package_root, "yolo26n.mlpackage", "image", "var_911")?;
 
         // 640x384 预处理
         let (buf640, mode640) = AppleCvEngine.letterbox(safe_frame, 640, 384, [114, 114, 114])?;
@@ -448,55 +436,29 @@ mod macos {
             reason: "pb640 null".to_string(),
         })?;
 
-        // 384x224 预处理
-        let (buf384, mode384) = AppleCvEngine.letterbox(safe_frame, 384, 224, [114, 114, 114])?;
-        let pb384 = buf384.as_raw_ptr().ok_or_else(|| AlgoError::Preprocess {
-            reason: "pb384 null".to_string(),
-        })?;
-
         // 预热
         for _ in 0..5 {
-            // SAFETY: pixelbuffer 由 buf640 / buf384 持有，在同步预测期间有效。
+            // SAFETY: pixelbuffer 由 buf640 持有，在同步预测期间有效。
             unsafe {
-                let _ = runner_640.predict_pixelbuffer(pb640)?;
-                let _ = runner_384.predict_pixelbuffer(pb384)?;
+                let _ = runner_person.predict_pixelbuffer(pb640)?;
             }
         }
 
-        // 测试 640x384
-        let mut time_640 = Vec::with_capacity(loops);
-        let mut raw_640 = Vec::new();
+        // 性能测试
+        let mut times = Vec::with_capacity(loops);
+        let mut raw_person = Vec::new();
         for _ in 0..loops {
             let t = Instant::now();
             // SAFETY: pb640 在预测期间由 buf640 保活。
-            raw_640 = unsafe { runner_640.predict_pixelbuffer(pb640)? };
-            time_640.push(t.elapsed().as_secs_f64() * 1000.0);
+            raw_person = unsafe { runner_person.predict_pixelbuffer(pb640)? };
+            times.push(t.elapsed().as_secs_f64() * 1000.0);
         }
-        let (avg_640, p50_640, p99_640) = calc_stats(&mut time_640);
-        let mut persons_640 = decode_person_detections(&raw_640, 0.40);
-        nms_persons(&mut persons_640, 0.45);
+        let (avg_ms, p50_ms, p99_ms) = calc_stats(&mut times);
+        let mut persons = decode_person_detections(&raw_person, 0.40);
+        nms_persons(&mut persons, 0.45);
         unmap_persons_letterbox(
-            &mut persons_640,
+            &mut persons,
             &mode640,
-            safe_frame.width(),
-            safe_frame.height(),
-        );
-
-        // 测试 384x224
-        let mut time_384 = Vec::with_capacity(loops);
-        let mut raw_384 = Vec::new();
-        for _ in 0..loops {
-            let t = Instant::now();
-            // SAFETY: pb384 在预测期间由 buf384 保活。
-            raw_384 = unsafe { runner_384.predict_pixelbuffer(pb384)? };
-            time_384.push(t.elapsed().as_secs_f64() * 1000.0);
-        }
-        let (avg_384, p50_384, p99_384) = calc_stats(&mut time_384);
-        let mut persons_384 = decode_person_detections(&raw_384, 0.40);
-        nms_persons(&mut persons_384, 0.45);
-        unmap_persons_letterbox(
-            &mut persons_384,
-            &mode384,
             safe_frame.width(),
             safe_frame.height(),
         );
@@ -510,21 +472,12 @@ mod macos {
         );
         println!(
             "{:<22} | {:>9.3} ms | {:>9.3} ms | {:>9.3} ms | {:>8} 人 | {:>10.1} FPS",
-            "YOLO26n 640x384 (共享)",
-            avg_640,
-            p50_640,
-            p99_640,
-            persons_640.len(),
-            1000.0 / avg_640
-        );
-        println!(
-            "{:<22} | {:>9.3} ms | {:>9.3} ms | {:>9.3} ms | {:>8} 人 | {:>10.1} FPS",
-            "YOLO26n 384x216 (独立)",
-            avg_384,
-            p50_384,
-            p99_384,
-            persons_384.len(),
-            1000.0 / avg_384
+            "YOLO26n 640x384",
+            avg_ms,
+            p50_ms,
+            p99_ms,
+            persons.len(),
+            1000.0 / avg_ms
         );
         println!(
             "================================================================================"
@@ -532,9 +485,9 @@ mod macos {
 
         println!("  架构分析与工程建议:");
         println!(
-            "  1. 推理耗时对比: 384x216 比 640x384 快约 {:.2} ms (提升 {:.1}%)",
-            avg_640 - avg_384,
-            (avg_640 - avg_384) / avg_640 * 100.0
+            "  1. 单模型推理均值: {:.2} ms ({:.1} FPS)",
+            avg_ms,
+            1000.0 / avg_ms
         );
         println!("  2. 显存与预处理开销:");
         println!("     - 640x384 方案: 人脸检测与人体检测共享同一个 640x384 CVPixelBuffer，只需一次 Letterbox 硬件缩放；");

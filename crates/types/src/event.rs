@@ -19,3 +19,6 @@ pub const TOPIC_CAMERA_TELEMETRY: &str = "camera.telemetry";
 
 /// 人脸 1:N 识别对账命中实时广播事件
 pub const TOPIC_RECOGNITION_MATCHED: &str = "recognition.matched";
+
+/// 人脸 1:N 识别对账人工审核状态变更广播事件
+pub const TOPIC_RECOGNITION_STATUS_CHANGED: &str = "recognition.status_changed";

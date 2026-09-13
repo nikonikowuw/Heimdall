@@ -2,4 +2,5 @@
 result.jpg
 *.tar.gz
 *.tgz
-weights/
+# 仅排除根目录下的原始权重（YOLO .pt/.onnx 等），不排除 .mlpackage 内部结构
+/weights/

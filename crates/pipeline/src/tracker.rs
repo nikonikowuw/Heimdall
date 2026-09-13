@@ -87,6 +87,7 @@ struct TrackState {
     class_id: usize,
     label: String,
     confidence: f32,
+    quality_score: Option<f32>,
     bbox: BoundingBox,
     /// 速度估计向量 (dx1, dy1, dx2, dy2)
     velocity: Velocity,
@@ -182,6 +183,7 @@ impl SimpleTracker {
                     );
                     track.bbox = det.bbox;
                     track.confidence = det.confidence;
+                    track.quality_score = det.quality_score;
                     track.lost_frames = 0;
 
                     let bottom_center = det.bbox.bottom_center();
@@ -205,6 +207,7 @@ impl SimpleTracker {
                     class_id: det.class_id,
                     label: det.label,
                     confidence: det.confidence,
+                    quality_score: det.quality_score,
                     bbox: det.bbox,
                     velocity: Velocity::ZERO,
                     trajectory: vec![bottom_center],
@@ -240,6 +243,7 @@ impl SimpleTracker {
                 class_id: t.class_id,
                 label: t.label.clone(),
                 confidence: t.confidence,
+                quality_score: t.quality_score,
                 bbox: t.bbox,
                 trajectory: t.trajectory.clone(),
             })
@@ -337,6 +341,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.9,
+            quality_score: None,
             bbox: BoundingBox::new(0.1, 0.1, 0.2, 0.2),
         }];
         let res1 = tracker.update(dets1);
@@ -348,6 +353,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.91,
+            quality_score: None,
             bbox: BoundingBox::new(0.12, 0.12, 0.22, 0.22),
         }];
         let res2 = tracker.update(dets2);
@@ -366,6 +372,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.10, 0.10, 0.18, 0.18),
         }];
         let res1 = tracker.update(det1);
@@ -377,6 +384,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.93,
+            quality_score: None,
             bbox: BoundingBox::new(0.12, 0.12, 0.20, 0.20),
         }];
         let res2 = tracker.update(det2);
@@ -389,6 +397,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.91,
+            quality_score: None,
             bbox: BoundingBox::new(0.155, 0.155, 0.235, 0.235),
         }];
         let res3 = tracker.update(det3);
@@ -405,6 +414,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.10, 0.10, 0.20, 0.20),
         }];
         let res1 = tracker.update(det1);
@@ -415,6 +425,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.12, 0.12, 0.22, 0.22),
         }];
         let res2 = tracker.update(det2);
@@ -430,6 +441,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.155, 0.155, 0.255, 0.255),
         }];
         let res4 = tracker.update(det4);
@@ -447,6 +459,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.3, 0.3, 0.5, 0.5),
         }];
         let res = tracker.update(dets);
@@ -469,6 +482,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.3, 0.3, 0.5, 0.5),
         }];
         let res = tracker.update(dets);

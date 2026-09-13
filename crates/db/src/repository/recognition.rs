@@ -6,6 +6,17 @@ use sea_orm::{
 use crate::entity::recognition::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
 
+#[derive(Debug, Clone, Default)]
+pub struct UpdateRecognitionReviewParams<'a> {
+    pub recognition_id: &'a str,
+    pub status: &'a str,
+    pub reviewer_id: Option<&'a str>,
+    pub selected_subject_id: Option<&'a str>,
+    pub selected_subject_name: Option<&'a str>,
+    pub selected_photo_path: Option<&'a str>,
+    pub selected_similarity: Option<f32>,
+}
+
 #[derive(Debug)]
 pub struct RecognitionRepo;
 
@@ -16,9 +27,22 @@ impl RecognitionRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
+        Self::list_filtered(db, camera_id, None, limit, offset).await
+    }
+
+    pub async fn list_filtered(
+        db: &DatabaseConnection,
+        camera_id: Option<&str>,
+        status: Option<&str>,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Vec<Model>, DbError> {
         let mut query = Entity::find().order_by_desc(Column::RecognizedAt);
         if let Some(cid) = camera_id {
             query = query.filter(Column::CameraId.eq(cid));
+        }
+        if let Some(st) = status {
+            query = query.filter(Column::Status.eq(st));
         }
         query
             .limit(limit)
@@ -26,6 +50,57 @@ impl RecognitionRepo {
             .all(db)
             .await
             .map_err(DbError::from)
+    }
+
+    pub async fn find_by_recognition_id(
+        db: &DatabaseConnection,
+        recognition_id: &str,
+    ) -> Result<Option<Model>, DbError> {
+        Entity::find()
+            .filter(Column::RecognitionId.eq(recognition_id))
+            .one(db)
+            .await
+            .map_err(DbError::from)
+    }
+
+    pub async fn update_review_status(
+        db: &DatabaseConnection,
+        params: UpdateRecognitionReviewParams<'_>,
+    ) -> Result<Option<Model>, DbError> {
+        use sea_orm::Set;
+
+        let Some(existing) = Self::find_by_recognition_id(db, params.recognition_id).await? else {
+            return Ok(None);
+        };
+
+        // 幂等保护：若记录已由人工审核过且本次提交状态未变更，则保留原始审核时间，
+        // 防止重复点击覆盖审核痕迹
+        let has_reviewer = existing.reviewer_id.is_some();
+        let same_status = params.status == existing.status.as_str();
+        let should_update_time = !(has_reviewer && same_status);
+
+        let mut active: ActiveModel = existing.into();
+        active.status = Set(params.status.to_string());
+        active.reviewer_id = Set(params.reviewer_id.map(|s| s.to_string()));
+        if should_update_time {
+            active.reviewed_at = Set(Some(chrono::Utc::now()));
+        }
+
+        if let Some(sub_id) = params.selected_subject_id {
+            active.subject_id = Set(sub_id.to_string());
+        }
+        if let Some(sub_name) = params.selected_subject_name {
+            active.subject_name = Set(sub_name.to_string());
+        }
+        if let Some(photo) = params.selected_photo_path {
+            active.registered_photo_path = Set(photo.to_string());
+        }
+        if let Some(sim) = params.selected_similarity {
+            active.similarity = Set(sim);
+        }
+
+        let updated = active.update(db).await?;
+        Ok(Some(updated))
     }
 
     pub async fn insert(

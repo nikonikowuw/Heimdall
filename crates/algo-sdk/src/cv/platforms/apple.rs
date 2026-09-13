@@ -731,7 +731,7 @@ impl AppleCvEngine {
                 let row_ptr = unsafe { (dst_ptr as *mut u8).add(y * dst_stride) };
                 // SAFETY: row_ptr 指向已锁定 surface 的当前行，dst_row <= dst_stride。
                 let row = unsafe { std::slice::from_raw_parts_mut(row_ptr, dst_row) };
-                for pixel in row.chunks_exact_mut(4) {
+                for pixel in row.as_chunks_mut::<4>().0 {
                     pixel[0] = b;
                     pixel[1] = g;
                     pixel[2] = r;
@@ -803,7 +803,7 @@ impl AppleCvEngine {
             .and_then(|pixels| pixels.checked_mul(4))
             .ok_or(AlgoError::OutOfMemory)?;
         let mut canvas_rgba = vec![0u8; canvas_len];
-        for chunk in canvas_rgba.chunks_exact_mut(4) {
+        for chunk in canvas_rgba.as_chunks_mut::<4>().0 {
             chunk[0] = fill_color[0];
             chunk[1] = fill_color[1];
             chunk[2] = fill_color[2];

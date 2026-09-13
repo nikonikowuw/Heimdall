@@ -15,7 +15,7 @@ pub use repository::{
     AdminUserRepo, AlarmRepo, CameraRepo, CaptureRepo, GalleryFaceRepo, GalleryRepo,
     OperationalLogRepo, OplogRepo, PersonnelRepo, RecognitionRepo, SaveTaskAlgorithmInstanceParams,
     SaveTaskParams, SaveTaskWithInstancesParams, SystemConfigRepo, TaskInstanceStateUpdate,
-    TaskRepo, UpdateTaskInstanceParams,
+    TaskRepo, UpdateRecognitionReviewParams, UpdateTaskInstanceParams,
 };
 pub use schema::create_tables_if_not_exist;
 pub use sea_orm::{self, DatabaseConnection};

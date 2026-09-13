@@ -1,5 +1,5 @@
 use db::entity::{capture, gallery, recognition};
-use db::{init_test_db, CaptureRepo, GalleryRepo, RecognitionRepo};
+use db::{init_test_db, CaptureRepo, GalleryRepo, RecognitionRepo, UpdateRecognitionReviewParams};
 use sea_orm::ActiveValue::Set;
 
 #[tokio::test]
@@ -74,6 +74,26 @@ async fn test_capture_and_recognition_repository_lifecycle() {
         .await
         .expect("list");
     assert_eq!(recs.len(), 1);
+
+    // 验证更新人工复核状态
+    let updated = RecognitionRepo::update_review_status(
+        &db,
+        UpdateRecognitionReviewParams {
+            recognition_id: "rec_001",
+            status: "confirmed",
+            reviewer_id: Some("admin"),
+            selected_subject_id: Some("sub_1001"),
+            selected_subject_name: Some("Alice Cooper"),
+            selected_photo_path: None,
+            selected_similarity: Some(0.92),
+        },
+    )
+    .await
+    .expect("update review status")
+    .expect("exists");
+    assert_eq!(updated.status, "confirmed");
+    assert_eq!(updated.subject_name, "Alice Cooper");
+    assert_eq!(updated.reviewer_id, Some("admin".to_string()));
 
     // 3. 插入底库名单
     let new_gal = gallery::ActiveModel {

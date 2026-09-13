@@ -8,6 +8,73 @@ use sea_orm::Set;
 
 use crate::state::AppState;
 
+/// 规范化证据相对路径：去除前导分隔符并校验路径穿越。
+///
+/// 返回 `None` 当路径为空、包含 `..` 组件或含有非法字符。
+/// 两处使用（`capture_service` 写入复制、`evidence` 审核复制）统一收敛于此，
+/// 杜绝路径穿越（AGENTS.md: 证据图片服务接口必须验证路径规范化）。
+pub(crate) fn normalize_evidence_relative_path(path: &str) -> Option<&str> {
+    let clean = path.trim_start_matches('/').trim_start_matches('\\');
+    if clean.is_empty() || clean.contains("..") {
+        return None;
+    }
+    Some(clean)
+}
+
+/// 隔离复制底库样本照片至识别对账目录 (recognitions/{recognition_id}_gallery.jpg)
+///
+/// 严格遵循系统安全与数据完整性约束：
+/// 1. 规范化源相对路径，拒绝空路径与包含 `..` 的路径穿越；
+/// 2. 校验源路径存在性与 base_dir 范围 (canonicalize.starts_with)；
+/// 3. 自复制保护：若源路径与目标路径一致，直接复用返回，严防 `fs::copy` 同名文件截断清空为 0 字节；
+/// 4. 自动创建目标父目录并安全复制。
+pub(crate) async fn isolate_gallery_evidence_photo(
+    base_dir: &std::path::Path,
+    source_rel: &str,
+    recognition_id: &str,
+) -> Option<String> {
+    let clean_rel = normalize_evidence_relative_path(source_rel)?;
+    let dest_rel = format!("recognitions/{recognition_id}_gallery.jpg");
+
+    // 1. 快速字符串比对：若源路径已经是当前识别记录的目标路径，直接返回
+    if clean_rel == dest_rel {
+        return Some(dest_rel);
+    }
+
+    if !base_dir.exists() {
+        return None;
+    }
+
+    let src = base_dir.join(clean_rel);
+    let dest = base_dir.join(&dest_rel);
+
+    // 2. 规范化路径与越界校验
+    let canonical_base = tokio::fs::canonicalize(base_dir).await.ok()?;
+    let canonical_src = tokio::fs::canonicalize(&src).await.ok()?;
+    if !canonical_src.starts_with(&canonical_base) {
+        tracing::warn!(src = %src.display(), "拒绝越界底库样本照片复制");
+        return None;
+    }
+
+    // 3. 规范化同名/硬链接保护
+    if let Ok(canonical_dest) = tokio::fs::canonicalize(&dest).await {
+        if canonical_src == canonical_dest {
+            return Some(dest_rel);
+        }
+    }
+
+    // 4. 安全创建目录并复制
+    if let Some(parent) = dest.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if tokio::fs::copy(&src, &dest).await.is_ok() {
+        Some(dest_rel)
+    } else {
+        tracing::warn!(src = %src.display(), dest = %dest.display(), "底库照片隔离复制失败");
+        None
+    }
+}
+
 /// 默认抓拍攒批写入阈值 (每批最多 32 条)
 pub const DEFAULT_CAPTURE_BATCH_SIZE: usize = 32;
 
@@ -95,7 +162,11 @@ impl CaptureDispatchService {
         let bbox_json =
             serde_json::to_string(&event.tracked_object.bbox).unwrap_or_else(|_| "{}".to_string());
 
-        let quality_score = event.tracked_object.confidence.clamp(0.0, 1.0);
+        let quality_score = event
+            .tracked_object
+            .quality_score
+            .unwrap_or(event.tracked_object.confidence)
+            .clamp(0.0, 1.0);
 
         Some(db::entity::capture::ActiveModel {
             id: sea_orm::NotSet,
@@ -154,6 +225,44 @@ impl CaptureDispatchService {
         Ok(inserted)
     }
 
+    /// 动态解析摄像头关联的算法实例阈值 (未显式配置时回退到安全默认值)
+    ///
+    /// 从数据库加载摄像头绑定的算法实例配置，提取 `similarity_threshold` 和
+    /// `review_threshold`；精确匹配优先，回退到名称含 `face` 的实例。
+    /// 保证 `review_threshold <= confirm_threshold`。
+    async fn resolve_recognition_thresholds(
+        &self,
+        camera_id: &str,
+        algorithm_id: &str,
+    ) -> (f32, f32) {
+        let (mut confirm_threshold, mut review_threshold) = (0.75f32, 0.60f32);
+        if let Ok(instances) =
+            db::AlgorithmInstanceRepo::list_by_camera_id(&self.db, camera_id).await
+        {
+            for inst in instances {
+                let is_exact = inst.algorithm_id == algorithm_id;
+                let is_face = inst.algorithm_id.contains("face");
+                if is_exact || is_face {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&inst.params_json) {
+                        if let Some(st) = val.get("similarity_threshold").and_then(|v| v.as_f64()) {
+                            confirm_threshold = st as f32;
+                        }
+                        if let Some(rt) = val.get("review_threshold").and_then(|v| v.as_f64()) {
+                            review_threshold = rt as f32;
+                        }
+                    }
+                    if is_exact {
+                        break;
+                    }
+                }
+            }
+        }
+        if review_threshold > confirm_threshold {
+            review_threshold = (confirm_threshold - 0.15).max(0.1);
+        }
+        (confirm_threshold, review_threshold)
+    }
+
     /// 针对人脸通行抓拍尝试触发 1:N 底库特征检索并落地识别对账记录
     async fn try_match_and_record_recognition(&self, event: &PipelineCaptureEvent) {
         // 互斥保护：非阻塞单飞模式，已有比对在执行时跳过本次触发，杜绝并发冲击 NPU 硬件推理通道
@@ -199,70 +308,92 @@ impl CaptureDispatchService {
             Err(_) => return,
         };
 
+        // 动态解析摄像头关联的算法实例阈值 (未显式配置时回退到安全默认值)
+        let (confirm_threshold, review_threshold) = self
+            .resolve_recognition_thresholds(&event.camera_id, &event.algorithm_id)
+            .await;
+
         // 遵循 docs/algo/EdgeFace.md 约定的自适应置信度动态微调
         // 质量评分围绕 0.50 基准点浮动 ±0.05，质量越低门槛越高，抑制低质误报
-        let base_threshold: f32 = 0.75;
         let quality_adjustment = (extraction.quality_score - 0.5) * 0.1;
-        let adaptive_threshold = (base_threshold + quality_adjustment).clamp(0.60, 0.90);
+        let adaptive_confirm = (confirm_threshold - quality_adjustment).clamp(0.40, 0.95);
+        let adaptive_review = (review_threshold - quality_adjustment).clamp(0.30, adaptive_confirm);
 
-        // 执行 1:N 余弦比对
-        if let Some(matched) = gallery_index
-            .search(&extraction.embedding, adaptive_threshold)
-            .await
-        {
-            let recognition_id = format!("rec_{}", uuid::Uuid::new_v4().simple());
-            let recognized_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
-                .unwrap_or_else(chrono::Utc::now);
+        // 执行 1:N 余弦比对 Top-5，底线门槛为 adaptive_review
+        let candidates = gallery_index
+            .search_top_k(&extraction.embedding, 5, adaptive_review)
+            .await;
 
-            // 遵循证据隔离原则：复制一份底库照片至 recognitions 目录
-            let reg_photo_src = base_dir.join(&matched.photo_rel_path);
-            let rec_gallery_rel = format!("recognitions/{recognition_id}_gallery.jpg");
-            let rec_gallery_dest = base_dir.join(&rec_gallery_rel);
-            if let Some(parent) = rec_gallery_dest.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
-            }
-            let _ = tokio::fs::copy(&reg_photo_src, &rec_gallery_dest).await;
+        if candidates.is_empty() {
+            return;
+        }
 
-            let active_rec = db::entity::recognition::ActiveModel {
-                id: sea_orm::NotSet,
-                recognition_id: Set(recognition_id.clone()),
-                camera_id: Set(event.camera_id.clone()),
-                gallery_id: Set("default".to_string()),
-                subject_id: Set(matched.subject_id.clone()),
-                subject_name: Set(matched.subject_name.clone()),
-                similarity: Set(matched.similarity),
-                field_crop_path: Set(snap.crop_image_rel_path.clone()),
-                registered_photo_path: Set(rec_gallery_rel),
-                recognized_at: Set(recognized_at),
-                created_at: Set(chrono::Utc::now()),
-            };
+        let best_match = &candidates[0];
+        let status = if best_match.similarity >= adaptive_confirm {
+            types::RecognitionStatus::Confirmed
+        } else {
+            types::RecognitionStatus::PendingReview
+        };
 
-            if let Ok(saved) = db::RecognitionRepo::insert(&self.db, active_rec).await {
-                tracing::info!(
-                    recognition_id = %recognition_id,
-                    subject_id = %matched.subject_id,
-                    similarity = matched.similarity,
-                    camera_id = %event.camera_id,
-                    "1:N 人脸识别对账命中成功并已持久化"
-                );
+        let recognition_id = format!("rec_{}", uuid::Uuid::new_v4().simple());
+        let recognized_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
+            .unwrap_or_else(chrono::Utc::now);
 
-                if let Some(broadcaster) = &self.event_broadcaster {
-                    let _ = broadcaster.send(crate::state::WsBroadcastEvent {
-                        topic: types::TOPIC_RECOGNITION_MATCHED.to_string(),
-                        payload: serde_json::json!({
-                            "recognitionId": saved.recognition_id,
-                            "cameraId": saved.camera_id,
-                            "galleryId": saved.gallery_id,
-                            "subjectId": saved.subject_id,
-                            "subjectName": saved.subject_name,
-                            "similarity": saved.similarity,
-                            "fieldCropPath": saved.field_crop_path,
-                            "registeredPhotoPath": saved.registered_photo_path,
-                            "recognizedAt": saved.recognized_at.timestamp_millis(),
-                        }),
-                        timestamp: event.timestamp,
-                    });
-                }
+        // 遵循证据隔离原则：若存在候选人样本，复制一份至 recognitions 目录
+        let rec_gallery_rel =
+            isolate_gallery_evidence_photo(base_dir, &best_match.photo_rel_path, &recognition_id)
+                .await
+                .unwrap_or_default();
+
+        let candidates_json =
+            serde_json::to_string(&candidates).unwrap_or_else(|_| "[]".to_string());
+
+        let active_rec = db::entity::recognition::ActiveModel {
+            id: sea_orm::NotSet,
+            recognition_id: Set(recognition_id.clone()),
+            camera_id: Set(event.camera_id.clone()),
+            gallery_id: Set("default".to_string()),
+            subject_id: Set(best_match.subject_id.clone()),
+            subject_name: Set(best_match.subject_name.clone()),
+            similarity: Set(best_match.similarity),
+            field_crop_path: Set(snap.crop_image_rel_path.clone()),
+            registered_photo_path: Set(rec_gallery_rel),
+            status: Set(status.as_str().to_string()),
+            candidates_json: Set(Some(candidates_json)),
+            reviewer_id: Set(None),
+            reviewed_at: Set(None),
+            recognized_at: Set(recognized_at),
+            created_at: Set(chrono::Utc::now()),
+        };
+
+        if let Ok(saved) = db::RecognitionRepo::insert(&self.db, active_rec).await {
+            tracing::info!(
+                recognition_id = %recognition_id,
+                subject_id = %best_match.subject_id,
+                similarity = best_match.similarity,
+                status = status.as_str(),
+                camera_id = %event.camera_id,
+                "1:N 人脸识别对账命中成功并已持久化"
+            );
+
+            if let Some(broadcaster) = &self.event_broadcaster {
+                let _ = broadcaster.send(crate::state::WsBroadcastEvent {
+                    topic: types::TOPIC_RECOGNITION_MATCHED.to_string(),
+                    payload: serde_json::json!({
+                        "recognitionId": saved.recognition_id,
+                        "cameraId": saved.camera_id,
+                        "galleryId": saved.gallery_id,
+                        "subjectId": saved.subject_id,
+                        "subjectName": saved.subject_name,
+                        "similarity": saved.similarity,
+                        "fieldCropPath": saved.field_crop_path,
+                        "registeredPhotoPath": saved.registered_photo_path,
+                        "status": saved.status,
+                        "candidates": candidates,
+                        "recognizedAt": saved.recognized_at.timestamp_millis(),
+                    }),
+                    timestamp: event.timestamp,
+                });
             }
         }
     }

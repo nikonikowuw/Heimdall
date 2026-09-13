@@ -3,7 +3,11 @@ use algo_sdk::math::clamp_bbox;
 
 pub const YOLOV5_FACE_FIELDS: usize = 16;
 pub const YOLOV8_FACE_FIELDS: usize = 20;
-pub const PERSON_FIELDS: usize = 5;
+/// yolo26n 人体检测输出每行 6 个浮点数: `x1, y1, x2, y2, score, class_id`。
+pub const PERSON_FIELDS: usize = 6;
+
+/// COCO 类别 0 = person
+const PERSON_CLASS_ID: usize = 0;
 
 pub use crate::association::PersonCandidate;
 
@@ -188,7 +192,9 @@ pub fn decode_face_detections(raw: &[f32], conf_threshold: f32) -> Vec<RawFace> 
     }
 }
 
-/// 解码 YOLO 人体检测张量（shape `[1, N, 5]`，每行依次为 `cx, cy, w, h, score`）。
+/// 解码 yolo26n 人体检测张量（shape `[1, 300, 6]`，每行依次为 `x1, y1, x2, y2, score, class_id`）。
+///
+/// 输出坐标为模型输入空间（640×384）的绝对像素值，仅保留 person 类（class_id == 0）。
 pub fn decode_person_detections(raw: &[f32], conf_threshold: f32) -> Vec<PersonCandidate> {
     if raw.len() < PERSON_FIELDS || !raw.len().is_multiple_of(PERSON_FIELDS) {
         return Vec::new();
@@ -201,19 +207,26 @@ pub fn decode_person_detections(raw: &[f32], conf_threshold: f32) -> Vec<PersonC
         if score < threshold {
             continue;
         }
-        let (cx, cy, width, height) = (row[0], row[1], row[2], row[3]);
-        if !cx.is_finite()
-            || !cy.is_finite()
-            || !width.is_finite()
-            || !height.is_finite()
-            || width <= 0.0
-            || height <= 0.0
+
+        let cls_id = row[5].round() as usize;
+        if cls_id != PERSON_CLASS_ID {
+            continue;
+        }
+
+        // xyxy → xywh（模型输入空间绝对像素坐标）
+        let (x1, y1, x2, y2) = (row[0], row[1], row[2], row[3]);
+        if !x1.is_finite()
+            || !y1.is_finite()
+            || !x2.is_finite()
+            || !y2.is_finite()
+            || x2 <= x1
+            || y2 <= y1
         {
             continue;
         }
 
         persons.push(PersonCandidate {
-            bbox: [cx - width * 0.5, cy - height * 0.5, width, height],
+            bbox: [x1, y1, x2 - x1, y2 - y1],
             score,
         });
     }

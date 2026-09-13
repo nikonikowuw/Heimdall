@@ -16,6 +16,10 @@ pub struct Model {
     pub similarity: f32,
     pub field_crop_path: String,
     pub registered_photo_path: String,
+    pub status: String,
+    pub candidates_json: Option<String>,
+    pub reviewer_id: Option<String>,
+    pub reviewed_at: Option<DateTimeUtc>,
     pub recognized_at: DateTimeUtc,
     pub created_at: DateTimeUtc,
 }

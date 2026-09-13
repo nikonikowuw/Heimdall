@@ -1,4 +1,4 @@
-.PHONY: all build test run benchmark stress package clean models
+.PHONY: all build test run benchmark stress package clean models models-sync
 
 TARGET_LIB := lib/libface_recognition.dylib
 WORKSPACE_ROOT := ../../../..
@@ -8,6 +8,12 @@ all: build
 
 models:
 	python3 convert_models.py
+
+# 从 general_detection 同步 yolo26n 人体检测模型（替代已废弃的 person_detect）
+models-sync:
+	@mkdir -p model
+	@cp -R ../general_detection/model/yolo26n.mlpackage model/yolo26n.mlpackage
+	@echo "Synced yolo26n.mlpackage from general_detection"
 
 build:
 	cargo build -p face-recognition --release
@@ -27,6 +33,14 @@ stress: build
 	cargo run -p face-recognition --release --bin face_recognition_run_local -- --stress $(DURATION)
 
 package: build
+	@echo "Checking mlpackage weights..."
+	@for pkg in model/*.mlpackage; do \
+		if [ -d "$$pkg/Data/com.apple.CoreML" ] && [ ! -d "$$pkg/Data/com.apple.CoreML/weights" ]; then \
+			echo "ERROR: $$pkg is missing Data/com.apple.CoreML/weights/"; \
+			echo "Run 'make models' first to generate CoreML model weights."; \
+			exit 1; \
+		fi; \
+	done
 	@rm -f face_recognition.tar.gz
 	tar -czf face_recognition.tar.gz \
 		--exclude=".DS_Store" \

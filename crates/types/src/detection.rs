@@ -27,6 +27,13 @@ impl BoundingBox {
         let cy = ((self.y1 + self.y2) / 2.0) as f64;
         (cx, cy)
     }
+
+    /// 判断指定点是否在边界框内部
+    pub fn contains_point(&self, x: f64, y: f64) -> bool {
+        let x = x as f32;
+        let y = y as f32;
+        x >= self.x1 && x <= self.x2 && y >= self.y1 && y <= self.y2
+    }
 }
 
 /// 单个目标检测结果
@@ -35,6 +42,9 @@ pub struct Detection {
     pub class_id: usize,
     pub label: String,
     pub confidence: f32,
+    /// 人脸姿态综合质量评分 (0.0..=1.0)，非人脸算法为 None
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f32>,
     pub bbox: BoundingBox,
 }
 
@@ -45,6 +55,9 @@ pub struct TrackedObject {
     pub class_id: usize,
     pub label: String,
     pub confidence: f32,
+    /// 人脸姿态综合质量评分 (0.0..=1.0)，非人脸算法为 None
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f32>,
     pub bbox: BoundingBox,
     /// 历史轨迹点集合 (通常保留最近 N 帧底边中心点，用于绊线跨越判定)
     pub trajectory: Vec<(f64, f64)>,
@@ -119,6 +132,9 @@ pub struct TrackDto {
     pub track_id: u64,
     pub label: String,
     pub confidence: f32,
+    /// 人脸姿态综合质量评分 (0.0..=1.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f32>,
     /// 归一化坐标 [x1, y1, x2, y2]
     pub bbox: [f32; 4],
     /// 历史轨迹坐标序列 [[x, y], ...]
@@ -132,6 +148,7 @@ impl From<&TrackedObject> for TrackDto {
             track_id: obj.track_id,
             label: obj.label.clone(),
             confidence: obj.confidence,
+            quality_score: obj.quality_score,
             bbox: [obj.bbox.x1, obj.bbox.y1, obj.bbox.x2, obj.bbox.y2],
             trajectory: obj.trajectory.clone(),
         }
@@ -159,12 +176,14 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.89,
+            quality_score: Some(0.92),
             bbox: BoundingBox::new(0.15, 0.22, 0.35, 0.68),
             trajectory: vec![(0.25, 0.65), (0.25, 0.68)],
         };
         let dto = TrackDto::from(&obj);
         assert_eq!(dto.track_id, 12);
         assert_eq!(dto.bbox, [0.15, 0.22, 0.35, 0.68]);
+        assert_eq!(dto.quality_score, Some(0.92));
 
         let payload = CameraTracksPayload {
             camera_id: "CAM-01".to_string(),
@@ -179,6 +198,8 @@ mod tests {
         assert_eq!(json_val["tracks"][0]["label"], "person");
         let conf = json_val["tracks"][0]["confidence"].as_f64().unwrap();
         assert!((conf - 0.89).abs() < 1e-4);
+        let q = json_val["tracks"][0]["qualityScore"].as_f64().unwrap();
+        assert!((q - 0.92).abs() < 1e-4);
         let x1 = json_val["tracks"][0]["bbox"][0].as_f64().unwrap();
         assert!((x1 - 0.15).abs() < 1e-4);
         let y2 = json_val["tracks"][0]["bbox"][3].as_f64().unwrap();

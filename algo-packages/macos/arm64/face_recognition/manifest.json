@@ -12,12 +12,6 @@
     "min_os_version": "14.0",
     "requires_ane_capable_coreml": true
   },
-  "models": {
-    "person_detector": "model/person_detect_640x384.mlpackage",
-    "detector": "model/yolov8_face.mlpackage",
-    "embedder": "model/edgeface_s.mlpackage",
-    "embedding_dimension": 512
-  },
   "resource_profile": {
     "min_free_memory_mb": 256,
     "fps_tiers": [

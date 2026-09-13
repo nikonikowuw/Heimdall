@@ -266,6 +266,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.9,
+            quality_score: None,
             bbox: BoundingBox::new(0.1, 0.1, 0.3, 0.3),
             trajectory: vec![(0.2, 0.3)],
         };
@@ -279,6 +280,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.9,
+            quality_score: None,
             bbox: BoundingBox::new(0.6, 0.6, 0.8, 0.8),
             trajectory: vec![(0.7, 0.8)],
         };
@@ -304,6 +306,7 @@ mod tests {
             class_id: 0,
             label: "car".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.4, 0.6, 0.6, 0.8),
             trajectory: vec![(0.5, 0.3), (0.5, 0.7)],
         };
@@ -343,6 +346,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.95,
+            quality_score: None,
             bbox: BoundingBox::new(0.4, 0.4, 0.6, 0.6),
             trajectory: vec![(0.5, 0.6)],
         };
@@ -387,6 +391,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.9,
+            quality_score: None,
             bbox: BoundingBox::new(0.05, 0.05, 0.2, 0.2),
             trajectory: vec![(0.125, 0.2)],
         };
@@ -397,6 +402,7 @@ mod tests {
             class_id: 0,
             label: "person".to_string(),
             confidence: 0.92,
+            quality_score: None,
             bbox: BoundingBox::new(0.5, 0.5, 0.7, 0.7),
             trajectory: vec![(0.6, 0.7)],
         };
@@ -427,6 +433,7 @@ mod tests {
             class_id: 0,
             label: "face".to_string(),
             confidence: 0.96,
+            quality_score: Some(0.88),
             bbox: BoundingBox::new(0.4, 0.4, 0.6, 0.6),
             trajectory: vec![(0.5, 0.6)],
         };
@@ -472,6 +479,7 @@ mod tests {
             class_id: 0,
             label: "face".to_string(),
             confidence: 0.95,
+            quality_score: Some(0.85),
             bbox: BoundingBox::new(0.5, 0.5, 0.7, 0.7),
             trajectory: vec![(0.6, 0.7)],
         };
@@ -480,6 +488,7 @@ mod tests {
             class_id: 0,
             label: "face".to_string(),
             confidence: 0.95,
+            quality_score: Some(0.89),
             bbox: BoundingBox::new(0.1, 0.1, 0.2, 0.2),
             trajectory: vec![(0.15, 0.2)],
         };
@@ -503,6 +512,7 @@ mod tests {
             class_id: 0,
             label: "face".to_string(),
             confidence: 0.97,
+            quality_score: Some(0.91),
             bbox: BoundingBox::new(0.4, 0.4, 0.6, 0.6),
             // 从 y=0.4 移动到 y=0.6，跨越 y=0.5 绊线
             trajectory: vec![(0.5, 0.4), (0.5, 0.6)],

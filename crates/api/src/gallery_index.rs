@@ -1,6 +1,8 @@
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use types::FaceCandidateItem;
 
 use db::{DatabaseConnection, DbError, GalleryFaceRepo, PersonnelRepo};
 use types::FaceMatchResult;
@@ -133,51 +135,197 @@ impl FaceFeatureIndex {
         }
     }
 
-    /// 执行 1:N 余弦相似度比对，返回置信度最高且满足阈值的匹配结果
-    pub async fn search(&self, query_vec: &[f32], threshold: f32) -> Option<FaceMatchResult> {
-        if query_vec.len() != 512 {
-            return None;
+    /// 执行 1:N 余弦相似度比对，返回 Top-K 候选人列表 (基于 Min-Heap 检索，单人员多特征取最优得分)
+    pub async fn search_top_k(
+        &self,
+        query_vec: &[f32],
+        top_k: usize,
+        min_threshold: f32,
+    ) -> Vec<FaceCandidateItem> {
+        if query_vec.len() != 512 || top_k == 0 {
+            return Vec::new();
         }
 
         let guard = self.faces.read().await;
         if guard.is_empty() {
-            return None;
+            return Vec::new();
         }
 
-        let mut best_match: Option<(&RegisteredFace, f32)> = None;
-
+        // 1. 同一人员聚合最优得分样本
+        let mut subject_best: HashMap<&str, (&RegisteredFace, f32)> = HashMap::new();
         for face in guard.iter() {
-            // L2 归一化后的向量，点积即为余弦相似度
             let dot: f32 = query_vec
                 .iter()
                 .zip(face.vector.iter())
                 .map(|(&a, &b)| a * b)
                 .sum();
 
-            if dot >= threshold {
-                match best_match {
-                    Some((_, current_max)) if dot > current_max => {
-                        best_match = Some((face, dot));
+            if dot >= min_threshold {
+                match subject_best.get_mut(face.subject_id.as_str()) {
+                    Some(entry) => {
+                        if dot > entry.1 {
+                            *entry = (face, dot);
+                        }
                     }
                     None => {
-                        best_match = Some((face, dot));
+                        subject_best.insert(face.subject_id.as_str(), (face, dot));
                     }
-                    _ => {}
                 }
             }
         }
 
-        best_match.map(|(face, similarity)| FaceMatchResult {
-            subject_id: face.subject_id.clone(),
-            subject_name: face.subject_name.clone(),
-            face_id: face.face_id.clone(),
-            photo_rel_path: face.photo_rel_path.clone(),
-            similarity,
+        if subject_best.is_empty() {
+            return Vec::new();
+        }
+
+        // 2. 借助 Min-Heap 维护最高 Top-K 得分
+        #[derive(Clone)]
+        struct HeapItem<'a> {
+            similarity: f32,
+            face: &'a RegisteredFace,
+        }
+
+        impl<'a> PartialEq for HeapItem<'a> {
+            fn eq(&self, other: &Self) -> bool {
+                self.similarity == other.similarity
+            }
+        }
+
+        impl<'a> Eq for HeapItem<'a> {}
+
+        impl<'a> Ord for HeapItem<'a> {
+            fn cmp(&self, other: &Self) -> Ordering {
+                other
+                    .similarity
+                    .partial_cmp(&self.similarity)
+                    .unwrap_or(Ordering::Equal)
+            }
+        }
+
+        impl<'a> PartialOrd for HeapItem<'a> {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        let mut heap: BinaryHeap<HeapItem> = BinaryHeap::with_capacity(top_k + 1);
+        for (_subj_id, (face, similarity)) in subject_best {
+            heap.push(HeapItem { similarity, face });
+            if heap.len() > top_k {
+                heap.pop();
+            }
+        }
+
+        let mut results = Vec::with_capacity(heap.len());
+        while let Some(item) = heap.pop() {
+            results.push(item);
+        }
+        results.reverse();
+
+        results
+            .into_iter()
+            .enumerate()
+            .map(|(i, item)| FaceCandidateItem {
+                rank: i + 1,
+                subject_id: item.face.subject_id.clone(),
+                subject_name: item.face.subject_name.clone(),
+                similarity: item.similarity,
+                face_id: item.face.face_id.clone(),
+                photo_rel_path: item.face.photo_rel_path.clone(),
+            })
+            .collect()
+    }
+
+    /// 执行 1:N 余弦相似度比对，返回置信度最高且满足阈值的匹配结果
+    pub async fn search(&self, query_vec: &[f32], threshold: f32) -> Option<FaceMatchResult> {
+        let top1 = self.search_top_k(query_vec, 1, threshold).await;
+        top1.into_iter().next().map(|cand| FaceMatchResult {
+            subject_id: cand.subject_id,
+            subject_name: cand.subject_name,
+            face_id: cand.face_id,
+            photo_rel_path: cand.photo_rel_path,
+            similarity: cand.similarity,
         })
     }
 
     /// 获取当前常驻内存的有效样本特征数
     pub async fn count(&self) -> usize {
         self.faces.read().await.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_vector(val: f32) -> [f32; 512] {
+        let mut vec = [0.0f32; 512];
+        vec[0] = val;
+        vec
+    }
+
+    #[tokio::test]
+    async fn test_gallery_search_top_k_and_dedup() {
+        let index = FaceFeatureIndex::new();
+
+        // 插入同一人员 subj1 的两张照片 (相似度 0.82 与 0.95)
+        index
+            .upsert_faces(vec![
+                RegisteredFace {
+                    face_id: "face_1a".into(),
+                    subject_id: "subj_1".into(),
+                    subject_name: "Alice".into(),
+                    photo_rel_path: "/photos/alice1.jpg".into(),
+                    vector: make_test_vector(0.82),
+                },
+                RegisteredFace {
+                    face_id: "face_1b".into(),
+                    subject_id: "subj_1".into(),
+                    subject_name: "Alice".into(),
+                    photo_rel_path: "/photos/alice2.jpg".into(),
+                    vector: make_test_vector(0.95),
+                },
+                RegisteredFace {
+                    face_id: "face_2".into(),
+                    subject_id: "subj_2".into(),
+                    subject_name: "Bob".into(),
+                    photo_rel_path: "".into(),
+                    vector: make_test_vector(0.88),
+                },
+                RegisteredFace {
+                    face_id: "face_3".into(),
+                    subject_id: "subj_3".into(),
+                    subject_name: "Charlie".into(),
+                    photo_rel_path: "".into(),
+                    vector: make_test_vector(0.70),
+                },
+                RegisteredFace {
+                    face_id: "face_4".into(),
+                    subject_id: "subj_4".into(),
+                    subject_name: "David".into(),
+                    photo_rel_path: "".into(),
+                    vector: make_test_vector(0.60),
+                },
+            ])
+            .await;
+
+        let query = make_test_vector(1.0);
+
+        // 检索 Top-2, 门限 0.75
+        let top2 = index.search_top_k(&query, 2, 0.75).await;
+        assert_eq!(top2.len(), 2);
+        // Alice 最优得分为 0.95，排第一，且对应的特征照片引用应正确更新为 face_1b
+        assert_eq!(top2[0].subject_id, "subj_1");
+        assert_eq!(top2[0].face_id, "face_1b");
+        assert_eq!(top2[0].photo_rel_path, "/photos/alice2.jpg");
+        assert!((top2[0].similarity - 0.95).abs() < 1e-5);
+        // Bob 得分 0.88，排第二
+        assert_eq!(top2[1].subject_id, "subj_2");
+        assert!((top2[1].similarity - 0.88).abs() < 1e-5);
+
+        // search 单结果向后兼容
+        let best = index.search(&query, 0.75).await.expect("should match");
+        assert_eq!(best.subject_id, "subj_1");
+        assert!((best.similarity - 0.95).abs() < 1e-5);
     }
 }

@@ -587,14 +587,23 @@ export function LivePlayer({
           }
 
           // 2. 绘制半透明发光识别框 (Bounding Box)
-          ctx.strokeStyle = item.label === 'person' ? '#06b6d4' : '#10b981'
+          const isFace = item.label.toLowerCase() === 'face'
+          const isPerson = item.label.toLowerCase() === 'person'
+          ctx.strokeStyle = isPerson ? '#06b6d4' : isFace ? '#8b5cf6' : '#10b981'
           ctx.lineWidth = isHero ? 2 : 1.5
           ctx.strokeRect(x, y, boxW, boxH)
 
           // 3. 绘制目标标签与置信度胶囊
-          ctx.fillStyle =
-            item.label === 'person' ? 'rgba(6, 182, 212, 0.85)' : 'rgba(16, 185, 129, 0.85)'
-          const labelText = `#${item.trackId} ${item.label} ${(item.confidence * 100).toFixed(0)}%`
+          ctx.fillStyle = isPerson
+            ? 'rgba(6, 182, 212, 0.85)'
+            : isFace
+              ? 'rgba(139, 92, 246, 0.85)'
+              : 'rgba(16, 185, 129, 0.85)'
+          const detPct = `${(item.confidence * 100).toFixed(0)}%`
+          const labelText =
+            isFace && item.qualityScore !== undefined
+              ? `#${item.trackId} ${item.label} Q:${(item.qualityScore * 100).toFixed(0)}% (${detPct})`
+              : `#${item.trackId} ${item.label} ${detPct}`
           ctx.font = isHero ? '600 11px monospace' : '500 9px monospace'
           const textWidth = ctx.measureText(labelText).width
           ctx.fillRect(x, Math.max(0, y - (isHero ? 18 : 14)), textWidth + 8, isHero ? 16 : 13)
