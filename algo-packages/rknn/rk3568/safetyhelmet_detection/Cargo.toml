@@ -15,8 +15,13 @@ crate-type = ["cdylib", "rlib"]
 name = "safetyhelmet_detection_run_local"
 path = "src/bin/run_local.rs"
 
+[features]
+default = []
+rga = ["algo-sdk/rga"]
+testing-hardware = ["algo-sdk/testing-hardware"]
+
 [dependencies]
-algo-sdk = { workspace = true, features = ["rga", "testing-hardware"] }
+algo-sdk = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 image = { workspace = true }

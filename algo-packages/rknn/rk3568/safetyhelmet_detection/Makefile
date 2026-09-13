@@ -149,6 +149,7 @@ package: build ## 交叉编译 + 打包算法包 (.tar.gz)
 		manifest.json \
 		config.schema.json \
 		README.md \
+		testimage.jpg \
 		model \
 		lib
 	@echo -e "$(GREEN)[package]$(RESET) 包产物: safetyhelmet_detection.tar.gz"
@@ -165,6 +166,7 @@ deploy: package ## 交叉编译 + 打包 + SCP 部署到 RK3568 设备
 		manifest.json \
 		config.schema.json \
 		README.md \
+		testimage.jpg \
 		model \
 		lib \
 		$(RKNN_HOST):$(RKNN_DEPLOY_PATH)/safetyhelmet_detection/

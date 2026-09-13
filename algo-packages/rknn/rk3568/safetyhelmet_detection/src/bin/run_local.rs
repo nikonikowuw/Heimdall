@@ -256,6 +256,10 @@ mod linux_run {
             confidence_threshold: confidence,
             iou_threshold: iou,
             custom_alarm_label: None,
+            explicit_fields: ["confidence_threshold", "iou_threshold"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
         };
         let init_ctx = InitContext {
             package_root: Path::new("."),
