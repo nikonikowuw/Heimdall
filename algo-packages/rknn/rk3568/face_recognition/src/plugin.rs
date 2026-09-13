@@ -72,14 +72,20 @@ impl AlgoPlugin for FaceRecognizer {
             });
         };
 
-        // 2. 执行人脸 NPU 推理与解码
-        let min_score = self.config.detection_confidence_threshold;
-        let raw_faces = if buf.as_dma_buf_layout().is_some() {
-            self.models.worker.detect_dma_buf(buf, layout, min_score)?
-        } else if let Some(host_bytes) = buf.as_host_bytes() {
+        // 2. 执行人脸与人体 NPU 推理与解码
+        let min_face_score = self.config.detection_confidence_threshold;
+        let min_person_score = self.config.person_confidence_threshold;
+        let (persons, raw_faces) = if buf.as_dma_buf_layout().is_some() {
             self.models
                 .worker
-                .detect_host(host_bytes.to_vec(), layout, min_score)?
+                .detect_dma_buf(buf, layout, min_face_score, min_person_score)?
+        } else if let Some(host_bytes) = buf.as_host_bytes() {
+            self.models.worker.detect_host(
+                host_bytes.to_vec(),
+                layout,
+                min_face_score,
+                min_person_score,
+            )?
         } else {
             return Err(AlgoError::Preprocess {
                 reason: "预处理输出既无有效 DMA-BUF 布局，也无 Host 内存视图".to_string(),
@@ -87,8 +93,8 @@ impl AlgoPlugin for FaceRecognizer {
         };
 
         // 3. 空间几何关联挂载：
-        // 在纯人脸检测模式下，由未匹配人脸自适应推导虚拟躯干 (Pseudo-body) 保底
-        let associated = crate::association::associate_persons_and_faces(&[], &raw_faces);
+        // 真实人体与人脸二分图匹配（未匹配人脸自适应推导虚拟躯干 Pseudo-body 保底）
+        let associated = crate::association::associate_persons_and_faces(&persons, &raw_faces);
 
         // 4. ByteTracker 追踪活跃人体框，维护稳定的内部 internal_track_id
         let track_dets: Vec<crate::bytetrack::TrackDetection> = associated

@@ -143,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let models = face_recognition_rk3568::shared_models(package_root)?;
 
     // 使用刚才硬件检测输出的 landmark
-    let faces = if is_dma_buf {
+    let (_persons, faces) = if is_dma_buf {
         // 直接从模型的 worker 中获取单次检测结果
         let (buf, mode) = algo_sdk::cv::letterbox(
             &safe_frame,
@@ -154,14 +154,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let algo_sdk::cv::PreprocessMode::Letterbox(layout) = mode else {
             return Err("预处理模式非 Letterbox".into());
         };
-        models.worker.detect_dma_buf(buf, layout, 0.25)?
+        models.worker.detect_dma_buf(buf, layout, 0.25, 0.40)?
     } else {
         let (detector_rgb, layout) = face_recognition_rk3568::prepare_detector_input_for(
             &dynamic_img,
             models.detector_width,
             models.detector_height,
         )?;
-        models.worker.detect_host(detector_rgb, layout, 0.25)?
+        models
+            .worker
+            .detect_host(detector_rgb, layout, 0.25, 0.40)?
     };
 
     if let Some(best) = faces

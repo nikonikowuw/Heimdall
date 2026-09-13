@@ -31,8 +31,8 @@ package: build
 		echo "错误: lib/libface_recognition.so 构建未生成"; \
 		exit 1; \
 	fi
-	@if [ ! -f model/yolov8n-face-640x384_rk3568_mixed_face.rknn ] || [ ! -f model/edgeface_xs_gamma_06_rk3568_fp16.rknn ]; then \
-		echo "错误: model/ 下缺少必需的 RKNN 模型权重"; \
+	@if [ ! -f model/yolov8n-face-640x384_rk3568_mixed_face.rknn ] || [ ! -f model/edgeface_xs_gamma_06_rk3568_fp16.rknn ] || [ ! -f model/yolov8n-640x384-rk3568.rknn ]; then \
+		echo "错误: model/ 下缺少必需的 RKNN 模型权重 (yolov8n-face, edgeface_xs, yolov8n)"; \
 		exit 1; \
 	fi
 	rm -f face_recognition.tar.gz

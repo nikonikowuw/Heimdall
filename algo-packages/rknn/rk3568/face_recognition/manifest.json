@@ -13,11 +13,6 @@
     "requires_rknn_runtime": true,
     "min_rknnrt_version": "1.5.0"
   },
-  "models": {
-    "detector": "model/yolov8n-face-640x384_rk3568_mixed_face.rknn",
-    "embedder": "model/edgeface_xs_gamma_06_rk3568_fp16.rknn",
-    "embedding_dimension": 512
-  },
   "resource_profile": {
     "min_free_memory_mb": 256,
     "fps_tiers": [

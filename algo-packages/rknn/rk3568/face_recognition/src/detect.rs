@@ -243,6 +243,93 @@ pub fn nms(faces: &mut Vec<RawFace>, iou_threshold: f32) {
     faces.truncate(kept_len);
 }
 
+pub const COCO_PERSON_CLASS_ID: usize = 0;
+pub const PERSON_MODEL_ANCHORS: usize = 5040;
+pub const PERSON_MODEL_CHANNELS: usize = 84;
+
+/// 解码 YOLOv8n 人体检测张量 (shape [84, 5040]，NCHW 展平)
+pub fn decode_yolov8_person(
+    raw: &[f32],
+    conf_threshold: f32,
+    layout: &LetterboxLayout,
+) -> Vec<PersonCandidate> {
+    if raw.len() < PERSON_MODEL_CHANNELS * PERSON_MODEL_ANCHORS {
+        return Vec::new();
+    }
+    let threshold = conf_threshold.clamp(0.0, 1.0);
+    let mut candidates = Vec::new();
+
+    let eff_w = layout.scaled_w as f32;
+    let eff_h = layout.scaled_h as f32;
+    if eff_w <= 0.0 || eff_h <= 0.0 {
+        return Vec::new();
+    }
+    let pad_left = layout.pad_left as f32;
+    let pad_top = layout.pad_top as f32;
+
+    for i in 0..PERSON_MODEL_ANCHORS {
+        let score = raw[4 * PERSON_MODEL_ANCHORS + i]; // COCO class 0: person
+        if !score.is_finite() || score < threshold {
+            continue;
+        }
+
+        let cx = raw[i];
+        let cy = raw[PERSON_MODEL_ANCHORS + i];
+        let w = raw[2 * PERSON_MODEL_ANCHORS + i];
+        let h = raw[3 * PERSON_MODEL_ANCHORS + i];
+
+        if !cx.is_finite()
+            || !cy.is_finite()
+            || !w.is_finite()
+            || !h.is_finite()
+            || w <= 0.0
+            || h <= 0.0
+        {
+            continue;
+        }
+
+        let x1_px = cx - w * 0.5;
+        let y1_px = cy - h * 0.5;
+        let x2_px = cx + w * 0.5;
+        let y2_px = cy + h * 0.5;
+
+        // 反算 letterbox 到原图 [0, 1] 归一化 [x, y, w, h]
+        let x1 = ((x1_px - pad_left) / eff_w).clamp(0.0, 1.0);
+        let y1 = ((y1_px - pad_top) / eff_h).clamp(0.0, 1.0);
+        let x2 = ((x2_px - pad_left) / eff_w).clamp(0.0, 1.0);
+        let y2 = ((y2_px - pad_top) / eff_h).clamp(0.0, 1.0);
+
+        if x2 > x1 && y2 > y1 {
+            candidates.push(PersonCandidate {
+                bbox: [x1, y1, x2 - x1, y2 - y1],
+                score,
+            });
+        }
+    }
+
+    nms_persons(&mut candidates, 0.45);
+    candidates
+}
+
+/// 人体检测候选 NMS 抑制
+pub fn nms_persons(persons: &mut Vec<PersonCandidate>, iou_threshold: f32) {
+    if persons.len() <= 1 {
+        return;
+    }
+    persons.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+    let mut kept_len = 0;
+    for i in 0..persons.len() {
+        let overlaps = (0..kept_len).any(|j| {
+            crate::bytetrack::box_iou(&persons[j].bbox, &persons[i].bbox) >= iou_threshold
+        });
+        if !overlaps {
+            persons.swap(kept_len, i);
+            kept_len += 1;
+        }
+    }
+    persons.truncate(kept_len);
+}
+
 /// 将 bbox 和 landmarks 从模型输入画布像素坐标根据 Letterbox 布局反算并归一化到原图 [0, 1]
 /// 全系统统一遵循 [x, y, w, h] 规范
 pub fn normalize_to_relative(faces: &mut [RawFace], layout: &LetterboxLayout) {
@@ -411,6 +498,35 @@ mod tests {
         assert!(decode_yolov8_face(&outputs, &attrs, &layout, 0.25, 0.45).is_err());
         assert!(decode_yolov8_face(&outputs, &attrs, &layout, f32::NAN, 0.45).is_err());
     }
+    #[test]
+    fn test_decode_yolov8_person() {
+        let mut raw = vec![0.0f32; PERSON_MODEL_CHANNELS * PERSON_MODEL_ANCHORS];
+        // anchor 50: person at center (320, 192), w=160, h=240, score=0.88
+        let anchor = 50;
+        raw[anchor] = 320.0;
+        raw[PERSON_MODEL_ANCHORS + anchor] = 192.0;
+        raw[2 * PERSON_MODEL_ANCHORS + anchor] = 160.0;
+        raw[3 * PERSON_MODEL_ANCHORS + anchor] = 240.0;
+        raw[4 * PERSON_MODEL_ANCHORS + anchor] = 0.88;
+
+        let layout = LetterboxLayout {
+            scaled_w: 640,
+            scaled_h: 384,
+            pad_left: 0,
+            pad_top: 0,
+            scale: 1.0,
+            dst_w: 640,
+            dst_h: 384,
+        };
+        let persons = decode_yolov8_person(&raw, 0.5, &layout);
+        assert_eq!(persons.len(), 1);
+        assert!((persons[0].score - 0.88).abs() < 1e-4);
+        assert!((persons[0].bbox[0] - (240.0 / 640.0)).abs() < 1e-4);
+        assert!((persons[0].bbox[1] - (72.0 / 384.0)).abs() < 1e-4);
+        assert!((persons[0].bbox[2] - (160.0 / 640.0)).abs() < 1e-4);
+        assert!((persons[0].bbox[3] - (240.0 / 384.0)).abs() < 1e-4);
+    }
+
     #[test]
     fn test_normalize_to_relative_with_padding() {
         let layout = LetterboxLayout {

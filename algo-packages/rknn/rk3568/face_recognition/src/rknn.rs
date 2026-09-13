@@ -1108,7 +1108,19 @@ fn validate_input_attr(
         contract.input_width,
         contract.input_channels,
     ];
-    if actual != nchw && actual != nhwc {
+    let nchw_flipped = [
+        1,
+        contract.input_channels,
+        contract.input_width,
+        contract.input_height,
+    ];
+    let nhwc_flipped = [
+        1,
+        contract.input_width,
+        contract.input_height,
+        contract.input_channels,
+    ];
+    if actual != nchw && actual != nhwc && actual != nchw_flipped && actual != nhwc_flipped {
         return Err(AlgoError::ModelLoad {
             reason: format!(
                 "RKNN 输入形状不匹配: expected={nchw:?} or {nhwc:?}, actual={actual:?}"

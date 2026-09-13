@@ -1,14 +1,31 @@
-//! 算法包 manifest 的唯一模型路径与 I/O 契约来源。
+//! 算法包 manifest 与模型路径解析契约。
+//!
+//! 遵循女娲规范：模型属于平台专属权重资产，不强行绑定在 manifest.json 内。
+//! 解析顺序：package_root/.env 指定路径 -> 约定的固定模型文件路径（model/*.rknn）。
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use algo_sdk::error::AlgoError;
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_MODEL_BYTES: u64 = 256 * 1024 * 1024;
+
+pub const DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 12] = [
+    [1, 64, 48, 80],
+    [1, 1, 48, 80],
+    [1, 1, 48, 80],
+    [1, 15, 48, 80],
+    [1, 64, 24, 40],
+    [1, 1, 24, 40],
+    [1, 1, 24, 40],
+    [1, 15, 24, 40],
+    [1, 64, 12, 20],
+    [1, 1, 12, 20],
+    [1, 1, 12, 20],
+    [1, 15, 12, 20],
+];
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PackageManifest {
@@ -17,8 +34,6 @@ pub struct PackageManifest {
     pub platform_id: String,
     #[serde(default)]
     pub runtime_constraints: Option<RuntimeConstraints>,
-    #[serde(default)]
-    pub models: Option<ModelsManifest>,
     #[serde(default)]
     pub self_test: Option<SelfTestManifest>,
 }
@@ -32,193 +47,24 @@ pub struct RuntimeConstraints {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ModelsManifest {
-    #[serde(deserialize_with = "deserialize_detector")]
-    pub detector: ModelManifest,
-    #[serde(deserialize_with = "deserialize_embedder")]
-    pub embedder: ModelManifest,
-    #[serde(
-        rename = "embedding_dimension",
-        default = "default_embedding_dimension"
-    )]
-    pub embedding_dimension: u32,
-}
-
-fn default_embedding_dimension() -> u32 {
-    512
-}
-
-impl Default for ModelsManifest {
-    fn default() -> Self {
-        Self {
-            detector: ModelManifest {
-                path: "model/yolov8n-face-640x384_rk3568_mixed_face.rknn".to_string(),
-                sha256: String::new(),
-                input: ModelInputManifest {
-                    width: 640,
-                    height: 384,
-                    channels: 3,
-                    pixel_format: "rgb24".to_string(),
-                    layout: "nchw".to_string(),
-                    data_type: "uint8".to_string(),
-                    pass_through: false,
-                    mean_values: [0.0; 3],
-                    std_values: [255.0; 3],
-                },
-                outputs: DETECTOR_OUTPUT_SHAPES
-                    .iter()
-                    .map(|shape| ModelOutputManifest {
-                        shape: *shape,
-                        layout: "nchw".to_string(),
-                        data_type: "float32".to_string(),
-                    })
-                    .collect(),
-            },
-            embedder: ModelManifest {
-                path: "model/edgeface_xs_gamma_06_rk3568_fp16.rknn".to_string(),
-                sha256: String::new(),
-                input: ModelInputManifest {
-                    width: 112,
-                    height: 112,
-                    channels: 3,
-                    pixel_format: "rgb24".to_string(),
-                    layout: "nchw".to_string(),
-                    data_type: "uint8".to_string(),
-                    pass_through: false,
-                    mean_values: [127.5; 3],
-                    std_values: [127.5; 3],
-                },
-                outputs: vec![ModelOutputManifest {
-                    shape: [1, 512, 1, 1],
-                    layout: "nchw".to_string(),
-                    data_type: "float32".to_string(),
-                }],
-            },
-            embedding_dimension: 512,
-        }
-    }
-}
-
-fn deserialize_detector<'de, D>(deserializer: D) -> Result<ModelManifest, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Helper {
-        Detailed(ModelManifest),
-        Simple(String),
-    }
-
-    match Helper::deserialize(deserializer)? {
-        Helper::Detailed(m) => Ok(m),
-        Helper::Simple(path) => Ok(ModelManifest {
-            path,
-            sha256: String::new(),
-            input: ModelInputManifest {
-                width: 640,
-                height: 384,
-                channels: 3,
-                pixel_format: "rgb24".to_string(),
-                layout: "nchw".to_string(),
-                data_type: "uint8".to_string(),
-                pass_through: false,
-                mean_values: [0.0; 3],
-                std_values: [255.0; 3],
-            },
-            outputs: DETECTOR_OUTPUT_SHAPES
-                .iter()
-                .map(|shape| ModelOutputManifest {
-                    shape: *shape,
-                    layout: "nchw".to_string(),
-                    data_type: "float32".to_string(),
-                })
-                .collect(),
-        }),
-    }
-}
-
-fn deserialize_embedder<'de, D>(deserializer: D) -> Result<ModelManifest, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Helper {
-        Detailed(ModelManifest),
-        Simple(String),
-    }
-
-    match Helper::deserialize(deserializer)? {
-        Helper::Detailed(m) => Ok(m),
-        Helper::Simple(path) => Ok(ModelManifest {
-            path,
-            sha256: String::new(),
-            input: ModelInputManifest {
-                width: 112,
-                height: 112,
-                channels: 3,
-                pixel_format: "rgb24".to_string(),
-                layout: "nchw".to_string(),
-                data_type: "uint8".to_string(),
-                pass_through: false,
-                mean_values: [127.5; 3],
-                std_values: [127.5; 3],
-            },
-            outputs: vec![ModelOutputManifest {
-                shape: [1, 512, 1, 1],
-                layout: "nc".to_string(),
-                data_type: "float32".to_string(),
-            }],
-        }),
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ModelManifest {
-    pub path: String,
-    pub sha256: String,
-    pub input: ModelInputManifest,
-    pub outputs: Vec<ModelOutputManifest>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelInputManifest {
-    pub width: u32,
-    pub height: u32,
-    pub channels: u32,
-    pub pixel_format: String,
-    pub layout: String,
-    pub data_type: String,
-    pub pass_through: bool,
-    pub mean_values: [f32; 3],
-    pub std_values: [f32; 3],
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelOutputManifest {
-    pub shape: [u32; 4],
-    pub layout: String,
-    pub data_type: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct SelfTestManifest {
-    #[serde(alias = "timeout_ms", alias = "timeoutMs")]
+    #[serde(alias = "timeoutMs")]
     pub timeout_ms: u64,
-    #[serde(alias = "input_mode", alias = "inputMode")]
+    #[serde(alias = "inputMode")]
     pub input_mode: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct LoadedPackage {
     pub root: PathBuf,
-    pub manifest: PackageManifest,
-    pub models: ModelsManifest,
+    pub person_detector_path: PathBuf,
     pub detector_path: PathBuf,
     pub embedder_path: PathBuf,
+    pub detector_width: u32,
+    pub detector_height: u32,
+    pub embedder_width: u32,
+    pub embedder_height: u32,
+    pub embedding_dimension: u32,
 }
 
 impl LoadedPackage {
@@ -226,7 +72,7 @@ impl LoadedPackage {
         let root = package_root
             .canonicalize()
             .map_err(|error| AlgoError::ModelLoad {
-                reason: format!("算法包根目录无法规范化 ({package_root:?}): {error}"),
+                reason: format!("规范化算法包根目录失败 ({package_root:?}): {error}"),
             })?;
         let manifest_path = root.join("manifest.json");
         let manifest_meta =
@@ -242,7 +88,7 @@ impl LoadedPackage {
             std::fs::read(&manifest_path).map_err(|error| AlgoError::ModelLoad {
                 reason: format!("读取算法包 manifest 失败 ({manifest_path:?}): {error}"),
             })?;
-        let mut manifest: PackageManifest =
+        let manifest: PackageManifest =
             serde_json::from_slice(&manifest_bytes).map_err(|error| AlgoError::ModelLoad {
                 reason: format!("解析算法包 manifest 失败: {error}"),
             })?;
@@ -262,169 +108,47 @@ impl LoadedPackage {
             });
         }
 
-        let mut models = manifest.models.take().unwrap_or_default();
         let env = algo_sdk::env::PackageEnv::load(&root);
 
-        // 优先使用当前包私有的 .env 配置路径覆盖模型（零全局污染）
-        if let Some(custom_detector) = env.get_str("DETECTOR_MODEL_PATH") {
-            models.detector.path = custom_detector;
-            models.detector.sha256.clear();
-        }
-        if let Some(custom_embedder) = env.get_str("EMBEDDER_MODEL_PATH") {
-            models.embedder.path = custom_embedder;
-            models.embedder.sha256.clear();
-        }
-
-        if models.embedding_dimension != 512 {
-            return Err(AlgoError::ModelLoad {
-                reason: format!(
-                    "EdgeFace embedding_dimension 必须为 512，实际 {}",
-                    models.embedding_dimension
-                ),
-            });
-        }
-        validate_input_manifest(
-            "detector",
-            &models.detector.input,
-            640,
-            384,
-            [0.0, 0.0, 0.0],
-            [255.0, 255.0, 255.0],
+        let person_detector_path = env.resolve_model_path(
+            &root,
+            "PERSON_DETECTOR_MODEL_PATH",
+            "model/yolov8n-640x384-rk3568.rknn",
         )?;
-        validate_input_manifest(
-            "embedder",
-            &models.embedder.input,
-            112,
-            112,
-            [127.5, 127.5, 127.5],
-            [127.5, 127.5, 127.5],
+        let detector_path = env.resolve_model_path(
+            &root,
+            "DETECTOR_MODEL_PATH",
+            "model/yolov8n-face-640x384_rk3568_mixed_face.rknn",
         )?;
-        validate_model_outputs(
-            "detector",
-            &models.detector.outputs,
-            &DETECTOR_OUTPUT_SHAPES,
-            &["nchw"],
-        )?;
-        validate_model_outputs(
-            "embedder",
-            &models.embedder.outputs,
-            &[[1, 512, 1, 1]],
-            &["nc", "nchw"],
+        let embedder_path = env.resolve_model_path(
+            &root,
+            "EMBEDDER_MODEL_PATH",
+            "model/edgeface_xs_gamma_06_rk3568_fp16.rknn",
         )?;
 
-        let detector_path = verify_model(&root, &models.detector)?;
-        let embedder_path = verify_model(&root, &models.embedder)?;
-        manifest.models = Some(models.clone());
+        verify_model_file(&detector_path)?;
+        verify_model_file(&embedder_path)?;
+        // 人体检测模型若存在则验证，若不存在亦记录
+        if person_detector_path.is_file() {
+            verify_model_file(&person_detector_path)?;
+        }
+
         Ok(Self {
             root,
-            manifest,
-            models,
+            person_detector_path,
             detector_path,
             embedder_path,
+            detector_width: 640,
+            detector_height: 384,
+            embedder_width: 112,
+            embedder_height: 112,
+            embedding_dimension: 512,
         })
     }
 }
 
-fn validate_input_manifest(
-    name: &str,
-    input: &ModelInputManifest,
-    expected_width: u32,
-    expected_height: u32,
-    expected_mean: [f32; 3],
-    expected_std: [f32; 3],
-) -> Result<(), AlgoError> {
-    if input.width != expected_width
-        || input.height != expected_height
-        || input.channels != 3
-        || input.pixel_format != "rgb24"
-        || input.layout != "nchw"
-        || input.data_type != "uint8"
-        || input.pass_through
-        || input.mean_values != expected_mean
-        || input.std_values != expected_std
-        || input.mean_values.iter().any(|v| !v.is_finite())
-        || input.std_values.iter().any(|v| !v.is_finite() || *v <= 0.0)
-    {
-        return Err(AlgoError::ModelLoad {
-            reason: format!("{name} manifest 输入契约不支持当前硬件路径"),
-        });
-    }
-    Ok(())
-}
-
-const DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 12] = [
-    [1, 64, 48, 80],
-    [1, 1, 48, 80],
-    [1, 1, 48, 80],
-    [1, 15, 48, 80],
-    [1, 64, 24, 40],
-    [1, 1, 24, 40],
-    [1, 1, 24, 40],
-    [1, 15, 24, 40],
-    [1, 64, 12, 20],
-    [1, 1, 12, 20],
-    [1, 1, 12, 20],
-    [1, 15, 12, 20],
-];
-
-fn validate_model_outputs(
-    name: &str,
-    outputs: &[ModelOutputManifest],
-    expected_shapes: &[[u32; 4]],
-    allowed_layouts: &[&str],
-) -> Result<(), AlgoError> {
-    if outputs.len() != expected_shapes.len() {
-        return Err(AlgoError::ModelLoad {
-            reason: format!(
-                "{name} 输出分支数量不匹配: expected={}, actual={}",
-                expected_shapes.len(),
-                outputs.len()
-            ),
-        });
-    }
-    for (index, (output, expected_shape)) in outputs.iter().zip(expected_shapes).enumerate() {
-        if output.shape != *expected_shape
-            || !allowed_layouts.contains(&output.layout.as_str())
-            || output.data_type != "float32"
-        {
-            return Err(AlgoError::ModelLoad {
-                reason: format!(
-                    "{name} 输出 {index} 契约不匹配: expected_shape={expected_shape:?}, actual_shape={:?}, layout={}, data_type={}",
-                    output.shape, output.layout, output.data_type
-                ),
-            });
-        }
-    }
-    Ok(())
-}
-fn verify_model(root: &Path, model: &ModelManifest) -> Result<PathBuf, AlgoError> {
-    let relative = Path::new(&model.path);
-    if relative.as_os_str().is_empty()
-        || relative.is_absolute()
-        || relative.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(AlgoError::ModelLoad {
-            reason: format!("模型路径不安全: {}", model.path),
-        });
-    }
-
-    let path = root
-        .join(relative)
-        .canonicalize()
-        .map_err(|error| AlgoError::ModelLoad {
-            reason: format!("模型文件无法规范化 ({}): {error}", model.path),
-        })?;
-    if !path.starts_with(root) {
-        return Err(AlgoError::ModelLoad {
-            reason: format!("模型路径越出算法包根目录: {}", model.path),
-        });
-    }
-    let metadata = std::fs::metadata(&path).map_err(|error| AlgoError::ModelLoad {
+fn verify_model_file(path: &Path) -> Result<(), AlgoError> {
+    let metadata = std::fs::metadata(path).map_err(|error| AlgoError::ModelLoad {
         reason: format!("读取模型元数据失败 ({path:?}): {error}"),
     })?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_MODEL_BYTES {
@@ -432,25 +156,7 @@ fn verify_model(root: &Path, model: &ModelManifest) -> Result<PathBuf, AlgoError
             reason: format!("模型文件大小或类型非法 ({path:?})"),
         });
     }
-    if !model.sha256.is_empty() {
-        let bytes = std::fs::read(&path).map_err(|error| AlgoError::ModelLoad {
-            reason: format!("读取模型文件失败 ({path:?}): {error}"),
-        })?;
-        let digest = Sha256::digest(&bytes);
-        let actual = digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        if !actual.eq_ignore_ascii_case(&model.sha256) {
-            return Err(AlgoError::ModelLoad {
-                reason: format!(
-                    "模型 SHA-256 不匹配 ({path:?}): expected={}, actual={actual}",
-                    model.sha256
-                ),
-            });
-        }
-    }
-    Ok(path)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -460,8 +166,14 @@ mod tests {
     #[test]
     fn package_manifest_matches_checked_in_models() {
         let package = LoadedPackage::load(Path::new(env!("CARGO_MANIFEST_DIR")))
-            .expect("checked-in RKNN manifest and model hashes must be valid");
-        assert_eq!(package.models.detector.outputs.len(), 12);
-        assert_eq!(package.models.embedding_dimension, 512);
+            .expect("checked-in RKNN manifest and model paths must be valid");
+        assert_eq!(package.detector_width, 640);
+        assert_eq!(package.detector_height, 384);
+        assert_eq!(package.embedder_width, 112);
+        assert_eq!(package.embedder_height, 112);
+        assert_eq!(package.embedding_dimension, 512);
+        assert!(package.detector_path.is_file());
+        assert!(package.embedder_path.is_file());
+        assert!(package.person_detector_path.is_file());
     }
 }

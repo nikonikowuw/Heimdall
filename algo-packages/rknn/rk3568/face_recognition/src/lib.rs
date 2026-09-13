@@ -43,18 +43,22 @@ const WORKER_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_DECODED_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_PREPROCESS_BYTES: usize = 128 * 1024 * 1024;
 
+type DetectionPairResult = Result<(Vec<detect::PersonCandidate>, Vec<detect::RawFace>), AlgoError>;
+
 enum InferenceRequest {
     DetectHost {
         data: Vec<u8>,
         layout: LetterboxLayout,
-        min_score: f32,
-        reply: SyncSender<Result<Vec<detect::RawFace>, AlgoError>>,
+        min_face_score: f32,
+        min_person_score: f32,
+        reply: SyncSender<DetectionPairResult>,
     },
     DetectDma {
         buffer: CvBuffer,
         letterbox: LetterboxLayout,
-        min_score: f32,
-        reply: SyncSender<Result<Vec<detect::RawFace>, AlgoError>>,
+        min_face_score: f32,
+        min_person_score: f32,
+        reply: SyncSender<DetectionPairResult>,
     },
     EmbedHost {
         data: Vec<u8>,
@@ -178,38 +182,33 @@ impl InferenceWorker {
     fn start(package: &LoadedPackage) -> Result<Arc<Self>, AlgoError> {
         let runtime = RknnRuntime::load(&package.root)?;
         let detector_contract = RknnModelContract {
-            input_width: package.models.detector.input.width,
-            input_height: package.models.detector.input.height,
-            input_channels: package.models.detector.input.channels,
-            output_shapes: package
-                .models
-                .detector
-                .outputs
-                .iter()
-                .map(|output| output.shape)
-                .collect(),
+            input_width: package.detector_width,
+            input_height: package.detector_height,
+            input_channels: 3,
+            output_shapes: manifest::DETECTOR_OUTPUT_SHAPES.to_vec(),
         };
         let embedder_contract = RknnModelContract {
-            input_width: package.models.embedder.input.width,
-            input_height: package.models.embedder.input.height,
-            input_channels: package.models.embedder.input.channels,
-            output_shapes: package
-                .models
-                .embedder
-                .outputs
-                .iter()
-                .map(|output| output.shape)
-                .collect(),
+            input_width: package.embedder_width,
+            input_height: package.embedder_height,
+            input_channels: 3,
+            output_shapes: vec![[1, 512, 1, 1]],
+        };
+        let person_detector_contract = RknnModelContract {
+            input_width: package.detector_width,
+            input_height: package.detector_height,
+            input_channels: 3,
+            output_shapes: vec![[1, 84, 5040, 1]],
         };
 
         let detector_path = package.detector_path.clone();
         let embedder_path = package.embedder_path.clone();
+        let person_detector_path = package.person_detector_path.clone();
         let queue = Arc::new(WorkerQueue::new());
         let worker_queue = Arc::clone(&queue);
         let (ready_tx, ready_rx) = sync_channel(1);
 
         let thread_handle = std::thread::Builder::new()
-            .name("heimdall-rk3576-face-npu".to_string())
+            .name("heimdall-rk3568-face-npu".to_string())
             .spawn(move || {
                 let sessions =
                     RknnSession::new(Arc::clone(&runtime), &detector_path, detector_contract)
@@ -225,6 +224,26 @@ impl InferenceWorker {
                     let _ = ready_tx.send(sessions.map(|_| ()));
                     return;
                 };
+
+                let mut person_detector = if person_detector_path.is_file() {
+                    match RknnSession::new(
+                        Arc::clone(&runtime),
+                        &person_detector_path,
+                        person_detector_contract,
+                    ) {
+                        Ok(session) => {
+                            tracing::info!(path = ?person_detector_path, "成功加载 YOLOv8n 人体检测模型");
+                            Some(session)
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "可选 YOLOv8n 人体检测模型初始化未就绪，使用纯人脸推导");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 if ready_tx.send(Ok(())).is_err() {
                     return;
                 }
@@ -234,12 +253,31 @@ impl InferenceWorker {
                         InferenceRequest::DetectHost {
                             data,
                             layout,
-                            min_score,
+                            min_face_score,
+                            min_person_score,
                             reply,
                         } => {
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    decode_detector(&mut detector, &data, &layout, min_score)
+                                    let persons = if let Some(ref mut p_session) = person_detector {
+                                        match p_session.infer_with_host_bytes(&data, |output| {
+                                            let RknnInferenceOutput::Float32(views) = output;
+                                            let slice = views.first().ok_or_else(|| AlgoError::Inference {
+                                                reason: "person detector 输出为空".to_string(),
+                                            })?;
+                                            Ok(detect::decode_yolov8_person(slice, min_person_score, &layout))
+                                        }) {
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                tracing::warn!(error = %e, "人体检测推理失败，回退到纯人脸推导");
+                                                Vec::new()
+                                            }
+                                        }
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    let faces = decode_detector(&mut detector, &data, &layout, min_face_score)?;
+                                    Ok((persons, faces))
                                 }))
                                 .unwrap_or_else(|_| Err(worker_panic_error()));
                             let _ = reply.send(result);
@@ -247,25 +285,42 @@ impl InferenceWorker {
                         InferenceRequest::DetectDma {
                             buffer,
                             letterbox,
-                            min_score,
+                            min_face_score,
+                            min_person_score,
                             reply,
                         } => {
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    buffer
+                                    let layout = buffer
                                         .as_dma_buf_layout()
                                         .ok_or_else(|| AlgoError::Preprocess {
                                             reason: "worker 收到的 buffer 没有 DMA-BUF 布局"
                                                 .to_string(),
-                                        })
-                                        .and_then(|layout| {
-                                            let attrs = detector.output_attrs.clone();
-                                            detector.infer_with_dma_buf(&layout, |output| {
-                                                decode_detector_output(
-                                                    output, &attrs, &letterbox, min_score,
-                                                )
-                                            })
-                                        })
+                                        })?;
+                                    let persons = if let Some(ref mut p_session) = person_detector {
+                                        match p_session.infer_with_dma_buf(&layout, |output| {
+                                            let RknnInferenceOutput::Float32(views) = output;
+                                            let slice = views.first().ok_or_else(|| AlgoError::Inference {
+                                                reason: "person detector 输出为空".to_string(),
+                                            })?;
+                                            Ok(detect::decode_yolov8_person(slice, min_person_score, &letterbox))
+                                        }) {
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                tracing::warn!(error = %e, "人体检测 DMA 推理失败，回退到纯人脸推导");
+                                                Vec::new()
+                                            }
+                                        }
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    let attrs = detector.output_attrs.clone();
+                                    let faces = detector.infer_with_dma_buf(&layout, |output| {
+                                        decode_detector_output(
+                                            output, &attrs, &letterbox, min_face_score,
+                                        )
+                                    })?;
+                                    Ok((persons, faces))
                                 }))
                                 .unwrap_or_else(|_| Err(worker_panic_error()));
                             let _ = reply.send(result);
@@ -318,13 +373,15 @@ impl InferenceWorker {
         &self,
         data: Vec<u8>,
         layout: LetterboxLayout,
-        min_score: f32,
-    ) -> Result<Vec<detect::RawFace>, AlgoError> {
+        min_face_score: f32,
+        min_person_score: f32,
+    ) -> Result<(Vec<detect::PersonCandidate>, Vec<detect::RawFace>), AlgoError> {
         let (reply, response) = sync_channel(1);
         self.try_send(InferenceRequest::DetectHost {
             data,
             layout,
-            min_score,
+            min_face_score,
+            min_person_score,
             reply,
         })?;
         receive_response(response)
@@ -334,13 +391,15 @@ impl InferenceWorker {
         &self,
         buffer: CvBuffer,
         letterbox: LetterboxLayout,
-        min_score: f32,
-    ) -> Result<Vec<detect::RawFace>, AlgoError> {
+        min_face_score: f32,
+        min_person_score: f32,
+    ) -> Result<(Vec<detect::PersonCandidate>, Vec<detect::RawFace>), AlgoError> {
         let (reply, response) = sync_channel(1);
         self.try_send(InferenceRequest::DetectDma {
             buffer,
             letterbox,
-            min_score,
+            min_face_score,
+            min_person_score,
             reply,
         })?;
         receive_response(response)
@@ -436,10 +495,10 @@ pub fn shared_models(package_root: &Path) -> Result<Arc<SharedModels>, AlgoError
     let worker = InferenceWorker::start(&package)?;
     let models = Arc::new(SharedModels {
         worker,
-        detector_width: package.models.detector.input.width,
-        detector_height: package.models.detector.input.height,
-        embedder_width: package.models.embedder.input.width,
-        embedder_height: package.models.embedder.input.height,
+        detector_width: package.detector_width,
+        detector_height: package.detector_height,
+        embedder_width: package.embedder_width,
+        embedder_height: package.embedder_height,
     });
 
     let mut registry = shared_model_registry()
@@ -745,15 +804,19 @@ unsafe fn extract_face_impl(
         };
     let (orig_w, orig_h) = (image.width(), image.height());
     let min_score = 0.5;
-    let raw_faces = match models.worker.detect_host(detector_rgb, layout, min_score) {
-        Ok(faces) => faces,
-        Err(error) => {
-            let status = error.to_c_status();
-            algo_sdk::macros::set_last_error(error.to_string());
-            write_output_error(output_ref, status);
-            return status;
-        }
-    };
+    let (_persons, raw_faces) =
+        match models
+            .worker
+            .detect_host(detector_rgb, layout, min_score, 0.40)
+        {
+            Ok(res) => res,
+            Err(error) => {
+                let status = error.to_c_status();
+                algo_sdk::macros::set_last_error(error.to_string());
+                write_output_error(output_ref, status);
+                return status;
+            }
+        };
 
     let min_face_size = 30u32;
     let min_quality_score = 0.3f32;
@@ -859,7 +922,8 @@ mod tests {
             .push(InferenceRequest::DetectHost {
                 data: vec![1],
                 layout,
-                min_score: 0.5,
+                min_face_score: 0.5,
+                min_person_score: 0.4,
                 reply: old_reply,
             })
             .expect("first request should be queued");
@@ -867,7 +931,8 @@ mod tests {
             .push(InferenceRequest::DetectHost {
                 data: vec![2],
                 layout,
-                min_score: 0.5,
+                min_face_score: 0.5,
+                min_person_score: 0.4,
                 reply: middle_reply,
             })
             .expect("second request should be queued");
@@ -875,7 +940,8 @@ mod tests {
             .push(InferenceRequest::DetectHost {
                 data: vec![3],
                 layout,
-                min_score: 0.5,
+                min_face_score: 0.5,
+                min_person_score: 0.4,
                 reply: new_reply,
             })
             .expect("newest request should replace oldest request");

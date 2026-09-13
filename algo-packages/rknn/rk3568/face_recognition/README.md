@@ -11,6 +11,7 @@
 
 ## 模型清单
 
+- `model/yolov8n-640x384-rk3568.rknn`: YOLOv8n COCO 人体检测模型（640×384 INT8）
 - `model/yolov8n-face-640x384_rk3568_mixed_face.rknn`: 人脸检测与 5 点关键点模型（640×384 混合精度）
 - `model/edgeface_xs_gamma_06_rk3568_fp16.rknn`: 512 维人脸特征提取模型（112×112 FP16）
 
@@ -18,7 +19,7 @@
 
 本算法包提供两条能力与全套端侧优化流水线：
 
-- `instance_process()`：在 640x384 图像上运行 `YOLOv8n-face` 人脸与五点关键点检测，结合空间几何关联与自适应虚拟躯干 (Pseudo-body) 保底，由纯 Rust `ByteTracker` 实现跨帧航迹维护。
+- `instance_process()`：在同一个 640x384 预处理缓冲区上并发运行 `yolov8n` 人体检测与 `YOLOv8n-face` 人脸关键点检测，结合空间几何关联挂载与特写虚拟躯干 (Pseudo-body) 保底，由纯 Rust `ByteTracker` 维护稳定航迹。
 - `BestShotManager` 动态抓拍与时域超球面特征融合：
   1. **低频算力门控**：初次入镜合格人脸立即触发特征提取；后续帧仅在姿态质量显著改善（$\Delta Q > 0.08$）或满足采样间隔（$\ge 6$ 帧）且未达上限（最多 4 帧）时触发 EdgeFace，彻底避免 RK3568 1.0 TOPS 算力逐帧空转；
   2. **超球面加权聚合**：按质量平方对 512 维单位特征向量增量加权累加，并重新 L2 归一化投影至单位超球面；

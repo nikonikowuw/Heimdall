@@ -12,10 +12,16 @@ use face_recognition_rk3568::{cosine_similarity, prepare_detector_input_for, sha
 #[ignore = "需要物理 RK3568 NPU 硬件和 librknnrt.so 环境"]
 fn test_rknn_hardware_face_detection_and_embedding() {
     let pkg_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let person_detector_model = pkg_root.join("model/yolov8n-640x384-rk3568.rknn");
     let detector_model = pkg_root.join("model/yolov8n-face-640x384_rk3568_mixed_face.rknn");
     let embedder_model = pkg_root.join("model/edgeface_xs_gamma_06_rk3568_fp16.rknn");
     let test_image_path = pkg_root.join("testimage.jpg");
 
+    assert!(
+        person_detector_model.is_file(),
+        "人体检测模型文件不存在: {:?}",
+        person_detector_model
+    );
     assert!(
         detector_model.is_file(),
         "检测模型文件不存在: {:?}",
@@ -51,9 +57,9 @@ fn test_rknn_hardware_face_detection_and_embedding() {
         (models.detector_width * models.detector_height * 3) as usize
     );
 
-    let faces = models
+    let (_persons, faces) = models
         .worker
-        .detect_host(detector_rgb, layout, 0.25)
+        .detect_host(detector_rgb, layout, 0.25, 0.40)
         .expect("人脸检测推理失败");
 
     assert!(!faces.is_empty(), "在 testimage.jpg 中未检出任何有效人脸");
