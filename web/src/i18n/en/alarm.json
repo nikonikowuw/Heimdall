@@ -34,7 +34,9 @@
     "prev": "Previous",
     "next": "Next",
     "page": "Page {{current}}",
-    "total": "Total {{total}}"
+    "total": "Total {{total}}",
+    "perPage": "{{count}} / page",
+    "pageSize": "Items per page"
   },
   "statusFilter": {
     "all": "All Status",
@@ -47,7 +49,29 @@
   "timeFilter": {
     "start": "Start Time",
     "end": "End Time",
-    "clear": "Clear"
+    "clear": "Clear",
+    "invalidRange": "Start time cannot be after end time",
+    "quickPresets": "Quick Presets",
+    "customRange": "Custom Precision Range",
+    "past5Minutes": "Past 5m",
+    "past15Minutes": "Past 15m",
+    "past30Minutes": "Past 30m",
+    "today": "Today",
+    "now": "Now",
+    "apply": "Apply",
+    "reset": "All Time",
+    "duration": "Span: {{duration}}",
+    "secondUnit": "s",
+    "minuteUnit": "m",
+    "hourUnit": "h",
+    "hourLabel": "HH",
+    "minuteLabel": "mm",
+    "secondLabel": "ss",
+    "selectStartTime": "Start Time",
+    "selectEndTime": "End Time",
+    "startOfDay": "00:00:00",
+    "endOfDay": "23:59:59",
+    "customDateRange": "Date & Time Range"
   },
   "filter": {
     "allCameras": "All Channels",
@@ -118,7 +142,11 @@
     "trackId": "Track ID",
     "channel": "Channel",
     "qualityScore": "Quality",
-    "time": "Time"
+    "time": "Time",
+    "download": "Download Image",
+    "openOriginal": "Open in New Tab",
+    "close": "Close",
+    "escHint": "Press Esc or click outside to close"
   },
   "toast": {
     "ruleTriggered": "Detected {{target}} triggering rule",

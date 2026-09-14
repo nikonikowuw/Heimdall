@@ -19,19 +19,19 @@ fn build_filter_query(
     end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
 ) -> sea_orm::Select<Entity> {
     let mut query = Entity::find();
-    if let Some(cid) = camera_id {
+    if let Some(cid) = camera_id.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::CameraId.eq(cid));
     }
-    if let Some(st) = status {
+    if let Some(st) = status.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::Status.eq(st));
     }
-    if let Some(lbl) = target_label {
+    if let Some(lbl) = target_label.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::TargetLabel.eq(lbl));
     }
-    if let Some(rt) = rule_type {
+    if let Some(rt) = rule_type.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::RuleType.eq(rt));
     }
-    if let Some(sev) = severity {
+    if let Some(sev) = severity.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::Severity.eq(sev));
     }
     if let Some(start) = start_time {

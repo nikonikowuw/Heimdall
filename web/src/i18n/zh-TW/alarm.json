@@ -34,7 +34,9 @@
     "prev": "上一頁",
     "next": "下一頁",
     "page": "第 {{current}} 頁",
-    "total": "共 {{total}} 條"
+    "total": "共 {{total}} 條",
+    "perPage": "{{count}} 條/頁",
+    "pageSize": "每頁條數"
   },
   "statusFilter": {
     "all": "全部狀態 (All Status)",
@@ -47,7 +49,29 @@
   "timeFilter": {
     "start": "開始時間",
     "end": "結束時間",
-    "clear": "清空時間"
+    "clear": "清空時間",
+    "invalidRange": "開始時間不能晚於結束時間",
+    "quickPresets": "快捷區間",
+    "customRange": "自定義精細範圍",
+    "past5Minutes": "近 5 分鐘",
+    "past15Minutes": "近 15 分鐘",
+    "past30Minutes": "近 30 分鐘",
+    "today": "今天",
+    "now": "當前時刻",
+    "apply": "套用篩選",
+    "reset": "全部時間",
+    "duration": "已選跨度: {{duration}}",
+    "secondUnit": "秒",
+    "minuteUnit": "分",
+    "hourUnit": "時",
+    "hourLabel": "時",
+    "minuteLabel": "分",
+    "secondLabel": "秒",
+    "selectStartTime": "開始時間",
+    "selectEndTime": "結束時間",
+    "startOfDay": "00:00:00",
+    "endOfDay": "23:59:59",
+    "customDateRange": "日期與時間範圍"
   },
   "filter": {
     "allCameras": "全部通道 (All Cameras)",
@@ -118,7 +142,11 @@
     "trackId": "Track ID",
     "channel": "通道",
     "qualityScore": "質量評分",
-    "time": "時間"
+    "time": "時間",
+    "download": "下載圖片",
+    "openOriginal": "在新分頁中打開原圖",
+    "close": "關閉",
+    "escHint": "按 Esc 或點擊外部空白處即可關閉"
   },
   "toast": {
     "ruleTriggered": "偵測到 {{target}} 觸發規則",

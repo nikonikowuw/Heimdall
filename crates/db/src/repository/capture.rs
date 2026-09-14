@@ -10,6 +10,28 @@ use crate::error::DbError;
 #[derive(Debug)]
 pub struct CaptureRepo;
 
+fn build_filter_query(
+    camera_id: Option<&str>,
+    target_label: Option<&str>,
+    start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+    end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+) -> sea_orm::Select<Entity> {
+    let mut query = Entity::find();
+    if let Some(cid) = camera_id.filter(|s| !s.trim().is_empty()) {
+        query = query.filter(Column::CameraId.eq(cid));
+    }
+    if let Some(lbl) = target_label.filter(|s| !s.trim().is_empty()) {
+        query = query.filter(Column::TargetLabel.eq(lbl));
+    }
+    if let Some(start) = start_time {
+        query = query.filter(Column::CapturedAt.gte(start));
+    }
+    if let Some(end) = end_time {
+        query = query.filter(Column::CapturedAt.lte(end));
+    }
+    query
+}
+
 impl CaptureRepo {
     pub async fn list_recent(
         db: &DatabaseConnection,
@@ -29,23 +51,24 @@ impl CaptureRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        let mut query = Entity::find().order_by_desc(Column::CapturedAt);
-        if let Some(cid) = camera_id {
-            query = query.filter(Column::CameraId.eq(cid));
-        }
-        if let Some(lbl) = target_label {
-            query = query.filter(Column::TargetLabel.eq(lbl));
-        }
-        if let Some(start) = start_time {
-            query = query.filter(Column::CapturedAt.gte(start));
-        }
-        if let Some(end) = end_time {
-            query = query.filter(Column::CapturedAt.lte(end));
-        }
-        query
+        build_filter_query(camera_id, target_label, start_time, end_time)
+            .order_by_desc(Column::CapturedAt)
             .limit(limit)
             .offset(offset)
             .all(db)
+            .await
+            .map_err(DbError::from)
+    }
+
+    pub async fn count_filtered(
+        db: &DatabaseConnection,
+        camera_id: Option<&str>,
+        target_label: Option<&str>,
+        start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+    ) -> Result<u64, DbError> {
+        build_filter_query(camera_id, target_label, start_time, end_time)
+            .count(db)
             .await
             .map_err(DbError::from)
     }

@@ -14,6 +14,8 @@ pub struct SpsInfo {
 }
 
 /// 将字节切片中的 Annex B NALU 单元拆分（支持 0x00000001 与 0x000001 起始码）
+///
+/// 单趟线性扫描，消除中间 start_codes 堆分配开销
 pub fn split_annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
     let len = data.len();
     if len < 3 {
@@ -24,37 +26,40 @@ pub fn split_annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
         };
     }
 
-    let mut start_codes = Vec::new();
+    let mut nalus = Vec::with_capacity(4);
     let mut i = 0;
+    let mut current_payload_start: Option<usize> = None;
+
     while i < len - 2 {
         if data[i] == 0 && data[i + 1] == 0 {
-            if i + 3 < len && data[i + 2] == 0 && data[i + 3] == 1 {
-                start_codes.push((i, i + 4));
-                i += 4;
-                continue;
+            let sc_len = if i + 3 < len && data[i + 2] == 0 && data[i + 3] == 1 {
+                Some(4)
             } else if data[i + 2] == 1 {
-                start_codes.push((i, i + 3));
-                i += 3;
+                Some(3)
+            } else {
+                None
+            };
+
+            if let Some(len_sc) = sc_len {
+                if let Some(start) = current_payload_start {
+                    if start < i {
+                        nalus.push(&data[start..i]);
+                    }
+                }
+                current_payload_start = Some(i + len_sc);
+                i += len_sc;
                 continue;
             }
         }
         i += 1;
     }
 
-    if start_codes.is_empty() {
-        return vec![data];
-    }
-
-    let mut nalus = Vec::with_capacity(start_codes.len());
-    for (idx, &(_, payload_start)) in start_codes.iter().enumerate() {
-        let payload_end = if idx + 1 < start_codes.len() {
-            start_codes[idx + 1].0
-        } else {
-            len
-        };
-        if payload_start < payload_end {
-            nalus.push(&data[payload_start..payload_end]);
+    if let Some(start) = current_payload_start {
+        if start < len {
+            nalus.push(&data[start..len]);
         }
+    } else {
+        nalus.push(data);
     }
 
     nalus
@@ -62,6 +67,12 @@ pub fn split_annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
 
 /// 移除 H.264 / H.265 NALU 中的防竞争字节 (0x00 0x00 0x03 -> 0x00 0x00)
 pub fn remove_emulation_prevention(data: &[u8]) -> Vec<u8> {
+    // 快速路径：绝大多数普通数据包不包含 0x00 0x00 0x03，直接借用或复制，避免逐字节遍历处理
+    let has_emulation = data.windows(3).any(|w| w == [0x00, 0x00, 0x03]);
+    if !has_emulation {
+        return data.to_vec();
+    }
+
     let mut out = Vec::with_capacity(data.len());
     let mut zero_count = 0;
 
@@ -71,11 +82,7 @@ pub fn remove_emulation_prevention(data: &[u8]) -> Vec<u8> {
             zero_count = 0;
             continue;
         }
-        if b == 0x00 {
-            zero_count += 1;
-        } else {
-            zero_count = 0;
-        }
+        zero_count = if b == 0x00 { zero_count + 1 } else { 0 };
         out.push(b);
     }
     out
@@ -93,17 +100,19 @@ impl<'a> BitReader<'a> {
         Self { data, bit_pos: 0 }
     }
 
+    #[inline]
     pub fn bits_left(&self) -> usize {
-        let total_bits = self.data.len() * 8;
-        total_bits.saturating_sub(self.bit_pos)
+        (self.data.len() << 3).saturating_sub(self.bit_pos)
     }
 
+    #[inline]
     pub fn read_bit(&mut self) -> Result<u32, MediaError> {
-        if self.bit_pos >= self.data.len() * 8 {
+        let total_bits = self.data.len() << 3;
+        if self.bit_pos >= total_bits {
             return Err(MediaError::SpsParse("比特流读取越界".into()));
         }
-        let byte_idx = self.bit_pos / 8;
-        let bit_idx = 7 - (self.bit_pos % 8);
+        let byte_idx = self.bit_pos >> 3;
+        let bit_idx = 7 - (self.bit_pos & 7);
         self.bit_pos += 1;
         Ok(((self.data[byte_idx] >> bit_idx) & 1) as u32)
     }
@@ -141,34 +150,39 @@ impl<'a> BitReader<'a> {
     }
 
     /// 读取有符号指数哥伦布编码 (Signed Exponential-Golomb / se)
+    ///
+    /// 无分支位运算映射：(-1)^(k+1) * ceil(k/2)
+    #[inline]
     pub fn read_se(&mut self) -> Result<i32, MediaError> {
         let code_num = self.read_ue()?;
-        if code_num % 2 == 0 {
-            Ok(-((code_num / 2) as i32))
-        } else {
-            Ok(code_num.div_ceil(2) as i32)
-        }
+        let val = ((code_num + 1) >> 1) as i32;
+        // 若 code_num 为偶数 (最低位为 0)，结果为负；否则为正
+        let sign_mask = ((code_num & 1) as i32).wrapping_sub(1);
+        Ok((val ^ sign_mask).wrapping_sub(sign_mask))
+    }
+}
+
+#[inline]
+fn strip_start_code(data: &[u8]) -> &[u8] {
+    if data.starts_with(&[0, 0, 0, 1]) {
+        &data[4..]
+    } else if data.starts_with(&[0, 0, 1]) {
+        &data[3..]
+    } else {
+        data
     }
 }
 
 /// 解析 H.264 SPS (Sequence Parameter Set)
 pub fn parse_h264_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
-    let mut data = raw_bytes;
-
-    // 剥离 NALU 起始码 00 00 01 或 00 00 00 01
-    if data.starts_with(&[0, 0, 0, 1]) {
-        data = &data[4..];
-    } else if data.starts_with(&[0, 0, 1]) {
-        data = &data[3..];
-    }
+    let mut data = strip_start_code(raw_bytes);
 
     if data.is_empty() {
         return Err(MediaError::SpsParse("SPS 数据为空".into()));
     }
 
     // 检查 NAL 头部：若首字节的 nal_unit_type == 7 (SPS)，跳过 1 字节 NAL Header
-    let nal_unit_type = data[0] & 0x1F;
-    if nal_unit_type == 7 {
+    if (data[0] & 0x1F) == 7 {
         data = &data[1..];
     }
 
@@ -250,32 +264,29 @@ pub fn parse_h264_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
     let _direct_8x8_inference_flag = reader.read_bit()?;
     let frame_cropping_flag = reader.read_bit()?;
 
-    let mut crop_left = 0u32;
-    let mut crop_right = 0u32;
-    let mut crop_top = 0u32;
-    let mut crop_bottom = 0u32;
-
-    if frame_cropping_flag != 0 {
-        crop_left = reader.read_ue()?;
-        crop_right = reader.read_ue()?;
-        crop_top = reader.read_ue()?;
-        crop_bottom = reader.read_ue()?;
-    }
+    let (crop_left, crop_right, crop_top, crop_bottom) = if frame_cropping_flag != 0 {
+        (
+            reader.read_ue()?,
+            reader.read_ue()?,
+            reader.read_ue()?,
+            reader.read_ue()?,
+        )
+    } else {
+        (0, 0, 0, 0)
+    };
 
     let crop_unit_x = match chroma_format_idc {
         1 | 2 => 2,
-        3 => 1,
         _ => 1,
     };
     let crop_unit_y = match chroma_format_idc {
         1 => 2 * (2 - frame_mbs_only_flag),
-        2 | 3 => 2 - frame_mbs_only_flag,
         _ => 2 - frame_mbs_only_flag,
     };
 
     let width =
-        ((pic_width_in_mbs_minus1 + 1) * 16).saturating_sub((crop_left + crop_right) * crop_unit_x);
-    let height = (((2 - frame_mbs_only_flag) * (pic_height_in_map_units_minus1 + 1)) * 16)
+        ((pic_width_in_mbs_minus1 + 1) << 4).saturating_sub((crop_left + crop_right) * crop_unit_x);
+    let height = (((2 - frame_mbs_only_flag) * (pic_height_in_map_units_minus1 + 1)) << 4)
         .saturating_sub((crop_top + crop_bottom) * crop_unit_y);
 
     let mut fps = 25.0f64; // 缺省 25fps
@@ -339,21 +350,14 @@ pub fn parse_h264_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
 
 /// 解析 H.265 (HEVC) SPS
 pub fn parse_h265_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
-    let mut data = raw_bytes;
-
-    if data.starts_with(&[0, 0, 0, 1]) {
-        data = &data[4..];
-    } else if data.starts_with(&[0, 0, 1]) {
-        data = &data[3..];
-    }
+    let mut data = strip_start_code(raw_bytes);
 
     if data.is_empty() {
         return Err(MediaError::SpsParse("H.265 SPS 数据为空".into()));
     }
 
     // H.265 NAL Header 为 2 字节，SPS 的 nal_unit_type 为 33 (0x21)
-    let nal_unit_type = (data[0] >> 1) & 0x3F;
-    if nal_unit_type == 33 {
+    if ((data[0] >> 1) & 0x3F) == 33 {
         data = &data[2..];
     }
 
@@ -368,7 +372,7 @@ pub fn parse_h265_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
     let sps_max_sub_layers_minus1 = reader.read_bits(3)?;
     let _sps_temporal_id_nesting_flag = reader.read_bit()?;
 
-    // Profile Tier Level 解析 (简明跳转)
+    // Profile Tier Level 解析 (栈上固定数组，消除堆分配)
     let _general_profile_space = reader.read_bits(2)?;
     let _general_tier_flag = reader.read_bit()?;
     let general_profile_idc = reader.read_bits(5)? as u8;
@@ -377,24 +381,25 @@ pub fn parse_h265_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
     let _general_constraint_flags_lo = reader.read_bits(16)?;
     let general_level_idc = reader.read_bits(8)? as u8;
 
-    let mut sub_layer_profile_present_flag = Vec::new();
-    let mut sub_layer_level_present_flag = Vec::new();
-    for _ in 0..sps_max_sub_layers_minus1 {
-        sub_layer_profile_present_flag.push(reader.read_bit()? != 0);
-        sub_layer_level_present_flag.push(reader.read_bit()? != 0);
+    let sub_layers = (sps_max_sub_layers_minus1 as usize).min(7);
+    let mut sub_layer_profile_present = [false; 8];
+    let mut sub_layer_level_present = [false; 8];
+    for i in 0..sub_layers {
+        sub_layer_profile_present[i] = reader.read_bit()? != 0;
+        sub_layer_level_present[i] = reader.read_bit()? != 0;
     }
     if sps_max_sub_layers_minus1 > 0 {
         for _ in sps_max_sub_layers_minus1..8 {
             let _ = reader.read_bits(2)?;
         }
     }
-    for i in 0..sps_max_sub_layers_minus1 as usize {
-        if sub_layer_profile_present_flag[i] {
+    for i in 0..sub_layers {
+        if sub_layer_profile_present[i] {
             let _ = reader.read_bits(32)?;
             let _ = reader.read_bits(32)?;
             let _ = reader.read_bits(24)?;
         }
-        if sub_layer_level_present_flag[i] {
+        if sub_layer_level_present[i] {
             let _ = reader.read_bits(8)?;
         }
     }
@@ -409,17 +414,17 @@ pub fn parse_h265_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
     let pic_height_in_luma_samples = reader.read_ue()?;
     let conformance_window_flag = reader.read_bit()?;
 
-    let mut conf_win_left_offset = 0u32;
-    let mut conf_win_right_offset = 0u32;
-    let mut conf_win_top_offset = 0u32;
-    let mut conf_win_bottom_offset = 0u32;
-
-    if conformance_window_flag != 0 {
-        conf_win_left_offset = reader.read_ue()?;
-        conf_win_right_offset = reader.read_ue()?;
-        conf_win_top_offset = reader.read_ue()?;
-        conf_win_bottom_offset = reader.read_ue()?;
-    }
+    let (conf_win_left, conf_win_right, conf_win_top, conf_win_bottom) =
+        if conformance_window_flag != 0 {
+            (
+                reader.read_ue()?,
+                reader.read_ue()?,
+                reader.read_ue()?,
+                reader.read_ue()?,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
 
     let sub_width_c = if chroma_format_idc == 1 || chroma_format_idc == 2 {
         2
@@ -428,10 +433,10 @@ pub fn parse_h265_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
     };
     let sub_height_c = if chroma_format_idc == 1 { 2 } else { 1 };
 
-    let width = pic_width_in_luma_samples
-        .saturating_sub((conf_win_left_offset + conf_win_right_offset) * sub_width_c);
-    let height = pic_height_in_luma_samples
-        .saturating_sub((conf_win_top_offset + conf_win_bottom_offset) * sub_height_c);
+    let width =
+        pic_width_in_luma_samples.saturating_sub((conf_win_left + conf_win_right) * sub_width_c);
+    let height =
+        pic_height_in_luma_samples.saturating_sub((conf_win_top + conf_win_bottom) * sub_height_c);
 
     Ok(SpsInfo {
         codec: "h265".to_string(),
@@ -447,22 +452,16 @@ pub fn parse_h265_sps(raw_bytes: &[u8]) -> Result<SpsInfo, MediaError> {
 ///
 /// 零堆分配，通过解析 Annex B NALU 头部直接识别帧类型，用于实时丢帧防花屏判定
 pub fn is_keyframe_or_parameter_set(data: &[u8], codec: CodecType) -> bool {
-    for nalu in split_annex_b_nalus(data) {
-        if let Some(&first) = nalu.first() {
-            let matches_header = match codec {
-                // 5: IDR, 7: SPS, 8: PPS
-                CodecType::H264 => matches!(first & 0x1F, 5 | 7 | 8),
-                // 16..=21: IRAP (BLA/IDR/CRA), 32: VPS, 33: SPS, 34: PPS
-                CodecType::H265 => matches!((first >> 1) & 0x3F, 16..=21 | 32..=34),
-                // AAC 音频帧不参与视频帧类型判定
-                CodecType::Aac => false,
-            };
-            if matches_header {
-                return true;
-            }
-        }
-    }
-    false
+    split_annex_b_nalus(data).into_iter().any(|nalu| {
+        nalu.first().is_some_and(|&first| match codec {
+            // 5: IDR, 7: SPS, 8: PPS
+            CodecType::H264 => matches!(first & 0x1F, 5 | 7 | 8),
+            // 16..=21: IRAP (BLA/IDR/CRA), 32: VPS, 33: SPS, 34: PPS
+            CodecType::H265 => matches!((first >> 1) & 0x3F, 16..=21 | 32..=34),
+            // AAC 音频帧不参与视频帧类型判定
+            CodecType::Aac => false,
+        })
+    })
 }
 
 #[cfg(test)]
@@ -567,5 +566,30 @@ mod tests {
             b"\x00\x00\x00\x01\x02trail",
             CodecType::H265
         ));
+    }
+
+    #[test]
+    fn test_bit_reader_ue_and_se() {
+        // 编码序列: 0, 1, 2, 3, 4, 5, 6
+        // 1 | 010 | 011 | 00100 | 00101 | 00110 | 00111
+        // 10100110 01000010 10011000 11100000
+        let bytes = [0xA6, 0x42, 0x98, 0xE0];
+        let mut reader_ue = BitReader::new(&bytes);
+        assert_eq!(reader_ue.read_ue().expect("ue 0"), 0);
+        assert_eq!(reader_ue.read_ue().expect("ue 1"), 1);
+        assert_eq!(reader_ue.read_ue().expect("ue 2"), 2);
+        assert_eq!(reader_ue.read_ue().expect("ue 3"), 3);
+        assert_eq!(reader_ue.read_ue().expect("ue 4"), 4);
+        assert_eq!(reader_ue.read_ue().expect("ue 5"), 5);
+        assert_eq!(reader_ue.read_ue().expect("ue 6"), 6);
+
+        let mut reader_se = BitReader::new(&bytes);
+        assert_eq!(reader_se.read_se().expect("se 0"), 0);
+        assert_eq!(reader_se.read_se().expect("se 1"), 1);
+        assert_eq!(reader_se.read_se().expect("se -1"), -1);
+        assert_eq!(reader_se.read_se().expect("se 2"), 2);
+        assert_eq!(reader_se.read_se().expect("se -2"), -2);
+        assert_eq!(reader_se.read_se().expect("se 3"), 3);
+        assert_eq!(reader_se.read_se().expect("se -3"), -3);
     }
 }

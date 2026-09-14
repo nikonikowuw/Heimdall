@@ -1,76 +1,85 @@
-import React from 'react'
-import { AlertCircle, Check, CheckCircle2, Users, X, XCircle } from 'lucide-react'
+import React, { useState } from 'react'
+import { AlertCircle, Check, CheckCircle2, Users, X, XCircle, ZoomIn } from 'lucide-react'
 import { evidenceApi } from '../../../lib/api'
 import type { RecognitionRecord } from '../../../types'
 import { formatTimestamp } from '../utils'
+import { ImagePreviewModal } from './ImagePreviewModal'
 
 export interface RecognitionCardItemProps {
   recognition: RecognitionRecord
+  cameraName?: string
   onOpenReview: (rec: RecognitionRecord) => void
   onQuickReview: (rec: RecognitionRecord, status: 'confirmed' | 'rejected') => void
   t: (key: string) => string
 }
 
+const STATUS_CONFIG = {
+  confirmed: {
+    textColor: 'text-emerald-500',
+    badgeClass: 'border-emerald-500/40 bg-emerald-500/15 text-emerald-500',
+    chipClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500',
+    cardBorder: 'border-[var(--border)] hover:border-emerald-500/40',
+    Icon: CheckCircle2,
+    labelKey: 'card.statusConfirmed',
+  },
+  pending_review: {
+    textColor: 'text-amber-500',
+    badgeClass: 'border-amber-500/40 bg-amber-500/15 text-amber-500',
+    chipClass: 'border-amber-500/30 bg-amber-500/15 text-amber-500',
+    cardBorder: 'border-amber-500/40 bg-amber-500/5',
+    Icon: AlertCircle,
+    labelKey: 'card.statusPendingReview',
+  },
+  rejected: {
+    textColor: 'text-rose-400',
+    badgeClass: 'border-rose-500/40 bg-rose-500/15 text-rose-400',
+    chipClass: 'border-rose-500/30 bg-rose-500/10 text-rose-400',
+    cardBorder: 'border-rose-500/30 opacity-75',
+    Icon: XCircle,
+    labelKey: 'card.statusRejected',
+  },
+} as const
+
 export function RecognitionCardItem({
   recognition,
+  cameraName,
   onOpenReview,
   onQuickReview,
   t,
 }: RecognitionCardItemProps): React.ReactElement {
   const isPending = recognition.status === 'pending_review'
-  const isConfirmed = recognition.status === 'confirmed'
-  const isRejected = recognition.status === 'rejected'
   const candidates = recognition.candidates || []
   const registeredPhotoRel = recognition.registeredPhotoPath || candidates[0]?.photoRelPath || ''
-  const [photoLoadError, setPhotoLoadError] = React.useState(false)
+  const [photoLoadError, setPhotoLoadError] = useState(false)
+  const [previewModal, setPreviewModal] = useState<{
+    src: string
+    title?: string
+    subtitle?: string
+  } | null>(null)
 
+  const statusConfig =
+    STATUS_CONFIG[recognition.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.confirmed
+  const StatusIcon = statusConfig.Icon
   const simPct = ((recognition.similarity ?? 0) * 100).toFixed(0)
-
-  let statusTextColor = 'text-emerald-500'
-  let statusBadgeClass = 'border-emerald-500/40 bg-emerald-500/15 text-emerald-500'
-  if (isPending) {
-    statusTextColor = 'text-amber-500'
-    statusBadgeClass = 'border-amber-500/40 bg-amber-500/15 text-amber-500'
-  } else if (isRejected) {
-    statusTextColor = 'text-rose-400'
-    statusBadgeClass = 'border-rose-500/40 bg-rose-500/15 text-rose-400'
-  }
 
   return (
     <div
-      className={`flex flex-col justify-between space-y-3 rounded-2xl border bg-[var(--bg-surface)] p-3.5 shadow-sm transition-all hover:shadow-md ${
-        isPending
-          ? 'border-amber-500/40 bg-amber-500/5'
-          : isRejected
-            ? 'border-rose-500/30 opacity-75'
-            : 'border-[var(--border)] hover:border-emerald-500/40'
-      }`}
+      className={`flex flex-col justify-between space-y-3 rounded-2xl border bg-[var(--bg-surface)] p-3.5 shadow-sm transition-all hover:shadow-md ${statusConfig.cardBorder}`}
     >
-      {/* 头部：状态标签与相似度 */}
+      {/* 头部：状态标签与相机名称 */}
       <div className="flex items-center justify-between">
-        <div>
-          {isConfirmed && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-500">
-              <CheckCircle2 className="h-3 w-3" />
-              {t('card.statusConfirmed')}
-            </span>
-          )}
-          {isPending && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-500">
-              <AlertCircle className="h-3 w-3" />
-              {t('card.statusPendingReview')}
-            </span>
-          )}
-          {isRejected && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-rose-400">
-              <XCircle className="h-3 w-3" />
-              {t('card.statusRejected')}
-            </span>
-          )}
-        </div>
+        <span
+          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold ${statusConfig.chipClass}`}
+        >
+          <StatusIcon className="h-3 w-3" />
+          {t(statusConfig.labelKey)}
+        </span>
 
-        <span className="font-mono text-[10px] text-[var(--text-muted)]">
-          {recognition.cameraId}
+        <span
+          className="max-w-[130px] truncate text-[11px] font-medium text-[var(--text-secondary)]"
+          title={cameraName || recognition.cameraId}
+        >
+          {cameraName || recognition.cameraId}
         </span>
       </div>
 
@@ -78,13 +87,38 @@ export function RecognitionCardItem({
       <div className="flex items-center justify-between gap-3">
         {/* 现场抓拍特写 */}
         <div className="flex flex-1 flex-col items-center gap-1.5">
-          <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black/90 shadow-xs">
+          <div
+            onClick={(e) => {
+              e.stopPropagation()
+              if (recognition.fieldCropPath) {
+                setPreviewModal({
+                  src: evidenceApi.getImageUrl(recognition.fieldCropPath),
+                  title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
+                  subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
+                })
+              }
+            }}
+            className={`group/crop relative aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black/90 shadow-xs ${
+              recognition.fieldCropPath
+                ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md'
+                : ''
+            }`}
+            title={recognition.fieldCropPath ? t('card.viewHd') : undefined}
+          >
             {recognition.fieldCropPath ? (
-              <img
-                src={evidenceApi.getImageUrl(recognition.fieldCropPath)}
-                alt={t('card.siteCrop')}
-                className="h-full w-full object-cover"
-              />
+              <>
+                <img
+                  src={evidenceApi.getImageUrl(recognition.fieldCropPath)}
+                  alt={t('card.siteCrop')}
+                  className="h-full w-full object-cover transition-transform duration-300 group-hover/crop:scale-105"
+                />
+                <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/crop:opacity-100">
+                  <span className="flex items-center gap-1 rounded-lg bg-black/60 px-2 py-1 text-[10px] font-medium text-white shadow-xs">
+                    <ZoomIn className="h-3 w-3" />
+                    <span>{t('card.viewHd')}</span>
+                  </span>
+                </div>
+              </>
             ) : (
               <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
                 {t('card.noImage')}
@@ -96,11 +130,11 @@ export function RecognitionCardItem({
 
         {/* 相似度分值徽标 */}
         <div className="flex flex-col items-center gap-1 px-1">
-          <span className={`font-mono text-[9px] font-bold uppercase ${statusTextColor}`}>
+          <span className={`font-mono text-[9px] font-bold uppercase ${statusConfig.textColor}`}>
             {t('card.match')}
           </span>
           <div
-            className={`flex h-11 w-11 items-center justify-center rounded-full border font-mono text-xs font-bold shadow-xs ${statusBadgeClass}`}
+            className={`flex h-11 w-11 items-center justify-center rounded-full border font-mono text-xs font-bold shadow-xs ${statusConfig.badgeClass}`}
           >
             {simPct}%
           </div>
@@ -109,14 +143,39 @@ export function RecognitionCardItem({
 
         {/* 底库登记照片 */}
         <div className="flex flex-1 flex-col items-center gap-1.5">
-          <div className="aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black/90 shadow-xs">
+          <div
+            onClick={(e) => {
+              e.stopPropagation()
+              if (registeredPhotoRel && !photoLoadError) {
+                setPreviewModal({
+                  src: evidenceApi.getImageUrl(registeredPhotoRel),
+                  title: `${t('card.registeredPhoto')}: ${recognition.subjectName || '已登记人员'}`,
+                  subtitle: `ID: ${recognition.subjectId || '-'}`,
+                })
+              }
+            }}
+            className={`group/reg relative aspect-square w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black/90 shadow-xs ${
+              registeredPhotoRel && !photoLoadError
+                ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md'
+                : ''
+            }`}
+            title={registeredPhotoRel && !photoLoadError ? t('card.viewHd') : undefined}
+          >
             {registeredPhotoRel && !photoLoadError ? (
-              <img
-                src={evidenceApi.getImageUrl(registeredPhotoRel)}
-                alt={t('card.registeredPhoto')}
-                className="h-full w-full object-cover"
-                onError={() => setPhotoLoadError(true)}
-              />
+              <>
+                <img
+                  src={evidenceApi.getImageUrl(registeredPhotoRel)}
+                  alt={t('card.registeredPhoto')}
+                  className="h-full w-full object-cover transition-transform duration-300 group-hover/reg:scale-105"
+                  onError={() => setPhotoLoadError(true)}
+                />
+                <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/reg:opacity-100">
+                  <span className="flex items-center gap-1 rounded-lg bg-black/60 px-2 py-1 text-[10px] font-medium text-white shadow-xs">
+                    <ZoomIn className="h-3 w-3" />
+                    <span>{t('card.viewHd')}</span>
+                  </span>
+                </div>
+              </>
             ) : (
               <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
                 {t('card.noImage')}
@@ -179,6 +238,16 @@ export function RecognitionCardItem({
           )}
         </div>
       </div>
+
+      {/* 高清图片大图全屏预览灯箱 */}
+      {previewModal && (
+        <ImagePreviewModal
+          src={previewModal.src}
+          title={previewModal.title}
+          subtitle={previewModal.subtitle}
+          onClose={() => setPreviewModal(null)}
+        />
+      )}
     </div>
   )
 }

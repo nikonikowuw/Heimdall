@@ -63,7 +63,7 @@ pub use stream_hub::{
 };
 pub use sub_stream::{deduce_primary_sub_stream, deduce_sub_stream, SubStreamCandidate};
 pub use webcodecs::{
-    pack_webcodecs_frame, pack_webcodecs_frame_with_flags, unpack_webcodecs_frame,
-    WebCodecsFrameHeader, WEBCODECS_FLAG_DISCONTINUITY, WEBCODECS_FRAME_HEADER_LEN,
-    WEBCODECS_PROTOCOL_VERSION,
+    build_webcodecs_header, pack_webcodecs_frame, pack_webcodecs_frame_with_flags,
+    unpack_webcodecs_frame, WebCodecsFrameHeader, WEBCODECS_FLAG_DISCONTINUITY,
+    WEBCODECS_FRAME_HEADER_LEN, WEBCODECS_PROTOCOL_VERSION,
 };

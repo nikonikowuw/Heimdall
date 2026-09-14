@@ -12,12 +12,14 @@ import {
 
 export interface CaptureLightboxModalProps {
   capture: CaptureRecord
+  cameraName?: string
   onClose: () => void
   t: (key: string) => string
 }
 
 export function CaptureLightboxModal({
   capture,
+  cameraName,
   onClose,
   t,
 }: CaptureLightboxModalProps): React.ReactElement {
@@ -135,7 +137,7 @@ export function CaptureLightboxModal({
                   {t('modal.cropImage')}
                 </div>
                 <div className="font-mono text-[11px] text-[var(--text-muted)]">
-                  {t('modal.channel')}: {capture.cameraId} · {t('modal.trackId')}: #
+                  {t('modal.channel')}: {cameraName || capture.cameraId} · {t('modal.trackId')}: #
                   {capture.trackId}
                 </div>
                 <div className="font-mono text-[11px] text-[var(--text-muted)]">

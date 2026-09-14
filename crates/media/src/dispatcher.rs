@@ -60,6 +60,7 @@ impl GopSnapshot {
             last_keyframe: self.packets.first().map(|packet| packet.payload.clone()),
             last_keyframe_pts: self.first_pts_ms,
             gop_packets: self.packets.iter().cloned().collect(),
+            total_payload_bytes: self.total_payload_bytes,
         }
     }
 }
@@ -75,6 +76,7 @@ pub struct KeyframeCache {
     pub last_keyframe: Option<Bytes>,
     pub last_keyframe_pts: i64,
     pub gop_packets: Vec<Arc<EncodedPacket>>,
+    pub total_payload_bytes: usize,
 }
 
 /// 预览分发资源预算。
@@ -493,6 +495,7 @@ impl KeyframeCacheStore {
 
         if packet.is_keyframe {
             cache.gop_packets.clear();
+            cache.total_payload_bytes = 0;
             cache.last_keyframe = Some(packet.payload.clone());
             cache.last_keyframe_pts = packet.pts_ms;
         }
@@ -537,17 +540,16 @@ impl KeyframeCacheStore {
         }
 
         let next_bytes = cache
-            .gop_packets
-            .iter()
-            .map(|item| item.payload.len())
-            .sum::<usize>()
+            .total_payload_bytes
             .saturating_add(packet.payload.len());
         if cache.gop_packets.len() >= config.max_gop_packets || next_bytes > config.max_gop_bytes {
             cache.gop_packets.clear();
+            cache.total_payload_bytes = 0;
             return;
         }
 
         cache.gop_packets.push(packet.clone());
+        cache.total_payload_bytes = next_bytes;
     }
 
     pub fn snapshot(&self, config: &PreviewDistributionConfig) -> Option<Arc<GopSnapshot>> {
@@ -560,11 +562,7 @@ impl KeyframeCacheStore {
         if codec == CodecType::H265 && cache.vps.is_none() {
             return None;
         }
-        let total_payload_bytes = cache
-            .gop_packets
-            .iter()
-            .map(|packet| packet.payload.len())
-            .sum::<usize>();
+        let total_payload_bytes = cache.total_payload_bytes;
         if cache.gop_packets.len() > config.max_gop_packets
             || total_payload_bytes > config.max_gop_bytes
         {
@@ -589,6 +587,7 @@ impl KeyframeCacheStore {
 #[derive(Debug)]
 pub struct PacketDispatcher {
     consumers: RwLock<HashMap<ConsumerId, Arc<Consumer>>>,
+    consumer_snapshot: RwLock<Arc<[Arc<Consumer>]>>,
     next_id: AtomicU64,
     epoch: AtomicU64,
     cache: Arc<KeyframeCacheStore>,
@@ -613,6 +612,7 @@ impl PacketDispatcher {
     ) -> Self {
         Self {
             consumers: RwLock::new(HashMap::new()),
+            consumer_snapshot: RwLock::new(Arc::from([])),
             next_id: AtomicU64::new(1),
             epoch: AtomicU64::new(0),
             cache,
@@ -669,6 +669,9 @@ impl PacketDispatcher {
                 lease: lease.clone(),
             }),
         );
+        self.sync_consumer_snapshot(&consumers);
+        drop(consumers);
+
         self.metrics
             .current_consumers
             .fetch_add(1, Ordering::Relaxed);
@@ -683,8 +686,12 @@ impl PacketDispatcher {
     }
 
     pub fn unsubscribe(&self, id: ConsumerId) {
-        let consumer = self.consumers.write().remove(&id);
+        let mut consumers = self.consumers.write();
+        let consumer = consumers.remove(&id);
         if let Some(consumer) = consumer {
+            self.sync_consumer_snapshot(&consumers);
+            drop(consumers);
+
             consumer.mailbox.close();
             consumer.lease.release();
             self.metrics
@@ -708,8 +715,8 @@ impl PacketDispatcher {
             );
             let epoch = self.epoch.load(Ordering::Acquire);
             self.cache.clear_for_epoch(epoch);
-            let consumers: Vec<Arc<Consumer>> = self.consumers.read().values().cloned().collect();
-            for consumer in consumers {
+            let consumers = self.consumer_snapshot.read().clone();
+            for consumer in consumers.iter() {
                 consumer.mailbox.mark_recovering();
             }
             return;
@@ -718,11 +725,15 @@ impl PacketDispatcher {
         let epoch = self.epoch.load(Ordering::Acquire);
         self.cache.update(&packet, epoch, &self.limits);
 
-        let consumers: Vec<Arc<Consumer>> = self.consumers.read().values().cloned().collect();
+        let consumers = self.consumer_snapshot.read().clone();
+        if consumers.is_empty() {
+            return;
+        }
+
         let mut replay_targets = Vec::new();
         let mut closed_ids = Vec::new();
 
-        for consumer in consumers {
+        for consumer in consumers.iter() {
             match consumer.mailbox.offer_packet(packet.clone()) {
                 OfferResult::Accepted => {}
                 OfferResult::NeedsReplay { dropped } => {
@@ -760,8 +771,8 @@ impl PacketDispatcher {
             .total_source_resets
             .fetch_add(1, Ordering::Relaxed);
 
-        let consumers: Vec<Arc<Consumer>> = self.consumers.read().values().cloned().collect();
-        for consumer in consumers {
+        let consumers = self.consumer_snapshot.read().clone();
+        for consumer in consumers.iter() {
             consumer.mailbox.source_reset(epoch);
         }
         epoch
@@ -811,6 +822,12 @@ impl PacketDispatcher {
                 })
                 .collect(),
         }
+    }
+
+    #[inline]
+    fn sync_consumer_snapshot(&self, consumers: &HashMap<ConsumerId, Arc<Consumer>>) {
+        let snapshot: Arc<[Arc<Consumer>]> = consumers.values().cloned().collect();
+        *self.consumer_snapshot.write() = snapshot;
     }
 
     pub fn evict_stalled(&self, now_mono_ms: u64) -> usize {

@@ -226,3 +226,127 @@ async fn test_review_recognition_self_copy_safety_does_not_truncate() {
     // 清理测试临时文件
     let _ = tokio::fs::remove_dir_all(&base_dir).await;
 }
+
+#[tokio::test]
+async fn test_evidence_captures_and_recognitions_count_api() {
+    use db::entity::capture::ActiveModel as CaptureActiveModel;
+    use db::CaptureRepo;
+
+    let (app, state, token) = setup_test_app().await;
+
+    // 插入 2 条抓拍数据
+    let c1 = CaptureActiveModel {
+        id: sea_orm::NotSet,
+        capture_id: Set("cap_test_1".to_string()),
+        camera_id: Set("CAM-01".to_string()),
+        track_id: Set(101),
+        target_label: Set("person".to_string()),
+        confidence: Set(0.92),
+        quality_score: Set(0.85),
+        bbox_json: Set("{}".to_string()),
+        image_id: Set("img1".to_string()),
+        image_rel_path: Set("captures/img1.jpg".to_string()),
+        crop_image_id: Set("crop1".to_string()),
+        crop_image_rel_path: Set("captures/crop1.jpg".to_string()),
+        captured_at: Set(chrono::Utc::now()),
+        created_at: Set(chrono::Utc::now()),
+    };
+    let c2 = CaptureActiveModel {
+        id: sea_orm::NotSet,
+        capture_id: Set("cap_test_2".to_string()),
+        camera_id: Set("CAM-02".to_string()),
+        track_id: Set(102),
+        target_label: Set("car".to_string()),
+        confidence: Set(0.88),
+        quality_score: Set(0.80),
+        bbox_json: Set("{}".to_string()),
+        image_id: Set("img2".to_string()),
+        image_rel_path: Set("captures/img2.jpg".to_string()),
+        crop_image_id: Set("crop2".to_string()),
+        crop_image_rel_path: Set("captures/crop2.jpg".to_string()),
+        captured_at: Set(chrono::Utc::now()),
+        created_at: Set(chrono::Utc::now()),
+    };
+    CaptureRepo::insert(&state.db, c1).await.unwrap();
+    CaptureRepo::insert(&state.db, c2).await.unwrap();
+
+    // 插入 1 条识别数据
+    let r1 = RecognitionActiveModel {
+        id: sea_orm::NotSet,
+        recognition_id: Set("rec_count_1".to_string()),
+        camera_id: Set("CAM-01".to_string()),
+        gallery_id: Set("default".to_string()),
+        subject_id: Set("sub_bob".to_string()),
+        subject_name: Set("Bob".to_string()),
+        similarity: Set(0.95),
+        field_crop_path: Set("captures/crop_bob.jpg".to_string()),
+        registered_photo_path: Set("recognitions/rec_bob_gallery.jpg".to_string()),
+        status: Set("confirmed".to_string()),
+        candidates_json: Set(None),
+        reviewer_id: Set(None),
+        reviewed_at: Set(None),
+        recognized_at: Set(chrono::Utc::now()),
+        created_at: Set(chrono::Utc::now()),
+    };
+    RecognitionRepo::insert(&state.db, r1).await.unwrap();
+
+    // 1. GET /api/v1/evidence/captures/count 全部抓拍
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/captures/count")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["data"]["total"], 2);
+
+    // 2. GET /api/v1/evidence/captures/count 带 camera_id=CAM-01
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/captures/count?camera_id=CAM-01")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["data"]["total"], 1);
+
+    // 3. GET /api/v1/evidence/recognitions/count 全部识别对账
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/recognitions/count")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["data"]["total"], 1);
+
+    // 4. GET /api/v1/evidence/recognitions/count 状态不匹配
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/recognitions/count?status=rejected")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["data"]["total"], 0);
+}
