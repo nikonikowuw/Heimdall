@@ -2,6 +2,11 @@
 # Heimdall Cargo 构建配置
 # ============================================================================
 #
+# sccache：跨命令编译缓存，消除 cargo clippy → cargo test 间的重复编译。
+# 首次编译无增益；多次迭代后缓存命中率上升，效果显著。
+# 禁用：export RUSTC_WRAPPER="" 或临时 unset RUSTC_WRAPPER。
+RUSTC_WRAPPER = "sccache"
+#
 # 交叉编译链接器定义。各 target 的 linker 仅在 `cargo build --target <triple>`
 # 时生效，不影响本机默认构建。
 #

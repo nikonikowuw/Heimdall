@@ -1,0 +1,36 @@
+# ============================================================================
+# cargo-nextest 配置
+# ============================================================================
+#
+# nextest 以进程级并行替代 cargo test 的线程级并行，
+# 每个 test 函数运行在独立进程中，互不阻塞。
+#
+# 安装：cargo install --locked cargo-nextest
+# 用法：cargo nextest run -p <crate>
+# ============================================================================
+
+[profile.default]
+# 单个 test 进程的最大运行时间；超时则强制终止该进程。
+# Heimdall 的媒体/推理测试通常很快，15s 足够。
+slow-timeout = { period = "15s", terminate-after = 2 }
+
+# 并行度：默认 = CPU 核心数。如有需要可手动限制：
+# threads = 8
+
+# 失败时立即停止，不跑后续 test（调试时设 true，CI 可设 false）。
+fail-fast = true
+
+[profile.default.junit]
+# 可选：JUnit XML 报告，CI 集成用。
+# path = "target/nextest.junit.xml"
+
+[profile.ci]
+# CI 用更宽松的配置：允许偶尔的网络/资源抖动。
+slow-timeout = { period = "60s", terminate-after = 3 }
+retries = 2
+fail-fast = false
+
+[profile.quick]
+# 快速验证：只跑最快的一组 test，适合编码中途快速检查。
+# 用法：cargo nextest run -p <crate> --profile quick
+slow-timeout = { period = "5s", terminate-after = 1 }
