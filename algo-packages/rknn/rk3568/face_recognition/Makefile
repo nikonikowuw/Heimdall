@@ -5,6 +5,8 @@
 PACKAGE        := face-recognition-rk3568-rknn
 TARGET_TRIPLE  := aarch64-unknown-linux-gnu
 WORKSPACE_ROOT := ../../../..
+ALGO_WORKSPACE_ROOT := $(abspath $(WORKSPACE_ROOT)/algo-packages/rknn/rk3568)
+ALGO_MANIFEST := $(ALGO_WORKSPACE_ROOT)/Cargo.toml
 
 .PHONY: help all build host check test run benchmark stress package clean
 
@@ -34,11 +36,11 @@ all: package
 
 # 语法检查
 check:
-	cd $(WORKSPACE_ROOT) && cargo check -p $(PACKAGE) --all-targets --target $(TARGET_TRIPLE)
+	cd $(WORKSPACE_ROOT) && $(CARGO) check --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --all-targets --target $(TARGET_TRIPLE)
 
 # 单元测试
 test:
-	cd $(WORKSPACE_ROOT) && cargo test -p $(PACKAGE) -- --nocapture
+	cd $(WORKSPACE_ROOT) && $(CARGO) test --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) -- --nocapture
 
 # Cargo 参数
 CARGO := cargo
@@ -50,15 +52,15 @@ CARGO_CROSS ?= $(shell if command -v cross >/dev/null 2>&1; then echo "CROSS_CON
 
 # 交叉编译 release
 build:
-	cd $(WORKSPACE_ROOT) && $(CARGO_CROSS) -p $(PACKAGE) --release --target $(TARGET_TRIPLE)
+	cd $(WORKSPACE_ROOT) && $(CARGO_CROSS) --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --release --target $(TARGET_TRIPLE)
 	@mkdir -p lib
-	cp $(WORKSPACE_ROOT)/target/$(TARGET_TRIPLE)/release/libface_recognition_rk3568.so lib/libface_recognition.so
+	cp $(ALGO_WORKSPACE_ROOT)/target/$(TARGET_TRIPLE)/release/libface_recognition_rk3568.so lib/libface_recognition.so
 
 # 目标板原生编译 release
 host:
-	cd $(WORKSPACE_ROOT) && cargo build -p $(PACKAGE) --release
+	cd $(WORKSPACE_ROOT) && $(CARGO) build --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --release
 	@mkdir -p lib
-	cp $(WORKSPACE_ROOT)/target/release/libface_recognition_rk3568.so lib/libface_recognition.so
+	cp $(ALGO_WORKSPACE_ROOT)/target/release/libface_recognition_rk3568.so lib/libface_recognition.so
 
 # 打包为标准算法包 (.tar.gz)
 package: build
@@ -92,7 +94,7 @@ package: build
 # 本地运行自测
 run: build
 	@echo "本地运行自测..."
-	cd $(WORKSPACE_ROOT) && $(CARGO) run -p $(PACKAGE) --release \
+	cd $(WORKSPACE_ROOT) && $(CARGO) run --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --release \
 		--target $(TARGET_TRIPLE) \
 		--bin face_recognition_rk3568_rknn_run_local -- \
 		--input algo-packages/rknn/rk3568/face_recognition/testimage.jpg
@@ -100,7 +102,7 @@ run: build
 # 性能基准测试
 benchmark: build
 	@echo "性能基准测试..."
-	cd $(WORKSPACE_ROOT) && $(CARGO) run -p $(PACKAGE) --release \
+	cd $(WORKSPACE_ROOT) && $(CARGO) run --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --release \
 		--target $(TARGET_TRIPLE) \
 		--bin face_recognition_rk3568_rknn_run_local -- \
 		--input algo-packages/rknn/rk3568/face_recognition/testimage.jpg \
@@ -109,7 +111,7 @@ benchmark: build
 # 压力测试 (默认 30 秒)
 stress: build
 	@echo "压力测试..."
-	cd $(WORKSPACE_ROOT) && $(CARGO) run -p $(PACKAGE) --release \
+	cd $(WORKSPACE_ROOT) && $(CARGO) run --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --release \
 		--target $(TARGET_TRIPLE) \
 		--bin face_recognition_rk3568_rknn_run_local -- \
 		--input algo-packages/rknn/rk3568/face_recognition/testimage.jpg \

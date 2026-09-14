@@ -36,10 +36,12 @@ Heimdall 在边缘设备本地完成多路视频分析、规则告警和证据�
 
 ## 工程与交付
 
-- Rust workspace 的成员与依赖版本由 [Cargo.toml](../../../Cargo.toml) 统一管理。
+- 宿主 Rust workspace 的成员与依赖版本由 [Cargo.toml](../../../Cargo.toml) 管理，包含 `crates/*` 与 `algo-sdk`。
+- 算法包按平台和硬件运行时划分为三个独立 workspace：[macos/Cargo.toml](../../../algo-packages/macos/Cargo.toml)、[rknn/rk3568/Cargo.toml](../../../algo-packages/rknn/rk3568/Cargo.toml) 和 [rknn/rk3576/Cargo.toml](../../../algo-packages/rknn/rk3576/Cargo.toml)。每个 workspace 拥有自己的 `Cargo.lock` 与 `target/`，通过路径依赖复用 SDK 源码，但算法 crate 不属于宿主 workspace 或其他平台 workspace。
 - HTTP/WS 使用 Axum + Tokio，持久化使用 SeaORM + SQLite + Refinery。
 - 前端为 Vite + React + TypeScript SPA，具体依赖见 [web/package.json](../../../web/package.json)。
 - 生产 SPA 通过 [static_files.rs](../../../crates/api/src/static_files.rs) 的 `rust-embed` 内嵌，保持单二进制交付；算法包独立管理。
+- `algo-packages/` 下的 Cargo 命令必须以目标平台 workspace 为入口，例如 `cargo check --manifest-path algo-packages/rknn/rk3568/Cargo.toml --workspace`；宿主根目录的 `cargo check/test/clippy --workspace` 不会编译算法包。
 - 平台目标为 Apple Silicon、Rockchip 和 Ascend；CPU 仅作物理无硬件环境的显式调试回退。
 - 专有驱动确需 C/C++ 时使用极薄 `native/` 垫片，不承载业务编排。
 

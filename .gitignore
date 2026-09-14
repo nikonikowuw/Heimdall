@@ -18,6 +18,8 @@ Desktop.ini
 
 # Rust workspace
 /target/
+/algo-packages/target/
+/algo-packages/**/target/
 build/
 deploy/
 # Cargo.lock is intentionally tracked: Heimdall is an application.

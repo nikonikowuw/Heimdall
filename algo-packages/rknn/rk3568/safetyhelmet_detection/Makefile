@@ -23,6 +23,8 @@ SHELL := /bin/bash
 # 路径
 # ──────────────────────────────────────────────────────────────────────────────
 WORKSPACE_ROOT  := ../../../..
+ALGO_WORKSPACE_ROOT := $(abspath $(WORKSPACE_ROOT)/algo-packages/rknn/rk3568)
+ALGO_MANIFEST    := $(ALGO_WORKSPACE_ROOT)/Cargo.toml
 TARGET_LIB      := lib/libsafetyhelmet_detection.so
 TARGET_LIB_HOST := lib/libsafetyhelmet_detection.so
 
@@ -94,11 +96,11 @@ all: build
 .PHONY: build
 build: ## 交叉编译算法包 (release, -> aarch64-linux)
 	@echo -e "$(CYAN)[build]$(RESET) 交叉编译 -> $(CROSS_TARGET)..."
-	cd $(WORKSPACE_ROOT) && $(CARGO) zigbuild -p safetyhelmet-detection-rk3568-rknn --release \
+	cd $(WORKSPACE_ROOT) && $(CARGO) zigbuild --manifest-path $(ALGO_MANIFEST) -p safetyhelmet-detection-rk3568-rknn --release \
 		--target $(CROSS_TARGET) \
 		--features $(CROSS_FEATURES)
 	@mkdir -p lib
-	@cp $(WORKSPACE_ROOT)/target/$(CROSS_TARGET)/release/libsafetyhelmet_detection.so \
+	@cp $(ALGO_WORKSPACE_ROOT)/target/$(CROSS_TARGET)/release/libsafetyhelmet_detection.so \
 		$(TARGET_LIB)
 	@echo -e "$(GREEN)[build]$(RESET) 产物: $(TARGET_LIB)"
 
@@ -109,9 +111,9 @@ build: ## 交叉编译算法包 (release, -> aarch64-linux)
 .PHONY: host
 host: ## 本机编译算法包 (release)
 	@echo -e "$(CYAN)[host]$(RESET) 本机编译..."
-	cd $(WORKSPACE_ROOT) && $(CARGO) build -p safetyhelmet-detection-rk3568-rknn --release
+	cd $(WORKSPACE_ROOT) && $(CARGO) build --manifest-path $(ALGO_MANIFEST) -p safetyhelmet-detection-rk3568-rknn --release
 	@mkdir -p lib
-	@cp $(WORKSPACE_ROOT)/target/release/libsafetyhelmet_detection.so \
+	@cp $(ALGO_WORKSPACE_ROOT)/target/release/libsafetyhelmet_detection.so \
 		$(TARGET_LIB_HOST)
 	@echo -e "$(GREEN)[host]$(RESET) 产物: $(TARGET_LIB_HOST)"
 
@@ -121,11 +123,11 @@ host: ## 本机编译算法包 (release)
 
 .PHONY: test
 test: ## 运行单元测试
-	cd $(WORKSPACE_ROOT) && $(CARGO) test -p safetyhelmet-detection-rk3568-rknn -- --nocapture
+	cd $(WORKSPACE_ROOT) && $(CARGO) test --manifest-path $(ALGO_MANIFEST) -p safetyhelmet-detection-rk3568-rknn -- --nocapture
 
 .PHONY: check
 check: ## 语法与类型检查 (交叉编译目标)
-	cd $(WORKSPACE_ROOT) && $(CARGO) check -p safetyhelmet-detection-rk3568-rknn \
+	cd $(WORKSPACE_ROOT) && $(CARGO) check --manifest-path $(ALGO_MANIFEST) -p safetyhelmet-detection-rk3568-rknn \
 		--target $(CROSS_TARGET) \
 		--features $(CROSS_FEATURES)
 
@@ -179,21 +181,21 @@ deploy: package ## 交叉编译 + 打包 + SCP 部署到 RK3568 设备
 .PHONY: run
 run: build ## 构建 + 本地运行自测
 	@echo -e "$(CYAN)[run]$(RESET) 本地运行自测..."
-	cd $(WORKSPACE_ROOT) && $(CARGO) run -p safetyhelmet-detection-rk3568-rknn --release \
+	cd $(WORKSPACE_ROOT) && $(CARGO) run --manifest-path $(ALGO_MANIFEST) -p safetyhelmet-detection-rk3568-rknn --release \
 		--target $(CROSS_TARGET) \
 		--features $(CROSS_FEATURES) \
 		--bin safetyhelmet_detection_run_local
 
 .PHONY: benchmark
 benchmark: build ## 构建 + 性能基准测试
-	cd $(WORKSPACE_ROOT) && $(CARGO) run -p safetyhelmet-detection-rk3568-rknn --release \
+	cd $(WORKSPACE_ROOT) && $(CARGO) run --manifest-path $(ALGO_MANIFEST) -p safetyhelmet-detection-rk3568-rknn --release \
 		--target $(CROSS_TARGET) \
 		--features $(CROSS_FEATURES) \
 		--bin safetyhelmet_detection_run_local -- --benchmark
 
 .PHONY: stress
 stress: build ## 构建 + 压力测试 (默认 30 秒)
-	cd $(WORKSPACE_ROOT) && $(CARGO) run -p safetyhelmet-detection-rk3568-rknn --release \
+	cd $(WORKSPACE_ROOT) && $(CARGO) run --manifest-path $(ALGO_MANIFEST) -p safetyhelmet-detection-rk3568-rknn --release \
 		--target $(CROSS_TARGET) \
 		--features $(CROSS_FEATURES) \
 		--bin safetyhelmet_detection_run_local -- --stress $(DURATION)
@@ -204,6 +206,6 @@ stress: build ## 构建 + 压力测试 (默认 30 秒)
 
 .PHONY: clean
 clean: ## 清理构建产物
-	cd $(WORKSPACE_ROOT) && $(CARGO) clean -p safetyhelmet-detection-rk3568-rknn
+	cd $(WORKSPACE_ROOT) && $(CARGO) clean --manifest-path $(ALGO_MANIFEST) -p safetyhelmet-detection-rk3568-rknn
 	rm -rf lib/*.so lib/*.dylib safetyhelmet_detection.tar.gz result.jpg
 	@echo -e "$(GREEN)[clean]$(RESET) 已清理"

@@ -91,7 +91,7 @@ Heimdall/
 │   │   │   └── tasks/              # 任务配置与 LiveRulesStudio 动态实时流布防工作台
 │   │   ├── lib/api.ts              # 类型安全的通用 API 交互客户端
 │   │   └── i18n/                   # 国际化语言包 (zh-CN, zh-TW, en)
-├── algo-packages/                  # 本地各硬件平台算法包资产库 ({platform}/{algo_id})
+├── algo-packages/                  # 独立算法 Cargo workspace 与本地算法包资产库 ({platform}/{algo_id})
 └── docs/                           # 架构评估与技术规格文档
     ├── nuwa/                       # Nuwa (女娲) 全套工程与架构规范体系
     │   ├── README.md               # Nuwa 规范总览与导航索引
@@ -257,6 +257,22 @@ cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+### 算法包门禁 (按平台独立 workspace)
+```bash
+for manifest in \
+  algo-packages/macos/Cargo.toml \
+  algo-packages/rknn/rk3568/Cargo.toml \
+  algo-packages/rknn/rk3576/Cargo.toml
+do
+  cargo fmt --manifest-path "$manifest" --all
+  cargo check --manifest-path "$manifest" --workspace
+  cargo clippy --manifest-path "$manifest" --workspace --all-targets -- -D warnings
+  cargo test --manifest-path "$manifest" --workspace
+done
+```
+
+每个平台 workspace 使用独立的 `Cargo.lock` 和 `target/`；宿主根目录的 `cargo test --workspace` 不会编译具体算法包。
 
 ### 前端门禁 (Web)
 ```bash

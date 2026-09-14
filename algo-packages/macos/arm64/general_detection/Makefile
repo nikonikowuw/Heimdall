@@ -2,26 +2,29 @@
 
 TARGET_LIB = lib/libgeneral_detection.dylib
 WORKSPACE_ROOT = ../../../..
+ALGO_WORKSPACE_ROOT = $(abspath $(WORKSPACE_ROOT)/algo-packages/macos)
+ALGO_MANIFEST = $(ALGO_WORKSPACE_ROOT)/Cargo.toml
+CARGO = cargo
 DURATION ?= 30
 
 all: build
 
 build:
-	cargo build -p general-detection --release
+	$(CARGO) build --manifest-path $(ALGO_MANIFEST) -p general-detection --release
 	@mkdir -p lib
-	@cp $(WORKSPACE_ROOT)/target/release/libgeneral_detection_coreml.dylib $(TARGET_LIB)
+	@cp $(ALGO_WORKSPACE_ROOT)/target/release/libgeneral_detection_coreml.dylib $(TARGET_LIB)
 
 test:
-	cargo test -p general-detection
+	$(CARGO) test --manifest-path $(ALGO_MANIFEST) -p general-detection
 
 run: build
-	cargo run -p general-detection --release --bin run_local
+	$(CARGO) run --manifest-path $(ALGO_MANIFEST) -p general-detection --release --bin run_local
 
 benchmark: build
-	cargo run -p general-detection --release --bin run_local -- --benchmark
+	$(CARGO) run --manifest-path $(ALGO_MANIFEST) -p general-detection --release --bin run_local -- --benchmark
 
 stress: build
-	cargo run -p general-detection --release --bin run_local -- --stress $(DURATION)
+	$(CARGO) run --manifest-path $(ALGO_MANIFEST) -p general-detection --release --bin run_local -- --stress $(DURATION)
 
 package: build
 	@rm -f general_detection.tar.gz
@@ -42,5 +45,5 @@ package: build
 		lib
 
 clean:
-	cargo clean -p general-detection
+	$(CARGO) clean --manifest-path $(ALGO_MANIFEST) -p general-detection
 	rm -rf lib/*.dylib general_detection.tar.gz result.jpg

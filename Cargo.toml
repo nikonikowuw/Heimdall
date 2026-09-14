@@ -9,13 +9,6 @@ members = [
     "crates/pipeline",
     "crates/api",
     "crates/app",
-    "algo-packages/macos/arm64/general_detection",
-    "algo-packages/macos/arm64/face_recognition",
-    "algo-packages/rknn/rk3576/general_detection",
-    "algo-packages/rknn/rk3576/face_recognition",
-    "algo-packages/rknn/rk3568/face_recognition",
-    "algo-packages/rknn/rk3568/fire-detections",
-    "algo-packages/rknn/rk3568/safetyhelmet_detection",
 ]
 
 [workspace.package]

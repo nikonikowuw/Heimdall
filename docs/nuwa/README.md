@@ -93,6 +93,19 @@ cargo clippy --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+### 算法包门禁 (按平台独立 Cargo workspace)
+
+算法包不属于根 workspace，需按目标平台单独执行。平台 manifest 可选：`algo-packages/macos/Cargo.toml`、`algo-packages/rknn/rk3568/Cargo.toml`、`algo-packages/rknn/rk3576/Cargo.toml`。
+
+```bash
+cargo fmt --manifest-path algo-packages/macos/Cargo.toml --all
+cargo check --manifest-path algo-packages/macos/Cargo.toml --workspace
+cargo clippy --manifest-path algo-packages/macos/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path algo-packages/macos/Cargo.toml --workspace
+```
+
+RKNN 平台使用对应的 `rknn/rk3568` 或 `rknn/rk3576` manifest。
+
 ### 前端门禁 (Web Console)
 
 ```bash

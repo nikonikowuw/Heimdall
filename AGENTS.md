@@ -89,6 +89,20 @@ cargo clippy --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+算法包按平台维护独立 workspace，不会被上述根 workspace 命令自动编译；涉及算法包时选择对应 manifest：
+
+```bash
+for manifest in \
+  algo-packages/macos/Cargo.toml \
+  algo-packages/rknn/rk3568/Cargo.toml \
+  algo-packages/rknn/rk3576/Cargo.toml
+do
+  cargo fmt --manifest-path "$manifest" --all
+  cargo clippy --manifest-path "$manifest" --workspace --all-targets -- -D warnings
+  cargo test --manifest-path "$manifest" --workspace
+done
+```
+
 有对应平台 SDK 的环境再额外运行 `cargo clippy --all-targets --all-features -- -D warnings` 及平台测试；硬件依赖测试必须显式标记为 `#[ignore]`，开发机 `cargo test` 仍须全绿。
 
 ### Web

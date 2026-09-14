@@ -28,6 +28,13 @@
 - 平台 feature 使用 `backend-<platform>` / `decoder-<platform>`；避免 `utils/common/helpers` 等无职责模块。
 - 依赖版本集中在 workspace，`Cargo.lock` 入版本控制；硬件垫片的构建规则见 [FFI](./ffi-guidelines.md)。
 
+## Cargo workspace 边界
+
+- 根目录 `Cargo.toml` 是 Heimdall 宿主 workspace，只包含 `crates/*` 和 `crates/algo-sdk`。
+- `algo-packages/` 按平台和硬件运行时维护独立 workspace：`macos/Cargo.toml`、`rknn/rk3568/Cargo.toml`、`rknn/rk3576/Cargo.toml`。每个 workspace 只包含对应平台的算法插件，并独立维护相邻的 `Cargo.lock` 和 `target/`。
+- 各平台 workspace 通过相对路径 `algo-sdk` 复用 SDK 源码。SDK 的 ABI 版本仍由宿主仓库统一维护，但算法包不会被根 workspace 或其他平台 workspace 的常规构建、测试或 lint 自动编译。
+- 从仓库根目录检查算法包时显式传入目标平台的 `--manifest-path`，例如 `algo-packages/rknn/rk3568/Cargo.toml`，或使用根 Makefile 的 `algo-check`、`algo-test`、`algo-clippy` 和 `algo-fmt-check` 目标并设置 `ALGO_PLATFORM`。
+
 ## 配置
 
 实现以 [config.rs](../../../crates/app/src/config.rs) 和 [config.example.toml](../../../config.example.toml) 为准，不在 spec 复制完整配置结构或默认值。

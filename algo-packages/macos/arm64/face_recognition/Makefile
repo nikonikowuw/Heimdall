@@ -2,6 +2,9 @@
 
 TARGET_LIB := lib/libface_recognition.dylib
 WORKSPACE_ROOT := ../../../..
+ALGO_WORKSPACE_ROOT := $(abspath $(WORKSPACE_ROOT)/algo-packages/macos)
+ALGO_MANIFEST := $(ALGO_WORKSPACE_ROOT)/Cargo.toml
+CARGO := cargo
 DURATION ?= 30
 REQUIRED_MODELS := model/edgeface_s.mlpackage model/yolo26n.mlpackage model/yolov8_face.mlpackage
 
@@ -17,21 +20,21 @@ models-sync:
 	@echo "Synced yolo26n.mlpackage from general_detection"
 
 build:
-	cargo build -p face-recognition --release
+	$(CARGO) build --manifest-path $(ALGO_MANIFEST) -p face-recognition --release
 	@mkdir -p lib
-	@cp $(WORKSPACE_ROOT)/target/release/libface_recognition_coreml.dylib $(TARGET_LIB)
+	@cp $(ALGO_WORKSPACE_ROOT)/target/release/libface_recognition_coreml.dylib $(TARGET_LIB)
 
 test:
-	cargo test -p face-recognition
+	$(CARGO) test --manifest-path $(ALGO_MANIFEST) -p face-recognition
 
 run: build
-	cargo run -p face-recognition --release --bin face_recognition_run_local
+	$(CARGO) run --manifest-path $(ALGO_MANIFEST) -p face-recognition --release --bin face_recognition_run_local
 
 benchmark: build
-	cargo run -p face-recognition --release --bin face_recognition_run_local -- --benchmark
+	$(CARGO) run --manifest-path $(ALGO_MANIFEST) -p face-recognition --release --bin face_recognition_run_local -- --benchmark
 
 stress: build
-	cargo run -p face-recognition --release --bin face_recognition_run_local -- --stress $(DURATION)
+	$(CARGO) run --manifest-path $(ALGO_MANIFEST) -p face-recognition --release --bin face_recognition_run_local -- --stress $(DURATION)
 
 package: build
 	@echo "Checking mlpackage weights..."
@@ -62,5 +65,5 @@ package: build
 		lib
 
 clean:
-	cargo clean -p face-recognition
+	$(CARGO) clean --manifest-path $(ALGO_MANIFEST) -p face-recognition
 	rm -rf lib/*.dylib face_recognition.tar.gz result.jpg

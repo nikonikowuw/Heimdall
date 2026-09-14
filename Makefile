@@ -27,7 +27,13 @@ export PATH := $(HOME)/.cargo/bin:$(PATH)
 WORKSPACE_ROOT := $(shell pwd)
 WEB_DIR        := $(WORKSPACE_ROOT)/web
 WEB_DIST       := $(WEB_DIR)/dist
-SDK_LIBS_DIR   := $(WORKSPACE_ROOT)/.rk-sdk-libs
+SDK_LIBS_DIR      := $(WORKSPACE_ROOT)/.rk-sdk-libs
+ALGO_ROOT         := $(WORKSPACE_ROOT)/algo-packages
+ALGO_PLATFORM     ?= macos
+ALGO_MANIFEST     := $(ALGO_ROOT)/$(ALGO_PLATFORM)/Cargo.toml
+ALGO_MANIFEST_MACOS  := $(ALGO_ROOT)/macos/Cargo.toml
+ALGO_MANIFEST_RK3568 := $(ALGO_ROOT)/rknn/rk3568/Cargo.toml
+ALGO_MANIFEST_RK3576 := $(ALGO_ROOT)/rknn/rk3576/Cargo.toml
 
 # 支持加载项目本地可选环境变量 (.env)
 -include .env
@@ -94,6 +100,16 @@ help: ## 显示此帮助信息
 	@echo "    make clippy-all         Clippy lint (整个 workspace)"
 	@echo "    make fmt                代码格式化"
 	@echo "    make fmt-check          格式化检查 (CI)"
+	@echo ""
+	@echo "  $(GREEN)算法包 workspace:$(RESET)"
+	@echo "    make algo-check         检查指定平台算法 (默认 macos)"
+	@echo "    make algo-test          运行指定平台算法测试"
+	@echo "    make algo-clippy        检查指定平台算法 lint"
+	@echo "    make algo-fmt           格式化指定平台算法"
+	@echo "    make algo-fmt-check     检查指定平台算法格式"
+	@echo "    make algo-check-all     检查 macos、rk3568、rk3576"
+	@echo "    make algo-test-all      测试 macos、rk3568、rk3576"
+	@echo "    make algo-check ALGO_PLATFORM=rknn/rk3568"
 	@echo ""
 	@echo "  $(GREEN)SDK 库管理:$(RESET)"
 	@echo "    make sdk-sync           从设备同步 Rockchip SDK 库 (自动识别芯片型号)"
@@ -225,6 +241,38 @@ fmt: ## 代码格式化
 fmt-check: ## 格式化检查 (CI 用)
 	$(CARGO) fmt --all -- --check
 
+.PHONY: algo-check
+algo-check: ## 检查指定平台算法 workspace
+	$(CARGO) check --manifest-path $(ALGO_MANIFEST) --workspace
+
+.PHONY: algo-test
+algo-test: ## 运行指定平台算法 workspace 测试
+	$(CARGO) test --manifest-path $(ALGO_MANIFEST) --workspace
+
+.PHONY: algo-clippy
+algo-clippy: ## Clippy lint 检查指定平台算法 workspace
+	$(CARGO) clippy --manifest-path $(ALGO_MANIFEST) --workspace --all-targets -- -D warnings
+
+.PHONY: algo-fmt
+algo-fmt: ## 格式化指定平台算法 workspace
+	$(CARGO) fmt --manifest-path $(ALGO_MANIFEST) --all
+
+.PHONY: algo-fmt-check
+algo-fmt-check: ## 格式化检查指定平台算法 workspace
+	$(CARGO) fmt --manifest-path $(ALGO_MANIFEST) --all -- --check
+
+.PHONY: algo-check-all
+algo-check-all: ## 检查全部平台算法 workspace
+	$(MAKE) algo-check ALGO_PLATFORM=macos
+	$(MAKE) algo-check ALGO_PLATFORM=rknn/rk3568
+	$(MAKE) algo-check ALGO_PLATFORM=rknn/rk3576
+
+.PHONY: algo-test-all
+algo-test-all: ## 测试全部平台算法 workspace
+	$(MAKE) algo-test ALGO_PLATFORM=macos
+	$(MAKE) algo-test ALGO_PLATFORM=rknn/rk3568
+	$(MAKE) algo-test ALGO_PLATFORM=rknn/rk3576
+
 # ============================================================================
 #  交叉编译 — 主程序
 # ============================================================================
@@ -309,6 +357,9 @@ web-dev: ## 启动前端开发服务器
 .PHONY: clean
 clean: ## 清理所有构建产物
 	$(CARGO) clean
+	$(CARGO) clean --manifest-path $(ALGO_MANIFEST_MACOS)
+	$(CARGO) clean --manifest-path $(ALGO_MANIFEST_RK3568)
+	$(CARGO) clean --manifest-path $(ALGO_MANIFEST_RK3576)
 	@echo -e "$(GREEN)[clean]$(RESET) 已清理全部构建产物"
 
 .PHONY: clean-target

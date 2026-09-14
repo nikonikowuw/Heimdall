@@ -2,6 +2,8 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 WORKSPACE_ROOT := ../../../..
+ALGO_WORKSPACE_ROOT := $(abspath $(WORKSPACE_ROOT)/algo-packages/rknn/rk3576)
+ALGO_MANIFEST := $(ALGO_WORKSPACE_ROOT)/Cargo.toml
 PACKAGE := face-recognition-rknn
 TARGET ?= aarch64-unknown-linux-gnu
 CARGO ?= cargo
@@ -21,23 +23,23 @@ help:
 		'make clean     remove package build artifacts'
 
 build:
-	cd $(WORKSPACE_ROOT) && $(CARGO_ZIGBUILD) -p $(PACKAGE) --release --target $(TARGET)
+	cd $(WORKSPACE_ROOT) && $(CARGO_ZIGBUILD) --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --release --target $(TARGET)
 	@mkdir -p lib
-	cp $(WORKSPACE_ROOT)/target/$(TARGET)/release/libface_recognition.so $(LIB)
+	cp $(ALGO_WORKSPACE_ROOT)/target/$(TARGET)/release/libface_recognition.so $(LIB)
 
 host:
-	cd $(WORKSPACE_ROOT) && $(CARGO) build -p $(PACKAGE) --release
+	cd $(WORKSPACE_ROOT) && $(CARGO) build --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --release
 	@mkdir -p lib
-	cp $(WORKSPACE_ROOT)/target/release/libface_recognition.so $(LIB)
+	cp $(ALGO_WORKSPACE_ROOT)/target/release/libface_recognition.so $(LIB)
 
 check:
-	cd $(WORKSPACE_ROOT) && $(CARGO) check -p $(PACKAGE) --all-targets --target $(TARGET)
+	cd $(WORKSPACE_ROOT) && $(CARGO) check --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --all-targets --target $(TARGET)
 
 test:
-	cd $(WORKSPACE_ROOT) && $(CARGO) test -p $(PACKAGE) --lib
+	cd $(WORKSPACE_ROOT) && $(CARGO) test --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --lib
 
 hardware:
-	cd $(WORKSPACE_ROOT) && $(CARGO) test -p $(PACKAGE) -- --ignored --nocapture
+	cd $(WORKSPACE_ROOT) && $(CARGO) test --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) -- --ignored --nocapture
 
 package: build
 	@rm -f face_recognition.tar.gz
