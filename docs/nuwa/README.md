@@ -72,6 +72,7 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | :--- | :--- | :--- |
 | [📹 录像与回放引擎（规划草案）](./designs/video-recording-and-playback-engine.md) | 纯流直封装 MP4 切片、事件前置缓冲与时间轴回放 | 零转码开销、配置契约与可选启闭、eMMC 寿命防护 |
 | [🎯 运动门控引擎](./designs/motion-detection-gating-engine.md) | 基于 Y 平面差分的轻量级前置门控 | 0 次无效推理、O(1) 调度、余晖保活、多边形遮罩 |
+| [🚬 RK3568 级联吸烟检测引擎](./designs/rk3568-smoking-detection-engine.md) | 面向单核 1.0 TOPS RK3568 的级联姿态与香烟检测 | 四级漏斗门控、RGA2 硬件双路零拷贝、无头纯卷积、防张冠李戴安全航迹 |
 | [🛰️ FFmpeg 协议兼容对照](./designs/ffmpeg-compatibility-reference.md) | 以 FFmpeg 为基准的 RTSP/RTP 接入与时钟映射 | 协议错误分类、RTP 回绕保护、Annex-B 封装 |
 
 > *注：已落地历史方案（实时预览改造、人脸识别分析包、国标 GB28181、快照硬件 JPEG 编码）已移入仓库历史案卷目录 `docs/archive/`。*

@@ -39,6 +39,37 @@ pub fn compute_letterbox_layout(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) 
     }
 }
 
+/// 计算 Stretch 缩放布局（直接拉伸，不保持宽高比）
+///
+/// 直接拉伸到目标尺寸，不保持宽高比，无黑边填充
+/// 适用于模型训练时使用非正方形输入的场景
+pub fn compute_stretch_layout(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> LetterboxLayout {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return LetterboxLayout {
+            scale: 1.0,
+            pad_left: 0,
+            pad_top: 0,
+            dst_w,
+            dst_h,
+            scaled_w: dst_w,
+            scaled_h: dst_h,
+        };
+    }
+
+    let scale_x = dst_w as f32 / src_w as f32;
+    let scale_y = dst_h as f32 / src_h as f32;
+
+    LetterboxLayout {
+        scale: scale_x.min(scale_y),
+        pad_left: 0,
+        pad_top: 0,
+        dst_w,
+        dst_h,
+        scaled_w: dst_w,
+        scaled_h: dst_h,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
