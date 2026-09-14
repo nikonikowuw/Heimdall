@@ -313,6 +313,8 @@ export interface RecognitionRecord {
   subjectName: string
   similarity: number
   fieldCropPath: string
+  fieldImagePath: string | null
+  fieldBboxJson: string | null
   registeredPhotoPath: string
   status: RecognitionStatus
   candidates?: FaceCandidateItem[]

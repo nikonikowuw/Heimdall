@@ -15,6 +15,8 @@ pub struct Model {
     pub subject_name: String,
     pub similarity: f32,
     pub field_crop_path: String,
+    pub field_image_path: String,
+    pub field_bbox_json: String,
     pub registered_photo_path: String,
     pub status: String,
     pub candidates_json: Option<String>,

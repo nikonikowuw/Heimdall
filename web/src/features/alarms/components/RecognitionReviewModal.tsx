@@ -6,6 +6,7 @@ import type { FaceCandidateItem, RecognitionRecord } from '../../../types'
 import { formatCosineSimilarityPercent } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
+import { RecognitionEvidencePreview } from './RecognitionEvidencePreview'
 
 export interface RecognitionReviewModalProps {
   recognition: RecognitionRecord
@@ -84,6 +85,7 @@ export function RecognitionReviewModal({
 }: RecognitionReviewModalProps): React.ReactElement {
   const candidates = recognition.candidates || []
   const registeredPhotoRel = recognition.registeredPhotoPath || candidates[0]?.photoRelPath || ''
+  const fieldImagePath = recognition.fieldImagePath
   const [compareCandidate, setCompareCandidate] = useState<FaceCandidateItem | null>(
     () => candidates[0] || null,
   )
@@ -91,6 +93,7 @@ export function RecognitionReviewModal({
     src: string
     title?: string
     subtitle?: string
+    bboxJson?: string | null
   } | null>(null)
 
   // 浮层按栈响应 ESC，杜绝穿透
@@ -128,11 +131,31 @@ export function RecognitionReviewModal({
         {/* Content */}
         <div className="flex-1 overflow-auto p-6">
           <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-            {/* 左侧：现场特写与底库样本 */}
+            {/* 左侧：现场全景、特写与底库样本 */}
             <div className="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-base)] p-4">
               <span className="text-xs font-semibold text-[var(--text-secondary)]">
-                {t('card.siteCrop')} & {t('card.registeredPhoto')}
+                {t('card.siteEvidence')}
               </span>
+              {fieldImagePath && (
+                <RecognitionEvidencePreview
+                  src={evidenceApi.getImageUrl(fieldImagePath)}
+                  bboxJson={recognition.fieldBboxJson}
+                  alt={t('card.sitePanorama')}
+                  label={t('card.sitePanorama')}
+                  faceLabel={t('card.face')}
+                  className="aspect-video w-full"
+                  title={t('card.viewHd')}
+                  noImageText={t('card.noImage')}
+                  onPreview={() => {
+                    setPreviewImage({
+                      src: evidenceApi.getImageUrl(fieldImagePath),
+                      bboxJson: recognition.fieldBboxJson,
+                      title: `${t('card.sitePanorama')} · ${recognition.subjectName || recognition.cameraId}`,
+                      subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
+                    })
+                  }}
+                />
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <ReviewPreviewThumb
                   src={recognition.fieldCropPath}
@@ -335,7 +358,7 @@ export function RecognitionReviewModal({
                           <div className="flex items-center gap-3">
                             <div className="flex flex-col items-end">
                               <span className="font-mono text-xs font-bold text-emerald-500">
-                                {scorePct}%
+                                {scorePct}
                               </span>
                               <span className="text-[9px] text-[var(--text-muted)]">
                                 {t('card.similarity')}
@@ -400,6 +423,7 @@ export function RecognitionReviewModal({
           src={previewImage.src}
           title={previewImage.title}
           subtitle={previewImage.subtitle}
+          bboxJson={previewImage.bboxJson}
           onClose={() => setPreviewImage(null)}
         />
       )}

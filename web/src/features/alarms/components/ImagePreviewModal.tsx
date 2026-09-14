@@ -1,9 +1,15 @@
-import React, { useMemo } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Download, ExternalLink, Maximize2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '../../../hooks/use-dismiss-stack'
-import { deriveDownloadFilename } from '../utils'
+import {
+  calculateFittedImageRect,
+  deriveDownloadFilename,
+  getBBoxStyle,
+  parseTargetBBoxes,
+  type FittedImageRect,
+} from '../utils'
 
 export interface ImagePreviewModalProps {
   src: string
@@ -11,6 +17,7 @@ export interface ImagePreviewModalProps {
   subtitle?: string
   alt?: string
   filename?: string
+  bboxJson?: string | null
   onClose: () => void
 }
 
@@ -33,6 +40,7 @@ export function ImagePreviewModal({
   subtitle,
   alt = 'Image Preview',
   filename,
+  bboxJson,
   onClose,
 }: ImagePreviewModalProps): React.ReactElement | null {
   const { t } = useTranslation('alarm')
@@ -44,6 +52,32 @@ export function ImagePreviewModal({
     () => deriveDownloadFilename(src, filename, title),
     [src, filename, title],
   )
+  const imageContainerRef = useRef<HTMLDivElement>(null)
+  const imageRef = useRef<HTMLImageElement>(null)
+  const [imgRect, setImgRect] = useState<FittedImageRect | null>(null)
+  const targetBBoxes = parseTargetBBoxes(bboxJson ?? undefined)
+
+  const updateImageRect = useCallback(() => {
+    const container = imageContainerRef.current
+    const image = imageRef.current
+    if (!container || !image || !image.naturalWidth || !image.naturalHeight) return
+    setImgRect(
+      calculateFittedImageRect(
+        container.clientWidth,
+        container.clientHeight,
+        image.naturalWidth,
+        image.naturalHeight,
+      ),
+    )
+  }, [])
+
+  useEffect(() => {
+    const container = imageContainerRef.current
+    if (!container || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(updateImageRect)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [updateImageRect])
 
   const handleDownload = async (e: React.MouseEvent): Promise<void> => {
     e.preventDefault()
@@ -113,14 +147,35 @@ export function ImagePreviewModal({
 
       {/* 居中大图 */}
       <div
-        className="flex max-h-[82vh] max-w-[90vw] items-center justify-center overflow-hidden rounded-2xl shadow-2xl"
+        ref={imageContainerRef}
+        className="relative flex max-h-[82vh] max-w-[90vw] items-center justify-center overflow-hidden rounded-2xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <img
+          ref={imageRef}
           src={src}
           alt={alt}
           className="max-h-[82vh] max-w-[90vw] rounded-2xl border border-white/15 object-contain shadow-2xl transition-transform duration-200"
+          onLoad={updateImageRect}
         />
+        {imgRect && targetBBoxes?.body && (
+          <div
+            className="pointer-events-none absolute border-2 border-cyan-400 bg-cyan-400/10 shadow-[0_0_12px_rgba(6,182,212,0.5)]"
+            style={getBBoxStyle(targetBBoxes.body, imgRect)}
+          />
+        )}
+        {imgRect && targetBBoxes?.face && (
+          <div
+            className="pointer-events-none absolute border-2 border-dashed border-purple-400 bg-purple-500/15 shadow-[0_0_12px_rgba(168,85,247,0.5)]"
+            style={getBBoxStyle(targetBBoxes.face.bbox, imgRect)}
+          >
+            <span className="absolute -top-4 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-xs">
+              {targetBBoxes.face.qualityScore !== undefined
+                ? `${t('card.face')} ${(targetBBoxes.face.qualityScore * 100).toFixed(0)}%`
+                : t('card.face')}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* 底部按键提示 */}

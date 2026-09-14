@@ -5,10 +5,11 @@ import { evidenceApi } from '../../../lib/api'
 import type { AlarmRecord } from '../../../types'
 import {
   calculateFittedImageRect,
+  getBBoxStyle,
   type FittedImageRect,
   formatTimestamp,
   getRuleTypeLabel,
-  parseBBoxCoords,
+  parseTargetBBoxes,
 } from '../utils'
 
 export interface AlarmLightboxModalProps {
@@ -47,7 +48,10 @@ export function AlarmLightboxModal({
       ? `${fullImageUrl}${fullImageUrl.includes('?') ? '&' : '?'}retry=${imageAttempt}`
       : fullImageUrl
 
-  const bbox = parseBBoxCoords(alarm.bboxJson)
+  const targetBBoxes = parseTargetBBoxes(alarm.bboxJson)
+  const bodyBBox = targetBBoxes?.body ?? null
+  const faceBBox = targetBBoxes?.face?.bbox ?? null
+  const faceQuality = targetBBoxes?.face?.qualityScore
 
   useEffect(() => {
     if (previousFullImageUrl.current === fullImageUrl) return
@@ -198,19 +202,26 @@ export function AlarmLightboxModal({
                   onLoad={handleImageLoad}
                   onError={handleImageError}
                 />
-                {bbox && imgRect && isFullLoaded && (
+                {bodyBBox && imgRect && isFullLoaded && (
                   <div
                     className="pointer-events-none absolute border-2 border-rose-500 bg-rose-500/15 shadow-[0_0_15px_rgba(244,63,94,0.6)] transition-all"
-                    style={{
-                      left: `${imgRect.x + bbox.x1 * imgRect.width}px`,
-                      top: `${imgRect.y + bbox.y1 * imgRect.height}px`,
-                      width: `${Math.max(6, (bbox.x2 - bbox.x1) * imgRect.width)}px`,
-                      height: `${Math.max(6, (bbox.y2 - bbox.y1) * imgRect.height)}px`,
-                    }}
+                    style={getBBoxStyle(bodyBBox, imgRect)}
                   >
                     <span className="absolute -top-6 left-0 rounded bg-rose-600 px-2 py-0.5 font-mono text-[10px] font-bold whitespace-nowrap text-white shadow-xs">
                       #{alarm.trackId} {alarm.targetLabel} (
                       {((alarm.confidence ?? 0) * 100).toFixed(0)}%)
+                    </span>
+                  </div>
+                )}
+                {faceBBox && imgRect && isFullLoaded && (
+                  <div
+                    className="pointer-events-none absolute border-2 border-dashed border-purple-400 bg-purple-500/15 shadow-[0_0_12px_rgba(168,85,247,0.5)] transition-all"
+                    style={getBBoxStyle(faceBBox, imgRect)}
+                  >
+                    <span className="absolute -top-4.5 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-xs">
+                      {faceQuality !== undefined
+                        ? `Face ${(faceQuality * 100).toFixed(0)}%`
+                        : 'Face'}
                     </span>
                   </div>
                 )}

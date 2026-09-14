@@ -65,8 +65,7 @@ impl AlarmDispatchService {
         let occurred_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
             .unwrap_or_else(chrono::Utc::now);
 
-        let bbox_json = serde_json::to_string(&event.alarm.tracked_object.bbox)
-            .unwrap_or_else(|_| "{}".to_string());
+        let bbox_json = crate::capture_service::serialize_field_bbox(&event.alarm.tracked_object);
 
         // 解析触发告警的算法业务告警类型 alarm_type_id（优先从算法库获取真实契约，如 "object_detect", "face_recognize", "intrusion"）
         let alarm_type_id = if event.algorithm_id.trim().is_empty() {

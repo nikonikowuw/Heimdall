@@ -66,6 +66,8 @@ pub struct RecognitionDto {
     pub subject_name: String,
     pub similarity: f32,
     pub field_crop_path: String,
+    pub field_image_path: Option<String>,
+    pub field_bbox_json: Option<String>,
     pub registered_photo_path: String,
     pub status: String,
     pub candidates: Vec<types::FaceCandidateItem>,
@@ -82,6 +84,8 @@ impl From<db::entity::recognition::Model> for RecognitionDto {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
+        let field_image_path = Some(m.field_image_path).filter(|s| !s.trim().is_empty());
+        let field_bbox_json = Some(m.field_bbox_json).filter(|s| !s.trim().is_empty());
         Self {
             id: m.id,
             recognition_id: m.recognition_id,
@@ -91,6 +95,8 @@ impl From<db::entity::recognition::Model> for RecognitionDto {
             subject_name: m.subject_name,
             similarity: m.similarity,
             field_crop_path: m.field_crop_path,
+            field_image_path,
+            field_bbox_json,
             registered_photo_path: m.registered_photo_path,
             status: m.status,
             candidates,

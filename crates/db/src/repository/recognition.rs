@@ -131,8 +131,8 @@ impl RecognitionRepo {
             active.similarity = Set(sim);
         }
 
-        let updated = active.update(db).await?;
-        Ok(Some(updated))
+        active.update(db).await?;
+        Self::find_by_recognition_id(db, params.recognition_id).await
     }
 
     pub async fn insert(

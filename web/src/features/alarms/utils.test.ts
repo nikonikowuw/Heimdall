@@ -4,6 +4,7 @@ import {
   formatTimestamp,
   getRuleTypeLabel,
   parseBBoxCoords,
+  parseTargetBBoxes,
   resolveEffectiveTimeRange,
 } from './utils'
 
@@ -36,6 +37,68 @@ describe('alarms utils', () => {
     it('parses object format { x1, y1, x2, y2 }', () => {
       const res = parseBBoxCoords('{"x1": 0.1, "y1": 0.2, "x2": 0.8, "y2": 0.9}')
       expect(res).toEqual({ x1: 0.1, y1: 0.2, x2: 0.8, y2: 0.9 })
+    })
+
+    it('parses composite format extracting body for backward compatibility', () => {
+      const res = parseBBoxCoords(
+        '{"body": [0.1, 0.2, 0.4, 0.6], "face": {"bbox": [0.15, 0.22, 0.25, 0.35], "qualityScore": 0.88}}',
+      )
+      expect(res).toEqual({ x1: 0.1, y1: 0.2, x2: 0.4, y2: 0.6 })
+    })
+  })
+
+  describe('parseTargetBBoxes', () => {
+    it('returns null for empty or invalid json', () => {
+      expect(parseTargetBBoxes('')).toBeNull()
+      expect(parseTargetBBoxes('invalid')).toBeNull()
+      expect(parseTargetBBoxes('[]')).toBeNull()
+    })
+
+    it('parses legacy array format', () => {
+      const res = parseTargetBBoxes('[0.1, 0.2, 0.4, 0.6]')
+      expect(res).toEqual({
+        body: { x1: 0.1, y1: 0.2, x2: 0.4, y2: 0.6 },
+        face: undefined,
+      })
+    })
+
+    it('parses composite format with body and face details', () => {
+      const json = JSON.stringify({
+        body: { x1: 0.1, y1: 0.2, x2: 0.4, y2: 0.6 },
+        face: {
+          bbox: { x1: 0.15, y1: 0.22, x2: 0.25, y2: 0.35 },
+          confidence: 0.95,
+          qualityScore: 0.88,
+        },
+      })
+      const res = parseTargetBBoxes(json)
+      expect(res).toEqual({
+        body: { x1: 0.1, y1: 0.2, x2: 0.4, y2: 0.6 },
+        face: {
+          bbox: { x1: 0.15, y1: 0.22, x2: 0.25, y2: 0.35 },
+          confidence: 0.95,
+          qualityScore: 0.88,
+        },
+      })
+    })
+
+    it('parses composite format with array bboxes and snake_case quality_score', () => {
+      const json = JSON.stringify({
+        body: [0.1, 0.2, 0.4, 0.6],
+        face: {
+          bbox: [0.15, 0.22, 0.25, 0.35],
+          quality_score: 0.91,
+        },
+      })
+      const res = parseTargetBBoxes(json)
+      expect(res).toEqual({
+        body: { x1: 0.1, y1: 0.2, x2: 0.4, y2: 0.6 },
+        face: {
+          bbox: { x1: 0.15, y1: 0.22, x2: 0.25, y2: 0.35 },
+          confidence: undefined,
+          qualityScore: 0.91,
+        },
+      })
     })
   })
 

@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import type { DateTimeRangeValue } from './components/DateTimeRangePicker'
 
 const PRESET_DURATIONS_MS: Record<string, number> = {
@@ -73,29 +74,97 @@ export interface ParsedBBoxCoords {
   y2: number
 }
 
+export interface ParsedTargetBBoxes {
+  body: ParsedBBoxCoords
+  face?: {
+    bbox: ParsedBBoxCoords
+    confidence?: number
+    qualityScore?: number
+  }
+}
+
+function parseCoordsHelper(item: unknown): ParsedBBoxCoords | null {
+  if (!item || typeof item !== 'object') return null
+
+  let values: unknown[]
+  if (Array.isArray(item) && item.length >= 4) {
+    values = item.slice(0, 4)
+  } else if ('x1' in item && 'y1' in item && 'x2' in item && 'y2' in item) {
+    const obj = item as Record<string, unknown>
+    values = [obj.x1, obj.y1, obj.x2, obj.y2]
+  } else {
+    return null
+  }
+
+  const [x1, y1, x2, y2] = values.map(Number)
+  return [x1, y1, x2, y2].every(Number.isFinite) ? { x1, y1, x2, y2 } : null
+}
+
+function asOptionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined
+}
+
 /**
- * 解析归一化对角两点式 BBox 坐标
- * 支持 [x1, y1, x2, y2] 数组或具名对象 { x1, y1, x2, y2 }
+ * 解析目标及其挂载人脸检测框坐标与质量分
+ * 支持：
+ * 1. 数组形式：[x1, y1, x2, y2]
+ * 2. 扁平对象：{ x1, y1, x2, y2 }
+ * 3. 复合对象：{ body: [..] | {..}, face?: { bbox: [..] | {..}, confidence?, qualityScore? } }
  */
-export function parseBBoxCoords(raw?: string): ParsedBBoxCoords | null {
+export function parseTargetBBoxes(raw?: string): ParsedTargetBBoxes | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed) && parsed.length >= 4) {
-      const [x1, y1, x2, y2] = parsed.map(Number)
-      return { x1, y1, x2, y2 }
-    }
-    if (parsed && typeof parsed === 'object' && 'x1' in parsed && 'y1' in parsed) {
-      return {
-        x1: Number(parsed.x1),
-        y1: Number(parsed.y1),
-        x2: Number(parsed.x2),
-        y2: Number(parsed.y2),
+    if (!parsed || typeof parsed !== 'object') return null
+
+    // 格式 1: 复合对象 { body: ..., face?: ... }
+    if ('body' in parsed) {
+      const bodyCoords = parseCoordsHelper(parsed.body)
+      if (!bodyCoords) return null
+
+      let face: ParsedTargetBBoxes['face'] = undefined
+      if (parsed.face && typeof parsed.face === 'object') {
+        const faceObj = parsed.face as Record<string, unknown>
+        const faceBBox = parseCoordsHelper(faceObj.bbox)
+        if (faceBBox) {
+          const qualityScore =
+            asOptionalNumber(faceObj.qualityScore) ?? asOptionalNumber(faceObj.quality_score)
+          face = {
+            bbox: faceBBox,
+            confidence: asOptionalNumber(faceObj.confidence),
+            qualityScore,
+          }
+        }
       }
+
+      return { body: bodyCoords, face }
     }
-    return null
+
+    // 格式 2: 扁平数组或对象
+    const coords = parseCoordsHelper(parsed)
+    return coords ? { body: coords } : null
   } catch {
     return null
+  }
+}
+
+/**
+ * 解析归一化对角两点式 BBox 坐标（向后兼容，始终返回主体 body 坐标）
+ */
+export function parseBBoxCoords(raw?: string): ParsedBBoxCoords | null {
+  const target = parseTargetBBoxes(raw)
+  return target ? target.body : null
+}
+
+/**
+ * 根据容器中居中自适应的大图几何矩形，计算目标框的绝对定位样式
+ */
+export function getBBoxStyle(bbox: ParsedBBoxCoords, rect: FittedImageRect): CSSProperties {
+  return {
+    left: `${rect.x + bbox.x1 * rect.width}px`,
+    top: `${rect.y + bbox.y1 * rect.height}px`,
+    width: `${Math.max(6, (bbox.x2 - bbox.x1) * rect.width)}px`,
+    height: `${Math.max(6, (bbox.y2 - bbox.y1) * rect.height)}px`,
   }
 }
 

@@ -5,6 +5,7 @@ import type { RecognitionRecord } from '../../../types'
 import { formatCosineSimilarityPercent } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
+import { RecognitionEvidencePreview } from './RecognitionEvidencePreview'
 
 export interface RecognitionCardItemProps {
   recognition: RecognitionRecord
@@ -51,11 +52,13 @@ export function RecognitionCardItem({
   const isPending = recognition.status === 'pending_review'
   const candidates = recognition.candidates || []
   const registeredPhotoRel = recognition.registeredPhotoPath || candidates[0]?.photoRelPath || ''
+  const fieldImagePath = recognition.fieldImagePath
   const [photoLoadError, setPhotoLoadError] = useState(false)
   const [previewModal, setPreviewModal] = useState<{
     src: string
     title?: string
     subtitle?: string
+    bboxJson?: string | null
   } | null>(null)
 
   const statusConfig =
@@ -84,7 +87,29 @@ export function RecognitionCardItem({
         </span>
       </div>
 
-      {/* 图像对比区 */}
+      {/* 现场全景上下文 */}
+      {fieldImagePath && (
+        <RecognitionEvidencePreview
+          src={evidenceApi.getImageUrl(fieldImagePath)}
+          bboxJson={recognition.fieldBboxJson}
+          alt={t('card.sitePanorama')}
+          label={t('card.sitePanorama')}
+          faceLabel={t('card.face')}
+          className="aspect-video w-full"
+          title={t('card.viewHd')}
+          noImageText={t('card.noImage')}
+          onPreview={() => {
+            setPreviewModal({
+              src: evidenceApi.getImageUrl(fieldImagePath),
+              bboxJson: recognition.fieldBboxJson,
+              title: `${t('card.sitePanorama')} · ${recognition.subjectName || recognition.cameraId}`,
+              subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
+            })
+          }}
+        />
+      )}
+
+      {/* 人脸特写与底库样本 */}
       <div className="flex items-center justify-between gap-3">
         {/* 现场抓拍特写 */}
         <div className="flex flex-1 flex-col items-center gap-1.5">
@@ -137,7 +162,7 @@ export function RecognitionCardItem({
           <div
             className={`flex h-11 w-11 items-center justify-center rounded-full border font-mono text-xs font-bold shadow-xs ${statusConfig.badgeClass}`}
           >
-            {simPct}%
+            {simPct}
           </div>
           <span className="text-[9px] text-[var(--text-muted)]">{t('card.similarity')}</span>
         </div>
@@ -246,6 +271,7 @@ export function RecognitionCardItem({
           src={previewModal.src}
           title={previewModal.title}
           subtitle={previewModal.subtitle}
+          bboxJson={previewModal.bboxJson}
           onClose={() => setPreviewModal(null)}
         />
       )}

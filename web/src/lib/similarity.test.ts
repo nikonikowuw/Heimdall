@@ -24,6 +24,8 @@ describe('cosine similarity display conversion', () => {
   it('formats normalized cosine values as percentages', () => {
     expect(formatCosineSimilarityPercent(0.56)).toBe('78.0%')
     expect(formatCosineSimilarityPercent(0.75, 0)).toBe('88%')
+    expect(formatCosineSimilarityPercent(0.47047037, 0)).toBe('74%')
+    expect(formatCosineSimilarityPercent(0.47047037, 1)).toBe('73.5%')
     expect(formatCosineSimilarityPercent(undefined)).toBe('-')
     expect(formatCosineSimilarityPercent(Number.NaN)).toBe('-')
   })

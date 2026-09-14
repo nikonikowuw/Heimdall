@@ -107,6 +107,19 @@ pub struct CaptureDispatchService {
     recognition_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
+/// 序列化现场主体及挂载人脸的归一化检测框，供抓拍与识别证据共同复用。
+pub(crate) fn serialize_field_bbox(obj: &types::TrackedObject) -> String {
+    if let Some(face) = &obj.face {
+        serde_json::json!({
+            "body": obj.bbox,
+            "face": face,
+        })
+        .to_string()
+    } else {
+        serde_json::to_string(&obj.bbox).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
 impl CaptureDispatchService {
     /// 从 `AppState` 中提取句柄构造默认抓拍分发服务实例
     pub fn from_state(state: &AppState) -> Self {
@@ -182,8 +195,7 @@ impl CaptureDispatchService {
         let captured_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
             .unwrap_or_else(chrono::Utc::now);
 
-        let bbox_json =
-            serde_json::to_string(&event.tracked_object.bbox).unwrap_or_else(|_| "{}".to_string());
+        let bbox_json = serialize_field_bbox(&event.tracked_object);
 
         let quality_score = Self::resolve_quality_score(&event.tracked_object);
 
@@ -392,6 +404,8 @@ impl CaptureDispatchService {
             subject_name: Set(best_match.subject_name.clone()),
             similarity: Set(best_match.similarity),
             field_crop_path: Set(snap.crop_image_rel_path.clone()),
+            field_image_path: Set(snap.image_rel_path.clone()),
+            field_bbox_json: Set(serialize_field_bbox(&event.tracked_object)),
             registered_photo_path: Set(rec_gallery_rel),
             status: Set(status.as_str().to_string()),
             candidates_json: Set(Some(candidates_json)),
@@ -422,6 +436,8 @@ impl CaptureDispatchService {
                         "subjectName": saved.subject_name,
                         "similarity": saved.similarity,
                         "fieldCropPath": saved.field_crop_path,
+                        "fieldImagePath": saved.field_image_path,
+                        "fieldBboxJson": saved.field_bbox_json,
                         "registeredPhotoPath": saved.registered_photo_path,
                         "status": saved.status,
                         "candidates": candidates,

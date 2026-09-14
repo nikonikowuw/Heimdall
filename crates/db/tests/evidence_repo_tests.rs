@@ -60,6 +60,8 @@ async fn test_capture_and_recognition_repository_lifecycle() {
         subject_name: Set("Alice".to_string()),
         similarity: Set(0.96),
         field_crop_path: Set("cam_01/crop_001.jpg".to_string()),
+        field_image_path: Set("cam_01/full_001.jpg".to_string()),
+        field_bbox_json: Set("[0.1, 0.2, 0.3, 0.4]".to_string()),
         registered_photo_path: Set("galleries/alice.jpg".to_string()),
         recognized_at: Set(now),
         ..Default::default()

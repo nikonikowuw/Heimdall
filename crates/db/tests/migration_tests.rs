@@ -147,6 +147,114 @@ fn test_v5_to_v6_migration_upgrade_and_deduplication() {
 }
 
 #[test]
+fn test_v12_migration_backfills_recognition_field_image_path() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    let v1 = include_str!("../src/migration/migrations/V1__init_schema.sql");
+    let v2 = include_str!("../src/migration/migrations/V2__evidence_triad_and_galleries.sql");
+    let v12 = include_str!("../src/migration/migrations/V12__recognition_field_image_path.sql");
+
+    conn.execute_batch(v1).expect("apply V1");
+    conn.execute_batch(v2).expect("apply V2");
+    conn.execute(
+        r#"
+        INSERT INTO capture_records (
+            capture_id, camera_id, track_id, target_label, confidence, quality_score,
+            bbox_json, image_id, image_rel_path, crop_image_id, crop_image_rel_path,
+            captured_at
+        ) VALUES (
+            'capture_v12', 'CAM_V12', 7, 'person', 0.95, 0.88,
+            '[]', 'image_v12', 'CAM_V12/image_v12.jpg', 'crop_v12', 'CAM_V12/crop_v12.jpg',
+            CURRENT_TIMESTAMP
+        )
+        "#,
+        [],
+    )
+    .expect("insert capture before migration");
+    conn.execute(
+        r#"
+        INSERT INTO recognition_records (
+            recognition_id, camera_id, gallery_id, subject_id, subject_name, similarity,
+            field_crop_path, registered_photo_path, recognized_at
+        ) VALUES (
+            'recognition_v12', 'CAM_V12', 'default', 'subject_v12', 'V12', 0.9,
+            'CAM_V12/crop_v12.jpg', 'galleries/subject_v12.jpg', CURRENT_TIMESTAMP
+        )
+        "#,
+        [],
+    )
+    .expect("insert recognition before migration");
+
+    conn.execute_batch(v12).expect("apply V12");
+
+    let field_image_path: String = conn
+        .query_row(
+            "SELECT field_image_path FROM recognition_records WHERE recognition_id = 'recognition_v12';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query backfilled field image path");
+    assert_eq!(field_image_path, "CAM_V12/image_v12.jpg");
+}
+
+#[test]
+fn test_v13_migration_backfills_recognition_field_bbox_json() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    let v1 = include_str!("../src/migration/migrations/V1__init_schema.sql");
+    let v2 = include_str!("../src/migration/migrations/V2__evidence_triad_and_galleries.sql");
+    let v12 = include_str!("../src/migration/migrations/V12__recognition_field_image_path.sql");
+    let v13 = include_str!("../src/migration/migrations/V13__recognition_field_bbox_json.sql");
+
+    conn.execute_batch(v1).expect("apply V1");
+    conn.execute_batch(v2).expect("apply V2");
+    conn.execute(
+        r#"
+        INSERT INTO capture_records (
+            capture_id, camera_id, track_id, target_label, confidence, quality_score,
+            bbox_json, image_id, image_rel_path, crop_image_id, crop_image_rel_path,
+            captured_at
+        ) VALUES (
+            'capture_bbox_v13', 'CAM_V13', 8, 'person', 0.96, 0.89,
+            '{"body":[0.1,0.2,0.4,0.6],"face":{"bbox":[0.15,0.22,0.25,0.35],"qualityScore":0.88}}',
+            'image_v13', 'CAM_V13/image_v13.jpg', 'crop_v13', 'CAM_V13/crop_v13.jpg',
+            CURRENT_TIMESTAMP
+        )
+        "#,
+        [],
+    )
+    .expect("insert capture before migration");
+    conn.execute(
+        r#"
+        INSERT INTO recognition_records (
+            recognition_id, camera_id, gallery_id, subject_id, subject_name, similarity,
+            field_crop_path, registered_photo_path, recognized_at
+        ) VALUES (
+            'recognition_bbox_v13', 'CAM_V13', 'default', 'subject_v13', 'V13', 0.9,
+            'CAM_V13/crop_v13.jpg', 'galleries/subject_v13.jpg', CURRENT_TIMESTAMP
+        )
+        "#,
+        [],
+    )
+    .expect("insert recognition before migration");
+
+    conn.execute_batch(v12).expect("apply V12");
+    conn.execute_batch(v13).expect("apply V13");
+
+    let field_bbox_json: String = conn
+        .query_row(
+            "SELECT field_bbox_json FROM recognition_records WHERE recognition_id = 'recognition_bbox_v13';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query backfilled field bbox json");
+    assert_eq!(
+        field_bbox_json,
+        r#"{"body":[0.1,0.2,0.4,0.6],"face":{"bbox":[0.15,0.22,0.25,0.35],"qualityScore":0.88}}"#
+    );
+}
+
+#[test]
 fn test_v8_migration_adds_stream_mode_with_default_auto() {
     let conn = Connection::open_in_memory().expect("open in-memory sqlite");
 

@@ -46,6 +46,10 @@ async fn test_review_recognition_lifecycle_and_broadcast() {
         subject_name: Set("Alice".to_string()),
         similarity: Set(0.68),
         field_crop_path: Set("captures/crop_1.jpg".to_string()),
+        field_image_path: Set("captures/full_1.jpg".to_string()),
+        field_bbox_json: Set(
+            r#"{"body":[0.1,0.2,0.4,0.6],"face":{"bbox":[0.15,0.22,0.25,0.35],"qualityScore":0.88}}"#.to_string(),
+        ),
         registered_photo_path: Set("recognitions/rec_review_1_gallery.jpg".to_string()),
         status: Set("pending_review".to_string()),
         candidates_json: Set(Some(
@@ -56,7 +60,11 @@ async fn test_review_recognition_lifecycle_and_broadcast() {
         recognized_at: Set(chrono::Utc::now()),
         created_at: Set(chrono::Utc::now()),
     };
-    RecognitionRepo::insert(&state.db, rec).await.unwrap();
+    let inserted = RecognitionRepo::insert(&state.db, rec).await.unwrap();
+    assert_eq!(
+        inserted.field_bbox_json,
+        r#"{"body":[0.1,0.2,0.4,0.6],"face":{"bbox":[0.15,0.22,0.25,0.35],"qualityScore":0.88}}"#
+    );
 
     // 订阅 WebSocket 广播
     let mut rx = state.event_broadcaster.subscribe();
@@ -85,8 +93,21 @@ async fn test_review_recognition_lifecycle_and_broadcast() {
         .unwrap();
     let json_val: serde_json::Value = serde_json::from_slice(&res_bytes).unwrap();
     assert_eq!(json_val["code"], 0);
+    let persisted = RecognitionRepo::find_by_recognition_id(&state.db, "rec_review_1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        persisted.field_bbox_json,
+        r#"{"body":[0.1,0.2,0.4,0.6],"face":{"bbox":[0.15,0.22,0.25,0.35],"qualityScore":0.88}}"#
+    );
     assert_eq!(json_val["data"]["status"], "confirmed");
     assert_eq!(json_val["data"]["subjectName"], "Alice Cooper");
+    assert_eq!(json_val["data"]["fieldImagePath"], "captures/full_1.jpg");
+    assert_eq!(
+        json_val["data"]["fieldBboxJson"],
+        r#"{"body":[0.1,0.2,0.4,0.6],"face":{"bbox":[0.15,0.22,0.25,0.35],"qualityScore":0.88}}"#
+    );
     assert_eq!(json_val["data"]["reviewerId"], "admin");
     assert!(json_val["data"]["reviewedAt"].as_i64().is_some());
 
@@ -192,6 +213,8 @@ async fn test_review_recognition_self_copy_safety_does_not_truncate() {
         subject_name: Set("Bob".to_string()),
         similarity: Set(0.70),
         field_crop_path: Set("captures/crop_2.jpg".to_string()),
+        field_image_path: Set("captures/full_2.jpg".to_string()),
+        field_bbox_json: Set("[0.1,0.2,0.4,0.6]".to_string()),
         registered_photo_path: Set("recognitions/rec_self_copy_gallery.jpg".to_string()),
         status: Set("pending_review".to_string()),
         candidates_json: Set(None),
@@ -280,6 +303,8 @@ async fn test_evidence_captures_and_recognitions_count_api() {
         subject_name: Set("Bob".to_string()),
         similarity: Set(0.95),
         field_crop_path: Set("captures/crop_bob.jpg".to_string()),
+        field_image_path: Set("captures/full_bob.jpg".to_string()),
+        field_bbox_json: Set("[0.1,0.2,0.4,0.6]".to_string()),
         registered_photo_path: Set("recognitions/rec_bob_gallery.jpg".to_string()),
         status: Set("confirmed".to_string()),
         candidates_json: Set(None),
