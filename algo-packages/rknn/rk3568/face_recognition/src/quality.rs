@@ -24,11 +24,8 @@ pub fn estimate_yaw(landmarks: &[[f32; 2]; 5]) -> f32 {
     if eye_dist <= f32::EPSILON {
         return 90.0;
     }
-    let eye_center = [
-        (landmarks[0][0] + landmarks[1][0]) * 0.5,
-        (landmarks[0][1] + landmarks[1][1]) * 0.5,
-    ];
-    let offset = (landmarks[2][0] - eye_center[0]) / eye_dist;
+    let eye_center_x = (landmarks[0][0] + landmarks[1][0]) * 0.5;
+    let offset = (landmarks[2][0] - eye_center_x) / eye_dist;
     finite_or_zero(offset.atan().to_degrees() * 2.0).clamp(-90.0, 90.0)
 }
 
@@ -59,7 +56,7 @@ pub fn compute_quality(
         .map(|score| finite_or_zero(*score).clamp(0.0, 1.0))
         .sum::<f32>()
         * 0.2;
-    // YOLOv5-face 没有独立 Laplacian 输出，关键点置信度是 fast path 上的低成本模糊代理。
+    // YOLOv8n-face 没有独立 Laplacian 输出，关键点置信度是 fast path 上的低成本模糊代理。
     let blur = (1.0 - average_landmark_score).clamp(0.0, 1.0);
     let size = face_width.max(0.0);
     let size_quality = (size / 120.0).clamp(0.0, 1.0);

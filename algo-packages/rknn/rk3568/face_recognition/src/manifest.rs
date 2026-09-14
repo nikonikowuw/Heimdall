@@ -27,6 +27,18 @@ pub const DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 12] = [
     [1, 15, 12, 20],
 ];
 
+pub const PERSON_DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 9] = [
+    [1, 64, 48, 80],
+    [1, 80, 48, 80],
+    [1, 1, 48, 80],
+    [1, 64, 24, 40],
+    [1, 80, 24, 40],
+    [1, 1, 24, 40],
+    [1, 64, 12, 20],
+    [1, 80, 12, 20],
+    [1, 1, 12, 20],
+];
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PackageManifest {
     pub manifest_version: u32,

@@ -197,7 +197,7 @@ impl InferenceWorker {
             input_width: package.detector_width,
             input_height: package.detector_height,
             input_channels: 3,
-            output_shapes: vec![[1, 84, 5040, 1]],
+            output_shapes: manifest::PERSON_DETECTOR_OUTPUT_SHAPES.to_vec(),
         };
 
         let detector_path = package.detector_path.clone();
@@ -260,12 +260,14 @@ impl InferenceWorker {
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     let persons = if let Some(ref mut p_session) = person_detector {
-                                        match p_session.infer_with_host_bytes(&data, |output| {
-                                            let RknnInferenceOutput::Float32(views) = output;
-                                            let slice = views.first().ok_or_else(|| AlgoError::Inference {
-                                                reason: "person detector 输出为空".to_string(),
-                                            })?;
-                                            Ok(detect::decode_yolov8_person(slice, min_person_score, &layout))
+                                        let attrs = p_session.output_attrs.clone();
+                                        match p_session.infer_with_host_int8(&data, |output| {
+                                            decode_person_output(
+                                                output,
+                                                &attrs,
+                                                &layout,
+                                                min_person_score,
+                                            )
                                         }) {
                                             Ok(p) => p,
                                             Err(e) => {
@@ -276,7 +278,8 @@ impl InferenceWorker {
                                     } else {
                                         Vec::new()
                                     };
-                                    let faces = decode_detector(&mut detector, &data, &layout, min_face_score)?;
+                                    let faces =
+                                        decode_detector(&mut detector, &data, &layout, min_face_score)?;
                                     Ok((persons, faces))
                                 }))
                                 .unwrap_or_else(|_| Err(worker_panic_error()));
@@ -291,23 +294,24 @@ impl InferenceWorker {
                         } => {
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    let layout = buffer
-                                        .as_dma_buf_layout()
-                                        .ok_or_else(|| AlgoError::Preprocess {
-                                            reason: "worker 收到的 buffer 没有 DMA-BUF 布局"
-                                                .to_string(),
-                                        })?;
+                                    let layout = buffer.as_dma_buf_layout().ok_or_else(|| {
+                                        AlgoError::Preprocess {
+                                            reason: "worker 收到的 buffer 没有 DMA-BUF 布局".to_string(),
+                                        }
+                                    })?;
                                     let persons = if let Some(ref mut p_session) = person_detector {
-                                        match p_session.infer_with_dma_buf(&layout, |output| {
-                                            let RknnInferenceOutput::Float32(views) = output;
-                                            let slice = views.first().ok_or_else(|| AlgoError::Inference {
-                                                reason: "person detector 输出为空".to_string(),
-                                            })?;
-                                            Ok(detect::decode_yolov8_person(slice, min_person_score, &letterbox))
+                                        let attrs = p_session.output_attrs.clone();
+                                        match p_session.infer_with_dma_buf_int8(&layout, |output| {
+                                            decode_person_output(
+                                                output,
+                                                &attrs,
+                                                &letterbox,
+                                                min_person_score,
+                                            )
                                         }) {
                                             Ok(p) => p,
                                             Err(e) => {
-                                                tracing::warn!(error = %e, "人体检测 DMA 推理失败，回退到纯人脸推导");
+                                                tracing::warn!(error = %e, "人体检测推理失败，回退到纯人脸推导");
                                                 Vec::new()
                                             }
                                         }
@@ -317,7 +321,10 @@ impl InferenceWorker {
                                     let attrs = detector.output_attrs.clone();
                                     let faces = detector.infer_with_dma_buf(&layout, |output| {
                                         decode_detector_output(
-                                            output, &attrs, &letterbox, min_face_score,
+                                            output,
+                                            &attrs,
+                                            &letterbox,
+                                            min_face_score,
                                         )
                                     })?;
                                     Ok((persons, faces))
@@ -329,7 +336,11 @@ impl InferenceWorker {
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     embedder.infer_with_host_bytes(&data, |output| {
-                                        let RknnInferenceOutput::Float32(values) = output;
+                                        let RknnInferenceOutput::Float32(values) = output else {
+                                            return Err(AlgoError::Inference {
+                                                reason: "EdgeFace 输出类型不是 Float32".to_string(),
+                                            });
+                                        };
                                         let values =
                                             values.first().ok_or_else(|| AlgoError::Inference {
                                                 reason: "EdgeFace 没有返回 embedding 输出"
@@ -444,13 +455,33 @@ fn decode_detector(
     })
 }
 
+fn decode_person_output(
+    output: &RknnInferenceOutput<'_>,
+    attrs: &[rknn::RknnTensorAttr],
+    layout: &LetterboxLayout,
+    min_score: f32,
+) -> Result<Vec<detect::PersonCandidate>, AlgoError> {
+    let RknnInferenceOutput::Int8(values) = output else {
+        return Err(AlgoError::Inference {
+            reason: format!(
+                "640x384 人体检测输出必须为 INT8 格式: outputs={}",
+                attrs.len()
+            ),
+        });
+    };
+    detect::decode_yolov8_person_multi_int8(values, attrs, layout, min_score, 0.45)
+}
 fn decode_detector_output(
     output: &RknnInferenceOutput<'_>,
     attrs: &[rknn::RknnTensorAttr],
     layout: &LetterboxLayout,
     min_score: f32,
 ) -> Result<Vec<detect::RawFace>, AlgoError> {
-    let RknnInferenceOutput::Float32(values) = output;
+    let RknnInferenceOutput::Float32(values) = output else {
+        return Err(AlgoError::Inference {
+            reason: "人脸检测输出类型不是 Float32".to_string(),
+        });
+    };
     let shapes: Vec<[u32; 4]> = attrs
         .iter()
         .map(|attr| [attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3]])
@@ -574,11 +605,7 @@ pub fn normalize_embedding(values: &[f32]) -> Result<[f32; 512], AlgoError> {
         });
     }
     let inv_norm = 1.0 / norm;
-    let mut embedding = [0.0f32; 512];
-    for (target, &source) in embedding.iter_mut().zip(values) {
-        *target = source * inv_norm;
-    }
-    Ok(embedding)
+    Ok(std::array::from_fn(|i| values[i] * inv_norm))
 }
 
 /// 使用 manifest 指定的尺寸执行 Host 侧低频 detector letterbox。
@@ -954,9 +981,15 @@ mod tests {
             Err(AlgoError::Timeout)
         ));
         let first = queue.pop().expect("middle request should remain queued");
-        assert!(matches!(first, InferenceRequest::DetectHost { data, .. } if data == vec![2]));
+        assert!(matches!(
+            first,
+            InferenceRequest::DetectHost { data, .. } if data == vec![2]
+        ));
         let second = queue.pop().expect("newest request should remain queued");
-        assert!(matches!(second, InferenceRequest::DetectHost { data, .. } if data == vec![3]));
+        assert!(matches!(
+            second,
+            InferenceRequest::DetectHost { data, .. } if data == vec![3]
+        ));
     }
     #[test]
     fn test_cosine_similarity_properties() {

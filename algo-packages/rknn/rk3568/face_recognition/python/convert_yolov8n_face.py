@@ -7,10 +7,7 @@ Usage:
 
 Examples:
     # Convert 640x384 model
-    python convert.py ../model/yolov8n-face-640x384.onnx rk3576 i8 ../model/yolov8n-face-640x384_i8.rknn
-
-    # Convert 640x640 model
-    python convert.py ../model/yolov8n-face-640x640.onnx rk3576 i8 ../model/yolov8n-face-640x640_i8.rknn
+    python convert.py ../model/yolov8n-face-640x384.onnx rk3568 i8 ../model/yolov8n-face-640x384_i8.rknn
 """
 
 import os
