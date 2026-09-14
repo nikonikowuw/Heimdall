@@ -73,7 +73,7 @@ function calculatePresetTimestamps(preset: QuickTimePreset): {
   if (preset === 'today') {
     const todayStart = new Date()
     todayStart.setHours(0, 0, 0, 0)
-    return { startTime: todayStart.getTime(), endTime: now }
+    return { startTime: todayStart.getTime(), endTime: undefined }
   }
   const duration = PRESET_DURATIONS_MS[preset]
   if (duration) {
@@ -334,8 +334,19 @@ export function DateTimeRangePicker({
       setIsOpen(false)
       return
     }
+    if (preset === 'today') {
+      const todayStart = new Date()
+      todayStart.setHours(0, 0, 0, 0)
+      onChange({
+        quickPreset: 'today',
+        startTime: todayStart.getTime(),
+        endTime: undefined,
+      })
+      setIsOpen(false)
+      return
+    }
     const timestamps = calculatePresetTimestamps(preset)
-    if (timestamps.startTime && timestamps.endTime) {
+    if (timestamps.startTime !== undefined) {
       onChange({
         quickPreset: preset,
         startTime: timestamps.startTime,

@@ -1,3 +1,56 @@
+import type { DateTimeRangeValue } from './components/DateTimeRangePicker'
+
+const PRESET_DURATIONS_MS: Record<string, number> = {
+  '5m': 5 * 60_000,
+  '15m': 15 * 60_000,
+  '30m': 30 * 60_000,
+  '1h': 3_600_000,
+  '24h': 86_400_000,
+  '7d': 7 * 86_400_000,
+}
+
+/**
+ * 实时解析时间范围值中的实际起止 UTC 毫秒时间戳
+ * - 对于 'all'：无起止时间限制（均为 undefined）
+ * - 对于 'custom'：严格遵循指定的 startTime 与 endTime
+ * - 对于 'today'：起始为当天 00:00:00，截止为 undefined（无上限截断，确保新告警可被查出）
+ * - 对于相对时间预设（'5m', '15m', '30m', '1h', '24h', '7d'）：基于当前时刻 now 动态回溯滑动窗口
+ */
+export function resolveEffectiveTimeRange(
+  range: DateTimeRangeValue,
+  now = Date.now(),
+): {
+  startTime?: number
+  endTime?: number
+} {
+  if (range.quickPreset === 'all') {
+    return { startTime: undefined, endTime: undefined }
+  }
+
+  if (range.quickPreset === 'custom') {
+    return { startTime: range.startTime, endTime: range.endTime }
+  }
+
+  if (range.quickPreset === 'today') {
+    const todayStart = new Date(now)
+    todayStart.setHours(0, 0, 0, 0)
+    return {
+      startTime: todayStart.getTime(),
+      endTime: undefined,
+    }
+  }
+
+  const duration = PRESET_DURATIONS_MS[range.quickPreset]
+  if (duration) {
+    return {
+      startTime: now - duration,
+      endTime: now,
+    }
+  }
+
+  return { startTime: range.startTime, endTime: range.endTime }
+}
+
 /**
  * 格式化展示 Unix 毫秒时间戳或 ISO 日期时间字符串
  */

@@ -32,6 +32,7 @@ import { DateTimeRangePicker, type DateTimeRangeValue } from './components/DateT
 import { RealtimeAlarmBanner } from './components/RealtimeAlarmBanner'
 import { RecognitionContent } from './components/RecognitionContent'
 import { RecognitionReviewModal } from './components/RecognitionReviewModal'
+import { resolveEffectiveTimeRange } from './utils'
 
 type EvidenceTab = 'alarms' | 'captures' | 'recognition'
 
@@ -41,7 +42,7 @@ function getInitialTodayRange(): DateTimeRangeValue {
   return {
     quickPreset: 'today',
     startTime: todayStart.getTime(),
-    endTime: Date.now(),
+    endTime: undefined,
   }
 }
 
@@ -52,8 +53,9 @@ function matchesTimeRange(timeRange: DateTimeRangeValue, timestamp: number): boo
   if (timeRange.quickPreset === 'today') {
     return true
   }
-  const afterStart = timeRange.startTime === undefined || timestamp >= timeRange.startTime
-  const beforeEnd = timeRange.endTime === undefined || timestamp <= timeRange.endTime + 60_000
+  const { startTime, endTime } = resolveEffectiveTimeRange(timeRange)
+  const afterStart = startTime === undefined || timestamp >= startTime
+  const beforeEnd = endTime === undefined || timestamp <= endTime + 60_000
   return afterStart && beforeEnd
 }
 
@@ -115,15 +117,12 @@ export function AlarmsPage(): React.ReactElement {
       .catch(() => {})
 
     const initialRange = getInitialTodayRange()
+    const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(initialRange)
     Promise.all([
-      alarmApi
-        .count({ startTime: initialRange.startTime, endTime: initialRange.endTime })
-        .catch(() => ({ total: 0 })),
+      alarmApi.count({ startTime: startMs, endTime: endMs }).catch(() => ({ total: 0 })),
+      evidenceApi.countCaptures({ startTime: startMs, endTime: endMs }).catch(() => ({ total: 0 })),
       evidenceApi
-        .countCaptures({ startTime: initialRange.startTime, endTime: initialRange.endTime })
-        .catch(() => ({ total: 0 })),
-      evidenceApi
-        .countRecognitions({ startTime: initialRange.startTime, endTime: initialRange.endTime })
+        .countRecognitions({ startTime: startMs, endTime: endMs })
         .catch(() => ({ total: 0 })),
     ]).then(([alarmsRes, capturesRes, recsRes]) => {
       if (!isMounted) return
@@ -163,8 +162,7 @@ export function AlarmsPage(): React.ReactElement {
       const targetLbl = selectedTargetLabel || undefined
       const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
       const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
-      const startMs = timeRange.startTime
-      const endMs = timeRange.endTime
+      const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
       const offset = (page - 1) * pageSize
 
       if (activeTab === 'alarms') {
@@ -367,6 +365,52 @@ export function AlarmsPage(): React.ReactElement {
     setter(val)
     setPage(1)
   }
+
+  // 显式点击刷新处理：动态重新拉取当前 Tab 记录并全量同步 Tab 徽标统计
+  const handleRefresh = useCallback(() => {
+    void loadData()
+
+    const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
+    const camId = selectedCameraId || undefined
+    const targetLbl = selectedTargetLabel || undefined
+    const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
+    const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
+
+    Promise.all([
+      alarmApi
+        .count({
+          cameraId: camId,
+          status: statusParam,
+          targetLabel: targetLbl,
+          severity: severityParam,
+          startTime: startMs,
+          endTime: endMs,
+        })
+        .catch(() => null),
+      evidenceApi
+        .countCaptures({
+          cameraId: camId,
+          targetLabel: targetLbl,
+          startTime: startMs,
+          endTime: endMs,
+        })
+        .catch(() => null),
+      evidenceApi
+        .countRecognitions({
+          cameraId: camId,
+          status: statusParam,
+          startTime: startMs,
+          endTime: endMs,
+        })
+        .catch(() => null),
+    ]).then(([alarmsCount, capturesCount, recsCount]) => {
+      setTabCounts((prev) => ({
+        alarms: alarmsCount !== null ? alarmsCount.total : prev.alarms,
+        captures: capturesCount !== null ? capturesCount.total : prev.captures,
+        recognition: recsCount !== null ? recsCount.total : prev.recognition,
+      }))
+    })
+  }, [loadData, timeRange, selectedCameraId, selectedTargetLabel, selectedSeverity, selectedStatus])
 
   // 单条告警状态切换
   const handleToggleAlarmStatus = async (alarm: AlarmRecord): Promise<void> => {
@@ -669,7 +713,7 @@ export function AlarmsPage(): React.ReactElement {
 
           <button
             type="button"
-            onClick={loadData}
+            onClick={handleRefresh}
             disabled={isLoading}
             className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-50"
           >
