@@ -18,7 +18,11 @@ pub use package::{
 pub use sandbox::{
     current_platform_id, normalize_platform_id, AlgoManifest, AlgoSandbox, VERIFY_ALGO_ARG,
 };
-pub use worker::{InferenceWorker, InferenceWorkerConfig, InferenceWorkerHandle};
+pub use worker::{
+    list_quarantined_workers, quarantined_workers_count, try_reclaim_quarantined_workers,
+    InferenceWorker, InferenceWorkerConfig, InferenceWorkerHandle, QuarantinedWorkerInfo,
+    WorkerState, DEFAULT_INFER_SHUTDOWN_TIMEOUT,
+};
 
 // NPU 监控模块
 pub use npu::monitor::{global_monitor, NpuMonitor, NpuMonitorEvent};

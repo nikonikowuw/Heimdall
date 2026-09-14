@@ -360,7 +360,12 @@ impl InferenceBackend for AlgoInstance {
         })?;
 
         // 隔离阻塞的 FFI 推理调用：仅在 Tokio 多线程工作池中调用 block_in_place
-        // 在专用 OS 线程或单线程运行时中直接执行，避免触发 Tokio 运行时 Panic
+        // 在专用 OS 线程或单线程运行时中直接执行，避免触发 Tokio 运行时 Panic。
+        //
+        // 架构安全边界：
+        // C ABI instance_process 属于同步阻塞调用；在专用常驻 OS 线程的 current_thread runtime 中，
+        // 若底层硬件在驱动内核态死锁（D 状态），协作式异步无法在执行期间进行抢占中断；
+        // 系统的死锁防御依赖 InferenceWorkerHandle 客户端断路超时保护与 stop() 线程/动态库隔离保活机制。
         let run_process = || {
             // SAFETY: 调用 C ABI instance_process，传入有效实例与帧描述符
             unsafe { process_fn(self.raw, &desc) }
