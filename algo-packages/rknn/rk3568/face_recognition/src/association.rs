@@ -124,9 +124,9 @@ pub fn associate_persons_and_faces(
             let fh = f.bbox[3];
             let fcx = f.bbox[0] + fw * 0.5;
 
-            // 根据人脸黄金比例外推躯干尺寸
-            let pw = (fw * 2.5).min(1.0);
-            let ph = (fh * 5.0).min(1.0);
+            // 根据人脸比例外推躯干尺寸 (限制最大扩展比例，避免特写场景框过大)
+            let pw = (fw * 2.0).min(0.8); // 宽度最多 0.8
+            let ph = (fh * 3.0).min(1.0); // 高度从 5.0 降到 3.0
             let px1 = (fcx - pw * 0.5).max(0.0);
             let py1 = f.bbox[1].max(0.0);
 

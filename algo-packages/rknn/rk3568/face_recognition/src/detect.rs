@@ -84,25 +84,19 @@ fn compute_dfl(logits: &[f32]) -> Result<f32, AlgoError> {
         });
     }
     let max_val = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let mut exp_vals = [0.0f32; DFL_LEN];
     let mut exp_sum = 0.0f32;
+    let mut weighted_sum = 0.0f32;
     for (i, &v) in logits.iter().enumerate() {
         let e = (v - max_val).exp();
-        exp_vals[i] = e;
         exp_sum += e;
+        weighted_sum += e * i as f32;
     }
     if !exp_sum.is_finite() || exp_sum <= f32::EPSILON {
         return Err(AlgoError::Inference {
             reason: "DFL softmax 分母非法".to_string(),
         });
     }
-    let inv_sum = 1.0 / exp_sum;
-    let weighted_sum: f32 = exp_vals
-        .iter()
-        .enumerate()
-        .map(|(i, &e)| e * i as f32)
-        .sum();
-    Ok(weighted_sum * inv_sum)
+    Ok(weighted_sum / exp_sum)
 }
 
 /// 单尺度解码：遍历 grid，解码 box + cls + kpt
@@ -246,73 +240,197 @@ pub fn nms(faces: &mut Vec<RawFace>, iou_threshold: f32) {
 }
 
 pub const COCO_PERSON_CLASS_ID: usize = 0;
-pub const PERSON_MODEL_ANCHORS: usize = 5040;
-pub const PERSON_MODEL_CHANNELS: usize = 84;
 
-/// 解码 YOLOv8n 人体检测张量 (shape [84, 5040]，NCHW 展平)
-pub fn decode_yolov8_person(
-    raw: &[f32],
-    conf_threshold: f32,
+/// 解码标准 YOLOv8n 640x384 多张量 INT8 输出，算法与参考 C++ 后处理保持一致。
+///
+/// 契约固定为 3 尺度 × 3 分支 (9 个 NCHW INT8 张量)：
+/// - 尺度 1 (stride 8):  grid 80x48, box 64ch, cls 80ch, score 1ch
+/// - 尺度 2 (stride 16): grid 40x24, box 64ch, cls 80ch, score 1ch
+/// - 尺度 3 (stride 32): grid 20x12, box 64ch, cls 80ch, score 1ch
+///
+/// 支持 NCHW 和 RKNN 的 NC1HWC2 物理通道布局；
+/// 严格只提取 COCO class 0 (person) 进行反量化与 Sigmoid 激活。
+pub fn decode_yolov8_person_multi_int8(
+    int8_outputs: &[&[i8]],
+    output_attrs: &[crate::rknn::RknnTensorAttr],
     layout: &LetterboxLayout,
-) -> Vec<PersonCandidate> {
-    if raw.len() < PERSON_MODEL_CHANNELS * PERSON_MODEL_ANCHORS {
-        return Vec::new();
-    }
+    conf_threshold: f32,
+    nms_threshold: f32,
+) -> Result<Vec<PersonCandidate>, AlgoError> {
     let threshold = conf_threshold.clamp(0.0, 1.0);
     let mut candidates = Vec::new();
-
     let eff_w = layout.scaled_w as f32;
     let eff_h = layout.scaled_h as f32;
     if eff_w <= 0.0 || eff_h <= 0.0 {
-        return Vec::new();
+        return Ok(candidates);
     }
+    let inv_eff_w = 1.0 / eff_w;
+    let inv_eff_h = 1.0 / eff_h;
     let pad_left = layout.pad_left as f32;
     let pad_top = layout.pad_top as f32;
 
-    for i in 0..PERSON_MODEL_ANCHORS {
-        let score = raw[4 * PERSON_MODEL_ANCHORS + i]; // COCO class 0: person
-        if !score.is_finite() || score < threshold {
+    for (cls_idx, cls_attr) in output_attrs.iter().enumerate() {
+        let cls_channels = cls_attr.dims[1];
+        let is_cls = match cls_attr.fmt {
+            crate::rknn::RknnTensorFormat::Nchw | crate::rknn::RknnTensorFormat::Undefined => {
+                cls_channels == 80
+            }
+            crate::rknn::RknnTensorFormat::Nc1hwc2 => cls_channels * 16 >= 80,
+            crate::rknn::RknnTensorFormat::Nhwc => false,
+        };
+        if !is_cls || cls_idx == 0 {
+            continue;
+        }
+        let box_idx = cls_idx - 1;
+        let box_attr = &output_attrs[box_idx];
+        let is_box = match box_attr.fmt {
+            crate::rknn::RknnTensorFormat::Nchw | crate::rknn::RknnTensorFormat::Undefined => {
+                box_attr.dims[1] == 64
+            }
+            crate::rknn::RknnTensorFormat::Nc1hwc2 => box_attr.dims[1] * 16 >= 64,
+            crate::rknn::RknnTensorFormat::Nhwc => false,
+        };
+        if !is_box || box_idx >= int8_outputs.len() || cls_idx >= int8_outputs.len() {
             continue;
         }
 
-        let cx = raw[i];
-        let cy = raw[PERSON_MODEL_ANCHORS + i];
-        let w = raw[2 * PERSON_MODEL_ANCHORS + i];
-        let h = raw[3 * PERSON_MODEL_ANCHORS + i];
+        let grid_h = usize::try_from(cls_attr.dims[2]).map_err(|_| AlgoError::OutOfMemory)?;
+        let grid_w = usize::try_from(cls_attr.dims[3]).map_err(|_| AlgoError::OutOfMemory)?;
+        let grid_len = grid_h.checked_mul(grid_w).ok_or(AlgoError::OutOfMemory)?;
+        let (stride_x, stride_y) = match (grid_w, grid_h) {
+            (80, 48) => (8.0, 8.0),
+            (40, 24) => (16.0, 16.0),
+            (20, 12) => (32.0, 32.0),
+            _ => continue,
+        };
+        let cls_data = int8_outputs[cls_idx];
+        let box_data = int8_outputs[box_idx];
 
-        if !cx.is_finite()
-            || !cy.is_finite()
-            || !w.is_finite()
-            || !h.is_finite()
-            || w <= 0.0
-            || h <= 0.0
-        {
-            continue;
-        }
+        for gy in 0..grid_h {
+            for gx in 0..grid_w {
+                let offset = gy * grid_w + gx;
+                let Some(person_value) = tensor_i8_value(
+                    cls_data,
+                    cls_attr.fmt,
+                    COCO_PERSON_CLASS_ID,
+                    grid_h,
+                    grid_w,
+                    gy,
+                    gx,
+                ) else {
+                    continue;
+                };
+                let cls_float = dequant_i8(person_value, cls_attr.zp, cls_attr.scale);
+                let score = activate_yolov8_score(cls_float);
+                if !score.is_finite() || score < threshold {
+                    continue;
+                }
 
-        let x1_px = cx - w * 0.5;
-        let y1_px = cy - h * 0.5;
-        let x2_px = cx + w * 0.5;
-        let y2_px = cy + h * 0.5;
+                let left = decode_dfl_i8(box_data, box_attr, 0, offset, grid_len, grid_h, grid_w);
+                let top = decode_dfl_i8(box_data, box_attr, 1, offset, grid_len, grid_h, grid_w);
+                let right = decode_dfl_i8(box_data, box_attr, 2, offset, grid_len, grid_h, grid_w);
+                let bottom = decode_dfl_i8(box_data, box_attr, 3, offset, grid_len, grid_h, grid_w);
+                let cx = (gx as f32 + 0.5) * stride_x;
+                let cy = (gy as f32 + 0.5) * stride_y;
+                let x1_px = cx - left * stride_x;
+                let y1_px = cy - top * stride_y;
+                let x2_px = cx + right * stride_x;
+                let y2_px = cy + bottom * stride_y;
 
-        // 反算 letterbox 到原图 [0, 1] 归一化 [x, y, w, h]
-        let x1 = ((x1_px - pad_left) / eff_w).clamp(0.0, 1.0);
-        let y1 = ((y1_px - pad_top) / eff_h).clamp(0.0, 1.0);
-        let x2 = ((x2_px - pad_left) / eff_w).clamp(0.0, 1.0);
-        let y2 = ((y2_px - pad_top) / eff_h).clamp(0.0, 1.0);
-
-        if x2 > x1 && y2 > y1 {
-            candidates.push(PersonCandidate {
-                bbox: [x1, y1, x2 - x1, y2 - y1],
-                score,
-            });
+                let x1 = ((x1_px - pad_left) * inv_eff_w).clamp(0.0, 1.0);
+                let y1 = ((y1_px - pad_top) * inv_eff_h).clamp(0.0, 1.0);
+                let x2 = ((x2_px - pad_left) * inv_eff_w).clamp(0.0, 1.0);
+                let y2 = ((y2_px - pad_top) * inv_eff_h).clamp(0.0, 1.0);
+                if x2 > x1 && y2 > y1 {
+                    candidates.push(PersonCandidate {
+                        bbox: [x1, y1, x2 - x1, y2 - y1],
+                        score,
+                    });
+                }
+            }
         }
     }
 
-    nms_persons(&mut candidates, 0.45);
-    candidates
+    nms_persons(&mut candidates, nms_threshold);
+    Ok(candidates)
 }
 
+fn tensor_i8_value(
+    data: &[i8],
+    format: crate::rknn::RknnTensorFormat,
+    channel: usize,
+    grid_h: usize,
+    grid_w: usize,
+    y: usize,
+    x: usize,
+) -> Option<i8> {
+    let index = match format {
+        crate::rknn::RknnTensorFormat::Nchw | crate::rknn::RknnTensorFormat::Undefined => channel
+            .checked_mul(grid_h.checked_mul(grid_w)?)?
+            .checked_add(y.checked_mul(grid_w)?.checked_add(x)?)?,
+        crate::rknn::RknnTensorFormat::Nc1hwc2 => {
+            let channel_group = channel / 16;
+            let channel_in_group = channel % 16;
+            channel_group
+                .checked_mul(grid_h.checked_mul(grid_w)?.checked_mul(16)?)?
+                .checked_add(y.checked_mul(grid_w)?.checked_mul(16)?)?
+                .checked_add(x.checked_mul(16)?)?
+                .checked_add(channel_in_group)?
+        }
+        _ => return None,
+    };
+    data.get(index).copied()
+}
+
+fn dequant_i8(value: i8, zero_point: i32, scale: f32) -> f32 {
+    (value as f32 - zero_point as f32) * scale
+}
+
+fn activate_yolov8_score(value: f32) -> f32 {
+    if value > 1.0 || value < -0.1 {
+        1.0 / (1.0 + (-value).exp())
+    } else {
+        value
+    }
+}
+
+fn decode_dfl_i8(
+    data: &[i8],
+    attr: &crate::rknn::RknnTensorAttr,
+    side: usize,
+    offset: usize,
+    grid_len: usize,
+    grid_h: usize,
+    grid_w: usize,
+) -> f32 {
+    debug_assert!(offset < grid_len);
+    let gy = offset / grid_w;
+    let gx = offset % grid_w;
+    let base_channel = side * DFL_LEN;
+
+    let mut logits = [0.0f32; DFL_LEN];
+    let mut max_logit = f32::NEG_INFINITY;
+    for (bin, logit) in logits.iter_mut().enumerate() {
+        let channel = base_channel + bin;
+        let Some(value) = tensor_i8_value(data, attr.fmt, channel, grid_h, grid_w, gy, gx) else {
+            return 0.0;
+        };
+        *logit = dequant_i8(value, attr.zp, attr.scale);
+        max_logit = max_logit.max(*logit);
+    }
+    let mut exp_sum = 0.0f32;
+    let mut weighted_sum = 0.0f32;
+    for (bin, logit) in logits.into_iter().enumerate() {
+        let exp_value = (logit - max_logit).exp();
+        exp_sum += exp_value;
+        weighted_sum += exp_value * bin as f32;
+    }
+    if exp_sum > 0.0 {
+        weighted_sum / exp_sum
+    } else {
+        0.0
+    }
+}
 /// 人体检测候选 NMS 抑制
 pub fn nms_persons(persons: &mut Vec<PersonCandidate>, iou_threshold: f32) {
     if persons.len() <= 1 {
@@ -340,22 +458,24 @@ pub fn normalize_to_relative(faces: &mut [RawFace], layout: &LetterboxLayout) {
     if eff_w <= 0.0 || eff_h <= 0.0 {
         return;
     }
+    let inv_w = 1.0 / eff_w;
+    let inv_h = 1.0 / eff_h;
     let pad_left = layout.pad_left as f32;
     let pad_top = layout.pad_top as f32;
 
     for face in faces {
         // bbox 反算黑边并归一化到原图 [0, 1] (x, y, w, h)
-        let x1 = ((face.bbox[0] - pad_left) / eff_w).clamp(0.0, 1.0);
-        let y1 = ((face.bbox[1] - pad_top) / eff_h).clamp(0.0, 1.0);
-        let x2 = ((face.bbox[0] + face.bbox[2] - pad_left) / eff_w).clamp(0.0, 1.0);
-        let y2 = ((face.bbox[1] + face.bbox[3] - pad_top) / eff_h).clamp(0.0, 1.0);
+        let x1 = ((face.bbox[0] - pad_left) * inv_w).clamp(0.0, 1.0);
+        let y1 = ((face.bbox[1] - pad_top) * inv_h).clamp(0.0, 1.0);
+        let x2 = ((face.bbox[0] + face.bbox[2] - pad_left) * inv_w).clamp(0.0, 1.0);
+        let y2 = ((face.bbox[1] + face.bbox[3] - pad_top) * inv_h).clamp(0.0, 1.0);
 
         face.bbox = [x1, y1, (x2 - x1).max(0.0), (y2 - y1).max(0.0)];
 
         // landmarks 反算黑边并归一化到原图
         for point in &mut face.landmarks {
-            point[0] = ((point[0] - pad_left) / eff_w).clamp(0.0, 1.0);
-            point[1] = ((point[1] - pad_top) / eff_h).clamp(0.0, 1.0);
+            point[0] = ((point[0] - pad_left) * inv_w).clamp(0.0, 1.0);
+            point[1] = ((point[1] - pad_top) * inv_h).clamp(0.0, 1.0);
         }
     }
 }
@@ -500,35 +620,90 @@ mod tests {
         assert!(decode_yolov8_face(&outputs, &attrs, &layout, 0.25, 0.45).is_err());
         assert!(decode_yolov8_face(&outputs, &attrs, &layout, f32::NAN, 0.45).is_err());
     }
-    #[test]
-    fn test_decode_yolov8_person() {
-        let mut raw = vec![0.0f32; PERSON_MODEL_CHANNELS * PERSON_MODEL_ANCHORS];
-        // anchor 50: person at center (320, 192), w=160, h=240, score=0.88
-        let anchor = 50;
-        raw[anchor] = 320.0;
-        raw[PERSON_MODEL_ANCHORS + anchor] = 192.0;
-        raw[2 * PERSON_MODEL_ANCHORS + anchor] = 160.0;
-        raw[3 * PERSON_MODEL_ANCHORS + anchor] = 240.0;
-        raw[4 * PERSON_MODEL_ANCHORS + anchor] = 0.88;
 
+    #[test]
+    fn test_decode_yolov8_person_multi_int8_non_square_three_scales() {
+        let grid_h = 48usize;
+        let grid_w = 80usize;
+        let grid_len = grid_h * grid_w;
+        let anchor = 10 * grid_w + 10;
+        let mut output_storage = [
+            vec![-10i8; 64 * grid_len],
+            vec![0i8; 80 * grid_len],
+            vec![0i8; grid_len],
+            vec![-10i8; 64 * (24 * 40)],
+            vec![0i8; 80 * (24 * 40)],
+            vec![0i8; 24 * 40],
+            vec![-10i8; 64 * (12 * 20)],
+            vec![0i8; 80 * (12 * 20)],
+            vec![0i8; 12 * 20],
+        ];
+        for (side, bin) in [1usize, 2, 3, 4].into_iter().enumerate() {
+            output_storage[0][(side * DFL_LEN + bin) * grid_len + anchor] = 10;
+        }
+        output_storage[1][anchor] = 10;
+
+        let make_attr =
+            |index: u32, channels: u32, height: u32, width: u32| crate::rknn::RknnTensorAttr {
+                index,
+                n_dims: 4,
+                dims: [
+                    1, channels, height, width, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ],
+                n_elems: channels * height * width,
+                fmt: crate::rknn::RknnTensorFormat::Nchw,
+                qnt_type: crate::rknn::RknnTensorQntType::AsymmetricChar,
+                scale: 1.0,
+                ..Default::default()
+            };
+        let attrs = [
+            make_attr(0, 64, 48, 80),
+            make_attr(1, 80, 48, 80),
+            make_attr(2, 1, 48, 80),
+            make_attr(3, 64, 24, 40),
+            make_attr(4, 80, 24, 40),
+            make_attr(5, 1, 24, 40),
+            make_attr(6, 64, 12, 20),
+            make_attr(7, 80, 12, 20),
+            make_attr(8, 1, 12, 20),
+        ];
+        let outputs: Vec<&[i8]> = output_storage.iter().map(Vec::as_slice).collect();
         let layout = LetterboxLayout {
-            scaled_w: 640,
-            scaled_h: 384,
+            scale: 1.0,
             pad_left: 0,
             pad_top: 0,
-            scale: 1.0,
             dst_w: 640,
             dst_h: 384,
+            scaled_w: 640,
+            scaled_h: 384,
         };
-        let persons = decode_yolov8_person(&raw, 0.5, &layout);
-        assert_eq!(persons.len(), 1);
-        assert!((persons[0].score - 0.88).abs() < 1e-4);
-        assert!((persons[0].bbox[0] - (240.0 / 640.0)).abs() < 1e-4);
-        assert!((persons[0].bbox[1] - (72.0 / 384.0)).abs() < 1e-4);
-        assert!((persons[0].bbox[2] - (160.0 / 640.0)).abs() < 1e-4);
-        assert!((persons[0].bbox[3] - (240.0 / 384.0)).abs() < 1e-4);
-    }
 
+        let persons = decode_yolov8_person_multi_int8(&outputs, &attrs, &layout, 0.5, 0.45)
+            .expect("非方形三尺度 INT8 YOLOv8 解码应成功");
+        assert_eq!(persons.len(), 1);
+        assert!(persons[0].score > 0.99);
+        assert!((persons[0].bbox[0] - 76.0 / 640.0).abs() < 0.01);
+        assert!((persons[0].bbox[1] - 68.0 / 384.0).abs() < 0.01);
+        assert!((persons[0].bbox[2] - 32.0 / 640.0).abs() < 0.01);
+        assert!((persons[0].bbox[3] - 48.0 / 384.0).abs() < 0.01);
+        let mut non_person_class_data = vec![0i8; 80 * grid_len];
+        non_person_class_data[grid_len + anchor] = 10;
+        let non_person_outputs = [
+            &output_storage[0][..],
+            &non_person_class_data[..],
+            &output_storage[2][..],
+            &output_storage[3][..],
+            &output_storage[4][..],
+            &output_storage[5][..],
+            &output_storage[6][..],
+            &output_storage[7][..],
+            &output_storage[8][..],
+        ];
+        let non_persons =
+            decode_yolov8_person_multi_int8(&non_person_outputs, &attrs, &layout, 0.5, 0.45)
+                .expect("非 person 类别不应导致人体候选");
+        assert!(non_persons.is_empty());
+    }
     #[test]
     fn test_normalize_to_relative_with_padding() {
         let layout = LetterboxLayout {

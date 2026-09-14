@@ -57,38 +57,36 @@ pub fn estimate_similarity_checked(
     const INV_N: f64 = 1.0 / 5.0;
 
     // 1. 计算源点集与目标点集的质心 (Centroids)
-    let (mut src_cx, mut src_cy) = (0.0f64, 0.0f64);
-    let (mut dst_cx, mut dst_cy) = (0.0f64, 0.0f64);
-    for (s, d) in src.iter().zip(dst.iter()) {
-        src_cx += s[0] as f64;
-        src_cy += s[1] as f64;
-        dst_cx += d[0];
-        dst_cy += d[1];
-    }
-    src_cx *= INV_N;
-    src_cy *= INV_N;
-    dst_cx *= INV_N;
-    dst_cy *= INV_N;
+    let (src_sum, dst_sum) = src.iter().zip(dst.iter()).fold(
+        ([0.0f64; 2], [0.0f64; 2]),
+        |(mut s_acc, mut d_acc), (s, d)| {
+            s_acc[0] += s[0] as f64;
+            s_acc[1] += s[1] as f64;
+            d_acc[0] += d[0];
+            d_acc[1] += d[1];
+            (s_acc, d_acc)
+        },
+    );
+    let (src_cx, src_cy) = (src_sum[0] * INV_N, src_sum[1] * INV_N);
+    let (dst_cx, dst_cy) = (dst_sum[0] * INV_N, dst_sum[1] * INV_N);
 
     // 2. 中心化并计算方差与协方差
-    let mut src_var = 0.0f64;
-    let mut s_xx = 0.0f64;
-    let mut s_xy = 0.0f64;
-    let mut s_yx = 0.0f64;
-    let mut s_yy = 0.0f64;
-
-    for (s, d) in src.iter().zip(dst.iter()) {
-        let sx = s[0] as f64 - src_cx;
-        let sy = s[1] as f64 - src_cy;
-        let dx = d[0] - dst_cx;
-        let dy = d[1] - dst_cy;
-
-        src_var += sx * sx + sy * sy;
-        s_xx += sx * dx;
-        s_xy += sx * dy;
-        s_yx += sy * dx;
-        s_yy += sy * dy;
-    }
+    let (src_var, s_xx, s_xy, s_yx, s_yy) = src.iter().zip(dst.iter()).fold(
+        (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64),
+        |(var, xx, xy, yx, yy), (s, d)| {
+            let sx = s[0] as f64 - src_cx;
+            let sy = s[1] as f64 - src_cy;
+            let dx = d[0] - dst_cx;
+            let dy = d[1] - dst_cy;
+            (
+                var + sx * sx + sy * sy,
+                xx + sx * dx,
+                xy + sx * dy,
+                yx + sy * dx,
+                yy + sy * dy,
+            )
+        },
+    );
 
     if src_var <= 1e-8 || !src_var.is_finite() {
         return Err("关键点几何退化，无法估计仿射矩阵");

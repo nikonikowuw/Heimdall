@@ -357,6 +357,7 @@ pub struct RknnTensorOutput<'a> {
 #[derive(Debug)]
 pub enum RknnInferenceOutput<'a> {
     Float32(Vec<&'a [f32]>),
+    Int8(Vec<&'a [i8]>),
 }
 
 struct RknnOutputsGuard<'a> {
@@ -569,6 +570,35 @@ impl RknnSession {
             output_count = output_attrs.len(),
             "RKNN 会话初始化完成"
         );
+        if std::env::var_os("HEIMDALL_DEBUG_RKNN_OUTPUT").is_some() {
+            tracing::info!(
+                input_type = ?input_attr.type_,
+                input_qnt_type = ?input_attr.qnt_type,
+                input_elements = input_attr.n_elems,
+                input_size = input_attr.size,
+                input_zero_point = input_attr.zp,
+                input_scale = input_attr.scale,
+                input_w_stride = input_attr.w_stride,
+                input_h_stride = input_attr.h_stride,
+                "RKNN 输入属性"
+            );
+            for attr in &output_attrs {
+                tracing::info!(
+                    output_index = attr.index,
+                    output_dims = ?attr.dims[..attr.n_dims as usize],
+                    output_type = ?attr.type_,
+                    output_format = ?attr.fmt,
+                    output_qnt_type = ?attr.qnt_type,
+                    output_elements = attr.n_elems,
+                    output_size = attr.size,
+                    output_zero_point = attr.zp,
+                    output_scale = attr.scale,
+                    output_w_stride = attr.w_stride,
+                    output_h_stride = attr.h_stride,
+                    "RKNN 输出属性"
+                );
+            }
+        }
 
         Ok(Self {
             backend: HardwareBackend {
@@ -676,6 +706,30 @@ impl RknnSession {
     where
         F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
     {
+        self.infer_with_host_bytes_mode(rgb_data, true, process_fn)
+    }
+
+    /// 执行 Host 输入推理并保留模型原生 INT8 输出，供量化后处理使用。
+    pub fn infer_with_host_int8<F, R>(
+        &mut self,
+        rgb_data: &[u8],
+        process_fn: F,
+    ) -> Result<R, AlgoError>
+    where
+        F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
+    {
+        self.infer_with_host_bytes_mode(rgb_data, false, process_fn)
+    }
+
+    fn infer_with_host_bytes_mode<F, R>(
+        &mut self,
+        rgb_data: &[u8],
+        want_float: bool,
+        process_fn: F,
+    ) -> Result<R, AlgoError>
+    where
+        F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
+    {
         let expected_size = expected_input_bytes(&self.contract)?;
         if rgb_data.len() != expected_size {
             return Err(AlgoError::IncompatibleFrame {
@@ -702,7 +756,7 @@ impl RknnSession {
                 reason: format!("rknn_inputs_set 设置 Host 输入失败，错误码: {status}"),
             });
         }
-        self.run_and_process(process_fn)
+        self.run_and_process(process_fn, want_float)
     }
 
     /// 执行 DMA-BUF 输入推理。
@@ -710,9 +764,34 @@ impl RknnSession {
     /// 优先使用 `rknn_create_mem_from_fd + rknn_set_io_mem`。若 Runtime/模型输入布局
     /// 不支持直接绑定，则使用同一个 DMA-BUF 的长期 mmap 作为显式兼容路径，并由
     /// `rknn_inputs_set` 负责格式转换；该路径不做 Rust CPU 像素 memcpy，但不宣称纯设备零拷贝。
+    /// 执行 DMA-BUF 输入推理并以 Float32 形式获取输出。
     pub fn infer_with_dma_buf<F, R>(
         &mut self,
         layout: &DmaBufLayout,
+        process_fn: F,
+    ) -> Result<R, AlgoError>
+    where
+        F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
+    {
+        self.infer_with_dma_buf_mode(layout, true, process_fn)
+    }
+
+    /// 执行 DMA-BUF 输入推理并保留模型原生 INT8 输出。
+    pub fn infer_with_dma_buf_int8<F, R>(
+        &mut self,
+        layout: &DmaBufLayout,
+        process_fn: F,
+    ) -> Result<R, AlgoError>
+    where
+        F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
+    {
+        self.infer_with_dma_buf_mode(layout, false, process_fn)
+    }
+
+    fn infer_with_dma_buf_mode<F, R>(
+        &mut self,
+        layout: &DmaBufLayout,
+        want_float: bool,
         process_fn: F,
     ) -> Result<R, AlgoError>
     where
@@ -757,7 +836,7 @@ impl RknnSession {
                     // SAFETY: mem 属于当前 context，attr 是本次同步绑定使用的局部 C POD。
                     let status = unsafe { set_io_mem(self.backend.ctx, mem.as_ptr(), &mut attr) };
                     if status == RKNN_SUCC {
-                        return self.run_and_process(process_fn);
+                        return self.run_and_process(process_fn, want_float);
                     }
                     tracing::debug!(
                         status,
@@ -767,13 +846,14 @@ impl RknnSession {
             }
         }
 
-        self.infer_with_mapped_dma(identity, layout, process_fn)
+        self.infer_with_mapped_dma(identity, layout, want_float, process_fn)
     }
 
     fn infer_with_mapped_dma<F, R>(
         &mut self,
         identity: DmaIdentity,
         layout: &DmaBufLayout,
+        want_float: bool,
         process_fn: F,
     ) -> Result<R, AlgoError>
     where
@@ -821,10 +901,10 @@ impl RknnSession {
             });
         }
         sync_result?;
-        self.run_and_process(process_fn)
+        self.run_and_process(process_fn, want_float)
     }
 
-    fn run_and_process<F, R>(&self, process_fn: F) -> Result<R, AlgoError>
+    fn run_and_process<F, R>(&self, process_fn: F, want_float: bool) -> Result<R, AlgoError>
     where
         F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
     {
@@ -840,7 +920,7 @@ impl RknnSession {
         let mut outputs = vec![RknnOutput::default(); output_count];
         for (index, output) in outputs.iter_mut().enumerate() {
             output.index = index as u32;
-            output.want_float = 1;
+            output.want_float = u8::from(want_float);
             output.is_prealloc = 0;
         }
         // SAFETY: outputs 是由 Rust 分配的连续 C POD 数组，Runtime 只在调用期间写入。
@@ -863,39 +943,67 @@ impl RknnSession {
             outputs,
         };
 
-        let mut views = Vec::with_capacity(output_count);
-        for (index, output) in guard.outputs.iter().enumerate() {
-            if output.buf.is_null() {
-                return Err(AlgoError::Inference {
-                    reason: format!("RKNN 输出 {index} 返回空指针"),
-                });
+        if want_float {
+            let mut views = Vec::with_capacity(output_count);
+            for (index, output) in guard.outputs.iter().enumerate() {
+                if output.buf.is_null() {
+                    return Err(AlgoError::Inference {
+                        reason: format!("RKNN 输出 {index} 返回空指针"),
+                    });
+                }
+                let expected = usize::try_from(self.output_attrs[index].n_elems)
+                    .map_err(|_| AlgoError::OutOfMemory)?;
+                let required_bytes = expected
+                    .checked_mul(std::mem::size_of::<f32>())
+                    .ok_or(AlgoError::OutOfMemory)?;
+                if u64::from(output.size)
+                    < u64::try_from(required_bytes).map_err(|_| AlgoError::OutOfMemory)?
+                {
+                    return Err(AlgoError::Inference {
+                        reason: format!(
+                            "RKNN 输出 {index} 缓冲区过小: {} < {}",
+                            output.size, required_bytes
+                        ),
+                    });
+                }
+                if !(output.buf as usize).is_multiple_of(std::mem::align_of::<f32>()) {
+                    return Err(AlgoError::Inference {
+                        reason: "RKNN 输出指针对齐非法".to_string(),
+                    });
+                }
+                // SAFETY: want_float=1 且 size 已覆盖查询到的 n_elems，guard 保证借用期间有效。
+                let values =
+                    unsafe { std::slice::from_raw_parts(output.buf.cast::<f32>(), expected) };
+                views.push(values);
             }
-            let expected = usize::try_from(self.output_attrs[index].n_elems)
-                .map_err(|_| AlgoError::OutOfMemory)?;
-            let required_bytes = expected
-                .checked_mul(std::mem::size_of::<f32>())
-                .ok_or(AlgoError::OutOfMemory)?;
-            if u64::from(output.size)
-                < u64::try_from(required_bytes).map_err(|_| AlgoError::OutOfMemory)?
-            {
-                return Err(AlgoError::Inference {
-                    reason: format!(
-                        "RKNN 输出 {index} 缓冲区过小: {} < {}",
-                        output.size, required_bytes
-                    ),
-                });
+            process_fn(&RknnInferenceOutput::Float32(views))
+        } else {
+            let mut views = Vec::with_capacity(output_count);
+            for (index, output) in guard.outputs.iter().enumerate() {
+                if output.buf.is_null() {
+                    return Err(AlgoError::Inference {
+                        reason: format!("RKNN 输出 {index} 返回空指针"),
+                    });
+                }
+                let expected = usize::try_from(self.output_attrs[index].n_elems)
+                    .map_err(|_| AlgoError::OutOfMemory)?;
+                if u64::from(output.size)
+                    < u64::try_from(expected).map_err(|_| AlgoError::OutOfMemory)?
+                {
+                    return Err(AlgoError::Inference {
+                        reason: format!(
+                            "RKNN INT8 输出 {index} 缓冲区过小: {} < {}",
+                            output.size, expected
+                        ),
+                    });
+                }
+                // SAFETY: want_float=0，Runtime 返回模型原生 INT8，size 已覆盖 n_elems。
+                let values =
+                    unsafe { std::slice::from_raw_parts(output.buf.cast::<i8>(), expected) };
+                views.push(values);
             }
-            if !(output.buf as usize).is_multiple_of(std::mem::align_of::<f32>()) {
-                return Err(AlgoError::Inference {
-                    reason: "RKNN 输出指针对齐非法".to_string(),
-                });
-            }
-            // SAFETY: want_float=1 且 size 已覆盖查询到的 n_elems，guard 保证借用期间有效。
-            let values = unsafe { std::slice::from_raw_parts(output.buf.cast::<f32>(), expected) };
-            views.push(values);
+            process_fn(&RknnInferenceOutput::Int8(views))
         }
-
-        process_fn(&RknnInferenceOutput::Float32(views))
     }
 
     fn ensure_dma_entry(

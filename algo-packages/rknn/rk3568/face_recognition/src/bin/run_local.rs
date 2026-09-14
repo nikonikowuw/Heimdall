@@ -18,6 +18,53 @@ use algo_sdk::testing::{MockEmitter, MockFrameBuilder};
 use face_recognition_rk3568::config::InstanceConfig;
 use face_recognition_rk3568::plugin::FaceRecognizer;
 
+/// 在 RGB 图片上绘制矩形框
+fn draw_rect_rgb(
+    img: &mut image::RgbImage,
+    x1: u32,
+    y1: u32,
+    x2: u32,
+    y2: u32,
+    color: image::Rgb<u8>,
+) {
+    let w = img.width();
+    let h = img.height();
+    let x1 = x1.min(w - 1);
+    let y1 = y1.min(h - 1);
+    let x2 = x2.min(w - 1);
+    let y2 = y2.min(h - 1);
+
+    // 绘制四条边
+    for x in x1..=x2 {
+        img.put_pixel(x, y1, color);
+        img.put_pixel(x, y2, color);
+    }
+    for y in y1..=y2 {
+        img.put_pixel(x1, y, color);
+        img.put_pixel(x2, y, color);
+    }
+}
+
+fn normalized_bbox_to_pixels(
+    value: &serde_json::Value,
+    width: f32,
+    height: f32,
+) -> Option<[u32; 4]> {
+    let bbox = value.as_array()?;
+    let [x1, y1, x2, y2] = bbox.as_slice() else {
+        return None;
+    };
+    Some(
+        [
+            (x1.as_f64()? as f32).clamp(0.0, 1.0) * width,
+            (y1.as_f64()? as f32).clamp(0.0, 1.0) * height,
+            (x2.as_f64()? as f32).clamp(0.0, 1.0) * width,
+            (y2.as_f64()? as f32).clamp(0.0, 1.0) * height,
+        ]
+        .map(|coordinate| coordinate as u32),
+    )
+}
+
 unsafe extern "C" fn on_result_callback(result: *const AvAlgoResult, user_data: *mut c_void) {
     if !result.is_null() && !user_data.is_null() {
         // SAFETY: user_data 指向有效 MockEmitter 实例
@@ -40,20 +87,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let package_root = package_root_buf.as_path();
     let default_image = package_root.join("testimage.jpg");
-    let image_path = args
-        .iter()
-        .find(|arg| {
-            !arg.starts_with("--")
-                && (arg.ends_with(".jpg") || arg.ends_with(".jpeg") || arg.ends_with(".png"))
-        })
-        .map(PathBuf::from)
-        .unwrap_or(default_image);
+    let mut image_path = None;
+    let mut skip_option_value = false;
+    for arg in args.iter().skip(1) {
+        if skip_option_value {
+            skip_option_value = false;
+            continue;
+        }
+        if arg == "--output" || arg == "--loops" {
+            skip_option_value = true;
+            continue;
+        }
+        if arg == "--input" {
+            continue;
+        }
+        if !arg.starts_with("--")
+            && (arg.ends_with(".jpg") || arg.ends_with(".jpeg") || arg.ends_with(".png"))
+        {
+            image_path = Some(PathBuf::from(arg));
+            break;
+        }
+    }
+    let image_path = image_path.unwrap_or(default_image);
 
     let loops: usize = args
         .iter()
         .position(|arg| arg == "--loops")
         .and_then(|index| args.get(index + 1)?.parse().ok())
         .unwrap_or(1);
+
+    let output_path = args
+        .iter()
+        .position(|arg| arg == "--output")
+        .and_then(|index| args.get(index + 1).map(PathBuf::from))
+        .unwrap_or_else(|| package_root.join("result.jpg"));
 
     println!("================================================================");
     println!("  RK3568 人脸识别算法包全硬件流转本地测试");
@@ -70,7 +137,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instance_id: "local_hardware_test",
         is_self_test: false,
     };
-    let mut recognizer = FaceRecognizer::init(&init_ctx, InstanceConfig::default())?;
+    let config = InstanceConfig::default();
+    let mut recognizer = FaceRecognizer::init(&init_ctx, config)?;
     println!(
         "  插件实例与 RKNN 会话初始化耗时: {:.2} ms",
         t0.elapsed().as_secs_f64() * 1000.0
@@ -142,9 +210,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (orig_w, orig_h) = (dynamic_img.width(), dynamic_img.height());
     let models = face_recognition_rk3568::shared_models(package_root)?;
 
-    // 使用刚才硬件检测输出的 landmark
+    // 人脸和人体模型均为 640x384，共用同一份预处理输入
     let (_persons, faces) = if is_dma_buf {
-        // 直接从模型的 worker 中获取单次检测结果
         let (buf, mode) = algo_sdk::cv::letterbox(
             &safe_frame,
             models.detector_width,
@@ -152,18 +219,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             [114, 114, 114],
         )?;
         let algo_sdk::cv::PreprocessMode::Letterbox(layout) = mode else {
-            return Err("预处理模式非 Letterbox".into());
+            return Err("检测预处理模式非 Letterbox".into());
         };
         models.worker.detect_dma_buf(buf, layout, 0.25, 0.40)?
     } else {
-        let (detector_rgb, layout) = face_recognition_rk3568::prepare_detector_input_for(
+        let (data, layout) = face_recognition_rk3568::prepare_detector_input_for(
             &dynamic_img,
             models.detector_width,
             models.detector_height,
         )?;
-        models
-            .worker
-            .detect_host(detector_rgb, layout, 0.25, 0.40)?
+        models.worker.detect_host(data, layout, 0.25, 0.40)?
     };
 
     if let Some(best) = faces
@@ -240,6 +305,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "  全流程 (RGA2 Letterbox + NPU 推理 + 后处理):\n    avg={:.2}ms, p50={:.2}ms, p99={:.2}ms, min={:.2}ms, max={:.2}ms\n    吞吐量: {:.1} FPS",
             avg_ms, p50_ms, p99_ms, min_ms, max_ms, fps
         );
+    }
+
+    // 5. 绘制检测框并保存结果图片
+    if let Some(json_str) = mock_emitter.raw_json_events().first() {
+        if let Ok(result) = serde_json::from_str::<serde_json::Value>(json_str) {
+            if let Some(objects) = result["objects"].as_array() {
+                let mut img = image::open(&image_path)?.to_rgb8();
+                let (w, h) = (img.width() as f32, img.height() as f32);
+
+                for obj in objects {
+                    // 绘制人体框 (红色)
+                    if let Some([x1, y1, x2, y2]) = normalized_bbox_to_pixels(&obj["bbox"], w, h) {
+                        draw_rect_rgb(&mut img, x1, y1, x2, y2, image::Rgb([255, 0, 0]));
+                    }
+
+                    // 绘制人脸框 (绿色)
+                    if let Some(face) = obj["face"].as_object() {
+                        if let Some([x1, y1, x2, y2]) =
+                            normalized_bbox_to_pixels(&face["bbox"], w, h)
+                        {
+                            draw_rect_rgb(&mut img, x1, y1, x2, y2, image::Rgb([0, 255, 0]));
+                        }
+                    }
+                }
+
+                img.save(&output_path)?;
+                println!("\n结果图片已保存: {}", output_path.display());
+            }
+        }
     }
 
     println!("\n================================================================");

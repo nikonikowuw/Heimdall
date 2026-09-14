@@ -6,9 +6,44 @@ PACKAGE        := face-recognition-rk3568-rknn
 TARGET_TRIPLE  := aarch64-unknown-linux-gnu
 WORKSPACE_ROOT := ../../../..
 
-.PHONY: all build host package clean
+.PHONY: help all build host check test run benchmark stress package clean
+
+help: ## 显示此帮助信息
+	@echo ""
+	@echo "  RK3568 人脸识别算法包"
+	@echo ""
+	@echo "  构建:"
+	@echo "    make                 交叉编译 (Mac -> RK3568)"
+	@echo "    make host            本机编译 (在 RK3568 设备上)"
+	@echo "    make check           语法检查 (交叉编译目标)"
+	@echo ""
+	@echo "  测试:"
+	@echo "    make test            运行单元测试"
+	@echo "    make run             构建 + 本地运行自测"
+	@echo "    make benchmark       构建 + 性能基准测试"
+	@echo "    make stress          构建 + 压力测试 (默认 100 轮)"
+	@echo ""
+	@echo "  打包与部署:"
+	@echo "    make package         交叉编译 + 打包 (.tar.gz)"
+	@echo ""
+	@echo "  工具:"
+	@echo "    make clean           清理构建产物"
+	@echo ""
 
 all: package
+
+# 语法检查
+check:
+	cd $(WORKSPACE_ROOT) && cargo check -p $(PACKAGE) --all-targets --target $(TARGET_TRIPLE)
+
+# 单元测试
+test:
+	cd $(WORKSPACE_ROOT) && cargo test -p $(PACKAGE) -- --nocapture
+
+# Cargo 参数
+CARGO := cargo
+CROSS_FEATURES ?= rga,testing-hardware
+DURATION ?= 30
 
 # 检测交叉编译工具链 (优先 cross, 其次 cargo zigbuild, 保底 cargo)
 CARGO_CROSS ?= $(shell if command -v cross >/dev/null 2>&1; then echo "CROSS_CONTAINER_ENGINE=podman cross build"; elif cargo zigbuild -h >/dev/null 2>&1; then echo "cargo zigbuild"; else echo "cargo build"; fi)
@@ -32,7 +67,7 @@ package: build
 		exit 1; \
 	fi
 	@if [ ! -f model/yolov8n-face-640x384_rk3568_mixed_face.rknn ] || [ ! -f model/edgeface_xs_gamma_06_rk3568_fp16.rknn ] || [ ! -f model/yolov8n-640x384-rk3568.rknn ]; then \
-		echo "错误: model/ 下缺少必需的 RKNN 模型权重 (yolov8n-face, edgeface_xs, yolov8n)"; \
+		echo "错误: model/ 下缺少必需的 RKNN 模型权重 (yolov8n-640x384, yolov8n-face, edgeface_xs)"; \
 		exit 1; \
 	fi
 	rm -f face_recognition.tar.gz
@@ -53,6 +88,32 @@ package: build
 		lib
 	@echo "算法包打包成功: face_recognition.tar.gz"
 	@tar -ztvf face_recognition.tar.gz
+
+# 本地运行自测
+run: build
+	@echo "本地运行自测..."
+	cd $(WORKSPACE_ROOT) && $(CARGO) run -p $(PACKAGE) --release \
+		--target $(TARGET_TRIPLE) \
+		--bin face_recognition_rk3568_rknn_run_local -- \
+		--input algo-packages/rknn/rk3568/face_recognition/testimage.jpg
+
+# 性能基准测试
+benchmark: build
+	@echo "性能基准测试..."
+	cd $(WORKSPACE_ROOT) && $(CARGO) run -p $(PACKAGE) --release \
+		--target $(TARGET_TRIPLE) \
+		--bin face_recognition_rk3568_rknn_run_local -- \
+		--input algo-packages/rknn/rk3568/face_recognition/testimage.jpg \
+		--loops 20
+
+# 压力测试 (默认 30 秒)
+stress: build
+	@echo "压力测试..."
+	cd $(WORKSPACE_ROOT) && $(CARGO) run -p $(PACKAGE) --release \
+		--target $(TARGET_TRIPLE) \
+		--bin face_recognition_rk3568_rknn_run_local -- \
+		--input algo-packages/rknn/rk3568/face_recognition/testimage.jpg \
+		--loops 100
 
 clean:
 	rm -rf lib face_recognition.tar.gz

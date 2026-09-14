@@ -58,17 +58,16 @@ impl AlgoPlugin for FaceRecognizer {
         frame: SafeFrame<'_>,
         emitter: &mut ResultEmitter<'_>,
     ) -> Result<(), AlgoError> {
-        // 1. 预处理：Letterbox 到检测模型输入尺寸 (640x384)
+        // 1. 预处理：人脸和人体模型均使用 640x384，共用同一份 RGA RGB 输出。
         let (buf, mode) = cv::letterbox(
             &frame,
             self.models.detector_width,
             self.models.detector_height,
             [114, 114, 114],
         )?;
-
         let PreprocessMode::Letterbox(layout) = mode else {
             return Err(AlgoError::Preprocess {
-                reason: "人脸检测需要 Letterbox 预处理模式".to_string(),
+                reason: "检测预处理需要 Letterbox 模式".to_string(),
             });
         };
 
@@ -347,12 +346,15 @@ fn decode_host_frame_to_rgb(
             for y in 0..h {
                 let src_row = &data[y * stride0..y * stride0 + min_row];
                 let dst_row = &mut rgb[y * w * 3..(y + 1) * w * 3];
-                for x in 0..w {
-                    let s = x * 4;
-                    let d = x * 3;
-                    dst_row[d] = src_row[s + 2];
-                    dst_row[d + 1] = src_row[s + 1];
-                    dst_row[d + 2] = src_row[s];
+                for (src_px, dst_px) in src_row
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(dst_row.as_chunks_mut::<3>().0.iter_mut())
+                {
+                    dst_px[0] = src_px[2];
+                    dst_px[1] = src_px[1];
+                    dst_px[2] = src_px[0];
                 }
             }
             Ok(rgb)
@@ -402,15 +404,16 @@ fn decode_nv12_to_rgb(
 
     let mut rgb = vec![0u8; output_len];
     let clamp_u8 = |v: f32| -> u8 { v.clamp(0.0, 255.0).round() as u8 };
+    let even_w = w & !1;
+    let num_pairs = even_w >> 1;
 
     for y in 0..h {
-        let uv_row_start = (y / 2) * uv_stride;
+        let uv_row_start = (y >> 1) * uv_stride;
         let y_row_start = y * y_stride;
         let dst_row_start = y * w * 3;
 
-        let even_w = (w / 2) * 2;
-        for pair_idx in 0..(even_w / 2) {
-            let x0 = pair_idx * 2;
+        for pair_idx in 0..num_pairs {
+            let x0 = pair_idx << 1;
             let x1 = x0 + 1;
             let uv_idx = uv_row_start + x0;
             let u_val = uv_plane[uv_idx] as f32;
@@ -429,7 +432,7 @@ fn decode_nv12_to_rgb(
             rgb[dst_idx0 + 2] = clamp_u8(c0 + b_chroma);
 
             let c1 = (y_plane[y_row_start + x1] as f32 - 16.0) * 1.164;
-            let dst_idx1 = dst_row_start + x1 * 3;
+            let dst_idx1 = dst_idx0 + 3;
             rgb[dst_idx1] = clamp_u8(c1 + r_chroma);
             rgb[dst_idx1 + 1] = clamp_u8(c1 + g_chroma);
             rgb[dst_idx1 + 2] = clamp_u8(c1 + b_chroma);

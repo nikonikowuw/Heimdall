@@ -11,7 +11,12 @@ use face_recognition_rk3568::{cosine_similarity, prepare_detector_input_for, sha
 #[test]
 #[ignore = "需要物理 RK3568 NPU 硬件和 librknnrt.so 环境"]
 fn test_rknn_hardware_face_detection_and_embedding() {
-    let pkg_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let pkg_root = if manifest_dir.is_dir() {
+        manifest_dir.to_path_buf()
+    } else {
+        std::env::current_dir().expect("获取当前运行目录失败")
+    };
     let person_detector_model = pkg_root.join("model/yolov8n-640x384-rk3568.rknn");
     let detector_model = pkg_root.join("model/yolov8n-face-640x384_rk3568_mixed_face.rknn");
     let embedder_model = pkg_root.join("model/edgeface_xs_gamma_06_rk3568_fp16.rknn");
@@ -39,7 +44,7 @@ fn test_rknn_hardware_face_detection_and_embedding() {
     );
 
     // 1. 加载双模型
-    let models = shared_models(pkg_root).expect("加载 RKNN 模型失败");
+    let models = shared_models(&pkg_root).expect("加载 RKNN 模型失败");
 
     // 2. 读取测试图像
     let image = image::open(&test_image_path)
@@ -57,10 +62,21 @@ fn test_rknn_hardware_face_detection_and_embedding() {
         (models.detector_width * models.detector_height * 3) as usize
     );
 
-    let (_persons, faces) = models
+    let (persons, faces) = models
         .worker
         .detect_host(detector_rgb, layout, 0.25, 0.40)
-        .expect("人脸检测推理失败");
+        .expect("人脸和人体检测推理失败");
+
+    assert!(!persons.is_empty(), "在 testimage.jpg 中未检出任何有效人体");
+    let best_person = persons
+        .iter()
+        .max_by(|a, b| a.score.total_cmp(&b.score))
+        .expect("应存在置信度最高的人体");
+    assert!(best_person.score >= 0.40);
+    assert!(best_person.bbox[0] >= 0.0 && best_person.bbox[0] <= 1.0);
+    assert!(best_person.bbox[1] >= 0.0 && best_person.bbox[1] <= 1.0);
+    assert!(best_person.bbox[2] > 0.0 && best_person.bbox[2] <= 1.0);
+    assert!(best_person.bbox[3] > 0.0 && best_person.bbox[3] <= 1.0);
 
     assert!(!faces.is_empty(), "在 testimage.jpg 中未检出任何有效人脸");
 
