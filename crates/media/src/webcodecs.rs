@@ -40,6 +40,7 @@ pub struct WebCodecsFrameHeader {
 /// 构造 12 字节的固定栈上 WebCodecs 帧头元数据
 ///
 /// 消除中间堆分配，可供向量化 I/O 或切片组装直接复用
+#[inline]
 pub fn build_webcodecs_header(
     packet: &EncodedPacket,
     flags: u8,
@@ -52,13 +53,21 @@ pub fn build_webcodecs_header(
         CodecType::H265 => 0x02,
         CodecType::Aac => return None,
     };
-    let mut header = [0u8; WEBCODECS_FRAME_HEADER_LEN];
-    header[0] = WEBCODECS_PROTOCOL_VERSION;
-    header[1] = codec_byte;
-    header[2] = if packet.is_keyframe { 0x01 } else { 0x00 };
-    header[3] = flags;
-    header[4..12].copy_from_slice(&packet.pts_ms.to_be_bytes());
-    Some(header)
+    let pts_be = packet.pts_ms.to_be_bytes();
+    Some([
+        WEBCODECS_PROTOCOL_VERSION,
+        codec_byte,
+        if packet.is_keyframe { 0x01 } else { 0x00 },
+        flags,
+        pts_be[0],
+        pts_be[1],
+        pts_be[2],
+        pts_be[3],
+        pts_be[4],
+        pts_be[5],
+        pts_be[6],
+        pts_be[7],
+    ])
 }
 
 /// 将内部 EncodedPacket 序列化为 12 字节二进制帧头的 WebCodecs 传输包

@@ -33,6 +33,35 @@ struct RingBufferInner {
     keyframe_count: usize,
 }
 
+impl RingBufferInner {
+    #[inline]
+    fn pop_front(&mut self) -> Option<Arc<EncodedPacket>> {
+        let removed = self.queue.pop_front()?;
+        if removed.is_keyframe {
+            self.keyframe_count = self.keyframe_count.saturating_sub(1);
+        }
+        Some(removed)
+    }
+
+    #[inline]
+    fn find_keyframe_prior_to(&self, target_pts_ms: i64) -> Option<(usize, usize)> {
+        let target_idx = self
+            .queue
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, pkt)| pkt.pts_ms.saturating_sub(target_pts_ms).saturating_abs())
+            .map(|(idx, _)| idx)?;
+
+        let keyframe_idx = self
+            .queue
+            .iter()
+            .take(target_idx + 1)
+            .rposition(|pkt| pkt.is_keyframe)?;
+
+        Some((keyframe_idx, target_idx))
+    }
+}
+
 /// 主码流内存环形队列
 #[derive(Debug)]
 pub struct MainStreamRingBuffer {
@@ -68,24 +97,7 @@ impl MainStreamRingBuffer {
     /// 保证返回的切片以关键帧 (I 帧) 为首包，后续帧按 PTS 单调递增，供快进解码。
     pub fn get_gop_for_timestamp(&self, target_pts_ms: i64) -> Option<Vec<Arc<EncodedPacket>>> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        if inner.queue.is_empty() {
-            return None;
-        }
-
-        // 1. 查找最接近目标时间戳的包索引 (使用 saturating 算术防止极端时间戳溢出)
-        let target_idx = inner
-            .queue
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, pkt)| pkt.pts_ms.saturating_sub(target_pts_ms).saturating_abs())
-            .map(|(idx, _)| idx)?;
-
-        // 2. 从 target_idx 向前倒序寻找最近的关键帧 (I-Frame)
-        let keyframe_idx = (0..=target_idx)
-            .rev()
-            .find(|&idx| inner.queue[idx].is_keyframe)?;
-
-        // 3. 截取 [keyframe_idx..=target_idx] 范围内的全部包
+        let (keyframe_idx, target_idx) = inner.find_keyframe_prior_to(target_pts_ms)?;
         Some(
             inner
                 .queue
@@ -98,20 +110,7 @@ impl MainStreamRingBuffer {
     /// 根据时标向后查找最近的前置关键帧 (I-Frame)
     pub fn find_prior_keyframe(&self, target_pts_ms: i64) -> Option<Arc<EncodedPacket>> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        if inner.queue.is_empty() {
-            return None;
-        }
-
-        let target_idx = inner
-            .queue
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, pkt)| pkt.pts_ms.saturating_sub(target_pts_ms).saturating_abs())
-            .map(|(idx, _)| idx)?;
-
-        let keyframe_idx = (0..=target_idx)
-            .rev()
-            .find(|&idx| inner.queue[idx].is_keyframe)?;
+        let (keyframe_idx, _) = inner.find_keyframe_prior_to(target_pts_ms)?;
         Some(inner.queue[keyframe_idx].clone())
     }
 
@@ -172,13 +171,8 @@ impl MainStreamRingBuffer {
 
     /// 队列修剪逻辑：保持最新 2~3.5 秒，且始终保全最近的完整 GOP (O(1) 关键帧跟踪)
     fn prune(&self, inner: &mut RingBufferInner) {
-        if inner.queue.is_empty() {
+        let Some(newest_pts) = inner.queue.back().map(|p| p.pts_ms) else {
             return;
-        }
-
-        let newest_pts = match inner.queue.back() {
-            Some(p) => p.pts_ms,
-            None => return,
         };
 
         // 当超出时间跨度或达到包上限，并且队列里至少有两个关键帧时，可以安全丢弃老关键帧及其之前的包
@@ -192,11 +186,7 @@ impl MainStreamRingBuffer {
                 || inner.queue.len() > self.config.max_packets
                 || clock_regressed
             {
-                if let Some(removed) = inner.queue.pop_front() {
-                    if removed.is_keyframe {
-                        inner.keyframe_count = inner.keyframe_count.saturating_sub(1);
-                    }
-                }
+                inner.pop_front();
             } else {
                 break;
             }
@@ -207,11 +197,7 @@ impl MainStreamRingBuffer {
         // 强制执行队首丢包，保全进程物理内存不被异常码流打爆
         let hard_limit = self.config.max_packets.saturating_mul(2).max(64);
         while inner.queue.len() > hard_limit {
-            if let Some(removed) = inner.queue.pop_front() {
-                if removed.is_keyframe {
-                    inner.keyframe_count = inner.keyframe_count.saturating_sub(1);
-                }
-            }
+            inner.pop_front();
         }
     }
 }

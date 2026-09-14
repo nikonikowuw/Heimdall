@@ -6,13 +6,12 @@ use crate::dispatcher::KeyframeCache;
 pub const MAX_FLV_TIMESTAMP_MS: i64 = u32::MAX as i64;
 
 /// 剥离 NALU 可能携带的 Annex B 起始码 (0x00 00 00 01 或 0x00 00 01)，确保纯净 NALU 载荷
+#[inline]
 pub fn strip_nalu_start_code(data: &[u8]) -> &[u8] {
-    if data.starts_with(&[0, 0, 0, 1]) {
-        &data[4..]
-    } else if data.starts_with(&[0, 0, 1]) {
-        &data[3..]
-    } else {
-        data
+    match data {
+        [0, 0, 0, 1, rest @ ..] => rest,
+        [0, 0, 1, rest @ ..] => rest,
+        _ => data,
     }
 }
 
@@ -32,43 +31,39 @@ impl FlvMuxer {
     ///
     /// FLV TypeFlags 的 bit 2 表示音频、bit 0 表示视频。音频-only
     /// 通道用于在 WebCodecs 渲染 H.265 视频时独立播放 AAC 音轨。
+    /// 采用静态常量字节数组零堆分配构建。
+    #[inline]
     pub fn flv_header_tracks(include_audio: bool, include_video: bool) -> Bytes {
-        let mut b = BytesMut::with_capacity(13);
-        let type_flags =
-            (if include_audio { 0x04 } else { 0x00 }) | (if include_video { 0x01 } else { 0x00 });
-
-        // "FLV" + version 1 + Flags + DataOffset (9) + PreviousTagSize0 (0)
-        b.extend_from_slice(&[
-            b'F', b'L', b'V', 0x01, // Signature & Version
-            type_flags, 0x00, 0x00, 0x00, 0x09, // DataOffset
-            0x00, 0x00, 0x00, 0x00, // PreviousTagSize0
-        ]);
-        b.freeze()
+        Bytes::from_static(match (include_audio, include_video) {
+            (true, true) => b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00",
+            (true, false) => b"FLV\x01\x04\x00\x00\x00\x09\x00\x00\x00\x00",
+            (false, true) => b"FLV\x01\x01\x00\x00\x00\x09\x00\x00\x00\x00",
+            (false, false) => b"FLV\x01\x00\x00\x00\x00\x09\x00\x00\x00\x00",
+        })
     }
 
     /// 构建单个 FLV Tag（11 字节 Tag Header + 数据体 + 4 字节 PreviousTagSize）
+    #[inline]
     fn wrap_tag(tag_type: u8, timestamp_ms: u32, payload: &[u8]) -> Bytes {
         let data_size = payload.len() as u32;
-        let mut tag = BytesMut::with_capacity(11 + payload.len() + 4);
+        let mut tag = BytesMut::with_capacity(15 + payload.len());
 
-        // Tag Type (1B)
-        tag.put_u8(tag_type);
-        // Data Size (3B Big-Endian)
-        tag.put_u8(((data_size >> 16) & 0xFF) as u8);
-        tag.put_u8(((data_size >> 8) & 0xFF) as u8);
-        tag.put_u8((data_size & 0xFF) as u8);
-        // Timestamp (3B Big-Endian) + TimestampExtended (1B)
-        tag.put_u8(((timestamp_ms >> 16) & 0xFF) as u8);
-        tag.put_u8(((timestamp_ms >> 8) & 0xFF) as u8);
-        tag.put_u8((timestamp_ms & 0xFF) as u8);
-        tag.put_u8(((timestamp_ms >> 24) & 0xFF) as u8);
-        // StreamID (3B = 0)
-        tag.put_slice(&[0x00, 0x00, 0x00]);
+        let header = [
+            tag_type,
+            (data_size >> 16) as u8,
+            (data_size >> 8) as u8,
+            data_size as u8,
+            (timestamp_ms >> 16) as u8,
+            (timestamp_ms >> 8) as u8,
+            timestamp_ms as u8,
+            (timestamp_ms >> 24) as u8,
+            0,
+            0,
+            0, // StreamID (3B = 0)
+        ];
 
-        // Tag Payload
+        tag.put_slice(&header);
         tag.put_slice(payload);
-
-        // PreviousTagSize (4B = 11 + DataSize)
         tag.put_u32(11 + data_size);
 
         tag.freeze()
