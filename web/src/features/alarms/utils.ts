@@ -53,6 +53,12 @@ export function getRuleTypeLabel(ruleType: string | undefined, t: (key: string) 
   return ruleType === 'line' ? t('types.lineCrossing') : t('types.regionIntrusion')
 }
 
+export function preloadImage(src: string): void {
+  if (!src || typeof Image === 'undefined') return
+  const image = new Image()
+  image.src = src
+}
+
 export interface FittedImageRect {
   x: number
   y: number

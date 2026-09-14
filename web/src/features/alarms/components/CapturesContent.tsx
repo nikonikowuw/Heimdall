@@ -2,7 +2,7 @@ import React from 'react'
 import { Camera as CameraIcon, Clock } from 'lucide-react'
 import { evidenceApi } from '../../../lib/api'
 import type { CaptureRecord } from '../../../types'
-import { formatTimestamp } from '../utils'
+import { formatTimestamp, preloadImage } from '../utils'
 
 export interface CaptureCardItemProps {
   capture: CaptureRecord
@@ -20,6 +20,7 @@ export function CaptureCardItem({
   return (
     <div
       onClick={onSelect}
+      onMouseEnter={() => preloadImage(evidenceApi.getImageUrl(capture.imageRelPath))}
       className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] transition-all duration-200 hover:border-cyan-500/50 hover:shadow-md"
     >
       <div className="relative aspect-square w-full overflow-hidden bg-black/90">
@@ -27,6 +28,8 @@ export function CaptureCardItem({
           <img
             src={evidenceApi.getImageUrl(capture.cropImageRelPath || capture.imageRelPath)}
             alt={capture.captureId}
+            loading="lazy"
+            decoding="async"
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
         ) : (

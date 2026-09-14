@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { Suspense, lazy, useState } from 'react'
 import {
   AlertCircle,
   Cpu,
   FileText,
   Keyboard,
+  Loader2,
   LogOut,
   Monitor,
   Moon,
@@ -17,19 +18,38 @@ import { useTranslation } from 'react-i18next'
 import { ChangePasswordModal } from '../components/ChangePasswordModal'
 import { LocaleDropdown } from '../components/LocaleDropdown'
 import { ShortcutsModal } from '../components/ShortcutsModal'
-import { AlarmsPage } from '../features/alarms/AlarmsPage'
-import { AlgorithmsPage } from '../features/algorithms'
-import { LoginPage } from '../features/auth'
-import { CamerasPage } from '../features/cameras'
-import { LivePage } from '../features/live/LivePage'
-import { OplogPage } from '../features/oplog/OplogPage'
-import { PersonnelPage } from '../features/personnel'
-import { SettingsPage } from '../features/system'
-import { TasksPage } from '../features/tasks/TasksPage'
 import { useGlobalShortcuts } from '../hooks/use-global-shortcuts'
 import { useTheme } from '../hooks/use-theme'
 import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
+
+const LoginPage = lazy(() =>
+  import('../features/auth/LoginPage').then((m) => ({ default: m.LoginPage })),
+)
+const LivePage = lazy(() =>
+  import('../features/live/LivePage').then((m) => ({ default: m.LivePage })),
+)
+const CamerasPage = lazy(() =>
+  import('../features/cameras/CamerasPage').then((m) => ({ default: m.CamerasPage })),
+)
+const TasksPage = lazy(() =>
+  import('../features/tasks/TasksPage').then((m) => ({ default: m.TasksPage })),
+)
+const AlgorithmsPage = lazy(() =>
+  import('../features/algorithms/AlgorithmsPage').then((m) => ({ default: m.AlgorithmsPage })),
+)
+const PersonnelPage = lazy(() =>
+  import('../features/personnel/PersonnelPage').then((m) => ({ default: m.PersonnelPage })),
+)
+const AlarmsPage = lazy(() =>
+  import('../features/alarms/AlarmsPage').then((m) => ({ default: m.AlarmsPage })),
+)
+const OplogPage = lazy(() =>
+  import('../features/oplog/OplogPage').then((m) => ({ default: m.OplogPage })),
+)
+const SettingsPage = lazy(() =>
+  import('../features/system/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+)
 
 export type NavTab =
   'live' | 'cameras' | 'tasks' | 'algorithms' | 'personnel' | 'alarms' | 'oplog' | 'system'
@@ -52,6 +72,15 @@ export function Layout() {
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false)
   const { isDark, toggleTheme } = useTheme()
+  const loadingFallback = (
+    <div
+      className="flex h-screen w-screen items-center justify-center bg-[var(--bg-primary)]"
+      role="status"
+      aria-label={t('loading')}
+    >
+      <Loader2 className="h-6 w-6 animate-spin text-[var(--accent)]" aria-hidden="true" />
+    </div>
+  )
 
   useGlobalShortcuts({
     currentTab,
@@ -73,7 +102,11 @@ export function Layout() {
 
   // 未登录状态展示先锋高奢登录页
   if (!isAuthenticated) {
-    return <LoginPage />
+    return (
+      <Suspense fallback={loadingFallback}>
+        <LoginPage />
+      </Suspense>
+    )
   }
 
   return (
@@ -152,29 +185,31 @@ export function Layout() {
 
       {/* 主工作视口 */}
       <main className="content-ambient flex flex-1 flex-col overflow-hidden p-4">
-        {currentTab === 'live' && <LivePage onNavigateToAlarms={() => setCurrentTab('alarms')} />}
-        {currentTab === 'cameras' && (
-          <CamerasPage
-            onNavigateToTasks={(camera) => {
-              setTargetTaskCameraId(camera.cameraId)
-              setCurrentTab('tasks')
-            }}
-          />
-        )}
-        {currentTab === 'tasks' && (
-          <TasksPage
-            initialConfigCameraId={targetTaskCameraId}
-            onNavigateToCameras={() => setCurrentTab('cameras')}
-            onNavigateToAlgorithms={() => setCurrentTab('algorithms')}
-          />
-        )}
-        {currentTab === 'algorithms' && <AlgorithmsPage />}
-        {currentTab === 'personnel' && <PersonnelPage />}
-        {currentTab === 'alarms' && <AlarmsPage />}
-        {currentTab === 'oplog' && <OplogPage />}
-        {currentTab === 'system' && (
-          <SettingsPage onOpenPasswordModal={() => setIsPasswordModalOpen(true)} />
-        )}
+        <Suspense fallback={loadingFallback}>
+          {currentTab === 'live' && <LivePage onNavigateToAlarms={() => setCurrentTab('alarms')} />}
+          {currentTab === 'cameras' && (
+            <CamerasPage
+              onNavigateToTasks={(camera) => {
+                setTargetTaskCameraId(camera.cameraId)
+                setCurrentTab('tasks')
+              }}
+            />
+          )}
+          {currentTab === 'tasks' && (
+            <TasksPage
+              initialConfigCameraId={targetTaskCameraId}
+              onNavigateToCameras={() => setCurrentTab('cameras')}
+              onNavigateToAlgorithms={() => setCurrentTab('algorithms')}
+            />
+          )}
+          {currentTab === 'algorithms' && <AlgorithmsPage />}
+          {currentTab === 'personnel' && <PersonnelPage />}
+          {currentTab === 'alarms' && <AlarmsPage />}
+          {currentTab === 'oplog' && <OplogPage />}
+          {currentTab === 'system' && (
+            <SettingsPage onOpenPasswordModal={() => setIsPasswordModalOpen(true)} />
+          )}
+        </Suspense>
       </main>
       {/* 修改密码模态框 */}
       <ChangePasswordModal

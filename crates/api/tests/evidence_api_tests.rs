@@ -350,3 +350,100 @@ async fn test_evidence_captures_and_recognitions_count_api() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["data"]["total"], 0);
 }
+
+#[tokio::test]
+async fn test_serve_evidence_image_streaming_and_etag_304() {
+    let relative_dir = std::path::PathBuf::from(format!(
+        "target/test_evidence_img_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    let _ = std::fs::remove_dir_all(&relative_dir);
+
+    let db = db::init_test_db().await.unwrap();
+    let pipeline = std::sync::Arc::new(pipeline::PipelineManager::with_evidence_dir(&relative_dir));
+    std::fs::create_dir_all(relative_dir.join("cam1")).unwrap();
+    let img_path = relative_dir.join("cam1/test.jpg");
+    std::fs::write(&img_path, b"fake_jpeg_data").unwrap();
+
+    let state = api::AppState::new(db, pipeline);
+    api::sync_auth_state(&state).await;
+
+    let password_hash = api::crypto::hash_password_async("adminPassword123".to_string()).await;
+    db::AdminUserRepo::create_admin(&state.db, "admin", &password_hash)
+        .await
+        .unwrap();
+    state
+        .is_initialized
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let claims = types::AuthClaims {
+        sub: "admin".to_string(),
+        iat: chrono::Utc::now().timestamp_millis(),
+        exp: chrono::Utc::now().timestamp_millis() + 86400000,
+    };
+    let token = api::crypto::generate_jwt(&claims, &state.get_jwt_secret()).unwrap();
+    let app = api::create_app(state);
+
+    // 1. 首次请求：验证流式直通 200 OK、ETag 及 Content-Length
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/image/cam1/test.jpg")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("content-type").unwrap(), "image/jpeg");
+    assert_eq!(resp.headers().get("content-length").unwrap(), "14");
+    let etag = resp
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(!etag.is_empty());
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body_bytes.as_ref(), b"fake_jpeg_data");
+
+    // 2. 二次请求：携带 If-None-Match，验证 304 Not Modified 极速短路
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/image/cam1/test.jpg")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("If-None-Match", &etag)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(resp.headers().get("etag").unwrap(), etag.as_str());
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body_bytes.is_empty(), "304 响应必须为 0 字节 Body");
+
+    // 3. 同尺寸文件快速替换后，ETag 必须变化，不能错误返回 304。
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::fs::write(&img_path, b"new_jpeg_data!").unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/image/cam1/test.jpg")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("If-None-Match", &etag)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let new_etag = resp.headers().get("etag").unwrap().to_str().unwrap();
+    assert_ne!(new_etag, etag);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body_bytes.as_ref(), b"new_jpeg_data!");
+
+    let _ = std::fs::remove_dir_all(&relative_dir);
+}

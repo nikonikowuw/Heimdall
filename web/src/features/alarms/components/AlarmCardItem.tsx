@@ -2,7 +2,7 @@ import React from 'react'
 import { Clock, ExternalLink } from 'lucide-react'
 import { evidenceApi } from '../../../lib/api'
 import type { AlarmRecord } from '../../../types'
-import { formatTimestamp, getRuleTypeLabel } from '../utils'
+import { formatTimestamp, getRuleTypeLabel, preloadImage } from '../utils'
 import { AlarmStatusButton } from './AlarmStatusButton'
 
 export interface AlarmCardItemProps {
@@ -31,6 +31,7 @@ export function AlarmCardItem({
   return (
     <div
       onClick={onSelect}
+      onMouseEnter={() => preloadImage(evidenceApi.getImageUrl(alarm.imageRelPath))}
       className={`group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-[var(--bg-surface)] shadow-xs transition-all duration-200 hover:shadow-md ${
         isSelected
           ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]/50'
@@ -53,10 +54,12 @@ export function AlarmCardItem({
           </div>
         )}
 
-        {alarm.imageRelPath ? (
+        {alarm.cropImageRelPath || alarm.imageRelPath ? (
           <img
-            src={evidenceApi.getImageUrl(alarm.imageRelPath)}
+            src={evidenceApi.getImageUrl(alarm.cropImageRelPath || alarm.imageRelPath)}
             alt={alarm.eventId}
+            loading="lazy"
+            decoding="async"
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
         ) : (
@@ -72,14 +75,11 @@ export function AlarmCardItem({
               e.stopPropagation()
               onSelectCrop()
             }}
-            className="absolute right-2 bottom-2 z-20 h-14 w-14 overflow-hidden rounded-lg border border-white/40 bg-black/80 p-0.5 shadow-md backdrop-blur-xs transition-all duration-200 hover:border-white/70 hover:shadow-lg hover:shadow-black/40"
+            className="absolute right-2 bottom-2 z-20 flex items-center gap-1 rounded-lg border border-white/40 bg-black/80 px-2 py-1 text-[10px] font-medium text-white shadow-md backdrop-blur-xs transition-all duration-200 hover:border-white/70 hover:shadow-lg hover:shadow-black/40"
             title={t('modal.cropImage')}
           >
-            <img
-              src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
-              alt="Crop"
-              className="h-full w-full rounded object-cover"
-            />
+            <ExternalLink className="h-3 w-3" />
+            <span>{t('card.siteCrop')}</span>
           </button>
         )}
 

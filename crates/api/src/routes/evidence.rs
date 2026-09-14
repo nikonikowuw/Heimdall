@@ -324,7 +324,7 @@ async fn serve_evidence_image(
         })
         .unwrap_or("unknown");
 
-    tracing::info!(
+    tracing::debug!(
         camera_id = %camera_id,
         user = %_user.username,
         client_ip = %client_ip,
@@ -358,22 +358,57 @@ async fn serve_evidence_image(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    match tokio::fs::read(&canonical_target).await {
-        Ok(bytes) => {
-            let mime = if clean_path.ends_with(".png") {
-                "image/png"
-            } else {
-                "image/jpeg"
-            };
+    let metadata = match tokio::fs::metadata(&canonical_target).await {
+        Ok(m) => m,
+        Err(_) => return Err(StatusCode::NOT_FOUND),
+    };
 
-            let res = Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime)
-                .header(header::CACHE_CONTROL, "private, max-age=86400")
-                .body(Body::from(bytes))
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            Ok(res)
-        }
-        Err(_) => Err(StatusCode::NOT_FOUND),
+    if !metadata.is_file() {
+        return Err(StatusCode::NOT_FOUND);
     }
+
+    let file_size = metadata.len();
+    let mtime_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let etag = format!("\"{:x}-{:x}\"", file_size, mtime_nanos);
+
+    if let Some(if_none_match) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
+        if if_none_match == etag {
+            return Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header(header::ETAG, etag)
+                .header(header::CACHE_CONTROL, "private, max-age=86400")
+                .body(Body::empty())
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    let file = match tokio::fs::File::open(&canonical_target).await {
+        Ok(f) => f,
+        Err(_) => return Err(StatusCode::NOT_FOUND),
+    };
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, 64 * 1024);
+    let body = Body::from_stream(stream);
+
+    let mime = if clean_path.ends_with(".png") {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::CONTENT_LENGTH, file_size)
+        .header(header::ETAG, etag)
+        .header(header::CACHE_CONTROL, "private, max-age=86400")
+        .body(body)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }

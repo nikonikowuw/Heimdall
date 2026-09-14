@@ -137,6 +137,9 @@
   "modal": {
     "fullImage": "4K/1080P Full Frame",
     "cropImage": "BBox Crop (10% Padding)",
+    "loadingFullHd": "Loading Ultra HD...",
+    "fullImageLoadFailed": "Unable to load the full image",
+    "retryImage": "Retry",
     "noImage": "Full image not found",
     "timestamp": "Timestamp",
     "trackId": "Track ID",

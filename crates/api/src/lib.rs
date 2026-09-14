@@ -34,6 +34,7 @@ pub use track_service::TrackDispatchService;
 use axum::middleware::from_fn;
 use axum::routing::get;
 use axum::Router;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -45,6 +46,7 @@ pub fn create_app(state: AppState) -> Router {
         .nest("/api/v1", api)
         .fallback(get(static_files::static_handler))
         .layer(CorsLayer::permissive())
+        .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

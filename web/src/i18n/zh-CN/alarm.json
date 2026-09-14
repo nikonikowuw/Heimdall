@@ -137,6 +137,9 @@
   "modal": {
     "fullImage": "全景超清大图",
     "cropImage": "BBox 目标特写抠图 (10% 扩边)",
+    "loadingFullHd": "超清大图加载中...",
+    "fullImageLoadFailed": "全景原图加载失败",
+    "retryImage": "重试",
     "noImage": "全景原图不存在",
     "timestamp": "时间戳",
     "trackId": "Track ID",

@@ -429,8 +429,9 @@ impl SnapshotEngine {
                 None
             }
         };
+        let base_dir: PathBuf = base_evidence_dir.into();
         Self {
-            base_evidence_dir: base_evidence_dir.into(),
+            base_evidence_dir: base_dir,
             worker,
             config: AtomicSnapshotConfig::new(config),
         }
