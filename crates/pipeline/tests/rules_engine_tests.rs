@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 use db::entity::{alarm, capture};
 use db::{init_test_db, AlarmRepo, CaptureRepo};
-use pipeline::{EvictionStore, RuleEvaluator, SimpleTracker, StorageCleaner, StorageCleanerConfig};
+use pipeline::{ByteTrack, EvictionStore, RuleEvaluator, StorageCleaner, StorageCleanerConfig};
 use sea_orm::ActiveValue::Set;
 use sea_orm::DatabaseConnection;
 use std::fs;
@@ -76,7 +76,7 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
         points: vec![DetectionPoint::new(0.0, 0.5), DetectionPoint::new(1.0, 0.5)],
     }];
 
-    let mut tracker = SimpleTracker::new();
+    let mut tracker = ByteTrack::new();
     let evaluator = RuleEvaluator::new();
 
     // 2. 模拟第 1 帧检测 (目标底中心在 Y = 0.48, 未触及绊线)

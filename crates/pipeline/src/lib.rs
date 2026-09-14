@@ -47,7 +47,7 @@ pub use storage_cleaner::{
 pub use thermal::{
     ThermalActionPlan, ThermalGuard, ThermalLevel, ThermalPolicyConfig, ThermalZoneInfo,
 };
-pub use tracker::SimpleTracker;
+pub use tracker::ByteTrack;
 
 /// 统一证据存储默认根目录
 pub const DEFAULT_EVIDENCE_DIR: &str = "var/data/evidence";

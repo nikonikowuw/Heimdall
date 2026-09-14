@@ -24,7 +24,7 @@ use crate::pump::{AnalysisPump, AnalysisPumpConfig, MotionGateRuntimeConfig, Pum
 use crate::roi::RoiAffineMapper;
 use crate::rules::{RuleEvaluator, TriggeredAlarm};
 use crate::snapshot::{SnapshotConfig, SnapshotEngine, SnapshotResult};
-use crate::tracker::SimpleTracker;
+use crate::tracker::ByteTrack;
 
 /// 单路摄像头管线运行时上下文
 pub struct CameraPipelineContext {
@@ -43,10 +43,10 @@ pub struct CameraPipelineContext {
     pub preview_count: AtomicUsize,
     /// 主码流专用的按需快拍解码器实例 (惰性分配)
     pub snapshot_decoder: TokioMutex<Option<Box<dyn VideoDecoder + Send>>>,
-    /// 纯 Rust 航迹关联跟踪器 (兼容单算法入口)
-    pub tracker: TokioMutex<SimpleTracker>,
-    /// 多算法独立航迹关联跟踪器映射表 (algorithm_id -> SimpleTracker)
-    pub trackers: TokioMutex<HashMap<String, SimpleTracker>>,
+    /// 纯 CPU ByteTrack 跟踪器 (兼容单算法入口)
+    pub tracker: TokioMutex<ByteTrack>,
+    /// 多算法独立 ByteTrack 跟踪器映射表 (algorithm_id -> ByteTrack)
+    pub trackers: TokioMutex<HashMap<String, ByteTrack>>,
     /// 每路摄像头按算法实例维护的最新活跃航迹快照 (algorithm_id -> Vec<TrackedObject>)
     pub current_tracks: TokioRwLock<HashMap<String, Vec<TrackedObject>>>,
     /// 局部特写预裁剪仿射变换映射器
@@ -81,7 +81,7 @@ impl CameraPipelineContext {
             ai_active: AtomicBool::new(false),
             preview_count: AtomicUsize::new(0),
             snapshot_decoder: TokioMutex::new(None),
-            tracker: TokioMutex::new(SimpleTracker::new()),
+            tracker: TokioMutex::new(ByteTrack::new()),
             trackers: TokioMutex::new(HashMap::new()),
             current_tracks: TokioRwLock::new(HashMap::new()),
             roi_mapper: TokioRwLock::new(RoiAffineMapper::identity()),
@@ -797,8 +797,9 @@ impl PipelineManager {
         let mut trackers = ctx.trackers.lock().await;
         let tracker = trackers
             .entry(algorithm_id.to_string())
-            .or_insert_with(SimpleTracker::new);
-        let tracked_objects = tracker.update_with_embeddings(global_detections, embeddings);
+            .or_insert_with(ByteTrack::new);
+        let tracked_objects =
+            tracker.update_with_embeddings_at(global_detections, embeddings, timestamp_ms);
 
         // 同步更新最新航迹快照 (PRD R1.1: 维护活跃航迹快照)。高频快照不携带
         // backend-only embedding，识别抓拍仍使用下方 `tracked_objects` 原值。

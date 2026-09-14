@@ -8,7 +8,7 @@
 use types::{DetectionRule, DetectionRuleRole, TrackedObject};
 
 use crate::geometry::{check_line_crossing, point_in_polygon};
-use crate::tracker::SimpleTracker;
+use crate::tracker::ByteTrack;
 
 /// 默认全屏布防规则索引标识（区别于用户显式配置的具体几何规则索引 0, 1, 2...）
 pub const DEFAULT_FULLSCREEN_RULE_INDEX: usize = usize::MAX;
@@ -118,7 +118,7 @@ impl RuleEvaluator {
         &self,
         rules: &[DetectionRule],
         tracked_objects: &[TrackedObject],
-        tracker: &mut SimpleTracker,
+        tracker: &mut ByteTrack,
         current_time_ms: i64,
         cooldown_ms: i64,
     ) -> Vec<TriggeredAlarm> {
@@ -180,7 +180,7 @@ impl RuleEvaluator {
         &self,
         rules: &[DetectionRule],
         tracked_objects: &[TrackedObject],
-        tracker: &mut SimpleTracker,
+        tracker: &mut ByteTrack,
         current_time_ms: i64,
         cooldown_ms: i64,
     ) -> Vec<TrackedObject> {
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn test_mask_filtering() {
         let evaluator = RuleEvaluator::new();
-        let mut tracker = SimpleTracker::new();
+        let mut tracker = ByteTrack::new();
 
         let rules = vec![
             DetectionRule {
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn test_tripwire_crossing_and_cooldown() {
         let evaluator = RuleEvaluator::new();
-        let mut tracker = SimpleTracker::new();
+        let mut tracker = ByteTrack::new();
 
         let rules = vec![DetectionRule {
             role: DetectionRuleRole::Line,
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn test_default_fullscreen_roi_when_no_positive_rules() {
         let evaluator = RuleEvaluator::new();
-        let mut tracker = SimpleTracker::new();
+        let mut tracker = ByteTrack::new();
 
         let obj = TrackedObject {
             track_id: 1,
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn test_default_fullscreen_with_mask_filtering() {
         let evaluator = RuleEvaluator::new();
-        let mut tracker = SimpleTracker::new();
+        let mut tracker = ByteTrack::new();
 
         // 配置单一 Mask 遮罩，未配置任何正向几何规则
         let mask_rule = DetectionRule {
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn test_evaluate_captures_fullscreen_and_roi_and_cooldown() {
         let evaluator = RuleEvaluator::new();
-        let mut tracker = SimpleTracker::new();
+        let mut tracker = ByteTrack::new();
 
         let face_obj = TrackedObject {
             track_id: 201,
