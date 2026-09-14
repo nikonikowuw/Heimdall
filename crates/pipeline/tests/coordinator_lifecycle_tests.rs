@@ -51,7 +51,7 @@ impl MockInferBackend {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl InferenceBackend for MockInferBackend {
     fn name(&self) -> &'static str {
         "MockInferBackend"
@@ -832,7 +832,7 @@ async fn test_coordinator_empty_tracks_broadcast() {
     // 空检测后端：detect 始终返回空 Vec
     #[derive(Debug)]
     struct EmptyBackend;
-    #[async_trait]
+    #[async_trait(?Send)]
     impl InferenceBackend for EmptyBackend {
         fn name(&self) -> &'static str {
             "EmptyBackend"

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::RwLock as TokioRwLock;
 
-use infer::{AlgoPackage, InferenceWorker};
+use infer::{AlgoPackage, InferenceWorker, InferenceWorkerConfig};
 use media::decoder::VideoDecoder;
 use media::ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
 use media::{StreamItem, StreamSubscription};
@@ -1052,9 +1052,16 @@ impl PipelineManager {
         for (camera_id, config_json) in targets {
             let package = package.clone();
             let instance_id = format!("hot-reload-{algorithm_id}-{camera_id}");
+            let worker_camera_id = camera_id.clone();
+            let worker_algorithm_id = algorithm_id.to_string();
             let worker_result = tokio::task::spawn_blocking(move || {
-                let instance = package.create_instance(&instance_id, config_json.as_deref())?;
-                Ok::<_, infer::InferError>(InferenceWorker::new(Arc::new(instance)))
+                let worker_config = InferenceWorkerConfig {
+                    worker_name: format!(
+                        "infer-worker-hot-reload-{worker_algorithm_id}-{worker_camera_id}"
+                    ),
+                    ..Default::default()
+                };
+                package.create_worker(&instance_id, config_json.as_deref(), worker_config)
             })
             .await;
 
@@ -1449,7 +1456,7 @@ mod tests {
 
         #[derive(Debug)]
         struct DummyInferBackend;
-        #[async_trait]
+        #[async_trait(?Send)]
         impl InferenceBackend for DummyInferBackend {
             fn name(&self) -> &'static str {
                 "DummyInfer"
@@ -1504,7 +1511,7 @@ mod tests {
 
         #[derive(Debug)]
         struct DummyInfer;
-        #[async_trait]
+        #[async_trait(?Send)]
         impl InferenceBackend for DummyInfer {
             fn name(&self) -> &'static str {
                 "DummyInfer"

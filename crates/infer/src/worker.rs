@@ -29,17 +29,17 @@ fn current_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// 推理 Worker 启动握手超时上限；若库/模型初始化卡死，线程进入隔离池而不是脱管。
+const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// 被隔离的挂死推理工作线程条目
 ///
-/// 核心保证：
-/// 1. 显式持有 `JoinHandle`，杜绝线程句柄脱管被孤儿化；
-/// 2. 显式持有 `backend`（`Arc<dyn InferenceBackend>`），保证 C ABI 动态库与底层硬件上下文
-///    在卡死线程执行期间维持有效引用，严防动态库被过早卸载（dlclose）引发 Use-After-Free / SIGSEGV。
+/// 后端对象由工作线程闭包独占持有；即使线程卡在同步 C ABI 调用中，
+/// 保留 JoinHandle 就会同时保留该线程栈、后端 session 和动态库引用。
 struct QuarantinedWorkerEntry {
     worker_name: String,
     quarantined_at: std::time::Instant,
     thread_handle: std::thread::JoinHandle<()>,
-    _backend: Arc<dyn InferenceBackend>,
 }
 
 /// 隔离工作线程公开诊断信息
@@ -52,17 +52,12 @@ pub struct QuarantinedWorkerInfo {
 static QUARANTINE_POOL: Mutex<Vec<QuarantinedWorkerEntry>> = Mutex::new(Vec::new());
 
 /// 将超时未能退出的工作线程移入受控隔离池（保活句柄与动态库上下文）
-fn quarantine_worker(
-    worker_name: String,
-    thread_handle: std::thread::JoinHandle<()>,
-    backend: Arc<dyn InferenceBackend>,
-) {
+fn quarantine_worker(worker_name: String, thread_handle: std::thread::JoinHandle<()>) {
     if let Ok(mut pool) = QUARANTINE_POOL.lock() {
         pool.push(QuarantinedWorkerEntry {
             worker_name,
             quarantined_at: std::time::Instant::now(),
             thread_handle,
-            _backend: backend,
         });
     }
 }
@@ -298,7 +293,6 @@ impl InferenceWorkerHandle {
 /// 拥有专用 OS 线程与单线程 Tokio 事件循环，保证模型上下文生命周期与底层硬件绑定。
 pub struct InferenceWorker {
     worker_name: String,
-    backend: Arc<dyn InferenceBackend>,
     handle: InferenceWorkerHandle,
     shutdown_tx: Option<watch::Sender<bool>>,
     // Mutex 用于向外层结构（如 PipelineManager）提供 Sync 特征（std::sync::mpsc::Receiver 为 !Sync）
@@ -319,8 +313,15 @@ impl std::fmt::Debug for InferenceWorker {
 }
 
 impl InferenceWorker {
-    /// 基于指定推理后端创建并启动专用常驻推理线程
-    pub fn new(backend: Arc<dyn InferenceBackend>) -> Self {
+    /// 基于指定推理后端创建并启动专用常驻推理线程。
+    ///
+    /// 后端值在 Worker OS 线程闭包内部取得所有权，避免依赖 `Arc<dyn ...>` 推导
+    /// 底层 SDK session 可跨线程共享。C ABI 后端应使用 [`Self::with_backend_factory`]，
+    /// 让 session 也在该线程内创建。
+    pub fn new<B>(backend: B) -> Self
+    where
+        B: InferenceBackend + Send,
+    {
         let name = format!("infer-worker-{}", backend.name());
         let config = InferenceWorkerConfig {
             worker_name: name,
@@ -329,12 +330,34 @@ impl InferenceWorker {
         Self::with_config(backend, config)
     }
 
-    /// 带自定义配置创建并启动专用常驻推理线程
-    pub fn with_config(backend: Arc<dyn InferenceBackend>, config: InferenceWorkerConfig) -> Self {
+    /// 带自定义配置创建并启动专用常驻推理线程。
+    pub fn with_config<B>(backend: B, config: InferenceWorkerConfig) -> Self
+    where
+        B: InferenceBackend + Send,
+    {
+        Self::with_backend_factory(
+            move || Ok(Box::new(backend) as Box<dyn InferenceBackend>),
+            config,
+        )
+        .expect("创建推理 Worker 失败")
+    }
+
+    /// 在 Worker OS 线程内创建后端并绑定其生命周期。
+    ///
+    /// 工厂返回的后端对象不会跨出线程闭包；因此可以安全承载不实现 `Send`/`Sync`
+    /// 的 C ABI session。构造握手只有在工厂和专用 runtime 都成功后才返回。
+    pub fn with_backend_factory<F>(
+        factory: F,
+        config: InferenceWorkerConfig,
+    ) -> Result<Self, InferError>
+    where
+        F: FnOnce() -> Result<Box<dyn InferenceBackend>, InferError> + Send + 'static,
+    {
         let slot = Arc::new(SharedSlot::new());
         let is_alive = Arc::new(AtomicBool::new(true));
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let (exit_tx, exit_rx) = std::sync::mpsc::channel();
+        let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
 
         let timeout_duration = Duration::from_millis(config.timeout_ms);
         let handle = InferenceWorkerHandle {
@@ -345,15 +368,23 @@ impl InferenceWorker {
 
         let worker_name = config.worker_name.clone();
         let thread_worker_name = worker_name.clone();
-
         let thread_slot = slot.clone();
         let thread_is_alive = is_alive.clone();
-        let thread_backend = backend.clone();
 
         let thread_handle = std::thread::Builder::new()
             .name(worker_name.clone())
             .spawn(move || {
                 tracing::info!(worker_name = %thread_worker_name, "专用常驻推理 OS 线程已启动并绑定");
+
+                let backend = match factory() {
+                    Ok(backend) => backend,
+                    Err(error) => {
+                        let _ = startup_tx.send(Err(error));
+                        thread_is_alive.store(false, Ordering::Relaxed);
+                        let _ = exit_tx.send(());
+                        return;
+                    }
+                };
 
                 // 创建单线程独立运行时，与主进程 Tokio 工作池物理隔离
                 let rt = match tokio::runtime::Builder::new_current_thread()
@@ -362,16 +393,20 @@ impl InferenceWorker {
                 {
                     Ok(rt) => rt,
                     Err(err) => {
+                        let error = InferError::Execution {
+                            reason: format!("创建专用推理单线程运行时失败: {err}"),
+                        };
+                        let _ = startup_tx.send(Err(error));
                         tracing::error!(error = %err, "创建专用推理单线程运行时失败");
                         thread_is_alive.store(false, Ordering::Relaxed);
                         let _ = exit_tx.send(());
                         return;
                     }
                 };
+                let _ = startup_tx.send(Ok(()));
 
-                let loop_worker_name = thread_worker_name.clone();
-                let inner_slot = thread_slot.clone();
-                rt.block_on(async move {
+                let loop_worker_name = thread_worker_name.as_str();
+                rt.block_on(async {
                     loop {
                         tokio::select! {
                             biased;
@@ -385,23 +420,23 @@ impl InferenceWorker {
                             }
 
                             // 监听待推理帧到达
-                            _ = inner_slot.notify.notified() => {
-                                let maybe_job = inner_slot.job.lock().ok().and_then(|mut g| g.take());
+                            _ = thread_slot.notify.notified() => {
+                                let maybe_job = thread_slot.job.lock().ok().and_then(|mut g| g.take());
 
                                 if let Some(job) = maybe_job {
-                                    inner_slot.is_busy.store(true, Ordering::Relaxed);
-                                    inner_slot.last_busy_start_ms.store(current_epoch_ms(), Ordering::Relaxed);
+                                    thread_slot.is_busy.store(true, Ordering::Relaxed);
+                                    thread_slot.last_busy_start_ms.store(current_epoch_ms(), Ordering::Relaxed);
 
                                     let result = execute_inference(
-                                        thread_backend.as_ref(),
+                                        backend.as_ref(),
                                         &job.frame,
                                         timeout_duration,
-                                        &loop_worker_name,
+                                        loop_worker_name,
                                     )
                                     .await;
 
-                                    inner_slot.is_busy.store(false, Ordering::Relaxed);
-                                    inner_slot.last_busy_start_ms.store(0, Ordering::Relaxed);
+                                    thread_slot.is_busy.store(false, Ordering::Relaxed);
+                                    thread_slot.last_busy_start_ms.store(0, Ordering::Relaxed);
                                     let _ = job.reply.send(result);
                                 }
                             }
@@ -409,7 +444,7 @@ impl InferenceWorker {
                     }
                 });
 
-                // 标记存活状态为 false，拒绝后续新提交
+                // backend 在此线程闭包结束时析构，保证 C ABI instance_destroy 与创建/调用线程一致。
                 thread_is_alive.store(false, Ordering::Relaxed);
 
                 // 排空并响应队列中可能残留的未执行任务，防止调用方悬挂
@@ -424,16 +459,38 @@ impl InferenceWorker {
                 tracing::info!(worker_name = %thread_worker_name, "专用常驻推理 OS 线程已平稳退出");
                 let _ = exit_tx.send(());
             })
-            .expect("创建专用常驻推理线程失败");
+            .map_err(|err| InferError::Execution {
+                reason: format!("创建专用常驻推理线程失败: {err}"),
+            })?;
 
-        Self {
-            worker_name,
-            backend,
-            handle,
-            shutdown_tx: Some(shutdown_tx),
-            exit_rx: std::sync::Mutex::new(exit_rx),
-            thread_handle: Some(thread_handle),
-            state: WorkerState::Running,
+        match startup_rx.recv_timeout(WORKER_STARTUP_TIMEOUT) {
+            Ok(Ok(())) => Ok(Self {
+                worker_name,
+                handle,
+                shutdown_tx: Some(shutdown_tx),
+                exit_rx: std::sync::Mutex::new(exit_rx),
+                thread_handle: Some(thread_handle),
+                state: WorkerState::Running,
+            }),
+            Ok(Err(error)) => {
+                let _ = thread_handle.join();
+                Err(error)
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                tracing::error!(
+                    worker_name = %worker_name,
+                    timeout_ms = WORKER_STARTUP_TIMEOUT.as_millis() as u64,
+                    "推理 Worker 启动握手超时，疑似算法库或模型初始化阻塞，移入隔离池保活"
+                );
+                quarantine_worker(worker_name, thread_handle);
+                Err(InferError::Timeout(WORKER_STARTUP_TIMEOUT))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = thread_handle.join();
+                Err(InferError::Execution {
+                    reason: "推理 Worker 启动握手通道异常关闭".to_string(),
+                })
+            }
         }
     }
 
@@ -505,7 +562,7 @@ impl InferenceWorker {
                     timeout_ms = timeout.as_millis() as u64,
                     "推理工作线程在指定超时时间内未能退出（疑似硬件驱动内核调用挂起），移入全局隔离池受控保活，杜绝句柄提前释放导致内存踩踏"
                 );
-                quarantine_worker(self.worker_name.clone(), thread, self.backend.clone());
+                quarantine_worker(self.worker_name.clone(), thread);
                 false
             }
         }
@@ -585,7 +642,7 @@ mod tests {
         sleep_ms: u64,
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl InferenceBackend for MockEchoBackend {
         fn name(&self) -> &'static str {
             "MockEcho"
@@ -689,7 +746,7 @@ mod tests {
     #[derive(Debug)]
     struct PanickingBackend;
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl InferenceBackend for PanickingBackend {
         fn name(&self) -> &'static str {
             "PanickingMock"
@@ -753,7 +810,7 @@ mod tests {
         sleep_ms: u64,
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl InferenceBackend for BlockingFfiMockBackend {
         fn name(&self) -> &'static str {
             "BlockingFfiMock"

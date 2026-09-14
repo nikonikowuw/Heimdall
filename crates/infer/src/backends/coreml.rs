@@ -14,7 +14,7 @@ impl CoreMlBackend {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl InferenceBackend for CoreMlBackend {
     fn name(&self) -> &'static str {
         "Apple-ANE-CoreML"

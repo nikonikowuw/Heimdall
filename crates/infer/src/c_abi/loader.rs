@@ -2,12 +2,469 @@
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::Path;
+use std::ptr;
 use std::sync::Arc;
 
 use libloading::{Library, Symbol};
 
 use crate::c_abi::types::*;
 use crate::error::InferError;
+
+const MAX_FACE_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_RESULT_JSON_BYTES: usize = 1024 * 1024;
+const MAX_RESULT_IMAGES: usize = 1024;
+
+/// 当前进程可读内存映射的快照。
+///
+/// 一次 ABI 校验可能需要检查头部、JSON 和图片请求数组；复用快照可以避免在同一
+/// 回调中重复读取 `/proc/self/maps`。快照仍只覆盖当前同步调用，不能替代沙箱隔离。
+#[derive(Debug)]
+struct ReadableMemoryMap {
+    #[cfg(target_os = "linux")]
+    maps: String,
+}
+
+impl ReadableMemoryMap {
+    #[cfg(target_os = "linux")]
+    fn capture() -> Self {
+        Self {
+            maps: std::fs::read_to_string("/proc/self/maps").unwrap_or_default(),
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn capture() -> Self {
+        Self {}
+    }
+
+    #[cfg(target_os = "linux")]
+    fn contains(&self, start: usize, end: usize) -> bool {
+        readable_linux_memory_range(&self.maps, start, end)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn contains(&self, start: usize, end: usize) -> bool {
+        readable_mach_memory_range(start, end)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn contains(&self, _start: usize, _end: usize) -> bool {
+        false
+    }
+}
+
+/// 检查由插件返回的裸地址是否按指定类型对齐，并覆盖在当前进程的可读映射中。
+///
+/// 这不是对恶意进程内插件的完整隔离：映射检查与实际解引用之间仍存在 TOCTOU
+/// 窗口。因此未信任插件仍必须经过沙箱子进程验证；这里的检查负责拒绝明显的野指针、
+/// 整数溢出和跨越不可读内存的常见 ABI 错误，避免安全层直接构造未定义行为的 slice。
+fn validate_readable_range(
+    memory: &ReadableMemoryMap,
+    ptr: *const c_void,
+    len: usize,
+    alignment: usize,
+    name: &str,
+) -> Result<(), String> {
+    let address = ptr as usize;
+    if address == 0 {
+        return Err(format!("{name} 指针为空"));
+    }
+    if alignment == 0 || !address.is_multiple_of(alignment) {
+        return Err(format!("{name} 指针未按 {alignment} 字节对齐"));
+    }
+    let end = address
+        .checked_add(len)
+        .ok_or_else(|| format!("{name} 地址范围溢出"))?;
+    if !memory.contains(address, end) {
+        return Err(format!("{name} 指向的内存范围不可读"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn readable_linux_memory_range(maps: &str, start: usize, end: usize) -> bool {
+    let mut cursor = start;
+    for line in maps.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(range) = fields.next() else {
+            continue;
+        };
+        let Some(permissions) = fields.next() else {
+            continue;
+        };
+        let Some((range_start, range_end)) = range.split_once('-') else {
+            continue;
+        };
+        let (Ok(range_start), Ok(range_end)) = (
+            usize::from_str_radix(range_start, 16),
+            usize::from_str_radix(range_end, 16),
+        ) else {
+            continue;
+        };
+
+        if range_start <= cursor && cursor < range_end {
+            if !permissions
+                .as_bytes()
+                .first()
+                .is_some_and(|&flag| flag == b'r')
+            {
+                return false;
+            }
+            cursor = range_end.min(end);
+            if cursor >= end {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn readable_mach_memory_range(start: usize, end: usize) -> bool {
+    let mut address = start as u64;
+    let end = end as u64;
+    let mut remaining = end.saturating_sub(address);
+    while remaining > 0 {
+        let mut region_address = address;
+        let mut region_size = remaining;
+        let mut info = [0_i32; VM_REGION_BASIC_INFO_COUNT_64 as usize];
+        let mut info_count = VM_REGION_BASIC_INFO_COUNT_64;
+        let mut object_name = 0_u32;
+        // SAFETY: 读取当前进程的 Mach task 句柄；该句柄由系统提供且仅用于查询内存区域。
+        let task = unsafe { libc::mach_task_self_ };
+        // SAFETY: 所有输出参数均指向本地可写存储；task 是当前进程任务句柄。
+        let status = unsafe {
+            mach_vm_region(
+                task,
+                &mut region_address,
+                &mut region_size,
+                VM_REGION_BASIC_INFO_64,
+                info.as_mut_ptr(),
+                &mut info_count,
+                &mut object_name,
+            )
+        };
+        if status != 0
+            || region_size == 0
+            || region_address > address
+            || region_address.saturating_add(region_size) <= address
+            || info[0] & libc::VM_PROT_READ == 0
+        {
+            return false;
+        }
+
+        let region_end = region_address.saturating_add(region_size);
+        let next = region_end.min(end);
+        if next <= address {
+            return false;
+        }
+        remaining = end.saturating_sub(next);
+        address = next;
+    }
+    true
+}
+
+#[cfg(target_os = "macos")]
+const VM_REGION_BASIC_INFO_64: u32 = 9;
+#[cfg(target_os = "macos")]
+const VM_REGION_BASIC_INFO_COUNT_64: u32 = 9;
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn mach_vm_region(
+        target_task: u32,
+        address: *mut u64,
+        size: *mut u64,
+        flavor: u32,
+        info: *mut i32,
+        info_count: *mut u32,
+        object_name: *mut u32,
+    ) -> i32;
+}
+
+/// 校验并复制插件返回的 ABI 虚表。
+fn copy_validated_abi(abi_ptr: *const AvAlgoAbi) -> Result<AvAlgoAbi, InferError> {
+    let memory = ReadableMemoryMap::capture();
+    let expected_size = std::mem::size_of::<AvAlgoAbi>();
+    validate_readable_range(
+        &memory,
+        abi_ptr.cast(),
+        std::mem::size_of::<u32>() * 2,
+        std::mem::align_of::<AvAlgoAbi>(),
+        "AvAlgoAbi 头部",
+    )
+    .map_err(|reason| InferError::InvalidAbi { reason })?;
+
+    // SAFETY: 上面的范围与对齐校验保证两个 ABI 头字段在当前调用点可读。
+    let (size, api_version) = unsafe {
+        (
+            ptr::read(abi_ptr.cast::<u32>()),
+            ptr::read(abi_ptr.cast::<u32>().add(1)),
+        )
+    };
+    if size as usize != expected_size {
+        return Err(InferError::InvalidAbi {
+            reason: format!("虚表大小不匹配: 期望 {expected_size} 字节, 实际 {size} 字节"),
+        });
+    }
+    if api_version != AV_ALGO_API_VERSION {
+        return Err(InferError::InvalidAbi {
+            reason: format!("API 版本不匹配: 期望 {AV_ALGO_API_VERSION}, 实际 {api_version}"),
+        });
+    }
+    validate_readable_range(
+        &memory,
+        abi_ptr.cast(),
+        expected_size,
+        std::mem::align_of::<AvAlgoAbi>(),
+        "AvAlgoAbi",
+    )
+    .map_err(|reason| InferError::InvalidAbi { reason })?;
+
+    // SAFETY: 已确认当前版本完整 AvAlgoAbi 的内存范围可读且正确对齐。
+    Ok(unsafe { ptr::read(abi_ptr) })
+}
+
+/// 校验结果回调中由插件提供的完整结果及其变长载荷。
+fn copy_validated_result(result: *const AvAlgoResult) -> Result<AvAlgoResult, String> {
+    let memory = ReadableMemoryMap::capture();
+    validate_readable_range(
+        &memory,
+        result.cast(),
+        std::mem::size_of::<u32>() * 2,
+        std::mem::align_of::<AvAlgoResult>(),
+        "AvAlgoResult 头部",
+    )?;
+    // SAFETY: 头部范围和对齐已验证，两个 u32 可以安全读取。
+    let (size, api_version) = unsafe {
+        (
+            ptr::read(result.cast::<u32>()),
+            ptr::read(result.cast::<u32>().add(1)),
+        )
+    };
+    let expected_size = std::mem::size_of::<AvAlgoResult>() as u32;
+    if size != expected_size {
+        return Err(format!(
+            "AvAlgoResult.size 无效: 期望 {expected_size}, 实际 {size}"
+        ));
+    }
+    if api_version != AV_ALGO_API_VERSION {
+        return Err(format!(
+            "AvAlgoResult.api_version 无效: 期望 {AV_ALGO_API_VERSION}, 实际 {api_version}"
+        ));
+    }
+    validate_readable_range(
+        &memory,
+        result.cast(),
+        expected_size as usize,
+        std::mem::align_of::<AvAlgoResult>(),
+        "AvAlgoResult",
+    )?;
+    // SAFETY: 完整 AvAlgoResult 已通过范围和头部校验。
+    let result = unsafe { ptr::read(result) };
+
+    if !matches!(
+        result.kind,
+        AV_RESULT_ALARM | AV_RESULT_SELF_TEST | AV_RESULT_RECOGNITION
+    ) {
+        return Err(format!("AvAlgoResult.kind 无效: {}", result.kind));
+    }
+    if result.reserved0 != 0 {
+        return Err("AvAlgoResult.reserved0 必须为 0".to_string());
+    }
+    let json_len = result.json_len as usize;
+    if json_len > MAX_RESULT_JSON_BYTES {
+        return Err(format!(
+            "AvAlgoResult.json_len 超过上限: {} > {MAX_RESULT_JSON_BYTES}",
+            result.json_len
+        ));
+    }
+    if json_len > 0 {
+        validate_readable_range(
+            &memory,
+            result.json.cast(),
+            json_len,
+            1,
+            "AvAlgoResult.json",
+        )?;
+    }
+
+    let image_count = result.image_count as usize;
+    if image_count > MAX_RESULT_IMAGES {
+        return Err(format!(
+            "AvAlgoResult.image_count 超过上限: {} > {MAX_RESULT_IMAGES}",
+            result.image_count
+        ));
+    }
+    if image_count > 0 {
+        let byte_len = image_count
+            .checked_mul(std::mem::size_of::<AvAlgoImageReq>())
+            .ok_or_else(|| "AvAlgoResult.images 长度计算溢出".to_string())?;
+        validate_readable_range(
+            &memory,
+            result.images.cast(),
+            byte_len,
+            std::mem::align_of::<AvAlgoImageReq>(),
+            "AvAlgoResult.images",
+        )?;
+        // SAFETY: images 的完整数组范围已验证可读且按 AvAlgoImageReq 对齐。
+        let images = unsafe { std::slice::from_raw_parts(result.images, image_count) };
+        for (index, image) in images.iter().enumerate() {
+            if image.size != std::mem::size_of::<AvAlgoImageReq>() as u32 {
+                return Err(format!("AvAlgoImageReq[{index}].size 无效"));
+            }
+            if image.api_version != AV_ALGO_API_VERSION {
+                return Err(format!("AvAlgoImageReq[{index}].api_version 无效"));
+            }
+            if !image.x.is_finite()
+                || !image.y.is_finite()
+                || !image.w.is_finite()
+                || !image.h.is_finite()
+                || image.x < 0.0
+                || image.y < 0.0
+                || image.w < 0.0
+                || image.h < 0.0
+                || image.x > 1.0
+                || image.y > 1.0
+                || image.w > 1.0
+                || image.h > 1.0
+                || image.x + image.w > 1.0
+                || image.y + image.h > 1.0
+            {
+                return Err(format!("AvAlgoImageReq[{index}] 几何范围无效"));
+            }
+        }
+    } else if !result.images.is_null() {
+        return Err("AvAlgoResult.image_count 为 0 时 images 必须为空".to_string());
+    }
+
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_abi() -> AvAlgoAbi {
+        AvAlgoAbi {
+            size: std::mem::size_of::<AvAlgoAbi>() as u32,
+            api_version: AV_ALGO_API_VERSION,
+            library_open: None,
+            library_query: None,
+            library_close: None,
+            instance_create: None,
+            instance_negotiate: None,
+            instance_update_config: None,
+            instance_set_rules: None,
+            instance_process: None,
+            instance_flush: None,
+            instance_destroy: None,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn test_abi_validation_accepts_valid_table() {
+        let abi = valid_abi();
+        let copied = copy_validated_abi(&abi).expect("valid ABI table");
+        assert_eq!(copied.size, abi.size);
+        assert_eq!(copied.api_version, abi.api_version);
+    }
+
+    #[test]
+    fn test_abi_validation_rejects_unaligned_table_pointer() {
+        let abi = valid_abi();
+        // SAFETY: 仅在测试中构造一个刻意错位的裸指针，验证校验器在解引用前拒绝它。
+        let pointer = unsafe {
+            (std::ptr::addr_of!(abi) as *const u8)
+                .add(1)
+                .cast::<AvAlgoAbi>()
+        };
+        let error = copy_validated_abi(pointer).expect_err("unaligned ABI pointer must fail");
+        assert!(matches!(error, InferError::InvalidAbi { reason } if reason.contains("对齐")));
+    }
+
+    fn valid_result(json: &[u8]) -> AvAlgoResult {
+        AvAlgoResult {
+            size: std::mem::size_of::<AvAlgoResult>() as u32,
+            api_version: AV_ALGO_API_VERSION,
+            kind: AV_RESULT_ALARM,
+            reserved0: 0,
+            frame_id: 1,
+            json: json.as_ptr().cast(),
+            json_len: json.len() as u32,
+            image_count: 0,
+            images: std::ptr::null(),
+        }
+    }
+
+    #[test]
+    fn test_result_validation_accepts_valid_payload() {
+        let json = br#"{"objects":[]}"#;
+        let result = valid_result(json);
+        let checked = copy_validated_result(&result).expect("valid result");
+        assert_eq!(checked.kind, AV_RESULT_ALARM);
+        assert_eq!(checked.json_len, json.len() as u32);
+    }
+
+    #[test]
+    fn test_result_validation_rejects_invalid_header_and_kind() {
+        let json = b"{}";
+        let mut result = valid_result(json);
+
+        result.size -= 1;
+        assert!(copy_validated_result(&result)
+            .expect_err("invalid result size must fail")
+            .contains("size"));
+
+        result.size = std::mem::size_of::<AvAlgoResult>() as u32;
+        result.api_version = AV_ALGO_API_VERSION + 1;
+        assert!(copy_validated_result(&result)
+            .expect_err("invalid result version must fail")
+            .contains("api_version"));
+
+        result.api_version = AV_ALGO_API_VERSION;
+        result.kind = 99;
+        assert!(copy_validated_result(&result)
+            .expect_err("invalid result kind must fail")
+            .contains("kind"));
+    }
+
+    #[test]
+    fn test_result_validation_rejects_unbounded_or_invalid_payloads() {
+        let json = b"{}";
+        let mut result = valid_result(json);
+
+        result.json_len = (MAX_RESULT_JSON_BYTES + 1) as u32;
+        assert!(copy_validated_result(&result)
+            .expect_err("oversized json must fail")
+            .contains("json_len"));
+
+        result = valid_result(json);
+        result.json = std::ptr::null();
+        assert!(copy_validated_result(&result)
+            .expect_err("non-zero json length with null pointer must fail")
+            .contains("json"));
+
+        result = valid_result(b"");
+        result.image_count = (MAX_RESULT_IMAGES + 1) as u32;
+        assert!(copy_validated_result(&result)
+            .expect_err("oversized image array must fail")
+            .contains("image_count"));
+    }
+
+    #[test]
+    fn test_result_validation_rejects_unaligned_result_pointer() {
+        let bytes = vec![0_u8; std::mem::size_of::<AvAlgoResult>() + 1];
+        // SAFETY: 仅在测试中构造一个刻意错位的裸指针，验证校验器在解引用前拒绝它。
+        let result = unsafe { bytes.as_ptr().add(1).cast::<AvAlgoResult>() };
+        assert!(copy_validated_result(result)
+            .expect_err("unaligned result pointer must fail")
+            .contains("对齐"));
+    }
+}
 
 /// 封装已加载的动态库与 C ABI 虚表
 #[derive(Debug)]
@@ -17,10 +474,7 @@ pub struct LoadedLib {
     abi: AvAlgoAbi,
 }
 
-// SAFETY: C ABI 函数指针均指向动态库只读代码段，可安全在多线程间转移所有权
-unsafe impl Send for LoadedLib {}
-// SAFETY: C ABI 虚表在多线程并发读取时安全
-unsafe impl Sync for LoadedLib {}
+// C ABI 函数表中的函数指针只在 `_lib` 保持加载期间使用；Library 自身已提供跨线程所有权语义。
 
 impl LoadedLib {
     /// 加载动态库并提取 C ABI 虚表
@@ -44,7 +498,7 @@ impl LoadedLib {
                 })?
         };
 
-        // SAFETY: 调用导出的获取虚表函数，传入当前支持的 API 版本
+        // SAFETY: 调用导出的获取虚表函数，传入当前支持的 API 版本。
         let abi_ptr = unsafe { get_abi_fn(AV_ALGO_API_VERSION) };
         if abi_ptr.is_null() {
             return Err(InferError::InvalidAbi {
@@ -52,28 +506,7 @@ impl LoadedLib {
             });
         }
 
-        // SAFETY: 验证虚表内存与版本
-        let abi = unsafe { *abi_ptr };
-        let expected_size = std::mem::size_of::<AvAlgoAbi>() as u32;
-        if abi.size != expected_size {
-            return Err(InferError::InvalidAbi {
-                reason: format!(
-                    "虚表大小不匹配: 期望 {expected_size} 字节, 实际 {} 字节",
-                    abi.size
-                ),
-            });
-        }
-
-        if abi.api_version != AV_ALGO_API_VERSION {
-            return Err(InferError::InvalidAbi {
-                reason: format!(
-                    "API 版本不匹配: 期望 {AV_ALGO_API_VERSION}, 实际 {}",
-                    abi.api_version
-                ),
-            });
-        }
-
-        // 校验关键虚函数指针非空
+        let abi = copy_validated_abi(abi_ptr)?;
         if abi.library_open.is_none()
             || abi.library_query.is_none()
             || abi.library_close.is_none()
@@ -119,11 +552,6 @@ pub struct RawAlgoLibrary {
     meta: LibraryMeta,
 }
 
-// SAFETY: 算法库句柄底层无线程亲和性，可在多线程转移所有权
-unsafe impl Send for RawAlgoLibrary {}
-// SAFETY: 算法库只读上下文支持多线程并发访问
-unsafe impl Sync for RawAlgoLibrary {}
-
 impl RawAlgoLibrary {
     /// 打开算法库
     pub fn open(
@@ -162,9 +590,21 @@ impl RawAlgoLibrary {
 
         // SAFETY: args 在调用期间有效；raw_lib 指向有效栈变量
         let code = unsafe { open_fn(&args, &mut raw_lib) };
-        if code != AV_OK || raw_lib.is_null() {
-            // SAFETY: 调用方保证 abi 与 inst 内存有效
-            return Err(unsafe { check_c_status(code, abi, std::ptr::null_mut()) });
+        if code != AV_OK {
+            // SAFETY: abi 有效；library-level 错误使用空 instance 句柄读取线程局部错误。
+            let error = unsafe { check_c_status(code, abi, std::ptr::null_mut()) };
+            if !raw_lib.is_null() {
+                if let Some(close_fn) = abi.library_close {
+                    // SAFETY: raw_lib 由当前 library_open 返回，失败路径尚未交付给调用方。
+                    unsafe { close_fn(raw_lib) };
+                }
+            }
+            return Err(error);
+        }
+        if raw_lib.is_null() {
+            return Err(InferError::InvalidAbi {
+                reason: "library_open 成功但返回了空库句柄".to_string(),
+            });
         }
 
         // 查询元数据
@@ -177,20 +617,43 @@ impl RawAlgoLibrary {
             alarm_type_id: [0; 64],
         };
 
-        let query_fn = abi.library_query.ok_or_else(|| InferError::InvalidAbi {
-            reason: "library_query 函数指针为空".to_string(),
-        })?;
+        let query_fn = match abi.library_query {
+            Some(query_fn) => query_fn,
+            None => {
+                if let Some(close_fn) = abi.library_close {
+                    // SAFETY: raw_lib 由当前 library_open 返回，失败路径尚未交付给调用方。
+                    unsafe { close_fn(raw_lib) };
+                }
+                return Err(InferError::InvalidAbi {
+                    reason: "library_query 函数指针为空".to_string(),
+                });
+            }
+        };
 
         // SAFETY: raw_lib 为有效句柄；info 为有效栈内存
         let query_code = unsafe { query_fn(raw_lib, &mut info) };
         if query_code != AV_OK {
-            // SAFETY: 出现错误时释放已打开的 raw_lib
+            // SAFETY: abi 有效；先读取错误详情，再释放已打开的 raw_lib。
+            let error = unsafe { check_c_status(query_code, abi, std::ptr::null_mut()) };
             if let Some(close_fn) = abi.library_close {
-                // SAFETY: raw_lib 由当前 open_fn 创建且未交付，释放它以防泄漏
+                // SAFETY: raw_lib 由当前 open_fn 创建且未交付，释放它以防泄漏。
                 unsafe { close_fn(raw_lib) };
             }
-            // SAFETY: 调用方保证 abi 与 inst 内存有效
-            return Err(unsafe { check_c_status(query_code, abi, std::ptr::null_mut()) });
+            return Err(error);
+        }
+        if info.size != std::mem::size_of::<AvAlgoLibraryInfo>() as u32
+            || info.api_version != AV_ALGO_API_VERSION
+        {
+            if let Some(close_fn) = abi.library_close {
+                // SAFETY: raw_lib 由当前 open_fn 创建且未交付，释放它以防泄漏。
+                unsafe { close_fn(raw_lib) };
+            }
+            return Err(InferError::InvalidAbi {
+                reason: format!(
+                    "AvAlgoLibraryInfo 头部无效: size={}, api_version={}",
+                    info.size, info.api_version
+                ),
+            });
         }
 
         let meta = LibraryMeta {
@@ -224,6 +687,15 @@ impl RawAlgoLibrary {
 
     /// 调用底层 C ABI 进行单张人脸特征提取、对齐与质量评估
     pub fn extract_face(&self, jpeg_bytes: &[u8]) -> Result<FaceExtraction, InferError> {
+        if jpeg_bytes.is_empty() || jpeg_bytes.len() > MAX_FACE_IMAGE_BYTES {
+            return Err(InferError::Execution {
+                reason: format!(
+                    "人脸提取输入图像大小无效: {} bytes（允许 1..={MAX_FACE_IMAGE_BYTES}）",
+                    jpeg_bytes.len()
+                ),
+            });
+        }
+
         let extract_fn =
             self.lib
                 .get_extract_face_fn()
@@ -251,13 +723,23 @@ impl RawAlgoLibrary {
             detection_score: 0.0,
         };
 
-        // SAFETY: input/output 结构体满足 ABI 契约且在调用期间保持有效
+        // SAFETY: input/output 结构体由宿主完整初始化，并在同步调用期间保持有效。
         let status = unsafe { extract_fn(self.raw, &input, &mut output) };
+        let expected_output_size = std::mem::size_of::<AvFaceExtractOutput>() as u32;
+        if output.size != expected_output_size || output.api_version != AV_ALGO_API_VERSION {
+            return Err(InferError::InvalidAbi {
+                reason: format!(
+                    "AvFaceExtractOutput 头部无效: size={}, api_version={}",
+                    output.size, output.api_version
+                ),
+            });
+        }
+
         if status != AV_OK || output.status_code != 0 {
-            // 复用 check_c_status 拉取算法插件底层详细错误描述
-            // SAFETY: self.raw 为有效 AvAlgoLibrary 句柄，abi 虚表在 RawAlgoLibrary 存活期间有效
-            let detail =
-                unsafe { check_c_status(status, self.lib.abi(), self.raw as AvAlgoInstance) };
+            // av_algo_extract_face 使用库句柄；last_error 的 inst_or_null 参数在此必须传空，
+            // 不能把 AvAlgoLibrary 强转成 AvAlgoInstance。
+            // SAFETY: abi 有效；库级错误按 ABI 契约使用空 instance 句柄读取线程局部错误。
+            let detail = unsafe { check_c_status(status, self.lib.abi(), std::ptr::null_mut()) };
             return Err(InferError::Execution {
                 reason: format!(
                     "人脸特征提取失败: plugin_status={status}, plugin_code={}, detail={detail}",
@@ -266,10 +748,7 @@ impl RawAlgoLibrary {
             });
         }
 
-        if output.embedding.is_null()
-            || output.embedding_dim != 512
-            || !(output.embedding as usize).is_multiple_of(std::mem::align_of::<f32>())
-        {
+        if output.embedding.is_null() || output.embedding_dim != 512 {
             return Err(InferError::Execution {
                 reason: format!(
                     "人脸特征向量无效: ptr={:?}, dim={}",
@@ -277,26 +756,67 @@ impl RawAlgoLibrary {
                 ),
             });
         }
+        let embedding_len = (output.embedding_dim as usize)
+            .checked_mul(std::mem::size_of::<f32>())
+            .ok_or_else(|| InferError::Execution {
+                reason: "人脸特征向量长度计算溢出".to_string(),
+            })?;
+        let memory = ReadableMemoryMap::capture();
+        validate_readable_range(
+            &memory,
+            output.embedding.cast(),
+            embedding_len,
+            std::mem::align_of::<f32>(),
+            "人脸特征向量",
+        )
+        .map_err(|reason| InferError::Execution { reason })?;
 
-        // SAFETY: output.embedding 指向 output.embedding_dim 个连续浮点数
+        // SAFETY: embedding 的维度、对齐和完整字节范围均已校验。
         let embedding = unsafe {
             std::slice::from_raw_parts(output.embedding, output.embedding_dim as usize).to_vec()
         };
+        if embedding.iter().any(|value| !value.is_finite()) {
+            return Err(InferError::Execution {
+                reason: "人脸特征向量包含 NaN/Inf".to_string(),
+            });
+        }
 
-        let aligned_jpeg = if !output.aligned_jpeg.is_null() && output.aligned_jpeg_len > 0 {
-            if output.aligned_jpeg_len > 32 * 1024 * 1024 {
+        let aligned_jpeg_len = output.aligned_jpeg_len as usize;
+        let aligned_jpeg = if aligned_jpeg_len > 0 {
+            if aligned_jpeg_len > MAX_FACE_IMAGE_BYTES {
                 return Err(InferError::Execution {
-                    reason: "人脸对齐切片尺寸异常超过 32MB 限制".to_string(),
+                    reason: format!("人脸对齐切片尺寸异常超过 {MAX_FACE_IMAGE_BYTES} bytes 限制"),
                 });
             }
-            // SAFETY: output.aligned_jpeg 指向 output.aligned_jpeg_len 个有效字节
-            unsafe {
-                std::slice::from_raw_parts(output.aligned_jpeg, output.aligned_jpeg_len as usize)
-                    .to_vec()
+            if output.aligned_jpeg.is_null() {
+                return Err(InferError::Execution {
+                    reason: "人脸对齐切片长度非零但指针为空".to_string(),
+                });
             }
+            validate_readable_range(
+                &memory,
+                output.aligned_jpeg.cast(),
+                aligned_jpeg_len,
+                1,
+                "人脸对齐切片",
+            )
+            .map_err(|reason| InferError::Execution { reason })?;
+            // SAFETY: aligned_jpeg 的长度上限、非空指针和可读范围均已校验。
+            unsafe { std::slice::from_raw_parts(output.aligned_jpeg, aligned_jpeg_len).to_vec() }
         } else {
+            if !output.aligned_jpeg.is_null() {
+                return Err(InferError::Execution {
+                    reason: "人脸对齐切片指针非空但长度为 0".to_string(),
+                });
+            }
             Vec::new()
         };
+
+        if !output.quality_score.is_finite() || !output.detection_score.is_finite() {
+            return Err(InferError::Execution {
+                reason: "人脸质量分或检测分包含 NaN/Inf".to_string(),
+            });
+        }
 
         Ok(FaceExtraction {
             embedding,
@@ -393,21 +913,27 @@ pub unsafe extern "C" fn algo_result_collector(
     user_data: *mut c_void,
 ) {
     let _ = std::panic::catch_unwind(|| {
-        if result.is_null() || user_data.is_null() {
+        if user_data.is_null() {
             return;
         }
-        // SAFETY: result 是底层传回的只读指针
-        let res = unsafe { &*result };
+
+        let res = match copy_validated_result(result) {
+            Ok(result) => result,
+            Err(reason) => {
+                tracing::warn!(error = %reason, "丢弃不符合 ABI 契约的算法结果回调");
+                return;
+            }
+        };
         if res.json.is_null() || res.json_len == 0 {
             return;
         }
 
-        // SAFETY: res.json 指向只读字符串，json_len 为底层计算的有效长度
+        // SAFETY: copy_validated_result 已验证 json 的非空、上限、映射范围和长度。
         let json_slice =
-            unsafe { std::slice::from_raw_parts(res.json as *const u8, res.json_len as usize) };
+            unsafe { std::slice::from_raw_parts(res.json.cast::<u8>(), res.json_len as usize) };
         let json_str = String::from_utf8_lossy(json_slice).to_string();
 
-        // SAFETY: user_data 在调用期间为有效的 Mutex<Vec<String>> 裸指针
+        // SAFETY: user_data 由宿主在 instance_create 时指向存活期内的 Mutex<Vec<String>>。
         let slot = unsafe { &*(user_data as *const std::sync::Mutex<Vec<String>>) };
         if let Ok(mut lock) = slot.lock() {
             lock.push(json_str);

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 #[cfg(target_os = "macos")]
 use infer::package::AlgoPackage;
-use infer::{InferenceBackend, InferenceWorker};
+use infer::{InferenceBackend, InferenceWorker, InferenceWorkerConfig};
 #[cfg(target_os = "macos")]
 use media::decoder::DecodeDeliveryPolicy;
 use media::decoder::VideoDecoder;
@@ -27,7 +27,7 @@ struct E2eMockInferBackend {
     current_y: std::sync::Mutex<f32>,
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl InferenceBackend for E2eMockInferBackend {
     fn name(&self) -> &'static str {
         "E2eMockInferBackend"
@@ -371,10 +371,16 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
     let valid_cfg =
         r#"{"confidence_threshold":0.35,"iou_threshold":0.45,"target_classes":["person","car"]}"#;
 
-    let inst = pkg
-        .create_instance(cam_id, Some(valid_cfg))
-        .expect("创建算法实例失败");
-    let backend: Arc<dyn InferenceBackend> = Arc::new(inst);
+    let worker = pkg
+        .create_worker(
+            cam_id,
+            Some(valid_cfg),
+            InferenceWorkerConfig {
+                worker_name: "infer-worker-real-macos-e2e".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("创建算法 Worker 失败");
 
     // 2. 准备自测图并构建 NativePixelBuffer
     let testimage_path = pkg_path.join("testimage.jpg");
@@ -394,8 +400,7 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
         policy: DecodeDeliveryPolicy::LosslessBackpressure,
     });
 
-    // 3. 构造常驻 OS 线程 InferenceWorker
-    let worker = InferenceWorker::new(backend);
+    // 3. Worker 已在专用 OS 线程中完成 C ABI session 创建
 
     // 4. 初始化模拟子码流会话
     let session = CameraStreamSession::mock(cam_id, "rtsp://mock-real/live", TransportPolicy::Tcp);

@@ -1598,6 +1598,7 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "image",
+ "libc",
  "libloading",
  "serde",
  "serde_json",

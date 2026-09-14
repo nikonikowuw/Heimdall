@@ -536,9 +536,21 @@ impl AlgoSandbox {
 
         // SAFETY: inst_args 栈有效，raw_inst 指向有效指针
         let create_code = unsafe { create_fn(raw_lib.raw(), &inst_args, &mut raw_inst) };
-        if create_code != AV_OK || raw_inst.is_null() {
-            // SAFETY: 调用方保证 abi 与 raw_inst 内存有效
-            return Err(unsafe { check_c_status(create_code, abi, std::ptr::null_mut()) });
+        if create_code != AV_OK {
+            // SAFETY: abi 有效；instance-level 错误使用部分返回的句柄（若有）提取详情。
+            let error = unsafe { check_c_status(create_code, abi, raw_inst) };
+            if !raw_inst.is_null() {
+                if let Some(destroy_fn) = abi.instance_destroy {
+                    // SAFETY: raw_inst 由当前 instance_create 返回，错误路径立即销毁且仅执行一次。
+                    unsafe { destroy_fn(raw_inst) };
+                }
+            }
+            return Err(error);
+        }
+        if raw_inst.is_null() {
+            return Err(InferError::InvalidAbi {
+                reason: "instance_create 成功但返回了空实例句柄".to_string(),
+            });
         }
 
         // RAII 保护 instance 释放

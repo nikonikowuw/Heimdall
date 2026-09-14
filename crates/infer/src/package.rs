@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::Engine;
 use serde::Deserialize;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use types::{BoundingBox, Detection, FaceEmbedding, FrameHandle, FrameRef, PixelFormat};
 
 use crate::backend::{InferenceBackend, InferenceResult};
@@ -18,6 +18,7 @@ use crate::error::InferError;
 use crate::sandbox::{
     current_platform_id, find_entry_library, normalize_platform_id, AlgoManifest, AlgoSandbox,
 };
+use crate::worker::{InferenceWorker, InferenceWorkerConfig};
 
 /// 算法描述清单固定文件名
 pub const ALGO_MANIFEST_FILENAME: &str = "manifest.json";
@@ -31,7 +32,6 @@ pub struct AlgoPackage {
     manifest: AlgoManifest,
     package_dir: PathBuf,
     lib: Arc<LoadedLib>,
-    raw_lib: Arc<RawAlgoLibrary>,
 }
 
 impl AlgoPackage {
@@ -115,11 +115,8 @@ impl AlgoPackage {
         let entry_lib = find_entry_library(&canonical_dir, &manifest.algorithm_id)?;
 
         let loaded_lib = Arc::new(LoadedLib::load(&entry_lib)?);
-        let raw_lib = Arc::new(RawAlgoLibrary::open(
-            loaded_lib.clone(),
-            &canonical_dir,
-            &manifest.platform_id,
-        )?);
+        let raw_lib =
+            RawAlgoLibrary::open(loaded_lib.clone(), &canonical_dir, &manifest.platform_id)?;
 
         if raw_lib.meta().algorithm_id != manifest.algorithm_id {
             return Err(InferError::Execution {
@@ -130,12 +127,13 @@ impl AlgoPackage {
                 ),
             });
         }
+        // raw_lib 仅用于当前线程的 library_open/query 握手；不把线程绑定的库句柄放入共享包对象。
+        drop(raw_lib);
 
         Ok(Self {
             manifest,
             package_dir: canonical_dir,
             lib: loaded_lib,
-            raw_lib,
         })
     }
 
@@ -160,12 +158,45 @@ impl AlgoPackage {
         self.lib.get_extract_face_fn().is_some()
     }
 
-    /// 调用该算法包提取人脸特征向量与对齐人脸切片
+    /// 调用该算法包提取人脸特征向量与对齐人脸切片。
+    ///
+    /// 库级句柄在当前调用线程打开、使用并关闭；这类离线低频能力不跨线程转移
+    /// `RawAlgoLibrary`，也不把插件 session 当作可并发共享对象。
     pub fn extract_face(&self, jpeg_bytes: &[u8]) -> Result<FaceExtraction, InferError> {
-        self.raw_lib.extract_face(jpeg_bytes)
+        let raw_lib = RawAlgoLibrary::open(
+            self.lib.clone(),
+            &self.package_dir,
+            &self.manifest.platform_id,
+        )?;
+        raw_lib.extract_face(jpeg_bytes)
     }
 
-    /// 创建一个独立的推理实例
+    /// 创建并启动绑定 C ABI session 的常驻推理 Worker。
+    ///
+    /// `RawAlgoLibrary` 与 `AlgoInstance` 在 Worker OS 线程内创建，因而不会跨线程
+    /// 移动底层 SDK 上下文。调用方只获得 Worker 的跨线程控制句柄。
+    pub fn create_worker(
+        self: &Arc<Self>,
+        instance_id: &str,
+        config_json: Option<&str>,
+        worker_config: InferenceWorkerConfig,
+    ) -> Result<InferenceWorker, InferError> {
+        let package = Arc::clone(self);
+        let instance_id = instance_id.to_string();
+        let config_json = config_json.map(str::to_owned);
+        InferenceWorker::with_backend_factory(
+            move || {
+                let instance = package.create_instance(&instance_id, config_json.as_deref())?;
+                Ok(Box::new(instance) as Box<dyn InferenceBackend>)
+            },
+            worker_config,
+        )
+    }
+
+    /// 创建一个当前线程独占的 C ABI 推理实例。
+    ///
+    /// 该 API 主要供 Worker 工厂和同步测试使用；返回的实例不实现 `Send`/`Sync`，
+    /// 生产推理应优先调用 [`Self::create_worker`]。
     pub fn create_instance(
         self: &Arc<Self>,
         instance_id: &str,
@@ -192,6 +223,11 @@ impl AlgoPackage {
             None => (std::ptr::null(), 0),
         };
 
+        let raw_lib = RawAlgoLibrary::open(
+            self.lib.clone(),
+            &self.package_dir,
+            &self.manifest.platform_id,
+        )?;
         let callback_slot = Box::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         let args = AvAlgoInstanceArgs {
@@ -214,26 +250,36 @@ impl AlgoPackage {
         };
 
         let mut raw_inst: AvAlgoInstance = std::ptr::null_mut();
-        let abi = self.lib.abi();
+        let abi = raw_lib.lib().abi();
         let create_fn = abi.instance_create.ok_or_else(|| InferError::InvalidAbi {
             reason: "instance_create 为空".to_string(),
         })?;
 
         // SAFETY: args 在调用期间有效
-        let code = unsafe { create_fn(self.raw_lib.raw(), &args, &mut raw_inst) };
+        let code = unsafe { create_fn(raw_lib.raw(), &args, &mut raw_inst) };
 
-        if code != AV_OK || raw_inst.is_null() {
-            // SAFETY: 调用方保证 abi 与 inst 内存有效
-            return Err(unsafe { check_c_status(code, abi, std::ptr::null_mut()) });
+        if code != AV_OK {
+            // SAFETY: abi 有效；instance-level 错误使用部分返回的句柄（若有）提取详情。
+            let error = unsafe { check_c_status(code, abi, raw_inst) };
+            if !raw_inst.is_null() {
+                if let Some(destroy_fn) = abi.instance_destroy {
+                    // SAFETY: raw_inst 由当前 instance_create 返回，错误路径立即销毁且仅执行一次。
+                    unsafe { destroy_fn(raw_inst) };
+                }
+            }
+            return Err(error);
+        }
+        if raw_inst.is_null() {
+            return Err(InferError::InvalidAbi {
+                reason: "instance_create 成功但返回了空实例句柄".to_string(),
+            });
         }
 
         Ok(AlgoInstance {
-            _package: self.clone(),
-            lib: self.lib.clone(),
             raw: raw_inst,
+            raw_lib,
             algorithm_id: self.manifest.algorithm_id.clone(),
             callback_slot,
-            lock: Mutex::new(()),
         })
     }
 }
@@ -241,14 +287,11 @@ impl AlgoPackage {
 /// 算法推理实例句柄
 #[derive(Debug)]
 pub struct AlgoInstance {
-    _package: Arc<AlgoPackage>,
-    lib: Arc<LoadedLib>,
     raw: AvAlgoInstance,
+    raw_lib: RawAlgoLibrary,
     algorithm_id: String,
     // 堆分配的实例回调结果槽，地址在实例生命周期内保持稳定
     callback_slot: Box<std::sync::Mutex<Vec<String>>>,
-    // 互斥锁确保单实例推理调用的重入安全
-    lock: Mutex<()>,
 }
 
 impl AlgoInstance {
@@ -258,16 +301,11 @@ impl AlgoInstance {
     }
 }
 
-// SAFETY: 互斥锁保护单实例不会发生跨线程并发重入调用，可在线程间转移所有权
-unsafe impl Send for AlgoInstance {}
-// SAFETY: 内部使用 Mutex 串行化推理调用，支持跨线程共享引用
-unsafe impl Sync for AlgoInstance {}
-
 impl Drop for AlgoInstance {
     fn drop(&mut self) {
         if !self.raw.is_null() {
-            if let Some(destroy_fn) = self.lib.abi().instance_destroy {
-                // SAFETY: raw 实例只释放一次；destroy 执行后 C 库不会再发起任何回调
+            if let Some(destroy_fn) = self.raw_lib.lib().abi().instance_destroy {
+                // SAFETY: raw 实例只在其创建线程销毁一次；raw_lib 在字段析构前保持动态库加载。
                 unsafe { destroy_fn(self.raw) };
             }
             self.raw = std::ptr::null_mut();
@@ -275,7 +313,7 @@ impl Drop for AlgoInstance {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl InferenceBackend for AlgoInstance {
     fn name(&self) -> &'static str {
         "C-ABI-AlgoInstance"
@@ -286,7 +324,7 @@ impl InferenceBackend for AlgoInstance {
     }
 
     async fn detect_with_metadata(&self, frame: &FrameRef) -> Result<InferenceResult, InferError> {
-        let _guard = self.lock.lock().await;
+        // AlgoInstance 只在其所属 InferenceWorker OS 线程内访问，底层 session 不跨线程并发。
 
         // 清空上一轮可能残留的回调结果
         if let Ok(mut lock) = self.callback_slot.lock() {
@@ -354,7 +392,7 @@ impl InferenceBackend for AlgoInstance {
             }
         }
 
-        let abi = self.lib.abi();
+        let abi = self.raw_lib.lib().abi();
         let process_fn = abi.instance_process.ok_or_else(|| InferError::InvalidAbi {
             reason: "instance_process 为空".to_string(),
         })?;
@@ -870,10 +908,12 @@ pub const DEFAULT_ALGO_COOLDOWN_SECS: u64 = 60;
 struct LeaseState {
     /// 当前活跃租约持有者计数（运行中摄像头实例 + 离线短租任务）
     ref_count: usize,
-    /// 算力保活实例句柄（持有期间确保底层 NPU Context / Shared Worker 保持常驻预热）
-    warm_instance: Option<AlgoInstance>,
+    /// 绑定算法 session 的常驻 Worker（底层实例只在线程闭包中存在）
+    warm_instance: Option<InferenceWorker>,
     /// 冷却任务世代号（用于取消先前安排的延迟退火任务）
     cooldown_generation: u64,
+    /// 预热任务世代号（用于阻止包替换后旧任务回写新状态）
+    warmup_generation: u64,
     /// 并发预热完成同步通道（保存当前预热执行结果；新等待方随时可读取最新完成状态，杜绝丢通知挂起）
     warmup_watch: Option<tokio::sync::watch::Receiver<Option<Result<(), InferError>>>>,
 }
@@ -1110,6 +1150,7 @@ impl AlgoRegistry {
             if let Some(entry) = state.get_mut(&algo_id) {
                 // 标记旧世代任务失效，移出旧版本暖机实例，防止新版本被误判为 Hot
                 entry.cooldown_generation += 1;
+                entry.warmup_generation = entry.warmup_generation.wrapping_add(1);
                 // 重置预热同步通道，避免新租约误读旧通道
                 entry.warmup_watch = None;
                 entry.warm_instance.take()
@@ -1197,7 +1238,10 @@ impl AlgoRegistry {
 
         enum WarmupRole {
             AlreadyHot,
-            Leader(tokio::sync::watch::Sender<Option<Result<(), InferError>>>),
+            Leader(
+                tokio::sync::watch::Sender<Option<Result<(), InferError>>>,
+                u64,
+            ),
             Waiter(tokio::sync::watch::Receiver<Option<Result<(), InferError>>>),
         }
 
@@ -1213,6 +1257,7 @@ impl AlgoRegistry {
                     ref_count: 0,
                     warm_instance: None,
                     cooldown_generation: 0,
+                    warmup_generation: 0,
                     warmup_watch: None,
                 });
             entry.ref_count += 1;
@@ -1224,52 +1269,58 @@ impl AlgoRegistry {
                 if rx.borrow().is_none() && rx.has_changed().is_err() {
                     // 先前的预热任务异常终止（如 leader future 被取消），重新作为 Leader 预热
                     let (tx, new_rx) = tokio::sync::watch::channel(None);
+                    entry.warmup_generation = entry.warmup_generation.wrapping_add(1);
+                    let generation = entry.warmup_generation;
                     entry.warmup_watch = Some(new_rx);
-                    WarmupRole::Leader(tx)
+                    WarmupRole::Leader(tx, generation)
                 } else {
                     WarmupRole::Waiter(rx.clone())
                 }
             } else {
                 let (tx, rx) = tokio::sync::watch::channel(None);
+                entry.warmup_generation = entry.warmup_generation.wrapping_add(1);
+                let generation = entry.warmup_generation;
                 entry.warmup_watch = Some(rx);
-                WarmupRole::Leader(tx)
+                WarmupRole::Leader(tx, generation)
             }
         };
 
         match role {
             WarmupRole::AlreadyHot => {}
-            WarmupRole::Leader(warmup_tx) => {
+            WarmupRole::Leader(warmup_tx, warmup_generation) => {
                 tracing::info!(
                     algorithm_id = %algorithm_id,
                     "算法从冷态激活借出租约，预热 NPU 模型上下文"
                 );
                 let pkg_clone = pkg.clone();
                 let inst_id = format!("warm-lease-{algorithm_id}");
-                let warm_inst_res =
-                    tokio::task::spawn_blocking(move || pkg_clone.create_instance(&inst_id, None))
-                        .await;
+                let warm_worker_config = InferenceWorkerConfig {
+                    worker_name: inst_id.clone(),
+                    ..Default::default()
+                };
+                let warm_inst_res = tokio::task::spawn_blocking(move || {
+                    pkg_clone.create_worker(&inst_id, None, warm_worker_config)
+                })
+                .await;
 
                 let (warmup_res, inst_to_drop) = match warm_inst_res {
-                    Ok(Ok(inst)) => {
+                    Ok(Ok(worker)) => {
                         let mut state = self
                             .inner
                             .leases
                             .lock()
                             .expect("algo lease state lock poisoned");
-                        let to_drop = if let Some(entry) = state.get_mut(algorithm_id) {
-                            entry.warmup_watch = None;
-                            if entry.ref_count > 0 {
-                                entry.warm_instance = Some(inst);
-                                None
-                            } else {
-                                // 预热异步执行期间租约已被全部释放，无需保留常驻，立即退火
-                                Some(inst)
+                        let mut inst_to_drop = Some(worker);
+                        if let Some(entry) = state.get_mut(algorithm_id) {
+                            if entry.warmup_generation == warmup_generation {
+                                entry.warmup_watch = None;
+                                if entry.ref_count > 0 {
+                                    entry.warm_instance = inst_to_drop.take();
+                                }
                             }
-                        } else {
-                            Some(inst)
-                        };
+                        }
                         let _ = warmup_tx.send(Some(Ok(())));
-                        (Ok(()), to_drop)
+                        (Ok(()), inst_to_drop)
                     }
                     Ok(Err(e)) => {
                         let mut state = self
@@ -1278,7 +1329,9 @@ impl AlgoRegistry {
                             .lock()
                             .expect("algo lease state lock poisoned");
                         if let Some(entry) = state.get_mut(algorithm_id) {
-                            entry.warmup_watch = None;
+                            if entry.warmup_generation == warmup_generation {
+                                entry.warmup_watch = None;
+                            }
                             entry.ref_count = entry.ref_count.saturating_sub(1);
                         }
                         let _ = warmup_tx.send(Some(Err(e.clone())));
@@ -1294,7 +1347,9 @@ impl AlgoRegistry {
                             .lock()
                             .expect("algo lease state lock poisoned");
                         if let Some(entry) = state.get_mut(algorithm_id) {
-                            entry.warmup_watch = None;
+                            if entry.warmup_generation == warmup_generation {
+                                entry.warmup_watch = None;
+                            }
                             entry.ref_count = entry.ref_count.saturating_sub(1);
                         }
                         let _ = warmup_tx.send(Some(Err(e.clone())));
@@ -1743,6 +1798,7 @@ mod tests {
                         ref_count: 1,
                         warm_instance: None,
                         cooldown_generation: 0,
+                        warmup_generation: 0,
                         warmup_watch: None,
                     });
                 entry.ref_count = 1;

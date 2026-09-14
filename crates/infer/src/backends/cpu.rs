@@ -14,7 +14,7 @@ impl CpuBackend {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl InferenceBackend for CpuBackend {
     fn name(&self) -> &'static str {
         "CPU-Fallback"

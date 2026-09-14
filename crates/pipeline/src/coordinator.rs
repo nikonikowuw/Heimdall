@@ -568,19 +568,28 @@ impl TaskRuntimeCoordinator {
             let pkg = lease.package().clone();
             leases.push(lease);
 
-            let camera_id = params.camera_id.clone();
-            let algo_params = if inst.algo_params.is_null() {
+            let algorithm_type = pkg.manifest().algorithm_type.clone();
+            let worker_instance_id = params.camera_id.clone();
+            let worker_config_json = if inst.algo_params.is_null() {
                 None
             } else {
                 Some(inst.algo_params.to_string())
             };
-            let algorithm_type = pkg.manifest().algorithm_type.clone();
+            let worker_algorithm_id = inst.algorithm_id.clone();
             let instance_result = tokio::task::spawn_blocking(move || {
-                pkg.create_instance(&camera_id, algo_params.as_deref())
+                let worker_config = infer::InferenceWorkerConfig {
+                    worker_name: format!("infer-worker-{worker_algorithm_id}-{worker_instance_id}"),
+                    ..Default::default()
+                };
+                pkg.create_worker(
+                    &worker_instance_id,
+                    worker_config_json.as_deref(),
+                    worker_config,
+                )
             })
             .await;
-            let instance = match instance_result {
-                Ok(Ok(instance)) => instance,
+            let worker = match instance_result {
+                Ok(Ok(worker)) => worker,
                 Ok(Err(err)) => {
                     shutdown_workers(workers).await;
                     return Err(CoordinatorError::AlgorithmInstance {
@@ -592,7 +601,6 @@ impl TaskRuntimeCoordinator {
                     return Err(CoordinatorError::TaskJoin(err));
                 }
             };
-            let worker = infer::InferenceWorker::new(Arc::new(instance));
             let handle = worker.handle();
             instance_configs.push(crate::pump::WorkerInstanceConfig {
                 algorithm_id: inst.algorithm_id.clone(),
