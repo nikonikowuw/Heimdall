@@ -129,7 +129,7 @@
     "confirmCandidate": "Confirm Selection",
     "rejectMatch": "Mark as Stranger",
     "currentStatus": "Current Status",
-    "sortedBySimilarity": "Sorted by Cosine Similarity (High to Low)",
+    "sortedBySimilarity": "Sorted by Similarity (High to Low)",
     "compareView": "Side-by-Side Comparison",
     "noCandidates": "No candidates meeting threshold",
     "cancel": "Cancel"

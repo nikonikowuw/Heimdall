@@ -4,6 +4,11 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { motionTokens } from '@/lib/motionTokens'
+import {
+  denormalizeCosineSimilarity,
+  isCosineThresholdKey,
+  normalizeCosineSimilarity,
+} from '@/lib/similarity'
 import type { AlgoManifest } from '@/types'
 import { getLocalizedClassName } from './rulesStudioTypes'
 
@@ -415,6 +420,22 @@ export function AlgoParamDrawer({
                       }
 
                       if (isNum) {
+                        const isCosineThreshold = isCosineThresholdKey(key)
+                        const rawMin = typeof prop.minimum === 'number' ? prop.minimum : 0
+                        const rawMax = typeof prop.maximum === 'number' ? prop.maximum : 1
+                        const rawDefault = typeof prop.default === 'number' ? prop.default : rawMin
+                        const rawValue = typeof val === 'number' ? val : rawDefault
+                        const boundedRawValue = Math.min(rawMax, Math.max(rawMin, rawValue))
+                        const inputMin = isCosineThreshold
+                          ? normalizeCosineSimilarity(rawMin) * 100
+                          : rawMin
+                        const inputMax = isCosineThreshold
+                          ? normalizeCosineSimilarity(rawMax) * 100
+                          : rawMax
+                        const inputValue = isCosineThreshold
+                          ? normalizeCosineSimilarity(boundedRawValue) * 100
+                          : boundedRawValue
+
                         return (
                           <div key={key} className="space-y-1">
                             <div className="flex items-center justify-between">
@@ -422,21 +443,32 @@ export function AlgoParamDrawer({
                                 {title}
                               </span>
                               <span className="font-mono text-[11px] font-bold text-[var(--accent)]">
-                                {String(val ?? prop.default ?? 0)}
+                                {isCosineThreshold
+                                  ? `${inputValue.toFixed(1)}%`
+                                  : String(inputValue)}
                               </span>
                             </div>
                             <input
                               type="number"
-                              min={prop.minimum as number | undefined}
-                              max={prop.maximum as number | undefined}
-                              step={prop.type === 'integer' ? 1 : 0.05}
-                              value={typeof val === 'number' ? val : Number(prop.default ?? 0)}
+                              min={inputMin}
+                              max={inputMax}
+                              step={isCosineThreshold ? 0.5 : prop.type === 'integer' ? 1 : 0.05}
+                              value={inputValue}
                               onChange={(e) => {
-                                const n =
+                                const parsed =
                                   prop.type === 'integer'
-                                    ? parseInt(e.target.value, 10) || 0
-                                    : parseFloat(e.target.value) || 0
-                                setLocalParams((p) => ({ ...p, [key]: n }))
+                                    ? Number.parseInt(e.target.value, 10)
+                                    : Number(e.target.value)
+                                if (!Number.isFinite(parsed)) return
+
+                                const nextRawValue = isCosineThreshold
+                                  ? denormalizeCosineSimilarity(parsed / 100)
+                                  : parsed
+                                const boundedNextValue = Math.min(
+                                  rawMax,
+                                  Math.max(rawMin, nextRawValue),
+                                )
+                                setLocalParams((p) => ({ ...p, [key]: boundedNextValue }))
                               }}
                               className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                             />

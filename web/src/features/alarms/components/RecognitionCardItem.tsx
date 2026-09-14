@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { AlertCircle, Check, CheckCircle2, Users, X, XCircle, ZoomIn } from 'lucide-react'
 import { evidenceApi } from '../../../lib/api'
 import type { RecognitionRecord } from '../../../types'
+import { formatCosineSimilarityPercent } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
@@ -60,7 +61,7 @@ export function RecognitionCardItem({
   const statusConfig =
     STATUS_CONFIG[recognition.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.confirmed
   const StatusIcon = statusConfig.Icon
-  const simPct = ((recognition.similarity ?? 0) * 100).toFixed(0)
+  const simPct = formatCosineSimilarityPercent(recognition.similarity, 0)
 
   return (
     <div

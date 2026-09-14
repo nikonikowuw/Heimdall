@@ -3,6 +3,7 @@ import { Check, Users, X, ZoomIn } from 'lucide-react'
 import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import { evidenceApi } from '../../../lib/api'
 import type { FaceCandidateItem, RecognitionRecord } from '../../../types'
+import { formatCosineSimilarityPercent } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
@@ -240,13 +241,13 @@ export function RecognitionReviewModal({
                             setPreviewImage({
                               src: evidenceApi.getImageUrl(compareCandidate.photoRelPath),
                               title: `${t('card.candidateList')}: ${compareCandidate.subjectName}`,
-                              subtitle: `ID: ${compareCandidate.subjectId} · ${t('card.similarity')}: ${(compareCandidate.similarity * 100).toFixed(1)}%`,
+                              subtitle: `ID: ${compareCandidate.subjectId} · ${t('card.similarity')}: ${formatCosineSimilarityPercent(compareCandidate.similarity)}`,
                             })
                           }
                         }}
                       />
                       <span className="font-mono text-[10px] font-bold text-emerald-500">
-                        {(compareCandidate.similarity * 100).toFixed(1)}%
+                        {formatCosineSimilarityPercent(compareCandidate.similarity)}
                       </span>
                     </div>
                   </div>
@@ -269,7 +270,7 @@ export function RecognitionReviewModal({
               ) : (
                 <div className="space-y-2.5">
                   {candidates.map((cand, idx) => {
-                    const scorePct = (cand.similarity * 100).toFixed(1)
+                    const scorePct = formatCosineSimilarityPercent(cand.similarity)
                     const isComparing = compareCandidate?.faceId === cand.faceId
                     return (
                       <div

@@ -1,6 +1,11 @@
 import React from 'react'
 import { Check, ChevronRight, Cpu } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import {
+  denormalizeCosineSimilarity,
+  isCosineThresholdKey,
+  normalizeCosineSimilarity,
+} from '@/lib/similarity'
 import type { AlgoManifest } from '@/types'
 import { getLocalizedClassName } from './rulesStudioTypes'
 
@@ -269,22 +274,44 @@ export function AlgoSettingsSidebar({
                   (prop.maximum as number) <= 1
 
                 if (hasMinMax) {
-                  const numVal = typeof val === 'number' ? val : Number(prop.default ?? 0.5)
+                  const isCosineThreshold = isCosineThresholdKey(key)
+                  const rawMin = Number(prop.minimum ?? 0)
+                  const rawMax = Number(prop.maximum ?? 1)
+                  const rawDefault = Number(prop.default ?? rawMin)
+                  const rawValue = typeof val === 'number' ? val : rawDefault
+                  const boundedRawValue = Math.min(rawMax, Math.max(rawMin, rawValue))
+                  const displayValue = isCosineThreshold
+                    ? normalizeCosineSimilarity(boundedRawValue) * 100
+                    : boundedRawValue
+                  const displayMin = isCosineThreshold
+                    ? normalizeCosineSimilarity(rawMin) * 100
+                    : rawMin
+                  const displayMax = isCosineThreshold
+                    ? normalizeCosineSimilarity(rawMax) * 100
+                    : rawMax
                   return (
                     <div key={key} className="space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="font-medium text-[var(--text-secondary)]">{title}</span>
                         <span className="font-mono font-semibold text-[var(--accent)]">
-                          {(numVal * 100).toFixed(0)}%
+                          {displayValue.toFixed(isCosineThreshold ? 1 : 0)}%
                         </span>
                       </div>
                       <input
                         type="range"
-                        min={Number(prop.minimum ?? 0)}
-                        max={Number(prop.maximum ?? 1)}
-                        step={prop.type === 'integer' ? 1 : 0.05}
-                        value={numVal}
-                        onChange={(e) => onCustomAlgoParamChange?.(key, parseFloat(e.target.value))}
+                        min={displayMin}
+                        max={displayMax}
+                        step={isCosineThreshold ? 0.5 : prop.type === 'integer' ? 1 : 0.05}
+                        value={displayValue}
+                        onChange={(e) => {
+                          const parsed = Number(e.target.value)
+                          if (!Number.isFinite(parsed)) return
+                          const nextRawValue = isCosineThreshold
+                            ? denormalizeCosineSimilarity(parsed / 100)
+                            : parsed
+                          const boundedNextValue = Math.min(rawMax, Math.max(rawMin, nextRawValue))
+                          onCustomAlgoParamChange?.(key, boundedNextValue)
+                        }}
                         className="w-full cursor-pointer accent-[var(--accent)]"
                       />
                       {desc && <p className="text-[10px] text-[var(--text-muted)]">{desc}</p>}

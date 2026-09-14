@@ -129,7 +129,7 @@
     "confirmCandidate": "確認為此人",
     "rejectMatch": "標記為陌生人",
     "currentStatus": "當前狀態",
-    "sortedBySimilarity": "餘弦相似度由高至低排列",
+    "sortedBySimilarity": "相似度由高至低排列",
     "compareView": "並排對比",
     "noCandidates": "底庫無符合門檻的候選人",
     "cancel": "取消"
