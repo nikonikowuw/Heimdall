@@ -201,7 +201,7 @@ impl StartCameraPipelineParams {
                     reason: "algorithm_id 长度或字符非法".to_string(),
                 });
             }
-            if !seen.insert(algo_id.to_string()) {
+            if !seen.insert(algo_id) {
                 return Err(CoordinatorError::Validation {
                     reason: format!("存在重复的 algorithm_id: {algo_id}"),
                 });

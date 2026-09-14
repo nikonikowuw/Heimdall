@@ -330,13 +330,10 @@ impl PipelineManager {
         }
 
         let mut pipelines = self.pipelines.write().await;
-        if let Some(ctx) = pipelines.get(camera_id) {
-            return ctx.clone();
-        }
-
-        let ctx = Arc::new(CameraPipelineContext::new(camera_id));
-        pipelines.insert(camera_id.to_string(), ctx.clone());
-        ctx
+        pipelines
+            .entry(camera_id.to_string())
+            .or_insert_with(|| Arc::new(CameraPipelineContext::new(camera_id)))
+            .clone()
     }
 
     /// 获取某路摄像头的分析管线上下文（若不存在返回 None）

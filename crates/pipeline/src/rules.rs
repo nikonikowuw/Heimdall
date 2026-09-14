@@ -126,7 +126,7 @@ impl RuleEvaluator {
 
         let has_positive_rules = rules
             .iter()
-            .any(|r| r.role == DetectionRuleRole::Roi || r.role == DetectionRuleRole::Line);
+            .any(|r| matches!(r.role, DetectionRuleRole::Roi | DetectionRuleRole::Line));
 
         for obj in tracked_objects {
             let bottom_center = obj.bbox.bottom_center();
@@ -188,7 +188,7 @@ impl RuleEvaluator {
 
         let has_positive_rules = rules
             .iter()
-            .any(|r| r.role == DetectionRuleRole::Roi || r.role == DetectionRuleRole::Line);
+            .any(|r| matches!(r.role, DetectionRuleRole::Roi | DetectionRuleRole::Line));
 
         for obj in tracked_objects {
             // 人脸识别类任务的人员目标：若当前帧未检测到人脸（如背身、低头），

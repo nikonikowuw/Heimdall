@@ -217,20 +217,15 @@ impl AnalysisFpsGovernor {
             return true;
         }
 
-        match self.last_sampled_pts {
-            None => {
-                self.last_sampled_pts = Some(pts_ms);
-                true
-            }
-            Some(last_pts) => {
-                if pts_ms < last_pts || (pts_ms - last_pts) >= self.interval_ms {
-                    self.last_sampled_pts = Some(pts_ms);
-                    true
-                } else {
-                    false
-                }
-            }
+        let sample = match self.last_sampled_pts {
+            None => true,
+            Some(last_pts) => pts_ms < last_pts || (pts_ms - last_pts) >= self.interval_ms,
+        };
+
+        if sample {
+            self.last_sampled_pts = Some(pts_ms);
         }
+        sample
     }
 
     #[inline]

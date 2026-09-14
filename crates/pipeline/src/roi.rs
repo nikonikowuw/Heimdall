@@ -23,36 +23,30 @@ impl RoiAffineMapper {
 
     /// 将局部归一化边界框还原至全景归一化坐标
     pub fn map_bbox(&self, local_bbox: &BoundingBox) -> BoundingBox {
-        match self.roi {
-            None => *local_bbox,
-            Some(roi) => {
-                let roi_w = roi.x2 - roi.x1;
-                let roi_h = roi.y2 - roi.y1;
+        self.roi.map_or(*local_bbox, |roi| {
+            let roi_w = roi.x2 - roi.x1;
+            let roi_h = roi.y2 - roi.y1;
 
-                let x1 = (roi.x1 + local_bbox.x1 * roi_w).clamp(0.0, 1.0);
-                let y1 = (roi.y1 + local_bbox.y1 * roi_h).clamp(0.0, 1.0);
-                let x2 = (roi.x1 + local_bbox.x2 * roi_w).clamp(0.0, 1.0);
-                let y2 = (roi.y1 + local_bbox.y2 * roi_h).clamp(0.0, 1.0);
+            let x1 = (roi.x1 + local_bbox.x1 * roi_w).clamp(0.0, 1.0);
+            let y1 = (roi.y1 + local_bbox.y1 * roi_h).clamp(0.0, 1.0);
+            let x2 = (roi.x1 + local_bbox.x2 * roi_w).clamp(0.0, 1.0);
+            let y2 = (roi.y1 + local_bbox.y2 * roi_h).clamp(0.0, 1.0);
 
-                BoundingBox::new(x1, y1, x2, y2)
-            }
-        }
+            BoundingBox::new(x1, y1, x2, y2)
+        })
     }
 
     /// 将局部归一化坐标点还原至全景归一化坐标
     pub fn map_point(&self, local_pt: DetectionPoint) -> DetectionPoint {
-        match self.roi {
-            None => local_pt,
-            Some(roi) => {
-                let roi_w = (roi.x2 - roi.x1) as f64;
-                let roi_h = (roi.y2 - roi.y1) as f64;
+        self.roi.map_or(local_pt, |roi| {
+            let roi_w = (roi.x2 - roi.x1) as f64;
+            let roi_h = (roi.y2 - roi.y1) as f64;
 
-                let x = (roi.x1 as f64 + local_pt.x * roi_w).clamp(0.0, 1.0);
-                let y = (roi.y1 as f64 + local_pt.y * roi_h).clamp(0.0, 1.0);
+            let x = (roi.x1 as f64 + local_pt.x * roi_w).clamp(0.0, 1.0);
+            let y = (roi.y1 as f64 + local_pt.y * roi_h).clamp(0.0, 1.0);
 
-                DetectionPoint::new(x, y)
-            }
-        }
+            DetectionPoint::new(x, y)
+        })
     }
 }
 

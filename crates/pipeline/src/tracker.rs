@@ -183,7 +183,7 @@ impl SimpleTracker {
             }
 
             // 按 IoU 降序排列
-            matches.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+            matches.sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
 
             for (t_idx, d_idx, _) in matches {
                 if !matched_tracks[t_idx] && !matched_dets[d_idx] {
@@ -337,26 +337,28 @@ impl SimpleTracker {
         now_ms: i64,
         cooldown_ms: i64,
     ) -> bool {
-        let key = (track_id, target);
-        if let Some(&last_time) = self.alarm_cooldowns.get(&key) {
-            if now_ms - last_time < cooldown_ms {
-                return false;
+        use std::collections::hash_map::Entry;
+        match self.alarm_cooldowns.entry((track_id, target)) {
+            Entry::Occupied(mut entry) => {
+                if now_ms - *entry.get() < cooldown_ms {
+                    false
+                } else {
+                    entry.insert(now_ms);
+                    true
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(now_ms);
+                true
             }
         }
-        self.alarm_cooldowns.insert(key, now_ms);
-        true
     }
 }
 
 /// 计算两边界框的交并比 (IoU)
 fn compute_iou(a: &BoundingBox, b: &BoundingBox) -> f32 {
-    let inter_x1 = a.x1.max(b.x1);
-    let inter_y1 = a.y1.max(b.y1);
-    let inter_x2 = a.x2.min(b.x2);
-    let inter_y2 = a.y2.min(b.y2);
-
-    let inter_w = (inter_x2 - inter_x1).max(0.0);
-    let inter_h = (inter_y2 - inter_y1).max(0.0);
+    let inter_w = (a.x2.min(b.x2) - a.x1.max(b.x1)).max(0.0);
+    let inter_h = (a.y2.min(b.y2) - a.y1.max(b.y1)).max(0.0);
     let inter_area = inter_w * inter_h;
 
     let area_a = (a.x2 - a.x1).max(0.0) * (a.y2 - a.y1).max(0.0);

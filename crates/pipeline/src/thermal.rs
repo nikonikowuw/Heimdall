@@ -253,28 +253,28 @@ impl ThermalGuard {
 
     /// 读取所有配置热区的结温并提取最高热点温度（摄氏度）
     pub fn read_temperature(&self) -> Option<f32> {
-        let readings = self.sample_zones();
-        readings
-            .into_iter()
-            .map(|z| z.temp_celsius)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        self.zone_paths
+            .iter()
+            .filter_map(|path| read_soc_temperature(path))
+            .reduce(f32::max)
     }
 
     /// 采样所有热区
     pub fn sample_zones(&self) -> Vec<ThermalZoneInfo> {
-        let mut results = Vec::new();
-        for (idx, path) in self.zone_paths.iter().enumerate() {
-            if let Some(temp) = read_soc_temperature(path) {
+        self.zone_paths
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, path)| {
+                let temp = read_soc_temperature(path)?;
                 let name = read_zone_type(path).unwrap_or_else(|| format!("zone_{idx}"));
-                results.push(ThermalZoneInfo {
+                Some(ThermalZoneInfo {
                     id: idx,
                     name,
                     temp_celsius: temp,
                     path: path.clone(),
-                });
-            }
-        }
-        results
+                })
+            })
+            .collect()
     }
 
     /// 获取当前生效的热状态级别（只读查询）
@@ -314,10 +314,7 @@ impl ThermalGuard {
     /// 执行一次完整的热状态采样、防抖计算与闭环行动方案推导
     pub fn evaluate(&mut self) -> ThermalActionPlan {
         let readings = self.sample_zones();
-        let peak_temp = readings
-            .iter()
-            .map(|z| z.temp_celsius)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let peak_temp = readings.iter().map(|z| z.temp_celsius).reduce(f32::max);
 
         // 1. 传感器故障 / 无读数状态处理
         if peak_temp.is_none() {

@@ -357,24 +357,14 @@ impl MotionGate {
                         let cur_val = current_y[idx];
                         let ref_val = ref_frame[idx];
 
-                        let diff = (cur_val as i16 - ref_val as i16).unsigned_abs() as u8;
+                        let diff = cur_val.abs_diff(ref_val);
                         if diff >= threshold {
                             total_diff_pixels += 1;
 
                             // Mask 与 ROI 都是像素级有效性约束；直接通过线性索引查表，
                             // 消除重复的坐标转换乘法、bounds check 与 Option 闭包开销。
-                            let is_masked = match mask_slice {
-                                Some(m) => m[idx] != 0,
-                                None => false,
-                            };
-                            let is_in_roi = if has_roi {
-                                match roi_slice {
-                                    Some(r) => r[idx] != 0,
-                                    None => true,
-                                }
-                            } else {
-                                true
-                            };
+                            let is_masked = mask_slice.is_some_and(|m| m[idx] != 0);
+                            let is_in_roi = !has_roi || roi_slice.is_none_or(|r| r[idx] != 0);
                             if !is_masked && is_in_roi {
                                 cell_diff_count += 1;
                             }

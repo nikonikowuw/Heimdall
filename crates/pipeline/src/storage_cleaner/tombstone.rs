@@ -75,16 +75,12 @@ pub fn list_tombstone_files(evidence_root: &Path) -> Result<Vec<PathBuf>, Pipeli
         return Ok(Vec::new());
     }
 
-    let mut files = Vec::new();
-    let entries = fs::read_dir(&tombstone_dir)
-        .map_err(|e| PipelineError::Snapshot(format!("读取墓碑隔离区目录失败: {e}")))?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            files.push(path);
-        }
-    }
+    let files = fs::read_dir(&tombstone_dir)
+        .map_err(|e| PipelineError::Snapshot(format!("读取墓碑隔离区目录失败: {e}")))?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
     Ok(files)
 }
 
