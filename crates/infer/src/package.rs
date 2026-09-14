@@ -15,7 +15,9 @@ use crate::backend::{InferenceBackend, InferenceResult};
 use crate::c_abi::loader::{check_c_status, FaceExtraction, LoadedLib, RawAlgoLibrary};
 use crate::c_abi::types::*;
 use crate::error::InferError;
-use crate::sandbox::{find_entry_library, AlgoManifest, AlgoSandbox};
+use crate::sandbox::{
+    current_platform_id, find_entry_library, normalize_platform_id, AlgoManifest, AlgoSandbox,
+};
 
 /// 算法描述清单固定文件名
 pub const ALGO_MANIFEST_FILENAME: &str = "manifest.json";
@@ -37,27 +39,85 @@ impl AlgoPackage {
     ///
     /// 仅解析 Manifest、加载动态库并建立 C ABI 虚表会话，不重复执行昂贵耗时的六步沙箱前向推理自测。
     pub fn open(package_dir: &Path) -> Result<Self, InferError> {
-        let manifest_path = package_dir.join(ALGO_MANIFEST_FILENAME);
-        if !manifest_path.is_file() {
+        if package_dir.as_os_str().is_empty() {
             return Err(InferError::Execution {
-                reason: format!("缺少 {ALGO_MANIFEST_FILENAME} 文件: {:?}", package_dir),
+                reason: "算法包路径不能为空".to_string(),
             });
         }
 
-        let manifest_bytes = std::fs::read(&manifest_path).map_err(|e| InferError::Execution {
-            reason: format!("读取 {ALGO_MANIFEST_FILENAME} 失败: {e}"),
-        })?;
+        if package_dir.to_string_lossy().contains('\0') {
+            return Err(InferError::Execution {
+                reason: "算法包路径包含非法空字符 (Null Byte)".to_string(),
+            });
+        }
+
+        if !package_dir.is_dir() {
+            return Err(InferError::Execution {
+                reason: format!("算法包目录不存在: {:?}", package_dir),
+            });
+        }
+
+        let canonical_dir = package_dir
+            .canonicalize()
+            .map_err(|e| InferError::Execution {
+                reason: format!("规范化算法包路径失败: {e}"),
+            })?;
+
+        let manifest_path = canonical_dir.join(ALGO_MANIFEST_FILENAME);
+        if !manifest_path.is_file() {
+            return Err(InferError::Execution {
+                reason: format!("缺少 {ALGO_MANIFEST_FILENAME} 文件: {:?}", canonical_dir),
+            });
+        }
+
+        let canonical_manifest =
+            manifest_path
+                .canonicalize()
+                .map_err(|e| InferError::Execution {
+                    reason: format!("规范化 {ALGO_MANIFEST_FILENAME} 失败: {e}"),
+                })?;
+
+        if !canonical_manifest.starts_with(&canonical_dir) {
+            return Err(InferError::Execution {
+                reason: format!(
+                    "检测到符号链接路径逃逸: {ALGO_MANIFEST_FILENAME} 指向算法包目录外部 ({:?})",
+                    canonical_manifest
+                ),
+            });
+        }
+
+        let manifest_bytes =
+            std::fs::read(&canonical_manifest).map_err(|e| InferError::Execution {
+                reason: format!("读取 {ALGO_MANIFEST_FILENAME} 失败: {e}"),
+            })?;
         let manifest: AlgoManifest =
             serde_json::from_slice(&manifest_bytes).map_err(|e| InferError::Execution {
                 reason: format!("解析 {ALGO_MANIFEST_FILENAME} 格式失败: {e}"),
             })?;
 
-        let entry_lib = find_entry_library(package_dir, &manifest.algorithm_id)?;
+        // 强校验 Manifest 各字段合法性，严格防御 Manifest 路径穿越
+        manifest.validate().map_err(|e| match e {
+            InferError::SandboxValidation { reason, .. } => InferError::Execution { reason },
+            other => other,
+        })?;
+
+        let cur_platform = current_platform_id();
+        let target_platform = normalize_platform_id(&manifest.platform_id);
+        if target_platform != cur_platform {
+            return Err(InferError::Execution {
+                reason: format!(
+                    "平台架构不匹配: 本机环境为 [{cur_platform}], 算法包声明为 [{}]",
+                    manifest.platform_id
+                ),
+            });
+        }
+
+        let entry_lib = find_entry_library(&canonical_dir, &manifest.algorithm_id)?;
 
         let loaded_lib = Arc::new(LoadedLib::load(&entry_lib)?);
         let raw_lib = Arc::new(RawAlgoLibrary::open(
             loaded_lib.clone(),
-            package_dir,
+            &canonical_dir,
             &manifest.platform_id,
         )?);
 
@@ -73,7 +133,7 @@ impl AlgoPackage {
 
         Ok(Self {
             manifest,
-            package_dir: package_dir.to_path_buf(),
+            package_dir: canonical_dir,
             lib: loaded_lib,
             raw_lib,
         })
@@ -727,54 +787,69 @@ fn parse_alarm_objects(json_str: &str) -> Result<Vec<Detection>, InferError> {
         .collect())
 }
 
-/// 计算目录下所有文件的总字节大小
+/// 计算目录下所有文件的总字节大小（使用 std::fs::symlink_metadata 防御符号链接逃逸与无限循环）
 pub fn compute_dir_size(path: &Path) -> i64 {
-    let mut total = 0i64;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
             let p = entry.path();
-            if p.is_file() {
-                if let Ok(meta) = p.metadata() {
-                    total += meta.len() as i64;
-                }
-            } else if p.is_dir() {
-                total += compute_dir_size(&p);
+            let meta = std::fs::symlink_metadata(&p).ok()?;
+            Some((p, meta))
+        })
+        .map(|(p, meta)| {
+            if meta.is_dir() {
+                compute_dir_size(&p)
+            } else {
+                meta.len() as i64
             }
-        }
-    }
-    total
+        })
+        .sum()
 }
 
-/// 发现指定搜索路径下的所有潜在算法包目录（必须包含 manifest.json，自动执行规范化去重）
+/// 发现指定搜索路径下的所有潜在算法包目录（必须包含 manifest.json，自动执行规范化去重与防逃逸过滤）
 pub fn discover_package_dirs(search_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut results = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for base in search_dirs {
-        if !base.is_dir() {
+        let Ok(canonical_base) = base.canonicalize() else {
+            continue;
+        };
+        if !canonical_base.is_dir() {
             continue;
         }
-        if let Ok(entries) = std::fs::read_dir(base) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_dir() {
-                    if p.join(ALGO_MANIFEST_FILENAME).is_file() {
-                        let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
-                        if seen.insert(canonical) {
-                            results.push(p);
-                        }
-                    } else if let Ok(sub_entries) = std::fs::read_dir(&p) {
-                        for sub_entry in sub_entries.flatten() {
-                            let sub_p = sub_entry.path();
-                            if sub_p.is_dir() && sub_p.join(ALGO_MANIFEST_FILENAME).is_file() {
-                                let canonical =
-                                    sub_p.canonicalize().unwrap_or_else(|_| sub_p.clone());
-                                if seen.insert(canonical) {
-                                    results.push(sub_p);
-                                }
-                            }
-                        }
-                    }
+        let Ok(entries) = std::fs::read_dir(&canonical_base) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(canonical_p) = entry.path().canonicalize() else {
+                continue;
+            };
+            if !canonical_p.starts_with(&canonical_base) || !canonical_p.is_dir() {
+                continue;
+            }
+            if canonical_p.join(ALGO_MANIFEST_FILENAME).is_file() {
+                if seen.insert(canonical_p.clone()) {
+                    results.push(canonical_p);
+                }
+                continue;
+            }
+            let Ok(sub_entries) = std::fs::read_dir(&canonical_p) else {
+                continue;
+            };
+            for sub_entry in sub_entries.flatten() {
+                let Ok(canonical_sub) = sub_entry.path().canonicalize() else {
+                    continue;
+                };
+                if canonical_sub.starts_with(&canonical_base)
+                    && canonical_sub.is_dir()
+                    && canonical_sub.join(ALGO_MANIFEST_FILENAME).is_file()
+                    && seen.insert(canonical_sub.clone())
+                {
+                    results.push(canonical_sub);
                 }
             }
         }

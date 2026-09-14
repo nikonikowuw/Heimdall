@@ -56,6 +56,157 @@ pub struct AlgoManifest {
     pub min_adapter_version: Option<String>,
 }
 
+impl AlgoManifest {
+    /// 校验 Manifest 各字段的合法性，严格防御路径穿越与畸形数据注入
+    pub fn validate(&self) -> Result<(), InferError> {
+        let step = "2.解析 Manifest 与平台匹配";
+        if self.manifest_version != 1 {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!("不支持的 manifest_version: {}", self.manifest_version),
+            });
+        }
+
+        Self::validate_algorithm_id(&self.algorithm_id, step)?;
+        Self::validate_version(&self.version, step)?;
+        Self::validate_name(&self.name, step)?;
+        Self::validate_identifier("algorithm_type", &self.algorithm_type, 31, step)?;
+        Self::validate_identifier("alarm_type_id", &self.alarm_type_id, 63, step)?;
+        Self::validate_platform_id(&self.platform_id, step)?;
+
+        Ok(())
+    }
+
+    /// 校验 algorithm_id
+    pub fn validate_algorithm_id(id: &str, step: &str) -> Result<(), InferError> {
+        Self::validate_identifier("algorithm_id", id, 63, step)
+    }
+
+    /// 校验 version
+    pub fn validate_version(ver: &str, step: &str) -> Result<(), InferError> {
+        if ver.is_empty() {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: "Manifest 中 'version' 不能为空".to_string(),
+            });
+        }
+        if ver.len() > 31 {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!(
+                    "Manifest 中 'version' 长度超过 C ABI 上限 (最大 31 字符, 实际 {} 字符)",
+                    ver.len()
+                ),
+            });
+        }
+        // 严格防路径穿越，禁止包含 ..、/、\、以及单纯由点构成的路径组件
+        if ver.contains("..") || ver.contains('/') || ver.contains('\\') || ver == "." {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!("Manifest 中 'version' [{ver}] 包含路径穿越组件"),
+            });
+        }
+        // 仅允许标准 SemVer 字符集: ASCII 字母、数字、点、短横线、下划线、加号
+        if !ver
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_' || b == b'+')
+        {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!("Manifest 中 'version' [{ver}] 包含非法字符"),
+            });
+        }
+        Ok(())
+    }
+
+    /// 校验 name 字段
+    pub fn validate_name(name: &str, step: &str) -> Result<(), InferError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: "Manifest 中 'name' 字段不能为空".to_string(),
+            });
+        }
+        if trimmed.contains('\0') {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: "Manifest 中 'name' 字段包含非法空字符 (Null Byte)".to_string(),
+            });
+        }
+        if trimmed.len() > 128 {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!(
+                    "Manifest 中 'name' 字段过长 (最大 128 字符, 实际 {} 字符)",
+                    trimmed.len()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// 校验普通标识符 (algorithm_type / alarm_type_id)
+    pub fn validate_identifier(
+        field: &str,
+        val: &str,
+        max_len: usize,
+        step: &str,
+    ) -> Result<(), InferError> {
+        if val.is_empty() {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!("Manifest 中 '{field}' 不能为空"),
+            });
+        }
+        if val.len() > max_len {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!(
+                    "Manifest 中 '{field}' 长度超过 C ABI 上限 (最大 {max_len} 字符, 实际 {} 字符)",
+                    val.len()
+                ),
+            });
+        }
+        if !val
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!("Manifest 中 '{field}' [{val}] 包含非法字符或路径穿越组件"),
+            });
+        }
+        Ok(())
+    }
+
+    /// 校验 platform_id
+    pub fn validate_platform_id(id: &str, step: &str) -> Result<(), InferError> {
+        if id.is_empty() {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: "Manifest 中 'platform_id' 不能为空".to_string(),
+            });
+        }
+        if id.len() > 64 {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!(
+                    "Manifest 中 'platform_id' 长度过长 (最大 64 字符, 实际 {} 字符)",
+                    id.len()
+                ),
+            });
+        }
+        if id.contains("..") || id.contains('/') || id.contains('\\') || id.contains('\0') {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: format!("Manifest 中 'platform_id' [{id}] 包含路径穿越组件"),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// 算法包自检结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfTestReport {
@@ -79,6 +230,20 @@ impl AlgoSandbox {
         use_subprocess: bool,
     ) -> Result<AlgoManifest, InferError> {
         let step = "1.路径防穿透与结构检查";
+        if package_dir.as_os_str().is_empty() {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: "算法包路径不能为空".to_string(),
+            });
+        }
+
+        if package_dir.to_string_lossy().contains('\0') {
+            return Err(InferError::SandboxValidation {
+                step: step.to_string(),
+                reason: "算法包路径包含非法空字符 (Null Byte)".to_string(),
+            });
+        }
+
         if !package_dir.exists() || !package_dir.is_dir() {
             return Err(InferError::SandboxValidation {
                 step: step.to_string(),
@@ -94,30 +259,46 @@ impl AlgoSandbox {
                     reason: format!("规范化算法包路径失败: {e}"),
                 })?;
 
-        // 检查核心必备文件
-        let manifest_path = canonical_dir.join(ALGO_MANIFEST_FILENAME);
-        if !manifest_path.is_file() {
-            return Err(InferError::SandboxValidation {
-                step: step.to_string(),
-                reason: format!("缺少 {ALGO_MANIFEST_FILENAME} 文件"),
-            });
-        }
+        // 检查核心必备文件并严格防御符号链接逃逸出算法包目录
+        let check_contained_entry = |name: &str, is_dir: bool| -> Result<PathBuf, InferError> {
+            let p = canonical_dir.join(name);
+            let is_valid = if is_dir { p.is_dir() } else { p.is_file() };
+            if !is_valid {
+                let reason = match name {
+                    "lib" => "缺少 lib/ 动态库目录".to_string(),
+                    ALGO_MANIFEST_FILENAME => format!("缺少 {ALGO_MANIFEST_FILENAME} 文件"),
+                    "testimage.jpg" => "缺少内置自测图 testimage.jpg".to_string(),
+                    other => format!("缺少 {other} 文件"),
+                };
+                return Err(InferError::SandboxValidation {
+                    step: step.to_string(),
+                    reason,
+                });
+            }
 
-        let lib_dir = canonical_dir.join("lib");
-        if !lib_dir.is_dir() {
-            return Err(InferError::SandboxValidation {
-                step: step.to_string(),
-                reason: "缺少 lib/ 动态库目录".to_string(),
-            });
-        }
+            let canonical_p = p
+                .canonicalize()
+                .map_err(|e| InferError::SandboxValidation {
+                    step: step.to_string(),
+                    reason: format!("规范化 {name} 物理路径失败: {e}"),
+                })?;
 
-        let testimage_path = canonical_dir.join("testimage.jpg");
-        if !testimage_path.is_file() {
-            return Err(InferError::SandboxValidation {
-                step: step.to_string(),
-                reason: "缺少内置自测图 testimage.jpg".to_string(),
-            });
-        }
+            if !canonical_p.starts_with(&canonical_dir) {
+                return Err(InferError::SandboxValidation {
+                    step: step.to_string(),
+                    reason: format!(
+                        "检测到符号链接路径逃逸: {name} 指向算法包目录外部 ({:?})",
+                        canonical_p
+                    ),
+                });
+            }
+
+            Ok(canonical_p)
+        };
+
+        let manifest_path = check_contained_entry(ALGO_MANIFEST_FILENAME, false)?;
+        let _lib_dir = check_contained_entry("lib", true)?;
+        let _testimage_path = check_contained_entry("testimage.jpg", false)?;
 
         let step = "2.解析 Manifest 与平台匹配";
         let manifest_str =
@@ -132,12 +313,8 @@ impl AlgoSandbox {
                 reason: format!("{ALGO_MANIFEST_FILENAME} 格式非法: {e}"),
             })?;
 
-        if manifest.manifest_version != 1 {
-            return Err(InferError::SandboxValidation {
-                step: step.to_string(),
-                reason: format!("不支持的 manifest_version: {}", manifest.manifest_version),
-            });
-        }
+        // 强校验 Manifest 各元数据字段合法性（严防路径穿越与畸形字段注入）
+        manifest.validate()?;
 
         let cur_platform = current_platform_id();
         let target_platform = normalize_platform_id(&manifest.platform_id);
@@ -154,7 +331,24 @@ impl AlgoSandbox {
         let step = "3.Config Schema 格式校验";
         let schema_path = canonical_dir.join("config.schema.json");
         if schema_path.exists() {
-            let schema_str = std::fs::read_to_string(&schema_path).map_err(|e| {
+            let canonical_schema =
+                schema_path
+                    .canonicalize()
+                    .map_err(|e| InferError::SandboxValidation {
+                        step: step.to_string(),
+                        reason: format!("规范化 config.schema.json 失败: {e}"),
+                    })?;
+            if !canonical_schema.starts_with(&canonical_dir) {
+                return Err(InferError::SandboxValidation {
+                    step: step.to_string(),
+                    reason: format!(
+                        "检测到符号链接路径逃逸: config.schema.json 指向算法包目录外部 ({:?})",
+                        canonical_schema
+                    ),
+                });
+            }
+
+            let schema_str = std::fs::read_to_string(&canonical_schema).map_err(|e| {
                 InferError::SandboxValidation {
                     step: step.to_string(),
                     reason: format!("读取 config.schema.json 失败: {e}"),
@@ -416,50 +610,103 @@ impl AlgoSandbox {
     }
 }
 
-/// 查找算法包动态库文件
+/// 查找算法包动态库文件（严格杜绝路径穿越与符号链接逃逸）
 pub fn find_entry_library(package_dir: &Path, algorithm_id: &str) -> Result<PathBuf, InferError> {
-    let lib_dir = package_dir.join("lib");
-    let ext = if cfg!(target_os = "macos") {
-        "dylib"
-    } else {
-        "so"
-    };
-    let alt_ext = if ext == "dylib" { "so" } else { "dylib" };
+    // 1. 防路径穿越强校验：algorithm_id 必须为合法的非空安全标识符
+    AlgoManifest::validate_algorithm_id(algorithm_id, "定位动态库")?;
 
-    // 优先尝试宿主原生命名的动态库，再尝试异构目标平台的命名
-    for candidate_ext in [ext, alt_ext] {
-        let candidate = lib_dir.join(format!("lib{algorithm_id}.{candidate_ext}"));
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
+    let canonical_pkg = package_dir
+        .canonicalize()
+        .map_err(|e| InferError::SandboxValidation {
+            step: "定位动态库".to_string(),
+            reason: format!("规范化算法包路径失败: {e}"),
+        })?;
+
+    let lib_dir = canonical_pkg.join("lib");
+    if !lib_dir.is_dir() {
+        return Err(InferError::SandboxValidation {
+            step: "定位动态库".to_string(),
+            reason: format!("动态库目录不存在: {:?}", lib_dir),
+        });
     }
 
+    let canonical_lib_dir = lib_dir
+        .canonicalize()
+        .map_err(|e| InferError::SandboxValidation {
+            step: "定位动态库".to_string(),
+            reason: format!("规范化 lib/ 目录路径失败: {e}"),
+        })?;
+
+    if !canonical_lib_dir.starts_with(&canonical_pkg) {
+        return Err(InferError::SandboxValidation {
+            step: "定位动态库".to_string(),
+            reason: format!(
+                "检测到 lib/ 目录符号链接逃逸出算法包: {:?}",
+                canonical_lib_dir
+            ),
+        });
+    }
+
+    let (ext, alt_ext) = if cfg!(target_os = "macos") {
+        ("dylib", "so")
+    } else {
+        ("so", "dylib")
+    };
+
+    // 优先尝试宿主原生命名的动态库，再尝试异构目标平台的命名
+    let mut candidate_file = [ext, alt_ext].into_iter().find_map(|candidate_ext| {
+        let candidate = canonical_lib_dir.join(format!("lib{algorithm_id}.{candidate_ext}"));
+        candidate.is_file().then_some(candidate)
+    });
+
     // 扫描 lib/ 目录下的匹配文件（优先宿主原生扩展名，再回退异构扩展名）
-    if let Ok(entries) = std::fs::read_dir(&lib_dir) {
-        let mut fallback = None;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(e) = path.extension() {
-                if e == ext {
-                    return Ok(path);
+    if candidate_file.is_none() {
+        if let Ok(entries) = std::fs::read_dir(&canonical_lib_dir) {
+            let mut fallback = None;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(extension) = path.extension() else {
+                    continue;
+                };
+                if extension == ext {
+                    candidate_file = Some(path);
+                    break;
                 }
-                if e == alt_ext && fallback.is_none() {
+                if extension == alt_ext && fallback.is_none() {
                     fallback = Some(path);
                 }
             }
-        }
-        if let Some(path) = fallback {
-            return Ok(path);
+            candidate_file = candidate_file.or(fallback);
         }
     }
 
-    Err(InferError::SandboxValidation {
+    let found_path = candidate_file.ok_or_else(|| InferError::SandboxValidation {
         step: "定位动态库".to_string(),
         reason: format!(
             "在 {:?} 中未找到动态库文件 (*.{} / *.{})",
-            lib_dir, ext, alt_ext
+            canonical_lib_dir, ext, alt_ext
         ),
-    })
+    })?;
+
+    // 严防动态库物理路径符号链接逃逸出算法包目录
+    let canonical_found = found_path
+        .canonicalize()
+        .map_err(|e| InferError::SandboxValidation {
+            step: "定位动态库".to_string(),
+            reason: format!("规范化动态库路径失败: {e}"),
+        })?;
+
+    if !canonical_found.starts_with(&canonical_pkg) {
+        return Err(InferError::SandboxValidation {
+            step: "定位动态库".to_string(),
+            reason: format!(
+                "动态库物理路径逃逸出算法包目录 (检测到符号链接逃逸): {:?}",
+                canonical_found
+            ),
+        });
+    }
+
+    Ok(canonical_found)
 }
 
 /// 非 macOS 平台开发/回退自测使用的软件 RGB24 转 NV12 转换器

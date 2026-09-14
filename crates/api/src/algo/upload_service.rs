@@ -204,9 +204,18 @@ pub fn process_uploaded_package_archive_sync(
         }
     };
 
-    let target_dir = PathBuf::from("var/packages")
+    let base_packages_dir = PathBuf::from("var/packages");
+    let target_dir = base_packages_dir
         .join(&validated_manifest.algorithm_id)
         .join(&validated_manifest.version);
+
+    if !target_dir.starts_with(&base_packages_dir) {
+        return Err(Box::new(ProcessedUploadError {
+            failed_idx: 1,
+            message: "目标安装路径逃逸出 var/packages 目录 (拦截路径穿越)".to_string(),
+            manifest: Some(validated_manifest),
+        }));
+    }
 
     if target_dir.exists() {
         let _ = std::fs::remove_dir_all(&target_dir);

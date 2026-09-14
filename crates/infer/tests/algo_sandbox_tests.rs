@@ -282,3 +282,179 @@ async fn test_algo_package_open_without_sandbox_self_test() {
     let nonexistent = pkg_path.join("nonexistent_sub_path");
     assert!(infer::package::AlgoPackage::open(&nonexistent).is_err());
 }
+
+#[test]
+fn test_sandbox_rejects_empty_and_null_byte_package_paths() {
+    let empty_path = Path::new("");
+    let res = AlgoSandbox::validate_package(empty_path, false);
+    assert!(res.is_err());
+    let err = res.expect_err("空路径必须报错");
+    assert_eq!(err.error_code(), 30016);
+    assert!(err.to_string().contains("1.路径防穿透与结构检查"));
+
+    let null_path = Path::new("algo-packages/\0invalid");
+    let res_null = AlgoSandbox::validate_package(null_path, false);
+    assert!(res_null.is_err());
+}
+
+#[test]
+fn test_sandbox_rejects_manifest_path_traversal_algorithm_id() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "heimdall_test_traversal_algo_id_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    std::fs::create_dir_all(temp_dir.join("lib")).expect("创建 lib 目录失败");
+    std::fs::write(temp_dir.join("testimage.jpg"), b"fake_jpg_content")
+        .expect("写入 testimage.jpg 失败");
+
+    let malicious_ids = [
+        "../../etc/passwd",
+        "../something",
+        "/etc/passwd",
+        "foo/bar",
+        "foo\\bar",
+        "..",
+        ".",
+        "",
+        "foo bar",
+        "id_with_null\0_byte",
+        "a_very_long_algorithm_id_exceeding_sixty_three_bytes_limit_c_abi_maximum_length_overflow",
+    ];
+
+    for bad_id in malicious_ids {
+        let manifest_content = serde_json::json!({
+            "manifest_version": 1,
+            "algorithm_id": bad_id,
+            "version": "1.0.0",
+            "name": "Malicious Algo",
+            "algorithm_type": "object_detection",
+            "alarm_type_id": "region_invasion",
+            "platform_id": infer::sandbox::current_platform_id(),
+        });
+        std::fs::write(
+            temp_dir.join("manifest.json"),
+            serde_json::to_string(&manifest_content).expect("序列化失败"),
+        )
+        .expect("写入 manifest.json 失败");
+
+        let res = AlgoSandbox::validate_package(&temp_dir, false);
+        assert!(
+            res.is_err(),
+            "必须拦截包含路径穿越的 algorithm_id: {bad_id}"
+        );
+        let err = res.expect_err("应当报错");
+        assert!(
+            err.to_string().contains("2.解析 Manifest 与平台匹配"),
+            "错误必须发生在第 2 步: {err}"
+        );
+
+        // 验证 find_entry_library 直接拦截
+        let entry_res = infer::sandbox::find_entry_library(&temp_dir, bad_id);
+        assert!(
+            entry_res.is_err(),
+            "find_entry_library 必须拦截非法 algorithm_id: {bad_id}"
+        );
+
+        // 验证 AlgoPackage::open 直接拦截
+        let open_res = infer::package::AlgoPackage::open(&temp_dir);
+        assert!(
+            open_res.is_err(),
+            "AlgoPackage::open 必须拦截非法 algorithm_id: {bad_id}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_sandbox_rejects_manifest_path_traversal_version() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "heimdall_test_traversal_version_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    std::fs::create_dir_all(temp_dir.join("lib")).expect("创建 lib 目录失败");
+    std::fs::write(temp_dir.join("testimage.jpg"), b"fake_jpg_content")
+        .expect("写入 testimage.jpg 失败");
+
+    let malicious_versions = [
+        "../../etc",
+        "../something",
+        "/etc",
+        "1.0/2.0",
+        "1.0\\2.0",
+        "..",
+        ".",
+        "",
+        "1.0.0 extra_space",
+        "version_longer_than_thirty_one_bytes_c_abi_limit_overflow",
+    ];
+
+    for bad_ver in malicious_versions {
+        let manifest_content = serde_json::json!({
+            "manifest_version": 1,
+            "algorithm_id": "valid_algo_id",
+            "version": bad_ver,
+            "name": "Malicious Version Algo",
+            "algorithm_type": "object_detection",
+            "alarm_type_id": "region_invasion",
+            "platform_id": infer::sandbox::current_platform_id(),
+        });
+        std::fs::write(
+            temp_dir.join("manifest.json"),
+            serde_json::to_string(&manifest_content).expect("序列化失败"),
+        )
+        .expect("写入 manifest.json 失败");
+
+        let res = AlgoSandbox::validate_package(&temp_dir, false);
+        assert!(res.is_err(), "必须拦截包含路径穿越的 version: {bad_ver}");
+        let err = res.expect_err("应当报错");
+        assert!(
+            err.to_string().contains("2.解析 Manifest 与平台匹配"),
+            "错误必须发生在第 2 步: {err}"
+        );
+
+        let open_res = infer::package::AlgoPackage::open(&temp_dir);
+        assert!(
+            open_res.is_err(),
+            "AlgoPackage::open 必须拦截非法 version: {bad_ver}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_sandbox_rejects_symlink_escape() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "heimdall_test_symlink_escape_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    let outside_dir = std::env::temp_dir().join(format!(
+        "heimdall_test_outside_target_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("创建 temp_dir 失败");
+    std::fs::create_dir_all(&outside_dir).expect("创建 outside_dir 失败");
+
+    let outside_manifest = outside_dir.join("escaped_manifest.json");
+    std::fs::write(&outside_manifest, b"{}").expect("写入 outside_manifest 失败");
+
+    // 创建指向目录外部的 manifest.json 符号链接
+    let symlink_manifest = temp_dir.join("manifest.json");
+    std::os::unix::fs::symlink(&outside_manifest, &symlink_manifest)
+        .expect("创建 symlink_manifest 失败");
+    std::fs::create_dir_all(temp_dir.join("lib")).expect("创建 lib 目录失败");
+    std::fs::write(temp_dir.join("testimage.jpg"), b"img").expect("写入 testimage.jpg 失败");
+
+    let res = AlgoSandbox::validate_package(&temp_dir, false);
+    assert!(res.is_err(), "必须拦截符号链接逃逸的 manifest.json");
+    let err = res.expect_err("应当报错");
+    assert!(
+        err.to_string().contains("符号链接路径逃逸"),
+        "错误信息必须明确提示符号链接路径逃逸: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::remove_dir_all(&outside_dir);
+}
