@@ -24,7 +24,7 @@ use crate::pump::{AnalysisPump, AnalysisPumpConfig, MotionGateRuntimeConfig, Pum
 use crate::roi::RoiAffineMapper;
 use crate::rules::{RuleEvaluator, TriggeredAlarm};
 use crate::snapshot::{SnapshotConfig, SnapshotEngine, SnapshotResult};
-use crate::tracker::ByteTrack;
+use crate::tracker::{ByteTrack, TrackUpdateStatus};
 
 /// 单路摄像头管线运行时上下文
 pub struct CameraPipelineContext {
@@ -47,6 +47,8 @@ pub struct CameraPipelineContext {
     pub tracker: TokioMutex<ByteTrack>,
     /// 多算法独立 ByteTrack 跟踪器映射表 (algorithm_id -> ByteTrack)
     pub trackers: TokioMutex<HashMap<String, ByteTrack>>,
+    /// 多算法 tracker 与清理操作之间的会话代际。
+    pub(crate) tracking_generation: Arc<AtomicU64>,
     /// 每路摄像头按算法实例维护的最新活跃航迹快照 (algorithm_id -> Vec<TrackedObject>)
     pub current_tracks: TokioRwLock<HashMap<String, Vec<TrackedObject>>>,
     /// 局部特写预裁剪仿射变换映射器
@@ -83,6 +85,7 @@ impl CameraPipelineContext {
             snapshot_decoder: TokioMutex::new(None),
             tracker: TokioMutex::new(ByteTrack::new()),
             trackers: TokioMutex::new(HashMap::new()),
+            tracking_generation: Arc::new(AtomicU64::new(0)),
             current_tracks: TokioRwLock::new(HashMap::new()),
             roi_mapper: TokioRwLock::new(RoiAffineMapper::identity()),
             rules: Arc::new(TokioRwLock::new(Vec::new())),
@@ -142,6 +145,8 @@ impl Default for PipelineManager {
 /// 算法分析单帧处理结果
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisOutcome {
+    /// 本次输入是否真正推进了 tracker 和规则状态；迟到/拒绝结果为 false。
+    pub applied: bool,
     /// 当前活跃航迹对象
     pub tracked: Vec<TrackedObject>,
     /// 触发的违规告警集合 (针对 detection 类防范算法)
@@ -434,6 +439,99 @@ impl PipelineManager {
                 *fallback = None;
             }
         }
+    }
+
+    /// 清理一条摄像头会话的全部宿主航迹，并向订阅方发送空快照。
+    pub async fn clear_tracking(&self, camera_id: &str) {
+        let Some(ctx) = self.get_pipeline_context(camera_id).await else {
+            return;
+        };
+
+        // 偶数代际可写，奇数代际表示清理进行中。CAS 失败说明其他清理已接管。
+        let generation = ctx.tracking_generation.load(Ordering::Acquire);
+        if generation & 1 != 0
+            || ctx
+                .tracking_generation
+                .compare_exchange(
+                    generation,
+                    generation + 1,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_err()
+        {
+            return;
+        }
+        let algorithm_ids: Vec<String> = {
+            let mut trackers = ctx.trackers.lock().await;
+            for tracker in trackers.values_mut() {
+                tracker.clear();
+            }
+            ctx.tracker.lock().await.clear();
+            let mut current = ctx.current_tracks.write().await;
+            current.drain().map(|(id, _)| id).collect()
+        };
+        ctx.tracking_generation.fetch_add(1, Ordering::Release);
+
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        for algorithm_id in algorithm_ids {
+            self.publish_analysis_event(PipelineAnalysisEvent::Tracks(
+                crate::events::PipelineTrackEvent {
+                    camera_id: camera_id.to_string(),
+                    algorithm_id,
+                    timestamp,
+                    tracks: Vec::new(),
+                },
+            ));
+        }
+    }
+
+    /// 在连续推理失败时按源帧 PTS 清除已经超过 Lost 保留时长的算法航迹。
+    pub async fn expire_tracking_for_algo_at(
+        &self,
+        camera_id: &str,
+        algorithm_id: &str,
+        timestamp_ms: i64,
+    ) -> bool {
+        let Some(ctx) = self.get_pipeline_context(camera_id).await else {
+            return false;
+        };
+        let generation = ctx.tracking_generation.load(Ordering::Acquire);
+        if generation & 1 != 0 {
+            return false;
+        }
+        let expired = {
+            let mut trackers = ctx.trackers.lock().await;
+            if generation != ctx.tracking_generation.load(Ordering::Acquire) {
+                false
+            } else {
+                trackers
+                    .get_mut(algorithm_id)
+                    .is_some_and(|tracker| tracker.expire_if_stale_at(timestamp_ms))
+            }
+        };
+        if !expired || generation != ctx.tracking_generation.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let removed = {
+            let mut current = ctx.current_tracks.write().await;
+            if generation != ctx.tracking_generation.load(Ordering::Acquire) {
+                return false;
+            }
+            current.remove(algorithm_id).is_some()
+        };
+        if removed {
+            self.publish_analysis_event(PipelineAnalysisEvent::Tracks(
+                crate::events::PipelineTrackEvent {
+                    camera_id: camera_id.to_string(),
+                    algorithm_id: algorithm_id.to_string(),
+                    timestamp: timestamp_ms,
+                    tracks: Vec::new(),
+                },
+            ));
+        }
+        removed
     }
 
     /// 标记该路摄像头是否为主码流直接进行 AI 分析 (StreamMode::Main 模式)
@@ -778,65 +876,139 @@ impl PipelineManager {
         embeddings: Vec<Option<types::FaceEmbedding>>,
         timestamp_ms: i64,
     ) -> AnalysisOutcome {
+        self.process_detections_for_algo_with_embeddings_internal(
+            camera_id,
+            algorithm_id,
+            algorithm_kind.into(),
+            detections,
+            embeddings,
+            timestamp_ms,
+            None,
+        )
+        .await
+    }
+
+    /// 使用抽帧时捕获的会话代际处理结果，拒绝 SourceReset 前已在途的旧帧。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_detections_for_algo_with_embeddings_at_generation(
+        &self,
+        camera_id: &str,
+        algorithm_id: &str,
+        algorithm_kind: impl Into<types::AlgorithmKind>,
+        detections: Vec<Detection>,
+        embeddings: Vec<Option<types::FaceEmbedding>>,
+        timestamp_ms: i64,
+        expected_generation: u64,
+    ) -> AnalysisOutcome {
+        self.process_detections_for_algo_with_embeddings_internal(
+            camera_id,
+            algorithm_id,
+            algorithm_kind.into(),
+            detections,
+            embeddings,
+            timestamp_ms,
+            Some(expected_generation),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn process_detections_for_algo_with_embeddings_internal(
+        &self,
+        camera_id: &str,
+        algorithm_id: &str,
+        algorithm_kind: types::AlgorithmKind,
+        mut detections: Vec<Detection>,
+        embeddings: Vec<Option<types::FaceEmbedding>>,
+        timestamp_ms: i64,
+        expected_generation: Option<u64>,
+    ) -> AnalysisOutcome {
         let ctx = self.get_or_create_context(camera_id).await;
+        let generation = ctx.tracking_generation.load(Ordering::Acquire);
+        if generation & 1 != 0 || expected_generation.is_some_and(|expected| expected != generation)
+        {
+            return AnalysisOutcome::default();
+        }
 
-        // 1. 局部仿射映射至全景坐标系
+        // 1. 局部仿射映射至全景坐标系 (原地变换，避免多余堆分配)
         let mapper = *ctx.roi_mapper.read().await;
-        let global_detections: Vec<Detection> = detections
-            .into_iter()
-            .map(|mut det| {
-                det.bbox = mapper.map_bbox(&det.bbox);
-                if let Some(f) = &mut det.face {
-                    f.bbox = mapper.map_bbox(&f.bbox);
-                }
-                det
-            })
-            .collect();
+        for det in &mut detections {
+            det.bbox = mapper.map_bbox(&det.bbox);
+            if let Some(f) = &mut det.face {
+                f.bbox = mapper.map_bbox(&f.bbox);
+            }
+        }
+        let global_detections = detections;
+        let rules = ctx.rules.read().await.clone();
 
-        // 2. 独立算法实例的航迹关联更新
-        let mut trackers = ctx.trackers.lock().await;
-        let tracker = trackers
-            .entry(algorithm_id.to_string())
-            .or_insert_with(ByteTrack::new);
-        let tracked_objects =
-            tracker.update_with_embeddings_at(global_detections, embeddings, timestamp_ms);
+        // 2. 独立算法实例的航迹关联更新。所有锁内工作均为同步计算，避免持锁跨 await。
+        let (tracked_objects, alarms, captures) = {
+            let mut trackers = ctx.trackers.lock().await;
+            if generation != ctx.tracking_generation.load(Ordering::Acquire) {
+                return AnalysisOutcome::default();
+            }
+
+            let tracker = match trackers.get_mut(algorithm_id) {
+                Some(tracker) => tracker,
+                None => trackers.entry(algorithm_id.to_string()).or_default(),
+            };
+            let update = tracker.update_with_embeddings_at_result(
+                global_detections,
+                embeddings,
+                timestamp_ms,
+            );
+            if update.status != TrackUpdateStatus::Applied {
+                return AnalysisOutcome::default();
+            }
+
+            let tracked_objects = update.objects;
+            let (alarms, captures) = if algorithm_kind.is_recognition() {
+                let captures = ctx.rule_evaluator.evaluate_captures(
+                    &rules,
+                    &tracked_objects,
+                    tracker,
+                    timestamp_ms,
+                    5000,
+                );
+                (Vec::new(), captures)
+            } else {
+                let alarms = ctx.rule_evaluator.evaluate(
+                    &rules,
+                    &tracked_objects,
+                    tracker,
+                    timestamp_ms,
+                    5000,
+                );
+                (alarms, Vec::new())
+            };
+            (tracked_objects, alarms, captures)
+        };
+
+        // 清理/换流可能在 tracker 锁释放后发生，代际校验阻止旧结果回写公共快照。
+        if generation != ctx.tracking_generation.load(Ordering::Acquire) {
+            return AnalysisOutcome::default();
+        }
 
         // 同步更新最新航迹快照 (PRD R1.1: 维护活跃航迹快照)。高频快照不携带
         // backend-only embedding，识别抓拍仍使用下方 `tracked_objects` 原值。
-        {
-            let public_tracks: Vec<TrackedObject> = tracked_objects
-                .iter()
-                .map(TrackedObject::without_embedding)
-                .collect();
-            let mut current = ctx.current_tracks.write().await;
-            if public_tracks.is_empty() {
-                current.remove(algorithm_id);
-            } else {
-                current.insert(algorithm_id.to_string(), public_tracks);
-            }
+        let public_tracks: Vec<TrackedObject> = tracked_objects
+            .iter()
+            .map(TrackedObject::without_embedding)
+            .collect();
+        let mut current = ctx.current_tracks.write().await;
+        if generation != ctx.tracking_generation.load(Ordering::Acquire) {
+            return AnalysisOutcome::default();
+        }
+        if public_tracks.is_empty() {
+            current.remove(algorithm_id);
+        } else if let Some(existing) = current.get_mut(algorithm_id) {
+            *existing = public_tracks;
+        } else {
+            current.insert(algorithm_id.to_string(), public_tracks);
         }
 
-        // 3. 根据 algorithm_kind 区分责任流向
-        let rules = ctx.rules.read().await;
-        let kind = algorithm_kind.into();
-
-        let (alarms, captures) = if kind.is_recognition() {
-            let captures = ctx.rule_evaluator.evaluate_captures(
-                &rules,
-                &tracked_objects,
-                tracker,
-                timestamp_ms,
-                5000,
-            );
-            (Vec::new(), captures)
-        } else {
-            let alarms =
-                ctx.rule_evaluator
-                    .evaluate(&rules, &tracked_objects, tracker, timestamp_ms, 5000);
-            (alarms, Vec::new())
-        };
-
         AnalysisOutcome {
+            applied: true,
             tracked: tracked_objects,
             alarms,
             captures,
@@ -869,6 +1041,7 @@ impl PipelineManager {
         };
         if let Some(mut old) = old_pump {
             old.stop().await;
+            self.clear_tracking(camera_id).await;
         }
         self.pumps.write().await.insert(camera_id.to_string(), pump);
     }
@@ -948,14 +1121,16 @@ impl PipelineManager {
             let mut pumps = self.pumps.write().await;
             pumps.remove(camera_id)
         };
-        if let Some(mut pump) = old_pump {
+        let stopped = if let Some(mut pump) = old_pump {
             pump.stop().await;
             self.clear_decoded_ring(camera_id).await;
             tracing::info!(camera_id = %camera_id, "分析码流驱动泵已停止并从管理器注销");
             true
         } else {
             false
-        }
+        };
+        self.clear_tracking(camera_id).await;
+        stopped
     }
 
     /// 停止所有摄像头的分析驱动泵并等待回收
@@ -967,6 +1142,7 @@ impl PipelineManager {
         for (cam_id, mut pump) in old_pumps {
             pump.stop().await;
             self.clear_decoded_ring(&cam_id).await;
+            self.clear_tracking(&cam_id).await;
         }
         tracing::info!("已停止所有分析驱动泵并回收资源");
     }
@@ -1805,6 +1981,73 @@ mod tests {
             rec_outcome.alarms.is_empty(),
             "face_recognition 类别算法绝不产生违规告警"
         );
+    }
+
+    #[tokio::test]
+    async fn test_tracking_generation_and_expiry_clear_state() {
+        let manager = Arc::new(PipelineManager::new());
+        let cam_id = "cam_tracking_generation_test";
+        let mut events = manager.subscribe_analysis_events();
+        let det = types::Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            quality_score: None,
+            bbox: types::BoundingBox::new(0.1, 0.2, 0.3, 0.4),
+            face: None,
+        };
+
+        let first = manager
+            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det.clone()], 1000)
+            .await;
+        assert!(first.applied);
+        assert_eq!(manager.get_current_tracks(cam_id).await.len(), 1);
+
+        let stale = manager
+            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det.clone()], 900)
+            .await;
+        assert!(!stale.applied);
+        assert_eq!(manager.get_current_tracks(cam_id).await.len(), 1);
+
+        let ctx = manager.get_or_create_context(cam_id).await;
+        let old_generation = ctx.tracking_generation.load(Ordering::Acquire);
+        manager.clear_tracking(cam_id).await;
+        assert!(manager.get_current_tracks(cam_id).await.is_empty());
+        match events.recv().await.expect("tracking clear event") {
+            PipelineAnalysisEvent::Tracks(event) => assert!(event.tracks.is_empty()),
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let in_flight_old_result = manager
+            .process_detections_for_algo_with_embeddings_at_generation(
+                cam_id,
+                "algo_1",
+                "detection",
+                vec![det.clone()],
+                vec![None],
+                1_050,
+                old_generation,
+            )
+            .await;
+        assert!(!in_flight_old_result.applied);
+        assert!(manager.get_current_tracks(cam_id).await.is_empty());
+
+        let second = manager
+            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det], 1100)
+            .await;
+        assert!(second.applied);
+        assert_eq!(manager.get_current_tracks(cam_id).await.len(), 1);
+
+        assert!(
+            manager
+                .expire_tracking_for_algo_at(cam_id, "algo_1", 4_101)
+                .await
+        );
+        assert!(manager.get_current_tracks(cam_id).await.is_empty());
+        match events.recv().await.expect("tracking expiry event") {
+            PipelineAnalysisEvent::Tracks(event) => assert!(event.tracks.is_empty()),
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -608,6 +608,7 @@ fn decode_face_embedding(encoded: &str) -> Result<FaceEmbedding, InferError> {
 
 /// 从算法包输出的 alarm/detection JSON 中解析目标框与质量元数据。
 fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetection>, InferError> {
+    const MAX_RESULT_OBJECTS: usize = 256;
     #[derive(Deserialize, Default)]
     struct RawQuality {
         #[serde(default)]
@@ -657,7 +658,7 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
         face_bbox: Option<RawBBox>,
     }
 
-    let val: serde_json::Value =
+    let mut val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| InferError::JsonParse {
             reason: format!("JSON 语法错误: {e}"),
         })?;
@@ -672,44 +673,61 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
     }
 
     // 提取可能存在的人脸元数据 (faces 数组)，用于质量分反查缝合
-    let raw_faces: Vec<RawFaceItem> = val
-        .get("faces")
-        .and_then(|f| serde_json::from_value(f.clone()).ok())
-        .unwrap_or_default();
+    let raw_faces: Vec<RawFaceItem> = match val.get_mut("faces").map(serde_json::Value::take) {
+        Some(faces_val) => {
+            if let Some(faces) = faces_val.as_array() {
+                if faces.len() > MAX_RESULT_OBJECTS {
+                    return Err(InferError::JsonParse {
+                        reason: format!(
+                            "faces 目标数量 {} 超过上限 {}",
+                            faces.len(),
+                            MAX_RESULT_OBJECTS
+                        ),
+                    });
+                }
+            }
+            serde_json::from_value(faces_val).unwrap_or_default()
+        }
+        None => Vec::new(),
+    };
 
-    let objects_val = match val.get("objects") {
+    let objects_val = match val.get_mut("objects").map(serde_json::Value::take) {
         Some(objs) => objs,
-        None if val.is_array() => &val,
+        None if val.is_array() => val,
         None => {
             // 若没有 objects 但存在 faces 数组，向下兼容纯人脸识别信封
             if !raw_faces.is_empty() {
-                let mut detections = Vec::with_capacity(raw_faces.len());
-                for f in raw_faces {
-                    let raw_bbox = f.bbox.ok_or_else(|| InferError::JsonParse {
-                        reason: "人脸对象缺少有效 bbox 坐标字段".to_string(),
-                    })?;
-                    let bbox = raw_bbox.to_bounding_box()?;
-                    let confidence = f.detection_score.ok_or_else(|| InferError::JsonParse {
-                        reason: "人脸对象缺少有效 detection_score 置信度字段".to_string(),
-                    })?;
-                    if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
-                        return Err(InferError::JsonParse {
-                            reason: format!("人脸置信度非法: {confidence}"),
-                        });
-                    }
-                    let quality_score = f.quality.and_then(|q| q.score).map(|s| s.clamp(0.0, 1.0));
-                    detections.push(ParsedDetection {
-                        detection: Detection {
-                            class_id: 0,
-                            label: "face".to_string(),
-                            confidence,
-                            quality_score,
-                            bbox,
-                            face: None,
-                        },
-                        embedding: None,
-                    });
-                }
+                let detections = raw_faces
+                    .into_iter()
+                    .map(|f| {
+                        let raw_bbox = f.bbox.ok_or_else(|| InferError::JsonParse {
+                            reason: "人脸对象缺少有效 bbox 坐标字段".to_string(),
+                        })?;
+                        let bbox = raw_bbox.to_bounding_box()?;
+                        let confidence =
+                            f.detection_score.ok_or_else(|| InferError::JsonParse {
+                                reason: "人脸对象缺少有效 detection_score 置信度字段".to_string(),
+                            })?;
+                        if !(0.0..=1.0).contains(&confidence) {
+                            return Err(InferError::JsonParse {
+                                reason: format!("人脸置信度非法: {confidence}"),
+                            });
+                        }
+                        let quality_score =
+                            f.quality.and_then(|q| q.score).map(|s| s.clamp(0.0, 1.0));
+                        Ok(ParsedDetection {
+                            detection: Detection {
+                                class_id: 0,
+                                label: "face".to_string(),
+                                confidence,
+                                quality_score,
+                                bbox,
+                                face: None,
+                            },
+                            embedding: None,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 return Ok(detections);
             }
             return Err(InferError::JsonParse {
@@ -718,8 +736,20 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
         }
     };
 
+    if let Some(objects) = objects_val.as_array() {
+        if objects.len() > MAX_RESULT_OBJECTS {
+            return Err(InferError::JsonParse {
+                reason: format!(
+                    "objects 目标数量 {} 超过上限 {}",
+                    objects.len(),
+                    MAX_RESULT_OBJECTS
+                ),
+            });
+        }
+    }
+
     let raw_list: Vec<RawObject> =
-        serde_json::from_value(objects_val.clone()).map_err(|e| InferError::JsonParse {
+        serde_json::from_value(objects_val).map_err(|e| InferError::JsonParse {
             reason: format!("解析 objects 目标列表失败: {e}"),
         })?;
 
@@ -740,7 +770,7 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
     let mut detections = Vec::with_capacity(raw_list.len());
 
     for item in raw_list {
-        if !item.confidence.is_finite() || !(0.0..=1.0).contains(&item.confidence) {
+        if !(0.0..=1.0).contains(&item.confidence) {
             return Err(InferError::JsonParse {
                 reason: format!("置信度非法或超出 [0.0, 1.0]: {}", item.confidence),
             });
@@ -1582,6 +1612,30 @@ mod tests {
         // 8. 坐标包含 NaN
         let nan_bbox = r#"{"objects": [{"label": "person", "confidence": 0.9, "bbox": [0.1, 0.1, null, 0.2]}]}"#;
         assert!(parse_alarm_objects(nan_bbox).is_err());
+
+        // 9. 目标数量超过固定上限 (objects & faces)
+        let objects: Vec<serde_json::Value> = (0..=256)
+            .map(|_| {
+                serde_json::json!({
+                    "label": "person",
+                    "confidence": 0.9,
+                    "bbox": [0.1, 0.1, 0.2, 0.2]
+                })
+            })
+            .collect();
+        let oversized = serde_json::json!({ "objects": objects }).to_string();
+        assert!(parse_alarm_objects(&oversized).is_err());
+
+        let faces: Vec<serde_json::Value> = (0..=256)
+            .map(|_| {
+                serde_json::json!({
+                    "bbox": [0.1, 0.1, 0.2, 0.2],
+                    "detection_score": 0.9
+                })
+            })
+            .collect();
+        let oversized_faces = serde_json::json!({ "faces": faces }).to_string();
+        assert!(parse_alarm_objects(&oversized_faces).is_err());
     }
 
     #[test]

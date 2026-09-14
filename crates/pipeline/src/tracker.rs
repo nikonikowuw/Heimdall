@@ -19,6 +19,8 @@ const DEFAULT_NEW_TRACK_SCORE: f32 = 0.45;
 const DEFAULT_HIGH_MATCH_IOU: f32 = 0.20;
 const DEFAULT_LOW_MATCH_IOU: f32 = 0.30;
 const DEFAULT_MAX_TRAJECTORY_LEN: usize = 30;
+const MAX_TRACKING_DETECTIONS: usize = 256;
+const MAX_TRACKS: usize = 512;
 const EPSILON: f32 = 1e-6;
 
 /// 纯 CPU ByteTrack 配置。
@@ -55,6 +57,24 @@ impl Default for ByteTrackConfig {
             max_trajectory_len: DEFAULT_MAX_TRAJECTORY_LEN,
         }
     }
+}
+
+/// 单次更新的处理结果，用于区分已应用、迟到和被拒绝的推理结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackUpdateStatus {
+    /// 结果已推进 Kalman、关联和规则状态。
+    Applied,
+    /// PTS 不晚于上一帧，结果被忽略。
+    Stale,
+    /// 结果违反跟踪输入上限或检测契约，状态保持不变。
+    Rejected,
+}
+
+/// ByteTrack 一次更新的结果。
+#[derive(Debug, Clone)]
+pub struct TrackUpdateResult {
+    pub status: TrackUpdateStatus,
+    pub objects: Vec<TrackedObject>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,6 +369,29 @@ impl ByteTrack {
         }
     }
 
+    /// 清除当前会话的航迹、PTS 和冷却状态，但保留递增 ID，避免同一上下文内复用旧 ID。
+    pub fn clear(&mut self) {
+        self.tracks.clear();
+        self.last_timestamp_ms = None;
+        self.alarm_cooldowns.clear();
+    }
+
+    /// 在没有成功推理结果时，按源帧 PTS 清理已经超时的航迹。
+    pub fn expire_if_stale_at(&mut self, timestamp_ms: i64) -> bool {
+        let Some(previous) = self.last_timestamp_ms else {
+            return false;
+        };
+        if self.tracks.is_empty()
+            || timestamp_ms <= previous
+            || timestamp_ms.saturating_sub(previous) <= self.config.max_lost_ms
+        {
+            return false;
+        }
+
+        self.clear();
+        true
+    }
+
     /// 输入检测列表，使用默认帧间隔。兼容规则测试和离线调用。
     pub fn update(&mut self, detections: Vec<Detection>) -> Vec<TrackedObject> {
         let embeddings = vec![None; detections.len()];
@@ -375,24 +418,59 @@ impl ByteTrack {
         embeddings: Vec<Option<FaceEmbedding>>,
         timestamp_ms: i64,
     ) -> Vec<TrackedObject> {
+        self.update_with_embeddings_at_result(detections, embeddings, timestamp_ms)
+            .objects
+    }
+
+    /// 使用源帧 PTS 更新航迹并返回结果状态。
+    pub fn update_with_embeddings_at_result(
+        &mut self,
+        detections: Vec<Detection>,
+        embeddings: Vec<Option<FaceEmbedding>>,
+        timestamp_ms: i64,
+    ) -> TrackUpdateResult {
         let elapsed_ms = match self.last_timestamp_ms {
             None => self.config.default_frame_interval_ms,
             Some(previous) if timestamp_ms > previous => timestamp_ms - previous,
             Some(_) => {
                 // 迟到帧不能回写已经推进的航迹，避免 PTS 倒退污染速度与冷却状态。
-                return self.active_objects();
+                return TrackUpdateResult {
+                    status: TrackUpdateStatus::Stale,
+                    objects: self.active_objects(),
+                };
             }
         };
-        self.last_timestamp_ms = Some(timestamp_ms);
-        self.update_internal(detections, embeddings, elapsed_ms)
+        let result = self.update_internal_result(detections, embeddings, elapsed_ms);
+        if result.status == TrackUpdateStatus::Applied {
+            self.last_timestamp_ms = Some(timestamp_ms);
+        }
+        result
     }
 
     fn update_internal(
         &mut self,
         detections: Vec<Detection>,
-        mut embeddings: Vec<Option<FaceEmbedding>>,
+        embeddings: Vec<Option<FaceEmbedding>>,
         elapsed_ms: i64,
     ) -> Vec<TrackedObject> {
+        self.update_internal_result(detections, embeddings, elapsed_ms)
+            .objects
+    }
+
+    fn update_internal_result(
+        &mut self,
+        detections: Vec<Detection>,
+        mut embeddings: Vec<Option<FaceEmbedding>>,
+        elapsed_ms: i64,
+    ) -> TrackUpdateResult {
+        if detections.len() > MAX_TRACKING_DETECTIONS || !detections.iter().all(is_valid_detection)
+        {
+            return TrackUpdateResult {
+                status: TrackUpdateStatus::Rejected,
+                objects: self.active_objects(),
+            };
+        }
+
         embeddings.resize(detections.len(), None);
 
         let elapsed_ms = elapsed_ms.max(1);
@@ -411,9 +489,6 @@ impl ByteTrack {
         let mut high_indices = Vec::with_capacity(detections.len());
         let mut low_indices = Vec::with_capacity(detections.len());
         for (index, detection) in detections.iter().enumerate() {
-            if !is_valid_detection(detection) {
-                continue;
-            }
             if detection.confidence >= self.config.track_score {
                 high_indices.push(index);
             } else if detection.confidence >= self.config.low_score {
@@ -427,8 +502,7 @@ impl ByteTrack {
             .iter()
             .enumerate()
             .filter_map(|(index, track)| {
-                (track.status == TrackStatus::Tracked || track.status == TrackStatus::Lost)
-                    .then_some(index)
+                matches!(track.status, TrackStatus::Tracked | TrackStatus::Lost).then_some(index)
             })
             .collect();
         let (high_matches, unmatched_pool, unmatched_high) = assign_tracks(
@@ -470,11 +544,21 @@ impl ByteTrack {
             self.tracks[track_index].mark_lost(elapsed_ms);
         }
 
+        // 先淘汰已超时 Lost 航迹，为新目标释放固定容量。
+        self.tracks.retain(|track| {
+            !(track.status == TrackStatus::Removed
+                || (track.status == TrackStatus::Lost
+                    && track.lost_for_ms > self.config.max_lost_ms))
+        });
+
         // 剩余高分检测初始化新航迹。低分检测永远不能直接产生业务 TrackId。
         for detection_index in unmatched_high {
             let detection = &detections[detection_index];
             if detection.confidence < self.config.new_track_score {
                 continue;
+            }
+            if self.tracks.len() >= MAX_TRACKS {
+                break;
             }
             let track_id = self.next_track_id;
             self.next_track_id = self.next_track_id.saturating_add(1).max(1);
@@ -486,20 +570,23 @@ impl ByteTrack {
             ));
         }
 
-        self.tracks.retain_mut(|track| {
-            if track.status == TrackStatus::Lost && track.lost_for_ms > self.config.max_lost_ms {
-                track.status = TrackStatus::Removed;
-            }
-            track.status != TrackStatus::Removed
-        });
-
         if !self.alarm_cooldowns.is_empty() {
-            let active_ids: HashSet<u64> = self.tracks.iter().map(|track| track.track_id).collect();
-            self.alarm_cooldowns
-                .retain(|(track_id, _), _| active_ids.contains(track_id));
+            if self.tracks.len() <= 16 {
+                self.alarm_cooldowns.retain(|(track_id, _), _| {
+                    self.tracks.iter().any(|track| track.track_id == *track_id)
+                });
+            } else {
+                let active_ids: HashSet<u64> =
+                    self.tracks.iter().map(|track| track.track_id).collect();
+                self.alarm_cooldowns
+                    .retain(|(track_id, _), _| active_ids.contains(track_id));
+            }
         }
 
-        self.active_objects()
+        TrackUpdateResult {
+            status: TrackUpdateStatus::Applied,
+            objects: self.active_objects(),
+        }
     }
 
     fn active_objects(&self) -> Vec<TrackedObject> {
@@ -577,16 +664,16 @@ impl ByteTrack {
 }
 
 fn is_valid_detection(detection: &Detection) -> bool {
-    detection.confidence.is_finite()
-        && (0.0..=1.0).contains(&detection.confidence)
+    (0.0..=1.0).contains(&detection.confidence)
+        && !detection.label.trim().is_empty()
         && is_valid_bbox(&detection.bbox)
 }
 
 fn is_valid_bbox(bbox: &BoundingBox) -> bool {
-    bbox.x1.is_finite()
-        && bbox.y1.is_finite()
-        && bbox.x2.is_finite()
-        && bbox.y2.is_finite()
+    (0.0..=1.0).contains(&bbox.x1)
+        && (0.0..=1.0).contains(&bbox.y1)
+        && (0.0..=1.0).contains(&bbox.x2)
+        && (0.0..=1.0).contains(&bbox.y2)
         && bbox.x2 > bbox.x1
         && bbox.y2 > bbox.y1
 }
@@ -646,9 +733,11 @@ fn assign_tracks(
 
     let rows = track_indices.len();
     let cols = detection_indices.len();
-    let min_iou = min_iou.clamp(0.0, 1.0);
+    let min_iou = min_iou.clamp(EPSILON, 1.0);
     let min_cost = 1.0 - min_iou;
-    let mut costs = vec![1.0f32; rows * cols];
+    // 2.0 is intentionally above the maximum valid cost (1.0), so forbidden
+    // class/IoU pairs can never be accepted even when min_iou is configured as 0.
+    let mut costs = vec![2.0f32; rows * cols];
 
     for (r, &track_index) in track_indices.iter().enumerate() {
         let track = &tracks[track_index];
@@ -659,7 +748,7 @@ fn assign_tracks(
                 continue;
             }
             let iou = compute_iou(&track.predicted_bbox, &detection.bbox);
-            if iou + EPSILON >= min_iou {
+            if iou > EPSILON && iou + EPSILON >= min_iou {
                 costs[row_offset + c] = 1.0 - iou;
             }
         }
@@ -675,7 +764,7 @@ fn assign_tracks(
             continue;
         };
         let cost = costs[r * cols + c];
-        if cost <= min_cost + EPSILON && cost < 1.0 + EPSILON {
+        if cost <= min_cost + EPSILON {
             let track_index = track_indices[r];
             let detection_index = detection_indices[c];
             matches.push((track_index, detection_index));
@@ -881,6 +970,73 @@ mod tests {
         );
         assert_eq!(stale[0].track_id, track_id);
         assert!((stale[0].bbox.x1 - 0.1).abs() < 1e-6);
+
+        let result = tracker.update_with_embeddings_at_result(
+            vec![detection(0.8, 0.8, 0.9, 0.9, 0.95)],
+            vec![None],
+            900,
+        );
+        assert_eq!(result.status, TrackUpdateStatus::Stale);
+    }
+
+    #[test]
+    fn test_rejected_detection_batch_keeps_tracker_state() {
+        let mut tracker = ByteTrack::new();
+        let first = tracker.update_with_embeddings_at(
+            vec![detection(0.1, 0.1, 0.2, 0.3, 0.95)],
+            vec![None],
+            1_000,
+        );
+        let track_id = first[0].track_id;
+        let oversized = (0..=MAX_TRACKING_DETECTIONS)
+            .map(|_| detection(0.1, 0.1, 0.2, 0.3, 0.95))
+            .collect();
+        let result = tracker.update_with_embeddings_at_result(oversized, Vec::new(), 1_100);
+        assert_eq!(result.status, TrackUpdateStatus::Rejected);
+        assert_eq!(result.objects[0].track_id, track_id);
+
+        let invalid = tracker.update_with_embeddings_at_result(
+            vec![detection(-0.1, 0.1, 0.2, 0.3, 0.95)],
+            vec![None],
+            1_100,
+        );
+        assert_eq!(invalid.status, TrackUpdateStatus::Rejected);
+        assert_eq!(invalid.objects[0].track_id, track_id);
+    }
+
+    #[test]
+    fn test_expire_if_stale_clears_without_reusing_track_id() {
+        let mut tracker = ByteTrack::with_config(ByteTrackConfig {
+            max_lost_ms: 500,
+            ..ByteTrackConfig::default()
+        });
+        let first = tracker.update_with_embeddings_at(
+            vec![detection(0.1, 0.1, 0.2, 0.3, 0.95)],
+            vec![None],
+            1_000,
+        );
+        let first_id = first[0].track_id;
+        assert!(!tracker.expire_if_stale_at(1_500));
+        assert!(tracker.expire_if_stale_at(1_501));
+
+        let next = tracker.update_with_embeddings_at(
+            vec![detection(0.1, 0.1, 0.2, 0.3, 0.95)],
+            vec![None],
+            1_600,
+        );
+        assert_ne!(next[0].track_id, first_id);
+    }
+
+    #[test]
+    fn test_zero_iou_threshold_does_not_match_disjoint_boxes() {
+        let mut tracker = ByteTrack::with_config(ByteTrackConfig {
+            high_match_iou: 0.0,
+            low_match_iou: 0.0,
+            ..ByteTrackConfig::default()
+        });
+        let first = tracker.update(vec![detection(0.1, 0.1, 0.2, 0.2, 0.95)]);
+        let second = tracker.update(vec![detection(0.7, 0.7, 0.8, 0.8, 0.95)]);
+        assert_ne!(first[0].track_id, second[0].track_id);
     }
 
     #[test]

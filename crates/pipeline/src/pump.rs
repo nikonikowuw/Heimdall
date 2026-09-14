@@ -234,9 +234,15 @@ impl AnalysisFpsGovernor {
     }
 }
 
+/// 解码采样帧及其捕获时的 tracker 会话代际。
+pub(crate) struct SampledFrame {
+    pub(crate) frame: FrameRef,
+    pub(crate) generation: u64,
+}
+
 /// 内部单槽采样传递队列 (Drop-Oldest 单槽缓冲)
 pub(crate) struct SamplingSlot {
-    pub(crate) frame: std::sync::Mutex<Option<FrameRef>>,
+    pub(crate) frame: std::sync::Mutex<Option<SampledFrame>>,
     pub(crate) notify: tokio::sync::Notify,
 }
 
@@ -517,10 +523,14 @@ impl AnalysisPump {
 
                         _ = infer_slot.notify.notified() => {
                             let maybe_frame = infer_slot.frame.lock().ok().and_then(|mut g| g.take());
-                            if let Some(frame) = maybe_frame {
-                                let timestamp = frame.timestamp;
+                            if let Some(sampled_frame) = maybe_frame {
+                                let timestamp = sampled_frame.frame.timestamp;
+                                let generation = sampled_frame.generation;
                                 let current_worker = infer_worker_holder.read().await.clone();
-                                match current_worker.submit_with_metadata(frame).await {
+                                match current_worker
+                                    .submit_with_metadata(sampled_frame.frame)
+                                    .await
+                                {
                                     Ok(inference_result) => {
                                         let infer::InferenceResult {
                                             detections,
@@ -535,15 +545,25 @@ impl AnalysisPump {
 
                                         // 驱动管线执行独立算法实例的航迹跟踪与几何规则判定 (保序执行)
                                         let outcome = pipeline_mgr_infer
-                                            .process_detections_for_algo_with_embeddings(
+                                            .process_detections_for_algo_with_embeddings_at_generation(
                                                 &cam_id_infer,
                                                 &algorithm_id_infer,
                                                 &algorithm_type_infer,
                                                 detections,
                                                 embeddings,
                                                 timestamp,
+                                                generation,
                                             )
                                             .await;
+                                        if !outcome.applied {
+                                            tracing::debug!(
+                                                camera_id = %cam_id_infer,
+                                                algorithm_id = %algorithm_id_infer,
+                                                timestamp,
+                                                "迟到或被拒绝的推理结果未进入航迹与规则链"
+                                            );
+                                            continue;
+                                        }
 
                                         // 广播航迹追踪事件 (供前端低延迟实时绘制元数据)
                                         pipeline_mgr_infer.publish_analysis_event(
@@ -649,6 +669,21 @@ impl AnalysisPump {
                                         pump_metrics
                                             .inference_errors
                                             .fetch_add(1, Ordering::Relaxed);
+                                        if pipeline_mgr_infer
+                                            .expire_tracking_for_algo_at(
+                                                &cam_id_infer,
+                                                &algorithm_id_infer,
+                                                timestamp,
+                                            )
+                                            .await
+                                        {
+                                            tracing::debug!(
+                                                camera_id = %cam_id_infer,
+                                                algorithm_id = %algorithm_id_infer,
+                                                timestamp,
+                                                "推理连续失败，已清理超时宿主航迹"
+                                            );
+                                        }
                                         tracing::debug!(
                                             camera_id = %cam_id_infer,
                                             algorithm_id = %algorithm_id_infer,
@@ -692,6 +727,11 @@ impl AnalysisPump {
         // 协程: 专用解码主循环（维持参考帧链完整，快速轮转，决不被推理阻塞）
         let decode_handle = tokio::spawn(async move {
             let _ai_lease = ai_lease;
+            let tracking_generation = pipeline_mgr_decode
+                .get_or_create_context(&cam_id)
+                .await
+                .tracking_generation
+                .clone();
             tracing::info!(
                 camera_id = %cam_id,
                 slot_count,
@@ -742,6 +782,7 @@ impl AnalysisPump {
                         if let Err(error) = decoder.reset().await {
                             tracing::warn!(camera_id = %cam_id, epoch, error = %error, "源流重建后分析解码器重置失败");
                         }
+                        pipeline_mgr_decode.clear_tracking(&cam_id).await;
                         continue;
                     }
                 };
@@ -808,7 +849,15 @@ impl AnalysisPump {
 
                                     // Drop-Oldest 单槽投递
                                     if let Ok(mut slot_guard) = slot.sampling_slot.frame.lock() {
-                                        if slot_guard.replace(frame.clone()).is_some() {
+                                        let generation =
+                                            tracking_generation.load(Ordering::Acquire);
+                                        if slot_guard
+                                            .replace(SampledFrame {
+                                                frame: frame.clone(),
+                                                generation,
+                                            })
+                                            .is_some()
+                                        {
                                             slot.metrics
                                                 .frames_dropped
                                                 .fetch_add(1, Ordering::Relaxed);
@@ -849,6 +898,7 @@ impl AnalysisPump {
             }
             // 退出前清空已解码缓冲队列，提前释放硬件池租约 (DMA-BUF / 显存)
             pipeline_mgr_decode.clear_decoded_ring(&cam_id).await;
+            pipeline_mgr_decode.clear_tracking(&cam_id).await;
             decoder.dispose().await;
 
             tracing::info!(camera_id = %cam_id, "分析码流驱动泵解码循环已完全停止并清理资源");
