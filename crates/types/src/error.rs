@@ -32,7 +32,7 @@ pub enum TypeError {
 }
 
 /// 媒体帧与缓冲区抽象相关错误
-#[derive(Debug, PartialEq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum FrameError {
     #[error("不支持的像素格式: {0:?}")]
     UnsupportedPixelFormat(String),

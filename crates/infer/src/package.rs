@@ -874,10 +874,8 @@ struct LeaseState {
     warm_instance: Option<AlgoInstance>,
     /// 冷却任务世代号（用于取消先前安排的延迟退火任务）
     cooldown_generation: u64,
-    /// 是否正在执行后台异步预热
-    is_warming_up: bool,
-    /// 并发预热完成唤醒通知
-    warmup_notify: Arc<tokio::sync::Notify>,
+    /// 并发预热完成同步通道（保存当前预热执行结果；新等待方随时可读取最新完成状态，杜绝丢通知挂起）
+    warmup_watch: Option<tokio::sync::watch::Receiver<Option<Result<(), InferError>>>>,
 }
 
 #[derive(Debug)]
@@ -898,7 +896,6 @@ impl AlgoRegistryInner {
                     entry.cooldown_generation += 1;
                     let gen = entry.cooldown_generation;
                     let cooldown = self.cooldown_duration;
-                    let inner = Arc::clone(self);
                     let aid = algorithm_id.to_string();
 
                     tracing::debug!(
@@ -913,16 +910,33 @@ impl AlgoRegistryInner {
                         .or_else(|| tokio::runtime::Handle::try_current().ok());
 
                     if let Some(h) = handle {
+                        let inner = Arc::clone(self);
+                        drop(state); // 必须在 spawn 前显式释放锁
                         h.spawn(async move {
                             tokio::time::sleep(cooldown).await;
                             inner.check_cooldown_expired(&aid, gen);
                         });
                     } else {
-                        // 脱离任何 Tokio Runtime 上下文（如独立媒体 OS 线程同步析构），执行即时退火防显存泄露
-                        inner.check_cooldown_expired(&aid, gen);
+                        // 无 Tokio runtime 时（如独立媒体 OS 线程同步析构），直接在当前锁内取走 warm_instance 并在锁外析构
+                        let inst_to_drop = entry.warm_instance.take();
+                        drop(state); // 释放锁后再析构实例，杜绝重入 check_cooldown_expired 导致死锁
+                        if let Some(inst) = inst_to_drop {
+                            tracing::info!(
+                                algorithm_id = %aid,
+                                "无异步运行时上下文，执行同步显式退火回收 NPU 显存"
+                            );
+                            drop(inst);
+                        }
                     }
                 }
             }
+        }
+    }
+
+    fn rollback_ref_count(&self, algorithm_id: &str) {
+        let mut state = self.leases.lock().expect("algo lease state lock poisoned");
+        if let Some(entry) = state.get_mut(algorithm_id) {
+            entry.ref_count = entry.ref_count.saturating_sub(1);
         }
     }
 
@@ -1076,10 +1090,42 @@ impl AlgoRegistry {
         Ok(count)
     }
 
-    /// 注册一个已验证的算法包
+    /// 注册一个已验证的算法包（支持热替换并同步重置算力常驻状态，释放旧版本暖机实例）
     pub async fn register(&self, pkg: Arc<AlgoPackage>) {
-        let mut map = self.inner.packages.write().await;
-        map.insert(pkg.manifest().algorithm_id.clone(), pkg);
+        let algo_id = pkg.manifest().algorithm_id.clone();
+
+        // 1. 同步更新 packages 映射
+        {
+            let mut map = self.inner.packages.write().await;
+            map.insert(algo_id.clone(), pkg);
+        }
+
+        // 2. 检查并重置可能存在的旧版本算力租约常驻状态
+        let old_warm_inst = {
+            let mut state = self
+                .inner
+                .leases
+                .lock()
+                .expect("algo lease state lock poisoned");
+            if let Some(entry) = state.get_mut(&algo_id) {
+                // 标记旧世代任务失效，移出旧版本暖机实例，防止新版本被误判为 Hot
+                entry.cooldown_generation += 1;
+                // 重置预热同步通道，避免新租约误读旧通道
+                entry.warmup_watch = None;
+                entry.warm_instance.take()
+            } else {
+                None
+            }
+        };
+
+        // 3. 异步销毁旧版本的暖机实例，释放旧 dynamic library 及 NPU 显存
+        if let Some(inst) = old_warm_inst {
+            tracing::info!(
+                algorithm_id = %algo_id,
+                "算法包热替换，退火回收旧版本暖机实例"
+            );
+            let _ = tokio::task::spawn_blocking(move || drop(inst)).await;
+        }
     }
 
     /// 获取算法包
@@ -1149,7 +1195,13 @@ impl AlgoRegistry {
                 reason: format!("算法未在注册中心就绪: {algorithm_id}"),
             })?;
 
-        let (need_warmup, wait_notify) = {
+        enum WarmupRole {
+            AlreadyHot,
+            Leader(tokio::sync::watch::Sender<Option<Result<(), InferError>>>),
+            Waiter(tokio::sync::watch::Receiver<Option<Result<(), InferError>>>),
+        }
+
+        let role = {
             let mut state = self
                 .inner
                 .leases
@@ -1161,83 +1213,131 @@ impl AlgoRegistry {
                     ref_count: 0,
                     warm_instance: None,
                     cooldown_generation: 0,
-                    is_warming_up: false,
-                    warmup_notify: Arc::new(tokio::sync::Notify::new()),
+                    warmup_watch: None,
                 });
             entry.ref_count += 1;
             entry.cooldown_generation += 1; // 世代号自增使先前的延迟退火任务作废
 
             if entry.warm_instance.is_some() {
-                (false, None)
-            } else if entry.is_warming_up {
-                (false, Some(Arc::clone(&entry.warmup_notify)))
+                WarmupRole::AlreadyHot
+            } else if let Some(rx) = &entry.warmup_watch {
+                if rx.borrow().is_none() && rx.has_changed().is_err() {
+                    // 先前的预热任务异常终止（如 leader future 被取消），重新作为 Leader 预热
+                    let (tx, new_rx) = tokio::sync::watch::channel(None);
+                    entry.warmup_watch = Some(new_rx);
+                    WarmupRole::Leader(tx)
+                } else {
+                    WarmupRole::Waiter(rx.clone())
+                }
             } else {
-                entry.is_warming_up = true;
-                (true, None)
+                let (tx, rx) = tokio::sync::watch::channel(None);
+                entry.warmup_watch = Some(rx);
+                WarmupRole::Leader(tx)
             }
         };
 
-        if need_warmup {
-            tracing::info!(
-                algorithm_id = %algorithm_id,
-                "算法从冷态激活借出租约，预热 NPU 模型上下文"
-            );
-            let pkg_clone = pkg.clone();
-            let inst_id = format!("warm-lease-{algorithm_id}");
-            let warm_inst_res =
-                tokio::task::spawn_blocking(move || pkg_clone.create_instance(&inst_id, None))
-                    .await;
+        match role {
+            WarmupRole::AlreadyHot => {}
+            WarmupRole::Leader(warmup_tx) => {
+                tracing::info!(
+                    algorithm_id = %algorithm_id,
+                    "算法从冷态激活借出租约，预热 NPU 模型上下文"
+                );
+                let pkg_clone = pkg.clone();
+                let inst_id = format!("warm-lease-{algorithm_id}");
+                let warm_inst_res =
+                    tokio::task::spawn_blocking(move || pkg_clone.create_instance(&inst_id, None))
+                        .await;
 
-            let inst_opt = match warm_inst_res {
-                Ok(Ok(inst)) => Some(inst),
-                Ok(Err(e)) => {
-                    tracing::warn!(
-                        algorithm_id = %algorithm_id,
-                        error = %e,
-                        "预热暖机实例创建产生告警，降级为按需即时推理模式"
-                    );
-                    None
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        algorithm_id = %algorithm_id,
-                        error = %e,
-                        "预热暖机调度异常，降级为按需即时推理模式"
-                    );
-                    None
-                }
-            };
-
-            let inst_to_drop = {
-                let mut state = self
-                    .inner
-                    .leases
-                    .lock()
-                    .expect("algo lease state lock poisoned");
-                if let Some(entry) = state.get_mut(algorithm_id) {
-                    entry.is_warming_up = false;
-                    entry.warmup_notify.notify_waiters();
-                    if let Some(inst) = inst_opt {
-                        if entry.ref_count > 0 {
-                            entry.warm_instance = Some(inst);
-                            None
+                let (warmup_res, inst_to_drop) = match warm_inst_res {
+                    Ok(Ok(inst)) => {
+                        let mut state = self
+                            .inner
+                            .leases
+                            .lock()
+                            .expect("algo lease state lock poisoned");
+                        let to_drop = if let Some(entry) = state.get_mut(algorithm_id) {
+                            entry.warmup_watch = None;
+                            if entry.ref_count > 0 {
+                                entry.warm_instance = Some(inst);
+                                None
+                            } else {
+                                // 预热异步执行期间租约已被全部释放，无需保留常驻，立即退火
+                                Some(inst)
+                            }
                         } else {
-                            // 预热异步执行期间租约已被全部释放，无需常驻，直接异步退火回收
                             Some(inst)
-                        }
-                    } else {
-                        None
+                        };
+                        let _ = warmup_tx.send(Some(Ok(())));
+                        (Ok(()), to_drop)
                     }
-                } else {
-                    inst_opt
-                }
-            };
+                    Ok(Err(e)) => {
+                        let mut state = self
+                            .inner
+                            .leases
+                            .lock()
+                            .expect("algo lease state lock poisoned");
+                        if let Some(entry) = state.get_mut(algorithm_id) {
+                            entry.warmup_watch = None;
+                            entry.ref_count = entry.ref_count.saturating_sub(1);
+                        }
+                        let _ = warmup_tx.send(Some(Err(e.clone())));
+                        (Err(e), None)
+                    }
+                    Err(join_err) => {
+                        let e = InferError::Execution {
+                            reason: format!("预热暖机任务调度异常: {join_err}"),
+                        };
+                        let mut state = self
+                            .inner
+                            .leases
+                            .lock()
+                            .expect("algo lease state lock poisoned");
+                        if let Some(entry) = state.get_mut(algorithm_id) {
+                            entry.warmup_watch = None;
+                            entry.ref_count = entry.ref_count.saturating_sub(1);
+                        }
+                        let _ = warmup_tx.send(Some(Err(e.clone())));
+                        (Err(e), None)
+                    }
+                };
 
-            if let Some(inst) = inst_to_drop {
-                tokio::task::spawn_blocking(move || drop(inst));
+                if let Some(inst) = inst_to_drop {
+                    let _ = tokio::task::spawn_blocking(move || drop(inst)).await;
+                }
+
+                if let Err(e) = warmup_res {
+                    tracing::error!(
+                        algorithm_id = %algorithm_id,
+                        error = %e,
+                        "算法预热暖机失败，回滚租约并返回错误"
+                    );
+                    return Err(e);
+                }
             }
-        } else if let Some(notify) = wait_notify {
-            notify.notified().await;
+            WarmupRole::Waiter(mut rx) => {
+                // 等待预热完成通知（watch 保持最新状态，无论通知何时到达都能安全读取，杜绝丢通知永久等待）
+                while rx.borrow().is_none() {
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+                let warmup_res = rx.borrow().clone().unwrap_or_else(|| {
+                    Err(InferError::Execution {
+                        reason: "算法预热通知通道异常关闭".to_string(),
+                    })
+                });
+
+                if let Err(e) = warmup_res {
+                    self.inner.rollback_ref_count(algorithm_id);
+                    tracing::error!(
+                        algorithm_id = %algorithm_id,
+                        error = %e,
+                        "并发等待预热失败，回滚租约并返回错误"
+                    );
+                    return Err(e);
+                }
+            }
         }
 
         Ok(AlgoLease {
@@ -1625,5 +1725,95 @@ mod tests {
             .await
             .expect_err("non existent algorithm should fail to acquire lease");
         assert!(err.to_string().contains("未在注册中心就绪"));
+    }
+
+    #[test]
+    fn test_algo_lease_release_without_runtime_no_deadlock() {
+        // 验证在脱离 Tokio Runtime 上下文（如独立物理 OS 线程同步析构租约）时，
+        // release_lease 绝不会因重入 check_cooldown_expired 而死锁
+        let registry = AlgoRegistry::with_cooldown(std::time::Duration::from_millis(50));
+        let inner = registry.inner.clone();
+
+        let handle = std::thread::spawn(move || {
+            {
+                let mut state = inner.leases.lock().expect("algo lease state lock poisoned");
+                let entry = state
+                    .entry("mock_algo".to_string())
+                    .or_insert_with(|| LeaseState {
+                        ref_count: 1,
+                        warm_instance: None,
+                        cooldown_generation: 0,
+                        warmup_watch: None,
+                    });
+                entry.ref_count = 1;
+            }
+
+            // 在无 Tokio runtime 上下文下释放租约
+            inner.release_lease("mock_algo");
+
+            let state = inner.leases.lock().expect("algo lease state lock poisoned");
+            let mock_entry = state.get("mock_algo").expect("mock_algo entry exists");
+            assert_eq!(mock_entry.ref_count, 0);
+        });
+
+        handle
+            .join()
+            .expect("release_lease 在无 runtime 下不应死锁");
+    }
+
+    #[tokio::test]
+    async fn test_algo_lease_concurrent_waiter_watch_no_lost_notify() {
+        // 验证并发借出租约时，watch 通道能可靠传递预热状态，
+        // 即使 Leader 提前完成预热并发送结果，Waiter 也不会丢失通知或永久挂起
+        let (tx, mut rx) = tokio::sync::watch::channel::<Option<Result<(), InferError>>>(None);
+
+        // 模拟 Leader 立即完成预热并发送成功通知
+        tx.send(Some(Ok(()))).expect("发送预热完成通知成功");
+
+        // Waiter 随后才开始接收（此前 Notify::notify_waiters() 会直接丢通知导致永久死锁）
+        while rx.borrow().is_none() {
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+
+        let res = rx.borrow().clone();
+        assert_eq!(res, Some(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn test_algo_registry_register_resets_warm_instance_and_state() {
+        // 验证 register() 替换算法包时同步重置旧的 LeaseState 与暖机实例，
+        // 防止新版本被误判为 Hot，并及时释放旧资源
+        let pkg_path = Path::new("../../algo-packages/macos-arm64/general_detection")
+            .canonicalize()
+            .or_else(|_| Path::new("algo-packages/macos-arm64/general_detection").canonicalize());
+
+        let Ok(pkg_path) = pkg_path else {
+            return;
+        };
+
+        let registry = AlgoRegistry::with_cooldown(std::time::Duration::from_millis(50));
+        let pkg = Arc::new(AlgoPackage::open(&pkg_path).expect("open test package"));
+        let algo_id = pkg.manifest().algorithm_id.clone();
+
+        // 初次注册
+        registry.register(pkg.clone()).await;
+
+        // 借出租约使算法进入 Hot 状态
+        let lease = registry
+            .acquire_lease(&algo_id)
+            .await
+            .expect("acquire lease");
+        assert_eq!(registry.active_lease_count(&algo_id), 1);
+        assert!(registry.is_algorithm_hot(&algo_id));
+
+        // 重新注册（替换同名算法包）
+        registry.register(pkg.clone()).await;
+
+        // 验证 register 同步重置了旧版本的 warm_instance，新版本绝不会被误判为 Hot
+        assert!(!registry.is_algorithm_hot(&algo_id));
+
+        drop(lease);
     }
 }

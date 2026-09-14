@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// 推理后端与算子错误枚举
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum InferError {
     #[error("模型加载失败: {path} (原因: {reason})")]
     ModelLoad { path: String, reason: String },
