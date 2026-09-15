@@ -14,7 +14,7 @@ pub mod types;
 pub use buffer::{CvBuffer, DmaBufLayout};
 pub use engine::CvEngine;
 pub use layout::{compute_letterbox_layout, compute_stretch_layout};
-pub use types::{LetterboxLayout, PixelFormat, PreprocessMode};
+pub use types::{CropRect, LetterboxLayout, PixelFormat, PreprocessMode};
 
 use crate::c_abi::AvImageOps;
 use crate::error::AlgoError;
@@ -93,6 +93,13 @@ pub fn active_engine() -> SharedCvEngine {
     ENGINE_STACK
         .with(|stack| stack.borrow().last().cloned())
         .unwrap_or_else(default_engine)
+}
+
+/// 统一门面：低频 ROI 裁剪为 RGB24。
+///
+/// Rockchip 路径优先在 RGA 中裁剪并返回 DMA-BUF；其他平台使用对应引擎的保底实现。
+pub fn crop_rgb(frame: &SafeFrame<'_>, rect: CropRect) -> Result<CvBuffer, AlgoError> {
+    active_engine().crop_rgb(frame, rect)
 }
 
 /// 统一门面：Letterbox 预处理（自动保持原图比例居中缩放并填充底色）。

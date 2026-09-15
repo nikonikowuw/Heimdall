@@ -180,22 +180,7 @@ impl PackageEnv {
         default_rel_path: &str,
     ) -> Result<PathBuf, AlgoError> {
         let raw_path = self.get(env_key).unwrap_or(default_rel_path);
-        let candidate = Path::new(raw_path);
-
-        let target_path = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            // 安全防穿透检查：相对路径不允许包含 ParentDir (..)
-            if candidate
-                .components()
-                .any(|c| matches!(c, Component::ParentDir))
-            {
-                return Err(AlgoError::ModelLoad {
-                    reason: format!("模型相对路径非法，包含父级遍历组件 '..': {raw_path}"),
-                });
-            }
-            package_root.join(candidate)
-        };
+        let target_path = resolve_candidate_target_path(package_root, raw_path)?;
 
         let canonical = target_path
             .canonicalize()
@@ -212,6 +197,34 @@ impl PackageEnv {
         Ok(canonical)
     }
 
+    /// 解析可选模型路径。
+    ///
+    /// 默认路径不存在时返回未规范化的候选路径，由调用方通过 `is_file()` 判断是否启用；
+    /// `.env` 显式指定的路径仍必须存在且为普通文件，避免拼写错误被静默吞掉。
+    pub fn resolve_optional_model_path(
+        &self,
+        package_root: &Path,
+        env_key: &str,
+        default_rel_path: &str,
+    ) -> Result<PathBuf, AlgoError> {
+        let explicit = self.get(env_key);
+        let target_path =
+            resolve_candidate_target_path(package_root, explicit.unwrap_or(default_rel_path))?;
+
+        match target_path.canonicalize() {
+            Ok(canonical) if canonical.is_file() => Ok(canonical),
+            Ok(canonical) => Err(AlgoError::ModelLoad {
+                reason: format!("模型路径不是有效物理文件: {canonical:?}"),
+            }),
+            Err(error) if explicit.is_none() && error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(target_path)
+            }
+            Err(error) => Err(AlgoError::ModelLoad {
+                reason: format!("无法规范化模型路径 ({target_path:?}): {error}"),
+            }),
+        }
+    }
+
     /// 当前环境变量集合是否为空
     pub fn is_empty(&self) -> bool {
         self.vars.is_empty()
@@ -220,6 +233,27 @@ impl PackageEnv {
     /// 当前包含的配置项数量
     pub fn len(&self) -> usize {
         self.vars.len()
+    }
+}
+
+fn resolve_candidate_target_path(
+    package_root: &Path,
+    raw_path: &str,
+) -> Result<PathBuf, AlgoError> {
+    let candidate = Path::new(raw_path);
+    if candidate.is_absolute() {
+        Ok(candidate.to_path_buf())
+    } else {
+        // 安全防穿透检查：相对路径不允许包含 ParentDir (..)
+        if candidate
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
+            return Err(AlgoError::ModelLoad {
+                reason: format!("模型相对路径非法，包含父级遍历组件 '..': {raw_path}"),
+            });
+        }
+        Ok(package_root.join(candidate))
     }
 }
 
@@ -280,6 +314,26 @@ mod tests {
             Some("model/test.rknn".to_string())
         );
         assert_eq!(env.get_f32("confidence"), Some(0.8));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_optional_model_path_allows_missing_default_only() {
+        let unique_id = uuid::Uuid::now_v7();
+        let dir = std::env::temp_dir().join(format!("algo_sdk_optional_model_test_{unique_id}"));
+        std::fs::create_dir_all(&dir).expect("创建临时目录失败");
+
+        let env = PackageEnv::default();
+        let missing = env
+            .resolve_optional_model_path(&dir, "OPTIONAL_MODEL_PATH", "model/optional.rknn")
+            .expect("默认可选模型缺失时应返回候选路径");
+        assert_eq!(missing, dir.join("model/optional.rknn"));
+
+        let explicit = PackageEnv::parse_str("OPTIONAL_MODEL_PATH=model/optional.rknn");
+        assert!(explicit
+            .resolve_optional_model_path(&dir, "OPTIONAL_MODEL_PATH", "model/optional.rknn")
+            .is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

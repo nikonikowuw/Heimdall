@@ -6,6 +6,7 @@ use std::slice;
 
 use super::types::PixelFormat;
 use crate::c_abi::*;
+use crate::error::AlgoError;
 
 /// 底层异构硬件显存句柄 — `pub(crate)` 密封在 SDK 内部，不逃逸到算法业务代码
 pub(crate) enum CvBufferKind {
@@ -319,6 +320,51 @@ impl CvBuffer {
         }
     }
 
+    /// 将 RGB24 输出读回紧凑 Host 内存。
+    ///
+    /// DMA-BUF 路径显式执行 cache sync，并按真实 stride 逐行去除 padding；该接口只应
+    /// 用于低频快照或证据生成，不应放入常驻检测热路径。
+    pub fn readback_rgb24(&self) -> Result<Vec<u8>, AlgoError> {
+        if self.format != PixelFormat::Rgb24 {
+            return Err(AlgoError::IncompatibleFrame {
+                reason: format!("RGB24 readback 收到不支持的格式: {:?}", self.format),
+            });
+        }
+        match &self.inner {
+            CvBufferKind::Host(data) => copy_strided_rgb24(
+                data,
+                self.width,
+                self.height,
+                self.width.checked_mul(3).ok_or(AlgoError::OutOfMemory)?,
+            ),
+            CvBufferKind::HostOps { .. } => {
+                let data = self
+                    .as_host_bytes()
+                    .ok_or_else(|| AlgoError::IncompatibleFrame {
+                        reason: "HostOps RGB24 缺少可读 Host 视图".to_string(),
+                    })?;
+                let stride = self
+                    .as_image_view()
+                    .and_then(|view| u32::try_from(view.stride[0]).ok())
+                    .filter(|stride| *stride > 0)
+                    .ok_or_else(|| AlgoError::IncompatibleFrame {
+                        reason: "HostOps RGB24 stride 无效".to_string(),
+                    })?;
+                copy_strided_rgb24(data, self.width, self.height, stride)
+            }
+            CvBufferKind::DmaBuf {
+                fd,
+                size,
+                stride,
+                h_stride,
+                ..
+            } => readback_dma_rgb24(*fd, *size, self.width, self.height, stride[0], *h_stride),
+            _ => Err(AlgoError::IncompatibleFrame {
+                reason: "当前图像句柄不支持 RGB24 Host readback".to_string(),
+            }),
+        }
+    }
+
     /// 获取底层 Host 内存可变切片
     pub fn as_host_bytes_mut(&mut self) -> Option<&mut [u8]> {
         match &mut self.inner {
@@ -349,6 +395,146 @@ impl CvBuffer {
             _ => None,
         }
     }
+}
+
+fn copy_strided_rgb24(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<Vec<u8>, AlgoError> {
+    let width = usize::try_from(width).map_err(|_| AlgoError::OutOfMemory)?;
+    let height = usize::try_from(height).map_err(|_| AlgoError::OutOfMemory)?;
+    let stride = usize::try_from(stride).map_err(|_| AlgoError::OutOfMemory)?;
+    let row_bytes = width.checked_mul(3).ok_or(AlgoError::OutOfMemory)?;
+    if stride < row_bytes {
+        return Err(AlgoError::IncompatibleFrame {
+            reason: format!("RGB24 stride 小于有效行宽: {stride} < {row_bytes}"),
+        });
+    }
+    let required = height
+        .checked_sub(1)
+        .and_then(|rows| rows.checked_mul(stride))
+        .and_then(|offset| offset.checked_add(row_bytes))
+        .ok_or(AlgoError::OutOfMemory)?;
+    if data.len() < required {
+        return Err(AlgoError::IncompatibleFrame {
+            reason: format!("RGB24 readback 数据不足: {} < {required}", data.len()),
+        });
+    }
+    let output_len = row_bytes
+        .checked_mul(height)
+        .ok_or(AlgoError::OutOfMemory)?;
+    let mut output = vec![0u8; output_len];
+    if stride == row_bytes {
+        output.copy_from_slice(&data[..output_len]);
+        return Ok(output);
+    }
+    for (row, dst_row) in output.chunks_exact_mut(row_bytes).enumerate() {
+        // 上面的 `required` 校验已证明末行不越界，行起点只能是 `row * stride`。
+        let source_start = row * stride;
+        dst_row.copy_from_slice(&data[source_start..source_start + row_bytes]);
+    }
+    Ok(output)
+}
+
+#[cfg(target_os = "linux")]
+const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
+#[cfg(target_os = "linux")]
+const DMA_BUF_SYNC_READ: u64 = 1;
+#[cfg(target_os = "linux")]
+const DMA_BUF_SYNC_END: u64 = 1 << 2;
+
+#[cfg(target_os = "linux")]
+fn sync_dma_buf(fd: i32, flags: u64) -> Result<(), AlgoError> {
+    let mut sync = flags;
+    // SAFETY: DMA_BUF_IOCTL_SYNC 只读取/更新本函数持有的 u64 ioctl 参数。
+    let status = unsafe { libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &mut sync) };
+    if status != 0 {
+        return Err(AlgoError::IncompatibleFrame {
+            reason: format!(
+                "DMA-BUF RGB24 readback cache sync 失败: fd={fd}, flags={flags:#x}, error={}",
+                std::io::Error::last_os_error()
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn readback_dma_rgb24(
+    fd: i32,
+    size: usize,
+    width: u32,
+    height: u32,
+    stride: u32,
+    h_stride: u32,
+) -> Result<Vec<u8>, AlgoError> {
+    const MAX_READBACK_BYTES: usize = 128 * 1024 * 1024;
+    if fd < 0 || size == 0 || size > MAX_READBACK_BYTES {
+        return Err(AlgoError::IncompatibleFrame {
+            reason: format!("RGB24 DMA-BUF readback 参数非法: fd={fd}, size={size}"),
+        });
+    }
+    if h_stride < height {
+        return Err(AlgoError::IncompatibleFrame {
+            reason: format!("RGB24 h_stride 小于有效高度: {h_stride} < {height}"),
+        });
+    }
+    // 行布局（stride 下限与尾行偏移）统一交给 `copy_strided_rgb24` 校验，避免两处推导漂移。
+    sync_dma_buf(fd, DMA_BUF_SYNC_READ)?;
+    // SAFETY: fd 由 CvBuffer/lease 保持有效，映射长度已按 DMA-BUF 容量校验。
+    let mapped = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        )
+    };
+    if mapped == libc::MAP_FAILED {
+        let error = AlgoError::IncompatibleFrame {
+            reason: format!(
+                "mmap RGB24 DMA-BUF fd={fd} 失败: {}",
+                std::io::Error::last_os_error()
+            ),
+        };
+        let _ = sync_dma_buf(fd, DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END);
+        return Err(error);
+    }
+
+    // SAFETY: mmap 成功且映射覆盖 size 字节；copy_strided_rgb24 只读取校验过的行范围。
+    let data = unsafe { slice::from_raw_parts(mapped.cast::<u8>(), size) };
+    let result = copy_strided_rgb24(data, width, height, stride);
+    let sync_result = sync_dma_buf(fd, DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END);
+    // SAFETY: mapped/size 与本次 mmap 成功调用严格对应。
+    let unmap_status = unsafe { libc::munmap(mapped, size) };
+    sync_result?;
+    if unmap_status != 0 {
+        return Err(AlgoError::IncompatibleFrame {
+            reason: format!(
+                "释放 RGB24 DMA-BUF 映射失败: {}",
+                std::io::Error::last_os_error()
+            ),
+        });
+    }
+    result
+}
+
+#[cfg(not(target_os = "linux"))]
+fn readback_dma_rgb24(
+    _fd: i32,
+    _size: usize,
+    _width: u32,
+    _height: u32,
+    _stride: u32,
+    _h_stride: u32,
+) -> Result<Vec<u8>, AlgoError> {
+    Err(AlgoError::IncompatibleFrame {
+        reason: "当前平台不支持 DMA-BUF RGB24 readback".to_string(),
+    })
 }
 
 impl Drop for CvBuffer {
@@ -458,6 +644,27 @@ mod tests {
         }
 
         assert!(FREED.load(Ordering::SeqCst), "析构时必须调用 free 回调");
+    }
+
+    #[test]
+    fn test_readback_rgb24_removes_row_padding() {
+        let data = [
+            1, 2, 3, 4, 5, 6, 0xaa, 0xbb, // row 0 + padding
+            7, 8, 9, 10, 11, 12, 0xcc, 0xdd, // row 1 + padding
+        ];
+        assert_eq!(
+            copy_strided_rgb24(&data, 2, 2, 8).expect("stride readback 应成功"),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        );
+    }
+
+    #[test]
+    fn test_readback_rgb24_rejects_wrong_format() {
+        let buf = CvBuffer::from_host(vec![0; 4 * 4 * 3 / 2], 4, 4, PixelFormat::Nv12);
+        assert!(matches!(
+            buf.readback_rgb24(),
+            Err(AlgoError::IncompatibleFrame { .. })
+        ));
     }
 
     #[test]

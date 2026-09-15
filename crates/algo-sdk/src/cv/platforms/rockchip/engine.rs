@@ -8,7 +8,7 @@ use super::pool::{RgaBufferPool, RgaBufferSpec};
 use crate::cv::engine::CvEngine;
 use crate::cv::layout::compute_letterbox_layout;
 use crate::cv::platforms::cpu::CpuCvEngine;
-use crate::cv::types::{PixelFormat, PreprocessMode};
+use crate::cv::types::{CropRect, PixelFormat, PreprocessMode};
 use crate::cv::CvBuffer;
 use crate::error::AlgoError;
 use crate::frame::{FrameHandleView, SafeFrame};
@@ -300,6 +300,7 @@ impl RgaCvEngine {
         &self,
         frame: &SafeFrame<'_>,
         source: &SourceLayout,
+        src_rect: ImRect,
         dst_w: u32,
         dst_h: u32,
         dst_rect: ImRect,
@@ -339,7 +340,6 @@ impl RgaCvEngine {
             format: RGA_FORMAT_RGB_888,
             color_space_mode: rgb_color_space_mode(),
         })?;
-        let src_rect = im_rect(0, 0, source.width, source.height)?;
         let fill = match fill_color {
             Some(color) => Some((
                 im_rect(0, 0, spec.width, spec.height)?,
@@ -366,6 +366,24 @@ impl RgaCvEngine {
         ))
     }
 
+    fn hardware_crop(&self, frame: &SafeFrame<'_>, rect: CropRect) -> Result<CvBuffer, AlgoError> {
+        let policy = RgaPolicy::new(self.config.core);
+        let source = self.source_layout(frame, policy)?;
+        let format = PixelFormat::from_c_abi(frame.pixel_format());
+        validate_rga_crop(format, rect)?;
+        policy.validate_scale_job(rect.width, rect.height, rect.width, rect.height)?;
+        let src_rect = im_rect(rect.x, rect.y, rect.width, rect.height)?;
+        self.hardware_preprocess(
+            frame,
+            &source,
+            src_rect,
+            rect.width,
+            rect.height,
+            im_rect(0, 0, rect.width, rect.height)?,
+            None,
+        )
+    }
+
     fn hardware_letterbox(
         &self,
         frame: &SafeFrame<'_>,
@@ -388,8 +406,15 @@ impl RgaCvEngine {
             layout.scaled_w,
             layout.scaled_h,
         )?;
-        let buffer =
-            self.hardware_preprocess(frame, &source, dst_w, dst_h, dst_rect, Some(fill_color))?;
+        let buffer = self.hardware_preprocess(
+            frame,
+            &source,
+            im_rect(0, 0, source.width, source.height)?,
+            dst_w,
+            dst_h,
+            dst_rect,
+            Some(fill_color),
+        )?;
         Ok((buffer, PreprocessMode::Letterbox(layout)))
     }
 
@@ -403,12 +428,29 @@ impl RgaCvEngine {
         let source = self.source_layout(frame, policy)?;
         policy.validate_scale_job(source.width, source.height, dst_w, dst_h)?;
         let dst_rect = im_rect(0, 0, dst_w, dst_h)?;
-        let buffer = self.hardware_preprocess(frame, &source, dst_w, dst_h, dst_rect, None)?;
+        let buffer = self.hardware_preprocess(
+            frame,
+            &source,
+            im_rect(0, 0, source.width, source.height)?,
+            dst_w,
+            dst_h,
+            dst_rect,
+            None,
+        )?;
         Ok((buffer, PreprocessMode::Resize))
     }
 }
 
 impl CvEngine for RgaCvEngine {
+    fn crop_rgb(&self, frame: &SafeFrame<'_>, rect: CropRect) -> Result<CvBuffer, AlgoError> {
+        frame.validate()?;
+        let rect = rect.validate(frame.width(), frame.height())?;
+        if !self.can_use_hardware(frame) {
+            return self.cpu.crop_rgb_fallback(frame, rect);
+        }
+        self.hardware_crop(frame, rect)
+    }
+
     fn letterbox(
         &self,
         frame: &SafeFrame<'_>,
@@ -548,6 +590,22 @@ fn positive_stride(stride: i32, fallback: u32) -> Result<u32, AlgoError> {
     } else {
         Ok(fallback)
     }
+}
+
+fn validate_rga_crop(format: PixelFormat, rect: CropRect) -> Result<(), AlgoError> {
+    if matches!(format, PixelFormat::Nv12 | PixelFormat::I420)
+        && [rect.x, rect.y, rect.width, rect.height]
+            .into_iter()
+            .any(|value| !value.is_multiple_of(2))
+    {
+        return Err(AlgoError::IncompatibleFrame {
+            reason: format!(
+                "RGA YUV ROI 必须按 2 像素对齐: x={}, y={}, width={}, height={}",
+                rect.x, rect.y, rect.width, rect.height
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn im_rect(x: u32, y: u32, width: u32, height: u32) -> Result<ImRect, AlgoError> {

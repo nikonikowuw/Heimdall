@@ -4,7 +4,7 @@ use crate::c_abi::*;
 use crate::cv::buffer::CvBuffer;
 use crate::cv::engine::CvEngine;
 use crate::cv::layout::compute_letterbox_layout;
-use crate::cv::types::{PixelFormat, PreprocessMode};
+use crate::cv::types::{CropRect, PixelFormat, PreprocessMode};
 use crate::error::AlgoError;
 use crate::frame::{FrameHandleView, SafeFrame};
 
@@ -350,6 +350,51 @@ impl CpuCvEngine {
         }
     }
 
+    pub(crate) fn crop_rgb_fallback(
+        &self,
+        frame: &SafeFrame<'_>,
+        rect: CropRect,
+    ) -> Result<CvBuffer, AlgoError> {
+        frame.validate()?;
+        let rect = rect.validate(frame.width(), frame.height())?;
+        let source = self.extract_rgb24(frame)?;
+        let source_width = usize::try_from(frame.width()).map_err(|_| AlgoError::OutOfMemory)?;
+        let source_stride = source_width.checked_mul(3).ok_or(AlgoError::OutOfMemory)?;
+        let crop_width = usize::try_from(rect.width).map_err(|_| AlgoError::OutOfMemory)?;
+        let crop_height = usize::try_from(rect.height).map_err(|_| AlgoError::OutOfMemory)?;
+        let crop_x = usize::try_from(rect.x).map_err(|_| AlgoError::OutOfMemory)?;
+        let crop_y = usize::try_from(rect.y).map_err(|_| AlgoError::OutOfMemory)?;
+        let crop_row_bytes = crop_width.checked_mul(3).ok_or(AlgoError::OutOfMemory)?;
+        let crop_x_bytes = crop_x.checked_mul(3).ok_or(AlgoError::OutOfMemory)?;
+        let output_len = crop_row_bytes
+            .checked_mul(crop_height)
+            .ok_or(AlgoError::OutOfMemory)?;
+        let mut source_start = crop_y
+            .checked_mul(source_stride)
+            .and_then(|row_start| row_start.checked_add(crop_x_bytes))
+            .ok_or(AlgoError::OutOfMemory)?;
+
+        // `extract_rgb24` 保证 source 为整帧紧凑 RGB24，rect 已校验落在帧内，
+        // 因此行起点只需按源 stride 自增，无需逐行重复 checked 运算。
+        let mut output = vec![0u8; output_len];
+        for dst_row in output.chunks_exact_mut(crop_row_bytes) {
+            let source_end = source_start + crop_row_bytes;
+            let Some(source_row) = source.get(source_start..source_end) else {
+                return Err(AlgoError::IncompatibleFrame {
+                    reason: "ROI 行超出源图像范围".to_string(),
+                });
+            };
+            dst_row.copy_from_slice(source_row);
+            source_start += source_stride;
+        }
+        Ok(CvBuffer::from_host(
+            output,
+            rect.width,
+            rect.height,
+            PixelFormat::Rgb24,
+        ))
+    }
+
     /// 高性能双线性插值缩放（带 X 轴预计算查找表）
     fn bilinear_resize(
         &self,
@@ -608,6 +653,40 @@ mod tests {
             assert!((pixel[1] as i16 - pixel[2] as i16).abs() <= 1);
             assert!((pixel[0] as i16 - 130).abs() <= 2);
         }
+    }
+
+    #[test]
+    fn test_cpu_crop_rgb_returns_only_roi() {
+        let width = 4u32;
+        let height = 3u32;
+        let mut pixels = vec![0u8; (width * height * 3) as usize];
+        for (index, pixel) in pixels.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            pixel[0] = index as u8;
+            pixel[1] = 100;
+            pixel[2] = 200;
+        }
+        let mut desc = AvFrameDesc::default_nv12(width, height, (width * 3) as i32, 0, 0);
+        desc.pixel_format = AV_PIX_RGB24;
+        desc.opaque = pixels.as_ptr() as *mut std::ffi::c_void;
+        desc.opaque_kind = AV_OPAQUE_NONE;
+        let frame = SafeFrame::from_ref(&desc).expect("RGB 帧描述符有效");
+        let buffer = CpuCvEngine::new()
+            .crop_rgb_fallback(
+                &frame,
+                CropRect {
+                    x: 1,
+                    y: 1,
+                    width: 2,
+                    height: 2,
+                },
+            )
+            .expect("CPU ROI 裁剪应成功");
+        assert_eq!(buffer.width(), 2);
+        assert_eq!(buffer.height(), 2);
+        assert_eq!(
+            buffer.readback_rgb24().expect("ROI readback 应成功"),
+            vec![5, 100, 200, 6, 100, 200, 9, 100, 200, 10, 100, 200]
+        );
     }
 
     #[test]

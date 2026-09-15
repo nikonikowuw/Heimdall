@@ -55,9 +55,89 @@ pub struct LetterboxLayout {
     pub scaled_h: u32,
 }
 
+/// 低频快照使用的像素 ROI。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CropRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl CropRect {
+    pub fn validate(
+        self,
+        frame_width: u32,
+        frame_height: u32,
+    ) -> Result<Self, crate::error::AlgoError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(crate::error::AlgoError::Preprocess {
+                reason: "ROI 尺寸不能为 0".to_string(),
+            });
+        }
+        let right = self
+            .x
+            .checked_add(self.width)
+            .ok_or(crate::error::AlgoError::Preprocess {
+                reason: "ROI 横向范围溢出".to_string(),
+            })?;
+        let bottom =
+            self.y
+                .checked_add(self.height)
+                .ok_or(crate::error::AlgoError::Preprocess {
+                    reason: "ROI 纵向范围溢出".to_string(),
+                })?;
+        if right > frame_width || bottom > frame_height {
+            return Err(crate::error::AlgoError::Preprocess {
+                reason: format!(
+                    "ROI 超出帧边界: roi={}x{}+{},{} frame={}x{}",
+                    self.width, self.height, self.x, self.y, frame_width, frame_height
+                ),
+            });
+        }
+        Ok(self)
+    }
+}
+
 /// 预处理变换模式（供后处理坐标反算使用）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PreprocessMode {
     Letterbox(LetterboxLayout),
     Resize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crop_rect_accepts_in_bounds_region() {
+        let rect = CropRect {
+            x: 4,
+            y: 6,
+            width: 8,
+            height: 10,
+        };
+        assert_eq!(rect.validate(16, 20), Ok(rect));
+    }
+
+    #[test]
+    fn crop_rect_rejects_overflow_and_out_of_bounds() {
+        assert!(CropRect {
+            x: u32::MAX,
+            y: 0,
+            width: 2,
+            height: 2,
+        }
+        .validate(u32::MAX, 2)
+        .is_err());
+        assert!(CropRect {
+            x: 8,
+            y: 0,
+            width: 9,
+            height: 2,
+        }
+        .validate(16, 2)
+        .is_err());
+    }
 }
