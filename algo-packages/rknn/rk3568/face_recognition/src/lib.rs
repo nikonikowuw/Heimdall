@@ -44,6 +44,7 @@ const MAX_DECODED_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_PREPROCESS_BYTES: usize = 128 * 1024 * 1024;
 
 type DetectionPairResult = Result<(Vec<detect::PersonCandidate>, Vec<detect::RawFace>), AlgoError>;
+type RegistrationResult = Result<Vec<detect::RawFace>, AlgoError>;
 
 enum InferenceRequest {
     DetectHost {
@@ -52,6 +53,12 @@ enum InferenceRequest {
         min_face_score: f32,
         min_person_score: f32,
         reply: SyncSender<DetectionPairResult>,
+    },
+    DetectRegistrationHost {
+        data: Vec<u8>,
+        layout: LetterboxLayout,
+        min_face_score: f32,
+        reply: SyncSender<RegistrationResult>,
     },
     DetectDma {
         buffer: CvBuffer,
@@ -140,6 +147,9 @@ fn reject_dropped_request(request: InferenceRequest) {
         InferenceRequest::DetectHost { reply, .. } | InferenceRequest::DetectDma { reply, .. } => {
             let _ = reply.try_send(Err(AlgoError::Timeout));
         }
+        InferenceRequest::DetectRegistrationHost { reply, .. } => {
+            let _ = reply.try_send(Err(AlgoError::Timeout));
+        }
         InferenceRequest::EmbedHost { reply, .. } => {
             let _ = reply.try_send(Err(AlgoError::Timeout));
         }
@@ -199,8 +209,15 @@ impl InferenceWorker {
             input_channels: 3,
             output_shapes: manifest::PERSON_DETECTOR_OUTPUT_SHAPES.to_vec(),
         };
+        let registration_detector_contract = RknnModelContract {
+            input_width: package.registration_detector_width,
+            input_height: package.registration_detector_height,
+            input_channels: 3,
+            output_shapes: manifest::DETECTOR_640X640_OUTPUT_SHAPES.to_vec(),
+        };
 
         let detector_path = package.detector_path.clone();
+        let registration_detector_path = package.registration_detector_path.clone();
         let embedder_path = package.embedder_path.clone();
         let person_detector_path = package.person_detector_path.clone();
         let queue = Arc::new(WorkerQueue::new());
@@ -223,6 +240,31 @@ impl InferenceWorker {
                 let Ok((mut detector, mut embedder)) = sessions else {
                     let _ = ready_tx.send(sessions.map(|_| ()));
                     return;
+                };
+
+                let mut registration_detector = if registration_detector_path.is_file() {
+                    match RknnSession::new(
+                        Arc::clone(&runtime),
+                        &registration_detector_path,
+                        registration_detector_contract,
+                    ) {
+                        Ok(session) => {
+                            tracing::info!(
+                                path = ?registration_detector_path,
+                                "成功加载 640x640 人脸注册专用检测模型"
+                            );
+                            Some(session)
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                "可选 640x640 人脸注册检测模型初始化失败，回退使用 640x384 检测器"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
                 };
 
                 let mut person_detector = if person_detector_path.is_file() {
@@ -281,6 +323,39 @@ impl InferenceWorker {
                                     let faces =
                                         decode_detector(&mut detector, &data, &layout, min_face_score)?;
                                     Ok((persons, faces))
+                                }))
+                                .unwrap_or_else(|_| Err(worker_panic_error()));
+                            let _ = reply.send(result);
+                        }
+                        InferenceRequest::DetectRegistrationHost {
+                            data,
+                            layout,
+                            min_face_score,
+                            reply,
+                        } => {
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    if let Some(ref mut reg_session) = registration_detector {
+                                        let attrs = reg_session.output_attrs.clone();
+                                        reg_session.infer_with_host_bytes(&data, |output| {
+                                            decode_detector_output(
+                                                output,
+                                                &attrs,
+                                                &layout,
+                                                min_face_score,
+                                            )
+                                        })
+                                    } else {
+                                        let attrs = detector.output_attrs.clone();
+                                        detector.infer_with_host_bytes(&data, |output| {
+                                            decode_detector_output(
+                                                output,
+                                                &attrs,
+                                                &layout,
+                                                min_face_score,
+                                            )
+                                        })
+                                    }
                                 }))
                                 .unwrap_or_else(|_| Err(worker_panic_error()));
                             let _ = reply.send(result);
@@ -398,6 +473,22 @@ impl InferenceWorker {
         receive_response(response)
     }
 
+    pub fn detect_registration_host(
+        &self,
+        data: Vec<u8>,
+        layout: LetterboxLayout,
+        min_face_score: f32,
+    ) -> Result<Vec<detect::RawFace>, AlgoError> {
+        let (reply, response) = sync_channel(1);
+        self.try_send(InferenceRequest::DetectRegistrationHost {
+            data,
+            layout,
+            min_face_score,
+            reply,
+        })?;
+        receive_response(response)
+    }
+
     pub fn detect_dma_buf(
         &self,
         buffer: CvBuffer,
@@ -501,6 +592,9 @@ pub struct SharedModels {
     pub worker: Arc<InferenceWorker>,
     pub detector_width: u32,
     pub detector_height: u32,
+    pub registration_detector_width: u32,
+    pub registration_detector_height: u32,
+    pub has_registration_detector: bool,
     pub embedder_width: u32,
     pub embedder_height: u32,
 }
@@ -523,11 +617,15 @@ pub fn shared_models(package_root: &Path) -> Result<Arc<SharedModels>, AlgoError
     }
 
     let package = LoadedPackage::load(&key)?;
+    let has_registration_detector = package.registration_detector_path.is_file();
     let worker = InferenceWorker::start(&package)?;
     let models = Arc::new(SharedModels {
         worker,
         detector_width: package.detector_width,
         detector_height: package.detector_height,
+        registration_detector_width: package.registration_detector_width,
+        registration_detector_height: package.registration_detector_height,
+        has_registration_detector,
         embedder_width: package.embedder_width,
         embedder_height: package.embedder_height,
     });
@@ -821,30 +919,64 @@ unsafe fn extract_face_impl(
         }
     };
 
-    let (detector_rgb, layout) =
-        match prepare_detector_input_for(&image, models.detector_width, models.detector_height) {
-            Ok(input) => input,
+    let (orig_w, orig_h) = (image.width(), image.height());
+
+    // 快捷路径：若输入本身已为 112x112 标准对齐人脸，直接进入 EdgeFace 提取，
+    // 杜绝重缩放至 640x384 灰色 letterbox 导致的特征模糊、关键点漂移与失真。
+    if orig_w == 112 && orig_h == 112 {
+        let aligned = image.as_raw().to_vec();
+        let embedding = match models.worker.embed_host(aligned.clone()) {
+            Ok(embedding) => embedding,
+            Err(error) => {
+                let status = error.to_c_status();
+                algo_sdk::macros::set_last_error(format!("EMBED_INFERENCE_FAILED: {error}"));
+                write_output_error(output_ref, status);
+                return status;
+            }
+        };
+        let jpeg = match encode_aligned_jpeg(&aligned) {
+            Ok(jpeg) => jpeg,
             Err(error) => {
                 algo_sdk::macros::set_last_error(error.to_string());
                 write_output_error(output_ref, error.to_c_status());
                 return error.to_c_status();
             }
         };
-    let (orig_w, orig_h) = (image.width(), image.height());
-    let min_score = 0.5;
-    let (_persons, raw_faces) =
-        match models
-            .worker
-            .detect_host(detector_rgb, layout, min_score, 0.40)
-        {
-            Ok(res) => res,
-            Err(error) => {
-                let status = error.to_c_status();
-                algo_sdk::macros::set_last_error(error.to_string());
-                write_output_error(output_ref, status);
-                return status;
-            }
-        };
+        write_output_success(output_ref, embedding, 1.0, 1.0, jpeg);
+        return AV_OK;
+    }
+
+    let (det_w, det_h) = if models.has_registration_detector {
+        (
+            models.registration_detector_width,
+            models.registration_detector_height,
+        )
+    } else {
+        (models.detector_width, models.detector_height)
+    };
+
+    let (detector_rgb, layout) = match prepare_detector_input_for(&image, det_w, det_h) {
+        Ok(input) => input,
+        Err(error) => {
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, error.to_c_status());
+            return error.to_c_status();
+        }
+    };
+    // 单图提取放宽检测器初筛门槛（0.30），由后续综合质量评估 (quality.accepted) 执行保真
+    let min_score = 0.30;
+    let raw_faces = match models
+        .worker
+        .detect_registration_host(detector_rgb, layout, min_score)
+    {
+        Ok(res) => res,
+        Err(error) => {
+            let status = error.to_c_status();
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, status);
+            return status;
+        }
+    };
 
     let min_face_size = 30u32;
     let min_quality_score = 0.3f32;
@@ -876,12 +1008,65 @@ unsafe fn extract_face_impl(
         return AV_ERR_INFERENCE_FAILED;
     };
 
-    let aligned = match align::align_face(image.as_raw(), orig_w, orig_h, &best_face.landmarks) {
-        Ok(aligned) => aligned,
-        Err(error) => {
-            algo_sdk::macros::set_last_error(error.to_string());
-            write_output_error(output_ref, error.to_c_status());
-            return error.to_c_status();
+    let aligned = if (orig_w < 320 || orig_h < 320)
+        && (best_face.width() * orig_w as f32 > 0.6 * orig_w as f32)
+    {
+        // 紧凑切片保护：输入为贴脸切片时，原图四周缺少额头与下巴余量。
+        // 通过边缘镜像填充（Reflect Padding）扩充 25% 边界，防止仿射对齐逆采样出大面积纯黑像素（0, 0, 0）。
+        let pad_x = (orig_w as f32 * 0.25).round() as u32;
+        let pad_y = (orig_h as f32 * 0.25).round() as u32;
+        let padded_w = orig_w + pad_x * 2;
+        let padded_h = orig_h + pad_y * 2;
+        let mut padded_image = vec![0u8; (padded_w * padded_h * 3) as usize];
+        let raw = image.as_raw();
+        for y in 0..padded_h {
+            let src_y = if y < pad_y {
+                pad_y - y
+            } else if y >= orig_h + pad_y {
+                let diff = y - (orig_h + pad_y) + 1;
+                orig_h.saturating_sub(diff)
+            } else {
+                y - pad_y
+            }
+            .min(orig_h - 1) as usize;
+
+            for x in 0..padded_w {
+                let src_x = if x < pad_x {
+                    pad_x - x
+                } else if x >= orig_w + pad_x {
+                    let diff = x - (orig_w + pad_x) + 1;
+                    orig_w.saturating_sub(diff)
+                } else {
+                    x - pad_x
+                }
+                .min(orig_w - 1) as usize;
+
+                let src_idx = (src_y * orig_w as usize + src_x) * 3;
+                let dst_idx = (y as usize * padded_w as usize + x as usize) * 3;
+                padded_image[dst_idx..dst_idx + 3].copy_from_slice(&raw[src_idx..src_idx + 3]);
+            }
+        }
+        let mut padded_landmarks = [[0.0f32; 2]; 5];
+        for (dst, src) in padded_landmarks.iter_mut().zip(&best_face.landmarks) {
+            dst[0] = src[0] * orig_w as f32 + pad_x as f32;
+            dst[1] = src[1] * orig_h as f32 + pad_y as f32;
+        }
+        match align::align_face(&padded_image, padded_w, padded_h, &padded_landmarks) {
+            Ok(aligned) => aligned,
+            Err(error) => {
+                algo_sdk::macros::set_last_error(error.to_string());
+                write_output_error(output_ref, error.to_c_status());
+                return error.to_c_status();
+            }
+        }
+    } else {
+        match align::align_face(image.as_raw(), orig_w, orig_h, &best_face.landmarks) {
+            Ok(aligned) => aligned,
+            Err(error) => {
+                algo_sdk::macros::set_last_error(error.to_string());
+                write_output_error(output_ref, error.to_c_status());
+                return error.to_c_status();
+            }
         }
     };
     let embedding = match models.worker.embed_host(aligned.clone()) {

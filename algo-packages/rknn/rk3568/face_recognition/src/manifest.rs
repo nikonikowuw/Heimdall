@@ -27,6 +27,21 @@ pub const DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 12] = [
     [1, 15, 12, 20],
 ];
 
+pub const DETECTOR_640X640_OUTPUT_SHAPES: [[u32; 4]; 12] = [
+    [1, 64, 80, 80],
+    [1, 1, 80, 80],
+    [1, 1, 80, 80],
+    [1, 15, 80, 80],
+    [1, 64, 40, 40],
+    [1, 1, 40, 40],
+    [1, 1, 40, 40],
+    [1, 15, 40, 40],
+    [1, 64, 20, 20],
+    [1, 1, 20, 20],
+    [1, 1, 20, 20],
+    [1, 15, 20, 20],
+];
+
 pub const PERSON_DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 9] = [
     [1, 64, 48, 80],
     [1, 80, 48, 80],
@@ -71,9 +86,12 @@ pub struct LoadedPackage {
     pub root: PathBuf,
     pub person_detector_path: PathBuf,
     pub detector_path: PathBuf,
+    pub registration_detector_path: PathBuf,
     pub embedder_path: PathBuf,
     pub detector_width: u32,
     pub detector_height: u32,
+    pub registration_detector_width: u32,
+    pub registration_detector_height: u32,
     pub embedder_width: u32,
     pub embedder_height: u32,
     pub embedding_dimension: u32,
@@ -132,6 +150,11 @@ impl LoadedPackage {
             "DETECTOR_MODEL_PATH",
             "model/yolov8n-face-640x384_rk3568_mixed_face.rknn",
         )?;
+        let registration_detector_path = env.resolve_model_path(
+            &root,
+            "REGISTRATION_DETECTOR_MODEL_PATH",
+            "model/yolov8n-face-640x640_rk3568_mixed_face.rknn",
+        )?;
         let embedder_path = env.resolve_model_path(
             &root,
             "EMBEDDER_MODEL_PATH",
@@ -140,18 +163,24 @@ impl LoadedPackage {
 
         verify_model_file(&detector_path)?;
         verify_model_file(&embedder_path)?;
-        // 人体检测模型若存在则验证，若不存在亦记录
+        // 人体检测模型与 640x640 人脸注册检测模型若存在则验证
         if person_detector_path.is_file() {
             verify_model_file(&person_detector_path)?;
+        }
+        if registration_detector_path.is_file() {
+            verify_model_file(&registration_detector_path)?;
         }
 
         Ok(Self {
             root,
             person_detector_path,
             detector_path,
+            registration_detector_path,
             embedder_path,
             detector_width: 640,
             detector_height: 384,
+            registration_detector_width: 640,
+            registration_detector_height: 640,
             embedder_width: 112,
             embedder_height: 112,
             embedding_dimension: 512,
@@ -181,10 +210,13 @@ mod tests {
             .expect("checked-in RKNN manifest and model paths must be valid");
         assert_eq!(package.detector_width, 640);
         assert_eq!(package.detector_height, 384);
+        assert_eq!(package.registration_detector_width, 640);
+        assert_eq!(package.registration_detector_height, 640);
         assert_eq!(package.embedder_width, 112);
         assert_eq!(package.embedder_height, 112);
         assert_eq!(package.embedding_dimension, 512);
         assert!(package.detector_path.is_file());
+        assert!(package.registration_detector_path.is_file());
         assert!(package.embedder_path.is_file());
         assert!(package.person_detector_path.is_file());
     }

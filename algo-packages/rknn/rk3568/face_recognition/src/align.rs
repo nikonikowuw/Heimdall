@@ -166,13 +166,15 @@ pub fn apply_affine(
 
         for _ in 0..out_size {
             if sx >= 0.0 && sy >= 0.0 && sx <= max_x && sy <= max_y {
-                let x0 = sx as usize;
-                let y0 = sy as usize;
+                let clamped_x = sx.clamp(0.0, max_x);
+                let clamped_y = sy.clamp(0.0, max_y);
+                let x0 = clamped_x as usize;
+                let y0 = clamped_y as usize;
                 let x1 = (x0 + 1).min(max_x_idx);
                 let y1 = (y0 + 1).min(max_y_idx);
 
-                let fx = sx - x0 as f32;
-                let fy = sy - y0 as f32;
+                let fx = clamped_x - x0 as f32;
+                let fy = clamped_y - y0 as f32;
 
                 let row0 = y0 * stride;
                 let row1 = y1 * stride;
@@ -228,7 +230,19 @@ pub fn align_face(
     }
     let mut source = *landmarks;
     for point in &mut source {
-        if point[0].abs() <= 1.0 && point[1].abs() <= 1.0 {
+        if !point[0].is_finite() || !point[1].is_finite() {
+            return Err(AlgoError::Preprocess {
+                reason: "人脸关键点包含非有限浮点数".to_string(),
+            });
+        }
+    }
+    // 统一尺度判定：若全部关键点均处于归一化相对坐标空间（允许适度浮点越界），则整组按原图尺寸缩放到绝对像素坐标。
+    // 避免单个越界关键点判断不一致导致部分点缩放、部分点保持相对值，造成仿射矩阵退化崩溃。
+    let is_normalized = source
+        .iter()
+        .all(|point| (-0.5..=2.0).contains(&point[0]) && (-0.5..=2.0).contains(&point[1]));
+    if is_normalized {
+        for point in &mut source {
             point[0] *= width as f32;
             point[1] *= height as f32;
         }

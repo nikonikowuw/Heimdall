@@ -284,12 +284,17 @@ pub fn face_alignment_matrix(
     }
     let mut source = *landmarks;
     for point in &mut source {
-        if point[0].abs() <= 1.0 && point[1].abs() <= 1.0 {
-            point[0] *= width as f32;
-            point[1] *= height as f32;
-        }
         if !point[0].is_finite() || !point[1].is_finite() {
             return Err("人脸关键点包含非有限值");
+        }
+    }
+    let is_normalized = source
+        .iter()
+        .all(|point| (-0.5..=2.0).contains(&point[0]) && (-0.5..=2.0).contains(&point[1]));
+    if is_normalized {
+        for point in &mut source {
+            point[0] *= width as f32;
+            point[1] *= height as f32;
         }
     }
     let matrix = estimate_affine_checked(&source, &ARC_FACE_TEMPLATE)?;

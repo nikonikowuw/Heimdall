@@ -7,8 +7,9 @@
 - **精度**: FP16
 
 ### 2. YOLOv8n-Face (人脸检测)
-- **原始模型**: yolov8n-face (640x384)
-- **精度**: INT8 mixed
+- **视频流模型**: `yolov8n-face-640x384_rk3568_mixed_face.rknn` (16:9 横屏监控优化)
+- **注册底库模型**: `yolov8n-face-640x640_rk3568_mixed_face.rknn` (9:16 手机自拍与正方形寸照优化)
+- **精度**: INT8 mixed (`auto_hybrid=True`, 使用 `face_calibration` 人脸专用校准集)
 
 ### 3. YOLOv8n COCO 人体检测
 - **模型文件**: `yolov8n-640x384-rk3568.rknn`
@@ -31,6 +32,7 @@ face_recognition/
 │   ├── edgeface_xs_gamma_06_rk3568_fp16.rknn
 │   ├── yolov8n-640x384-rk3568.rknn
 │   ├── yolov8n-face-640x384_rk3568_mixed_face.rknn
+│   ├── yolov8n-face-640x640_rk3568_mixed_face.rknn
 │   ├── CONVERSION.md
 │   └── README.md
 ├── python/

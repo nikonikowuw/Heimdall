@@ -472,10 +472,10 @@ pub fn normalize_to_relative(faces: &mut [RawFace], layout: &LetterboxLayout) {
 
         face.bbox = [x1, y1, (x2 - x1).max(0.0), (y2 - y1).max(0.0)];
 
-        // landmarks 反算黑边并归一化到原图
+        // landmarks 反算黑边并归一化到原图相对坐标系（允许轻微跨界以保护 5 点几何拓扑不失真）
         for point in &mut face.landmarks {
-            point[0] = ((point[0] - pad_left) * inv_w).clamp(0.0, 1.0);
-            point[1] = ((point[1] - pad_top) * inv_h).clamp(0.0, 1.0);
+            point[0] = ((point[0] - pad_left) * inv_w).clamp(-0.2, 1.2);
+            point[1] = ((point[1] - pad_top) * inv_h).clamp(-0.2, 1.2);
         }
     }
 }
