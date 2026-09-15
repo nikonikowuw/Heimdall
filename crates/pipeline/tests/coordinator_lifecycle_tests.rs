@@ -166,6 +166,16 @@ async fn test_coordinator_full_lifecycle_and_events() {
     // 等待子流解码与推理
     tokio::time::sleep(Duration::from_millis(150)).await;
 
+    // 双流分工下必须继续维护主码流压缩包证据环，供告警时按需追帧取证
+    let dual_ctx = pipeline_mgr
+        .get_pipeline_context(cam_id)
+        .await
+        .expect("双流模式下应存在管线上下文");
+    assert!(
+        !dual_ctx.ring_buffer.is_empty(),
+        "双流模式下主码流压缩包证据环必须保持活跃"
+    );
+
     // 4. 验证事件通道能收到 Tracks 事件
     let mut received_track = false;
     while let Ok(evt) = event_rx.try_recv() {
@@ -189,6 +199,105 @@ async fn test_coordinator_full_lifecycle_and_events() {
         0,
         "主流订阅计数必须准确归零"
     );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+/// 主码流分析模式下，分析泵已独占消费并常驻解码主码流，证据直接复用推理原生帧，
+/// 压缩包证据环没有任何消费者，不得再额外挂一份主码流订阅与整环内存。
+#[tokio::test]
+async fn test_main_stream_analysis_does_not_maintain_compressed_ring_buffer() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_main_stream_no_ring_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let pipeline_mgr = Arc::new(PipelineManager::with_evidence_dir(&temp_dir));
+    let stream_hub = Arc::new(StreamHub::new());
+    let algo_registry = Arc::new(AlgoRegistry::new());
+
+    let coordinator =
+        TaskRuntimeCoordinator::new(pipeline_mgr.clone(), stream_hub.clone(), algo_registry);
+
+    let cam_id = "camera_main_stream_001";
+    // 主码流分析模式：解析后的分析码流 URL 与主码流 URL 相同
+    let main_url = "rtsp://mock-main/main-stream";
+
+    let session = stream_hub
+        .get_or_create_session(&format!("{}:main", cam_id), main_url, TransportPolicy::Tcp)
+        .await;
+    let sub_session = stream_hub
+        .get_or_create_session(&format!("{}:sub", cam_id), main_url, TransportPolicy::Tcp)
+        .await;
+    assert!(
+        Arc::ptr_eq(&session, &sub_session),
+        "主码流分析模式下主/子键必须复用同一条物理连接"
+    );
+
+    // 订阅分析事件，作为“包确实流到消费者”的正向对照
+    let mut event_rx = pipeline_mgr.subscribe_analysis_events();
+
+    let infer_backend = Arc::new(MockInferBackend::new(0.45));
+    let worker = InferenceWorker::new(infer_backend);
+    let decoder: Box<dyn VideoDecoder + Send> =
+        Box::new(MockDecoder::new(cam_id, CodecType::H264, 640, 360));
+
+    let params = StartCameraPipelineParams {
+        camera_id: cam_id.to_string(),
+        main_rtsp_url: main_url.to_string(),
+        main_codec: CodecType::H264,
+        sub_rtsp_url: main_url.to_string(),
+        sub_codec: CodecType::H264,
+        transport_policy: TransportPolicy::Tcp,
+        instances: vec![InstanceLaunchConfig {
+            algorithm_id: "test_algo_main".to_string(),
+            algo_params: serde_json::json!({}),
+            target_fps: 25,
+        }],
+        motion_gate: None,
+    };
+
+    coordinator
+        .start_camera_pipeline_with_decoder_and_worker(params, decoder, worker)
+        .await
+        .expect("主码流分析模式启动管线应成功");
+
+    let ctx = pipeline_mgr
+        .get_pipeline_context(cam_id)
+        .await
+        .expect("主码流分析模式下应存在管线上下文");
+    assert!(
+        ctx.is_main_stream_analysis.load(Ordering::Acquire),
+        "管线必须被识别为主码流分析模式"
+    );
+
+    // 在共享物理连接上推送数据：分析泵必须消费它
+    session.dispatcher.publish(create_packet(1000, true));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let mut consumed = false;
+    while let Ok(evt) = event_rx.try_recv() {
+        if let PipelineAnalysisEvent::Tracks(track_evt) = evt {
+            if track_evt.camera_id == cam_id && !track_evt.tracks.is_empty() {
+                consumed = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        consumed,
+        "正向对照失败：分析泵未消费主码流，下面的环断言将失去意义"
+    );
+
+    // 回归断言：主码流分析模式不得再维护压缩包证据环
+    assert_eq!(
+        ctx.ring_buffer.len(),
+        0,
+        "主码流分析模式下压缩包证据环必须保持为空"
+    );
+
+    assert!(coordinator.stop_camera_pipeline(cam_id).await);
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

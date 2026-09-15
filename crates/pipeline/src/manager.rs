@@ -754,8 +754,8 @@ impl PipelineManager {
             None
         };
 
-        // 没有显式携带推理帧时，仍可复用环中 PTS 对齐的主流帧。该兼容入口不再把
-        // 环中任意最新帧当作主流证据，未命中时交由 GOP 追帧或返回失败。
+        // 没有显式携带推理帧时，仍可复用环中 PTS 对齐的主流帧。主码流分析模式不维护
+        // 压缩包证据环，未命中即失败，绝不退化成按需 GOP 追帧。
         if is_main_stream {
             let matched_opt = {
                 let ring = ctx.decoded_ring.read().await;
@@ -781,26 +781,34 @@ impl PipelineManager {
                     .save_snapshot_async(camera_id, frame, bbox, false)
                     .await;
             }
+
+            tracing::warn!(
+                camera_id = %camera_id,
+                target_pts = target_pts_ms,
+                "主码流分析模式未命中同刻已解码帧，拒绝按需 GOP 追帧取证"
+            );
+            return Err(PipelineError::PipelineNotFound {
+                camera_id: format!("{camera_id} (主码流分析模式未命中同刻已解码帧)"),
+            });
         }
 
         // 子码流双流分析时，优先复用本推理周期中同一时标已按需解码成功的主码流高分辨率帧，
         // 彻底避免单帧触发多规则告警或多目标通行抓拍时对同一 GOP 重复执行高开销前向硬解！
-        if !is_main_stream {
-            if let Some(cached) = ctx.last_on_demand_frame.read().await.as_ref() {
-                let diff_ms = cached.timestamp.abs_diff(target_pts_ms);
-                if diff_ms <= crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS as u64 {
-                    tracing::debug!(
-                        camera_id = %camera_id,
-                        target_pts = target_pts_ms,
-                        frame_pts = cached.timestamp,
-                        diff_ms,
-                        "复用同刻已解码的主码流按需帧，避免多告警重复前向解码 GOP"
-                    );
-                    return self
-                        .snapshot_engine
-                        .save_snapshot_async(camera_id, cached.clone(), bbox, false)
-                        .await;
-                }
+        // 以下仅子码流双流分析路径可达：主码流已在上面收敛返回。
+        if let Some(cached) = ctx.last_on_demand_frame.read().await.as_ref() {
+            let diff_ms = cached.timestamp.abs_diff(target_pts_ms);
+            if diff_ms <= crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS as u64 {
+                tracing::debug!(
+                    camera_id = %camera_id,
+                    target_pts = target_pts_ms,
+                    frame_pts = cached.timestamp,
+                    diff_ms,
+                    "复用同刻已解码的主码流按需帧，避免多告警重复前向解码 GOP"
+                );
+                return self
+                    .snapshot_engine
+                    .save_snapshot_async(camera_id, cached.clone(), bbox, false)
+                    .await;
             }
         }
 
@@ -808,7 +816,7 @@ impl PipelineManager {
         // 所有候选帧均严格受 MAX_TARGET_FRAME_DIFF_MS 约束，杜绝过期帧与当前 bbox 拼接。
         let fallback_frame: Option<FallbackCandidate> = if let Some(frame) = analyzed_fallback {
             Some(frame)
-        } else if !is_main_stream {
+        } else {
             let max_diff = crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS;
             let ring_fallback = {
                 let ring = ctx.decoded_ring.read().await;
@@ -826,8 +834,6 @@ impl PipelineManager {
                         .map(FallbackCandidate::sub_stream)
                 }
             }
-        } else {
-            None
         };
 
         // 工业级全局 VPU 抓拍通道配额管控：仅在需要按码流取证时借用按需解码器。

@@ -255,7 +255,7 @@ pub struct ActiveRuntimeEntry {
     pub generation: u64,
     pub params: StartCameraPipelineParams,
     pub main_stream_key: String,
-    pub main_attach_handle: AbortOnDropHandle<()>,
+    pub main_attach_handle: Option<AbortOnDropHandle<()>>,
     pub sub_stream_key: String,
     pub sub_session: Arc<media::stream_hub::CameraStreamSession>,
     pub worker_handle: infer::InferenceWorkerHandle,
@@ -745,18 +745,24 @@ impl TaskRuntimeCoordinator {
             .unwrap_or_default();
 
         let result: Result<u64, CoordinatorError> = async {
-            let main_rx = self
-                .stream_hub
-                .subscribe(
-                    &main_stream_key,
-                    &params.main_rtsp_url,
-                    params.transport_policy,
-                )
-                .await?;
+            // 主码流分析模式下，分析泵已独占消费并常驻解码主码流，证据直接复用推理原生帧，
+            // 压缩包证据环没有任何消费者。此时再订阅一次只会在同一条物理连接上多挂一个
+            // mailbox 并整环缓存 4s 主码流 NALU；只有分析走独立子码流的双流分工才需要
+            // 主码流裸 NALU 进环，供告警时按需前向解码取证。
+            if !params.is_main_stream_analysis() {
+                let main_rx = self
+                    .stream_hub
+                    .subscribe(
+                        &main_stream_key,
+                        &params.main_rtsp_url,
+                        params.transport_policy,
+                    )
+                    .await?;
 
-            main_attach_handle = Some(AbortOnDropHandle::new(
-                self.pipeline_mgr.attach_main_stream(&camera_id, main_rx),
-            ));
+                main_attach_handle = Some(AbortOnDropHandle::new(
+                    self.pipeline_mgr.attach_main_stream(&camera_id, main_rx),
+                ));
+            }
 
             self.stream_hub
                 .set_ai_enabled(
@@ -807,9 +813,7 @@ impl TaskRuntimeCoordinator {
                 generation,
                 params: params.clone(),
                 main_stream_key: main_stream_key.clone(),
-                main_attach_handle: main_attach_handle
-                    .take()
-                    .expect("main attach handle is owned by startup transaction"),
+                main_attach_handle: main_attach_handle.take(),
                 sub_stream_key: sub_stream_key.clone(),
                 sub_session,
                 worker_handle: primary_handle,
@@ -918,7 +922,9 @@ impl TaskRuntimeCoordinator {
                     false,
                 )
                 .await;
-            abort_join_handle(entry.main_attach_handle).await;
+            if let Some(handle) = entry.main_attach_handle {
+                abort_join_handle(handle).await;
+            }
             self.pipeline_mgr.set_ai_active(camera_id, false).await;
             self.pipeline_mgr
                 .set_main_stream_analysis(camera_id, false)
