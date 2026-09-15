@@ -1,5 +1,62 @@
 use serde::{Deserialize, Serialize};
 
+/// 人脸特征重新提取单项失败明细
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReextractFaceFailureDetail {
+    pub face_id: String,
+    pub subject_id: String,
+    pub reason: String,
+}
+
+/// 人脸特征重新提取任务运行状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReextractTaskStatus {
+    #[default]
+    Idle,
+    Running,
+    Completed,
+    Failed,
+}
+
+impl ReextractTaskStatus {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// 人脸特征重新提取任务实时进度与状态 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReextractProgressDto {
+    pub status: ReextractTaskStatus,
+    pub total: u64,
+    pub processed: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub current_face_id: Option<String>,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub failures: Vec<ReextractFaceFailureDetail>,
+    pub error_message: Option<String>,
+}
+
+/// 人脸特征重新提取任务执行报告（针对单人或终态）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReextractFaceFeaturesReportDto {
+    pub total: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub failures: Vec<ReextractFaceFailureDetail>,
+}
+
 /// 人员列表展示 DTO
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

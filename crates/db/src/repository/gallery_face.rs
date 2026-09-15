@@ -143,4 +143,30 @@ impl GalleryFaceRepo {
     pub async fn count_all<C: ConnectionTrait>(db: &C) -> Result<u64, DbError> {
         Entity::find().count(db).await.map_err(DbError::from)
     }
+
+    /// 更新人脸特征向量、对齐切片路径与质量评分
+    pub async fn update_feature<C: ConnectionTrait>(
+        db: &C,
+        face_id: &str,
+        feature_vector: Vec<u8>,
+        aligned_rel_path: &str,
+        quality_score: f32,
+        detection_score: f32,
+    ) -> Result<bool, DbError> {
+        let rows = db
+            .execute(Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "UPDATE gallery_faces SET feature_vector = ?, aligned_rel_path = ?, quality_score = ?, detection_score = ? WHERE face_id = ?",
+                [
+                    feature_vector.into(),
+                    aligned_rel_path.into(),
+                    quality_score.into(),
+                    detection_score.into(),
+                    face_id.into(),
+                ],
+            ))
+            .await
+            .map_err(DbError::from)?;
+        Ok(rows.rows_affected() > 0)
+    }
 }

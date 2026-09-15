@@ -40,7 +40,9 @@ pub use gb28181::{
 pub use oplog::{OpEvent, OperationLog};
 pub use personnel::{
     FaceCandidateItem, FaceMatchResult, GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto,
-    PersonnelStatsDto, RecognitionStatus, UpdatePersonnelRequest,
+    PersonnelStatsDto, RecognitionStatus, ReextractFaceFailureDetail,
+    ReextractFaceFeaturesReportDto, ReextractProgressDto, ReextractTaskStatus,
+    UpdatePersonnelRequest,
 };
 pub use system::{
     CoreMetrics, CpuMetrics, DiskMetrics, EvictionReport, ForceSyncResponse, InterfaceCapabilities,

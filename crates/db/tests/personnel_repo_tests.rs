@@ -77,6 +77,31 @@ async fn test_personnel_and_gallery_faces_crud() {
     assert_eq!(faces_updated[1].face_id, "face_1");
     assert_eq!(faces_updated[1].is_primary, 0);
 
+    // 4.1 更新 face_1 特征向量与对齐路径
+    let new_vec_1 = vec![2u8; 2048];
+    let updated = GalleryFaceRepo::update_feature(
+        &db,
+        "face_1",
+        new_vec_1.clone(),
+        "galleries/emp_001/aligned_face_1_v2.jpg",
+        0.98,
+        0.99,
+    )
+    .await
+    .unwrap();
+    assert!(updated);
+    let f1_updated = GalleryFaceRepo::find_by_face_id(&db, "face_1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(f1_updated.feature_vector, new_vec_1);
+    assert_eq!(
+        f1_updated.aligned_rel_path,
+        "galleries/emp_001/aligned_face_1_v2.jpg"
+    );
+    assert_eq!(f1_updated.quality_score, 0.98);
+    assert_eq!(f1_updated.detection_score, 0.99);
+
     // 5. 模糊搜索
     let (list, total) = PersonnelRepo::list_filtered(&db, Some("张"), 10, 0)
         .await
