@@ -387,8 +387,10 @@ impl Drop for RknnOutputsGuard<'_> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DmaIdentity {
-    device: u64,
-    inode: u64,
+    // 按平台真实类型存放：macOS `dev_t` 是 i32、Linux 是 u64；
+    // 若统一写成 u64 会在 Linux 目标触发 `unnecessary_cast`。
+    device: libc::dev_t,
+    inode: libc::ino_t,
     size: usize,
     stride: u32,
     h_stride: u32,

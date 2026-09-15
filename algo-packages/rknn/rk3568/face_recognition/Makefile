@@ -44,8 +44,6 @@ test:
 
 # Cargo 参数
 CARGO := cargo
-CROSS_FEATURES ?= rga,testing-hardware
-DURATION ?= 30
 
 # 检测交叉编译工具链 (优先 cross, 其次 cargo zigbuild, 保底 cargo)
 CARGO_CROSS ?= $(shell if command -v cross >/dev/null 2>&1; then echo "CROSS_CONTAINER_ENGINE=podman cross build"; elif cargo zigbuild -h >/dev/null 2>&1; then echo "cargo zigbuild"; else echo "cargo build"; fi)

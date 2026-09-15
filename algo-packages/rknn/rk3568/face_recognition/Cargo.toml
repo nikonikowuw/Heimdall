@@ -20,8 +20,6 @@ libloading = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 libc = { workspace = true }
-uuid = { workspace = true }
-sha2 = { workspace = true }
 base64 = { workspace = true }
 
 [[bin]]

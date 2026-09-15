@@ -76,12 +76,11 @@ fn sigmoid(x: f32) -> f32 {
 
 /// DFL 解码：16-bin softmax 加权求和 → 单个偏移值
 ///
-/// 输入 16 个 logits，输出一个浮点偏移量。
-fn compute_dfl(logits: &[f32]) -> Result<f32, AlgoError> {
-    if logits.len() != DFL_LEN || logits.iter().any(|value| !value.is_finite()) {
-        return Err(AlgoError::Inference {
-            reason: "DFL logits 长度或数值非法".to_string(),
-        });
+/// 输入 16 个 logits，输出一个浮点偏移量；非有限 logits 或 softmax 分母退化时返回 `None`，
+/// 由调用方按候选丢弃，不中断同帧其余候选的解码。
+fn compute_dfl(logits: &[f32; DFL_LEN]) -> Option<f32> {
+    if logits.iter().any(|value| !value.is_finite()) {
+        return None;
     }
     let max_val = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let mut exp_sum = 0.0f32;
@@ -92,11 +91,26 @@ fn compute_dfl(logits: &[f32]) -> Result<f32, AlgoError> {
         weighted_sum += e * i as f32;
     }
     if !exp_sum.is_finite() || exp_sum <= f32::EPSILON {
-        return Err(AlgoError::Inference {
-            reason: "DFL softmax 分母非法".to_string(),
-        });
+        return None;
     }
-    Ok(weighted_sum / exp_sum)
+    Some(weighted_sum / exp_sum)
+}
+
+/// 解码单个 grid 单元的 4 条边 DFL 偏移
+///
+/// 任一条边出现非有限 logits 或 softmax 退化时返回 `None`，调用方丢弃该候选即可。
+/// 调用方须先校验 `box_tensor` 长度覆盖该单元（见 `decode_scale` 前置检查）。
+fn decode_box_offsets(box_tensor: &[f32], grid_len: usize, offset: usize) -> Option<[f32; 4]> {
+    let mut box_offset = [0.0f32; 4];
+    for (edge, value) in box_offset.iter_mut().enumerate() {
+        let base = edge * DFL_LEN * grid_len + offset;
+        let mut logits = [0.0f32; DFL_LEN];
+        for (k, logit) in logits.iter_mut().enumerate() {
+            *logit = box_tensor[base + k * grid_len];
+        }
+        *value = compute_dfl(&logits)?;
+    }
+    Some(box_offset)
 }
 
 /// 单尺度解码：遍历 grid，解码 box + cls + kpt
@@ -158,16 +172,10 @@ fn decode_scale(
                 continue;
             }
 
-            // DFL 解码 bbox
-            let mut box_offset = [0.0f32; 4];
-            for (b, offset_val) in box_offset.iter_mut().enumerate() {
-                let base = b * DFL_LEN * grid_len + offset;
-                let mut logits = [0.0f32; DFL_LEN];
-                for (k, logit) in logits.iter_mut().enumerate() {
-                    *logit = box_tensor[base + k * grid_len];
-                }
-                *offset_val = compute_dfl(&logits)?;
-            }
+            // DFL 解码 bbox：单个候选出现非有限 logits 时按候选丢弃，不拖垮整帧
+            let Some(box_offset) = decode_box_offsets(box_tensor, grid_len, offset) else {
+                continue;
+            };
 
             // 还原为原图像素坐标 (x1, y1, x2, y2)
             let cx = gx as f32 + 0.5;
@@ -607,6 +615,23 @@ mod tests {
         logits[3] = 10.0;
         let result = compute_dfl(&logits).expect("尖峰 logits 应可解码");
         assert!((result - 3.0).abs() < 0.01);
+    }
+
+    /// 单个候选的非有限 DFL logits 只丢弃该候选，不能让整帧解码返回错误。
+    #[test]
+    fn decode_scale_skips_candidates_with_non_finite_dfl_logits() {
+        let (grid_h, grid_w) = (1usize, 2usize);
+        let grid_len = grid_h * grid_w;
+        let mut box_tensor = vec![0.0f32; DFL_LEN * 4 * grid_len];
+        // 候选 1（offset = 1）的 DFL 首个 logit（b = 0, k = 0）置为 NaN，候选 0 保持全部有限。
+        box_tensor[1] = f32::NAN;
+        let score_sum = vec![0.9f32; grid_len];
+        let cls = vec![0.9f32; grid_len];
+        let kpt = vec![0.0f32; KPT_CHANNELS_PER_POINT * NUM_LANDMARKS * grid_len];
+
+        let faces = decode_scale(&box_tensor, &score_sum, &cls, &kpt, grid_h, grid_w, 8, 0.5)
+            .expect("单个候选的非法 DFL logits 不应让整帧解码返回错误");
+        assert_eq!(faces.len(), 1, "非法候选必须按候选丢弃，合法候选保留");
     }
 
     #[test]

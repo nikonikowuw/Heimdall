@@ -125,9 +125,10 @@ impl LoadedPackage {
 
         if manifest.manifest_version != 1
             || manifest.algorithm_id != "face_recognition"
+            // 与宿主 `normalize_platform_id` 的 linux-rknn 别名表保持一致
             || !matches!(
                 manifest.platform_id.as_str(),
-                "linux-rknn" | "rknn-rk3568" | "rknn-rk3576"
+                "linux-rknn" | "linux-arm64-rknn" | "rknn"
             )
         {
             return Err(AlgoError::ModelLoad {

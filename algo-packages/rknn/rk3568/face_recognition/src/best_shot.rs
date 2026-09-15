@@ -27,6 +27,22 @@ pub const MIN_FUSION_QUALITY_SCORE: f32 = 0.50;
 /// 失败退避的最大帧间隔上限 (避免长时遮挡下无限期停止重试)
 const MAX_RETRY_DELAY_FRAMES: usize = 48;
 
+/// 连续失败时的重试间隔按失败次数翻倍：6 → 12 → 24 帧，封顶 `MAX_RETRY_DELAY_FRAMES`。
+const fn retry_delay_frames(failed_attempts: u8) -> usize {
+    let shift = match failed_attempts {
+        0 | 1 => 0,
+        2 => 1,
+        3 => 2,
+        _ => 3,
+    };
+    let delay = MIN_FUSION_FRAME_INTERVAL << shift;
+    if delay > MAX_RETRY_DELAY_FRAMES {
+        MAX_RETRY_DELAY_FRAMES
+    } else {
+        delay
+    }
+}
+
 /// 最佳抓拍人脸记录与多帧特征融合状态
 #[derive(Debug, Clone)]
 pub struct BestShotRecord {
@@ -81,6 +97,22 @@ impl BestShotRecord {
             Some(&self.embedding)
         }
     }
+
+    /// 记录一次成功的特征提取：解除失败退避窗口。
+    fn mark_extraction_success(&mut self, frame_id: usize) {
+        self.last_extract_frame_id = frame_id;
+        self.retry_after_frame_id = frame_id;
+        self.failed_attempts = 0;
+    }
+
+    /// 记录一次软失败（提取失败或防漂移拒绝）：按失败次数指数推进退避窗口，
+    /// 避免异常状态下逐帧空转 NPU。
+    fn mark_extraction_failure(&mut self, frame_id: usize) {
+        self.last_extract_frame_id = frame_id;
+        self.failed_attempts = self.failed_attempts.saturating_add(1);
+        self.retry_after_frame_id =
+            frame_id.saturating_add(retry_delay_frames(self.failed_attempts));
+    }
 }
 
 /// 航迹最佳人脸抓拍状态机
@@ -101,28 +133,14 @@ impl BestShotManager {
         self.records.get(&track_id)
     }
 
-    /// 连续失败时的重试间隔按失败次数翻倍：6 → 12 → 24 帧，封顶 `MAX_RETRY_DELAY_FRAMES`。
-    const fn retry_delay_frames(failed_attempts: u8) -> usize {
-        let shift = match failed_attempts {
-            0 | 1 => 0,
-            2 => 1,
-            3 => 2,
-            _ => 3,
-        };
-        let delay = MIN_FUSION_FRAME_INTERVAL << shift;
-        if delay > MAX_RETRY_DELAY_FRAMES {
-            MAX_RETRY_DELAY_FRAMES
-        } else {
-            delay
-        }
-    }
-
     /// 判定当前帧人脸是否应该触发特征提取与特征融合
     ///
-    /// 触发条件：
-    /// 1. 该航迹此前从未提取过人脸特征，且没有处于失败退避窗口；
+    /// 触发条件（所有分支均先受失败退避窗口 `retry_after_frame_id` 约束）：
+    /// 1. 该航迹此前从未提取过人脸特征；
     /// 2. 当前人脸综合质量分比历史最优高出至少 `DEFAULT_QUALITY_UPGRADE_DELTA`；
     /// 3. 或已融合帧数未达上限，且距离上次提取已间隔足够帧数，且达到融合门限。
+    ///
+    /// 提取失败与防漂移拒绝都会推进退避窗口，异常状态下不允许逐帧空转 NPU。
     pub fn should_update_best_shot(
         &self,
         track_id: u64,
@@ -148,9 +166,8 @@ impl BestShotManager {
         match self.records.get(&track_id) {
             None => true,
             Some(prev) if prev.fused_count >= MAX_FUSED_FRAMES => false,
-            Some(prev) if prev.embedding.is_empty() => {
-                current_frame_id >= prev.retry_after_frame_id
-            }
+            Some(prev) if current_frame_id < prev.retry_after_frame_id => false,
+            Some(prev) if prev.embedding.is_empty() => true,
             Some(prev) => {
                 new_quality.score > prev.quality.score + delta
                     || (current_frame_id.saturating_sub(prev.last_extract_frame_id)
@@ -162,7 +179,7 @@ impl BestShotManager {
 
     /// 更新某条航迹并执行超球面加权特征融合
     ///
-    /// 1. 防漂移校验：计算新特征与已有融合特征的余弦相似度，若低于门限则拒绝融合；
+    /// 1. 防漂移校验：新特征与已有融合特征的余弦相似度低于门限则拒绝融合，并按软失败推进重试退避；
     /// 2. 加权融合：按质量平方对单位向量加权累加，并重新 L2 归一化；
     /// 3. 返回当前最新的融合特征向量。
     #[allow(clippy::too_many_arguments)]
@@ -184,13 +201,14 @@ impl BestShotManager {
         });
 
         if record.embedding.len() == 512 {
-            let current: &[f32; 512] = match record.embedding.as_slice().try_into() {
-                Ok(arr) => arr,
-                Err(_) => return *new_embedding,
+            // 取出融合基准向量：按值持有，避免后续状态更新与 `record.embedding` 借用冲突；
+            // 长度异常时退化为直接返回本次特征。
+            let Ok(current) = <[f32; 512]>::try_from(record.embedding.as_slice()) else {
+                return *new_embedding;
             };
 
             // 防漂移校验 (Anti-Drift Outlier Defense)
-            let sim = crate::cosine_similarity(new_embedding, current);
+            let sim = crate::cosine_similarity(new_embedding, &current);
             if sim < DRIFT_REJECTION_SIMILARITY {
                 tracing::warn!(
                     track_id,
@@ -198,8 +216,9 @@ impl BestShotManager {
                     threshold = DRIFT_REJECTION_SIMILARITY,
                     "特征融合防漂移校验拦截：新特征与历史融合特征余弦相似度过低，拒绝污染特征池"
                 );
-                record.last_extract_frame_id = frame_id;
-                return *current;
+                // 拒绝按软失败计入退避：质量分保持不变，但必须避免跟踪漂移期间每帧重试 EdgeFace。
+                record.mark_extraction_failure(frame_id);
+                return current;
             }
 
             // 超球面加权累加与归一化
@@ -230,9 +249,7 @@ impl BestShotManager {
             record.embedding.copy_from_slice(&fused);
             record.fused_count += 1;
             record.total_weight = prev_weight + weight;
-            record.last_extract_frame_id = frame_id;
-            record.retry_after_frame_id = frame_id;
-            record.failed_attempts = 0;
+            record.mark_extraction_success(frame_id);
 
             fused
         } else {
@@ -243,9 +260,7 @@ impl BestShotManager {
             record.embedding = new_embedding.to_vec();
             record.fused_count = 1;
             record.total_weight = weight;
-            record.last_extract_frame_id = frame_id;
-            record.retry_after_frame_id = frame_id;
-            record.failed_attempts = 0;
+            record.mark_extraction_success(frame_id);
             *new_embedding
         }
     }
@@ -289,10 +304,7 @@ impl BestShotManager {
         self.records
             .entry(track_id)
             .and_modify(|record| {
-                record.last_extract_frame_id = frame_id;
-                record.failed_attempts = record.failed_attempts.saturating_add(1);
-                record.retry_after_frame_id =
-                    frame_id.saturating_add(Self::retry_delay_frames(record.failed_attempts));
+                record.mark_extraction_failure(frame_id);
                 if quality.score > record.quality.score {
                     record.bbox = bbox;
                     record.landmarks = landmarks;
@@ -304,8 +316,7 @@ impl BestShotManager {
                 let mut record =
                     BestShotRecord::pending(bbox, landmarks, score, quality, Vec::new(), frame_id);
                 // 首次失败即进入退避窗口，避免逐帧重复触发重型提取。
-                record.failed_attempts = 1;
-                record.retry_after_frame_id = frame_id.saturating_add(Self::retry_delay_frames(1));
+                record.mark_extraction_failure(frame_id);
                 record
             });
     }
@@ -451,6 +462,63 @@ mod tests {
         assert_eq!(fused_after_drift, fused2);
         let rec = mgr.get(track_id).expect("航迹记录应存在");
         assert_eq!(rec.fused_count, 2, "漂移特征不计入融合计数");
+    }
+
+    /// 防漂移拒绝必须按软失败进入退避窗口。
+    ///
+    /// 缺陷复现：漂移拒绝路径不更新质量分，导致 `ΔQ` 分支每帧成立，跟踪漂移期间
+    /// 逐帧触发 EdgeFace 提取；修复后同一退避窗口内只能重试一次。
+    #[test]
+    fn drift_rejection_enters_backoff_instead_of_extracting_every_frame() {
+        let mut mgr = BestShotManager::new();
+        let track_id = 21;
+
+        let q = FaceQuality {
+            score: 0.60,
+            blur: 0.30,
+            yaw: 5.0,
+            pitch: 2.0,
+            face_size: 80,
+        };
+        let mut v1 = [0.0f32; 512];
+        v1[0] = 1.0;
+        assert!(mgr.should_update_best_shot(track_id, &q, 1));
+        mgr.update_with_fusion(
+            track_id,
+            [0.1, 0.1, 0.2, 0.2],
+            [[0.0; 2]; 5],
+            0.9,
+            q,
+            &v1,
+            1,
+        );
+
+        // 质量显著更高的漂移特征（与 v1 余弦相似度 = 0）：首次允许尝试
+        let mut drift = [0.0f32; 512];
+        drift[100] = 1.0;
+        let q_high = FaceQuality {
+            score: 0.95,
+            blur: 0.10,
+            yaw: 0.0,
+            pitch: 0.0,
+            face_size: 120,
+        };
+        assert!(mgr.should_update_best_shot(track_id, &q_high, 7));
+        let fused = mgr.update_with_fusion(
+            track_id,
+            [0.1, 0.1, 0.2, 0.2],
+            [[0.0; 2]; 5],
+            0.99,
+            q_high,
+            &drift,
+            7,
+        );
+        assert_eq!(fused, v1, "漂移特征必须被拒绝");
+
+        // 拒绝后进入 6 帧退避：窗口内不得因 ΔQ 每帧触发提取，窗口结束后允许重试
+        assert!(!mgr.should_update_best_shot(track_id, &q_high, 8));
+        assert!(!mgr.should_update_best_shot(track_id, &q_high, 12));
+        assert!(mgr.should_update_best_shot(track_id, &q_high, 13));
     }
 
     #[test]

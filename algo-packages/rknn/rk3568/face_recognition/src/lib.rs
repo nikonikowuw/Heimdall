@@ -586,7 +586,7 @@ fn shared_model_registry() -> &'static Mutex<HashMap<PathBuf, Weak<SharedModels>
     SHARED_MODELS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 已验证 manifest、模型 hash 和输入输出契约的共享 worker。
+/// 已验证 manifest 身份与模型输入输出契约的共享 worker。
 #[derive(Debug)]
 pub struct SharedModels {
     pub worker: Arc<InferenceWorker>,
@@ -643,10 +643,6 @@ pub fn shared_models(package_root: &Path) -> Result<Arc<SharedModels>, AlgoError
     }
 }
 
-pub(crate) fn open_shared_models(package_root: &Path) -> Result<(), AlgoError> {
-    shared_models(package_root).map(|_| ())
-}
-
 pub(crate) fn close_shared_models(_package_root: &Path) {
     if let Some(registry) = SHARED_MODELS.get() {
         if let Ok(mut registry) = registry.lock() {
@@ -662,7 +658,10 @@ export_algo!(
     version: "1.0.0",
     algo_type: "face_recognition",
     alarm_type_id: "face_recognize",
-    library_open_hook: crate::open_shared_models,
+    // library_open 保持轻量（仅动态链接与 ABI 虚表握手）；RKNN 会话在首次
+    // instance_create / av_algo_extract_face 时经 shared_models 惰性初始化，
+    // 避免冷启动与热切换阶段的无条件模型加载与 CMA 争抢。
+    library_open_hook: algo_sdk::macros::noop_library_open,
     library_close_hook: crate::close_shared_models
 );
 

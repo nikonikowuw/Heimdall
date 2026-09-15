@@ -55,9 +55,11 @@ pub fn encode_embedding(embedding: &[f32]) -> Result<String, AlgoError> {
         });
     }
 
-    // SAFETY: f32 与 [u8; 4] 内存尺寸与对齐兼容，Linux 为小端序，与 to_le_bytes 等价且避免逐元素拷贝。
-    let bytes: &[u8] =
-        unsafe { std::slice::from_raw_parts(embedding.as_ptr().cast::<u8>(), 512 * 4) };
+    // 显式小端序编码：与宿主 `f32::from_le_bytes` 解码严格对应，不依赖本机端序。
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(embedding));
+    for value in embedding {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
     Ok(STANDARD.encode(bytes))
 }
 
