@@ -2,6 +2,7 @@ pub mod alarm;
 pub mod auth;
 pub mod camera;
 pub mod common;
+pub mod personnel;
 pub mod system;
 pub mod task;
 
@@ -70,7 +71,8 @@ pub fn localize_api_message(code: u32, original_msg: &str, locale: Locale) -> St
         30000..=39999 => task::translate_task(code, original_msg, locale),
         42000..=42999 => alarm::translate_alarm(code, original_msg, locale),
         51000..=51999 => system::translate_system(code, original_msg, locale),
-        _ => common::translate_common(code, original_msg, locale),
+        _ => personnel::translate_personnel(code, original_msg, locale)
+            .or_else(|| common::translate_common(code, original_msg, locale)),
     };
 
     localized.unwrap_or_else(|| original_msg.to_string())
@@ -221,10 +223,24 @@ mod tests {
         assert_eq!(
             localize_api_message(
                 40002,
-                "人脸质量评分过低 (0.32)，未满足 0.50 门禁要求，请上传光线充足的正面照片",
+                "人脸质量评分过低 (0.32)，未满足门禁要求，请上传光线充足的正面照片",
                 Locale::En
             ),
-            "Face quality rejected: 人脸质量评分过低 (0.32)，未满足 0.50 门禁要求，请上传光线充足的正面照片"
+            "Face quality score is too low (< 0.50). Please upload a well-lit, clear frontal photo."
+        );
+
+        // Face Algorithm Not Loaded 50301 & Reextract Conflict 40902
+        assert_eq!(
+            localize_api_message(50301, "人脸识别算法包未就绪", Locale::En),
+            "Face recognition algorithm package is not ready. Please deploy or activate a face algorithm package first."
+        );
+        assert_eq!(
+            localize_api_message(50301, "人脸识别算法包未就绪", Locale::ZhTw),
+            "人臉識別演算法包未就緒，無法擷取特徵，請先部署/啟用人臉演算法"
+        );
+        assert_eq!(
+            localize_api_message(40902, "当前有全量底库特征重新提取任务正在后台执行中，请稍候再试", Locale::En),
+            "A gallery face feature re-extraction task is currently running in the background, please try again later."
         );
 
         // Resource Not Found 40401

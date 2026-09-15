@@ -2,7 +2,10 @@ use axum::extract::{Multipart, Path as AxumPath, Query, State};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use types::{PersonnelDetailDto, PersonnelItemDto, PersonnelStatsDto, UpdatePersonnelRequest};
+use types::{
+    PersonnelDetailDto, PersonnelItemDto, PersonnelStatsDto, ReextractFaceFeaturesReportDto,
+    ReextractProgressDto, UpdatePersonnelRequest,
+};
 
 use crate::error::ApiError;
 use crate::personnel_service::PersonnelService;
@@ -37,6 +40,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_personnel).post(create_personnel))
         .route("/stats", get(get_personnel_stats))
+        .route("/reextract", post(start_reextract_all_faces))
+        .route("/reextract/status", get(get_reextract_status))
         .route(
             "/{id}",
             get(get_personnel_detail)
@@ -49,6 +54,7 @@ pub fn router() -> Router<AppState> {
             "/{id}/faces/{face_id}/primary",
             put(set_primary_personnel_face),
         )
+        .route("/{id}/reextract", post(reextract_single_personnel_faces))
 }
 
 /// 分页查询在册人员列表
@@ -220,4 +226,43 @@ async fn set_primary_personnel_face(
     let svc = PersonnelService::from_state(&state);
     let detail = svc.set_primary_face(&subject_id, &face_id).await?;
     Ok(ApiResponse::success(detail))
+}
+
+/// 启动全量底库人脸特征后台异步重新提取任务
+async fn start_reextract_all_faces(
+    State(state): State<AppState>,
+) -> Result<ApiResponse<ReextractProgressDto>, ApiError> {
+    let evidence_base_dir = state
+        .pipeline
+        .snapshot_engine()
+        .base_evidence_dir()
+        .to_path_buf();
+    let initial_progress = state
+        .reextract_manager
+        .start_task(
+            state.db.clone(),
+            evidence_base_dir,
+            state.algo_registry.clone(),
+            state.gallery_index.clone(),
+        )
+        .await?;
+    Ok(ApiResponse::success(initial_progress))
+}
+
+/// 查询后台人脸特征重新提取任务的实时进度与状态
+async fn get_reextract_status(
+    State(state): State<AppState>,
+) -> Result<ApiResponse<ReextractProgressDto>, ApiError> {
+    let progress = state.reextract_manager.get_progress().await;
+    Ok(ApiResponse::success(progress))
+}
+
+/// 针对单个人员重新提取其所有人脸样本特征（快速同步处理）
+async fn reextract_single_personnel_faces(
+    State(state): State<AppState>,
+    AxumPath(subject_id): AxumPath<String>,
+) -> Result<ApiResponse<ReextractFaceFeaturesReportDto>, ApiError> {
+    let svc = PersonnelService::from_state(&state);
+    let report = svc.reextract_single_personnel_features(&subject_id).await?;
+    Ok(ApiResponse::success(report))
 }

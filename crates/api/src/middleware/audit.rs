@@ -298,6 +298,8 @@ fn infer_module_action(path: &str, method: &Method) -> (String, String) {
         ["algorithms", ..] => ("algorithm", generic_action),
         ["alarms", _, "status"] => ("alarm", "update_status"),
         ["evidence", ..] => ("evidence", generic_action),
+        ["personnel", "reextract"] => ("personnel", "reextract"),
+        ["personnel", _, "reextract"] => ("personnel", "reextract"),
         ["system", "network", "changes", _, "confirm"] => ("system", "confirm_network_change"),
         ["system", "network", "changes", _, "cancel"] => ("system", "cancel_network_change"),
         ["system", "storage", "cleanup"] => ("system", "cleanup_storage"),

@@ -1,5 +1,5 @@
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use db::entity::gallery_face::ActiveModel as FaceActiveModel;
@@ -8,13 +8,15 @@ use db::{DatabaseConnection, GalleryFaceRepo, PersonnelRepo};
 use sea_orm::ActiveValue::Set;
 use sea_orm::TransactionTrait;
 use types::{
-    GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto, PersonnelStatsDto, UpdatePersonnelRequest,
+    GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto, PersonnelStatsDto,
+    ReextractFaceFailureDetail, ReextractFaceFeaturesReportDto, UpdatePersonnelRequest,
 };
 
 use crate::error::ApiError;
 use crate::gallery_index::{
     embedding_to_le_bytes, le_bytes_to_embedding, FaceFeatureIndex, RegisteredFace,
 };
+use crate::personnel_reextract::PersonnelReextractManager;
 use crate::state::AppState;
 
 /// 磁盘写操作异常回滚守卫（RAII：若在提交前发生异常或 panic，自动销毁孤儿临时文件）
@@ -50,6 +52,128 @@ impl Drop for DiskRollbackGuard {
     }
 }
 
+/// 人脸特征流水线执行异常
+#[derive(Debug)]
+pub(crate) enum FacePipelineError {
+    Transcode(String),
+    NoFaceDetected,
+    ExtractionFailed(String),
+    QualityLow(f32),
+}
+
+/// 人脸对齐与特征提取产物
+pub(crate) struct ExtractedFaceData {
+    pub(crate) jpeg_bytes: Vec<u8>,
+    pub(crate) aligned_jpeg: Vec<u8>,
+    pub(crate) feature_bytes: Vec<u8>,
+    pub(crate) vector: [f32; 512],
+    pub(crate) quality_score: f32,
+    pub(crate) detection_score: f32,
+}
+
+/// 提取人脸特征并执行质量门禁校验，收敛核心转码、人脸检测与特征提取逻辑
+pub(crate) async fn extract_face_pipeline(
+    algo_registry: &infer::package::AlgoRegistry,
+    raw_img: Vec<u8>,
+) -> Result<ExtractedFaceData, FacePipelineError> {
+    let jpeg_bytes = ensure_jpeg_bytes_async(raw_img)
+        .await
+        .map_err(|e| FacePipelineError::Transcode(e.to_string()))?;
+
+    let extraction = algo_registry
+        .extract_face(&jpeg_bytes)
+        .await
+        .map_err(|err| {
+            let msg = err.to_string();
+            if msg.contains("NO_FACE_DETECTED") {
+                FacePipelineError::NoFaceDetected
+            } else {
+                FacePipelineError::ExtractionFailed(msg)
+            }
+        })?;
+
+    if extraction.quality_score < 0.50 {
+        return Err(FacePipelineError::QualityLow(extraction.quality_score));
+    }
+
+    let aligned_jpeg = if !extraction.aligned_jpeg.is_empty() {
+        extraction.aligned_jpeg
+    } else {
+        jpeg_bytes.clone()
+    };
+
+    let feature_bytes = embedding_to_le_bytes(&extraction.embedding);
+    let vector = le_bytes_to_embedding(&feature_bytes).unwrap_or([0.0f32; 512]);
+
+    Ok(ExtractedFaceData {
+        jpeg_bytes,
+        aligned_jpeg,
+        feature_bytes,
+        vector,
+        quality_score: extraction.quality_score,
+        detection_score: extraction.detection_score,
+    })
+}
+
+/// 重新提取单张人脸样本特征并更新数据库与对齐图，失败时返回具体原因
+pub(crate) async fn reextract_face_sample(
+    db: &DatabaseConnection,
+    evidence_base_dir: &Path,
+    algo_registry: &infer::package::AlgoRegistry,
+    face: &db::entity::gallery_face::Model,
+) -> Result<(), String> {
+    let photo_abs = evidence_base_dir.join(&face.photo_rel_path);
+    let raw_img = tokio::fs::read(&photo_abs).await.map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            format!("原始照片文件不存在: {}", face.photo_rel_path)
+        } else {
+            format!("读取照片文件失败: {err}")
+        }
+    })?;
+
+    let face_data = extract_face_pipeline(algo_registry, raw_img)
+        .await
+        .map_err(|err| match err {
+            FacePipelineError::Transcode(e) => format!("照片转码失败: {e}"),
+            FacePipelineError::NoFaceDetected => "未在照片中检测到有效人脸".to_string(),
+            FacePipelineError::ExtractionFailed(msg) => format!("特征提取失败: {msg}"),
+            FacePipelineError::QualityLow(score) => {
+                format!("人脸质量评分过低 ({score:.2} < 0.50)，未达到门禁标准")
+            }
+        })?;
+
+    let aligned_rel_path = if !face.aligned_rel_path.is_empty() {
+        face.aligned_rel_path.clone()
+    } else {
+        format!("galleries/{}/aligned_{}.jpg", face.subject_id, face.face_id)
+    };
+    let aligned_abs = evidence_base_dir.join(&aligned_rel_path);
+    let aligned_data = if !face_data.aligned_jpeg.is_empty() {
+        &face_data.aligned_jpeg
+    } else {
+        &face_data.jpeg_bytes
+    };
+    if let Some(parent) = aligned_abs.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if let Err(err) = tokio::fs::write(&aligned_abs, aligned_data).await {
+        tracing::warn!(face_id = %face.face_id, "写入对齐切片失败: {err}");
+    }
+
+    GalleryFaceRepo::update_feature(
+        db,
+        &face.face_id,
+        face_data.feature_bytes,
+        &aligned_rel_path,
+        face_data.quality_score,
+        face_data.detection_score,
+    )
+    .await
+    .map_err(|err| format!("更新数据库特征失败: {err}"))?;
+
+    Ok(())
+}
+
 /// 内部处理产出的人脸特征及磁盘文件元数据
 struct ExtractedFaceMeta {
     face_id: String,
@@ -69,6 +193,7 @@ pub struct PersonnelService {
     evidence_base_dir: PathBuf,
     algo_registry: Arc<infer::package::AlgoRegistry>,
     gallery_index: Arc<FaceFeatureIndex>,
+    reextract_manager: Arc<PersonnelReextractManager>,
 }
 
 impl PersonnelService {
@@ -77,12 +202,14 @@ impl PersonnelService {
         evidence_base_dir: PathBuf,
         algo_registry: Arc<infer::package::AlgoRegistry>,
         gallery_index: Arc<FaceFeatureIndex>,
+        reextract_manager: Arc<PersonnelReextractManager>,
     ) -> Self {
         Self {
             db,
             evidence_base_dir,
             algo_registry,
             gallery_index,
+            reextract_manager,
         }
     }
 
@@ -96,6 +223,7 @@ impl PersonnelService {
                 .to_path_buf(),
             state.algo_registry.clone(),
             state.gallery_index.clone(),
+            state.reextract_manager.clone(),
         )
     }
 
@@ -535,6 +663,72 @@ impl PersonnelService {
         self.get_detail(subject_id).await
     }
 
+    /// 针对单个人员重新提取其所有人脸样本特征（快速同步处理）
+    pub async fn reextract_single_personnel_features(
+        &self,
+        subject_id: &str,
+    ) -> Result<ReextractFaceFeaturesReportDto, ApiError> {
+        if self.reextract_manager.is_running().await {
+            return Err(ApiError::FaceExtractionConflict(
+                "当前有全量底库特征重新提取任务正在后台执行中，请稍候再试".to_string(),
+            ));
+        }
+
+        if !self.algo_registry.is_face_extraction_ready().await {
+            return Err(ApiError::FaceAlgorithmNotLoaded(
+                "人脸识别算法包未就绪，无法提取特征，请先部署/激活人脸算法".to_string(),
+            ));
+        }
+
+        let trimmed = subject_id.trim();
+        if PersonnelRepo::find_by_subject_id(&self.db, trimmed)
+            .await?
+            .is_none()
+        {
+            return Err(ApiError::NotFound(format!("人员不存在: {trimmed}")));
+        }
+
+        let faces = GalleryFaceRepo::list_by_subject_id(&self.db, trimmed).await?;
+        let total = faces.len() as u64;
+        let mut succeeded = 0u64;
+        let mut failed = 0u64;
+        let mut failures = Vec::new();
+
+        for face in faces {
+            match reextract_face_sample(
+                &self.db,
+                &self.evidence_base_dir,
+                &self.algo_registry,
+                &face,
+            )
+            .await
+            {
+                Ok(()) => succeeded += 1,
+                Err(reason) => {
+                    failed += 1;
+                    failures.push(ReextractFaceFailureDetail {
+                        face_id: face.face_id,
+                        subject_id: face.subject_id,
+                        reason,
+                    });
+                }
+            }
+        }
+
+        if succeeded > 0 {
+            if let Err(err) = self.gallery_index.reload(&self.db).await {
+                tracing::error!("重新提取单人特征后重载底库内存特征索引失败: {err}");
+            }
+        }
+
+        Ok(ReextractFaceFeaturesReportDto {
+            total,
+            succeeded,
+            failed,
+            failures,
+        })
+    }
+
     /// 提取单张人脸特征并落盘
     async fn process_and_save_face(
         &self,
@@ -544,31 +738,22 @@ impl PersonnelService {
         is_primary: bool,
         rollback_guard: &mut DiskRollbackGuard,
     ) -> Result<ExtractedFaceMeta, ApiError> {
-        let jpeg_bytes = ensure_jpeg_bytes_async(raw_img).await?;
-
-        // 调用人脸算法提取特征（底层已通过 spawn_blocking 隔离 C ABI）
-        let extraction = match self.algo_registry.extract_face(&jpeg_bytes).await {
-            Ok(ext) => ext,
-            Err(err) => {
-                let msg = err.to_string();
-                if msg.contains("NO_FACE_DETECTED") {
-                    return Err(ApiError::FaceQualityRejected(
-                        "未在上传照片中检测到有效人脸，请上传正面清晰免冠照".to_string(),
-                    ));
+        let face_data = extract_face_pipeline(&self.algo_registry, raw_img)
+            .await
+            .map_err(|err| match err {
+                FacePipelineError::Transcode(e) => {
+                    ApiError::BadRequest(format!("照片转码失败: {e}"))
                 }
-                return Err(ApiError::FaceQualityRejected(format!(
-                    "人脸特征提取失败: {msg}"
-                )));
-            }
-        };
-
-        // 质量门禁校验 (>= 0.50)
-        if extraction.quality_score < 0.50 {
-            return Err(ApiError::FaceQualityRejected(format!(
-                "人脸质量评分过低 ({:.2})，未满足 0.50 门禁要求，请上传光线充足的正面照片",
-                extraction.quality_score
-            )));
-        }
+                FacePipelineError::NoFaceDetected => ApiError::FaceQualityRejected(
+                    "未在上传照片中检测到有效人脸，请上传正面清晰免冠照".to_string(),
+                ),
+                FacePipelineError::ExtractionFailed(msg) => {
+                    ApiError::FaceQualityRejected(format!("人脸特征提取失败: {msg}"))
+                }
+                FacePipelineError::QualityLow(score) => ApiError::FaceQualityRejected(format!(
+                    "人脸质量评分过低 ({score:.2})，未满足 0.50 门禁要求，请上传光线充足的正面照片"
+                )),
+            })?;
 
         // 目录规划: var/data/evidence/galleries/{subject_id}/
         let subject_dir = self.evidence_base_dir.join("galleries").join(subject_id);
@@ -583,48 +768,39 @@ impl PersonnelService {
         let aligned_abs = self.evidence_base_dir.join(&aligned_rel_path);
 
         // 写入原始 JPEG 并纳入回滚保护
-        tokio::fs::write(&photo_abs, &jpeg_bytes)
+        tokio::fs::write(&photo_abs, &face_data.jpeg_bytes)
             .await
             .map_err(|e| ApiError::Internal(format!("写入原始照片失败: {e}")))?;
         rollback_guard.track(photo_abs);
 
         // 写入 112x112 对齐切片
-        let aligned_data = if !extraction.aligned_jpeg.is_empty() {
-            &extraction.aligned_jpeg
-        } else {
-            &jpeg_bytes
-        };
-        tokio::fs::write(&aligned_abs, aligned_data)
+        tokio::fs::write(&aligned_abs, &face_data.aligned_jpeg)
             .await
             .map_err(|e| ApiError::Internal(format!("写入对齐人脸切片失败: {e}")))?;
         rollback_guard.track(aligned_abs);
-
-        // 小端字节序打包 512 维 FP32 向量 (2048 字节)
-        let feature_bytes = embedding_to_le_bytes(&extraction.embedding);
-        let vector = le_bytes_to_embedding(&feature_bytes).unwrap_or([0.0f32; 512]);
 
         Ok(ExtractedFaceMeta {
             face_id: face_id.to_string(),
             photo_rel_path,
             aligned_rel_path,
-            feature_bytes,
-            vector,
-            quality_score: extraction.quality_score,
-            detection_score: extraction.detection_score,
+            feature_bytes: face_data.feature_bytes,
+            vector: face_data.vector,
+            quality_score: face_data.quality_score,
+            detection_score: face_data.detection_score,
             is_primary,
         })
     }
 }
 
 /// 异步调用阻塞线程池保证图片转码为标准 JPEG
-async fn ensure_jpeg_bytes_async(raw: Vec<u8>) -> Result<Vec<u8>, ApiError> {
-    if raw.len() >= 2 && raw[0] == 0xFF && raw[1] == 0xD8 {
+pub(crate) async fn ensure_jpeg_bytes_async(raw: Vec<u8>) -> Result<Vec<u8>, ApiError> {
+    if raw.starts_with(&[0xFF, 0xD8]) {
         return Ok(raw);
     }
     tokio::task::spawn_blocking(move || {
         let img = image::load_from_memory(&raw)
             .map_err(|e| ApiError::BadRequest(format!("不支持的图片格式或文件损坏: {e}")))?;
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(raw.len());
         img.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Jpeg)
             .map_err(|e| ApiError::Internal(format!("转码为 JPEG 失败: {e}")))?;
         Ok(out)

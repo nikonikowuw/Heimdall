@@ -58,6 +58,9 @@ pub enum ApiError {
     #[error("人脸质量不达标: {0}")]
     FaceQualityRejected(String),
 
+    #[error("人脸特征提取任务冲突: {0}")]
+    FaceExtractionConflict(String),
+
     // ─── 系统设置 51xxx ───
     #[error("网卡不存在: {0}")]
     NetworkInterfaceNotFound(String),
@@ -144,6 +147,7 @@ impl IntoResponse for ApiError {
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, 50000, m.clone()),
             Self::FaceAlgorithmNotLoaded(m) => (StatusCode::SERVICE_UNAVAILABLE, 50301, m.clone()),
             Self::FaceQualityRejected(m) => (StatusCode::BAD_REQUEST, 40002, m.clone()),
+            Self::FaceExtractionConflict(m) => (StatusCode::CONFLICT, 40902, m.clone()),
             Self::NetworkInterfaceNotFound(m) => (StatusCode::NOT_FOUND, 51007, m.clone()),
             Self::NetworkInterfaceReadOnly(m) => (StatusCode::BAD_REQUEST, 51005, m.clone()),
             Self::NetworkPendingOperation => (StatusCode::CONFLICT, 51006, self.to_string()),

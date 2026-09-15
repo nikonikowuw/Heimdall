@@ -258,3 +258,65 @@ async fn test_personnel_api_crud_lifecycle() {
         .unwrap();
     assert!(check.is_none());
 }
+
+#[tokio::test]
+async fn test_reextract_features_endpoints() {
+    let (app, _state, token) = setup_test_app().await;
+
+    // 1. 在未加载人脸算法包环境下发起全局重新提取 -> 应返回 503 (FaceAlgorithmNotLoaded)
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/personnel/reextract")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept-Language", "en")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 50301);
+    assert_eq!(
+        json["message"],
+        "Face recognition algorithm package is not ready. Please deploy or activate a face algorithm package first."
+    );
+
+    // 2. 在未加载人脸算法包环境下发起单人重新提取 (繁体测试) -> 应同样返回 503 并本地化为繁体
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/personnel/some_user/reextract")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept-Language", "zh-TW")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 50301);
+    assert_eq!(
+        json["message"],
+        "人臉識別演算法包未就緒，無法擷取特徵，請先部署/啟用人臉演算法"
+    );
+
+    // 3. GET /api/v1/personnel/reextract/status -> 正常返回初始 idle 状态
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/personnel/reextract/status")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 0);
+    assert_eq!(json["data"]["status"], "idle");
+}

@@ -220,6 +220,7 @@ pub struct AppState {
     pub algorithm_upload_semaphore: Arc<Semaphore>,
     pub storage_cleaner: Option<Arc<pipeline::storage_cleaner::StorageCleaner>>,
     pub gallery_index: Arc<crate::gallery_index::FaceFeatureIndex>,
+    pub reextract_manager: Arc<crate::personnel_reextract::PersonnelReextractManager>,
     pub gb28181_sip_server: Arc<media::gb28181::Gb28181SipServer>,
 }
 
@@ -235,6 +236,8 @@ impl AppState {
     ) -> Self {
         let (event_broadcaster, _) = broadcast::channel(1024);
         let (shutdown_tx, _) = broadcast::channel(16);
+        let reextract_manager =
+            Arc::new(crate::personnel_reextract::PersonnelReextractManager::new());
         let stream_hub = Arc::new(StreamHub::new());
         let algo_registry = Arc::new(AlgoRegistry::new());
         let gallery_index = Arc::new(crate::gallery_index::FaceFeatureIndex::new());
@@ -279,6 +282,7 @@ impl AppState {
             )),
             storage_cleaner: None,
             gallery_index,
+            reextract_manager,
             gb28181_sip_server,
         }
     }
