@@ -31,6 +31,15 @@
 - 时间基准见 [全局约定](../guides/conventions.md#时间)；插件 ABI 纳秒转换仅在 [适配边界](./algo-sdk-guidelines.md#帧契约) 进行。
 - 允许的 CPU readback 前后执行 DMA-BUF cache sync START/END；常驻推理不得为 CPU 门控额外读回像素。
 
+## 跨流证据时标轴
+
+- **PTS 轴语义**：`EncodedPacket::pts_ms` 的原点由**该路物理流自己的** RTSP `PLAY` 应答（`RTP-Info`）决定。主码流与子码流各有一条独立时标轴，同一真实时刻在两路上的数值相差一个常量偏移；**跨流直接比较 PTS（包括 `abs_diff <= 容差`）恒为近似成立，无法发现错配**，这是子码流推理取主码流证据时“证据帧与推理帧对不上”的根因。
+- **换算真源**：[StreamClockAnchor](../../../crates/media/src/clock.rs) 在接入层按视频帧观测 `lag = wall_arrival - pts_ms`，以固定窗口低分位数（p10，约 2 秒收敛）估计时延地板；`lag` 噪声单边（调度与网络只会让包更晚到达），均值/EMA 会系统性高估。跨流换算为 `main_axis_pts = detection_pts + (lag_analysis - lag_main)`，等价于对齐到共同墙上时间。
+- **重连作废**：每次 `PLAY` 都重新协商 `RTP-Info`，接入层必须 `reset()` 锚点；未重新收敛前 `lag_ms()` 返回 `None`。
+- **类型约束**：[EvidenceTarget](../../../crates/pipeline/src/snapshot.rs) 分开承载检测轴与主码流证据轴字段，禁止调用方用单个 `i64` 表达跨轴目标。`main_axis_pts_ms` 为 `None`（未标定或锚点未注入）时**必须**完全跳过主码流证据环，退回检测流自身的帧——宁可取低分辨率但时间正确的证据，也细不假定偏移为 0 产出错帧。
+- **同轴退化**：主码流分析模式下分析流与主码流是同一条物理连接（主/子 URL 相同，`StreamHub` 按规范化 URL 去重），注入同一锚点实例，换算恒等（偏移 0），无需标定。
+- **容差语义**：两条轴对齐后 `MAX_TARGET_FRAME_DIFF_MS` 才第一次真正表达“允许几帧偏差”；`last_on_demand_frame` 缓存位于主码流轴，复用比较必须同样是换算后的时标。
+
 ## 接入与分发
 
 - [Retina 接入](../../../crates/media/src/rtsp.rs) 使用 SIMPLE/Annex B 格式，`VideoFrame::into_data()` → `Bytes/EncodedPacket`，避免重复复制压缩包。

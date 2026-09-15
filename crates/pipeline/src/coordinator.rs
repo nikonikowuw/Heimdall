@@ -794,6 +794,28 @@ impl TaskRuntimeCoordinator {
                 .set_main_stream_analysis(&camera_id, params.is_main_stream_analysis())
                 .await;
 
+            // 注入主码流/分析流的接入时延锚点。子码流分工时检测帧与主码流证据帧位于两条
+            // 由各自 `PLAY` 应答决定的独立 PTS 轴，必须靠实测接入时延换算；主码流分析模式下
+            // 两路是同一条物理连接（主/子 URL 相同，StreamHub 按规范化 URL 去重），传同一
+            // 实例即恒等换算。
+            let analysis_clock = sub_session.clock_anchor.clone();
+            let main_clock = if params.is_main_stream_analysis() {
+                analysis_clock.clone()
+            } else {
+                self.stream_hub
+                    .get_or_create_session(
+                        &main_stream_key,
+                        &params.main_rtsp_url,
+                        params.transport_policy,
+                    )
+                    .await
+                    .clock_anchor
+                    .clone()
+            };
+            self.pipeline_mgr
+                .set_stream_clock_anchors(&camera_id, main_clock, analysis_clock)
+                .await;
+
             self.pipeline_mgr
                 .start_analysis_pump_multi_worker(
                     &camera_id,
@@ -859,6 +881,9 @@ impl TaskRuntimeCoordinator {
             self.pipeline_mgr.set_ai_active(&camera_id, false).await;
             self.pipeline_mgr
                 .set_main_stream_analysis(&camera_id, false)
+                .await;
+            self.pipeline_mgr
+                .clear_stream_clock_anchors(&camera_id)
                 .await;
             // pump 退出时已自清理，此处为幂等双保险确保管线停止后资源干净
             self.pipeline_mgr.clear_decoded_ring(&camera_id).await;
@@ -929,6 +954,9 @@ impl TaskRuntimeCoordinator {
             self.pipeline_mgr
                 .set_main_stream_analysis(camera_id, false)
                 .await;
+            self.pipeline_mgr
+                .clear_stream_clock_anchors(camera_id)
+                .await;
             // pump 退出时已自清理，此处为幂等双保险确保管线停止后资源干净
             self.pipeline_mgr.clear_decoded_ring(camera_id).await;
             if let Some(ctx) = self.pipeline_mgr.get_pipeline_context(camera_id).await {
@@ -947,6 +975,9 @@ impl TaskRuntimeCoordinator {
             self.pipeline_mgr.set_ai_active(camera_id, false).await;
             self.pipeline_mgr
                 .set_main_stream_analysis(camera_id, false)
+                .await;
+            self.pipeline_mgr
+                .clear_stream_clock_anchors(camera_id)
                 .await;
             // pump 退出时已自清理，此处为幂等双保险确保管线停止后资源干净
             self.pipeline_mgr.clear_decoded_ring(camera_id).await;

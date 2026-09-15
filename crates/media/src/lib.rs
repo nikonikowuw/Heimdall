@@ -1,4 +1,5 @@
 pub mod buffer_pool;
+pub mod clock;
 pub mod decoder;
 pub mod decoders;
 pub mod dispatcher;
@@ -23,6 +24,7 @@ pub mod sub_stream;
 pub mod webcodecs;
 
 pub use buffer_pool::{BufferPoolStats, PoolDiagnostics, PoolError};
+pub use clock::StreamClockAnchor;
 pub use decoder::{DecodeDeliveryPolicy, VideoDecoder};
 #[cfg(target_os = "macos")]
 pub use decoders::VideoToolboxDecoder;

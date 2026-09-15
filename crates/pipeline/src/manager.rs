@@ -8,7 +8,7 @@ use tokio::sync::RwLock as TokioRwLock;
 use infer::{AlgoPackage, InferenceWorker, InferenceWorkerConfig};
 use media::decoder::VideoDecoder;
 use media::ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
-use media::{StreamItem, StreamSubscription};
+use media::{StreamClockAnchor, StreamItem, StreamSubscription};
 use types::{
     AnalysisTask, BoundingBox, Camera, Detection, DetectionRule, EncodedPacket, FrameRef,
     TrackedObject,
@@ -23,8 +23,35 @@ use crate::events::{
 use crate::pump::{AnalysisPump, AnalysisPumpConfig, MotionGateRuntimeConfig, PumpMetrics};
 use crate::roi::RoiAffineMapper;
 use crate::rules::{RuleEvaluator, TriggeredAlarm};
-use crate::snapshot::{SnapshotConfig, SnapshotEngine, SnapshotResult};
+use crate::snapshot::{EvidenceTarget, SnapshotConfig, SnapshotEngine, SnapshotResult};
 use crate::tracker::{ByteTrack, TrackUpdateStatus};
+
+/// 跨流证据时标偏移超过该值时告警一次：说明此前的同轴比较会明显选错证据帧。
+const CROSS_STREAM_OFFSET_WARN_MS: i64 = 40;
+
+/// 一路摄像头的主码流/分析流接入时延锚点配对。
+///
+/// 成对承载，保证跨流换算不会读到「只更新了一半」的状态；告警去重标志也随本对一同
+/// 重建，无需外部手工清位。
+#[derive(Clone)]
+pub(crate) struct StreamClockAnchors {
+    /// 主码流证据流
+    pub main: Arc<StreamClockAnchor>,
+    /// 分析流（主码流分析模式下与 `main` 为同一实例）
+    pub analysis: Arc<StreamClockAnchor>,
+    /// 已就跨流证据时标偏移告警过一次，避免逐帧刷屏。
+    warned_on_offset: Arc<AtomicBool>,
+}
+
+impl StreamClockAnchors {
+    fn new(main: Arc<StreamClockAnchor>, analysis: Arc<StreamClockAnchor>) -> Self {
+        Self {
+            main,
+            analysis,
+            warned_on_offset: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
 
 /// 单路摄像头管线运行时上下文
 pub struct CameraPipelineContext {
@@ -43,6 +70,10 @@ pub struct CameraPipelineContext {
     pub preview_count: AtomicUsize,
     /// 最近一次主码流按需成功解码的高保真证据帧缓存（避免单帧多告警重复前向解码同一 GOP）
     pub last_on_demand_frame: TokioRwLock<Option<FrameRef>>,
+    /// 主码流/分析流的接入时延锚点配对，供跨流 PTS 轴换算。
+    ///
+    /// 未注入或未标定时，跨流取证自动退回检测流自身的帧。
+    pub(crate) stream_clock_anchors: TokioRwLock<Option<StreamClockAnchors>>,
     /// 主码流专用的按需快拍解码器实例 (惰性分配)
     pub snapshot_decoder: TokioMutex<Option<Box<dyn VideoDecoder + Send>>>,
     /// 纯 CPU ByteTrack 跟踪器 (兼容单算法入口)
@@ -85,6 +116,7 @@ impl CameraPipelineContext {
             ai_active: AtomicBool::new(false),
             preview_count: AtomicUsize::new(0),
             last_on_demand_frame: TokioRwLock::new(None),
+            stream_clock_anchors: TokioRwLock::new(None),
             snapshot_decoder: TokioMutex::new(None),
             tracker: TokioMutex::new(ByteTrack::new()),
             trackers: TokioMutex::new(HashMap::new()),
@@ -582,6 +614,90 @@ impl PipelineManager {
         );
     }
 
+    /// 注入主码流与分析流的接入时延锚点，用于跨流 PTS 轴换算。
+    ///
+    /// 每次启动管线都必须重新注入；主码流分析模式下两路为同一物理连接，
+    /// 应传入同一 `Arc`，此时换算恒等（偏移 0），无需标定即可成立。
+    pub async fn set_stream_clock_anchors(
+        &self,
+        camera_id: &str,
+        main: Arc<StreamClockAnchor>,
+        analysis: Arc<StreamClockAnchor>,
+    ) {
+        let ctx = self.get_or_create_context(camera_id).await;
+        *ctx.stream_clock_anchors.write().await = Some(StreamClockAnchors::new(main, analysis));
+    }
+
+    /// 清除接入时延锚点，使跨流取证退回安全路径。
+    ///
+    /// 不创建上下文：停止路径上上下文可能已经不存在。
+    pub async fn clear_stream_clock_anchors(&self, camera_id: &str) {
+        if let Some(ctx) = self.get_pipeline_context(camera_id).await {
+            *ctx.stream_clock_anchors.write().await = None;
+        }
+    }
+
+    /// 把检测流的时标换算到主码流证据轴。
+    ///
+    /// 返回 `None` 表示跨流时延尚未标定或锚点未注入：调用方必须退回检测流自身的帧，
+    /// **不得**假定偏移为 0，否则等于继续在错位的轴上做比较，重新引入错帧证据。
+    pub(crate) async fn resolve_main_axis_pts(
+        &self,
+        ctx: &CameraPipelineContext,
+        camera_id: &str,
+        detection_pts_ms: i64,
+    ) -> Option<i64> {
+        let Some(anchors) = ctx.stream_clock_anchors.read().await.clone() else {
+            tracing::debug!(
+                camera_id = %camera_id,
+                detection_pts = detection_pts_ms,
+                "跨流时标锚点未注入，本次取证退回检测流自身帧"
+            );
+            return None;
+        };
+
+        let Some(main_axis_pts) = anchors
+            .analysis
+            .convert_pts_to(&anchors.main, detection_pts_ms)
+        else {
+            tracing::debug!(
+                camera_id = %camera_id,
+                detection_pts = detection_pts_ms,
+                main_samples = anchors.main.sample_count(),
+                analysis_samples = anchors.analysis.sample_count(),
+                "跨流接入时延尚未标定，本次取证退回检测流自身帧（不检索主码流证据环）"
+            );
+            return None;
+        };
+
+        let offset_ms = main_axis_pts - detection_pts_ms;
+        let main_lag_ms = anchors.main.lag_ms();
+        let analysis_lag_ms = anchors.analysis.lag_ms();
+        tracing::debug!(
+            camera_id = %camera_id,
+            detection_pts = detection_pts_ms,
+            main_axis_pts,
+            offset_ms,
+            ?main_lag_ms,
+            ?analysis_lag_ms,
+            "跨流证据时标已换算至主码流轴"
+        );
+
+        if offset_ms.abs() > CROSS_STREAM_OFFSET_WARN_MS
+            && !anchors.warned_on_offset.swap(true, Ordering::Relaxed)
+        {
+            tracing::warn!(
+                camera_id = %camera_id,
+                offset_ms,
+                ?main_lag_ms,
+                ?analysis_lag_ms,
+                "主码流与子码流 PTS 轴存在显著偏移，此前按同轴比较取回的证据帧会与推理帧错位"
+            );
+        }
+
+        Some(main_axis_pts)
+    }
+
     /// 标记 AI 分析激活状态（按需解码开关）
     pub async fn set_ai_active(&self, camera_id: &str, active: bool) {
         let ctx = self.get_or_create_context(camera_id).await;
@@ -690,6 +806,9 @@ impl PipelineManager {
     }
 
     /// 触发靶向快拍抽帧与证据图片落地。
+    ///
+    /// `target_pts_ms` 位于**检测流（分析流）轴**；子码流分析模式下函数内部会先把它换算到
+    /// 主码流证据轴，再检索主码流证据环。
     pub async fn trigger_snapshot(
         &self,
         camera_id: &str,
@@ -704,6 +823,9 @@ impl PipelineManager {
     ///
     /// 主码流分析时这条路径绕过 `decoded_ring` 和按需 GOP 解码，保证检测框与落盘图片
     /// 共享同一个 `FrameRef`。子码流分析仍将该帧作为同刻保底，优先尝试主码流 GOP 高清取证。
+    ///
+    /// `target_pts_ms` 位于**检测流（分析流）轴**且必须与 `analyzed_frame.timestamp` 一致，
+    /// 否则直接拒绝抓拍。
     pub async fn trigger_snapshot_for_frame(
         &self,
         camera_id: &str,
@@ -718,7 +840,7 @@ impl PipelineManager {
     async fn trigger_snapshot_internal(
         &self,
         camera_id: &str,
-        target_pts_ms: i64,
+        detection_pts_ms: i64,
         bbox: Option<BoundingBox>,
         analyzed_frame: Option<FrameRef>,
     ) -> Result<SnapshotResult, PipelineError> {
@@ -728,17 +850,17 @@ impl PipelineManager {
         // 推理框只能与产生该框的源帧配对。调用方应从同一帧派生 timestamp；若边界数据
         // 不一致，拒绝抓拍比保存一张看似成功但时空错配的证据更安全。
         let analyzed_fallback = if let Some(frame) = analyzed_frame {
-            if frame.camera_id != camera_id || frame.timestamp != target_pts_ms {
+            if frame.camera_id != camera_id || frame.timestamp != detection_pts_ms {
                 return Err(PipelineError::Snapshot(format!(
                     "推理帧与抓拍目标不一致 (camera={}, framePts={}, targetPts={})",
-                    frame.camera_id, frame.timestamp, target_pts_ms
+                    frame.camera_id, frame.timestamp, detection_pts_ms
                 )));
             }
 
             if is_main_stream {
                 tracing::debug!(
                     camera_id = %camera_id,
-                    target_pts = target_pts_ms,
+                    detection_pts = detection_pts_ms,
                     frame_pts = frame.timestamp,
                     width = frame.width,
                     height = frame.height,
@@ -760,7 +882,7 @@ impl PipelineManager {
             let matched_opt = {
                 let ring = ctx.decoded_ring.read().await;
                 ring.find_by_pts(
-                    target_pts_ms,
+                    detection_pts_ms,
                     ring.window_duration_ms()
                         .min(crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS),
                 )
@@ -769,7 +891,7 @@ impl PipelineManager {
             if let Some((frame, diff_ms)) = matched_opt {
                 tracing::debug!(
                     camera_id = %camera_id,
-                    target_pts = target_pts_ms,
+                    detection_pts = detection_pts_ms,
                     frame_pts = frame.timestamp,
                     diff_ms,
                     width = frame.width,
@@ -784,7 +906,7 @@ impl PipelineManager {
 
             tracing::warn!(
                 camera_id = %camera_id,
-                target_pts = target_pts_ms,
+                detection_pts = detection_pts_ms,
                 "主码流分析模式未命中同刻已解码帧，拒绝按需 GOP 追帧取证"
             );
             return Err(PipelineError::PipelineNotFound {
@@ -792,27 +914,41 @@ impl PipelineManager {
             });
         }
 
-        // 子码流双流分析时，优先复用本推理周期中同一时标已按需解码成功的主码流高分辨率帧，
-        // 彻底避免单帧触发多规则告警或多目标通行抓拍时对同一 GOP 重复执行高开销前向硬解！
         // 以下仅子码流双流分析路径可达：主码流已在上面收敛返回。
-        if let Some(cached) = ctx.last_on_demand_frame.read().await.as_ref() {
-            let diff_ms = cached.timestamp.abs_diff(target_pts_ms);
+        //
+        // 检测帧的 PTS 位于子码流轴，而主码流证据环与按需解码帧位于主码流轴；两条轴的原点由
+        // 各自的 RTSP PLAY 应答决定，**不可直接比较**。必须先换算到主码流轴再检索/比较，
+        // 否则取回的证据帧与推理帧不是同一时刻；未标定时换算返回 None，直接退回检测流自身的帧。
+        let target = EvidenceTarget {
+            detection_pts_ms,
+            main_axis_pts_ms: self
+                .resolve_main_axis_pts(&ctx, camera_id, detection_pts_ms)
+                .await,
+        };
+
+        // 优先复用本推理周期中同一时标已按需解码成功的主码流高分辨率帧，
+        // 彻底避免单帧触发多规则告警或多目标通行抓拍时对同一 GOP 重复执行高开销前向硬解！
+        // 缓存帧位于主码流轴，必须与换算后的目标时标同轴比较。
+        let cached_on_demand = ctx.last_on_demand_frame.read().await.clone();
+        if let (Some(main_axis_pts), Some(cached)) = (target.main_axis_pts_ms, cached_on_demand) {
+            let diff_ms = cached.timestamp.abs_diff(main_axis_pts);
             if diff_ms <= crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS as u64 {
                 tracing::debug!(
                     camera_id = %camera_id,
-                    target_pts = target_pts_ms,
+                    detection_pts = detection_pts_ms,
+                    main_axis_pts,
                     frame_pts = cached.timestamp,
                     diff_ms,
                     "复用同刻已解码的主码流按需帧，避免多告警重复前向解码 GOP"
                 );
                 return self
                     .snapshot_engine
-                    .save_snapshot_async(camera_id, cached.clone(), bbox, false)
+                    .save_snapshot_async(camera_id, cached, bbox, false)
                     .await;
             }
         }
 
-        // 子码流分析时，显式传入的推理帧是最可靠的保底；没有它才查询兼容环。
+        // 显式传入的推理帧是最可靠的保底；没有它才查询兼容环。
         // 所有候选帧均严格受 MAX_TARGET_FRAME_DIFF_MS 约束，杜绝过期帧与当前 bbox 拼接。
         let fallback_frame: Option<FallbackCandidate> = if let Some(frame) = analyzed_fallback {
             Some(frame)
@@ -820,7 +956,7 @@ impl PipelineManager {
             let max_diff = crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS;
             let ring_fallback = {
                 let ring = ctx.decoded_ring.read().await;
-                ring.find_by_pts(target_pts_ms, max_diff)
+                ring.find_by_pts(detection_pts_ms, max_diff)
                     .map(|(f, _)| FallbackCandidate::sub_stream(f))
             };
             match ring_fallback {
@@ -829,7 +965,7 @@ impl PipelineManager {
                     let guard = ctx.sub_stream_fallback.read().await;
                     guard
                         .as_ref()
-                        .filter(|f| f.timestamp.abs_diff(target_pts_ms) <= max_diff as u64)
+                        .filter(|f| f.timestamp.abs_diff(detection_pts_ms) <= max_diff as u64)
                         .cloned()
                         .map(FallbackCandidate::sub_stream)
                 }
@@ -847,7 +983,10 @@ impl PipelineManager {
             Ok(Ok(permit)) => {
                 let res = {
                     let mut decoder_guard = ctx.snapshot_decoder.lock().await;
-                    if decoder_guard.is_none() && !ctx.ring_buffer.is_empty() {
+                    if decoder_guard.is_none()
+                        && target.main_axis_pts_ms.is_some()
+                        && !ctx.ring_buffer.is_empty()
+                    {
                         let codec = ctx
                             .ring_buffer
                             .latest_codec()
@@ -858,7 +997,7 @@ impl PipelineManager {
                     self.snapshot_engine
                         .decode_frame(
                             camera_id,
-                            target_pts_ms,
+                            target,
                             Some(&ctx.ring_buffer),
                             fallback_frame.as_ref().map(|f| f.frame()),
                             decoder_guard.as_deref_mut(),
@@ -884,11 +1023,11 @@ impl PipelineManager {
                 if let Some(fallback_src) = fallback_frame {
                     let is_sub_stream = fallback_src.is_sub_stream();
                     let fallback = fallback_src.into_frame();
-                    let diff_ms = fallback.timestamp.abs_diff(target_pts_ms);
+                    let diff_ms = fallback.timestamp.abs_diff(detection_pts_ms);
                     if diff_ms <= crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS as u64 {
                         tracing::warn!(
                             camera_id = %camera_id,
-                            target_pts = target_pts_ms,
+                            detection_pts = detection_pts_ms,
                             frame_pts = fallback.timestamp,
                             diff_ms,
                             timeout_ms = self.permit_timeout_ms,
@@ -1467,6 +1606,58 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use types::{CodecType, FrameHandle, PixelFormat, StrideInfo};
+
+    /// 构造已标定的接入时延锚点（低分位数需足量样本才收敛）。
+    fn calibrated_anchor(lag_ms: i64) -> Arc<StreamClockAnchor> {
+        let anchor = Arc::new(StreamClockAnchor::new());
+        for _ in 0..64 {
+            anchor.observe(lag_ms);
+        }
+        assert!(anchor.lag_ms().is_some());
+        anchor
+    }
+
+    /// 跨流换算必须把检测时标投到主码流轴；未标定/未注入时必须返回 None，
+    /// 让调用方退回检测流自身的帧，而不是假定偏移为 0。
+    #[tokio::test]
+    async fn test_resolve_main_axis_pts_requires_calibration() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("test_cross_axis_{}", uuid::Uuid::now_v7().simple()));
+        let manager = PipelineManager::with_evidence_dir(&temp_dir);
+        let cam_id = "cam_cross_axis";
+        let ctx = manager.get_or_create_context(cam_id).await;
+
+        // 主码流滞后 220ms、子码流滞后 120ms：同一真实时刻在主码流轴上数值小 100ms。
+        manager
+            .set_stream_clock_anchors(cam_id, calibrated_anchor(220), calibrated_anchor(120))
+            .await;
+        assert_eq!(
+            manager.resolve_main_axis_pts(&ctx, cam_id, 1180).await,
+            Some(1080)
+        );
+
+        // 任一侧未标定 → 拒绝跨流取证。
+        manager
+            .set_stream_clock_anchors(
+                cam_id,
+                Arc::new(StreamClockAnchor::new()),
+                calibrated_anchor(120),
+            )
+            .await;
+        assert_eq!(
+            manager.resolve_main_axis_pts(&ctx, cam_id, 1180).await,
+            None
+        );
+
+        // 锚点未注入 → 同样拒绝。
+        manager.clear_stream_clock_anchors(cam_id).await;
+        assert_eq!(
+            manager.resolve_main_axis_pts(&ctx, cam_id, 1180).await,
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 
     #[tokio::test]
     async fn test_pipeline_manager_on_demand_and_snapshot() {

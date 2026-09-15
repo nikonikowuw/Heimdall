@@ -391,6 +391,26 @@ impl Drop for SnapshotWorker {
     }
 }
 
+/// 证据检索目标：显式携带两条时标轴。
+///
+/// 主码流与子码流的 `pts_ms` 原点由各自的 RTSP `PLAY` 应答（`RTP-Info`）决定，
+/// **两条轴不可直接比较**。本类型把「检测帧所在轴」与「主码流证据轴」分开承载，
+/// 让每一次比较都必须先声明用哪条轴，从类型层面消除混轴比较
+/// （见 `media::StreamClockAnchor`）。
+///
+/// 调用方负责完成轴换算；本类型不做换算，也不猜偏移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenceTarget {
+    /// 检测帧所在轴（分析流）。子码流分析模式下即子码流 PTS。
+    /// 用于校验子码流回退帧与检测帧是否同一刻。
+    pub detection_pts_ms: i64,
+    /// 主码流证据轴上的等价时标。
+    ///
+    /// `None` 表示跨流时延尚未标定：此时**禁止**检索主码流 GOP，只能使用检测流
+    /// 自身的帧。宁可取低分辨率但时间正确的证据，也不得假定偏移为 0 而产出错帧。
+    pub main_axis_pts_ms: Option<i64>,
+}
+
 /// 快照抓拍引擎
 pub struct SnapshotEngine {
     base_evidence_dir: PathBuf,
@@ -451,17 +471,23 @@ impl SnapshotEngine {
         Ok(())
     }
 
-    /// 目标证据允许的最大 PTS 偏差。超过该值说明解码器没有追到目标帧，不能将旧帧与当前检测框组合落盘。
+    /// 目标证据允许的最大 PTS 偏差。
+    ///
+    /// 两条轴完成对齐后，该值才第一次真正表达「允许几帧偏差」（100ms ≈ 25fps 的 2.5 帧）。
+    /// 对齐前它只是在一条已错位的轴上量距离，恒为近似成立，无法发现错配。
     pub(crate) const MAX_TARGET_FRAME_DIFF_MS: i64 = 100;
 
     /// 从一个完整 GOP 前向解码到目标 PTS。
+    ///
+    /// `main_axis_pts` 位于**主码流轴**：`packets` 全部来自主码流证据环，两者的比较
+    /// 是同轴比较。
     ///
     /// GOP 起始 I 帧只是解码参考点，不是证据帧。只有输出帧已经到达目标时间附近，
     /// 才能返回给带框证据路径；超时或只得到 I 帧时返回 `None`，由上层决定是否复用
     /// 同时刻的子码流帧或报告抓拍失败。
     async fn decode_gop_to_target(
         camera_id: &str,
-        target_pts_ms: i64,
+        main_axis_pts: i64,
         packets: &[std::sync::Arc<types::EncodedPacket>],
         decoder: &mut (dyn VideoDecoder + Send),
         timeout_ms: u64,
@@ -475,7 +501,7 @@ impl SnapshotEngine {
                 timed_out = true;
                 tracing::warn!(
                     camera_id = %camera_id,
-                    target_pts = target_pts_ms,
+                    main_axis_pts,
                     elapsed_ms = started_at.elapsed().as_millis(),
                     timeout_budget_ms = timeout_ms,
                     "主码流证据追帧达到耗时预算，拒绝使用未到达目标 PTS 的旧帧"
@@ -485,7 +511,7 @@ impl SnapshotEngine {
 
             match decoder.decode_packet(&packet.payload, packet.pts_ms).await {
                 Ok(Some(frame)) => {
-                    let diff_ms = frame.timestamp.abs_diff(target_pts_ms);
+                    let diff_ms = frame.timestamp.abs_diff(main_axis_pts);
                     if diff_ms == 0 {
                         best_frame = Some((frame, 0));
                         break;
@@ -502,7 +528,7 @@ impl SnapshotEngine {
                 Err(error) => {
                     tracing::debug!(
                         camera_id = %camera_id,
-                        target_pts = target_pts_ms,
+                        main_axis_pts,
                         packet_pts = packet.pts_ms,
                         error = %error,
                         "主码流证据包解码未产出帧"
@@ -516,7 +542,7 @@ impl SnapshotEngine {
             Ok(flushed_frames) => {
                 if !timed_out {
                     for frame in flushed_frames {
-                        let diff_ms = frame.timestamp.abs_diff(target_pts_ms);
+                        let diff_ms = frame.timestamp.abs_diff(main_axis_pts);
                         if best_frame
                             .as_ref()
                             .map(|(_, best_diff)| diff_ms < *best_diff)
@@ -544,7 +570,7 @@ impl SnapshotEngine {
             if diff_ms <= Self::MAX_TARGET_FRAME_DIFF_MS as u64 {
                 tracing::debug!(
                     camera_id = %camera_id,
-                    target_pts = target_pts_ms,
+                    main_axis_pts,
                     frame_pts = frame.timestamp,
                     diff_ms,
                     "主码流证据追帧完成，使用目标时间附近的解码帧"
@@ -553,7 +579,7 @@ impl SnapshotEngine {
             } else {
                 tracing::warn!(
                     camera_id = %camera_id,
-                    target_pts = target_pts_ms,
+                    main_axis_pts,
                     frame_pts = frame.timestamp,
                     diff_ms,
                     max_diff_ms = Self::MAX_TARGET_FRAME_DIFF_MS,
@@ -565,17 +591,17 @@ impl SnapshotEngine {
         (selected, false)
     }
 
-    /// 根据时标从主码流 GOP 解码目标帧，或回退至同一时刻的子码流帧。
+    /// 根据轴上显式的目标时标从主码流 GOP 解码目标帧，或回退至同一时刻的子码流帧。
     pub async fn decode_target_frame(
         camera_id: &str,
-        target_pts_ms: i64,
+        target: EvidenceTarget,
         ring_buffer: Option<&MainStreamRingBuffer>,
         sub_stream_fallback: Option<&FrameRef>,
         main_decoder: Option<&mut (dyn VideoDecoder + Send)>,
     ) -> Result<(FrameRef, bool), PipelineError> {
         Self::decode_target_frame_with_config(
             camera_id,
-            target_pts_ms,
+            target,
             ring_buffer,
             sub_stream_fallback,
             main_decoder,
@@ -585,20 +611,25 @@ impl SnapshotEngine {
     }
 
     /// 根据时标与配置从主码流 GOP 解码目标帧，或回退至同一时刻的子码流帧。
+    /// `target` 显式区分检测轴与主码流证据轴。
+    ///
+    /// `target.main_axis_pts_ms` 为 `None` 时（跨流时延未标定）**不会**触及主码流证据环，
+    /// 直接走 `valid_fallback`：宁可取低分辨率但时间正确的帧，也不产出错帧。
     pub async fn decode_target_frame_with_config(
         camera_id: &str,
-        target_pts_ms: i64,
+        target: EvidenceTarget,
         ring_buffer: Option<&MainStreamRingBuffer>,
         sub_stream_fallback: Option<&FrameRef>,
         main_decoder: Option<&mut (dyn VideoDecoder + Send)>,
         config: &SnapshotConfig,
     ) -> Result<(FrameRef, bool), PipelineError> {
+        // 回退帧来自检测流自身，与检测时标同轴，可直接比较。
         let valid_fallback = sub_stream_fallback.filter(|frame| {
-            let diff_ms = frame.timestamp.abs_diff(target_pts_ms);
+            let diff_ms = frame.timestamp.abs_diff(target.detection_pts_ms);
             if diff_ms > Self::MAX_TARGET_FRAME_DIFF_MS as u64 {
                 tracing::warn!(
                     camera_id = %camera_id,
-                    target_pts = target_pts_ms,
+                    detection_pts = target.detection_pts_ms,
                     frame_pts = frame.timestamp,
                     diff_ms,
                     max_diff_ms = Self::MAX_TARGET_FRAME_DIFF_MS,
@@ -610,13 +641,16 @@ impl SnapshotEngine {
             }
         });
 
-        if let (Some(rb), Some(decoder)) = (ring_buffer, main_decoder) {
+        // 仅当主码流证据轴的时标可用时才检索证据环；未标定时禁止触碰。
+        if let (Some(main_axis_pts), Some(rb), Some(decoder)) =
+            (target.main_axis_pts_ms, ring_buffer, main_decoder)
+        {
             decoder.set_delivery_policy(DecodeDeliveryPolicy::LosslessBackpressure);
 
-            if let Some(gop) = rb.get_gop_for_timestamp(target_pts_ms) {
+            if let Some(gop) = rb.get_gop_for_timestamp(main_axis_pts) {
                 if !gop.is_empty() {
                     let keyframe_pts = gop[0].pts_ms;
-                    let phase_diff_ms = target_pts_ms.abs_diff(keyframe_pts);
+                    let phase_diff_ms = main_axis_pts.abs_diff(keyframe_pts);
                     let packet_count = gop.len();
 
                     // 大 GOP 超出预算时只允许使用同一时刻的候选帧。
@@ -635,7 +669,7 @@ impl SnapshotEngine {
                         if let Some(fallback) = valid_fallback {
                             tracing::info!(
                                 camera_id = %camera_id,
-                                target_pts = target_pts_ms,
+                                main_axis_pts,
                                 frame_pts = fallback.timestamp,
                                 keyframe_pts,
                                 phase_diff_ms,
@@ -647,7 +681,7 @@ impl SnapshotEngine {
                         if matches!(config.capture_mode, SnapshotCaptureMode::AdaptiveDualMode) {
                             tracing::warn!(
                                 camera_id = %camera_id,
-                                target_pts = target_pts_ms,
+                                main_axis_pts,
                                 keyframe_pts,
                                 phase_diff_ms,
                                 packet_count,
@@ -662,7 +696,7 @@ impl SnapshotEngine {
 
                     tracing::info!(
                         camera_id = %camera_id,
-                        target_pts = target_pts_ms,
+                        main_axis_pts,
                         keyframe_pts,
                         phase_diff_ms,
                         packet_count,
@@ -671,7 +705,7 @@ impl SnapshotEngine {
                     );
                     let (decoded_frame, _timed_out) = Self::decode_gop_to_target(
                         camera_id,
-                        target_pts_ms,
+                        main_axis_pts,
                         &gop,
                         decoder,
                         config.max_burst_timeout_ms,
@@ -683,7 +717,7 @@ impl SnapshotEngine {
                     if let Some(fallback) = valid_fallback {
                         tracing::info!(
                             camera_id = %camera_id,
-                            target_pts = target_pts_ms,
+                            main_axis_pts,
                             frame_pts = fallback.timestamp,
                             "主码流目标帧解码失败或超时，复用同一时刻的子码流证据帧"
                         );
@@ -696,7 +730,8 @@ impl SnapshotEngine {
         if let Some(fallback) = valid_fallback {
             tracing::warn!(
                 camera_id = %camera_id,
-                target_pts = target_pts_ms,
+                detection_pts = target.detection_pts_ms,
+                main_axis_pts = ?target.main_axis_pts_ms,
                 frame_pts = fallback.timestamp,
                 "主码流目标帧不可用，使用经过 PTS 校验的候选证据帧"
             );
@@ -712,7 +747,7 @@ impl SnapshotEngine {
     pub async fn decode_frame(
         &self,
         camera_id: &str,
-        target_pts_ms: i64,
+        target: EvidenceTarget,
         ring_buffer: Option<&MainStreamRingBuffer>,
         sub_stream_fallback: Option<&FrameRef>,
         main_decoder: Option<&mut (dyn VideoDecoder + Send)>,
@@ -720,7 +755,7 @@ impl SnapshotEngine {
         let config = self.config();
         Self::decode_target_frame_with_config(
             camera_id,
-            target_pts_ms,
+            target,
             ring_buffer,
             sub_stream_fallback,
             main_decoder,
@@ -774,7 +809,7 @@ impl SnapshotEngine {
     pub async fn capture_snapshot(
         &self,
         camera_id: &str,
-        target_pts_ms: i64,
+        target: EvidenceTarget,
         target_bbox: Option<BoundingBox>,
         ring_buffer: Option<&MainStreamRingBuffer>,
         sub_stream_fallback: Option<&FrameRef>,
@@ -783,7 +818,7 @@ impl SnapshotEngine {
         let (frame, is_fallback) = self
             .decode_frame(
                 camera_id,
-                target_pts_ms,
+                target,
                 ring_buffer,
                 sub_stream_fallback,
                 main_decoder,
@@ -991,11 +1026,14 @@ mod tests {
 
         let bbox = BoundingBox::new(0.2, 0.2, 0.6, 0.6);
 
-        // 测试主码流为空时的平滑降级抓拍
+        // 测试主码流为空时的平滑降级抓拍：无可用主码流证据轴，只能使用检测流自身的帧
         let result = engine
             .capture_snapshot(
                 "cam_test_001",
-                1741100000000,
+                EvidenceTarget {
+                    detection_pts_ms: 1741100000000,
+                    main_axis_pts_ms: None,
+                },
                 Some(bbox),
                 None, // 无主码流 RingBuffer
                 Some(&fallback_frame),

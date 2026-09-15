@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use types::TransportPolicy;
 
+use crate::clock::StreamClockAnchor;
 use crate::dispatcher::{
     ConsumerId, ConsumerKind, DispatcherError, KeyframeCacheStore, MediaSubscription,
     PacketDispatcher, PreviewDistributionConfig, StreamItem,
@@ -52,6 +53,10 @@ pub struct CameraStreamSession {
     pub keyframe_cache: Arc<KeyframeCacheStore>,
     /// 独立消费者 mailbox 的分发器。
     pub dispatcher: Arc<PacketDispatcher>,
+    /// 该物理流的接入时延锚点，供跨流 PTS 轴换算使用。
+    ///
+    /// 由接入层在每收到一个视频帧时写入；重连时自动作废并重新收敛。
+    pub clock_anchor: Arc<StreamClockAnchor>,
     pub cancel_signal: Arc<AtomicBool>,
     pub cancel_tx: tokio::sync::watch::Sender<bool>,
     pub cancel_rx: tokio::sync::watch::Receiver<bool>,
@@ -128,6 +133,7 @@ impl CameraStreamSession {
             ai_task_refs: Arc::new(AtomicUsize::new(0)),
             keyframe_cache: cache,
             dispatcher,
+            clock_anchor: Arc::new(StreamClockAnchor::new()),
             cancel_signal: Arc::new(AtomicBool::new(false)),
             cancel_tx,
             cancel_rx,
@@ -334,6 +340,7 @@ impl StreamHub {
             ai_task_refs: Arc::new(AtomicUsize::new(0)),
             keyframe_cache: cache,
             dispatcher,
+            clock_anchor: Arc::new(StreamClockAnchor::new()),
             cancel_signal: Arc::new(AtomicBool::new(false)),
             cancel_tx,
             cancel_rx,
@@ -627,6 +634,7 @@ impl StreamHub {
                 session.dispatcher.clone(),
             )
             .with_last_packet_time(session.last_packet_time.clone())
+            .with_clock_anchor(session.clock_anchor.clone())
             .with_reconnect_metrics(session.reconnect_count.clone(), session.last_error.clone()),
         ))
     }

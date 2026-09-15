@@ -20,6 +20,7 @@ use retina::client::{
 use retina::codec::{CodecItem, FrameFormat};
 use types::{CodecType, EncodedPacket, StreamTag, TransportPolicy};
 
+use crate::clock::StreamClockAnchor;
 use crate::dispatcher::PacketDispatcher;
 use crate::error::MediaError;
 use crate::probe::StreamProber;
@@ -319,6 +320,8 @@ pub struct RetinaIngestor {
     pub rtsp_url: String,
     pub transport_policy: TransportPolicy,
     pub dispatcher: Arc<PacketDispatcher>,
+    /// 接入时延锚点，用于跨流 PTS 轴换算（主/子码流证据对齐）。
+    pub clock_anchor: Option<Arc<StreamClockAnchor>>,
     pub last_packet_time: Option<Arc<AtomicI64>>,
     pub reconnect_count: Option<Arc<std::sync::atomic::AtomicU64>>,
     pub last_error: Option<Arc<parking_lot::Mutex<Option<String>>>>,
@@ -339,6 +342,7 @@ impl RetinaIngestor {
             rtsp_url,
             transport_policy,
             dispatcher,
+            clock_anchor: None,
             last_packet_time: None,
             reconnect_count: None,
             last_error: None,
@@ -365,11 +369,27 @@ impl RetinaIngestor {
         self
     }
 
+    /// 注入接入时延锚点，用于跨流 PTS 轴换算。
+    pub fn with_clock_anchor(mut self, clock_anchor: Arc<StreamClockAnchor>) -> Self {
+        self.clock_anchor = Some(clock_anchor);
+        self
+    }
+
     fn publish(&self, packet: Arc<EncodedPacket>) {
         if let Some(last_packet_time) = &self.last_packet_time {
             last_packet_time.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
         }
         self.dispatcher.publish(packet);
+    }
+
+    /// 观测接入时延地板 `wall_arrival - pts_ms`，供跨流 PTS 轴换算使用。
+    ///
+    /// 仅对真实视频帧观测：SDP 合成的参数集注入包其 `pts_ms` 取自本地墙钟而非媒体时间，
+    /// 观测它会污染估计。
+    fn observe_ingest_lag(&self, pts_ms: i64) {
+        if let Some(anchor) = &self.clock_anchor {
+            anchor.observe(chrono::Utc::now().timestamp_millis() - pts_ms);
+        }
     }
 
     fn log_timestamp_discontinuity(&self, stream: &'static str, mapping: TimestampMapping) {
@@ -807,6 +827,11 @@ impl RetinaIngestor {
         );
 
         let base_timestamp_ms = chrono::Utc::now().timestamp_millis();
+        // 每次重连都会重新协商 RTP-Info，PTS 轴原点随之改变。旧连接的滞后样本与新轴
+        // 不可混用，必须作废；reset 后 lag_ms() 回到 None，跨流取证自动退回安全路径。
+        if let Some(anchor) = &self.clock_anchor {
+            anchor.reset();
+        }
         let mut video_timestamps = TrackTimestampMapper::default();
         let mut audio_timestamps = TrackTimestampMapper::default();
         let mut rtp_diagnostics = RtpDiagnostics::default();
@@ -930,6 +955,7 @@ impl RetinaIngestor {
                         frame.loss(),
                         base_timestamp_ms,
                     );
+                    self.observe_ingest_lag(pts_ms);
 
                     let is_keyframe = frame.is_random_access_point();
                     // 零拷贝借出底层 Vec<u8> 生成 Bytes，已包含 Annex B 0x00000001。

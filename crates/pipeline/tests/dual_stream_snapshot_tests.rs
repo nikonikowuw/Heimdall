@@ -4,7 +4,8 @@
 use bytes::Bytes;
 use media::decoders::MockDecoder;
 use media::ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
-use pipeline::{PipelineManager, SnapshotCaptureMode, SnapshotConfig};
+use media::StreamClockAnchor;
+use pipeline::{EvidenceTarget, PipelineManager, SnapshotCaptureMode, SnapshotConfig};
 use std::fs;
 use std::sync::Arc;
 use types::{
@@ -21,6 +22,26 @@ fn make_packet(pts_ms: i64, is_keyframe: bool) -> Arc<EncodedPacket> {
     })
 }
 
+/// 构造一个已标定的接入时延锚点（低分位数需要足量样本才收敛）。
+fn calibrated_anchor(lag_ms: i64) -> Arc<StreamClockAnchor> {
+    let anchor = Arc::new(StreamClockAnchor::new());
+    for _ in 0..64 {
+        anchor.observe(lag_ms);
+    }
+    assert!(anchor.lag_ms().is_some());
+    anchor
+}
+
+/// 声明「主码流与分析流位于同一条 PTS 轴」：两路接入时延相等，跨流偏移为 0。
+///
+/// 真实双流部署中两条轴由各自的 `PLAY` 应答决定，必须由接入层实测时延换算；
+/// 本 helper 仅用于复现「恰好同轴」的测试场景，不注入锚点时跨流取证会退回检测帧。
+async fn install_aligned_stream_clocks(manager: &PipelineManager, cam_id: &str) {
+    manager
+        .set_stream_clock_anchors(cam_id, calibrated_anchor(120), calibrated_anchor(120))
+        .await;
+}
+
 #[tokio::test]
 async fn test_dual_stream_main_stream_target_decode_flow() {
     let temp_dir = std::env::temp_dir().join(format!(
@@ -29,6 +50,7 @@ async fn test_dual_stream_main_stream_target_decode_flow() {
     ));
     let manager = PipelineManager::with_evidence_dir(&temp_dir);
     let cam_id = "cam_test_hq_001";
+    install_aligned_stream_clocks(&manager, cam_id).await;
 
     let ctx = manager.get_or_create_context(cam_id).await;
 
@@ -110,6 +132,7 @@ async fn test_dual_stream_fallback_to_sub_stream() {
     ));
     let manager = PipelineManager::with_evidence_dir(&temp_dir);
     let cam_id = "cam_test_fallback_002";
+    install_aligned_stream_clocks(&manager, cam_id).await;
 
     // 不设置主流解码器，环形队列为空，仅有子码流帧
     let fallback_nv12 = vec![150u8; (640 * 360 * 3 / 2) as usize].into();
@@ -158,6 +181,7 @@ async fn test_large_gop_fast_mode_within_threshold() {
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_fast";
+    install_aligned_stream_clocks(&manager, cam_id).await;
 
     let ctx = manager.get_or_create_context(cam_id).await;
     {
@@ -218,7 +242,10 @@ async fn test_gop_target_decode_does_not_use_keyframe_as_evidence() {
     let mut decoder = MockDecoder::new("cam_gop_target", CodecType::H264, 1920, 1080);
     let (frame, is_fallback) = pipeline::SnapshotEngine::decode_target_frame_with_config(
         "cam_gop_target",
-        1200,
+        EvidenceTarget {
+            detection_pts_ms: 1200,
+            main_axis_pts_ms: Some(1200),
+        },
         Some(&ring),
         None,
         Some(&mut decoder),
@@ -246,6 +273,7 @@ async fn test_large_gop_sub_stream_reuse_on_large_gap() {
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_sub_reuse";
+    install_aligned_stream_clocks(&manager, cam_id).await;
 
     let ctx = manager.get_or_create_context(cam_id).await;
     {
@@ -314,6 +342,7 @@ async fn test_large_gop_adaptive_burst_decode() {
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_burst";
+    install_aligned_stream_clocks(&manager, cam_id).await;
 
     let ctx = manager.get_or_create_context(cam_id).await;
     {
@@ -380,6 +409,7 @@ async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_overflow";
+    install_aligned_stream_clocks(&manager, cam_id).await;
 
     let ctx = manager.get_or_create_context(cam_id).await;
     {
@@ -446,6 +476,7 @@ async fn test_large_gop_burst_timeout_budget_fuse() {
     };
     let manager = PipelineManager::with_evidence_dir_and_snapshot_config(&temp_dir, config);
     let cam_id = "cam_large_gop_fuse";
+    install_aligned_stream_clocks(&manager, cam_id).await;
 
     let ctx = manager.get_or_create_context(cam_id).await;
     {
@@ -599,6 +630,7 @@ async fn test_sub_stream_multiple_alarms_reuse_on_demand_frame() {
     ));
     let manager = PipelineManager::with_evidence_dir(&temp_dir);
     let cam_id = "cam_multialarm_reuse";
+    install_aligned_stream_clocks(&manager, cam_id).await;
 
     let ctx = manager.get_or_create_context(cam_id).await;
     {
@@ -696,4 +728,79 @@ async fn test_quota_exhausted_rejects_expired_fallback_frame() {
 
     drop(held_permit);
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+/// 子码流推理取主码流证据时，必须按**换算后的主码流轴**选题。
+///
+/// 检测时标 1180 位于子码流轴；在接入时延差 -100ms 下同一真实时刻对应主码流轴 1080。
+/// 若仍按检测时标 1180 去检索，则会选回 1160 这一帧——即现场看到的「证据帧与推理帧对不上」。
+#[tokio::test]
+async fn test_cross_stream_evidence_targets_converted_main_axis() {
+    let ring = MainStreamRingBuffer::new(RingBufferConfig::default());
+    for pts in [1000, 1040, 1080, 1120, 1160] {
+        ring.push(make_packet(pts, pts == 1000));
+    }
+
+    let mut decoder = MockDecoder::new("cam_cross_axis_pick", CodecType::H264, 1920, 1080);
+    let (frame, is_fallback) = pipeline::SnapshotEngine::decode_target_frame_with_config(
+        "cam_cross_axis_pick",
+        EvidenceTarget {
+            detection_pts_ms: 1180,
+            main_axis_pts_ms: Some(1080),
+        },
+        Some(&ring),
+        None,
+        Some(&mut decoder),
+        &SnapshotConfig::default(),
+    )
+    .await
+    .expect("应按主码流轴追解到目标帧");
+
+    assert!(!is_fallback, "主码流就绪时不应降级");
+    assert_eq!(
+        frame.timestamp, 1080,
+        "必须按主码流轴选题；沿用检测时标 1180 会选回 1160"
+    );
+}
+
+/// 跨流时延未标定时，`main_axis_pts_ms` 为 `None`：不得假定偏移为 0，
+/// 必须完全跳过主码流证据环，退回检测流自身的帧。
+#[tokio::test]
+async fn test_uncalibrated_cross_stream_evidence_refuses_main_stream() {
+    let ring = MainStreamRingBuffer::new(RingBufferConfig::default());
+    for pts in [1000, 1040, 1080] {
+        ring.push(make_packet(pts, pts == 1000));
+    }
+
+    let detection_frame = FrameRef::new(
+        "cam_uncalibrated".to_string(),
+        1080,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(vec![128u8; 640 * 360 * 3 / 2].into()),
+    );
+
+    let mut decoder = MockDecoder::new("cam_uncalibrated", CodecType::H264, 1920, 1080);
+    let (frame, is_fallback) = pipeline::SnapshotEngine::decode_target_frame_with_config(
+        "cam_uncalibrated",
+        EvidenceTarget {
+            detection_pts_ms: 1080,
+            main_axis_pts_ms: None,
+        },
+        Some(&ring),
+        Some(&detection_frame),
+        Some(&mut decoder),
+        &SnapshotConfig::default(),
+    )
+    .await
+    .expect("未标定时应退回检测流自身的帧");
+
+    assert!(is_fallback, "未标定时不得使用主码流证据");
+    assert_eq!(
+        frame.width, 640,
+        "必须是检测流自身的帧，而非分辨率更高的错位帧"
+    );
+    assert_eq!(frame.timestamp, 1080);
 }
