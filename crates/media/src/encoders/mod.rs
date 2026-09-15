@@ -9,6 +9,14 @@ use types::{BoundingBox, FrameRef};
 
 use crate::error::MediaError;
 use crate::image_convert::snapshot_readback_to_rgb_image;
+use crate::rga::RGA3_MIN_DIMENSION;
+
+/// 判断当前 MPP/RGA3 特写路径是否必须回退到 CPU。
+fn crop_requires_cpu_fallback(frame: &FrameRef, bbox: BoundingBox, padding_ratio: f32) -> bool {
+    let (_, _, crop_w, crop_h, _) =
+        compute_crop_roi(frame.width, frame.height, bbox, padding_ratio);
+    crop_w < RGA3_MIN_DIMENSION || crop_h < RGA3_MIN_DIMENSION
+}
 
 /// 设备侧快照编码器统一抽象
 ///
@@ -212,6 +220,12 @@ impl SnapEncoder {
         padding_ratio: f32,
         quality: u8,
     ) -> Result<Vec<u8>, MediaError> {
+        if crop_requires_cpu_fallback(frame, bbox, padding_ratio) {
+            return self
+                .cpu_encoder
+                .encode_crop(frame, bbox, padding_ratio, quality);
+        }
+
         if let Some(ref hw) = self.hw_encoder {
             if hw.is_ready() {
                 match hw.encode_crop(frame, bbox, padding_ratio, quality) {
@@ -245,9 +259,21 @@ impl SnapEncoder {
                 .map(|jpeg| (jpeg, None));
         };
 
+        let cpu_crop_fallback = crop_requires_cpu_fallback(frame, bbox, padding_ratio);
+
         if let Some(ref hw) = self.hw_encoder {
             if hw.is_ready() {
                 match hw.encode_full_frame(frame, full_quality) {
+                    Ok(full) if cpu_crop_fallback => {
+                        let rgb = snapshot_readback_to_rgb_image(frame)?;
+                        let crop = self.cpu_encoder.encode_crop_from_rgb(
+                            &rgb,
+                            bbox,
+                            padding_ratio,
+                            crop_quality,
+                        )?;
+                        return Ok((full, Some(crop)));
+                    }
                     Ok(full) => match hw.encode_crop(frame, bbox, padding_ratio, crop_quality) {
                         Ok(crop) => return Ok((full, Some(crop))),
                         Err(error) => {
@@ -401,11 +427,11 @@ mod tests {
         let frame = FrameRef::new(
             "camera".into(),
             1,
-            4,
-            4,
-            types::StrideInfo::new(4, 4),
+            128,
+            128,
+            types::StrideInfo::new(128, 128),
             types::PixelFormat::Nv12,
-            types::FrameHandle::Host(std::sync::Arc::from(vec![128u8; 24])),
+            types::FrameHandle::Host(std::sync::Arc::from(vec![128u8; 128 * 128 * 3 / 2])),
         );
         let encoder = SnapEncoder::new(Some(Box::new(CropFailureEncoder)));
         let (full, crop) = encoder
@@ -421,6 +447,74 @@ mod tests {
         assert_eq!(full, vec![0xff, 0xd8, 0xff, 0xd9]);
         let crop = crop.expect("应返回 CPU 特写 JPEG");
         assert_eq!(&crop[..2], &[0xff, 0xd8]);
+    }
+
+    #[test]
+    fn test_small_crop_bypasses_hardware_crop_encoder() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct CropTrackingEncoder {
+            crop_calls: Arc<AtomicUsize>,
+        }
+
+        impl DeviceSnapEncoder for CropTrackingEncoder {
+            fn name(&self) -> &'static str {
+                "mock-hardware"
+            }
+
+            fn encode_full_frame(
+                &self,
+                _frame: &FrameRef,
+                _quality: u8,
+            ) -> Result<Vec<u8>, MediaError> {
+                Ok(vec![0xff, 0xd8, 0xff, 0xd9])
+            }
+
+            fn encode_crop(
+                &self,
+                _frame: &FrameRef,
+                _bbox: BoundingBox,
+                _padding_ratio: f32,
+                _quality: u8,
+            ) -> Result<Vec<u8>, MediaError> {
+                self.crop_calls.fetch_add(1, Ordering::Relaxed);
+                Err(MediaError::Encode {
+                    reason: "small crop must not reach hardware".into(),
+                })
+            }
+
+            fn is_ready(&self) -> bool {
+                true
+            }
+        }
+
+        let crop_calls = Arc::new(AtomicUsize::new(0));
+        let frame = FrameRef::new(
+            "camera".into(),
+            1,
+            4,
+            4,
+            types::StrideInfo::new(4, 4),
+            types::PixelFormat::Nv12,
+            types::FrameHandle::Host(Arc::from(vec![128u8; 24])),
+        );
+        let encoder = SnapEncoder::new(Some(Box::new(CropTrackingEncoder {
+            crop_calls: Arc::clone(&crop_calls),
+        })));
+        let bbox = BoundingBox::new(0.0, 0.0, 1.0, 1.0);
+
+        let direct_crop = encoder
+            .encode_crop(&frame, bbox, 0.1, 90)
+            .expect("小特写应直接由 CPU 生成");
+        assert_eq!(&direct_crop[..2], &[0xff, 0xd8]);
+
+        let (full, combined_crop) = encoder
+            .encode_full_and_crop(&frame, Some(bbox), 0.1, 90, 90)
+            .expect("组合快照的小特写应直接由 CPU 生成");
+        assert_eq!(full, vec![0xff, 0xd8, 0xff, 0xd9]);
+        assert_eq!(&combined_crop.expect("应返回 CPU 特写")[..2], &[0xff, 0xd8]);
+        assert_eq!(crop_calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]
