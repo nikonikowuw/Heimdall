@@ -1,42 +1,33 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Activity,
-  ArrowLeft,
-  Camera as CameraIcon,
-  Check,
-  Columns,
-  Hexagon,
-  Layers,
-  Magnet,
-  Maximize2,
-  MousePointer2,
-  PanelRightClose,
-  PanelRightOpen,
-  Pencil,
-  Ratio,
-  Save,
-  ShieldAlert,
-  Slash,
-  Trash2,
-  X,
-} from 'lucide-react'
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
+import { Activity, ArrowLeft, Camera as CameraIcon, Layers, Pencil, Save, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LivePlayer } from '@/features/live/components/LivePlayer'
 import { algorithmApi, taskApi } from '@/lib/api'
+import { telemetryStore } from '@/lib/telemetryStore'
 import type {
   AlgoManifest,
   Camera,
   DetectionLineDirection,
   DetectionPoint,
-  DetectionRuleRole,
   StreamMode,
   TaskAlgorithmInstanceDto,
   TaskConfigDto,
 } from '@/types'
+import { useUndoableState } from '../hooks/use-undoable-state'
 import { ActivityZonesSection } from './ActivityZonesSection'
 import { AlgoParamDrawer } from './AlgoParamDrawer'
 import { AlgoSandboxDrawer } from './AlgoSandboxDrawer'
 import { AlgorithmInstanceItem, AlgorithmRack } from './AlgorithmRack'
+import { extractTargetClasses } from '../algoMetadata'
+import { RulePropertiesPanel } from './RulePropertiesPanel'
+import { StudioToolIsland } from './StudioToolIsland'
 import {
   DEFAULT_ALGO_PACKAGES,
   ExtendedRule,
@@ -54,6 +45,52 @@ export interface LiveRulesStudioProps {
   camera: Camera
   onBack?: () => void
   onNavigateToAlgorithms?: () => void
+}
+
+/** 各工具的画板操作提示（复用既有 tools.hud* 文案） */
+const HUD_HINT_KEY: Record<ToolMode, string> = {
+  select: 'tools.hudSelect',
+  roi: 'tools.hudRoi',
+  polygon: 'tools.hudPolygon',
+  rect: 'tools.hudRect',
+  precrop: 'tools.hudRect',
+  line: 'tools.hudLine',
+  mask: 'tools.hudMask',
+}
+
+const DRAW_TOOLS: ReadonlySet<ToolMode> = new Set<ToolMode>([
+  'roi',
+  'polygon',
+  'rect',
+  'precrop',
+  'line',
+  'mask',
+])
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value))
+}
+
+function round4(value: number): number {
+  return Number(value.toFixed(4))
+}
+
+/** 规则在画面上的标注锚点：多边形取顶点均值，绊线取中点 */
+function getRuleAnchor(rule: ExtendedRule): DetectionPoint | null {
+  if (rule.points.length < 2) return null
+  if (rule.role === 'line') {
+    const [a, b] = rule.points
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+  }
+  const sum = rule.points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 })
+  return { x: sum.x / rule.points.length, y: sum.y / rule.points.length }
+}
+
+interface ResolvedPoint {
+  x: number
+  y: number
+  /** 命中的吸附顶点（用于吸附高亮反馈） */
+  snapped: DetectionPoint | null
 }
 
 export function LiveRulesStudio({
@@ -82,16 +119,27 @@ export function LiveRulesStudio({
   const [isAlgoSandboxOpen, setIsAlgoSandboxOpen] = useState(false)
   const [sandboxAlgo] = useState<AlgoManifest | null>(null)
 
-  // 空间防区与标定模式
-  const [rules, setRules] = useState<ExtendedRule[]>([])
+  // 空间防区（可撤销/重做，历史有界）
+  const {
+    value: rules,
+    set: setRules,
+    undo: undoRuleEdit,
+    redo: redoRuleEdit,
+    reset: resetRules,
+    beginGesture,
+    endGesture,
+    canUndo,
+    canRedo,
+  } = useUndoableState<ExtendedRule[]>([])
+
   const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null)
-  const [isCalibrating, setIsCalibrating] = useState<boolean>(false)
   const [isPanelOpen, setIsPanelOpen] = useState<boolean>(true)
-  const [layoutMode, setLayoutMode] = useState<'overlay' | 'docked'>('overlay')
-  const [fitMode, setFitMode] = useState<'fill' | 'fit'>('fill')
   const [tool, setTool] = useState<ToolMode>('select')
   const [currentPoints, setCurrentPoints] = useState<DetectionPoint[]>([])
-  const [cursorPos, setCursorPos] = useState<DetectionPoint | null>(null)
+  const [draftCursor, setDraftCursor] = useState<{
+    cursor: DetectionPoint | null
+    snapped: DetectionPoint | null
+  }>({ cursor: null, snapped: null })
   const [snapEnabled, setSnapEnabled] = useState(true)
 
   // 运动门控与防抖
@@ -101,6 +149,14 @@ export function LiveRulesStudio({
   // 保存与反馈状态
   const [isSaving, setIsSaving] = useState(false)
   const [saveToast, setSaveToast] = useState<string | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    },
+    [],
+  )
 
   // 交互拖拽状态
   const [draggingVertex, setDraggingVertex] = useState<{
@@ -115,9 +171,21 @@ export function LiveRulesStudio({
 
   const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
+  // 拖拽结束后紧接着的 click 不应被当作“点空白取消选中”
+  const suppressClickRef = useRef(false)
   const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null)
 
-  // 动态自适应画板尺寸（在保证 16:9 比例前提下最大化撑满可用黑底工作视口）
+  // 真实遥测：活跃航迹与运动门控状态由后端 WS 推送
+  const telemetry = useSyncExternalStore(
+    useCallback(
+      (onStoreChange) => telemetryStore.subscribe(camera.cameraId, onStoreChange),
+      [camera.cameraId],
+    ),
+    useCallback(() => telemetryStore.getTelemetry(camera.cameraId), [camera.cameraId]),
+    () => undefined,
+  )
+
+  // 动态自适应画板尺寸（严格保持摄像头物理宽高比，杜绝画面拉伸导致的标定视觉失真）
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -167,20 +235,6 @@ export function LiveRulesStudio({
           list = algoRes.items.map((item) => {
             const actVer = item.versions.find((v) => v.isActive) || item.versions[0]
             const schemaObj = (actVer?.configSchema as Record<string, unknown>) || {}
-            const propertiesObj =
-              (schemaObj.properties as Record<string, Record<string, unknown>>) || {}
-            const targetClassesProp =
-              propertiesObj.target_classes || propertiesObj.allowed_classes || propertiesObj.classes
-            const enumClasses = (targetClassesProp?.items as Record<string, unknown>)?.enum as
-              string[] | undefined
-            const rawClasses = (actVer?.manifestRaw as Record<string, unknown>)?.classes as
-              string[] | undefined
-            const detectedClasses =
-              enumClasses && enumClasses.length > 0
-                ? enumClasses
-                : rawClasses && rawClasses.length > 0
-                  ? rawClasses
-                  : []
 
             return {
               algorithmId: item.algorithmId,
@@ -192,7 +246,7 @@ export function LiveRulesStudio({
               supportedPlatforms: actVer ? [actVer.platformId] : ['linux-rknn'],
               alarmTypeId: item.alarmTypeId,
               author: item.isBuiltin ? 'System' : 'Custom',
-              classes: detectedClasses,
+              classes: extractTargetClasses(actVer),
               configSchema: schemaObj,
             }
           })
@@ -213,9 +267,11 @@ export function LiveRulesStudio({
 
   // 2. 加载选定摄像头的任务布防配置
   useEffect(() => {
+    let isMounted = true
     taskApi
       .getTask(camera.cameraId)
       .then((dto) => {
+        if (!isMounted) return
         setTaskName(dto.name || camera.name || `Task-${camera.cameraId}`)
         setIsArmed(dto.desiredEnabled)
         if (dto.streamMode) {
@@ -272,15 +328,21 @@ export function LiveRulesStudio({
             color,
           }
         })
-        setRules(extRules)
-        if (extRules.length > 0) {
-          setSelectedRuleId(extRules[0].id)
-        }
+        resetRules(extRules)
+        setSelectedRuleId(extRules.length > 0 ? extRules[0].id : null)
+        // 新建任务尚无任何防区时，直接切到绘制工具，进入工作台即可下笔
+        setTool(extRules.length === 0 ? 'roi' : 'select')
       })
       .catch(() => {
-        setTaskName(camera.name || `Task-${camera.cameraId}`)
+        if (isMounted) {
+          setTaskName(camera.name || `Task-${camera.cameraId}`)
+        }
       })
-  }, [camera, t])
+
+    return () => {
+      isMounted = false
+    }
+  }, [camera, t, resetRules])
 
   // 3. 算法启闭切换操作
   const handleToggleAlgo = (algoId: string) => {
@@ -369,39 +431,46 @@ export function LiveRulesStudio({
     })
   }
 
-  // 6. 矢量点归一化映射与磁吸
-  const getNormalizedPoint = useCallback(
+  // 6. 归一化坐标映射与顶点磁吸
+  const resolvePoint = useCallback(
     (
-      e:
-        | React.MouseEvent<HTMLElement | SVGElement>
-        | MouseEvent
-        | { clientX: number; clientY: number },
-      skipPoint?: { ruleId: string; pointIndex: number },
-    ): DetectionPoint => {
-      if (!stageRef.current) return { x: 0, y: 0 }
-      const rect = stageRef.current.getBoundingClientRect()
-      let x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-      let y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height))
+      e: { clientX: number; clientY: number },
+      options?: {
+        skip?: { ruleId: string; pointIndex: number }
+        disableSnap?: boolean
+      },
+    ): ResolvedPoint => {
+      const stage = stageRef.current
+      if (!stage) return { x: 0, y: 0, snapped: null }
+      const rect = stage.getBoundingClientRect()
+      let x = clamp01((e.clientX - rect.left) / rect.width)
+      let y = clamp01((e.clientY - rect.top) / rect.height)
 
-      if (snapEnabled) {
-        const threshold = 0.015
+      let snapped: DetectionPoint | null = null
+      if (snapEnabled && !options?.disableSnap) {
+        const threshold = 0.02
+        let bestDistance = threshold
         for (const rule of rules) {
           if (!rule.visible) continue
-          for (let i = 0; i < rule.points.length; i++) {
-            if (skipPoint && rule.id === skipPoint.ruleId && i === skipPoint.pointIndex) {
+          for (let i = 0; i < rule.points.length; i += 1) {
+            if (options?.skip && rule.id === options.skip.ruleId && i === options.skip.pointIndex) {
               continue
             }
-            const pt = rule.points[i]
-            if (Math.hypot(pt.x - x, pt.y - y) < threshold) {
-              x = pt.x
-              y = pt.y
-              break
+            const candidate = rule.points[i]
+            const distance = Math.hypot(candidate.x - x, candidate.y - y)
+            if (distance < bestDistance) {
+              bestDistance = distance
+              snapped = candidate
             }
           }
         }
+        if (snapped) {
+          x = snapped.x
+          y = snapped.y
+        }
       }
 
-      return { x: Number(x.toFixed(4)), y: Number(y.toFixed(4)) }
+      return { x: round4(x), y: round4(y), snapped }
     },
     [snapEnabled, rules],
   )
@@ -412,22 +481,17 @@ export function LiveRulesStudio({
       if (activeTool === 'line') {
         if (points.length < 2) {
           setCurrentPoints([])
+          setDraftCursor({ cursor: null, snapped: null })
           return
         }
       } else if (points.length < 3) {
         setCurrentPoints([])
+        setDraftCursor({ cursor: null, snapped: null })
         return
       }
 
-      let role: DetectionRuleRole = 'roi'
-      if (activeTool === 'line') {
-        role = 'line'
-      } else if (activeTool === 'mask') {
-        role = 'mask'
-      }
-
+      const role = activeTool === 'line' ? 'line' : activeTool === 'mask' ? 'mask' : 'roi'
       const existingRoiCount = rules.filter((r) => r.role === 'roi').length
-      const assignedColor = getInitialRuleColor(role, existingRoiCount)
 
       const newRule: ExtendedRule = {
         id: `rule_${Date.now()}`,
@@ -436,44 +500,77 @@ export function LiveRulesStudio({
         lineDirection: role === 'line' ? 'both' : undefined,
         points: [...points],
         visible: true,
-        color: assignedColor,
+        color: getInitialRuleColor(role, existingRoiCount),
       }
 
       setRules((prev) => [...prev, newRule])
       setSelectedRuleId(newRule.id)
       setCurrentPoints([])
+      setDraftCursor({ cursor: null, snapped: null })
       setTool('select')
     },
-    [rules, t, tool],
+    [rules, setRules, t, tool],
   )
 
   const finishDrawing = useCallback(() => {
     finishDrawingPoints(currentPoints, tool)
   }, [currentPoints, finishDrawingPoints, tool])
 
+  const handleSelectTool = useCallback((nextTool: ToolMode) => {
+    setTool(nextTool)
+    setCurrentPoints([])
+    setDraftCursor({ cursor: null, snapped: null })
+    if (nextTool !== 'select') {
+      setSelectedRuleId(null)
+    }
+  }, [])
+
+  const handleCancelDrawing = useCallback(() => {
+    setCurrentPoints([])
+    setDraftCursor({ cursor: null, snapped: null })
+    setTool('select')
+  }, [])
+
   // 8. 键盘快捷键监听
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
 
-      if (e.key === 'v' || e.key === 'V') {
-        setTool('select')
+      const withMeta = e.ctrlKey || e.metaKey
+      if (withMeta && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        if (e.shiftKey) {
+          redoRuleEdit()
+        } else {
+          undoRuleEdit()
+        }
         setCurrentPoints([])
+        setDraftCursor({ cursor: null, snapped: null })
+        return
+      }
+      if (withMeta && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault()
+        redoRuleEdit()
+        setCurrentPoints([])
+        setDraftCursor({ cursor: null, snapped: null })
+        return
+      }
+      if (withMeta) return
+
+      if (e.key === 'v' || e.key === 'V') {
+        handleSelectTool('select')
       }
       if (e.key === 'r' || e.key === 'R' || e.key === 'p' || e.key === 'P') {
-        setTool('roi')
-        setCurrentPoints([])
-        setIsCalibrating(true)
+        handleSelectTool('roi')
       }
       if (e.key === 'l' || e.key === 'L') {
-        setTool('line')
-        setCurrentPoints([])
-        setIsCalibrating(true)
+        handleSelectTool('line')
       }
       if (e.key === 'm' || e.key === 'M') {
-        setTool('mask')
-        setCurrentPoints([])
-        setIsCalibrating(true)
+        handleSelectTool('mask')
+      }
+      if (e.key === 's' || e.key === 'S') {
+        setSnapEnabled((prev) => !prev)
       }
       if (e.key === 'Enter') {
         finishDrawing()
@@ -485,10 +582,11 @@ export function LiveRulesStudio({
         }
         if (currentPoints.length > 0) {
           setCurrentPoints([])
+          setDraftCursor({ cursor: null, snapped: null })
         } else if (tool !== 'select') {
-          setTool('select')
-        } else if (isCalibrating) {
-          setIsCalibrating(false)
+          handleSelectTool('select')
+        } else if (selectedRuleId) {
+          setSelectedRuleId(null)
         } else if (onBack) {
           onBack()
         }
@@ -508,65 +606,65 @@ export function LiveRulesStudio({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [tool, currentPoints, selectedRuleId, onBack, paramDrawerAlgo, isCalibrating, finishDrawing])
+  }, [
+    tool,
+    currentPoints,
+    selectedRuleId,
+    onBack,
+    paramDrawerAlgo,
+    finishDrawing,
+    handleSelectTool,
+    setRules,
+    undoRuleEdit,
+    redoRuleEdit,
+  ])
 
-  // 9. 画布拖拽监听
-  const handleStageMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return
-    const pt = getNormalizedPoint(e)
-
-    if (tool === 'select' && selectedRuleId) {
-      const rule = rules.find((r) => r.id === selectedRuleId)
-      if (rule && rule.visible) {
-        const hit =
-          rule.role === 'line'
-            ? isPointNearLine(pt, rule.points[0], rule.points[1])
-            : isPointInPolygon(pt, rule.points)
-        if (hit) {
-          setDraggingShape({
-            ruleId: rule.id,
-            startCursor: pt,
-            initialPoints: rule.points.map((p) => ({ ...p })),
-          })
-        }
-      }
-    }
-  }
-
+  // 9. 画布拖拽监听（顶点微调与整体位移，整段手势只入栈一条历史）
   useEffect(() => {
     if (!draggingVertex && !draggingShape) return
 
     const handleGlobalMouseMove = (e: MouseEvent) => {
       if (draggingVertex) {
-        const pt = getNormalizedPoint(e, draggingVertex)
-        setRules((prev) =>
-          prev.map((r) => {
-            if (r.id !== draggingVertex.ruleId) return r
-            const pts = [...r.points]
-            pts[draggingVertex.pointIndex] = pt
-            return { ...r, points: pts }
-          }),
+        const pt = resolvePoint(e, { skip: draggingVertex })
+        setRules(
+          (prev) =>
+            prev.map((r) => {
+              if (r.id !== draggingVertex.ruleId) return r
+              const pts = [...r.points]
+              pts[draggingVertex.pointIndex] = { x: pt.x, y: pt.y }
+              return { ...r, points: pts }
+            }),
+          { history: false },
         )
-      } else if (draggingShape) {
-        const pt = getNormalizedPoint(e)
+        return
+      }
+
+      if (draggingShape) {
+        const pt = resolvePoint(e, { disableSnap: true })
         const dx = pt.x - draggingShape.startCursor.x
         const dy = pt.y - draggingShape.startCursor.y
-        setRules((prev) =>
-          prev.map((r) => {
-            if (r.id !== draggingShape.ruleId) return r
-            const movedPts = draggingShape.initialPoints.map((p) => ({
-              x: Math.max(0, Math.min(1, Number((p.x + dx).toFixed(4)))),
-              y: Math.max(0, Math.min(1, Number((p.y + dy).toFixed(4)))),
-            }))
-            return { ...r, points: movedPts }
-          }),
+        setRules(
+          (prev) =>
+            prev.map((r) => {
+              if (r.id !== draggingShape.ruleId) return r
+              const movedPoints = draggingShape.initialPoints.map((p) => ({
+                x: round4(clamp01(p.x + dx)),
+                y: round4(clamp01(p.y + dy)),
+              }))
+              return { ...r, points: movedPoints }
+            }),
+          { history: false },
         )
       }
     }
 
     const handleGlobalMouseUp = () => {
+      if (draggingVertex || draggingShape) {
+        suppressClickRef.current = true
+      }
       setDraggingVertex(null)
       setDraggingShape(null)
+      endGesture()
     }
 
     window.addEventListener('mousemove', handleGlobalMouseMove)
@@ -575,22 +673,50 @@ export function LiveRulesStudio({
       window.removeEventListener('mousemove', handleGlobalMouseMove)
       window.removeEventListener('mouseup', handleGlobalMouseUp)
     }
-  }, [draggingVertex, draggingShape, getNormalizedPoint])
+  }, [draggingVertex, draggingShape, resolvePoint, setRules, endGesture])
+
+  const handleStageMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || tool !== 'select' || !selectedRuleId) return
+    const { x, y } = resolvePoint(e)
+    const rule = rules.find((r) => r.id === selectedRuleId)
+    if (!rule || !rule.visible) return
+    const pt = { x, y }
+    const hit =
+      rule.role === 'line'
+        ? rule.points.length >= 2 && isPointNearLine(pt, rule.points[0], rule.points[1])
+        : isPointInPolygon(pt, rule.points)
+    if (hit) {
+      beginGesture()
+      setDraggingShape({
+        ruleId: rule.id,
+        startCursor: pt,
+        initialPoints: rule.points.map((p) => ({ ...p })),
+      })
+    }
+  }
 
   const handleStageMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (draggingVertex || draggingShape) return
-    const pt = getNormalizedPoint(e)
-    setCursorPos(pt)
-  }
-
-  const handleStageMouseUp = () => {
-    if (draggingVertex) setDraggingVertex(null)
-    if (draggingShape) setDraggingShape(null)
+    // 仅在绘制态跟踪光标，避免选择态下每次移动都触发重渲染
+    if (!DRAW_TOOLS.has(tool) || currentPoints.length === 0) return
+    const resolved = resolvePoint(e)
+    setDraftCursor({
+      cursor: { x: resolved.x, y: resolved.y },
+      snapped: resolved.snapped,
+    })
   }
 
   const handleStageClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (tool === 'select') return
-    const pt = getNormalizedPoint(e)
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
+    if (tool === 'select') {
+      setSelectedRuleId(null)
+      return
+    }
+    const { x, y } = resolvePoint(e)
+    const pt = { x, y }
 
     if (tool === 'line') {
       if (currentPoints.length === 0) {
@@ -598,20 +724,88 @@ export function LiveRulesStudio({
       } else {
         finishDrawingPoints([currentPoints[0], pt], 'line')
       }
-    } else {
-      if (currentPoints.length >= 3) {
-        const first = currentPoints[0]
-        const dist = Math.hypot(first.x - pt.x, first.y - pt.y)
-        if (dist < 0.03) {
-          finishDrawing()
-          return
-        }
-      }
-      setCurrentPoints((prev) => [...prev, pt])
+      return
     }
+
+    if (currentPoints.length >= 3) {
+      const first = currentPoints[0]
+      if (Math.hypot(first.x - pt.x, first.y - pt.y) < 0.03) {
+        finishDrawing()
+        return
+      }
+    }
+    setCurrentPoints((prev) => [...prev, pt])
   }
 
-  // 10. 保存布防任务配置
+  const handleStageDoubleClick = () => {
+    if (!DRAW_TOOLS.has(tool) || tool === 'line') return
+    const points = [...currentPoints]
+    // 双击的第二次 click 会追加一个近乎重合的顶点，闭合前先剔除
+    if (points.length >= 4) {
+      const last = points[points.length - 1]
+      const prev = points[points.length - 2]
+      if (Math.hypot(last.x - prev.x, last.y - prev.y) < 0.02) {
+        points.pop()
+      }
+    }
+    finishDrawingPoints(points, tool)
+  }
+
+  const handleVertexMouseDown = (
+    e: React.MouseEvent<HTMLDivElement>,
+    ruleId: string,
+    pointIndex: number,
+  ) => {
+    e.stopPropagation()
+    e.preventDefault()
+    beginGesture()
+    setDraggingVertex({ ruleId, pointIndex })
+  }
+  // 10. 规则编辑操作
+  const handleUpdateRule = useCallback(
+    (ruleId: string, partial: Partial<ExtendedRule>) => {
+      setRules((prev) => prev.map((r) => (r.id === ruleId ? { ...r, ...partial } : r)))
+    },
+    [setRules],
+  )
+
+  const handleDeleteRule = useCallback(
+    (ruleId: string) => {
+      setRules((prev) => prev.filter((r) => r.id !== ruleId))
+      setSelectedRuleId((prev) => (prev === ruleId ? null : prev))
+    },
+    [setRules],
+  )
+
+  const handleCloneRule = useCallback(
+    (ruleId: string) => {
+      const source = rules.find((r) => r.id === ruleId)
+      if (!source) return
+      const cloneId = `rule_${Date.now()}`
+      const offset = 0.03
+      const clone: ExtendedRule = {
+        ...source,
+        id: cloneId,
+        name: `${source.name} ${t('inspector.copySuffix', { defaultValue: '副本' })}`,
+        points: source.points.map((p) => ({
+          x: round4(clamp01(p.x + offset)),
+          y: round4(clamp01(p.y + offset)),
+        })),
+      }
+      setRules((prev) => [...prev, clone])
+      setSelectedRuleId(cloneId)
+    },
+    [rules, setRules, t],
+  )
+
+  const handleToggleRuleVisible = useCallback(
+    (ruleId: string) => {
+      setRules((prev) => prev.map((r) => (r.id === ruleId ? { ...r, visible: !r.visible } : r)))
+    },
+    [setRules],
+  )
+
+  // 11. 保存布防任务配置
   const handleSave = async () => {
     setIsSaving(true)
 
@@ -654,58 +848,73 @@ export function LiveRulesStudio({
         setStreamMode(updated.streamMode)
       }
       setSaveToast(t('footer.saveSuccess', { defaultValue: '任务配置已保存并生效！' }))
-      setTimeout(() => setSaveToast(null), 3000)
     } catch {
       setSaveToast(t('footer.saveFailed', { defaultValue: '保存失败，请检查网络或后端状态' }))
-      setTimeout(() => setSaveToast(null), 3000)
     } finally {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+      toastTimerRef.current = setTimeout(() => setSaveToast(null), 3000)
       setIsSaving(false)
     }
   }
 
-  const selectedRule = useMemo(() => {
-    return rules.find((r) => r.id === selectedRuleId)
-  }, [rules, selectedRuleId])
+  const selectedRule = useMemo(
+    () => rules.find((r) => r.id === selectedRuleId),
+    [rules, selectedRuleId],
+  )
+
+  const activeAlgorithmNames = useMemo(
+    () =>
+      Object.values(activeInstances)
+        .filter((item) => item.enabled)
+        .map(
+          (item) =>
+            availableAlgos.find((algo) => algo.algorithmId === item.algorithmId)?.name ??
+            item.algorithmId,
+        ),
+    [activeInstances, availableAlgos],
+  )
+
+  const isDrawing = currentPoints.length > 0
+  const hudHint = t(HUD_HINT_KEY[tool], { defaultValue: t('tools.hudSelect') })
 
   return (
-    <div className="flex h-full w-full max-w-full flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      {/* 顶部综合态势导航栏 (UniFi / Verkada 风格 Header) */}
-      <header className="frosted-glass relative z-20 flex h-14 shrink-0 items-center justify-between border-b border-[var(--border)] px-4 sm:px-6">
+    <div className="flex h-full w-full max-w-full flex-1 flex-col overflow-hidden rounded-[10px] border border-t-2 border-[var(--border-strong)] border-t-[var(--accent)] bg-[var(--bg-primary)] text-[var(--text-primary)]">
+      {/* 顶部综合态势导航栏 */}
+      <header className="relative z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b-2 border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-4">
         {/* 左侧：返回 + 摄像头通道身份 + 原地编辑任务名 */}
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           {onBack && (
             <button
               type="button"
               onClick={onBack}
               title={t('actions.backToTasks', { defaultValue: '返回任务列表' })}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              aria-label={t('actions.backToTasks', { defaultValue: '返回任务列表' })}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
           )}
 
           {/* 摄像头通道信息 */}
-          <div className="flex items-center gap-2 border-l border-[var(--border)] pl-3 text-xs">
+          <div className="flex min-w-0 items-center gap-2 text-xs">
             <span className="flex items-center gap-1.5 font-bold text-[var(--text-primary)]">
-              <CameraIcon className="h-4 w-4 text-[var(--accent)]" />
-              <span>{camera.name || camera.cameraId}</span>
+              <CameraIcon className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+              <span className="max-w-[10rem] truncate">{camera.name || camera.cameraId}</span>
             </span>
-            <span className="hidden text-[var(--text-muted)] md:inline">·</span>
-            <span className="hidden font-mono text-[11px] text-[var(--text-secondary)] md:inline">
-              {camera.rtspUrl || '1080P RTSP'}
+            <span className="hidden font-mono text-[11px] text-[var(--text-secondary)] lg:inline">
+              {camera.lastWidth || 1920}×{camera.lastHeight || 1080}
             </span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-400">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-              ONLINE 1080P
+            <span className="hidden font-mono text-[11px] font-semibold text-cyan-400 lg:inline">
+              {camera.lastCodec?.toUpperCase() || 'H264'}
             </span>
           </div>
 
-          <span className="hidden h-4 w-[1px] bg-[var(--border)] sm:inline" />
+          <span className="hidden h-4 w-px bg-[var(--border)] sm:inline" />
 
           {/* 任务名称：支持原地点击快速改名 */}
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="text-[var(--text-muted)]">
-              {t('taskName', { defaultValue: '任务名称:' })}
+          <div className="hidden min-w-0 items-center gap-1.5 text-xs sm:flex">
+            <span className="shrink-0 text-[var(--text-muted)]">
+              {t('taskName', { defaultValue: '任务名称' })}
             </span>
             {isEditingTaskName ? (
               <input
@@ -717,112 +926,39 @@ export function LiveRulesStudio({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') setIsEditingTaskName(false)
                 }}
-                className="rounded-lg border border-[var(--accent)] bg-[var(--bg-surface)] px-2 py-0.5 text-xs font-semibold text-[var(--text-primary)] ring-1 ring-[var(--accent)] outline-none"
+                className="min-w-0 rounded-lg border border-[var(--accent)] bg-[var(--bg-surface)] px-2 py-0.5 text-xs font-semibold text-[var(--text-primary)] ring-1 ring-[var(--accent)] outline-none"
               />
             ) : (
               <button
                 type="button"
                 onClick={() => setIsEditingTaskName(true)}
-                className="group flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]"
+                className="group flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-0.5 text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]"
                 title={t('clickToEditName', { defaultValue: '点击可原地快速修改任务名称' })}
               >
-                <span>{taskName || `Task-${camera.cameraId}`}</span>
-                <Pencil className="h-3 w-3 text-[var(--text-muted)] opacity-60 group-hover:text-[var(--accent)] group-hover:opacity-100" />
+                <span className="max-w-[14rem] truncate">
+                  {taskName || `Task-${camera.cameraId}`}
+                </span>
+                <Pencil className="h-3 w-3 shrink-0 text-[var(--text-muted)] opacity-60 group-hover:text-[var(--accent)] group-hover:opacity-100" />
               </button>
             )}
           </div>
         </div>
 
-        {/* 右侧：布局切换 + 全局布防开关 + 保存主操作 */}
-        <div className="flex items-center gap-3 sm:gap-4">
+        {/* 右侧：码流选择 + 布防总闸 + 保存 */}
+        <div className="flex shrink-0 items-center gap-3">
           {saveToast && (
-            <span className="animate-fade-in font-mono text-xs font-semibold text-emerald-400">
+            <span className="hidden font-mono text-xs font-semibold text-emerald-400 xl:inline">
               {saveToast}
             </span>
           )}
 
-          {/* 画面比例模式：铺满无黑边 (Fill) vs 等比保真 (Fit) */}
-          <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs">
-            <button
-              type="button"
-              onClick={() => setFitMode('fill')}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
-                fitMode === 'fill'
-                  ? 'bg-[var(--accent)] text-white shadow-2xs'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t('studio.fitModeFillTitle', {
-                defaultValue: '铺满全视口：画面撑满视口，消除上下左右所有空隙黑边',
-              })}
-            >
-              <Maximize2 className="h-3.5 w-3.5" />
-              <span className="hidden xl:inline">
-                {t('studio.fitModeFill', { defaultValue: '撑满无留白' })}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setFitMode('fit')}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
-                fitMode === 'fit'
-                  ? 'bg-[var(--accent)] text-white shadow-2xs'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t('studio.fitModeFitTitle', {
-                defaultValue: '等比保真：严格保持原始 16:9 物理像素比例',
-              })}
-            >
-              <Ratio className="h-3.5 w-3.5" />
-              <span className="hidden xl:inline">
-                {t('studio.fitModeFit', { defaultValue: '等比保真' })}
-              </span>
-            </button>
-          </div>
-
-          {/* 视图模式切换：沉浸全屏画板 (UniFi 浮动) vs 双栏停靠 (Verkada 并排) */}
-          <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs">
-            <button
-              type="button"
-              onClick={() => setLayoutMode('overlay')}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
-                layoutMode === 'overlay'
-                  ? 'bg-[var(--accent)] text-white shadow-2xs'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t('studio.layoutOverlayTitle', {
-                defaultValue: '沉浸全景画板 (UniFi 风格，16:9 全幅撑满视口，消除上下黑边)',
-              })}
-            >
-              <Layers className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">
-                {t('studio.layoutOverlay', { defaultValue: '沉浸全屏' })}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setLayoutMode('docked')}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
-                layoutMode === 'docked'
-                  ? 'bg-[var(--accent)] text-white shadow-2xs'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t('studio.layoutDockedTitle', {
-                defaultValue: '双栏并排视图 (Verkada 风格，左侧视频与硬件遥测，右侧参数停靠)',
-              })}
-            >
-              <Columns className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">
-                {t('studio.layoutDocked', { defaultValue: '双栏并排' })}
-              </span>
-            </button>
-          </div>
-
-          {/* AI 分析码流选择切换 */}
-          <div className="hidden items-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs sm:flex">
+          {/* AI 分析码流选择 */}
+          <div className="hidden items-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs lg:flex">
             <button
               type="button"
               onClick={() => setStreamMode('main')}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
+              aria-pressed={streamMode === 'main'}
+              className={`rounded-md px-2 py-1 font-medium transition-colors ${
                 streamMode === 'main'
                   ? 'bg-cyan-500 font-semibold text-black shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
@@ -831,12 +967,13 @@ export function LiveRulesStudio({
                 defaultValue: '全高清原图硬件下采样，小目标与远距离识别最清晰，快照零延迟',
               })}
             >
-              <span>{t('cardStream.main', { defaultValue: '主码流·高清' })}</span>
+              {t('cardStream.main', { defaultValue: '主码流' })}
             </button>
             <button
               type="button"
               onClick={() => setStreamMode('sub')}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
+              aria-pressed={streamMode === 'sub'}
+              className={`rounded-md px-2 py-1 font-medium transition-colors ${
                 streamMode === 'sub'
                   ? 'bg-amber-500 font-semibold text-black shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
@@ -845,12 +982,13 @@ export function LiveRulesStudio({
                 defaultValue: '低码率子流推理，节约 VPU 算力，适合超多路密集布防',
               })}
             >
-              <span>{t('cardStream.sub', { defaultValue: '子码流·低能耗' })}</span>
+              {t('cardStream.sub', { defaultValue: '子码流' })}
             </button>
             <button
               type="button"
               onClick={() => setStreamMode('auto')}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors ${
+              aria-pressed={streamMode === 'auto'}
+              className={`rounded-md px-2 py-1 font-medium transition-colors ${
                 streamMode === 'auto'
                   ? 'bg-[var(--accent)] font-semibold text-white shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
@@ -859,13 +997,13 @@ export function LiveRulesStudio({
                 defaultValue: '自动探活子码流，若无子流或不可用则自适应降级主码流',
               })}
             >
-              <span>{t('cardStream.auto', { defaultValue: '自动码流' })}</span>
+              {t('cardStream.auto', { defaultValue: '自动' })}
             </button>
           </div>
 
           {/* 全局布防总开关 */}
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-[var(--text-secondary)]">
+            <span className="hidden text-xs font-medium text-[var(--text-secondary)] sm:inline">
               {isArmed
                 ? t('status.armed', { defaultValue: '已布防' })
                 : t('status.disarmed', { defaultValue: '已撤防' })}
@@ -873,6 +1011,8 @@ export function LiveRulesStudio({
             <button
               type="button"
               onClick={() => setIsArmed(!isArmed)}
+              aria-pressed={isArmed}
+              aria-label={t('studio.masterArm', { defaultValue: '通道布防总闸' })}
               className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
                 isArmed ? 'bg-[var(--accent)]' : 'bg-zinc-700'
               }`}
@@ -890,7 +1030,7 @@ export function LiveRulesStudio({
             type="button"
             onClick={handleSave}
             disabled={isSaving}
-            className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-[6px] bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
           >
             <Save className="h-4 w-4" />
             <span>
@@ -900,80 +1040,60 @@ export function LiveRulesStudio({
             </span>
           </button>
 
-          {/* 展开/收起右侧控制侧边栏 */}
-          <button
-            type="button"
-            onClick={() => setIsPanelOpen(!isPanelOpen)}
-            title={
-              isPanelOpen
-                ? t('studio.collapsePanel', { defaultValue: '收起配置面板' })
-                : t('studio.expandPanel', { defaultValue: '展开配置面板' })
-            }
-            className={`hidden h-8 w-8 items-center justify-center rounded-lg border transition-colors lg:flex ${
-              isPanelOpen
-                ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            {isPanelOpen ? (
-              <PanelRightClose className="h-4 w-4" />
-            ) : (
-              <PanelRightOpen className="h-4 w-4" />
-            )}
-          </button>
+          {/* 展开/收起右侧配置面板 */}
+          {!isPanelOpen && (
+            <button
+              type="button"
+              onClick={() => setIsPanelOpen(true)}
+              title={t('studio.expandPanel', { defaultValue: '展开配置面板' })}
+              aria-label={t('studio.expandPanel', { defaultValue: '展开配置面板' })}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              <Layers className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </header>
 
-      {/* 主视口工作区：支持沉浸全屏 (UniFi 浮动) 与双栏并排 (Verkada 停靠) */}
-      <div
-        className={`relative flex min-h-0 min-w-0 flex-1 overflow-hidden ${
-          layoutMode === 'docked' ? 'flex-col lg:flex-row' : ''
-        }`}
-      >
+      {/* 主工作区：画板 + 停靠式上下文配置面板 */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
         {/* 视频主视区 */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div
             ref={containerRef}
-            className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-black/95 p-2 sm:p-3"
+            className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-[#06080d] p-2 sm:p-3"
           >
+            {/* 画布严格按摄像头物理宽高比等比呈现，保证归一化坐标与实景像素一一对应 */}
             <div
               ref={stageRef}
               onMouseDown={handleStageMouseDown}
               onMouseMove={handleStageMouseMove}
-              onMouseUp={handleStageMouseUp}
               onClick={handleStageClick}
-              className="relative flex items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black shadow-2xl"
+              onDoubleClick={handleStageDoubleClick}
+              className={`relative touch-none overflow-hidden rounded-[6px] border border-white/15 bg-black shadow-2xl ${
+                DRAW_TOOLS.has(tool) ? 'cursor-crosshair' : ''
+              }`}
               style={
-                fitMode === 'fill'
-                  ? {
+                stageSize
+                  ? { width: `${stageSize.width}px`, height: `${stageSize.height}px` }
+                  : {
                       width: '100%',
-                      height: '100%',
+                      aspectRatio:
+                        camera.lastWidth && camera.lastHeight
+                          ? `${camera.lastWidth} / ${camera.lastHeight}`
+                          : '16 / 9',
+                      maxHeight: '100%',
                     }
-                  : stageSize
-                    ? {
-                        width: `${stageSize.width}px`,
-                        height: `${stageSize.height}px`,
-                      }
-                    : {
-                        width: '100%',
-                        height: '100%',
-                        maxWidth: '100%',
-                        maxHeight: '100%',
-                        aspectRatio:
-                          camera.lastWidth && camera.lastHeight
-                            ? `${camera.lastWidth} / ${camera.lastHeight}`
-                            : '16 / 9',
-                      }
               }
             >
-              {/* 实时分析源预览播放器 (主码流或子码流) */}
+              {/* 实时分析源预览播放器 (主码流或子码流)，使用 contain 保证几何标定不失真 */}
               <LivePlayer
                 cameraId={camera.cameraId}
                 cameraName={camera.name}
                 videoCodec={camera.lastCodec}
                 stream={effectivePreviewStream}
-                fitMode={fitMode === 'fill' ? 'fill' : 'contain'}
-                className="pointer-events-none h-full w-full"
+                fitMode="contain"
+                className="pointer-events-none h-full w-full rounded-none border-0"
               />
 
               {/* 矢量绘制与标定交互 SVG 覆盖层 */}
@@ -1012,16 +1132,30 @@ export function LiveRulesStudio({
                   const theme = getRuleTheme(rule, ruleIdx)
 
                   if (rule.role === 'line') {
-                    const p1 = rule.points[0]
-                    const p2 = rule.points[1]
+                    const [p1, p2] = rule.points
                     return (
                       <g
                         key={rule.id}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setSelectedRuleId(rule.id)
-                        }}
+                        onClick={
+                          tool === 'select'
+                            ? (e) => {
+                                e.stopPropagation()
+                                setSelectedRuleId(rule.id)
+                              }
+                            : undefined
+                        }
                       >
+                        {/* 加宽的透明命中区，避免细线难以点选 */}
+                        <line
+                          x1={`${p1.x * 100}%`}
+                          y1={`${p1.y * 100}%`}
+                          x2={`${p2.x * 100}%`}
+                          y2={`${p2.y * 100}%`}
+                          stroke="transparent"
+                          strokeWidth="14"
+                          vectorEffect="non-scaling-stroke"
+                          className="cursor-pointer"
+                        />
                         <line
                           x1={`${p1.x * 100}%`}
                           y1={`${p1.y * 100}%`}
@@ -1037,18 +1171,21 @@ export function LiveRulesStudio({
                     )
                   }
 
-                  const ptsStr = rule.points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')
-
+                  const pointsAttr = rule.points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')
                   return (
                     <g
                       key={rule.id}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedRuleId(rule.id)
-                      }}
+                      onClick={
+                        tool === 'select'
+                          ? (e) => {
+                              e.stopPropagation()
+                              setSelectedRuleId(rule.id)
+                            }
+                          : undefined
+                      }
                     >
                       <polygon
-                        points={ptsStr}
+                        points={pointsAttr}
                         fill={theme.fill}
                         stroke={isSelected ? theme.selectedStroke : theme.stroke}
                         strokeWidth={isSelected ? '2.5' : '1.5'}
@@ -1059,7 +1196,7 @@ export function LiveRulesStudio({
                   )
                 })}
 
-                {/* 绘制中的交互引导与点线 */}
+                {/* 绘制中的橡皮线与引导线 */}
                 {currentPoints.length > 0 &&
                   (() => {
                     const activeToolTheme = getToolTheme(
@@ -1077,12 +1214,12 @@ export function LiveRulesStudio({
                             vectorEffect="non-scaling-stroke"
                           />
                         )}
-                        {cursorPos && currentPoints.length >= 1 && (
+                        {draftCursor.cursor && (
                           <line
                             x1={`${currentPoints[currentPoints.length - 1].x * 100}%`}
                             y1={`${currentPoints[currentPoints.length - 1].y * 100}%`}
-                            x2={`${cursorPos.x * 100}%`}
-                            y2={`${cursorPos.y * 100}%`}
+                            x2={`${draftCursor.cursor.x * 100}%`}
+                            y2={`${draftCursor.cursor.y * 100}%`}
                             stroke={activeToolTheme.stroke}
                             strokeWidth={1}
                             strokeDasharray="3 3"
@@ -1094,288 +1231,338 @@ export function LiveRulesStudio({
                   })()}
               </svg>
 
-              {/* 标定模式浮动工具栏 (位于视频上方居中) */}
-              {isCalibrating && (
-                <div className="frosted-glass absolute top-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[var(--border)] bg-black/75 p-1.5 shadow-2xl backdrop-blur-md">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTool('select')
-                      setCurrentPoints([])
-                    }}
-                    className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition-all ${
-                      tool === 'select'
-                        ? 'bg-[var(--accent)] text-white shadow-xs'
-                        : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    <MousePointer2 className="h-3.5 w-3.5" />
-                    <span>{t('tools.select')} (V)</span>
-                  </button>
+              {/* 顶点手柄层：绝对定位保证圆形手柄不随画幅比例被拉伸 */}
+              {tool === 'select' &&
+                rules.map((rule, ruleIdx) => {
+                  if (!rule.visible || rule.id !== selectedRuleId || rule.points.length < 2) {
+                    return null
+                  }
+                  const theme = getRuleTheme(rule, ruleIdx)
+                  return rule.points.map((p, pointIndex) => (
+                    <div
+                      key={`${rule.id}-${pointIndex}`}
+                      onMouseDown={(e) => handleVertexMouseDown(e, rule.id, pointIndex)}
+                      className="absolute z-20 h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-black/70 shadow-xs transition-transform hover:scale-125 active:cursor-grabbing"
+                      style={{
+                        left: `${p.x * 100}%`,
+                        top: `${p.y * 100}%`,
+                        backgroundColor: theme.selectedStroke,
+                      }}
+                    />
+                  ))
+                })}
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTool('roi')
-                      setCurrentPoints([])
-                    }}
-                    className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition-all ${
-                      tool === 'roi'
-                        ? 'bg-cyan-500 text-white shadow-xs'
-                        : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    <Hexagon className="h-3.5 w-3.5" />
-                    <span>{t('tools.roi')} (P)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTool('line')
-                      setCurrentPoints([])
-                    }}
-                    className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition-all ${
-                      tool === 'line'
-                        ? 'bg-emerald-500 text-white shadow-xs'
-                        : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    <Slash className="h-3.5 w-3.5" />
-                    <span>{t('tools.line')} (L)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTool('mask')
-                      setCurrentPoints([])
-                    }}
-                    className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition-all ${
-                      tool === 'mask'
-                        ? 'bg-rose-500 text-white shadow-xs'
-                        : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    <ShieldAlert className="h-3.5 w-3.5" />
-                    <span>{t('tools.mask')} (M)</span>
-                  </button>
-
-                  <span className="mx-1 h-3.5 w-[1px] bg-white/20" />
-
-                  <button
-                    type="button"
-                    onClick={() => setSnapEnabled(!snapEnabled)}
-                    className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                      snapEnabled ? 'text-cyan-400' : 'text-white/50'
-                    }`}
-                    title={t('studio.snapMagnet', { defaultValue: '磁吸吸附' })}
-                  >
-                    <Magnet className="h-3.5 w-3.5" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsCalibrating(false)}
-                    className="flex items-center gap-1 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white hover:bg-white/25"
-                  >
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>{t('studio.doneCalibration', { defaultValue: '完成标定 (ESC)' })}</span>
-                  </button>
-                </div>
+              {/* 绘制中的顶点与吸附高亮 */}
+              {currentPoints.map((p, index) => (
+                <div
+                  key={`draft-${index}`}
+                  className="pointer-events-none absolute z-20 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-black/70 bg-white"
+                  style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
+                />
+              ))}
+              {draftCursor.snapped && (
+                <div
+                  className="pointer-events-none absolute z-20 h-5 w-5 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full border-2 border-cyan-400"
+                  style={{
+                    left: `${draftCursor.snapped.x * 100}%`,
+                    top: `${draftCursor.snapped.y * 100}%`,
+                  }}
+                />
               )}
 
-              {/* 视频右上角：当前防区快速指示 / 属性面板 */}
-              <div className="absolute top-4 right-4 z-20 flex flex-col items-end gap-2">
-                {selectedRule && isCalibrating && (
-                  <div className="frosted-glass flex w-64 flex-col gap-2 rounded-2xl border border-[var(--border)] bg-black/80 p-3 text-xs text-white shadow-2xl backdrop-blur-md">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-[var(--accent)]">{selectedRule.name}</span>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedRuleId(null)}
-                        className="text-white/60 hover:text-white"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+              {/* 规则随动标注气泡：选中态提供就地快捷操作 */}
+              {rules.map((rule, ruleIdx) => {
+                if (!rule.visible) return null
+                const anchor = getRuleAnchor(rule)
+                if (!anchor) return null
+                const isSelected = rule.id === selectedRuleId
+                const isInteractive = isSelected && tool === 'select'
 
-                    {/* 若为绊线，提供方向切换 */}
-                    {selectedRule.role === 'line' && (
-                      <div className="flex items-center justify-between gap-1 pt-1 font-mono text-[11px]">
-                        <span>{t('inspector.lineDirection', { defaultValue: '方向:' })}</span>
-                        <select
-                          value={selectedRule.lineDirection || 'both'}
-                          onChange={(e) => {
-                            const dir = e.target.value as DetectionLineDirection
-                            setRules((prev) =>
-                              prev.map((r) =>
-                                r.id === selectedRule.id ? { ...r, lineDirection: dir } : r,
-                              ),
-                            )
-                          }}
-                          className="rounded border border-white/20 bg-black/60 px-1.5 py-0.5 text-white outline-none"
+                return (
+                  <div
+                    key={`label-${rule.id}`}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                    className={`absolute z-20 -translate-x-1/2 -translate-y-[calc(100%+10px)] ${
+                      isInteractive ? '' : 'pointer-events-none'
+                    }`}
+                    style={{ left: `${anchor.x * 100}%`, top: `${anchor.y * 100}%` }}
+                  >
+                    <div
+                      className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[11px] shadow-lg backdrop-blur-xs ${
+                        isSelected
+                          ? 'border-[var(--accent)]/60 bg-black/85 text-white'
+                          : 'border-white/15 bg-black/65 text-white/75'
+                      }`}
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${getRuleTheme(rule, ruleIdx).handleBg}`}
+                      />
+                      <span className="max-w-[9rem] truncate font-medium">{rule.name}</span>
+
+                      {isSelected && rule.role === 'line' && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleUpdateRule(rule.id, {
+                              lineDirection:
+                                rule.lineDirection === 'both'
+                                  ? 'a_to_b'
+                                  : rule.lineDirection === 'a_to_b'
+                                    ? 'b_to_a'
+                                    : 'both',
+                            })
+                          }
+                          title={t('inspector.lineDirection', { defaultValue: '跨线判定方向' })}
+                          className="rounded px-1 font-mono text-[10px] text-cyan-300 hover:bg-white/15"
                         >
-                          <option value="both">
-                            {t('inspector.dirBoth', { defaultValue: '双向 ⇄' })}
-                          </option>
-                          <option value="a_to_b">
-                            {t('inspector.dirAtoB', { defaultValue: 'A → B' })}
-                          </option>
-                          <option value="b_to_a">
-                            {t('inspector.dirBtoA', { defaultValue: 'B → A' })}
-                          </option>
-                        </select>
-                      </div>
-                    )}
+                          {rule.lineDirection === 'both'
+                            ? '⇄'
+                            : rule.lineDirection === 'a_to_b'
+                              ? 'A→B'
+                              : 'B→A'}
+                        </button>
+                      )}
 
-                    <div className="flex items-center justify-between border-t border-white/10 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRules((prev) => prev.filter((r) => r.id !== selectedRule.id))
-                          setSelectedRuleId(null)
-                        }}
-                        className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                        <span>{t('inspector.delete', { defaultValue: '删除防区' })}</span>
-                      </button>
+                      {isSelected && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRule(rule.id)}
+                          aria-label={t('inspector.delete', { defaultValue: '删除防区' })}
+                          title={t('inspector.delete', { defaultValue: '删除防区' })}
+                          className="rounded p-0.5 text-rose-300 hover:bg-rose-500/25"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
                     </div>
                   </div>
-                )}
+                )
+              })}
+
+              {/* 画板操作提示 HUD */}
+              <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 max-w-[calc(100%-2rem)] -translate-x-1/2">
+                <span className="rounded-full border border-white/10 bg-black/70 px-3 py-1 text-center font-mono text-[11px] text-white/70 backdrop-blur-xs">
+                  {hudHint}
+                </span>
               </div>
+
+              {/* 左侧常驻工具岛 */}
+              <StudioToolIsland
+                tool={tool}
+                onToolChange={handleSelectTool}
+                snapEnabled={snapEnabled}
+                onToggleSnap={() => setSnapEnabled((prev) => !prev)}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onUndo={undoRuleEdit}
+                onRedo={redoRuleEdit}
+                isDrawing={isDrawing}
+                onCancelDrawing={handleCancelDrawing}
+              />
             </div>
           </div>
 
-          {/* 仅在双栏并排 (Docked) 模式下呈现硬件与推理指标遥测底栏 (彻底消除上下黑边无用空隙) */}
-          {layoutMode === 'docked' && (
-            <div className="flex shrink-0 items-center justify-between border-t border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 font-mono text-[11px] text-[var(--text-secondary)]">
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1.5 font-semibold text-emerald-400">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-                  <span>
-                    {t('studio.telemetryZeroCopy', {
-                      defaultValue: '硬件零拷贝解码: VPU DMA-BUF',
-                    })}
-                  </span>
-                </span>
-                <span>·</span>
+          {/* 真实遥测底栏：分辨率/编码来自探活，航迹与门控状态来自后端推送 */}
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-cyan-500/25 bg-[#0d111a] px-4 py-2 font-mono text-[11px] text-[var(--text-secondary)]">
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-400" />
                 <span>
-                  {t('studio.telemetryInferEngine', { defaultValue: '推理核心: RKNN NPU 2.0' })}
-                </span>
-                <span>·</span>
-                <span>
-                  {t('studio.telemetryResolution', { defaultValue: '源分辨率:' })}{' '}
                   {camera.lastWidth || 1920}×{camera.lastHeight || 1080}
                 </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="font-semibold text-cyan-300">
-                  {t('studio.telemetryLatency', { defaultValue: '流延迟:' })} ~106ms
-                </span>
-                <span>·</span>
-                <span>{t('studio.telemetryFps', { defaultValue: '实时帧率:' })} 25.0 FPS</span>
-              </div>
+              </span>
+              <span>·</span>
+              <span className="font-semibold text-cyan-400">
+                {camera.lastCodec?.toUpperCase() || 'H264'}
+              </span>
+              <span>·</span>
+              <span>
+                {t('studio.telemetryPreviewStream', { defaultValue: '预览码流' })}:{' '}
+                {effectivePreviewStream === 'main'
+                  ? t('cardStream.main', { defaultValue: '主码流' })
+                  : t('cardStream.sub', { defaultValue: '子码流' })}
+              </span>
             </div>
-          )}
+            <div className="flex items-center gap-3">
+              <span>
+                {t('studio.telemetryTracks', { defaultValue: '活跃航迹' })}:{' '}
+                <span className="font-semibold text-[var(--text-primary)]">
+                  {telemetry?.activeTracks ?? 0}
+                </span>
+              </span>
+              <span>·</span>
+              <span>
+                {t('studio.telemetryMotion', { defaultValue: '画面变动' })}:{' '}
+                <span className="font-semibold text-[var(--text-primary)]">
+                  {telemetry ? `${Math.round(telemetry.motionScore * 100)}%` : '—'}
+                </span>
+              </span>
+              <span>·</span>
+              <span className={telemetry?.isMotionGated ? 'text-amber-400' : 'text-emerald-400'}>
+                {telemetry?.isMotionGated
+                  ? t('studio.telemetryGated', { defaultValue: '门控待机' })
+                  : t('studio.telemetryInferring', { defaultValue: '推理中' })}
+              </span>
+            </div>
+          </div>
         </div>
 
-        {/* 控制面板：在 Overlay 模式下为悬浮玻璃卡片 (不挤压视频画幅)，在 Docked 模式下为右侧固定停靠栏 */}
+        {/* 停靠式上下文配置面板：全局算力视角 / 单防区属性视角 */}
         {isPanelOpen && (
-          <aside
-            className={
-              layoutMode === 'overlay'
-                ? 'frosted-glass animate-fade-in absolute top-3 right-3 bottom-3 z-30 flex w-80 flex-col space-y-4 overflow-y-auto rounded-2xl border border-white/15 bg-black/75 p-4 shadow-2xl backdrop-blur-xl sm:w-96'
-                : 'flex w-full shrink-0 flex-col space-y-4 overflow-y-auto border-t border-[var(--border)] bg-[var(--bg-surface-solid)] p-4 lg:w-[380px] lg:border-t-0 lg:border-l xl:w-[420px] 2xl:w-[460px]'
-            }
-          >
-            {/* 1. AI 智能检测引擎方块机架 */}
-            <AlgorithmRack
-              availableAlgos={availableAlgos}
-              activeInstances={activeInstances}
-              onToggleAlgo={handleToggleAlgo}
-              onOpenParams={handleOpenParams}
-            />
-
-            <div className="h-px bg-[var(--border)]" />
-
-            {/* 2. 空间活动防区卡片组 */}
-            <ActivityZonesSection
-              rules={rules}
-              selectedRuleId={selectedRuleId}
-              onSelectRule={setSelectedRuleId}
-              onToggleRuleVisible={(ruleId) =>
-                setRules((prev) =>
-                  prev.map((r) => (r.id === ruleId ? { ...r, visible: !r.visible } : r)),
-                )
-              }
-              onDeleteRule={(ruleId) => {
-                setRules((prev) => prev.filter((r) => r.id !== ruleId))
-                if (selectedRuleId === ruleId) setSelectedRuleId(null)
-              }}
-              onEnterCalibration={() => setIsCalibrating(true)}
-              isCalibrating={isCalibrating}
-            />
-
-            <div className="h-px bg-[var(--border)]" />
-
-            {/* 3. 运动检测门控卡片 */}
-            <div className="space-y-2.5 rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-[var(--accent)]" />
-                  <span className="text-xs font-bold text-[var(--text-primary)]">
-                    {t('studio.motionGateTitle', { defaultValue: '运动检测门控 (Motion Gating)' })}
-                  </span>
-                </div>
+          <aside className="flex h-[44vh] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t-2 border-[var(--accent)] bg-[var(--bg-primary)] lg:h-auto lg:max-h-none lg:w-[360px] lg:border-t-0 lg:border-l-2 xl:w-[400px]">
+            <div className="flex h-11 shrink-0 items-center justify-between border-b border-[var(--border)] px-3.5">
+              <span className="flex min-w-0 items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
+                {selectedRule ? (
+                  <>
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--accent)]" />
+                    <span className="truncate">{selectedRule.name}</span>
+                    <span className="shrink-0 rounded-[5px] border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]">
+                      {selectedRule.role.toUpperCase()}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Layers className="h-4 w-4 text-[var(--accent)]" />
+                    <span>{t('studio.panelGlobalMode', { defaultValue: '算力与防区配置' })}</span>
+                  </>
+                )}
+              </span>
+              <div className="flex shrink-0 items-center gap-1">
+                {selectedRule && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRuleId(null)}
+                    title={t('inspector.backToOverview', { defaultValue: '返回全局配置' })}
+                    aria-label={t('inspector.backToOverview', { defaultValue: '返回全局配置' })}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => setMotionGateEnabled(!motionGateEnabled)}
-                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
-                    motionGateEnabled ? 'bg-[var(--accent)]' : 'bg-zinc-700'
-                  }`}
+                  onClick={() => setIsPanelOpen(false)}
+                  title={t('studio.collapsePanel', { defaultValue: '收起配置面板' })}
+                  aria-label={t('studio.collapsePanel', { defaultValue: '收起配置面板' })}
+                  className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
                 >
-                  <span
-                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
-                      motionGateEnabled ? 'translate-x-4' : 'translate-x-0.5'
-                    }`}
-                  />
+                  <X className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <p className="text-[11px] leading-relaxed text-[var(--text-muted)]">
-                {t('studio.motionGateDesc', {
-                  defaultValue:
-                    '画面静止无像素变动时跳过 NPU 深度推理，极大降低芯片能耗与总线发热。',
-                })}
-              </p>
-              {motionGateEnabled && (
-                <div className="space-y-1.5 border-t border-[var(--border)] pt-2">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="text-[var(--text-secondary)]">
-                      {t('studio.motionGateSensitivity', { defaultValue: '灵敏度阈值:' })}
-                    </span>
-                    <span className="font-mono font-semibold text-[var(--accent)]">
-                      {motionGateThreshold}%
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={5}
-                    max={80}
-                    step={1}
-                    value={motionGateThreshold}
-                    onChange={(e) => setMotionGateThreshold(Number(e.target.value))}
-                    className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent)]"
+            </div>
+
+            <div className="flex-1 space-y-4 overflow-y-auto p-3.5">
+              {/* 单防区视角：属性编辑 */}
+              {selectedRule && (
+                <>
+                  <RulePropertiesPanel
+                    rule={selectedRule}
+                    onUpdateRule={handleUpdateRule}
+                    onCloneRule={handleCloneRule}
+                    onDeleteRule={handleDeleteRule}
+                    activeAlgorithmNames={activeAlgorithmNames}
                   />
-                </div>
+                  <div className="h-px bg-[var(--border)]" />
+                </>
+              )}
+
+              {/* 全局视角：算力机架 */}
+              {!selectedRule && (
+                <>
+                  <AlgorithmRack
+                    availableAlgos={availableAlgos}
+                    activeInstances={activeInstances}
+                    onToggleAlgo={handleToggleAlgo}
+                    onOpenParams={handleOpenParams}
+                  />
+                  <div className="h-px bg-[var(--border)]" />
+                </>
+              )}
+
+              {/* 空间活动防区列表（两种视角下均可用，便于快速切换） */}
+              <ActivityZonesSection
+                rules={rules}
+                selectedRuleId={selectedRuleId}
+                onSelectRule={setSelectedRuleId}
+                onToggleRuleVisible={handleToggleRuleVisible}
+                onDeleteRule={handleDeleteRule}
+                onStartDrawing={handleSelectTool}
+                activeTool={tool}
+                activeAlgorithmNames={activeAlgorithmNames}
+              />
+
+              {/* 运动门控（通道级算力策略，仅在全局视角暴露） */}
+              {!selectedRule && (
+                <>
+                  <div className="h-px bg-[var(--border)]" />
+                  <div className="space-y-2.5 rounded-[8px] border border-[var(--border)] bg-[var(--bg-surface)] p-3.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Activity className="h-4 w-4 text-[var(--accent)]" />
+                        <span className="text-xs font-bold text-[var(--text-primary)]">
+                          {t('studio.motionGateTitle', {
+                            defaultValue: '运动检测门控',
+                          })}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setMotionGateEnabled(!motionGateEnabled)}
+                        aria-pressed={motionGateEnabled}
+                        aria-label={t('studio.motionGateTitle', {
+                          defaultValue: '运动检测门控',
+                        })}
+                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                          motionGateEnabled ? 'bg-[var(--accent)]' : 'bg-zinc-700'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
+                            motionGateEnabled ? 'translate-x-4' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-[var(--text-muted)]">
+                      {t('studio.motionGateDesc', {
+                        defaultValue:
+                          '画面静止无像素变动时跳过 NPU 深度推理，显著降低芯片能耗与总线发热。',
+                      })}
+                    </p>
+                    {motionGateEnabled && (
+                      <div className="space-y-1.5 border-t border-[var(--border)] pt-2">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-[var(--text-secondary)]">
+                            {t('studio.motionGateSensitivity', { defaultValue: '灵敏度阈值' })}
+                          </span>
+                          <span className="font-mono font-semibold text-[var(--accent)]">
+                            {motionGateThreshold}%
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={5}
+                          max={80}
+                          step={1}
+                          value={motionGateThreshold}
+                          aria-label={t('studio.motionGateSensitivity', {
+                            defaultValue: '灵敏度阈值',
+                          })}
+                          onChange={(e) => setMotionGateThreshold(Number(e.target.value))}
+                          className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent)]"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           </aside>
         )}
       </div>
 
-      {/* 算法参数独立调优抽屉 (点击算法小方块的 ⚙️ 触发) */}
+      {/* 算法参数独立调优抽屉 */}
       <AlgoParamDrawer
         isOpen={Boolean(paramDrawerAlgo)}
         algo={paramDrawerAlgo}

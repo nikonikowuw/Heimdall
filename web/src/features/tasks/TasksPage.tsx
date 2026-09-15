@@ -162,12 +162,12 @@ export function TasksPage({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
-          className="flex h-full flex-col gap-4 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] select-none"
+          className="calibration-grid flex h-full flex-col gap-5 bg-[var(--bg-primary)] p-5 text-[var(--text-primary)] select-none"
         >
           {/* 顶部状态与操作栏 */}
-          <div className="frosted-glass flex items-center justify-between rounded-2xl p-3.5 shadow-xs">
+          <div className="flex shrink-0 flex-col gap-4 border border-l-4 border-[var(--border-strong)] border-l-[var(--accent)] bg-[var(--bg-surface-solid)] px-4 py-3.5 shadow-[var(--shadow-sm)] sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] shadow-2xs">
+              <div className="flex h-10 w-10 items-center justify-center rounded-[8px] border border-[var(--accent)]/25 bg-[var(--accent-soft)] text-[var(--accent)]">
                 <Sliders className="h-5 w-5" />
               </div>
               <div>
@@ -196,7 +196,7 @@ export function TasksPage({
                 type="button"
                 onClick={loadData}
                 disabled={isLoading}
-                className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-[7px] border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:border-[var(--accent)]/40 hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-50"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
                 <span>{tc('actions.refresh')}</span>
@@ -204,7 +204,7 @@ export function TasksPage({
               <button
                 type="button"
                 onClick={() => setIsCreateTaskModalOpen(true)}
-                className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95"
+                className="flex items-center gap-1.5 rounded-[7px] bg-[var(--accent)] px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>{t('createTask', { defaultValue: '新建布防任务' })}</span>
@@ -213,7 +213,7 @@ export function TasksPage({
           </div>
 
           {/* AI 任务卡片矩阵 */}
-          <div className="frosted-glass flex-1 overflow-auto rounded-2xl p-4 shadow-xs">
+          <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--border-strong)] pt-5">
             {cameras.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-24 text-center text-[var(--text-muted)]">
                 <Video className="mb-2 h-8 w-8 opacity-40" />
@@ -261,7 +261,7 @@ export function TasksPage({
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
                 {camerasWithTasks.map((camera) => (
                   <TaskCameraCard
                     key={camera.id}
