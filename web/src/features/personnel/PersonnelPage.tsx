@@ -4,6 +4,7 @@ import {
   UserPlus,
   Search,
   RotateCw,
+  RefreshCw,
   Cpu,
   Layers,
   CheckCircle2,
@@ -12,11 +13,12 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { personnelApi } from '../../lib/api'
-import type { PersonnelItem, PersonnelStats } from '../../types'
+import type { PersonnelItem, PersonnelStats, ReextractProgress } from '../../types'
 import { PersonnelCard } from './components/PersonnelCard'
 import { PersonnelModal } from './components/PersonnelModal'
 import { PersonnelDetailDrawer } from './components/PersonnelDetailDrawer'
 import { DeleteConfirmModal } from './components/DeleteConfirmModal'
+import { ReextractModal } from './components/ReextractModal'
 
 export const PersonnelPage: React.FC = () => {
   const { t } = useTranslation(['personnel', 'common'])
@@ -43,6 +45,12 @@ export const PersonnelPage: React.FC = () => {
 
   const [deleteTarget, setDeleteTarget] = useState<PersonnelItem | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+
+  // 一键重新提取特征状态
+  const [isReextractModalOpen, setIsReextractModalOpen] = useState(false)
+  const [isStartingReextract, setIsStartingReextract] = useState(false)
+  const [reextractProgress, setReextractProgress] = useState<ReextractProgress | null>(null)
+  const [reextractError, setReextractError] = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
@@ -72,6 +80,36 @@ export const PersonnelPage: React.FC = () => {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // 初次加载探测一次后台任务状态
+  useEffect(() => {
+    personnelApi
+      .getReextractStatus()
+      .then(setReextractProgress)
+      .catch(() => {})
+  }, [])
+
+  // 仅在任务处于运行状态时以 1s 频率轮询进度
+  const isTaskRunning = reextractProgress?.status === 'running'
+  useEffect(() => {
+    if (!isTaskRunning) return
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await personnelApi.getReextractStatus()
+        setReextractProgress(res)
+        if (res.status !== 'running') {
+          if (res.status === 'completed') {
+            loadData()
+          }
+        }
+      } catch {
+        // 轮询容错
+      }
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [isTaskRunning, loadData])
 
   const handleOpenRegister = () => {
     setEditTarget(null)
@@ -109,6 +147,29 @@ export const PersonnelPage: React.FC = () => {
     } finally {
       setIsDeleting(false)
     }
+  }
+
+  const handleOpenReextract = () => {
+    setReextractError(null)
+    setIsReextractModalOpen(true)
+  }
+
+  const handleConfirmReextract = async () => {
+    setIsStartingReextract(true)
+    setReextractError(null)
+    try {
+      const initial = await personnelApi.startReextract()
+      setReextractProgress(initial)
+    } catch (err: unknown) {
+      setReextractError(err instanceof Error ? err.message : t('errors.reextractFailed'))
+    } finally {
+      setIsStartingReextract(false)
+    }
+  }
+
+  const handleCloseReextractModal = () => {
+    setIsReextractModalOpen(false)
+    setReextractError(null)
   }
 
   const handleModalSuccess = () => {
@@ -210,6 +271,44 @@ export const PersonnelPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* 一键重新提取人脸特征（支持后台异步任务感知） */}
+          <button
+            type="button"
+            onClick={handleOpenReextract}
+            disabled={(!stats.algoReady || stats.totalFaces === 0) && !isTaskRunning}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium transition-colors ${
+              isTaskRunning
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-emerald-500/40 hover:text-emerald-400 disabled:cursor-not-allowed disabled:opacity-40'
+            }`}
+            title={
+              !stats.algoReady
+                ? t('reextract.algoDisabledTooltip')
+                : stats.totalFaces === 0
+                  ? t('reextract.noFaces')
+                  : t('actions.reextractFeatures')
+            }
+          >
+            <RefreshCw
+              className={`h-4 w-4 ${isTaskRunning ? 'animate-spin text-emerald-400' : ''}`}
+            />
+            <span className="hidden sm:inline">
+              {isTaskRunning
+                ? t('reextract.runningBadge', {
+                    percent:
+                      reextractProgress && reextractProgress.total > 0
+                        ? Math.min(
+                            100,
+                            Math.round(
+                              (reextractProgress.processed / reextractProgress.total) * 100,
+                            ),
+                          )
+                        : 0,
+                  })
+                : t('actions.reextractFeatures')}
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={() => loadData()}
@@ -327,6 +426,17 @@ export const PersonnelPage: React.FC = () => {
         isDeleting={isDeleting}
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleConfirmDelete}
+      />
+
+      {/* 一键重新提取特征确认与实时进度弹窗 */}
+      <ReextractModal
+        isOpen={isReextractModalOpen}
+        isGlobal={true}
+        isStarting={isStartingReextract}
+        progress={reextractProgress}
+        error={reextractError}
+        onClose={handleCloseReextractModal}
+        onConfirm={handleConfirmReextract}
       />
     </div>
   )

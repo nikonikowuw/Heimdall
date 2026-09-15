@@ -366,6 +366,34 @@ export interface PersonnelStats {
   algoReady: boolean
 }
 
+export interface ReextractFaceFailureDetail {
+  faceId: string
+  subjectId: string
+  reason: string
+}
+
+export type ReextractTaskStatus = 'idle' | 'running' | 'completed' | 'failed'
+
+export interface ReextractProgress {
+  status: ReextractTaskStatus
+  total: number
+  processed: number
+  succeeded: number
+  failed: number
+  currentFaceId?: string | null
+  startedAt?: number | null
+  finishedAt?: number | null
+  failures: ReextractFaceFailureDetail[]
+  errorMessage?: string | null
+}
+
+export interface ReextractFaceFeaturesReport {
+  total: number
+  succeeded: number
+  failed: number
+  failures: ReextractFaceFailureDetail[]
+}
+
 export interface AlgoManifest {
   algorithmId: string
   name: string

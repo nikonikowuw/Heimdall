@@ -4,6 +4,7 @@ import {
   Star,
   Trash2,
   UploadCloud,
+  RefreshCw,
   Loader2,
   AlertCircle,
   Clock,
@@ -14,8 +15,9 @@ import {
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import { evidenceApi, personnelApi } from '../../../lib/api'
-import type { PersonnelDetail, GalleryFace } from '../../../types'
+import type { PersonnelDetail, GalleryFace, ReextractFaceFeaturesReport } from '../../../types'
 import { formatTimestamp } from '../../../lib/time'
+import { ReextractModal } from './ReextractModal'
 
 export interface PersonnelDetailDrawerProps {
   isOpen: boolean
@@ -80,6 +82,12 @@ export function PersonnelDetailDrawer({
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'original' | 'aligned'>('original')
   const [faceToDelete, setFaceToDelete] = useState<GalleryFace | null>(null)
+
+  // 单人重新提取特征状态
+  const [isReextractModalOpen, setIsReextractModalOpen] = useState(false)
+  const [isReextracting, setIsReextracting] = useState(false)
+  const [reextractReport, setReextractReport] = useState<ReextractFaceFeaturesReport | null>(null)
+  const [reextractError, setReextractError] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -162,6 +170,34 @@ export function PersonnelDetailDrawer({
     } finally {
       setActionLoading(false)
     }
+  }
+
+  const handleOpenReextract = () => {
+    setReextractReport(null)
+    setReextractError(null)
+    setIsReextractModalOpen(true)
+  }
+
+  const handleConfirmReextract = async () => {
+    if (!detail) return
+    setIsReextracting(true)
+    setReextractError(null)
+    try {
+      const report = await personnelApi.reextractSingle(detail.subjectId)
+      setReextractReport(report)
+      await fetchDetail(detail.subjectId)
+      onUpdate()
+    } catch (err: unknown) {
+      setReextractError(err instanceof Error ? err.message : t('errors.reextractFailed'))
+    } finally {
+      setIsReextracting(false)
+    }
+  }
+
+  const handleCloseReextractModal = () => {
+    setIsReextractModalOpen(false)
+    setReextractReport(null)
+    setReextractError(null)
   }
 
   const handleAddPhotos = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -331,17 +367,32 @@ export function PersonnelDetailDrawer({
                     </div>
                   </div>
 
-                  {detail.faces.length < 5 && (
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={actionLoading}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20"
+                      onClick={handleOpenReextract}
+                      disabled={actionLoading || isReextracting || detail.faces.length === 0}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-tertiary)] px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:border-emerald-500/40 hover:text-emerald-400 disabled:opacity-40"
+                      title={t('actions.reextractShort')}
                     >
-                      <UploadCloud className="h-3.5 w-3.5" />
-                      {t('actions.addFaces')}
+                      <RefreshCw
+                        className={`h-3.5 w-3.5 ${isReextracting ? 'animate-spin text-emerald-400' : ''}`}
+                      />
+                      <span className="hidden sm:inline">{t('actions.reextractShort')}</span>
                     </button>
-                  )}
+
+                    {detail.faces.length < 5 && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={actionLoading || isReextracting}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20 disabled:opacity-40"
+                      >
+                        <UploadCloud className="h-3.5 w-3.5" />
+                        {t('actions.addFaces')}
+                      </button>
+                    )}
+                  </div>
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -492,6 +543,19 @@ export function PersonnelDetailDrawer({
           </div>
         </div>
       )}
+
+      {/* 单人重新提取特征弹窗 */}
+      <ReextractModal
+        isOpen={isReextractModalOpen}
+        isGlobal={false}
+        targetName={detail?.name}
+        progress={null}
+        singleReport={reextractReport}
+        isStarting={isReextracting}
+        error={reextractError}
+        onClose={handleCloseReextractModal}
+        onConfirm={handleConfirmReextract}
+      />
     </div>
   )
 }

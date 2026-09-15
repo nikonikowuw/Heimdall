@@ -20,8 +20,12 @@
     "setPrimary": "設為主要頭像",
     "deleteFace": "刪除樣本",
     "refresh": "重新整理",
+    "reextractFeatures": "一鍵重新擷取特徵",
+    "reextractShort": "重新擷取特徵",
+    "reextracting": "重新擷取中...",
     "cancel": "取消",
     "confirm": "確定",
+    "retry": "重試",
     "saving": "儲存中...",
     "uploading": "上傳擷取特徵中..."
   },
@@ -65,6 +69,35 @@
     "deleteFaceTitle": "確認刪除人臉樣本",
     "deleteFaceDesc": "確定要刪除該張樣本照片嗎？如果該照片為主要頭像，系統將自動將剩餘樣本的第一張升級為主要頭像。"
   },
+  "reextract": {
+    "title": "重新擷取人臉特徵",
+    "desc": "確定要基於已儲存的原始照片重新擷取底庫中所有人臉樣本的特徵向量嗎？更新演算法包後執行此操作可確保特徵空間與最新模型對齊，處理完成後將自動重新載入記憶體檢索索引。",
+    "singleDesc": "確定要基於原始照片重新擷取「{{name}}」的人臉特徵向量與對齊切片嗎？",
+    "inProgress": "正在使用當前人臉演算法模型重新擷取特徵，請稍候...",
+    "successTitle": "特徵重新擷取完成",
+    "failedTitle": "特徵重新擷取失敗",
+    "successDesc": "共處理 {{total}} 張人臉照片，全部重新擷取成功並已更新記憶體索引。",
+    "failedDesc": "任務執行異常中斷，請檢查系統日誌",
+    "partialDesc": "處理 {{total}} 張人臉照片，成功 {{succeeded}} 張，失敗 {{failed}} 張。失敗樣本已保留舊特徵。",
+    "noFaces": "當前底庫暫無可擷取的人臉照片樣本",
+    "failuresTitle": "失敗明細",
+    "algoDisabledTooltip": "當前系統未就緒人臉識別演算法，請先部署或啟用人臉演算法包",
+    "runInBackground": "背景靜默執行",
+    "currentProcessing": "正在擷取樣本",
+    "processedRatio": "處理進度: {{processed}} / {{total}}",
+    "successCount": "成功",
+    "failedCount": "失敗",
+    "runningBadge": "擷取中 {{percent}}%",
+    "reasons": {
+      "photoNotFound": "原始照片檔案不存在: {{path}}",
+      "readFailed": "讀取照片檔案失敗: {{error}}",
+      "transcodeFailed": "照片轉碼失敗: {{error}}",
+      "noFaceDetected": "未在照片中檢測到有效人臉",
+      "extractFailed": "特徵擷取失敗: {{error}}",
+      "qualityTooLow": "人臉品質評分過低 ({{score}} < 0.50)，未達到門禁標準",
+      "dbUpdateFailed": "更新資料庫特徵失敗: {{error}}"
+    }
+  },
   "empty": {
     "title": "暫無人員底庫記錄",
     "desc": "點擊上方「錄入新人員」按鈕新增首位在冊人員及人臉特徵",
@@ -77,7 +110,9 @@
     "cannotDeleteLastFace": "人員至少保留 1 張樣本，無法刪除最後一張照片",
     "failedToLoad": "載入人員底庫失敗",
     "failedToSave": "儲存人員資訊失敗",
-    "failedToDelete": "刪除操作失敗"
+    "failedToDelete": "刪除操作失敗",
+    "reextractFailed": "重新擷取人臉特徵失敗",
+    "reextractConflict": "特徵重新擷取任務正在執行中，請勿重複發起"
   },
   "toast": {
     "registered": "人員檔案及人臉特徵錄入成功",

@@ -29,6 +29,8 @@ import type {
   PersonnelItem,
   PersonnelStats,
   RecognitionRecord,
+  ReextractFaceFeaturesReport,
+  ReextractProgress,
   SysGb28181Config,
   TaskConfigDto,
   TaskSummaryDto,
@@ -453,13 +455,35 @@ export const personnelApi = {
       {},
     )
   },
+
+  startReextract(): Promise<ReextractProgress> {
+    return api.post<ReextractProgress>('/personnel/reextract', {})
+  },
+
+  getReextractStatus(): Promise<ReextractProgress> {
+    return api.get<ReextractProgress>('/personnel/reextract/status')
+  },
+
+  reextractSingle(subjectId: string): Promise<ReextractFaceFeaturesReport> {
+    return api.post<ReextractFaceFeaturesReport>(
+      `/personnel/${encodeURIComponent(subjectId)}/reextract`,
+      {},
+    )
+  },
 }
 
 function postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
   const token = useAuthStore.getState().token
+  const lang = (i18n && i18n.language) || 'zh-CN'
+  const headers: Record<string, string> = {
+    'Accept-Language': lang,
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
   return fetch(`${BASE_URL}${endpoint}`, {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers,
     body: formData,
   }).then(async (res) => {
     const raw = await res.text().catch(() => '')
