@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 
 use db::{DatabaseConnection, GalleryFaceRepo};
 use infer::package::AlgoRegistry;
@@ -14,6 +14,7 @@ use types::{ReextractFaceFailureDetail, ReextractProgressDto, ReextractTaskStatu
 use crate::error::ApiError;
 use crate::gallery_index::FaceFeatureIndex;
 use crate::personnel_service::reextract_face_sample;
+use crate::state::WsBroadcastEvent;
 
 /// 人脸底库特征后台重新提取管理器（线程安全共享状态）
 #[derive(Debug, Clone)]
@@ -51,6 +52,7 @@ impl PersonnelReextractManager {
         evidence_base_dir: PathBuf,
         algo_registry: Arc<AlgoRegistry>,
         gallery_index: Arc<FaceFeatureIndex>,
+        event_broadcaster: broadcast::Sender<WsBroadcastEvent>,
     ) -> Result<ReextractProgressDto, ApiError> {
         if !algo_registry.is_face_extraction_ready().await {
             return Err(ApiError::FaceAlgorithmNotLoaded(
@@ -128,12 +130,19 @@ impl PersonnelReextractManager {
             }
 
             // 更新任务为已完成终态
-            {
+            let final_snapshot = {
                 let mut p = progress_ref.write().await;
                 p.status = ReextractTaskStatus::Completed;
                 p.current_face_id = None;
                 p.finished_at = Some(chrono::Utc::now().timestamp_millis());
-            }
+                p.clone()
+            };
+
+            let _ = event_broadcaster.send(WsBroadcastEvent {
+                topic: "personnel.reextract.finished".to_string(),
+                payload: serde_json::to_value(&final_snapshot).unwrap_or_default(),
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            });
 
             tracing::info!(
                 total,

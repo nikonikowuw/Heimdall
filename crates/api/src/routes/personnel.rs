@@ -244,6 +244,7 @@ async fn start_reextract_all_faces(
             evidence_base_dir,
             state.algo_registry.clone(),
             state.gallery_index.clone(),
+            state.event_broadcaster.clone(),
         )
         .await?;
     Ok(ApiResponse::success(initial_progress))

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Users,
   UserPlus,
@@ -10,9 +10,12 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
+  FileText,
+  X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { personnelApi } from '../../lib/api'
+import { wsClient } from '../../lib/wsClient'
 import type { PersonnelItem, PersonnelStats, ReextractProgress } from '../../types'
 import { PersonnelCard } from './components/PersonnelCard'
 import { PersonnelModal } from './components/PersonnelModal'
@@ -46,11 +49,22 @@ export const PersonnelPage: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<PersonnelItem | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
-  // 一键重新提取特征状态
+  // 一键重新提取特征状态与执行报告
   const [isReextractModalOpen, setIsReextractModalOpen] = useState(false)
+  const [reextractModalMode, setReextractModalMode] = useState<'confirm' | 'report'>('confirm')
   const [isStartingReextract, setIsStartingReextract] = useState(false)
   const [reextractProgress, setReextractProgress] = useState<ReextractProgress | null>(null)
   const [reextractError, setReextractError] = useState<string | null>(null)
+
+  // 任务完成即时通知 Toast 状态
+  const [toast, setToast] = useState<{
+    id: number
+    title: string
+    message: string
+    type: 'success' | 'warning' | 'error'
+  } | null>(null)
+
+  const lastStatusRef = useRef<string | null>(null)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
@@ -85,11 +99,39 @@ export const PersonnelPage: React.FC = () => {
   useEffect(() => {
     personnelApi
       .getReextractStatus()
-      .then(setReextractProgress)
+      .then((res) => {
+        setReextractProgress(res)
+        lastStatusRef.current = res.status
+      })
       .catch(() => {})
   }, [])
 
-  // 仅在任务处于运行状态时以 1s 频率轮询进度
+  // 订阅 WebSocket 完成广播通知
+  useEffect(() => {
+    const unsub = wsClient.subscribe<ReextractProgress>('personnel.reextract.finished', (data) => {
+      setReextractProgress(data)
+      loadData()
+      setToast({
+        id: Date.now(),
+        title:
+          data.status === 'completed'
+            ? t('reextract.completedToastTitle')
+            : t('reextract.failedToastTitle'),
+        message:
+          data.status === 'completed'
+            ? t('reextract.completedToastDesc', {
+                total: data.total,
+                succeeded: data.succeeded,
+                failed: data.failed,
+              })
+            : data.errorMessage || t('reextract.failedToastDesc'),
+        type: data.status === 'completed' ? (data.failed > 0 ? 'warning' : 'success') : 'error',
+      })
+    })
+    return unsub
+  }, [loadData, t])
+
+  // 轮询后台重提任务状态
   const isTaskRunning = reextractProgress?.status === 'running'
   useEffect(() => {
     if (!isTaskRunning) return
@@ -98,18 +140,44 @@ export const PersonnelPage: React.FC = () => {
       try {
         const res = await personnelApi.getReextractStatus()
         setReextractProgress(res)
-        if (res.status !== 'running') {
-          if (res.status === 'completed') {
-            loadData()
-          }
+
+        // 状态从 running 转为已完成或失败
+        if (lastStatusRef.current === 'running' && res.status !== 'running') {
+          loadData()
+          setToast({
+            id: Date.now(),
+            title:
+              res.status === 'completed'
+                ? t('reextract.completedToastTitle')
+                : t('reextract.failedToastTitle'),
+            message:
+              res.status === 'completed'
+                ? t('reextract.completedToastDesc', {
+                    total: res.total,
+                    succeeded: res.succeeded,
+                    failed: res.failed,
+                  })
+                : res.errorMessage || t('reextract.failedToastDesc'),
+            type: res.status === 'completed' ? (res.failed > 0 ? 'warning' : 'success') : 'error',
+          })
         }
+        lastStatusRef.current = res.status
       } catch {
         // 轮询容错
       }
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [isTaskRunning, loadData])
+  }, [isTaskRunning, loadData, t])
+
+  // Toast 自动消退倒计时
+  useEffect(() => {
+    if (!toast) return
+    const timer = setTimeout(() => {
+      setToast(null)
+    }, 6000)
+    return () => clearTimeout(timer)
+  }, [toast])
 
   const handleOpenRegister = () => {
     setEditTarget(null)
@@ -151,12 +219,20 @@ export const PersonnelPage: React.FC = () => {
 
   const handleOpenReextract = () => {
     setReextractError(null)
+    setReextractModalMode('confirm')
+    setIsReextractModalOpen(true)
+  }
+
+  const handleOpenReport = () => {
+    setReextractError(null)
+    setReextractModalMode('report')
     setIsReextractModalOpen(true)
   }
 
   const handleConfirmReextract = async () => {
     setIsStartingReextract(true)
     setReextractError(null)
+    lastStatusRef.current = 'running'
     try {
       const initial = await personnelApi.startReextract()
       setReextractProgress(initial)
@@ -271,10 +347,35 @@ export const PersonnelPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* 最近一次重提任务报告查看模块 */}
+          {reextractProgress &&
+            (reextractProgress.status === 'completed' || reextractProgress.status === 'failed') &&
+            !isTaskRunning && (
+              <button
+                type="button"
+                onClick={handleOpenReport}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-colors ${
+                  reextractProgress.failed > 0
+                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20'
+                    : 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400 hover:bg-emerald-500/15'
+                }`}
+                title={t('reextract.viewReportTooltip')}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">
+                  {t('reextract.lastReportBadge', {
+                    succeeded: reextractProgress.succeeded,
+                    failed: reextractProgress.failed,
+                  })}
+                </span>
+                <span className="sm:hidden">{t('reextract.viewReport')}</span>
+              </button>
+            )}
+
           {/* 一键重新提取人脸特征（支持后台异步任务感知） */}
           <button
             type="button"
-            onClick={handleOpenReextract}
+            onClick={isTaskRunning ? handleOpenReport : handleOpenReextract}
             disabled={(!stats.algoReady || stats.totalFaces === 0) && !isTaskRunning}
             className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium transition-colors ${
               isTaskRunning
@@ -432,12 +533,57 @@ export const PersonnelPage: React.FC = () => {
       <ReextractModal
         isOpen={isReextractModalOpen}
         isGlobal={true}
+        initialMode={reextractModalMode}
         isStarting={isStartingReextract}
         progress={reextractProgress}
         error={reextractError}
         onClose={handleCloseReextractModal}
         onConfirm={handleConfirmReextract}
       />
+
+      {/* 任务完成即时反馈 Toast 提示卡片 */}
+      {toast && (
+        <div className="animate-in slide-in-from-top-4 fade-in fixed top-5 right-5 z-50 flex max-w-md items-start gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4 shadow-xl backdrop-blur-md">
+          <div
+            className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+              toast.type === 'error'
+                ? 'bg-rose-500/10 text-rose-400'
+                : toast.type === 'warning'
+                  ? 'bg-amber-500/10 text-amber-400'
+                  : 'bg-emerald-500/10 text-emerald-400'
+            }`}
+          >
+            {toast.type === 'error' || toast.type === 'warning' ? (
+              <AlertCircle className="h-4 w-4" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
+          </div>
+          <div className="flex-1">
+            <h4 className="text-xs font-semibold text-[var(--text-primary)]">{toast.title}</h4>
+            <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{toast.message}</p>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setToast(null)
+                  handleOpenReport()
+                }}
+                className="text-xs font-medium text-emerald-400 hover:underline"
+              >
+                {t('reextract.viewReport')}
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

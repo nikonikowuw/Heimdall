@@ -1,13 +1,24 @@
 import { useState, useEffect } from 'react'
-import { RefreshCw, CheckCircle2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import {
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Check,
+  Percent,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import type { ReextractProgress, ReextractFaceFeaturesReport } from '../../../types'
+import { formatTimestamp } from '../../../lib/time'
 
 export interface ReextractModalProps {
   isOpen: boolean
   isGlobal: boolean
   targetName?: string
+  initialMode?: 'confirm' | 'report'
   progress: ReextractProgress | null
   singleReport?: ReextractFaceFeaturesReport | null
   isStarting: boolean
@@ -61,6 +72,7 @@ export function ReextractModal({
   isOpen,
   isGlobal,
   targetName,
+  initialMode = 'confirm',
   progress,
   singleReport,
   isStarting,
@@ -68,25 +80,46 @@ export function ReextractModal({
   onClose,
   onConfirm,
 }: ReextractModalProps) {
-  const { t } = useTranslation(['personnel', 'common'])
+  const { t, i18n } = useTranslation(['personnel', 'common'])
   const [showFailures, setShowFailures] = useState(false)
+  const [currentMode, setCurrentMode] = useState<'confirm' | 'progress' | 'report'>('confirm')
 
   // 状态判定
   const isRunning = isGlobal ? progress?.status === 'running' || isStarting : isStarting
-  const isCompleted = isGlobal ? progress?.status === 'completed' : Boolean(singleReport)
+  const isCompleted = isGlobal
+    ? progress?.status === 'completed' || progress?.status === 'failed'
+    : Boolean(singleReport)
+
+  // 根据外部状态和打开模式同步内部视图模式
+  useEffect(() => {
+    if (!isOpen) {
+      setShowFailures(false)
+      return
+    }
+    if (isRunning) {
+      setCurrentMode('progress')
+    } else if (initialMode === 'report' && isCompleted) {
+      setCurrentMode('report')
+    } else if (isCompleted && !singleReport && initialMode !== 'confirm') {
+      setCurrentMode('report')
+    } else {
+      setCurrentMode('confirm')
+    }
+  }, [isOpen, isRunning, isCompleted, initialMode, singleReport])
+
+  // 任务在当前弹窗中从运行中转为完成时，自动切换为报告展示视图
+  useEffect(() => {
+    if (isCompleted && currentMode === 'progress') {
+      setCurrentMode('report')
+    }
+  }, [isCompleted, currentMode])
 
   // ESC 浮层栈支持（执行中可按 ESC 关闭弹窗转入后台运行）
   useDismissStack(isOpen, onClose)
 
-  useEffect(() => {
-    if (!isOpen) {
-      setShowFailures(false)
-    }
-  }, [isOpen])
-
   // Enter 快捷确认（仅限确认阶段）
   useEffect(() => {
-    if (!isOpen || isRunning || isCompleted) return
+    if (!isOpen || currentMode !== 'confirm') return
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Enter') {
         e.preventDefault()
@@ -95,7 +128,7 @@ export function ReextractModal({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, isRunning, isCompleted, onConfirm])
+  }, [isOpen, currentMode, onConfirm])
 
   if (!isOpen) return null
 
@@ -108,6 +141,12 @@ export function ReextractModal({
   const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
   const isTaskFailed = isGlobal && progress?.status === 'failed'
   const isAllSuccess = !isTaskFailed && failed === 0
+
+  // 任务耗时计算 (单位: 秒)
+  const durationSec =
+    progress?.startedAt && progress?.finishedAt && progress.finishedAt >= progress.startedAt
+      ? ((progress.finishedAt - progress.startedAt) / 1000).toFixed(1)
+      : null
 
   let completedBadgeClass = 'border-amber-500/30 bg-amber-500/10 text-amber-400'
   if (isTaskFailed) {
@@ -159,25 +198,82 @@ export function ReextractModal({
               </button>
             </div>
           </div>
-        ) : isCompleted ? (
+        ) : currentMode === 'report' ? (
+          /* 1. 完成结果详细报告展示 */
           <div>
-            <div className="flex items-center gap-3">
-              <div
-                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${completedBadgeClass}`}
-              >
-                {isAllSuccess ? (
-                  <CheckCircle2 className="h-5 w-5" />
-                ) : (
-                  <AlertCircle className="h-5 w-5" />
-                )}
-              </div>
-              <div>
-                <h3 className="text-base font-semibold text-[var(--text-primary)]">
-                  {isTaskFailed ? t('reextract.failedTitle') : t('reextract.successTitle')}
-                </h3>
-                <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{completedDesc}</p>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${completedBadgeClass}`}
+                >
+                  {isAllSuccess ? (
+                    <CheckCircle2 className="h-5 w-5" />
+                  ) : (
+                    <AlertCircle className="h-5 w-5" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-[var(--text-primary)]">
+                    {isTaskFailed ? t('reextract.failedTitle') : t('reextract.successTitle')}
+                  </h3>
+                  <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{completedDesc}</p>
+                </div>
               </div>
             </div>
+
+            {/* 详细指标四宫格 */}
+            <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-tertiary)] p-2.5 text-center">
+                <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
+                  <Check className="h-3 w-3 text-emerald-400" />
+                  <span>{t('reextract.successCount')}</span>
+                </div>
+                <p className="mt-1 font-mono text-base font-bold text-emerald-400">
+                  {succeeded}{' '}
+                  <span className="text-xs font-normal text-[var(--text-muted)]">/ {total}</span>
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-tertiary)] p-2.5 text-center">
+                <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
+                  <Percent className="h-3 w-3 text-cyan-400" />
+                  <span>{t('reextract.successRate')}</span>
+                </div>
+                <p className="mt-1 font-mono text-base font-bold text-cyan-400">{percent}%</p>
+              </div>
+
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-tertiary)] p-2.5 text-center">
+                <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
+                  <AlertCircle className="h-3 w-3 text-amber-400" />
+                  <span>{t('reextract.failedCount')}</span>
+                </div>
+                <p
+                  className={`mt-1 font-mono text-base font-bold ${
+                    failed > 0 ? 'text-amber-400' : 'text-[var(--text-muted)]'
+                  }`}
+                >
+                  {failed}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-tertiary)] p-2.5 text-center">
+                <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
+                  <Clock className="h-3 w-3 text-[var(--text-muted)]" />
+                  <span>{t('reextract.duration')}</span>
+                </div>
+                <p className="mt-1 font-mono text-base font-bold text-[var(--text-primary)]">
+                  {durationSec ? `${durationSec}s` : '--'}
+                </p>
+              </div>
+            </div>
+
+            {/* 完成时间标注 */}
+            {progress?.finishedAt && (
+              <p className="mt-3 text-right font-mono text-[10px] text-[var(--text-muted)]">
+                {t('reextract.finishedAt')}:{' '}
+                {formatTimestamp(progress.finishedAt, i18n.language || 'zh-CN')}
+              </p>
+            )}
 
             {/* 失败明细折叠面板 */}
             {failures.length > 0 && (
@@ -219,7 +315,16 @@ export function ReextractModal({
               </div>
             )}
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-6 flex items-center justify-end gap-3">
+              {isGlobal && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentMode('confirm')}
+                  className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                >
+                  {t('reextract.reextractAgain')}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onClose}
@@ -229,7 +334,7 @@ export function ReextractModal({
               </button>
             </div>
           </div>
-        ) : isRunning ? (
+        ) : isRunning || currentMode === 'progress' ? (
           /* 2. 实时进度展示（带进度条与统计卡片） */
           <div>
             <div className="flex items-center justify-between">
