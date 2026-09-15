@@ -41,6 +41,8 @@ pub struct CameraPipelineContext {
     pub ai_active: AtomicBool,
     /// 活跃的实时预览客户端计数
     pub preview_count: AtomicUsize,
+    /// 最近一次主码流按需成功解码的高保真证据帧缓存（避免单帧多告警重复前向解码同一 GOP）
+    pub last_on_demand_frame: TokioRwLock<Option<FrameRef>>,
     /// 主码流专用的按需快拍解码器实例 (惰性分配)
     pub snapshot_decoder: TokioMutex<Option<Box<dyn VideoDecoder + Send>>>,
     /// 纯 CPU ByteTrack 跟踪器 (兼容单算法入口)
@@ -82,6 +84,7 @@ impl CameraPipelineContext {
             sub_stream_fallback: TokioRwLock::new(None),
             ai_active: AtomicBool::new(false),
             preview_count: AtomicUsize::new(0),
+            last_on_demand_frame: TokioRwLock::new(None),
             snapshot_decoder: TokioMutex::new(None),
             tracker: TokioMutex::new(ByteTrack::new()),
             trackers: TokioMutex::new(HashMap::new()),
@@ -196,6 +199,34 @@ fn bounded_len<T>(queue: &Mutex<VecDeque<T>>) -> usize {
         .len()
 }
 
+/// 证据抓拍保底候选帧（消除 `(FrameRef, bool)` 基本类型偏执）
+#[derive(Debug, Clone)]
+pub(crate) struct FallbackCandidate {
+    frame: FrameRef,
+    is_sub_stream: bool,
+}
+
+impl FallbackCandidate {
+    pub(crate) fn sub_stream(frame: FrameRef) -> Self {
+        Self {
+            frame,
+            is_sub_stream: true,
+        }
+    }
+
+    pub(crate) fn frame(&self) -> &FrameRef {
+        &self.frame
+    }
+
+    pub(crate) fn is_sub_stream(&self) -> bool {
+        self.is_sub_stream
+    }
+
+    pub(crate) fn into_frame(self) -> FrameRef {
+        self.frame
+    }
+}
+
 impl PipelineManager {
     pub fn new() -> Self {
         Self::with_evidence_dir(crate::DEFAULT_EVIDENCE_DIR)
@@ -251,6 +282,11 @@ impl PipelineManager {
     /// 获取快照抓拍引擎句柄
     pub fn snapshot_engine(&self) -> &SnapshotEngine {
         &self.snapshot_engine
+    }
+
+    /// 获取全局 VPU 快照信号量句柄 (供测试与外部配额状态观察)
+    pub fn snapshot_semaphore(&self) -> &tokio::sync::Semaphore {
+        &self.snapshot_semaphore
     }
 
     /// 获取当前快照配置拷贝
@@ -653,24 +689,81 @@ impl PipelineManager {
         })
     }
 
-    /// 触发靶向快拍抽帧与证据图片落地 (全局有界 VPU 通道配额与细粒度锁隔离)
+    /// 触发靶向快拍抽帧与证据图片落地。
     pub async fn trigger_snapshot(
         &self,
         camera_id: &str,
         target_pts_ms: i64,
         bbox: Option<BoundingBox>,
     ) -> Result<SnapshotResult, PipelineError> {
+        self.trigger_snapshot_internal(camera_id, target_pts_ms, bbox, None)
+            .await
+    }
+
+    /// 使用推理实际消费的原生帧生成证据。
+    ///
+    /// 主码流分析时这条路径绕过 `decoded_ring` 和按需 GOP 解码，保证检测框与落盘图片
+    /// 共享同一个 `FrameRef`。子码流分析仍将该帧作为同刻保底，优先尝试主码流 GOP 高清取证。
+    pub async fn trigger_snapshot_for_frame(
+        &self,
+        camera_id: &str,
+        target_pts_ms: i64,
+        bbox: Option<BoundingBox>,
+        analyzed_frame: FrameRef,
+    ) -> Result<SnapshotResult, PipelineError> {
+        self.trigger_snapshot_internal(camera_id, target_pts_ms, bbox, Some(analyzed_frame))
+            .await
+    }
+
+    async fn trigger_snapshot_internal(
+        &self,
+        camera_id: &str,
+        target_pts_ms: i64,
+        bbox: Option<BoundingBox>,
+        analyzed_frame: Option<FrameRef>,
+    ) -> Result<SnapshotResult, PipelineError> {
         let ctx = self.get_or_create_context(camera_id).await;
         let is_main_stream = ctx.is_main_stream_analysis.load(Ordering::Acquire);
 
-        // 【方案三：零解码瞬时直通】
-        // 若当前摄像头采用主码流分析模式，分析泵已在常驻解码 1080P/4K 高清主码流！
-        // 优先在 decoded_ring 中以时标检索目标帧（容差对齐环形缓冲的时间窗口上限，覆盖推理全过程），
-        // 命中即可零解码直通，杜绝大 GOP 从 I 帧重新追解 98+ 包造成的 VPU 争抢与算力雪崩！
+        // 推理框只能与产生该框的源帧配对。调用方应从同一帧派生 timestamp；若边界数据
+        // 不一致，拒绝抓拍比保存一张看似成功但时空错配的证据更安全。
+        let analyzed_fallback = if let Some(frame) = analyzed_frame {
+            if frame.camera_id != camera_id || frame.timestamp != target_pts_ms {
+                return Err(PipelineError::Snapshot(format!(
+                    "推理帧与抓拍目标不一致 (camera={}, framePts={}, targetPts={})",
+                    frame.camera_id, frame.timestamp, target_pts_ms
+                )));
+            }
+
+            if is_main_stream {
+                tracing::debug!(
+                    camera_id = %camera_id,
+                    target_pts = target_pts_ms,
+                    frame_pts = frame.timestamp,
+                    width = frame.width,
+                    height = frame.height,
+                    "使用推理实际消费的主码流 FrameRef 生成同帧证据"
+                );
+                return self
+                    .snapshot_engine
+                    .save_snapshot_async(camera_id, frame, bbox, false)
+                    .await;
+            }
+            Some(FallbackCandidate::sub_stream(frame))
+        } else {
+            None
+        };
+
+        // 没有显式携带推理帧时，仍可复用环中 PTS 对齐的主流帧。该兼容入口不再把
+        // 环中任意最新帧当作主流证据，未命中时交由 GOP 追帧或返回失败。
         if is_main_stream {
             let matched_opt = {
                 let ring = ctx.decoded_ring.read().await;
-                ring.find_by_pts(target_pts_ms, ring.window_duration_ms())
+                ring.find_by_pts(
+                    target_pts_ms,
+                    ring.window_duration_ms()
+                        .min(crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS),
+                )
             };
 
             if let Some((frame, diff_ms)) = matched_opt {
@@ -690,27 +783,54 @@ impl PipelineManager {
             }
         }
 
-        // 次选与保底帧获取：优先在已解码环中查找最接近目标时标的候选帧。
-        // 元组中的布尔值记录候选帧是否来自子码流，避免主流 decoded_ring 帧被误标为子流降级。
-        let fallback_frame = {
-            let ring = ctx.decoded_ring.read().await;
-            ring.find_by_pts(target_pts_ms, 500)
-                .map(|(f, _)| (f, !is_main_stream))
-                .or_else(|| ring.latest_frame().map(|f| (f, !is_main_stream)))
-        };
-        let fallback_frame = match fallback_frame {
-            Some(f) => Some(f),
-            None => ctx
-                .sub_stream_fallback
-                .read()
-                .await
-                .clone()
-                .map(|frame| (frame, !is_main_stream)),
+        // 子码流双流分析时，优先复用本推理周期中同一时标已按需解码成功的主码流高分辨率帧，
+        // 彻底避免单帧触发多规则告警或多目标通行抓拍时对同一 GOP 重复执行高开销前向硬解！
+        if !is_main_stream {
+            if let Some(cached) = ctx.last_on_demand_frame.read().await.as_ref() {
+                let diff_ms = cached.timestamp.abs_diff(target_pts_ms);
+                if diff_ms <= crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS as u64 {
+                    tracing::debug!(
+                        camera_id = %camera_id,
+                        target_pts = target_pts_ms,
+                        frame_pts = cached.timestamp,
+                        diff_ms,
+                        "复用同刻已解码的主码流按需帧，避免多告警重复前向解码 GOP"
+                    );
+                    return self
+                        .snapshot_engine
+                        .save_snapshot_async(camera_id, cached.clone(), bbox, false)
+                        .await;
+                }
+            }
+        }
+
+        // 子码流分析时，显式传入的推理帧是最可靠的保底；没有它才查询兼容环。
+        // 所有候选帧均严格受 MAX_TARGET_FRAME_DIFF_MS 约束，杜绝过期帧与当前 bbox 拼接。
+        let fallback_frame: Option<FallbackCandidate> = if let Some(frame) = analyzed_fallback {
+            Some(frame)
+        } else if !is_main_stream {
+            let max_diff = crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS;
+            let ring_fallback = {
+                let ring = ctx.decoded_ring.read().await;
+                ring.find_by_pts(target_pts_ms, max_diff)
+                    .map(|(f, _)| FallbackCandidate::sub_stream(f))
+            };
+            match ring_fallback {
+                Some(f) => Some(f),
+                None => {
+                    let guard = ctx.sub_stream_fallback.read().await;
+                    guard
+                        .as_ref()
+                        .filter(|f| f.timestamp.abs_diff(target_pts_ms) <= max_diff as u64)
+                        .cloned()
+                        .map(FallbackCandidate::sub_stream)
+                }
+            }
+        } else {
+            None
         };
 
-        // 工业级全局 VPU 抓拍通道配额管控：
-        // 尝试在限时内获取全局 VPU 硬解信号量许可，若瞬时并发告警超限或排队超时，
-        // 自动无缝降级使用已解码备用帧，彻底防止瞬时并发告警打爆硬件 VPU 通道上限！
+        // 工业级全局 VPU 抓拍通道配额管控：仅在需要按码流取证时借用按需解码器。
         let permit_res = tokio::time::timeout(
             std::time::Duration::from_millis(self.permit_timeout_ms),
             self.snapshot_semaphore.acquire(),
@@ -719,7 +839,6 @@ impl PipelineManager {
 
         let (frame_to_process, is_fallback) = match permit_res {
             Ok(Ok(permit)) => {
-                // 成功获得硬件解码配额通道，仅在解码阶段持有解码器互斥锁，解码完成立刻释放
                 let res = {
                     let mut decoder_guard = ctx.snapshot_decoder.lock().await;
                     if decoder_guard.is_none() && !ctx.ring_buffer.is_empty() {
@@ -735,42 +854,54 @@ impl PipelineManager {
                             camera_id,
                             target_pts_ms,
                             Some(&ctx.ring_buffer),
-                            fallback_frame.as_ref().map(|(frame, _)| frame),
+                            fallback_frame.as_ref().map(|f| f.frame()),
                             decoder_guard.as_deref_mut(),
                         )
                         .await?
                 };
-                drop(permit); // 解码完成后显式归还配额
+                drop(permit);
                 let (frame, used_fallback) = res;
                 let is_sub_fallback = if used_fallback {
                     fallback_frame
                         .as_ref()
-                        .map(|(_, is_sub_stream)| *is_sub_stream)
+                        .map(|f| f.is_sub_stream())
                         .unwrap_or(true)
                 } else {
+                    // 成功按需解码出主码流高分辨率帧，缓存供同刻后续多告警/多抓拍零解码直通复用
+                    *ctx.last_on_demand_frame.write().await = Some(frame.clone());
                     false
                 };
                 (frame, is_sub_fallback)
             }
             _ => {
-                // 配额满载或获取超时，自适应降级复用已解码候选帧
-                if let Some((fallback, is_sub_stream)) = fallback_frame {
-                    tracing::warn!(
-                        camera_id = %camera_id,
-                        target_pts = target_pts_ms,
-                        timeout_ms = self.permit_timeout_ms,
-                        "全局 VPU 硬件抓拍解码配额满载或等待超时，自适应无缝复用已解码候选帧"
-                    );
-                    (fallback, is_sub_stream)
+                // 配额满载时只允许复用经过 PTS 严格校验的候选帧；主流无候选则失败。
+                if let Some(fallback_src) = fallback_frame {
+                    let is_sub_stream = fallback_src.is_sub_stream();
+                    let fallback = fallback_src.into_frame();
+                    let diff_ms = fallback.timestamp.abs_diff(target_pts_ms);
+                    if diff_ms <= crate::snapshot::SnapshotEngine::MAX_TARGET_FRAME_DIFF_MS as u64 {
+                        tracing::warn!(
+                            camera_id = %camera_id,
+                            target_pts = target_pts_ms,
+                            frame_pts = fallback.timestamp,
+                            diff_ms,
+                            timeout_ms = self.permit_timeout_ms,
+                            "全局 VPU 抓拍配额满载，复用同刻候选帧"
+                        );
+                        (fallback, is_sub_stream)
+                    } else {
+                        return Err(PipelineError::Snapshot(format!(
+                            "全局 VPU 抓拍通道配额耗尽且候选帧已过期 ({camera_id})"
+                        )));
+                    }
                 } else {
                     return Err(PipelineError::Snapshot(format!(
-                        "全局 VPU 抓拍通道配额耗尽且无有效备用帧 ({camera_id})"
+                        "全局 VPU 抓拍通道配额耗尽且无同刻证据帧 ({camera_id})"
                     )));
                 }
             }
         };
 
-        // 将色彩转换、抠图裁切与 JPEG 写盘卸载至专用 blocking 线程池
         self.snapshot_engine
             .save_snapshot_async(camera_id, frame_to_process, bbox, is_fallback)
             .await
@@ -1579,7 +1710,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_main_decoded_ring_fallback_is_not_marked_as_sub_stream() {
+    async fn test_main_stale_decoded_ring_frame_is_rejected() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_main_ring_fallback_{}",
             uuid::Uuid::now_v7().simple()
@@ -1607,21 +1738,58 @@ mod tests {
         );
         manager.update_decoded_frame(cam_id, frame).await;
 
-        // 目标偏差超过精确匹配容差，配额占满后复用主流环中的最近帧。
-        let snapshot = manager
+        // 目标偏差超过证据允许范围，配额占满后不得复用主流环中的过期帧。
+        let result = manager
             .trigger_snapshot(
                 cam_id,
                 2000,
                 Some(types::BoundingBox::new(0.1, 0.1, 0.3, 0.3)),
             )
-            .await
-            .expect("主流环帧复用应成功");
+            .await;
 
-        assert!(!snapshot.is_fallback_sub_stream);
-        assert_eq!(snapshot.width, 1920);
-        assert_eq!(snapshot.height, 1080);
+        assert!(result.is_err(), "过期主流环帧不能与当前检测框拼接");
 
         drop(held_permit);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_main_analysis_uses_the_exact_inference_frame() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_main_exact_inference_frame_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager = PipelineManager::with_evidence_dir(&temp_dir);
+        let cam_id = "cam_main_exact_inference";
+        let target_pts = 2_000;
+
+        manager.set_main_stream_analysis(cam_id, true).await;
+        let frame = FrameRef::new(
+            cam_id.to_string(),
+            target_pts,
+            64,
+            64,
+            types::StrideInfo::new(64, 64),
+            types::PixelFormat::Nv12,
+            types::FrameHandle::Host(vec![128u8; 64 * 64 * 3 / 2].into()),
+        );
+
+        // 不提供 decoded_ring、主流 GOP 或按需解码器；成功只能来自推理实际消费的 FrameRef。
+        let snapshot = manager
+            .trigger_snapshot_for_frame(
+                cam_id,
+                target_pts,
+                Some(types::BoundingBox::new(0.1, 0.1, 0.3, 0.3)),
+                frame,
+            )
+            .await
+            .expect("主流推理帧直通抓拍应成功");
+
+        assert!(!snapshot.is_fallback_sub_stream);
+        assert_eq!(snapshot.width, 64);
+        assert_eq!(snapshot.height, 64);
+        assert!(temp_dir.join(&snapshot.image_rel_path).is_file());
+
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
     #[tokio::test]

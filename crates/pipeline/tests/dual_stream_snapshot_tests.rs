@@ -3,6 +3,7 @@
 
 use bytes::Bytes;
 use media::decoders::MockDecoder;
+use media::ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
 use pipeline::{PipelineManager, SnapshotCaptureMode, SnapshotConfig};
 use std::fs;
 use std::sync::Arc;
@@ -192,14 +193,14 @@ async fn test_large_gop_fast_mode_within_threshold() {
         .update_sub_stream_frame(cam_id, fallback_frame)
         .await;
 
-    // 告警时标位于 1200ms，与 I 帧相位差 200ms (< 500ms 阈值)
+    // 相位差在阈值内仍必须前向解码到 1200ms，不能停在 1000ms 的 I 帧。
     let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
     let snapshot = manager
         .trigger_snapshot(cam_id, 1200, Some(target))
         .await
         .expect("极速模式单帧解码抓拍应成功");
 
-    // 命中极速模式：单帧硬解 I 帧，不降级子码流，保持 1080P 高清
+    // 保持 1080P 高清，并验证目标帧追解成功而非回退至子码流。
     assert!(!snapshot.is_fallback_sub_stream);
     assert_eq!(snapshot.width, 1920);
     assert_eq!(snapshot.height, 1080);
@@ -207,6 +208,28 @@ async fn test_large_gop_fast_mode_within_threshold() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[tokio::test]
+async fn test_gop_target_decode_does_not_use_keyframe_as_evidence() {
+    let ring = MainStreamRingBuffer::new(RingBufferConfig::default());
+    ring.push(make_packet(1000, true));
+    ring.push(make_packet(1120, false));
+    ring.push(make_packet(1200, false));
+
+    let mut decoder = MockDecoder::new("cam_gop_target", CodecType::H264, 1920, 1080);
+    let (frame, is_fallback) = pipeline::SnapshotEngine::decode_target_frame_with_config(
+        "cam_gop_target",
+        1200,
+        Some(&ring),
+        None,
+        Some(&mut decoder),
+        &SnapshotConfig::default(),
+    )
+    .await
+    .expect("GOP 应追解到目标帧");
+
+    assert!(!is_fallback);
+    assert_eq!(frame.timestamp, 1200, "证据帧不能停在 GOP 起始 I 帧");
+}
 #[tokio::test]
 async fn test_large_gop_sub_stream_reuse_on_large_gap() {
     let temp_dir = std::env::temp_dir().join(format!(
@@ -555,15 +578,122 @@ async fn test_scheme3_tolerance_matching_and_fallback() {
     );
     manager.update_sub_stream_frame(cam_id, frame).await;
 
-    // 目标时标 1150ms (模拟 NPU 推理排队延时 150ms，与 1000ms 偏差 150ms <= 300ms 窗口容差)，应成功容差命中零解码
+    // 目标时标 1080ms (模拟 NPU 推理排队延时 80ms，仍在证据 PTS 容差内)，应成功容差命中零解码
     let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
     let snapshot = manager
-        .trigger_snapshot(cam_id, 1150, Some(target))
+        .trigger_snapshot(cam_id, 1080, Some(target))
         .await
         .expect("容差范围内零解码直通应成功");
 
     assert!(!snapshot.is_fallback_sub_stream);
     assert_eq!(snapshot.width, 1920);
 
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_sub_stream_multiple_alarms_reuse_on_demand_frame() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_sub_stream_multialarm_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    let manager = PipelineManager::with_evidence_dir(&temp_dir);
+    let cam_id = "cam_multialarm_reuse";
+
+    let ctx = manager.get_or_create_context(cam_id).await;
+    {
+        let mut decoder_guard = ctx.snapshot_decoder.lock().await;
+        *decoder_guard = Some(Box::new(MockDecoder::new(
+            cam_id,
+            CodecType::H264,
+            1920,
+            1080,
+        )));
+    }
+
+    // 主流 GOP: 1000(I) .. 1080(P)
+    manager
+        .push_main_packet(cam_id, make_packet(1000, true))
+        .await;
+    manager
+        .push_main_packet(cam_id, make_packet(1040, false))
+        .await;
+    manager
+        .push_main_packet(cam_id, make_packet(1080, false))
+        .await;
+
+    // 子流推理帧 (640x360)
+    let analyzed_frame = FrameRef::new(
+        cam_id.to_string(),
+        1080,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(vec![128u8; 640 * 360 * 3 / 2].into()),
+    );
+
+    // 告警 1 触发：从主码流 GOP 前向解码出 1080P 高清帧
+    let bbox1 = BoundingBox::new(0.1, 0.1, 0.2, 0.2);
+    let snap1 = manager
+        .trigger_snapshot_for_frame(cam_id, 1080, Some(bbox1), analyzed_frame.clone())
+        .await
+        .expect("告警 1 抓拍应成功");
+    assert!(!snap1.is_fallback_sub_stream);
+    assert_eq!(snap1.width, 1920);
+
+    // 验证按需解码产物已缓存
+    assert!(ctx.last_on_demand_frame.read().await.is_some());
+
+    // 故意清空主流 RingBuffer，确保告警 2 成功必须来自对同刻已解码高保真帧的直接复用
+    ctx.ring_buffer.clear();
+
+    // 告警 2 触发：相同 PTS，不同 BBox
+    let bbox2 = BoundingBox::new(0.5, 0.5, 0.7, 0.7);
+    let snap2 = manager
+        .trigger_snapshot_for_frame(cam_id, 1080, Some(bbox2), analyzed_frame)
+        .await
+        .expect("告警 2 应复用同刻按需帧抓拍成功");
+    assert!(!snap2.is_fallback_sub_stream);
+    assert_eq!(snap2.width, 1920);
+    assert_ne!(snap1.crop_image_rel_path, snap2.crop_image_rel_path);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_quota_exhausted_rejects_expired_fallback_frame() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_quota_expired_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    let manager = PipelineManager::with_evidence_dir(&temp_dir);
+    let cam_id = "cam_quota_expired";
+
+    // 占用全部 VPU 配额信号量
+    let held_permit = manager
+        .snapshot_semaphore()
+        .try_acquire()
+        .expect("acquire permit");
+
+    // 注入过期子流候选帧 (时标 1000ms)
+    let frame = FrameRef::new(
+        cam_id.to_string(),
+        1000,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(vec![128u8; 640 * 360 * 3 / 2].into()),
+    );
+    manager.update_sub_stream_frame(cam_id, frame).await;
+
+    // 请求时标 1500ms 的抓拍 (偏差 500ms > 100ms 阈值)
+    let target = BoundingBox::new(0.1, 0.1, 0.3, 0.3);
+    let result = manager.trigger_snapshot(cam_id, 1500, Some(target)).await;
+
+    assert!(result.is_err(), "配额满载时过期候选帧应被拒绝");
+
+    drop(held_permit);
     let _ = fs::remove_dir_all(&temp_dir);
 }

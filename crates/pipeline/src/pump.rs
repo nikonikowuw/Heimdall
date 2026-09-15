@@ -309,46 +309,60 @@ impl SharedControlSlots {
 }
 
 /// 辅助执行单目标快照抓拍并统一累加指标与记录结构化日志
-#[allow(clippy::too_many_arguments)]
-async fn trigger_target_snapshot(
-    pipeline_mgr: &PipelineManager,
-    camera_id: &str,
-    algorithm_id: &str,
+struct SnapshotRecorder<'a> {
+    pipeline_mgr: &'a PipelineManager,
+    camera_id: &'a str,
+    algorithm_id: &'a str,
     timestamp: i64,
-    bbox: types::BoundingBox,
-    context_desc: &str,
-    infer_metrics: &InstanceMetrics,
-    pump_metrics: &PumpMetrics,
-) -> Result<SnapshotResult, String> {
-    match pipeline_mgr
-        .trigger_snapshot(camera_id, timestamp, Some(bbox))
-        .await
-    {
-        Ok(snapshot_res) => {
-            infer_metrics
-                .snapshots_saved
-                .fetch_add(1, Ordering::Relaxed);
-            pump_metrics.snapshots_saved.fetch_add(1, Ordering::Relaxed);
-            tracing::info!(
-                camera_id = %camera_id,
-                algorithm_id = %algorithm_id,
-                target_pts = timestamp,
-                path = %snapshot_res.image_rel_path,
-                is_fallback = snapshot_res.is_fallback_sub_stream,
-                "{context_desc}快照落地成功"
-            );
-            Ok(snapshot_res)
-        }
-        Err(err) => {
-            let err_str = err.to_string();
-            tracing::error!(
-                camera_id = %camera_id,
-                algorithm_id = %algorithm_id,
-                target_pts = timestamp,
-                error = %err,
-                "{context_desc}快照捕获失败"
-            );
-            Err(err_str)
+    analyzed_frame: FrameRef,
+    infer_metrics: &'a InstanceMetrics,
+    pump_metrics: &'a PumpMetrics,
+}
+
+impl<'a> SnapshotRecorder<'a> {
+    async fn capture(
+        &self,
+        bbox: types::BoundingBox,
+        context_desc: &str,
+    ) -> Result<SnapshotResult, String> {
+        match self
+            .pipeline_mgr
+            .trigger_snapshot_for_frame(
+                self.camera_id,
+                self.timestamp,
+                Some(bbox),
+                self.analyzed_frame.clone(),
+            )
+            .await
+        {
+            Ok(snapshot_res) => {
+                self.infer_metrics
+                    .snapshots_saved
+                    .fetch_add(1, Ordering::Relaxed);
+                self.pump_metrics
+                    .snapshots_saved
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::info!(
+                    camera_id = %self.camera_id,
+                    algorithm_id = %self.algorithm_id,
+                    target_pts = self.timestamp,
+                    path = %snapshot_res.image_rel_path,
+                    is_fallback = snapshot_res.is_fallback_sub_stream,
+                    "{context_desc}快照落地成功"
+                );
+                Ok(snapshot_res)
+            }
+            Err(err) => {
+                let err_str = err.to_string();
+                tracing::error!(
+                    camera_id = %self.camera_id,
+                    algorithm_id = %self.algorithm_id,
+                    target_pts = self.timestamp,
+                    error = %err,
+                    "{context_desc}快照捕获失败"
+                );
+                Err(err_str)
+            }
         }
     }
 }
@@ -527,6 +541,7 @@ impl AnalysisPump {
                                 let timestamp = sampled_frame.frame.timestamp;
                                 let generation = sampled_frame.generation;
                                 let current_worker = infer_worker_holder.read().await.clone();
+                                let analyzed_frame = sampled_frame.frame.clone();
                                 match current_worker
                                     .submit_with_metadata(sampled_frame.frame)
                                     .await
@@ -580,22 +595,24 @@ impl AnalysisPump {
                                         );
 
                                         // 识别类算法：通行抓拍处理 (不产生告警，直接落地 capture_records)
+                                        let snapshot_recorder = SnapshotRecorder {
+                                            pipeline_mgr: &pipeline_mgr_infer,
+                                            camera_id: &cam_id_infer,
+                                            algorithm_id: &algorithm_id_infer,
+                                            timestamp,
+                                            analyzed_frame: analyzed_frame.clone(),
+                                            infer_metrics: &infer_metrics,
+                                            pump_metrics: &pump_metrics,
+                                        };
+
                                         if !outcome.captures.is_empty() {
                                             for target in outcome.captures {
                                                 let capture_id = uuid::Uuid::now_v7().to_string();
                                                 let crop_bbox = target.face_bbox().unwrap_or(target.bbox);
-                                                let snapshot = trigger_target_snapshot(
-                                                    &pipeline_mgr_infer,
-                                                    &cam_id_infer,
-                                                    &algorithm_id_infer,
-                                                    timestamp,
-                                                    crop_bbox,
-                                                    "通行识别抓拍",
-                                                    &infer_metrics,
-                                                    &pump_metrics,
-                                                )
-                                                .await
-                                                .ok();
+                                                let snapshot = snapshot_recorder
+                                                    .capture(crop_bbox, "通行识别抓拍")
+                                                    .await
+                                                    .ok();
 
                                                 pipeline_mgr_infer.publish_analysis_event(
                                                     PipelineAnalysisEvent::Capture(Box::new(
@@ -623,17 +640,12 @@ impl AnalysisPump {
                                             for alarm in outcome.alarms {
                                                 let event_id = uuid::Uuid::now_v7().to_string();
                                                 let (snapshot, evidence_status, evidence_error) =
-                                                    match trigger_target_snapshot(
-                                                        &pipeline_mgr_infer,
-                                                        &cam_id_infer,
-                                                        &algorithm_id_infer,
-                                                        timestamp,
-                                                        alarm.tracked_object.bbox,
-                                                        "规则引擎告警",
-                                                        &infer_metrics,
-                                                        &pump_metrics,
-                                                    )
-                                                    .await
+                                                    match snapshot_recorder
+                                                        .capture(
+                                                            alarm.tracked_object.bbox,
+                                                            "规则引擎告警",
+                                                        )
+                                                        .await
                                                     {
                                                         Ok(res) => {
                                                             (Some(res), EvidenceStatus::Ready, None)
