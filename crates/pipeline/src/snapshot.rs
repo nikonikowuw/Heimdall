@@ -1,7 +1,7 @@
 //! 靶向精准高清抽帧与异步 JPEG 编码引擎
 //!
-//! 1. 告警触发时，按时标 T 从 MainStreamRingBuffer 索引前置 I 帧并快进解码出单帧 1080P/4K 原图；
-//! 2. 若主码流断线、无可用 GOP 或 VPU 配额不足，自动平滑复用已解码候选帧，保证 100% 不漏图；
+//! 1. 告警触发时，按时标 T 从 MainStreamRingBuffer 索引前置 I 帧并前向解码至目标帧；
+//! 2. 若主码流无法追到目标 PTS，仅复用经过时标校验的同刻候选帧，否则显式失败，禁止保存错帧证据；
 //! 3. 将图像色彩空间转换、扩边裁剪、JPEG 压缩与文件落盘卸载至 Dedicated Blocking 线程池，杜绝阻塞 Tokio Worker；
 //! 4. 产物落盘至 `var/data/evidence/{camera_id}/`。
 
@@ -44,14 +44,14 @@ pub struct SnapshotResult {
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotCaptureMode {
     /// 智能自适应双模（默认推荐）：
-    /// - 相位偏差 < 500ms：极速单帧硬解最近 I 帧（1080P/4K 高清且延时 < 5ms）；
-    /// - 相位偏差 >= 500ms：若包数 <= max_burst_packets，快速前向硬解 (Burst Decode) 至告警点；若超限或解码失败，则直接复用子码流真实检测帧。
+    /// - GOP 包数在追帧预算内：从 I 帧前向解码至目标 PTS；
+    /// - GOP 包数超出预算：仅复用同一时刻的已解码候选帧，没有候选帧则失败。
     #[default]
     AdaptiveDualMode,
 
     /// 极速优先 / 子码流直取模式：
-    /// - 相位偏差 < 500ms：极速单帧硬解最近 I 帧；
-    /// - 相位偏差 >= 500ms：直接复用子码流当时检测命中的那张真实解码帧（0 硬件争抢，100% 时标精准，避免大 GOP 前向硬解开销）。
+    /// - 相位偏差 < 500ms：从 I 帧前向解码至目标 PTS；
+    /// - 相位偏差 >= 500ms：优先复用同一时刻的子码流检测帧，没有候选帧则前向解码。
     SubStreamOnLargeGap,
 
     /// 强制前向追帧硬解模式 (Burst Decode Only)：
@@ -63,7 +63,7 @@ pub enum SnapshotCaptureMode {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotConfig {
-    /// 极速单帧与精准追帧模式的时间戳相位差阈值（毫秒，默认 500ms）
+    /// 证据抓拍的相位阈值（毫秒）。仅用于 `SubStreamOnLargeGap` 判断何时优先复用同刻子码流帧。
     pub phase_diff_threshold_ms: i64,
     /// 前向追帧硬解的最大允许包数量（默认 30 包，约 1.2s GOP）
     pub max_burst_packets: usize,
@@ -451,7 +451,121 @@ impl SnapshotEngine {
         Ok(())
     }
 
-    /// 根据时标从主码流 GOP 快速解码，或回退至子码流当前帧 (默认配置)
+    /// 目标证据允许的最大 PTS 偏差。超过该值说明解码器没有追到目标帧，不能将旧帧与当前检测框组合落盘。
+    pub(crate) const MAX_TARGET_FRAME_DIFF_MS: i64 = 100;
+
+    /// 从一个完整 GOP 前向解码到目标 PTS。
+    ///
+    /// GOP 起始 I 帧只是解码参考点，不是证据帧。只有输出帧已经到达目标时间附近，
+    /// 才能返回给带框证据路径；超时或只得到 I 帧时返回 `None`，由上层决定是否复用
+    /// 同时刻的子码流帧或报告抓拍失败。
+    async fn decode_gop_to_target(
+        camera_id: &str,
+        target_pts_ms: i64,
+        packets: &[std::sync::Arc<types::EncodedPacket>],
+        decoder: &mut (dyn VideoDecoder + Send),
+        timeout_ms: u64,
+    ) -> (Option<FrameRef>, bool) {
+        let started_at = Instant::now();
+        let mut best_frame: Option<(FrameRef, u64)> = None;
+        let mut timed_out = false;
+
+        for packet in packets {
+            if started_at.elapsed().as_millis() as u64 >= timeout_ms {
+                timed_out = true;
+                tracing::warn!(
+                    camera_id = %camera_id,
+                    target_pts = target_pts_ms,
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    timeout_budget_ms = timeout_ms,
+                    "主码流证据追帧达到耗时预算，拒绝使用未到达目标 PTS 的旧帧"
+                );
+                break;
+            }
+
+            match decoder.decode_packet(&packet.payload, packet.pts_ms).await {
+                Ok(Some(frame)) => {
+                    let diff_ms = frame.timestamp.abs_diff(target_pts_ms);
+                    if diff_ms == 0 {
+                        best_frame = Some((frame, 0));
+                        break;
+                    }
+                    if best_frame
+                        .as_ref()
+                        .map(|(_, best_diff)| diff_ms < *best_diff)
+                        .unwrap_or(true)
+                    {
+                        best_frame = Some((frame, diff_ms));
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::debug!(
+                        camera_id = %camera_id,
+                        target_pts = target_pts_ms,
+                        packet_pts = packet.pts_ms,
+                        error = %error,
+                        "主码流证据包解码未产出帧"
+                    );
+                }
+            }
+        }
+
+        // 统一刷新解码器残留管线缓冲，排空未决帧并防止跨抓拍会话的 DPB 状态污染
+        match decoder.flush().await {
+            Ok(flushed_frames) => {
+                if !timed_out {
+                    for frame in flushed_frames {
+                        let diff_ms = frame.timestamp.abs_diff(target_pts_ms);
+                        if best_frame
+                            .as_ref()
+                            .map(|(_, best_diff)| diff_ms < *best_diff)
+                            .unwrap_or(true)
+                        {
+                            best_frame = Some((frame, diff_ms));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    camera_id = %camera_id,
+                    error = %e,
+                    "刷新快拍解码器管线失败"
+                );
+            }
+        }
+
+        if timed_out {
+            return (None, true);
+        }
+
+        let selected = best_frame.and_then(|(frame, diff_ms)| {
+            if diff_ms <= Self::MAX_TARGET_FRAME_DIFF_MS as u64 {
+                tracing::debug!(
+                    camera_id = %camera_id,
+                    target_pts = target_pts_ms,
+                    frame_pts = frame.timestamp,
+                    diff_ms,
+                    "主码流证据追帧完成，使用目标时间附近的解码帧"
+                );
+                Some(frame)
+            } else {
+                tracing::warn!(
+                    camera_id = %camera_id,
+                    target_pts = target_pts_ms,
+                    frame_pts = frame.timestamp,
+                    diff_ms,
+                    max_diff_ms = Self::MAX_TARGET_FRAME_DIFF_MS,
+                    "主码流证据解码未到达目标 PTS，拒绝保存 GOP 起始帧"
+                );
+                None
+            }
+        });
+        (selected, false)
+    }
+
+    /// 根据时标从主码流 GOP 解码目标帧，或回退至同一时刻的子码流帧。
     pub async fn decode_target_frame(
         camera_id: &str,
         target_pts_ms: i64,
@@ -470,7 +584,7 @@ impl SnapshotEngine {
         .await
     }
 
-    /// 根据时标与配置从主码流 GOP 快速解码，或回退至子码流当前帧 (双模证据抓取机制)
+    /// 根据时标与配置从主码流 GOP 解码目标帧，或回退至同一时刻的子码流帧。
     pub async fn decode_target_frame_with_config(
         camera_id: &str,
         target_pts_ms: i64,
@@ -479,216 +593,117 @@ impl SnapshotEngine {
         main_decoder: Option<&mut (dyn VideoDecoder + Send)>,
         config: &SnapshotConfig,
     ) -> Result<(FrameRef, bool), PipelineError> {
-        let mut decoded_frame: Option<FrameRef> = None;
+        let valid_fallback = sub_stream_fallback.filter(|frame| {
+            let diff_ms = frame.timestamp.abs_diff(target_pts_ms);
+            if diff_ms > Self::MAX_TARGET_FRAME_DIFF_MS as u64 {
+                tracing::warn!(
+                    camera_id = %camera_id,
+                    target_pts = target_pts_ms,
+                    frame_pts = frame.timestamp,
+                    diff_ms,
+                    max_diff_ms = Self::MAX_TARGET_FRAME_DIFF_MS,
+                    "拒绝将过期候选帧与当前检测框组合为证据"
+                );
+                false
+            } else {
+                true
+            }
+        });
 
-        // 1. 尝试从主码流 RingBuffer 提取 GOP 并根据双模策略解码
         if let (Some(rb), Some(decoder)) = (ring_buffer, main_decoder) {
-            // 快照抽帧采用无损反压交付策略，确保大 GOP 追解帧一帧不漏
             decoder.set_delivery_policy(DecodeDeliveryPolicy::LosslessBackpressure);
 
             if let Some(gop) = rb.get_gop_for_timestamp(target_pts_ms) {
                 if !gop.is_empty() {
-                    let keyframe = &gop[0];
-                    let keyframe_pts = keyframe.pts_ms;
-                    let phase_diff_ms = (target_pts_ms - keyframe_pts).abs();
+                    let keyframe_pts = gop[0].pts_ms;
+                    let phase_diff_ms = target_pts_ms.abs_diff(keyframe_pts);
                     let packet_count = gop.len();
 
-                    match config.capture_mode {
+                    // 大 GOP 超出预算时只允许使用同一时刻的候选帧。
+                    // 没有候选帧就直接失败，绝不能把 I 帧冒充目标证据。
+                    let use_fallback = match config.capture_mode {
                         SnapshotCaptureMode::AdaptiveDualMode => {
-                            if phase_diff_ms < config.phase_diff_threshold_ms {
-                                // 1. 极速模式：相位偏差在阈值以内 (< 500ms)，单帧解码最近 I 帧
-                                tracing::info!(
-                                    camera_id = %camera_id,
-                                    target_pts = target_pts_ms,
-                                    keyframe_pts,
-                                    phase_diff_ms,
-                                    threshold_ms = config.phase_diff_threshold_ms,
-                                    "大 GOP 极速模式命中 (< 500ms)：单帧解码 I 帧 (极低延时 1080P/4K 出图)"
-                                );
-                                if let Ok(Some(frame)) = decoder
-                                    .decode_packet(&keyframe.payload, keyframe.pts_ms)
-                                    .await
-                                {
-                                    decoded_frame = Some(frame);
-                                }
-                            } else if packet_count <= config.max_burst_packets {
-                                // 2. 精准追帧模式 (Burst Decode)：偏差较大且包数在预算内，从 I 帧快速前向硬解至告警点
-                                tracing::info!(
-                                    camera_id = %camera_id,
-                                    target_pts = target_pts_ms,
-                                    keyframe_pts,
-                                    phase_diff_ms,
-                                    packet_count,
-                                    "大 GOP 精准追帧模式：从 I 帧开始快速前向硬解 (Burst Decode) 至告警点"
-                                );
-                                let burst_start = std::time::Instant::now();
-                                let mut timed_out = false;
-                                for pkt in gop {
-                                    if burst_start.elapsed().as_millis() as u64
-                                        >= config.max_burst_timeout_ms
-                                    {
-                                        tracing::warn!(
-                                            camera_id = %camera_id,
-                                            elapsed_ms = burst_start.elapsed().as_millis(),
-                                            timeout_budget_ms = config.max_burst_timeout_ms,
-                                            "大 GOP 前向追解达到硬实时耗时预算，自适应熔断截断解码"
-                                        );
-                                        timed_out = true;
-                                        break;
-                                    }
-                                    if let Ok(Some(frame)) =
-                                        decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
-                                    {
-                                        decoded_frame = Some(frame);
-                                    }
-                                }
-                                if timed_out {
-                                    // 工业级加固：超时熔断时显式刷新解码器内部残留帧并排空未决状态，防止 VPU 状态污染
-                                    let _ = decoder.flush().await;
-                                    if let Some(fallback) = sub_stream_fallback {
-                                        tracing::info!(
-                                            camera_id = %camera_id,
-                                            "追帧解码超时熔断，已排空解码器并优雅回退至已解码候选帧"
-                                        );
-                                        return Ok((fallback.clone(), true));
-                                    }
-                                }
-                            } else if let Some(fallback) = sub_stream_fallback {
-                                // 3. 精准追帧模式 (已解帧直接复用)：前向追解包数超限，直接复用当时检测命中的那张真实解码候选帧
-                                tracing::warn!(
-                                    camera_id = %camera_id,
-                                    target_pts = target_pts_ms,
-                                    keyframe_pts,
-                                    phase_diff_ms,
-                                    packet_count,
-                                    max_burst = config.max_burst_packets,
-                                    "大 GOP 前向追解包数超限，精准追帧模式直接复用已解码候选帧 (时标零偏差)"
-                                );
-                                return Ok((fallback.clone(), true));
-                            } else {
-                                // 候选帧不可用，尽力而为前向硬解
-                                tracing::warn!(
-                                    camera_id = %camera_id,
-                                    target_pts = target_pts_ms,
-                                    keyframe_pts,
-                                    phase_diff_ms,
-                                    packet_count,
-                                    "已解码候选帧未就绪，尽力而为前向硬解"
-                                );
-                                let burst_start = std::time::Instant::now();
-                                let mut timed_out = false;
-                                for pkt in gop {
-                                    if burst_start.elapsed().as_millis() as u64
-                                        >= config.max_burst_timeout_ms
-                                    {
-                                        tracing::warn!(
-                                            camera_id = %camera_id,
-                                            elapsed_ms = burst_start.elapsed().as_millis(),
-                                            timeout_budget_ms = config.max_burst_timeout_ms,
-                                            "尽力而为前向硬解达到硬实时耗时预算，自适应熔断"
-                                        );
-                                        timed_out = true;
-                                        break;
-                                    }
-                                    if let Ok(Some(frame)) =
-                                        decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
-                                    {
-                                        decoded_frame = Some(frame);
-                                    }
-                                }
-                                if timed_out {
-                                    let _ = decoder.flush().await;
-                                }
-                            }
+                            packet_count > config.max_burst_packets
                         }
                         SnapshotCaptureMode::SubStreamOnLargeGap => {
-                            if phase_diff_ms < config.phase_diff_threshold_ms {
-                                // 极速模式：相位偏差在 500ms 内，单帧硬解最近 I 帧
-                                tracing::info!(
-                                    camera_id = %camera_id,
-                                    target_pts = target_pts_ms,
-                                    keyframe_pts,
-                                    phase_diff_ms,
-                                    "大 GOP 极速模式命中 (< 500ms)：单帧解码 I 帧"
-                                );
-                                if let Ok(Some(frame)) = decoder
-                                    .decode_packet(&keyframe.payload, keyframe.pts_ms)
-                                    .await
-                                {
-                                    decoded_frame = Some(frame);
-                                }
-                            } else if let Some(fallback) = sub_stream_fallback {
-                                // 精准追帧模式：偏差较大，直接复用当时检测命中的真实解码候选帧 (0延迟/100%时标精准)
-                                tracing::info!(
-                                    camera_id = %camera_id,
-                                    target_pts = target_pts_ms,
-                                    keyframe_pts,
-                                    phase_diff_ms,
-                                    "大 GOP 相位偏差较大 (>= 500ms)，直接复用已解码候选帧 (时标零偏差)"
-                                );
-                                return Ok((fallback.clone(), true));
-                            } else {
-                                // 子码流不可用，回退至前向硬解
-                                for pkt in gop {
-                                    if let Ok(Some(frame)) =
-                                        decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
-                                    {
-                                        decoded_frame = Some(frame);
-                                    }
-                                }
-                            }
+                            phase_diff_ms >= config.phase_diff_threshold_ms.max(0) as u64
                         }
-                        SnapshotCaptureMode::BurstDecodeOnly => {
-                            // 强制全量前向硬解追帧
+                        SnapshotCaptureMode::BurstDecodeOnly => false,
+                    };
+
+                    if use_fallback {
+                        if let Some(fallback) = valid_fallback {
                             tracing::info!(
                                 camera_id = %camera_id,
                                 target_pts = target_pts_ms,
+                                frame_pts = fallback.timestamp,
+                                keyframe_pts,
+                                phase_diff_ms,
                                 packet_count,
-                                "强制执行全量前向硬解追帧 (Burst Decode)"
+                                "主码流 GOP 超出当前策略预算，复用同一时刻的子码流证据帧"
                             );
-                            let burst_start = std::time::Instant::now();
-                            let mut timed_out = false;
-                            for pkt in gop {
-                                if burst_start.elapsed().as_millis() as u64
-                                    >= config.max_burst_timeout_ms
-                                {
-                                    tracing::warn!(
-                                        camera_id = %camera_id,
-                                        elapsed_ms = burst_start.elapsed().as_millis(),
-                                        timeout_budget_ms = config.max_burst_timeout_ms,
-                                        "强制追帧模式达到硬实时耗时预算，自适应熔断"
-                                    );
-                                    timed_out = true;
-                                    break;
-                                }
-                                if let Ok(Some(frame)) =
-                                    decoder.decode_packet(&pkt.payload, pkt.pts_ms).await
-                                {
-                                    decoded_frame = Some(frame);
-                                }
-                            }
-                            if timed_out {
-                                let _ = decoder.flush().await;
-                            }
+                            return Ok((fallback.clone(), true));
                         }
+                        if matches!(config.capture_mode, SnapshotCaptureMode::AdaptiveDualMode) {
+                            tracing::warn!(
+                                camera_id = %camera_id,
+                                target_pts = target_pts_ms,
+                                keyframe_pts,
+                                phase_diff_ms,
+                                packet_count,
+                                max_burst = config.max_burst_packets,
+                                "主码流 GOP 超出追帧预算且没有同刻候选帧，拒绝生成错帧证据"
+                            );
+                            return Err(PipelineError::PipelineNotFound {
+                                camera_id: format!("{camera_id} (主码流证据未追到目标帧)"),
+                            });
+                        }
+                    }
+
+                    tracing::info!(
+                        camera_id = %camera_id,
+                        target_pts = target_pts_ms,
+                        keyframe_pts,
+                        phase_diff_ms,
+                        packet_count,
+                        capture_mode = ?config.capture_mode,
+                        "从 GOP 起始 I 帧前向解码至目标 PTS，不使用 I 帧作为替代证据"
+                    );
+                    let (decoded_frame, _timed_out) = Self::decode_gop_to_target(
+                        camera_id,
+                        target_pts_ms,
+                        &gop,
+                        decoder,
+                        config.max_burst_timeout_ms,
+                    )
+                    .await;
+                    if let Some(frame) = decoded_frame {
+                        return Ok((frame, false));
+                    }
+                    if let Some(fallback) = valid_fallback {
+                        tracing::info!(
+                            camera_id = %camera_id,
+                            target_pts = target_pts_ms,
+                            frame_pts = fallback.timestamp,
+                            "主码流目标帧解码失败或超时，复用同一时刻的子码流证据帧"
+                        );
+                        return Ok((fallback.clone(), true));
                     }
                 }
             }
         }
 
-        // 2. 若主流未能解码出有效帧，自动回退借用已解码备用帧
-        if let Some(frame) = decoded_frame {
-            Ok((frame, false))
-        } else if let Some(fallback) = sub_stream_fallback {
+        if let Some(fallback) = valid_fallback {
             tracing::warn!(
                 camera_id = %camera_id,
                 target_pts = target_pts_ms,
-                "主码流靶向抽帧未就绪，平滑降级使用已解码备用帧"
+                frame_pts = fallback.timestamp,
+                "主码流目标帧不可用，使用经过 PTS 校验的候选证据帧"
             );
             Ok((fallback.clone(), true))
         } else {
             Err(PipelineError::PipelineNotFound {
-                camera_id: format!("{camera_id} (无可用视频帧用于抓拍)"),
+                camera_id: format!("{camera_id} (无可用目标时刻视频帧用于抓拍)"),
             })
         }
     }
@@ -882,6 +897,7 @@ pub(crate) fn encode_and_save_snapshot(
         crop_id = %crop_image_id,
         encoder = %encoder.name(),
         file_size_bytes,
+        frame_pts = frame.timestamp,
         is_fallback,
         "靶向证据高清抓拍完成 (dedicated snapshot worker)"
     );
