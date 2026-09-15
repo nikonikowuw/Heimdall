@@ -20,6 +20,7 @@ pub struct AssociatedPerson {
     pub person_bbox: [f32; 4],
     pub person_score: f32,
     pub is_pseudo_body: bool,
+    pub face_index: Option<usize>,
     pub attached_face: Option<RawFace>,
 }
 
@@ -100,6 +101,7 @@ pub fn associate_persons_and_faces(
                 person_bbox: persons[p_idx].bbox,
                 person_score: persons[p_idx].score,
                 is_pseudo_body: false,
+                face_index: Some(f_idx),
                 attached_face: Some(faces[f_idx]),
             });
         }
@@ -112,6 +114,7 @@ pub fn associate_persons_and_faces(
                 person_bbox: p.bbox,
                 person_score: p.score,
                 is_pseudo_body: false,
+                face_index: None,
                 attached_face: None,
             });
         }
@@ -134,6 +137,7 @@ pub fn associate_persons_and_faces(
                 person_bbox: [px1, py1, pw, ph],
                 person_score: f.score * 0.9,
                 is_pseudo_body: true,
+                face_index: Some(f_idx),
                 attached_face: Some(*f),
             });
         }
@@ -142,10 +146,47 @@ pub fn associate_persons_and_faces(
     results
 }
 
-/// 为当前活跃的航迹列表互斥关联最佳的人体-人脸对
+/// 将已确认的人脸航迹与当前帧的人脸检测建立一对一映射。
 ///
-/// 遵循全局单射匹配原则，按 IoU 降序贪婪提取不相交对，保证同一目标绝不被多路航迹串挂。
-/// 返回与 `active_tracks` 严格一一对应的 `Vec<Option<AssociatedPerson>>`。
+/// 该映射只用于身份状态（best-shot），不使用人体框或 candidate 序号回退，
+/// 避免检测顺序变化时发生 embedding 串挂。
+pub fn match_face_tracks_to_detections(
+    active_tracks: &[crate::bytetrack::STrack],
+    faces: &[RawFace],
+    iou_threshold: f32,
+) -> Vec<Option<u64>> {
+    let mut pairs = Vec::with_capacity(active_tracks.len().saturating_mul(faces.len()));
+    for (track_idx, track) in active_tracks.iter().enumerate() {
+        for (face_idx, face) in faces.iter().enumerate() {
+            let iou = crate::bytetrack::box_iou(&track.bbox, &face.bbox);
+            if iou >= iou_threshold {
+                pairs.push((iou, track_idx, face_idx));
+            }
+        }
+    }
+    pairs.sort_unstable_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+
+    let mut track_matched = vec![false; active_tracks.len()];
+    let mut result = vec![None; faces.len()];
+    for (_iou, track_idx, face_idx) in pairs {
+        // `result` 本身即人脸侧占用标记，无需再维护一张平行布尔表。
+        if !track_matched[track_idx] && result[face_idx].is_none() {
+            track_matched[track_idx] = true;
+            result[face_idx] = Some(active_tracks[track_idx].track_id);
+        }
+    }
+    result
+}
+
+/// 为当前活跃的航迹列表互斥关联最佳的人体-人脸对。
+///
+/// 该函数保留给需要人体上下文的调用方；best-shot 不使用它分配身份。
 pub fn match_tracks_to_associated(
     active_tracks: &[crate::bytetrack::STrack],
     associated: &[AssociatedPerson],
@@ -252,6 +293,7 @@ mod tests {
             person_bbox: [0.1, 0.1, 0.2, 0.4],
             person_score: 0.95,
             is_pseudo_body: false,
+            face_index: None,
             attached_face: None,
         }];
 

@@ -150,7 +150,7 @@ impl LoadedPackage {
             "DETECTOR_MODEL_PATH",
             "model/yolov8n-face-640x384_rk3568_mixed_face.rknn",
         )?;
-        let registration_detector_path = env.resolve_model_path(
+        let registration_detector_path = env.resolve_optional_model_path(
             &root,
             "REGISTRATION_DETECTOR_MODEL_PATH",
             "model/yolov8n-face-640x640_rk3568_mixed_face.rknn",

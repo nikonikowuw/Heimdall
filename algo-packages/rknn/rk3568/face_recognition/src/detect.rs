@@ -514,6 +514,8 @@ pub fn decode_yolov8_face(
     }
 
     let expected_channels = [64usize, 1, 1, 15];
+    // 诊断开关只在每次解码入口读取一次，避免热路径重复访问进程环境。
+    let debug_branches = std::env::var_os("HEIMDALL_DEBUG_FACE_BRANCHES").is_some();
     let mut all_faces = Vec::new();
     for scale in 0..3 {
         let base = scale * BRANCHES_PER_SCALE;
@@ -537,6 +539,30 @@ pub fn decode_yolov8_face(
             }
         }
         let stride = 8 * (1 << scale);
+
+        // 阈值标定诊断：仅在显式开启时统计各分支的取值范围，不参与任何判定。
+        if debug_branches {
+            for (branch, name) in ["box", "score_sum", "cls", "kpt"].iter().enumerate() {
+                let tensor = float_outputs[base + branch];
+                let (min, max) = tensor
+                    .iter()
+                    .copied()
+                    .filter(|value| value.is_finite())
+                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), value| {
+                        (low.min(value), high.max(value))
+                    });
+                tracing::info!(
+                    scale,
+                    branch = *name,
+                    len = tensor.len(),
+                    min,
+                    max,
+                    above_half = tensor.iter().filter(|value| **value > 0.5).count(),
+                    "YOLOv8n-face 分支值域"
+                );
+            }
+        }
+
         let faces = decode_scale(
             float_outputs[base],
             float_outputs[base + 1],

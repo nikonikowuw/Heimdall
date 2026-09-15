@@ -57,7 +57,9 @@ pub struct InstanceConfig {
 impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
-            detection_confidence_threshold: 0.5,
+            // 与 config.schema.json 默认值、.env.example 及 RK3576 姊妹包保持一致：
+            // 缺省回退必须等同于控制台未改动表单时的下发值，否则“缺省路径”与“表单路径”行为分叉。
+            detection_confidence_threshold: 0.25,
             person_confidence_threshold: 0.4,
             min_face_size: 30,
             quality_thresholds: QualityThresholds::default(),
@@ -288,7 +290,7 @@ mod tests {
     #[test]
     fn default_config_has_expected_values() {
         let config = InstanceConfig::default();
-        assert_eq!(config.detection_confidence_threshold, 0.5);
+        assert_eq!(config.detection_confidence_threshold, 0.25);
         assert_eq!(config.person_confidence_threshold, 0.4);
         assert_eq!(config.min_face_size, 30);
         assert_eq!(config.quality_thresholds.min_score, 0.3);
@@ -342,6 +344,75 @@ mod tests {
         assert_eq!(config.quality_thresholds.max_pitch, 15.0);
         assert_eq!(config.quality_thresholds.max_blur, 0.5);
         assert!(config.validate().is_ok());
+    }
+
+    fn load_schema_properties() -> serde_json::Map<String, serde_json::Value> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config.schema.json");
+        let raw = std::fs::read_to_string(path).expect("读取 config.schema.json 失败");
+        let schema: serde_json::Value =
+            serde_json::from_str(&raw).expect("解析 config.schema.json 失败");
+        schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("config.schema.json 缺少 properties")
+            .clone()
+    }
+
+    /// 运行时自有字段必须全部出现在控制台 schema 中。
+    ///
+    /// schema 的 `additionalProperties: false` 会让控制台无法下发未声明字段，
+    /// 字段一旦漏写，运行时只能吃硬编码默认值（历史缺陷：`person_confidence_threshold`）。
+    #[test]
+    fn schema_exposes_every_runtime_field() {
+        let properties = load_schema_properties();
+        for key in [
+            "detection_confidence_threshold",
+            "person_confidence_threshold",
+            "min_face_size",
+            "quality_min_score",
+            "quality_max_yaw",
+            "quality_max_pitch",
+            "quality_max_blur",
+        ] {
+            let prop = properties
+                .get(key)
+                .unwrap_or_else(|| panic!("config.schema.json 缺少运行时字段 {key}"));
+            assert!(
+                prop.get("default").is_some(),
+                "config.schema.json 的 {key} 必须声明 default，否则与运行时缺省值无从对齐"
+            );
+        }
+    }
+
+    /// schema 声明的默认值必须与运行时缺省值逐字段一致。
+    ///
+    /// 否则「控制台未改动表单」与「宿主未下发该字段」两条路径会得到不同阈值
+    /// （历史缺陷：detection 在 schema 为 0.25、运行时为 0.5）。
+    #[test]
+    fn schema_defaults_match_runtime_defaults() {
+        let properties = load_schema_properties();
+        let defaults: serde_json::Map<String, serde_json::Value> = properties
+            .iter()
+            .filter_map(|(key, prop)| {
+                prop.get("default")
+                    .map(|value| (key.clone(), value.clone()))
+            })
+            .collect();
+        let from_schema: InstanceConfig =
+            serde_json::from_value(serde_json::Value::Object(defaults))
+                .expect("schema 默认值应当可被 InstanceConfig 解析");
+        let runtime = InstanceConfig::default();
+
+        assert_eq!(
+            from_schema.detection_confidence_threshold,
+            runtime.detection_confidence_threshold
+        );
+        assert_eq!(
+            from_schema.person_confidence_threshold,
+            runtime.person_confidence_threshold
+        );
+        assert_eq!(from_schema.min_face_size, runtime.min_face_size);
+        assert_eq!(from_schema.quality_thresholds, runtime.quality_thresholds);
     }
 
     #[test]

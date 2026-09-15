@@ -134,21 +134,11 @@ pub fn apply_affine(
         return Vec::new();
     }
 
-    let [a, b, tx, c, d, ty] = *matrix.as_ref();
-    let determinant = a * d - b * c;
-    if !determinant.is_finite() || determinant.abs() <= 1e-12 {
+    let Some(inverse) = inverse_coeffs(matrix.as_ref()) else {
         return Vec::new();
-    }
-    let inv = 1.0 / determinant;
-
+    };
     // 预先计算逆变换仿射矩阵系数 (转换为 f32 向量化单精度浮点)
-    let m00 = (d * inv) as f32;
-    let m01 = (-b * inv) as f32;
-    let m02 = ((-d * tx + b * ty) * inv) as f32;
-
-    let m10 = (-c * inv) as f32;
-    let m11 = (a * inv) as f32;
-    let m12 = ((c * tx - a * ty) * inv) as f32;
+    let [m00, m01, m02, m10, m11, m12] = inverse.map(|value| value as f32);
 
     let stride = width * 3;
     let max_x = (width - 1) as f32;
@@ -212,6 +202,83 @@ pub fn apply_affine(
     output
 }
 
+/// 逆仿射系数 `[m00, m01, m02, m10, m11, m12]`，对应 `source = M⁻¹ · output`：
+///   `sx = m00 * x + m01 * y + m02`，`sy = m10 * x + m11 * y + m12`。
+///
+/// `apply_affine` 的采样与 `aligned_source_bounds` 的采样域推导共用此系数，
+/// 避免两处逆变换公式各自漂移；矩阵退化（行列式非有限或接近 0）时返回 `None`。
+fn inverse_coeffs(matrix: &[f64; 6]) -> Option<[f64; 6]> {
+    let [a, b, tx, c, d, ty] = *matrix;
+    let determinant = a * d - b * c;
+    if !determinant.is_finite() || determinant.abs() <= 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / determinant;
+    Some([
+        d * inv,
+        -b * inv,
+        (-d * tx + b * ty) * inv,
+        -c * inv,
+        a * inv,
+        (c * tx - a * ty) * inv,
+    ])
+}
+
+/// 对齐输出在源图中的采样域 `[left, top, right, bottom]`（右下为排他边界，已取整）。
+///
+/// 双线性插值取 `floor(v)` 与 `floor(v) + 1` 两个像素，故边界已外扩 1 像素余量。
+/// 返回值可能超出源图边界：调用方按帧尺寸收窄即可，超界像素在整帧路径本就同样填黑。
+pub fn aligned_source_bounds(landmarks: &[[f32; 2]; 5], out_size: u32) -> Option<[f32; 4]> {
+    if out_size == 0 {
+        return None;
+    }
+    let inverse = inverse_coeffs(&estimate_affine(landmarks, &ARC_FACE_TEMPLATE).0)?;
+    let max = f64::from(out_size - 1);
+    let mut bounds = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for (out_x, out_y) in [(0.0, 0.0), (max, 0.0), (0.0, max), (max, max)] {
+        let sx = inverse[0] * out_x + inverse[1] * out_y + inverse[2];
+        let sy = inverse[3] * out_x + inverse[4] * out_y + inverse[5];
+        bounds[0] = bounds[0].min(sx - 1.0);
+        bounds[1] = bounds[1].min(sy - 1.0);
+        bounds[2] = bounds[2].max(sx + 1.0);
+        bounds[3] = bounds[3].max(sy + 1.0);
+    }
+    Some([
+        bounds[0].floor() as f32,
+        bounds[1].floor() as f32,
+        bounds[2].ceil() as f32,
+        bounds[3].ceil() as f32,
+    ])
+}
+
+/// 将已经处于像素坐标系的关键点对齐为 112×112 RGB 图像。
+pub fn align_face_pixels(
+    image: &[u8],
+    width: u32,
+    height: u32,
+    landmarks: &[[f32; 2]; 5],
+) -> Result<Vec<u8>, AlgoError> {
+    if width == 0 || height == 0 {
+        return Err(AlgoError::Preprocess {
+            reason: "人脸图像尺寸不能为 0".to_string(),
+        });
+    }
+    if landmarks.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(AlgoError::Preprocess {
+            reason: "人脸关键点包含非有限浮点数".to_string(),
+        });
+    }
+    let matrix = estimate_affine(landmarks, &ARC_FACE_TEMPLATE);
+    let aligned = apply_affine(image, width, height, matrix, ALIGNED_SIZE);
+    if aligned.len() == (ALIGNED_SIZE * ALIGNED_SIZE * 3) as usize {
+        Ok(aligned)
+    } else {
+        Err(AlgoError::Preprocess {
+            reason: "仿射对齐输出为空或尺寸错误".to_string(),
+        })
+    }
+}
+
 /// 将归一化/像素关键点转换为 112×112 对齐人脸 RGB 图像。
 ///
 /// `image`: 原图连续 RGB8 字节流
@@ -247,15 +314,7 @@ pub fn align_face(
             point[1] *= height as f32;
         }
     }
-    let matrix = estimate_affine(&source, &ARC_FACE_TEMPLATE);
-    let aligned = apply_affine(image, width, height, matrix, ALIGNED_SIZE);
-    if aligned.len() == (ALIGNED_SIZE * ALIGNED_SIZE * 3) as usize {
-        Ok(aligned)
-    } else {
-        Err(AlgoError::Preprocess {
-            reason: "仿射对齐输出为空或尺寸错误".to_string(),
-        })
-    }
+    align_face_pixels(image, width, height, &source)
 }
 
 #[cfg(test)]

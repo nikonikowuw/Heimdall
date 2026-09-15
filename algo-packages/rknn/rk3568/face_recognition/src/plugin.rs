@@ -5,13 +5,13 @@
 
 use std::sync::Arc;
 
-use algo_sdk::cv::{self, PreprocessMode};
+use algo_sdk::cv::{self, CropRect, PreprocessMode};
 use algo_sdk::emitter::ResultEmitter;
 use algo_sdk::error::AlgoError;
-use algo_sdk::frame::{FrameHandleView, SafeFrame};
+use algo_sdk::frame::SafeFrame;
 use algo_sdk::plugin::{AlgoPlugin, InitContext};
 
-use crate::align::align_face;
+use crate::align::align_face_pixels;
 use crate::config::InstanceConfig;
 use crate::quality::compute_quality;
 use crate::SharedModels;
@@ -44,11 +44,8 @@ impl AlgoPlugin for FaceRecognizer {
         let models = crate::shared_models(ctx.package_root)?;
         Ok(Self {
             models,
-            config,
-            tracker: crate::bytetrack::ByteTracker::new(crate::bytetrack::ByteTrackConfig {
-                confirm_new_tracks: false,
-                ..Default::default()
-            }),
+            config: config.clone(),
+            tracker: crate::bytetrack::ByteTracker::new(face_tracker_config(&config)),
             best_shots: crate::best_shot::BestShotManager::new(),
         })
     }
@@ -95,32 +92,33 @@ impl AlgoPlugin for FaceRecognizer {
         // 真实人体与人脸二分图匹配（未匹配人脸自适应推导虚拟躯干 Pseudo-body 保底）
         let associated = crate::association::associate_persons_and_faces(&persons, &raw_faces);
 
-        // 4. ByteTracker 追踪活跃人体框，维护稳定的内部 internal_track_id
-        let track_dets: Vec<crate::bytetrack::TrackDetection> = associated
+        // 4. ByteTrack 直接追踪人脸框。人脸 track 是 best-shot 的唯一身份键，
+        //    人体框只作为输出上下文，不能反向决定 embedding 所属目标。
+        let face_track_dets: Vec<crate::bytetrack::TrackDetection> = raw_faces
             .iter()
-            .map(|candidate| crate::bytetrack::TrackDetection {
-                bbox: candidate.person_bbox,
-                score: candidate.person_score,
+            .map(|face| crate::bytetrack::TrackDetection {
+                bbox: face.bbox,
+                score: face.score,
                 class_id: 0,
             })
             .collect();
-        let active_tracks = self.tracker.update(&track_dets);
-        let active_track_ids: Vec<u64> = active_tracks.iter().map(|track| track.track_id).collect();
+        let active_face_tracks = self.tracker.update(&face_track_dets);
+        let face_track_ids = crate::association::match_face_tracks_to_detections(
+            &active_face_tracks,
+            &raw_faces,
+            0.25,
+        );
+        self.best_shots
+            .remove_tracks(self.tracker.recently_removed_track_ids());
 
-        // 5. 遍历关联目标，执行质量门控、低频 best-shot 时域超球面融合与结果组装
+        // 5. 遍历关联目标，执行质量门控、低频 best-shot 时域融合与结果组装
         let mut objects = Vec::with_capacity(associated.len());
 
-        for (a_idx, candidate) in associated.iter().enumerate() {
-            // 匹配内部 tracker 的 track_id
-            let internal_track_id = active_tracks
-                .iter()
-                .filter_map(|t| {
-                    let iou = crate::bytetrack::box_iou(&t.bbox, &candidate.person_bbox);
-                    (iou >= 0.25).then_some((iou, t.track_id))
-                })
-                .max_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, id)| id)
-                .unwrap_or((a_idx + 1) as u64);
+        for candidate in associated.iter() {
+            // 人脸 track 未确认时只输出检测结果，不创建临时身份键。
+            let internal_track_id = candidate
+                .face_index
+                .and_then(|face_index| face_track_ids.get(face_index).copied().flatten());
 
             let face_detail = if let Some(face) = candidate.attached_face {
                 let face_width_pixels = face.width() * frame.width() as f32;
@@ -132,65 +130,11 @@ impl AlgoPlugin for FaceRecognizer {
                     &self.config.quality_thresholds,
                 );
 
-                // 仅在人脸通过姿态质量门控时触发低频 EdgeFace 特征提取 (best-shot)
-                let embedding_str = if quality
-                    .accepted(&self.config.quality_thresholds, self.config.min_face_size)
-                {
-                    let embedding = if self.best_shots.should_update_best_shot(
-                        internal_track_id,
-                        &quality,
-                        frame.frame_id() as usize,
-                    ) {
-                        let extract = || -> Result<[f32; 512], AlgoError> {
-                            let rgb_data = extract_frame_rgb(&frame)?;
-                            let aligned = align_face(
-                                &rgb_data,
-                                frame.width(),
-                                frame.height(),
-                                &face.landmarks,
-                            )?;
-                            self.models.worker.embed_host(aligned)
-                        };
-
-                        match extract() {
-                            Ok(normalized) => {
-                                let fused = self.best_shots.update_with_fusion(
-                                    internal_track_id,
-                                    face.bbox,
-                                    face.landmarks,
-                                    face.score,
-                                    quality,
-                                    &normalized,
-                                    frame.frame_id() as usize,
-                                );
-                                Some(fused)
-                            }
-                            Err(error) => {
-                                self.best_shots.record_attempt_without_embedding(
-                                    internal_track_id,
-                                    face.bbox,
-                                    face.landmarks,
-                                    face.score,
-                                    quality,
-                                    frame.frame_id() as usize,
-                                );
-                                tracing::warn!(
-                                    %error,
-                                    "best-shot RKNN 设备侧 EdgeFace 提取失败，保留检测结果并允许后续重试"
-                                );
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                    embedding
-                        .as_ref()
-                        .map(|value| crate::postprocess::encode_embedding(value.as_slice()))
-                        .transpose()?
-                } else {
-                    None
+                let embedding_str = match internal_track_id {
+                    Some(track_id) => {
+                        self.best_shot_embedding(&frame, &face, &quality, track_id)?
+                    }
+                    None => None,
                 };
 
                 // 人脸检测框只要检出，就必须作为精细元数据输出给宿主管线与前端实时绘制
@@ -213,7 +157,6 @@ impl AlgoPlugin for FaceRecognizer {
             });
         }
 
-        self.best_shots.retain_active_tracks(&active_track_ids);
         crate::postprocess::emit_detection_objects(emitter, &objects)
     }
 
@@ -221,6 +164,8 @@ impl AlgoPlugin for FaceRecognizer {
         config
             .validate()
             .map_err(|reason| AlgoError::ConfigParse { reason })?;
+        // 建轨门槛由检测阈值派生，配置热更新必须同步刷新跟踪器门限。
+        self.tracker.apply_config(face_tracker_config(&config));
         self.config = config;
         Ok(())
     }
@@ -232,303 +177,309 @@ impl AlgoPlugin for FaceRecognizer {
     }
 }
 
-/// 从 SafeFrame 中按需提取连续 RGB24 图像（低频抓拍与 best-shot 路径使用）
-fn extract_frame_rgb(frame: &SafeFrame<'_>) -> Result<Vec<u8>, AlgoError> {
-    let w = frame.width() as usize;
-    let h = frame.height() as usize;
-    if w == 0 || h == 0 {
+impl FaceRecognizer {
+    /// 低频 best-shot 链路：质量门控 → ROI 特征提取 → 时域融合 → Base64 编码。
+    ///
+    /// 质量不足或尚未到重试窗口时返回 `None`，不触碰特征库。
+    fn best_shot_embedding(
+        &mut self,
+        frame: &SafeFrame<'_>,
+        face: &crate::detect::RawFace,
+        quality: &crate::quality::FaceQuality,
+        track_id: u64,
+    ) -> Result<Option<String>, AlgoError> {
+        if !quality.accepted(&self.config.quality_thresholds, self.config.min_face_size) {
+            return Ok(None);
+        }
+        let frame_id = frame.frame_id() as usize;
+        if !self
+            .best_shots
+            .should_update_best_shot(track_id, quality, frame_id)
+        {
+            return Ok(None);
+        }
+
+        // ROI 裁切失败与设备侧推理失败共用同一退避重试路径。
+        let extract = || -> Result<[f32; 512], AlgoError> {
+            let aligned = extract_aligned_face(frame, face)?;
+            self.models.worker.embed_host(aligned)
+        };
+        match extract() {
+            Ok(normalized) => {
+                let fused = self.best_shots.update_with_fusion(
+                    track_id,
+                    face.bbox,
+                    face.landmarks,
+                    face.score,
+                    *quality,
+                    &normalized,
+                    frame_id,
+                );
+                crate::postprocess::encode_embedding(fused.as_slice()).map(Some)
+            }
+            Err(error) => {
+                self.best_shots.record_attempt_without_embedding(
+                    track_id,
+                    face.bbox,
+                    face.landmarks,
+                    face.score,
+                    *quality,
+                    frame_id,
+                );
+                tracing::warn!(
+                    %error,
+                    track_id,
+                    "best-shot RKNN 设备侧 EdgeFace 提取失败，按退避策略允许后续重试"
+                );
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// 只读取对齐采样域覆盖的 ROI，避免 best-shot 路径把整帧 DMA-BUF 映射回 CPU。
+fn extract_aligned_face(
+    frame: &SafeFrame<'_>,
+    face: &crate::detect::RawFace,
+) -> Result<Vec<u8>, AlgoError> {
+    // 关键点先换算到全帧像素坐标：ROI 推导与裁剪后平移都需要像素空间。
+    let mut landmarks = face.landmarks;
+    for point in &mut landmarks {
+        point[0] *= frame.width() as f32;
+        point[1] *= frame.height() as f32;
+    }
+    let rect = face_snapshot_rect(frame, &landmarks)?;
+    let cropped = cv::crop_rgb(frame, rect)?;
+    let rgb = cropped.readback_rgb24()?;
+    for point in &mut landmarks {
+        point[0] -= rect.x as f32;
+        point[1] -= rect.y as f32;
+    }
+    align_face_pixels(&rgb, rect.width, rect.height, &landmarks)
+}
+
+/// 由检测阈值派生人脸航迹跟踪门限。
+///
+/// 板端实测（RK3568，librknnrt 2.3.2）：`yolov8n-face-640x384_rk3568_mixed_face.rknn`
+/// 经 `auto_hybrid=True` 混合量化后，score 分支的量化区间上限被钳到 **0.5**
+/// （stride 16 分支 INT8/FP16 均实测 max=0.5，stride 8 分支 `cls` 上限仅 0.0597，
+/// stride 32 分支两个 score 分支为常量）。因此 `ByteTrackConfig::default()` 的
+/// 建轨门槛 0.60 在本模型上 **永远不可达**，会导致航迹无法创建，
+/// best-shot 与 EdgeFace 特征提取链路整体失效。
+///
+/// 这里以宿主可见的检测阈值作为建轨门槛：凡是已通过检测门控的目标即视为“高分检测”，
+/// 跟踪器不再施加模型无法满足的第二道更高门槛。
+fn face_tracker_config(config: &InstanceConfig) -> crate::bytetrack::ByteTrackConfig {
+    let gate = config.detection_confidence_threshold;
+    crate::bytetrack::ByteTrackConfig {
+        high_thresh: gate,
+        track_thresh: gate,
+        confirm_new_tracks: false,
+        ..Default::default()
+    }
+}
+
+/// 由仿射采样域反推快照 ROI。
+///
+/// ROI 必须覆盖 112×112 对齐输出的全部采样像素：旧实现的“检测框 + 固定 margin”与
+/// 采样域不同量纲，紧框或关键点跨度较大时会把对齐图边缘填黑，使 embedding 偏离整帧路径。
+fn face_snapshot_rect(
+    frame: &SafeFrame<'_>,
+    landmarks: &[[f32; 2]; 5],
+) -> Result<CropRect, AlgoError> {
+    if landmarks.iter().flatten().any(|value| !value.is_finite()) {
         return Err(AlgoError::Preprocess {
-            reason: "帧宽高不能为 0".to_string(),
+            reason: "人脸关键点包含非有限浮点数".to_string(),
         });
     }
+    let frame_width = frame.width();
+    let frame_height = frame.height();
+    let [left, top, right, bottom] =
+        crate::align::aligned_source_bounds(landmarks, crate::align::ALIGNED_SIZE).ok_or_else(
+            || AlgoError::Preprocess {
+                reason: "人脸关键点无法构成有效相似变换".to_string(),
+            },
+        )?;
 
-    match frame.handle_view() {
-        FrameHandleView::Host { data } => decode_host_frame_to_rgb(frame, data, w, h),
-        FrameHandleView::DmaBuf { fd } => {
-            #[cfg(target_os = "linux")]
-            {
-                decode_dma_buf_to_rgb(frame, fd, w, h)
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = fd;
-                Err(AlgoError::IncompatibleFrame {
-                    reason: "非 Linux 环境无法直接读取 DMA-BUF".to_string(),
-                })
-            }
-        }
-        _ => Err(AlgoError::IncompatibleFrame {
-            reason: "暂不支持的帧内存句柄类型".to_string(),
-        }),
-    }
-}
-
-/// 将 Host 内存中的帧数据按像素格式转换为 RGB24
-fn decode_host_frame_to_rgb(
-    frame: &SafeFrame<'_>,
-    data: &[u8],
-    w: usize,
-    h: usize,
-) -> Result<Vec<u8>, AlgoError> {
-    let output_len = w
-        .checked_mul(h)
-        .and_then(|pixels| pixels.checked_mul(3))
-        .ok_or(AlgoError::OutOfMemory)?;
-
-    match frame.pixel_format() {
-        algo_sdk::c_abi::AV_PIX_RGB24 => {
-            let min_row = w.checked_mul(3).ok_or(AlgoError::OutOfMemory)?;
-            let stride0 = if frame.stride(0) > 0 {
-                frame.stride(0) as usize
-            } else {
-                min_row
-            };
-            if stride0 == min_row {
-                let source = data.get(..output_len).ok_or(AlgoError::OutOfMemory)?;
-                Ok(source.to_vec())
-            } else {
-                let mut rgb = Vec::with_capacity(output_len);
-                for y in 0..h {
-                    let row_start = y * stride0;
-                    let row = data
-                        .get(row_start..row_start + min_row)
-                        .ok_or(AlgoError::OutOfMemory)?;
-                    rgb.extend_from_slice(row);
-                }
-                Ok(rgb)
-            }
-        }
-        algo_sdk::c_abi::AV_PIX_NV12 => {
-            let y_stride = if frame.stride(0) > 0 {
-                frame.stride(0) as usize
-            } else {
-                w
-            };
-            let uv_stride = if frame.stride(1) > 0 {
-                frame.stride(1) as usize
-            } else {
-                w.div_ceil(2) * 2
-            };
-            let y_offset = usize::try_from(frame.plane_offset(0)).unwrap_or(0);
-            let alloc_h = if frame.alloc_height() > 0 {
-                frame.alloc_height() as usize
-            } else {
-                h
-            };
-            let default_uv_offset = y_offset
-                .checked_add(y_stride.checked_mul(alloc_h).unwrap_or(0))
-                .unwrap_or(0);
-            let uv_offset = if frame.plane_offset(1) > 0 {
-                usize::try_from(frame.plane_offset(1)).unwrap_or(default_uv_offset)
-            } else {
-                default_uv_offset
-            };
-
-            decode_nv12_to_rgb(data, w, h, y_stride, uv_stride, y_offset, uv_offset)
-        }
-        algo_sdk::c_abi::AV_PIX_BGRA => {
-            let min_row = w.checked_mul(4).ok_or(AlgoError::OutOfMemory)?;
-            let stride0 = if frame.stride(0) > 0 {
-                frame.stride(0) as usize
-            } else {
-                min_row
-            };
-            let required_len = (h.saturating_sub(1))
-                .checked_mul(stride0)
-                .and_then(|v| v.checked_add(min_row))
-                .ok_or(AlgoError::OutOfMemory)?;
-            if data.len() < required_len {
-                return Err(AlgoError::Preprocess {
-                    reason: "BGRA 数据长度不足".to_string(),
-                });
-            }
-            let mut rgb = vec![0u8; output_len];
-            for y in 0..h {
-                let src_row = &data[y * stride0..y * stride0 + min_row];
-                let dst_row = &mut rgb[y * w * 3..(y + 1) * w * 3];
-                for (src_px, dst_px) in src_row
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .zip(dst_row.as_chunks_mut::<3>().0.iter_mut())
-                {
-                    dst_px[0] = src_px[2];
-                    dst_px[1] = src_px[1];
-                    dst_px[2] = src_px[0];
-                }
-            }
-            Ok(rgb)
-        }
-        _ => Err(AlgoError::IncompatibleFrame {
-            reason: format!("暂不支持由格式 {} 转换为 RGB24", frame.pixel_format()),
-        }),
-    }
-}
-
-/// 高性能 NV12 转 RGB24（水平色度解耦复用与零单像素内层分支）
-fn decode_nv12_to_rgb(
-    data: &[u8],
-    w: usize,
-    h: usize,
-    y_stride: usize,
-    uv_stride: usize,
-    y_offset: usize,
-    uv_offset: usize,
-) -> Result<Vec<u8>, AlgoError> {
-    let output_len = w
-        .checked_mul(h)
-        .and_then(|p| p.checked_mul(3))
-        .ok_or(AlgoError::OutOfMemory)?;
-
-    let y_plane = data.get(y_offset..).ok_or_else(|| AlgoError::Preprocess {
-        reason: "NV12 Y 平面越界".to_string(),
-    })?;
-    let uv_plane = data.get(uv_offset..).ok_or_else(|| AlgoError::Preprocess {
-        reason: "NV12 UV 平面越界".to_string(),
-    })?;
-
-    let y_required = (h.saturating_sub(1))
-        .checked_mul(y_stride)
-        .and_then(|v| v.checked_add(w))
-        .ok_or(AlgoError::OutOfMemory)?;
-    let uv_required = (h.div_ceil(2).saturating_sub(1))
-        .checked_mul(uv_stride)
-        .and_then(|v| v.checked_add(w.div_ceil(2) * 2))
-        .ok_or(AlgoError::OutOfMemory)?;
-
-    if y_plane.len() < y_required || uv_plane.len() < uv_required {
-        return Err(AlgoError::Preprocess {
-            reason: "NV12 平面数据长度不足".to_string(),
-        });
-    }
-
-    let mut rgb = vec![0u8; output_len];
-    let clamp_u8 = |v: f32| -> u8 { v.clamp(0.0, 255.0).round() as u8 };
-    let even_w = w & !1;
-    let num_pairs = even_w >> 1;
-
-    for y in 0..h {
-        let uv_row_start = (y >> 1) * uv_stride;
-        let y_row_start = y * y_stride;
-        let dst_row_start = y * w * 3;
-
-        for pair_idx in 0..num_pairs {
-            let x0 = pair_idx << 1;
-            let x1 = x0 + 1;
-            let uv_idx = uv_row_start + x0;
-            let u_val = uv_plane[uv_idx] as f32;
-            let v_val = uv_plane[uv_idx + 1] as f32;
-
-            let d = u_val - 128.0;
-            let e = v_val - 128.0;
-            let r_chroma = 1.596 * e;
-            let g_chroma = -0.392 * d - 0.813 * e;
-            let b_chroma = 2.017 * d;
-
-            let c0 = (y_plane[y_row_start + x0] as f32 - 16.0) * 1.164;
-            let dst_idx0 = dst_row_start + x0 * 3;
-            rgb[dst_idx0] = clamp_u8(c0 + r_chroma);
-            rgb[dst_idx0 + 1] = clamp_u8(c0 + g_chroma);
-            rgb[dst_idx0 + 2] = clamp_u8(c0 + b_chroma);
-
-            let c1 = (y_plane[y_row_start + x1] as f32 - 16.0) * 1.164;
-            let dst_idx1 = dst_idx0 + 3;
-            rgb[dst_idx1] = clamp_u8(c1 + r_chroma);
-            rgb[dst_idx1 + 1] = clamp_u8(c1 + g_chroma);
-            rgb[dst_idx1 + 2] = clamp_u8(c1 + b_chroma);
-        }
-
-        if even_w < w {
-            let x = even_w;
-            let uv_idx = uv_row_start + x;
-            let u_val = uv_plane[uv_idx] as f32;
-            let v_val = uv_plane[uv_idx + 1] as f32;
-            let d = u_val - 128.0;
-            let e = v_val - 128.0;
-            let c = (y_plane[y_row_start + x] as f32 - 16.0) * 1.164;
-            let dst_idx = dst_row_start + x * 3;
-            rgb[dst_idx] = clamp_u8(c + 1.596 * e);
-            rgb[dst_idx + 1] = clamp_u8(c - 0.392 * d - 0.813 * e);
-            rgb[dst_idx + 2] = clamp_u8(c + 2.017 * d);
-        }
-    }
-    Ok(rgb)
-}
-
-#[cfg(target_os = "linux")]
-fn decode_dma_buf_to_rgb(
-    frame: &SafeFrame<'_>,
-    fd: i32,
-    w: usize,
-    h: usize,
-) -> Result<Vec<u8>, AlgoError> {
-    let size = match frame.pixel_format() {
-        algo_sdk::c_abi::AV_PIX_NV12 => {
-            let y_stride = if frame.stride(0) > 0 {
-                frame.stride(0) as usize
-            } else {
-                w
-            };
-            let alloc_h = if frame.alloc_height() > 0 {
-                frame.alloc_height() as usize
-            } else {
-                h
-            };
-            y_stride
-                .checked_mul(alloc_h)
-                .and_then(|y| y.checked_add(y / 2))
-                .ok_or(AlgoError::OutOfMemory)?
-        }
-        algo_sdk::c_abi::AV_PIX_RGB24 => {
-            let stride = if frame.stride(0) > 0 {
-                frame.stride(0) as usize
-            } else {
-                w * 3
-            };
-            stride.checked_mul(h).ok_or(AlgoError::OutOfMemory)?
-        }
-        _ => {
-            return Err(AlgoError::IncompatibleFrame {
-                reason: format!("暂不支持 DMA-BUF 格式: {}", frame.pixel_format()),
-            });
-        }
+    // 按帧尺寸收窄：超界区域在整帧路径同样被填黑，收窄不改变采样结果。
+    let x = left.clamp(0.0, frame_width as f32) as u32;
+    let y = top.clamp(0.0, frame_height as f32) as u32;
+    let rect = CropRect {
+        x,
+        y,
+        width: (right.clamp(0.0, frame_width as f32) as u32).saturating_sub(x),
+        height: (bottom.clamp(0.0, frame_height as f32) as u32).saturating_sub(y),
     };
 
-    // SAFETY: mmap 使用只读标志映射有效 DMA-BUF fd，失败时返回 MAP_FAILED 由下方判断处理。
-    let ptr = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            size,
-            libc::PROT_READ,
-            libc::MAP_SHARED,
-            fd,
-            0,
-        )
+    if matches!(
+        frame.pixel_format(),
+        algo_sdk::c_abi::AV_PIX_NV12 | algo_sdk::c_abi::AV_PIX_I420
+    ) {
+        return align_yuv_crop(rect, frame_width, frame_height)?
+            .validate(frame_width, frame_height);
+    }
+    rect.validate(frame_width, frame_height)
+}
+
+fn align_yuv_crop(
+    mut rect: CropRect,
+    frame_width: u32,
+    frame_height: u32,
+) -> Result<CropRect, AlgoError> {
+    // YUV 4:2:0 的 ROI 起止必须落在偶数像素，否则色度平面会错位。
+    let align_up_even = |value: u32, limit: u32| {
+        if value >= limit {
+            limit
+        } else {
+            (value + 1) & !1
+        }
     };
-    if ptr == libc::MAP_FAILED {
-        return Err(AlgoError::IncompatibleFrame {
-            reason: format!(
-                "mmap DMA-BUF fd={fd} 失败: {}",
-                std::io::Error::last_os_error()
-            ),
+    let left = rect.x & !1;
+    let top = rect.y & !1;
+    // 终点必须按原始边界推导：若先左移起点再用其加宽度，终点会跟着内缩一列/行，
+    // 采样域（`aligned_source_bounds`）的右/下边缘会落到 ROI 外被填黑。
+    let right = align_up_even(
+        rect.x
+            .checked_add(rect.width)
+            .ok_or(AlgoError::OutOfMemory)?,
+        frame_width,
+    );
+    let bottom = align_up_even(
+        rect.y
+            .checked_add(rect.height)
+            .ok_or(AlgoError::OutOfMemory)?,
+        frame_height,
+    );
+    rect.x = left;
+    rect.y = top;
+    rect.width = right.saturating_sub(left);
+    rect.height = bottom.saturating_sub(top);
+    if rect.width < 2 || rect.height < 2 {
+        return Err(AlgoError::Preprocess {
+            reason: "YUV 快照 ROI 对齐后尺寸过小".to_string(),
         });
     }
+    Ok(rect)
+}
 
-    struct MmapGuard {
-        ptr: *mut libc::c_void,
-        size: usize,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use algo_sdk::testing::MockFrameBuilder;
+
+    #[test]
+    fn face_tracker_gate_follows_detection_threshold() {
+        let mut config = InstanceConfig::default();
+        config.detection_confidence_threshold = 0.25;
+
+        let tracker_config = face_tracker_config(&config);
+        assert_eq!(tracker_config.high_thresh, 0.25);
+        assert_eq!(tracker_config.track_thresh, 0.25);
+        assert!(!tracker_config.confirm_new_tracks);
+        // 关联阈值仍保留 ByteTrack 默认的 IoU 门限，不被分数耦合影响。
+        assert_eq!(
+            tracker_config.match_thresh,
+            crate::bytetrack::ByteTrackConfig::default().match_thresh
+        );
     }
-    impl Drop for MmapGuard {
-        fn drop(&mut self) {
-            // SAFETY: ptr 由 libc::mmap 成功分配，size 与映射大小严格一致。
-            unsafe {
-                libc::munmap(self.ptr, self.size);
-            }
+
+    /// 生成逐像素可区分的 RGB24 图案（任何采样偏移都会直接体现为像素差异）。
+    ///
+    /// 各通道下界抬到 33/41/53，使「填黑」（0）与合法像素的差异远大于 1 LSB。
+    fn synthetic_rgb(width: u32, height: u32) -> Vec<u8> {
+        let mut pixels = vec![0u8; (width * height * 3) as usize];
+        for (index, pixel) in pixels.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            let x = index as u32 % width;
+            let y = index as u32 / width;
+            pixel[0] = 33 + (x * 5 % 191) as u8;
+            pixel[1] = 41 + (y * 7 % 173) as u8;
+            pixel[2] = 53 + ((x + y) * 3 % 149) as u8;
+        }
+        pixels
+    }
+
+    /// 用同一引擎读取整帧紧凑 RGB24，作为"改动前整帧对齐"的像素基准。
+    fn full_frame_rgb(frame: &SafeFrame<'_>) -> Vec<u8> {
+        let rect = CropRect {
+            x: 0,
+            y: 0,
+            width: frame.width(),
+            height: frame.height(),
+        };
+        cv::crop_rgb(frame, rect)
+            .expect("整帧读取失败")
+            .readback_rgb24()
+            .expect("整帧 readback 失败")
+    }
+
+    /// ROI 裁剪 + 关键点平移必须与"整帧对齐"采样到完全相同的像素。
+    ///
+    /// best-shot 改走 ROI 硬件裁剪的前提是：ROI 只改变读取范围，不允许改变仿射采样
+    /// 落在原图上的位置，否则 embedding 会随裁剪窗口抖动。
+    /// ROI 快照路径必须与「整帧读回 + 全图仿射」采样到同一批像素。
+    ///
+    /// 允许 1 LSB 差异：ROI 路径在裁剪后的局部坐标系内估计仿射矩阵，与整帧坐标系的 f32
+    /// 舍入不同，双线性权重恰好落在整像素边界时会有末位抖动；任何真实几何偏差
+    /// （ROI 未覆盖采样域导致的填黑、采样错位）都会使差异远大于 1 LSB。
+    #[test]
+    fn roi_crop_geometry_matches_full_frame_alignment() {
+        let (width, height) = (320u32, 240u32);
+        let rgb = synthetic_rgb(width, height);
+        let landmarks = [
+            [0.32, 0.30],
+            [0.42, 0.30],
+            [0.37, 0.39],
+            [0.32, 0.47],
+            [0.42, 0.47],
+        ];
+        let face = crate::detect::RawFace {
+            bbox: [0.28, 0.26, 0.20, 0.26],
+            landmarks,
+            landmark_scores: [0.9; 5],
+            score: 0.9,
+        };
+
+        let host_rgb = MockFrameBuilder::new()
+            .dimensions(width, height)
+            .host_data(rgb.clone())
+            .build();
+        let nv12 = MockFrameBuilder::new()
+            .dimensions(width, height)
+            .host_data(rgb.clone())
+            .to_nv12(16)
+            .build();
+
+        for (label, frame) in [("RGB24", &host_rgb), ("NV12", &nv12)] {
+            let safe = frame.as_safe_frame();
+            let expected =
+                crate::align::align_face(&full_frame_rgb(&safe), width, height, &landmarks)
+                    .expect("整帧对齐失败");
+            let actual = extract_aligned_face(&safe, &face).expect("ROI 对齐失败");
+            let pixel_landmarks =
+                landmarks.map(|point| [point[0] * width as f32, point[1] * height as f32]);
+            let rect = face_snapshot_rect(&safe, &pixel_landmarks).expect("ROI 计算失败");
+            assert!(
+                rect.width < width && rect.height < height,
+                "{label} 帧 ROI=({},{},{}x{}) 未真正裁剪",
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height
+            );
+            let max_delta = actual
+                .iter()
+                .zip(expected.iter())
+                .map(|(left, right)| left.abs_diff(*right))
+                .max()
+                .unwrap_or(u8::MAX);
+            assert!(
+                max_delta <= 1,
+                "{label} 帧 ROI=({},{},{}x{}) 与整帧路径采样偏差 {max_delta}：ROI 未覆盖仿射采样域",
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height
+            );
         }
     }
-    let _guard = MmapGuard { ptr, size };
-
-    // SAFETY: ptr 经过 MAP_FAILED 检查，size 覆盖该缓冲区，并在 _guard 存活期间只读有效。
-    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, size) };
-    decode_host_frame_to_rgb(frame, slice, w, h)
 }

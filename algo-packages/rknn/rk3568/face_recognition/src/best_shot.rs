@@ -24,6 +24,9 @@ pub const DRIFT_REJECTION_SIMILARITY: f32 = 0.55;
 /// 允许参与特征融合的最低质量分门限
 pub const MIN_FUSION_QUALITY_SCORE: f32 = 0.50;
 
+/// 失败退避的最大帧间隔上限 (避免长时遮挡下无限期停止重试)
+const MAX_RETRY_DELAY_FRAMES: usize = 48;
+
 /// 最佳抓拍人脸记录与多帧特征融合状态
 #[derive(Debug, Clone)]
 pub struct BestShotRecord {
@@ -39,9 +42,36 @@ pub struct BestShotRecord {
     pub total_weight: f32,
     /// 最近一次提取特征的帧序号
     pub last_extract_frame_id: usize,
+    /// 下一次允许重试的帧序号；用于隔离设备/队列瞬时失败
+    pub retry_after_frame_id: usize,
+    failed_attempts: u8,
 }
 
 impl BestShotRecord {
+    /// 新建一条尚未获得特征的记录；`retry_after_frame_id` 默认立即可重试。
+    fn pending(
+        bbox: [f32; 4],
+        landmarks: [[f32; 2]; 5],
+        score: f32,
+        quality: FaceQuality,
+        embedding: Vec<f32>,
+        frame_id: usize,
+    ) -> Self {
+        Self {
+            bbox,
+            landmarks,
+            score,
+            quality,
+            embedding,
+            frame_id,
+            fused_count: 0,
+            total_weight: 0.0,
+            last_extract_frame_id: frame_id,
+            retry_after_frame_id: frame_id,
+            failed_attempts: 0,
+        }
+    }
+
     /// 若特征向量已提取且非空，则返回只读切片；流式仅标记阶段返回 None。
     #[inline]
     pub fn embedding_opt(&self) -> Option<&[f32]> {
@@ -71,12 +101,28 @@ impl BestShotManager {
         self.records.get(&track_id)
     }
 
+    /// 连续失败时的重试间隔按失败次数翻倍：6 → 12 → 24 帧，封顶 `MAX_RETRY_DELAY_FRAMES`。
+    const fn retry_delay_frames(failed_attempts: u8) -> usize {
+        let shift = match failed_attempts {
+            0 | 1 => 0,
+            2 => 1,
+            3 => 2,
+            _ => 3,
+        };
+        let delay = MIN_FUSION_FRAME_INTERVAL << shift;
+        if delay > MAX_RETRY_DELAY_FRAMES {
+            MAX_RETRY_DELAY_FRAMES
+        } else {
+            delay
+        }
+    }
+
     /// 判定当前帧人脸是否应该触发特征提取与特征融合
     ///
     /// 触发条件：
-    /// 1. 该航迹此前从未提取过人脸特征；
-    /// 2. 当前人脸综合质量分比历史最优高出至少 `DEFAULT_QUALITY_UPGRADE_DELTA`（显著改善，如侧脸转正脸）；
-    /// 3. 或已融合帧数未达上限 (`< MAX_FUSED_FRAMES`)，且距离上次提取已间隔足够帧数 (`>= MIN_FUSION_FRAME_INTERVAL`)，且达到融合门限 (`>= MIN_FUSION_QUALITY_SCORE`)。
+    /// 1. 该航迹此前从未提取过人脸特征，且没有处于失败退避窗口；
+    /// 2. 当前人脸综合质量分比历史最优高出至少 `DEFAULT_QUALITY_UPGRADE_DELTA`；
+    /// 3. 或已融合帧数未达上限，且距离上次提取已间隔足够帧数，且达到融合门限。
     pub fn should_update_best_shot(
         &self,
         track_id: u64,
@@ -101,12 +147,14 @@ impl BestShotManager {
     ) -> bool {
         match self.records.get(&track_id) {
             None => true,
-            Some(prev) if prev.embedding.is_empty() => true,
+            Some(prev) if prev.fused_count >= MAX_FUSED_FRAMES => false,
+            Some(prev) if prev.embedding.is_empty() => {
+                current_frame_id >= prev.retry_after_frame_id
+            }
             Some(prev) => {
                 new_quality.score > prev.quality.score + delta
-                    || (prev.fused_count < MAX_FUSED_FRAMES
-                        && current_frame_id.saturating_sub(prev.last_extract_frame_id)
-                            >= MIN_FUSION_FRAME_INTERVAL
+                    || (current_frame_id.saturating_sub(prev.last_extract_frame_id)
+                        >= MIN_FUSION_FRAME_INTERVAL
                         && new_quality.score >= MIN_FUSION_QUALITY_SCORE)
             }
         }
@@ -131,20 +179,9 @@ impl BestShotManager {
         let q = quality.score.clamp(0.1, 1.0);
         let weight = q * q;
 
-        let record = self
-            .records
-            .entry(track_id)
-            .or_insert_with(|| BestShotRecord {
-                bbox,
-                landmarks,
-                score,
-                quality,
-                embedding: Vec::new(),
-                frame_id,
-                fused_count: 0,
-                total_weight: 0.0,
-                last_extract_frame_id: frame_id,
-            });
+        let record = self.records.entry(track_id).or_insert_with(|| {
+            BestShotRecord::pending(bbox, landmarks, score, quality, Vec::new(), frame_id)
+        });
 
         if record.embedding.len() == 512 {
             let current: &[f32; 512] = match record.embedding.as_slice().try_into() {
@@ -194,6 +231,8 @@ impl BestShotManager {
             record.fused_count += 1;
             record.total_weight = prev_weight + weight;
             record.last_extract_frame_id = frame_id;
+            record.retry_after_frame_id = frame_id;
+            record.failed_attempts = 0;
 
             fused
         } else {
@@ -205,6 +244,8 @@ impl BestShotManager {
             record.fused_count = 1;
             record.total_weight = weight;
             record.last_extract_frame_id = frame_id;
+            record.retry_after_frame_id = frame_id;
+            record.failed_attempts = 0;
             *new_embedding
         }
     }
@@ -228,17 +269,7 @@ impl BestShotManager {
         } else {
             self.records.insert(
                 track_id,
-                BestShotRecord {
-                    bbox,
-                    landmarks,
-                    score,
-                    quality,
-                    embedding,
-                    frame_id,
-                    fused_count: 0,
-                    total_weight: 0.0,
-                    last_extract_frame_id: frame_id,
-                },
+                BestShotRecord::pending(bbox, landmarks, score, quality, embedding, frame_id),
             );
         }
     }
@@ -259,6 +290,9 @@ impl BestShotManager {
             .entry(track_id)
             .and_modify(|record| {
                 record.last_extract_frame_id = frame_id;
+                record.failed_attempts = record.failed_attempts.saturating_add(1);
+                record.retry_after_frame_id =
+                    frame_id.saturating_add(Self::retry_delay_frames(record.failed_attempts));
                 if quality.score > record.quality.score {
                     record.bbox = bbox;
                     record.landmarks = landmarks;
@@ -266,23 +300,21 @@ impl BestShotManager {
                     record.quality = quality;
                 }
             })
-            .or_insert_with(|| BestShotRecord {
-                bbox,
-                landmarks,
-                score,
-                quality,
-                embedding: Vec::new(),
-                frame_id,
-                fused_count: 0,
-                total_weight: 0.0,
-                last_extract_frame_id: frame_id,
+            .or_insert_with(|| {
+                let mut record =
+                    BestShotRecord::pending(bbox, landmarks, score, quality, Vec::new(), frame_id);
+                // 首次失败即进入退避窗口，避免逐帧重复触发重型提取。
+                record.failed_attempts = 1;
+                record.retry_after_frame_id = frame_id.saturating_add(Self::retry_delay_frames(1));
+                record
             });
     }
 
-    /// 清理已消亡航迹对应的最优抓拍记录，防止内存泄漏
-    pub fn retain_active_tracks(&mut self, active_track_ids: &[u64]) {
-        self.records
-            .retain(|track_id, _| active_track_ids.contains(track_id));
+    /// 删除已经进入 `Removed` 状态的航迹对应记录；`Lost` 航迹必须保留。
+    pub fn remove_tracks(&mut self, removed_track_ids: &[u64]) {
+        for track_id in removed_track_ids {
+            self.records.remove(track_id);
+        }
     }
 
     /// 清空所有状态
@@ -316,7 +348,9 @@ mod tests {
             quality,
             1,
         );
-        assert!(mgr.should_update_best_shot(track_id, &quality, 1));
+        assert!(!mgr.should_update_best_shot(track_id, &quality, 1));
+        assert!(!mgr.should_update_best_shot(track_id, &quality, 6));
+        assert!(mgr.should_update_best_shot(track_id, &quality, 7));
     }
 
     #[test]

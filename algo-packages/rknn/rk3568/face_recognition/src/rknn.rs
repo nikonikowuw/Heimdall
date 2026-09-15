@@ -448,16 +448,26 @@ unsafe impl Send for RknnSession {}
 impl Drop for RknnSession {
     fn drop(&mut self) {
         let backend = &mut self.backend;
-        for (_, entry) in backend.dma_mem_cache.drain() {
+        // Keep duplicated DMA-BUF fds alive until rknn_destroy completes. The RK3568 runtime
+        // owns imported tensor handles through the context and may validate the backing fd while
+        // tearing the context down.
+        let mut entries: Vec<DmaMemEntry> = backend
+            .dma_mem_cache
+            .drain()
+            .map(|(_, entry)| entry)
+            .collect();
+        for entry in &entries {
             if let (Some(destroy_mem), Some(mem)) = (backend.runtime.rknn_destroy_mem, entry.mem) {
-                // SAFETY: mem 由当前 context 的 rknn_create_mem_from_fd 创建，且只销毁一次。
+                // SAFETY: mem was created by rknn_create_mem_from_fd in this context and is
+                // removed from the cache exactly once before the context is destroyed.
                 let status = unsafe { destroy_mem(backend.ctx, mem.as_ptr()) };
+                tracing::debug!(status, "销毁 RKNN DMA tensor memory");
                 if status != RKNN_SUCC {
                     tracing::warn!(status, "销毁 RKNN DMA tensor memory 失败");
                 }
             }
             if let Some(virt_addr) = entry.virt_addr {
-                // SAFETY: virt_addr/size 是 mmap 成功后由本结构体独占的映射。
+                // SAFETY: virt_addr/map_size are an mmap pair owned by this cache entry.
                 let status = unsafe { libc::munmap(virt_addr.as_ptr(), entry.map_size) };
                 if status != 0 {
                     tracing::warn!(
@@ -466,17 +476,19 @@ impl Drop for RknnSession {
                     );
                 }
             }
-            drop(entry.fd);
         }
 
         if backend.ctx != 0 {
-            // SAFETY: ctx 由当前 session 独占，Drop 只调用一次 destroy。
+            // SAFETY: ctx is exclusively owned by this session; rknn_destroy also releases
+            // tensor handles created from the current context.
             let status = unsafe { (backend.runtime.rknn_destroy)(backend.ctx) };
             if status != RKNN_SUCC {
                 tracing::warn!(status, "rknn_destroy 失败");
             }
             backend.ctx = 0;
         }
+        // Drop imported fds only after the Runtime has finished destroying the context.
+        entries.clear();
     }
 }
 
@@ -826,6 +838,8 @@ impl RknnSession {
         }
 
         if direct_supported && direct_layout_compatible {
+            // RK3568 BSP 的 rknn_create_mem_from_fd 要求有效 virt_addr；这里仅建立长期映射，
+            // 不读取或复制像素，set_io_mem 仍直接绑定原 DMA-BUF。
             let entry = self.ensure_dma_entry(identity, layout, true, true)?;
             if let Some(mem) = entry.mem {
                 let mut attr = input_attr;
@@ -836,6 +850,12 @@ impl RknnSession {
                     // SAFETY: mem 属于当前 context，attr 是本次同步绑定使用的局部 C POD。
                     let status = unsafe { set_io_mem(self.backend.ctx, mem.as_ptr(), &mut attr) };
                     if status == RKNN_SUCC {
+                        tracing::debug!(
+                            fd = layout.fd,
+                            stride = layout.stride[0],
+                            h_stride = layout.h_stride,
+                            "RKNN 使用 DMA-BUF 直绑输入"
+                        );
                         return self.run_and_process(process_fn, want_float);
                     }
                     tracing::debug!(
@@ -846,6 +866,12 @@ impl RknnSession {
             }
         }
 
+        tracing::debug!(
+            fd = layout.fd,
+            stride = layout.stride[0],
+            h_stride = layout.h_stride,
+            "RKNN 使用 DMA-BUF mmap 兼容输入"
+        );
         self.infer_with_mapped_dma(identity, layout, want_float, process_fn)
     }
 

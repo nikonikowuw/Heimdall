@@ -4,7 +4,9 @@
 //! 通过 RGA2 硬件 2D 引擎完成色彩空间转换与 Letterbox，
 //! 并直通 RKNN NPU 进行全硬件管线前向推理。
 //!
-//! 用法: `cargo run -p face-recognition-rk3568-rknn --bin face_recognition_rk3568_rknn_run_local -- [image_path] [--loops N]`
+//! 用法: `cargo run -p face-recognition-rk3568-rknn --bin face_recognition_rk3568_rknn_run_local -- [image_path] [--loops N] [--face-conf F] [--person-conf F]`
+//!
+//! `--face-conf` / `--person-conf` 以宿主显式配置的优先级覆盖阈值，用于现场分数分布评估。
 
 use std::env;
 use std::ffi::c_void;
@@ -74,6 +76,48 @@ unsafe extern "C" fn on_result_callback(result: *const AvAlgoResult, user_data: 
     }
 }
 
+/// 解析浮点命令行选项，非法或缺失时返回 None。
+fn parse_f32_option(args: &[String], name: &str) -> Option<f32> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|index| args.get(index + 1)?.parse::<f32>().ok())
+        .filter(|value| value.is_finite())
+}
+
+/// 汇总当前阈值下的检测数量与最高分数，用于现场阈值标定。
+fn summarize_detections(json: Option<&String>) -> String {
+    let Some(json) = json else {
+        return "未发射结果".to_string();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return "结果 JSON 解析失败".to_string();
+    };
+    let Some(objects) = value["objects"].as_array() else {
+        return "结果缺少 objects 字段".to_string();
+    };
+    let best_person = objects
+        .iter()
+        .filter_map(|obj| obj["confidence"].as_f64())
+        .fold(f64::NAN, f64::max);
+    let best_face = objects
+        .iter()
+        .filter_map(|obj| obj["face"]["confidence"].as_f64())
+        .fold(f64::NAN, f64::max);
+    format!(
+        "人体={} (最高 {:.4})，人脸={} (最高 {:.4})",
+        objects
+            .iter()
+            .filter(|obj| obj["confidence"].is_number())
+            .count(),
+        best_person,
+        objects
+            .iter()
+            .filter(|obj| obj["face"]["confidence"].is_number())
+            .count(),
+        best_face
+    )
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -94,7 +138,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             skip_option_value = false;
             continue;
         }
-        if arg == "--output" || arg == "--loops" {
+        if matches!(
+            arg.as_str(),
+            "--output" | "--loops" | "--face-conf" | "--person-conf"
+        ) {
             skip_option_value = true;
             continue;
         }
@@ -137,7 +184,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instance_id: "local_hardware_test",
         is_self_test: false,
     };
-    let config = InstanceConfig::default();
+    // 阈值覆盖通过正常的 Deserialize 路径构造，确保 explicit_fields 生效，
+    // 从而让命令行优先级高于包内 `.env`。
+    let mut overrides = serde_json::Map::new();
+    if let Some(value) = parse_f32_option(&args, "--face-conf") {
+        overrides.insert("detection_confidence_threshold".to_string(), value.into());
+    }
+    if let Some(value) = parse_f32_option(&args, "--person-conf") {
+        overrides.insert("person_confidence_threshold".to_string(), value.into());
+    }
+    let config: InstanceConfig = if overrides.is_empty() {
+        InstanceConfig::default()
+    } else {
+        serde_json::from_value(serde_json::Value::Object(overrides))?
+    };
+    let face_conf = config.detection_confidence_threshold;
+    let person_conf = config.person_confidence_threshold;
+    println!(
+        "  阈值: detection_confidence_threshold={face_conf}, person_confidence_threshold={person_conf}"
+    );
     let mut recognizer = FaceRecognizer::init(&init_ctx, config)?;
     println!(
         "  插件实例与 RKNN 会话初始化耗时: {:.2} ms",
@@ -203,6 +268,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|s| s.as_str())
             .unwrap_or("(无结果)")
     );
+    println!(
+        "  检测汇总: {}",
+        summarize_detections(mock_emitter.raw_json_events().first())
+    );
 
     // 4. 特征嵌入测试 (EdgeFace-xs)
     println!("\n[4/4] 特征嵌入提取测试 (EdgeFace-xs)...");
@@ -221,15 +290,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let algo_sdk::cv::PreprocessMode::Letterbox(layout) = mode else {
             return Err("检测预处理模式非 Letterbox".into());
         };
-        models.worker.detect_dma_buf(buf, layout, 0.25, 0.40)?
+        models
+            .worker
+            .detect_dma_buf(buf, layout, face_conf, person_conf)?
     } else {
         let (data, layout) = face_recognition_rk3568::prepare_detector_input_for(
             &dynamic_img,
             models.detector_width,
             models.detector_height,
         )?;
-        models.worker.detect_host(data, layout, 0.25, 0.40)?
+        models
+            .worker
+            .detect_host(data, layout, face_conf, person_conf)?
     };
+    println!(
+        "  独立检测: 人体={} 人脸={}，最高人脸分数={:.4}",
+        _persons.len(),
+        faces.len(),
+        faces.iter().map(|face| face.score).fold(f32::NAN, f32::max)
+    );
 
     if let Some(best) = faces
         .iter()

@@ -352,7 +352,7 @@ pub struct ByteTracker {
     next_id: u64,
     tracked_stracks: Vec<STrack>,
     lost_stracks: Vec<STrack>,
-    removed_stracks: Vec<STrack>,
+    recently_removed: Vec<u64>,
 }
 
 impl ByteTracker {
@@ -363,7 +363,7 @@ impl ByteTracker {
             next_id: 1,
             tracked_stracks: Vec::new(),
             lost_stracks: Vec::new(),
-            removed_stracks: Vec::new(),
+            recently_removed: Vec::new(),
         }
     }
 
@@ -373,12 +373,28 @@ impl ByteTracker {
         self.next_id = 1;
         self.tracked_stracks.clear();
         self.lost_stracks.clear();
-        self.removed_stracks.clear();
+        self.recently_removed.clear();
+    }
+
+    /// 返回本次 update 刚刚进入 Removed 的 track ID。
+    /// Lost 航迹不在这里返回，调用方必须继续保留其时域状态。
+    pub fn recently_removed_track_ids(&self) -> &[u64] {
+        &self.recently_removed
+    }
+
+    /// 热更新建轨与关联门限。
+    ///
+    /// 建轨门槛与检测阈值存在耦合关系（见 `plugin::FaceRecognizer::init`），
+    /// 宿主通过 `instance_update_config` 调整检测阈值时必须同步刷新，
+    /// 否则会出现“检测通过但无法建轨”的状态不一致。
+    pub fn apply_config(&mut self, config: ByteTrackConfig) {
+        self.config = config;
     }
 
     /// 执行一帧跟踪更新，返回当前处于 Tracked 状态的活跃航迹列表
     pub fn update(&mut self, detections: &[TrackDetection]) -> Vec<STrack> {
         self.frame_id += 1;
+        self.recently_removed.clear();
 
         // 1. 卡尔曼滤波时间更新：预测所有活跃与暂失航迹在当前时刻的位置
         for track in self.tracked_stracks.iter_mut() {
@@ -421,8 +437,9 @@ impl ByteTracker {
             if self.tracked_stracks[t_idx].is_activated {
                 tracked_for_low.push(t_idx);
             } else {
-                // 未激活的未确认航迹，若在第二帧没有匹配到高分目标，直接淘汰，不消耗低分资源
                 self.tracked_stracks[t_idx].mark_removed();
+                self.recently_removed
+                    .push(self.tracked_stracks[t_idx].track_id);
             }
         }
 
@@ -514,9 +531,11 @@ impl ByteTracker {
         self.lost_stracks.extend(newly_lost);
         let max_lost = self.config.max_time_lost;
         let cur_frame = self.frame_id;
+        let recently_removed = &mut self.recently_removed;
         self.lost_stracks.retain_mut(|track| {
             if cur_frame.saturating_sub(track.frame_id) > max_lost {
                 track.mark_removed();
+                recently_removed.push(track.track_id);
                 false
             } else {
                 true
@@ -925,5 +944,66 @@ mod tests {
                 "同一 Detection 严禁匹配多个 Track！"
             );
         }
+    }
+
+    /// 板端实测的人脸分数上限：`yolov8n-face-640x384_rk3568_mixed_face.rknn`
+    /// 的 score 分支量化区间被钳到 0.5，任何人脸都不可能得到更高的分数。
+    const SATURATED_FACE_SCORE: f32 = 0.5;
+
+    /// 派生门限（high_thresh == track_thresh == 检测阈值）必须能让饱和分数建轨；
+    /// 否则 face_track_id 恒为空，best-shot 与 EdgeFace 提取链路整体失效。
+    #[test]
+    fn saturated_face_score_creates_track_with_detection_derived_gate() {
+        let mut tracker = ByteTracker::new(ByteTrackConfig {
+            high_thresh: SATURATED_FACE_SCORE,
+            track_thresh: SATURATED_FACE_SCORE,
+            confirm_new_tracks: false,
+            ..Default::default()
+        });
+        let detections = vec![TrackDetection {
+            bbox: [0.22, 0.21, 0.27, 0.30],
+            score: SATURATED_FACE_SCORE,
+            class_id: 0,
+        }];
+
+        let active = tracker.update(&detections);
+        assert_eq!(
+            active.len(),
+            1,
+            "饱和分数 {SATURATED_FACE_SCORE} 必须能建立并激活人脸航迹"
+        );
+
+        // 跨帧持续命中必须保持同一 ID，保证 best-shot 融合的身份键稳定。
+        let track_id = active[0].track_id;
+        let next = vec![TrackDetection {
+            bbox: [0.225, 0.211, 0.27, 0.30],
+            score: SATURATED_FACE_SCORE,
+            class_id: 0,
+        }];
+        let active_next = tracker.update(&next);
+        assert_eq!(active_next.len(), 1);
+        assert_eq!(active_next[0].track_id, track_id);
+    }
+
+    /// 记录导致本次修复的缺陷：默认建轨门槛 0.60 高于模型可达上限 0.5，航迹永不创建。
+    #[test]
+    fn default_high_thresh_cannot_track_saturated_face_score() {
+        let mut tracker = ByteTracker::new(ByteTrackConfig {
+            confirm_new_tracks: false,
+            ..Default::default()
+        });
+        assert!(
+            ByteTrackConfig::default().high_thresh > SATURATED_FACE_SCORE,
+            "默认建轨门槛必须仍然高于模型可达上限，否则此回归测试失去意义"
+        );
+        let detections = vec![TrackDetection {
+            bbox: [0.22, 0.21, 0.27, 0.30],
+            score: SATURATED_FACE_SCORE,
+            class_id: 0,
+        }];
+        assert!(
+            tracker.update(&detections).is_empty(),
+            "默认 0.60 门槛下饱和分数不应建轨"
+        );
     }
 }
