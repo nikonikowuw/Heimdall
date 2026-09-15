@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 #[cfg(target_os = "macos")]
 use infer::package::AlgoPackage;
-use infer::{InferenceBackend, InferenceWorker, InferenceWorkerConfig};
+use infer::{InferenceBackend, InferenceWorker};
 #[cfg(target_os = "macos")]
 use media::decoder::DecodeDeliveryPolicy;
 use media::decoder::VideoDecoder;
