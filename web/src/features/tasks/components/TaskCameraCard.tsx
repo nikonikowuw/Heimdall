@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import {
   Activity,
   ArrowLeftRight,
-  ArrowRight,
   Check,
   Copy,
   Hexagon,
@@ -15,10 +14,9 @@ import {
   Video,
 } from 'lucide-react'
 import { motion } from 'motion/react'
-import { getProbeBadge } from '@/features/cameras'
-import { motionTokens } from '@/lib/motionTokens'
+import { getProbeBadge } from '@/features/cameras/cameraStatus'
 import { copyToClipboard } from '@/lib/utils'
-import type { Camera, DetectionRule, TaskConfigDto, StreamMode } from '@/types'
+import type { Camera, DetectionRule, StreamMode, TaskConfigDto } from '@/types'
 
 export interface TaskCameraCardProps {
   camera: Camera
@@ -64,6 +62,20 @@ function getPipelineRuntimeStatus(
   }
 }
 
+const ROI_PALETTES = [
+  { stroke: '#06b6d4', fill: 'rgba(6, 182, 212, 0.24)' },
+  { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.24)' },
+  { stroke: '#a855f7', fill: 'rgba(168, 85, 247, 0.24)' },
+  { stroke: '#f43f5e', fill: 'rgba(244, 63, 94, 0.24)' },
+  { stroke: '#6366f1', fill: 'rgba(99, 102, 241, 0.24)' },
+]
+
+function nextStreamMode(current: StreamMode | undefined): StreamMode {
+  if (current === 'main') return 'sub'
+  if (current === 'sub') return 'auto'
+  return 'main'
+}
+
 export function TaskCameraCard({
   camera,
   config,
@@ -81,21 +93,12 @@ export function TaskCameraCard({
   const maskCount = rules.filter((r) => r.role === 'mask').length
   const isMotionGateEco = config?.motionGate?.enabled ?? false
   const algorithmInstances = config?.algorithmInstances ?? []
-  const primaryInstance =
-    algorithmInstances.find((instance) => instance.enabled) ?? algorithmInstances[0]
+  const enabledInstances = algorithmInstances.filter((instance) => instance.enabled)
+  const primaryInstance = enabledInstances[0] ?? algorithmInstances[0]
   const algorithmId = primaryInstance?.algorithmId ?? config?.algorithmId ?? ''
   const analysisFps = primaryInstance?.analysisFps ?? config?.analysisFps ?? 0
   const actualStatus = primaryInstance?.actualStatus ?? config?.actualStatus ?? 0
   const runtimeStatus = getPipelineRuntimeStatus(actualStatus, t)
-
-  const algoParams = (primaryInstance?.algoParams as Record<string, unknown>) ?? {}
-  const rawConf =
-    algoParams.confidence_threshold ??
-    algoParams.confidenceThreshold ??
-    algoParams.detection_confidence_threshold
-  const confDisplay = typeof rawConf === 'number' ? `${(rawConf * 100).toFixed(0)}%` : null
-  const rawClasses = algoParams.target_classes ?? algoParams.targetClasses
-  const classesCount = Array.isArray(rawClasses) ? rawClasses.length : null
 
   const [copied, setCopied] = useState(false)
   const probeBadge = getProbeBadge(camera.lastProbeStatus, t)
@@ -110,116 +113,95 @@ export function TaskCameraCard({
   }
 
   return (
-    <motion.div
-      role="button"
-      tabIndex={0}
-      onClick={onConfigure}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onConfigure()
-        }
-      }}
-      whileHover={{ y: -4 }}
-      transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
-      className={`group frosted-glass relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border p-4 text-left shadow-xs transition-all select-none ${
+    <motion.article
+      whileHover={{ y: -3 }}
+      className={`group relative flex flex-col overflow-hidden rounded-[10px] border border-l-4 bg-[var(--bg-surface-solid)] p-3.5 text-left shadow-[var(--shadow-sm)] transition-all ${
         isArmed
-          ? 'border-[var(--accent)]/50 shadow-md hover:border-[var(--accent)] hover:shadow-lg'
-          : 'border-[var(--border)] hover:border-[var(--accent)]/40 hover:shadow-md'
+          ? 'border-[var(--accent)]/50 border-l-[var(--accent)] shadow-md hover:border-[var(--accent)] hover:shadow-lg'
+          : 'border-[var(--border)] border-l-[var(--border-strong)] hover:border-[var(--accent)]/40 hover:shadow-md'
       }`}
     >
-      {/* 顶部武装状态外发光微氛围 */}
+      {/* 已布防氛围光 */}
       {isArmed && (
         <div className="pointer-events-none absolute -top-12 -right-12 h-28 w-28 rounded-full bg-[var(--accent)]/15 blur-2xl transition-all group-hover:bg-[var(--accent)]/25" />
       )}
 
-      {/* 1. 头部设备信息与快捷操作 */}
-      <div className="relative z-10 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-3">
-          {/* 设备图标 + 状态指示呼吸灯 */}
-          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] shadow-2xs">
-            <Video className="h-5 w-5 text-[var(--accent)]" />
+      {/* 1. 头部：身份 + 操作 */}
+      <div className="relative z-10 flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[7px] border border-[var(--border)] bg-[var(--bg-secondary)]">
+            <Video className="h-4 w-4 text-[var(--accent)]" />
             <span
               className={`absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-surface-solid)] ${probeBadge.dotClass}`}
             />
           </div>
-
-          {/* 标题与通道标识 */}
           <div className="min-w-0">
-            <h4 className="truncate text-sm font-bold text-[var(--text-primary)] transition-colors group-hover:text-[var(--accent)]">
-              {camera.name}
+            <h4 className="truncate text-sm font-bold text-[var(--text-primary)]">
+              {camera.name || camera.cameraId}
             </h4>
-            <div className="mt-0.5 flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)]">
-              <span className="py-0.2 rounded bg-[var(--bg-secondary)] px-1 font-semibold">
-                RTSP
-              </span>
-              <span className="truncate">{camera.cameraId}</span>
-            </div>
+            <p className="truncate font-mono text-[11px] text-[var(--text-muted)]">
+              {camera.cameraId}
+            </p>
           </div>
         </div>
 
-        {/* 右侧动作群：布防状态胶囊 + 快速编辑/删除 */}
         <div className="flex shrink-0 items-center gap-1.5">
-          {/* 布防总开关 */}
-          <motion.button
+          {/* 布防总闸 */}
+          <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleArm()
-            }}
-            whileTap={{ scale: 0.94 }}
-            className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-semibold transition-all ${
+            onClick={onToggleArm}
+            aria-pressed={isArmed}
+            aria-label={isArmed ? t('status.armed') : t('status.disarmed')}
+            title={isArmed ? t('status.armed') : t('status.disarmed')}
+            className={`flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-xs font-semibold transition-all ${
               isArmed
-                ? 'border-rose-500/30 bg-rose-500/15 text-rose-500 shadow-xs hover:bg-rose-500/25'
+                ? 'border-rose-500/30 bg-rose-500/15 text-rose-500 hover:bg-rose-500/25'
                 : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)]'
             }`}
-            title={isArmed ? t('status.armed') : t('status.disarmed')}
           >
             {isArmed ? (
               <>
                 <ShieldAlert className="h-3.5 w-3.5" />
-                <span>{t('status.armed')}</span>
+                <span className="hidden sm:inline">{t('status.armed')}</span>
               </>
             ) : (
               <>
                 <ShieldCheck className="h-3.5 w-3.5" />
-                <span>{t('status.disarmed')}</span>
+                <span className="hidden sm:inline">{t('status.disarmed')}</span>
               </>
             )}
-          </motion.button>
+          </button>
 
-          {/* 进入画板配置 */}
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onConfigure()
-            }}
+            onClick={onConfigure}
             title={t('actions.configureRules', { defaultValue: '配置算法与布防规则' })}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+            aria-label={t('actions.configureRules', { defaultValue: '配置算法与布防规则' })}
+            className="flex h-7 w-7 items-center justify-center rounded-[6px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
 
-          {/* 删除布防任务 */}
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete()
-            }}
+            onClick={onDelete}
             title={t('deleteTask', { defaultValue: '删除布防任务' })}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-rose-500/40 hover:bg-rose-500/15 hover:text-rose-500"
+            aria-label={t('deleteTask', { defaultValue: '删除布防任务' })}
+            className="flex h-7 w-7 items-center justify-center rounded-[6px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-rose-500/40 hover:bg-rose-500/15 hover:text-rose-500"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
-      {/* 2. 核心视窗与空间几何布防微缩舞台 */}
-      <div className="relative mt-3 aspect-[2.1/1] w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black/90 shadow-inner">
-        {/* 精密十字十字线准星底纹 */}
-        <div
+      {/* 2. 防区预览（唯一的进入工作台入口，语义化 button 避免嵌套误触） */}
+      <button
+        type="button"
+        onClick={onConfigure}
+        aria-label={`${t('actions.configureRules', { defaultValue: '配置算法与布防规则' })} - ${camera.name || camera.cameraId}`}
+        className="relative mt-3 aspect-video w-full overflow-hidden rounded-[6px] border border-[var(--border)] bg-black/90 shadow-inner"
+      >
+        <span
           className="pointer-events-none absolute inset-0 opacity-20"
           style={{
             backgroundImage:
@@ -227,30 +209,19 @@ export function TaskCameraCard({
             backgroundSize: '16px 16px',
           }}
         />
+        <span className="pointer-events-none absolute top-1.5 left-1.5 h-2 w-2 border-t-2 border-l-2 border-white/40" />
+        <span className="pointer-events-none absolute top-1.5 right-1.5 h-2 w-2 border-t-2 border-r-2 border-white/40" />
+        <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b-2 border-l-2 border-white/40" />
+        <span className="pointer-events-none absolute right-1.5 bottom-1.5 h-2 w-2 border-r-2 border-b-2 border-white/40" />
 
-        {/* 视口四角取景标尺 L-brackets */}
-        <div className="pointer-events-none absolute top-1.5 left-1.5 h-2 w-2 border-t-2 border-l-2 border-white/40" />
-        <div className="pointer-events-none absolute top-1.5 right-1.5 h-2 w-2 border-t-2 border-r-2 border-white/40" />
-        <div className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b-2 border-l-2 border-white/40" />
-        <div className="pointer-events-none absolute right-1.5 bottom-1.5 h-2 w-2 border-r-2 border-b-2 border-white/40" />
-
-        {/* 几何规则动态微缩 SVG 绘制 */}
         {rulesCount > 0 ? (
           <svg
-            className="absolute inset-0 h-full w-full"
+            className="pointer-events-none absolute inset-0 h-full w-full"
             viewBox="0 0 100 100"
             preserveAspectRatio="none"
           >
             {(() => {
-              const ROI_PALETTES = [
-                { stroke: '#06b6d4', fill: 'rgba(6, 182, 212, 0.24)' },
-                { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.24)' },
-                { stroke: '#a855f7', fill: 'rgba(168, 85, 247, 0.24)' },
-                { stroke: '#f43f5e', fill: 'rgba(244, 63, 94, 0.24)' },
-                { stroke: '#6366f1', fill: 'rgba(99, 102, 241, 0.24)' },
-              ]
               let roiIdx = 0
-
               return rules.map((rule, idx) => {
                 if (rule.role === 'roi' && rule.points.length >= 3) {
                   const pts = rule.points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')
@@ -301,97 +272,59 @@ export function TaskCameraCard({
             })()}
           </svg>
         ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-[var(--text-muted)]">
-            <Hexagon className="h-5 w-5 animate-pulse text-cyan-400 opacity-40" />
-            <span className="font-mono text-xs tracking-wide opacity-70">
+          <span className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 text-[var(--text-muted)]">
+            <Hexagon className="h-5 w-5 text-cyan-400 opacity-40" />
+            <span className="font-mono text-[11px] tracking-wide opacity-70">
               {t('card.noRulesPlaceholder')}
             </span>
-          </div>
+          </span>
         )}
 
-        {/* 视口左上角：规格与编码 + 码流模式 */}
-        <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 font-mono text-[11px] backdrop-blur-xs">
-          <div className="flex items-center gap-1 rounded bg-black/75 px-2 py-0.5 text-white/90">
+        {/* 左上：规格与编码 */}
+        <span className="pointer-events-none absolute top-2 left-2 z-10 flex items-center gap-1.5">
+          <span className="flex items-center gap-1 rounded bg-black/75 px-2 py-0.5 font-mono text-[11px] text-white/90">
             <span className="font-semibold text-cyan-400">
               {camera.lastCodec?.toUpperCase() || 'H264'}
             </span>
             <span className="opacity-40">/</span>
-            <span>{camera.lastWidth ? `${camera.lastWidth}x${camera.lastHeight}` : '1080P'}</span>
-          </div>
-          {/* 码流切换按钮：点击可快捷循环切换 */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              if (onStreamModeChange) {
-                const nextMode: StreamMode =
-                  camera.streamMode === 'main'
-                    ? 'sub'
-                    : camera.streamMode === 'sub'
-                      ? 'auto'
-                      : 'main'
-                onStreamModeChange(nextMode)
-              }
-            }}
-            title={t('card.clickToSwitchStreamMode', {
-              defaultValue: '点击可快捷切换分析码流 (主码流 / 子码流 / 自动)',
-            })}
-            className={`cursor-pointer rounded px-1.5 py-0.5 font-sans text-[10px] font-semibold shadow-xs transition-all hover:scale-105 active:scale-95 ${
-              camera.streamMode === 'main'
-                ? 'border border-cyan-500/60 bg-cyan-500/90 text-black hover:bg-cyan-400'
-                : camera.streamMode === 'sub'
-                  ? 'border border-amber-500/60 bg-amber-500/90 text-black hover:bg-amber-400'
-                  : 'border border-white/30 bg-white/20 text-white hover:bg-white/30'
-            }`}
-          >
-            <span className="inline-flex items-center gap-1">
-              {camera.streamMode === 'main'
-                ? t('cardStream.main', { defaultValue: '主码流·高清' })
-                : camera.streamMode === 'sub'
-                  ? t('cardStream.sub', { defaultValue: '子码流·低能耗' })
-                  : t('cardStream.auto', { defaultValue: '自动码流' })}
-              <ArrowLeftRight className="h-2.5 w-2.5 opacity-70" />
+            <span>{camera.lastWidth ? `${camera.lastWidth}×${camera.lastHeight}` : '1080P'}</span>
+          </span>
+          {rulesCount > 0 && (
+            <span className="flex items-center gap-1 font-mono text-[10px]">
+              {roiCount > 0 && (
+                <span className="rounded bg-cyan-500/25 px-1.5 py-0.5 font-semibold text-cyan-200">
+                  {roiCount} ROI
+                </span>
+              )}
+              {lineCount > 0 && (
+                <span className="rounded bg-emerald-500/25 px-1.5 py-0.5 font-semibold text-emerald-200">
+                  {lineCount} LINE
+                </span>
+              )}
+              {maskCount > 0 && (
+                <span className="rounded bg-rose-500/25 px-1.5 py-0.5 font-semibold text-rose-200">
+                  {maskCount} MASK
+                </span>
+              )}
             </span>
-          </button>
-        </div>
+          )}
+        </span>
 
-        {/* 视口右上角：FPS 实时帧率 */}
-        <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded bg-black/75 px-2 py-0.5 font-mono text-[11px] text-emerald-400 backdrop-blur-xs">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-          <span>{camera.lastFps ? camera.lastFps.toFixed(1) : '25.0'} FPS</span>
-        </div>
+        {/* 右上：进入工作台提示 */}
+        <span className="absolute top-2 right-2 z-10 rounded-md bg-[var(--accent)]/90 px-2 py-0.5 text-[11px] font-medium text-white opacity-0 shadow-md backdrop-blur-xs transition-opacity group-hover:opacity-100">
+          {t('card.enterRules', { defaultValue: '配置算法与规则' })}
+        </span>
 
-        {/* 视口左下角：规则类型徽标 */}
-        {rulesCount > 0 && (
-          <div className="absolute bottom-2 left-2 z-10 flex items-center gap-1 font-mono text-xs">
-            {roiCount > 0 && (
-              <span className="rounded bg-cyan-500/20 px-1.5 py-0.5 font-semibold text-cyan-300 backdrop-blur-xs">
-                {roiCount} ROI
-              </span>
-            )}
-            {lineCount > 0 && (
-              <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 font-semibold text-emerald-300 backdrop-blur-xs">
-                {lineCount} LINE
-              </span>
-            )}
-            {maskCount > 0 && (
-              <span className="rounded bg-rose-500/20 px-1.5 py-0.5 font-semibold text-rose-300 backdrop-blur-xs">
-                {maskCount} MASK
-              </span>
-            )}
-          </div>
-        )}
+        {/* 悬停遮罩提示 */}
+        <span className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-center gap-1.5 bg-black/70 py-1.5 text-[11px] font-medium text-white opacity-0 backdrop-blur-xs transition-opacity group-hover:opacity-100">
+          <Layers className="h-3.5 w-3.5" />
+          {t('card.enterStudioHint', { defaultValue: '进入布防工作台' })}
+        </span>
+      </button>
 
-        {/* 悬停微动效：进入画板浮动引导 */}
-        <div className="absolute right-2 bottom-2 z-10 flex items-center gap-1 rounded-md bg-[var(--accent)]/90 px-2 py-0.5 text-xs font-medium text-white opacity-0 shadow-md backdrop-blur-xs transition-all duration-200 group-hover:opacity-100">
-          <span>{t('card.enterStudioHint')}</span>
-        </div>
-      </div>
-
-      {/* 3. 关键性能与管线指标胶囊 */}
+      {/* 3. 配置摘要：规则 / 门控 / 算法 */}
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        {/* 规则总数 */}
-        <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5">
+        <div className="flex items-center justify-between rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5">
           <span className="flex items-center gap-1.5 text-[var(--text-secondary)]">
             <Hexagon className="h-3.5 w-3.5 text-cyan-500" />
             <span>{t('card.geometryRules')}</span>
@@ -401,8 +334,7 @@ export function TaskCameraCard({
           </span>
         </div>
 
-        {/* 运动门控 */}
-        <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5">
+        <div className="flex items-center justify-between rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5">
           <span className="flex items-center gap-1.5 text-[var(--text-secondary)]">
             <Activity className="h-3.5 w-3.5 text-emerald-500" />
             <span>{t('card.motionGate')}</span>
@@ -416,100 +348,89 @@ export function TaskCameraCard({
       </div>
 
       {/* 4. 算法绑定与运行状态 */}
-      <div className="mt-2 flex flex-col gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-xs">
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
-            <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-            <span
-              className="truncate font-mono font-semibold text-[var(--text-primary)]"
-              title={algorithmId || undefined}
-            >
-              {algorithmId || t('card.algorithmUnbound', { defaultValue: '未绑定算法' })}
-            </span>
-          </span>
-          <span className="flex shrink-0 items-center gap-2 font-mono text-[11px]">
-            <span className="text-[var(--text-muted)]">
-              {analysisFps > 0
-                ? `${analysisFps} FPS`
-                : t('card.fpsAuto', { defaultValue: '自动 FPS' })}
-            </span>
-            <span className={runtimeStatus.className}>{runtimeStatus.label}</span>
-          </span>
-        </div>
-
-        {/* 算法运行参数快速摘要 */}
-        {algorithmId && (confDisplay || classesCount !== null) && (
-          <div className="flex items-center gap-2 border-t border-[var(--border)]/50 pt-1.5 font-mono text-[10px] text-[var(--text-muted)]">
-            {confDisplay && (
-              <span className="flex items-center gap-1">
-                <span>{t('card.confidence', { defaultValue: '置信度:' })}</span>
-                <span className="font-semibold text-[var(--accent)]">{confDisplay}</span>
+      <div className="mt-2 flex items-center justify-between gap-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-2 text-xs">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+          {algorithmId ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate font-mono font-semibold text-[var(--text-primary)]">
+                {algorithmId}
               </span>
-            )}
-            {confDisplay && classesCount !== null && <span>·</span>}
-            {classesCount !== null && (
-              <span className="flex items-center gap-1">
-                <span>{t('card.targetClasses', { defaultValue: '警戒类别:' })}</span>
-                <span className="font-semibold text-[var(--text-secondary)]">
-                  {t('card.classesCount', {
-                    count: classesCount,
-                    defaultValue: `${classesCount} 类`,
-                  })}
+              {enabledInstances.length > 1 && (
+                <span className="shrink-0 rounded border border-[var(--border)] px-1 font-mono text-[10px] text-[var(--text-muted)]">
+                  +{enabledInstances.length - 1}
                 </span>
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* 5. RTSP 直通流单行地址与一键复制 */}
-      <div className="mt-2 flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5 font-mono text-xs">
-        <div className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
-          <Radio className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
-          <span className="shrink-0 text-[var(--text-muted)]">{t('card.rtspDirect')}</span>
-          <span className="truncate text-[var(--text-primary)]" title={camera.rtspUrl}>
-            {camera.rtspUrl}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={handleCopyRtsp}
-          className="ml-2 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
-          title={t('card.copyRtsp')}
-        >
-          {copied ? (
-            <>
-              <Check className="h-3 w-3 text-emerald-500" />
-              <span className="text-emerald-500">{t('card.copied')}</span>
-            </>
+              )}
+            </span>
           ) : (
-            <Copy className="h-3 w-3" />
+            <span className="truncate text-[var(--text-muted)]">
+              {t('card.algorithmUnbound', { defaultValue: '未绑定算法' })}
+            </span>
           )}
-        </button>
+        </span>
+        <span className="flex shrink-0 items-center gap-2 font-mono text-[11px]">
+          <span className="text-[var(--text-muted)]">
+            {analysisFps > 0 ? `${analysisFps} FPS` : t('card.fpsAuto', { defaultValue: '自动' })}
+          </span>
+          <span className={runtimeStatus.className}>{runtimeStatus.label}</span>
+        </span>
       </div>
 
-      {/* 5. 底部状态与主行动呼应栏 */}
-      <div className="mt-3 flex items-center justify-between border-t border-[var(--border)] pt-2.5">
+      {/* 5. 接入状态与码流/地址 */}
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--border)] pt-2.5">
         <span
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${probeBadge.badgeBg}`}
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${probeBadge.badgeBg}`}
         >
           <span className={`h-1.5 w-1.5 rounded-full ${probeBadge.dotClass}`} />
           <span>{probeBadge.text}</span>
         </span>
 
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onConfigure()
-          }}
-          className="flex items-center gap-1 rounded-xl bg-[var(--accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--accent)] shadow-2xs transition-all duration-200 hover:bg-[var(--accent)] hover:text-white"
-        >
-          <Layers className="h-3.5 w-3.5" />
-          <span>{t('card.enterRules')}</span>
-          <ArrowRight className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-0.5" />
-        </button>
+        <div className="flex min-w-0 items-center gap-1">
+          {/* 码流循环切换 */}
+          {onStreamModeChange && (
+            <button
+              type="button"
+              onClick={() => onStreamModeChange(nextStreamMode(camera.streamMode))}
+              title={t('card.clickToSwitchStreamMode', {
+                defaultValue: '点击可快捷切换分析码流 (主码流 / 子码流 / 自动)',
+              })}
+              className={`flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-0.5 font-mono text-[10px] font-semibold transition-all ${
+                camera.streamMode === 'main'
+                  ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-400'
+                  : camera.streamMode === 'sub'
+                    ? 'border-amber-500/50 bg-amber-500/15 text-amber-500'
+                    : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
+              }`}
+            >
+              {camera.streamMode === 'main'
+                ? t('cardStream.main', { defaultValue: '主码流' })
+                : camera.streamMode === 'sub'
+                  ? t('cardStream.sub', { defaultValue: '子码流' })
+                  : t('cardStream.auto', { defaultValue: '自动' })}
+              <ArrowLeftRight className="h-2.5 w-2.5 opacity-70" />
+            </button>
+          )}
+
+          {/* RTSP 地址复制 */}
+          <button
+            type="button"
+            onClick={handleCopyRtsp}
+            title={`${t('card.copyRtsp')}\n${camera.rtspUrl}`}
+            aria-label={`${t('card.copyRtsp')}: ${camera.rtspUrl}`}
+            className="flex shrink-0 items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+          >
+            <Radio className="h-3.5 w-3.5" />
+            {copied ? (
+              <>
+                <Check className="h-3 w-3 text-emerald-500" />
+                <span className="text-emerald-500">{t('card.copied')}</span>
+              </>
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
+          </button>
+        </div>
       </div>
-    </motion.div>
+    </motion.article>
   )
 }

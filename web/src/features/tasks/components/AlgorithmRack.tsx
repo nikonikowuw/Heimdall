@@ -97,15 +97,25 @@ export function AlgorithmRack({
                 duration: motionTokens.duration.normal,
                 ease: motionTokens.easing.smooth,
               }}
-              onClick={() => onToggleAlgo(algo.algorithmId)}
-              className={`group relative flex h-24 w-full cursor-pointer flex-col justify-between rounded-2xl border p-2.5 transition-all select-none ${
+              className={`group relative h-24 w-full rounded-[8px] border transition-all select-none ${
                 isEnabled
                   ? 'border-[var(--accent)] bg-[var(--accent-soft)]/50 shadow-xs ring-1 ring-[var(--accent)]/30'
                   : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-secondary)]'
               }`}
             >
-              {/* 卡片顶行：状态指示灯 + 调参齿轮按钮 */}
-              <div className="flex items-center justify-between">
+              {/* 主区域使用语义化按钮，调参按钮作为独立操作，避免嵌套点击目标 */}
+              <button
+                type="button"
+                onClick={() => onToggleAlgo(algo.algorithmId)}
+                aria-pressed={isEnabled}
+                aria-label={`${algo.name} ${
+                  isEnabled
+                    ? t('studio.disableAlgo', { defaultValue: '已启用，点击停用' })
+                    : t('studio.enableAlgo', { defaultValue: '未启用，点击启用' })
+                }`}
+                className="absolute inset-0 flex cursor-pointer flex-col justify-between rounded-[8px] p-2.5 text-left focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset"
+              >
+                {/* 卡片顶行：状态指示灯与 FPS */}
                 <div className="flex items-center gap-1.5">
                   <span
                     className={`h-2 w-2 rounded-full ${
@@ -121,44 +131,42 @@ export function AlgorithmRack({
                   )}
                 </div>
 
-                {/* 调参按钮：仅在启用时浮现 */}
-                {isEnabled && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onOpenParams(algo)
-                    }}
-                    title={t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}
-                    className="flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--accent)] transition-all hover:scale-110 hover:bg-[var(--accent)] hover:text-white"
-                  >
-                    <Settings2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-
-              {/* 卡片中心：矢量图标 */}
-              <div
-                className={`flex items-center justify-center transition-colors ${
-                  isEnabled
-                    ? 'text-[var(--accent)]'
-                    : 'text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]'
-                }`}
-              >
-                {icon}
-              </div>
-
-              {/* 卡片底行：算法名称 */}
-              <div className="truncate text-center">
-                <span
-                  className={`truncate text-[11px] font-semibold ${
-                    isEnabled ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'
+                {/* 卡片中心：矢量图标 */}
+                <div
+                  className={`flex items-center justify-center transition-colors ${
+                    isEnabled
+                      ? 'text-[var(--accent)]'
+                      : 'text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]'
                   }`}
-                  title={algo.name}
                 >
-                  {algo.name}
-                </span>
-              </div>
+                  {icon}
+                </div>
+
+                {/* 卡片底行：算法名称 */}
+                <div className="truncate text-center">
+                  <span
+                    className={`truncate text-[11px] font-semibold ${
+                      isEnabled ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'
+                    }`}
+                    title={algo.name}
+                  >
+                    {algo.name}
+                  </span>
+                </div>
+              </button>
+
+              {/* 调参按钮：仅在启用时浮现 */}
+              {isEnabled && (
+                <button
+                  type="button"
+                  onClick={() => onOpenParams(algo)}
+                  title={t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}
+                  aria-label={`${t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}: ${algo.name}`}
+                  className="absolute top-2 right-2 z-10 flex h-6 w-6 items-center justify-center rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--accent)] transition-all hover:scale-110 hover:bg-[var(--accent)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                </button>
+              )}
             </motion.div>
           )
         })}
