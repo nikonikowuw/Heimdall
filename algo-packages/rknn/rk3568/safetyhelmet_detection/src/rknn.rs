@@ -304,7 +304,7 @@ struct DmaMemEntry {
 }
 
 impl DmaMemEntry {
-    /// 释放 NPU 显存句柄与内核虚拟内存映射
+    /// 释放 NPU 显存句柄与内核虚拟内存映射（运行时 LRU 淘汰使用）
     fn release(&mut self, runtime: &RknnRuntime, ctx: RknnContext) {
         if let Some(destroy_mem) = runtime.rknn_destroy_mem {
             if !self.mem.is_null() && ctx != 0 {
@@ -313,6 +313,14 @@ impl DmaMemEntry {
                 self.mem = null_mut();
             }
         }
+        self.release_cpu_mapping();
+    }
+
+    /// 仅释放 CPU 侧 mmap 映射（Drop 路径使用）
+    ///
+    /// NPU 侧显存句柄由 `rknn_destroy(ctx)` 在 Drop 末尾统一清理，
+    /// 此处仅释放 CPU 侧 mmap 映射，避免与 `rknn_destroy` 内部清理产生 double-free。
+    fn release_cpu_mapping(&mut self) {
         if !self.virt_addr.is_null() && self.virt_addr != libc::MAP_FAILED {
             // SAFETY: 释放内核 DMA-BUF 虚拟内存映射，与 libc::mmap 成对
             unsafe { libc::munmap(self.virt_addr, self.size) };
@@ -373,9 +381,10 @@ impl Drop for RknnSession {
             ..
         } = self.backend
         {
-            // 释放所有已缓存的 DMA-BUF NPU 显存映射与对应虚拟内存空间
+            // 仅释放 CPU 侧 mmap 映射；NPU 侧 tensor_mem 句柄由 rknn_destroy 统一清理，
+            // 避免手动 rknn_destroy_mem 与 rknn_destroy 内部清理 double-free。
             for (_fd, mut entry) in dma_mem_cache.drain() {
-                entry.release(runtime, *ctx);
+                entry.release_cpu_mapping();
             }
 
             if *ctx != 0 {
