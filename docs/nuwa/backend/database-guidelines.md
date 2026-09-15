@@ -6,12 +6,12 @@
 
 连接池由 `db` 构建，默认 1～4 个连接，关闭高频 SQL 日志。连接初始化必须保证：
 
-| PRAGMA         | 值       | 目的               |
-| -------------- | -------- | ------------------ |
+| PRAGMA         | 值        | 目的           |
+| -------------- | -------- | ------------ |
 | `journal_mode` | `WAL`    | 降低读写互斥       |
-| `synchronous`  | `NORMAL` | 减少 fsync 写放大  |
-| `busy_timeout` | `5000`   | 写锁等待 5000ms    |
-| `foreign_keys` | `ON`     | 保证外键与级联约束 |
+| `synchronous`  | `NORMAL` | 减少 fsync 写放大 |
+| `busy_timeout` | `5000`   | 写锁等待 5000ms  |
+| `foreign_keys` | `ON`     | 保证外键与级联约束    |
 
 - Refinery 文件：`src/migration/migrations/V{version}__{snake_case_description}.sql`。
 - 版本递增，已合并迁移只增不改；修复或回滚用新的前向迁移。
