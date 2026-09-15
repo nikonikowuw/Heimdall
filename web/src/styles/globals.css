@@ -17,6 +17,8 @@
   --bg-secondary: #f0f2f5;
   --bg-surface: rgba(255, 255, 255, 0.75);
   --bg-surface-solid: #ffffff;
+  --video-surface: #0b0e14;
+  --overlay-scrim: rgba(3, 4, 8, 0.64);
 
   --text-primary: #0b0f19;
   --text-secondary: #475569;
@@ -44,6 +46,8 @@
   --bg-secondary: #0a0c14;
   --bg-surface: rgba(10, 12, 20, 0.75);
   --bg-surface-solid: #0a0c14;
+  --video-surface: #000000;
+  --overlay-scrim: rgba(0, 0, 0, 0.72);
 
   --text-primary: #f1f5f9;
   --text-secondary: #94a3b8;

@@ -58,7 +58,8 @@
     "healthy": "正常在線",
     "degraded": "網路波動",
     "offline": "離線",
-    "error": "故障"
+    "error": "故障",
+    "unprobed": "待探測"
   },
   "manage": {
     "title": "視訊串流設備管理",
@@ -129,7 +130,8 @@
     "deleting": "正在刪除...",
     "saveSuccess": "攝影機配置已更新",
     "createSuccess": "攝影機接入成功",
-    "deleteSuccess": "攝影機已刪除"
+    "deleteSuccess": "攝影機已刪除",
+    "deleteCamera": "刪除攝影機"
   },
   "protocol": {
     "all": "全部協議",

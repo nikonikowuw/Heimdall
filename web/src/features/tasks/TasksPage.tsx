@@ -162,28 +162,30 @@ export function TasksPage({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
-          className="calibration-grid flex h-full flex-col gap-5 bg-[var(--bg-primary)] p-5 text-[var(--text-primary)] select-none"
+          className="calibration-grid flex h-full flex-col gap-4 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)]"
         >
           {/* 顶部状态与操作栏 */}
-          <div className="flex shrink-0 flex-col gap-4 border border-l-4 border-[var(--border-strong)] border-l-[var(--accent)] bg-[var(--bg-surface-solid)] px-4 py-3.5 shadow-[var(--shadow-sm)] sm:flex-row sm:items-center sm:justify-between">
+          <div className="frosted-glass flex shrink-0 flex-col gap-4 rounded-[8px] px-4 py-3.5 shadow-[var(--shadow-sm)] sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-[8px] border border-[var(--accent)]/25 bg-[var(--accent-soft)] text-[var(--accent)]">
+              <div className="flex h-10 w-10 items-center justify-center rounded-[8px] border border-[var(--border)] bg-[var(--accent-soft)] text-[var(--accent)]">
                 <Sliders className="h-5 w-5" />
               </div>
               <div>
                 <h2 className="text-base font-bold text-[var(--text-primary)]">
                   {t('title', { defaultValue: 'AI 任务与空间布防' })}
                 </h2>
-                <div className="mt-0.5 flex items-center gap-3 text-xs">
-                  <span className="flex items-center gap-1 font-mono text-[var(--text-muted)]">
+                <div className="mt-0.5 flex items-center gap-2 text-xs">
+                  <span className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[11px] text-[var(--text-secondary)]">
                     <span>{t('channelCount', { defaultValue: '任务总数' })}:</span>
                     <strong className="font-semibold text-[var(--text-primary)]">
                       {camerasWithTasks.length}
                     </strong>
                   </span>
-                  <span className="text-[var(--border-strong)]">/</span>
-                  <span className="flex items-center gap-1 font-mono text-emerald-500">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                  <span aria-hidden="true" className="hidden text-[var(--border-strong)] sm:inline">
+                    /
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--accent-green)]/25 bg-[var(--accent-green)]/10 px-2 py-1 font-mono text-[11px] text-[var(--accent-green)]">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent-green)]" />
                     <span>{t('armedCount', { defaultValue: '已布防' })}:</span>
                     <strong className="font-semibold">{totalArmed}</strong>
                   </span>
@@ -213,7 +215,7 @@ export function TasksPage({
           </div>
 
           {/* AI 任务卡片矩阵 */}
-          <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--border-strong)] pt-5">
+          <div className="min-h-0 flex-1 overflow-auto border-t border-[var(--border-strong)] pt-4">
             {cameras.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-24 text-center text-[var(--text-muted)]">
                 <Video className="mb-2 h-8 w-8 opacity-40" />
@@ -241,7 +243,7 @@ export function TasksPage({
               </div>
             ) : camerasWithTasks.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-24 text-center text-[var(--text-muted)]">
-                <ShieldAlert className="mb-2 h-8 w-8 text-cyan-500 opacity-60" />
+                <ShieldAlert className="mb-2 h-8 w-8 text-[var(--accent)] opacity-60" />
                 <p className="font-medium text-[var(--text-secondary)]">
                   {t('emptyTasks', { defaultValue: '暂无运行中的 AI 任务' })}
                 </p>
@@ -261,7 +263,7 @@ export function TasksPage({
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {camerasWithTasks.map((camera) => (
                   <TaskCameraCard
                     key={camera.id}

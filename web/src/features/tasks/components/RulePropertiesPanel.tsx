@@ -111,7 +111,7 @@ export function RulePropertiesPanel({
           <span>{t('inspector.scopeTitle', { defaultValue: '算力作用域' })}</span>
         </div>
         {activeAlgorithmNames.length === 0 ? (
-          <p className="text-[10px] text-amber-500">
+          <p className="text-[10px] text-[var(--accent-amber)]">
             {t('inspector.noActiveAlgo', { defaultValue: '尚未启用任何算法，本规则暂不参与判定' })}
           </p>
         ) : (
@@ -148,7 +148,7 @@ export function RulePropertiesPanel({
         <button
           type="button"
           onClick={() => onDeleteRule(rule.id)}
-          className="flex items-center justify-center gap-1.5 rounded-[7px] border border-rose-500/30 bg-rose-500/10 py-2 text-xs font-semibold text-rose-500 transition-colors hover:bg-rose-500/20"
+          className="flex items-center justify-center gap-1.5 rounded-[7px] border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 py-2 text-xs font-semibold text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/15"
         >
           <Trash2 className="h-3.5 w-3.5" />
           <span>{t('inspector.delete', { defaultValue: '删除防区' })}</span>

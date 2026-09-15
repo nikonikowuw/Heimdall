@@ -123,7 +123,8 @@
     "username": "Username",
     "createdAt": "Created At",
     "updatedAt": "Updated At",
-    "changePassword": "Change Password"
+    "changePassword": "Change Password",
+    "subtitle": "Manage the current administrator account"
   },
   "network": {
     "title": "Network / Service",
@@ -154,7 +155,28 @@
     "notAssigned": "Not Assigned",
     "currentAccess": "Current Access",
     "wifiConnected": "Wi-Fi Connected",
-    "wifiDisconnected": "Wi-Fi Disconnected"
+    "wifiDisconnected": "Wi-Fi Disconnected",
+    "accessUrl": "Access URL",
+    "autoRollback": "until auto-rollback",
+    "cancelFailed": "Failed to discard configuration",
+    "cancelRollback": "Discard & Roll Back",
+    "carrierDown": "Cable unplugged",
+    "carrierUp": "Cable connected",
+    "confirmFailed": "Failed to confirm configuration",
+    "confirmPermanent": "Confirm & Make Permanent",
+    "conflictDesc": "Before applying, the system detected via ARP probe that an active host on the LAN already occupies this IP. To prevent broadcast storms and device communication failure, the change was blocked automatically.",
+    "conflictSolution1": "Investigate the conflicting host on the LAN, or choose another unassigned static IP address",
+    "conflictSolution2": "Or switch the interface to DHCP and let the router assign an available IP",
+    "conflictSubtitle": "Layer-2 address conflict protection engaged",
+    "conflictTitle": "RFC 5227 Static IP Conflict Interception",
+    "conflictWarning": "Industrial safety interception",
+    "known": "Got it",
+    "newIp": "Target IP",
+    "occupyingMac": "Conflicting host MAC",
+    "subtitle": "Manage industrial edge network interfaces and IP configuration",
+    "targetIp": "Proposed IP",
+    "trialActiveTitle": "Network change trial in progress",
+    "trialDesc": "Interface {{name}} is running a trial with the new configuration. Verify the new IP is reachable on the LAN. If you do not confirm before the countdown ends, the independent watchdog rolls back to the previous configuration unconditionally."
   },
   "storage": {
     "title": "Storage & Retention",
@@ -209,7 +231,12 @@
       "estimatedSize": "Est. ~{{size}} KB / frame",
       "resetDefaults": "Reset Defaults",
       "savedSuccess": "Snapshot encoding settings saved and applied"
-    }
+    },
+    "autoCleanupDesc": "Trigger cleanup automatically based on disk watermark",
+    "evidenceBreakdown": "Evidence storage breakdown",
+    "overwriteDesc": "Evict old data automatically when the disk is full",
+    "stopOnFullDesc": "Stop writing once the disk is full",
+    "subtitle": "Manage disk quota, retention policy, and automatic cleanup"
   },
   "time": {
     "title": "Time Sync",
@@ -237,7 +264,8 @@
     "setTime": "Set Time Now",
     "confirmTitle": "Manual Time Set",
     "confirmMessage": "This will modify the system clock, which may cause video timestamp jumps and affect recording continuity. NTP auto sync is recommended.",
-    "confirmSet": "Confirm Set"
+    "confirmSet": "Confirm Set",
+    "subtitle": "Manage system clock and NTP synchronization"
   },
   "gb28181": {
     "serviceTitle": "GB/T 28181 Native Service",
@@ -271,5 +299,8 @@
     "cardPassword": "Access Password",
     "cardHeartbeat": "Suggested Heartbeat: 60s (Timeout: {{timeout}}s)",
     "cardStreamMode": "Suggested Stream Transport: TCP Passive (Recommended) or UDP"
-  }
+  },
+  "loadFailed": "Failed to load",
+  "saveFailed": "Failed to save",
+  "setFailed": "Failed to set"
 }

@@ -157,5 +157,8 @@
   "toast": {
     "ruleTriggered": "Detected {{target}} triggering rule",
     "viewEvidence": "View Evidence"
+  },
+  "common": {
+    "cancel": "Cancel"
   }
 }

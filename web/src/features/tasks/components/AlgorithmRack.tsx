@@ -78,98 +78,102 @@ export function AlgorithmRack({
           </span>
         </div>
         <span className="font-mono text-[11px] text-[var(--text-muted)]">
-          {t('studio.rackTip', { defaultValue: '点击方块直接启闭 · 启用后点齿轮调参' })}
+          {t('studio.rackTip', { defaultValue: '点击卡片切换启用 · 启用后点齿轮调参' })}
         </span>
       </div>
 
-      {/* 小方形卡片网格机架 (自适应 3 列排列) */}
-      <div className="grid grid-cols-3 gap-2.5">
-        {sortedAlgos.map((algo) => {
-          const instance = activeInstances[algo.algorithmId]
-          const isEnabled = Boolean(instance?.enabled)
-          const icon = getAlgoVectorIcon(algo.algorithmType, algo.algorithmId)
+      {/* 紧凑算法卡片网格：多算法并列展示，超出后在机架内部滚动 */}
+      <div className="max-h-[min(42vh,360px)] overflow-y-auto pr-0.5">
+        <div className="grid grid-cols-2 gap-2">
+          {sortedAlgos.map((algo) => {
+            const instance = activeInstances[algo.algorithmId]
+            const isEnabled = Boolean(instance?.enabled)
+            const icon = getAlgoVectorIcon(algo.algorithmType, algo.algorithmId)
 
-          return (
-            <motion.div
-              key={algo.algorithmId}
-              layout
-              transition={{
-                duration: motionTokens.duration.normal,
-                ease: motionTokens.easing.smooth,
-              }}
-              className={`group relative h-24 w-full rounded-[8px] border transition-all select-none ${
-                isEnabled
-                  ? 'border-[var(--accent)] bg-[var(--accent-soft)]/50 shadow-xs ring-1 ring-[var(--accent)]/30'
-                  : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-secondary)]'
-              }`}
-            >
-              {/* 主区域使用语义化按钮，调参按钮作为独立操作，避免嵌套点击目标 */}
-              <button
-                type="button"
-                onClick={() => onToggleAlgo(algo.algorithmId)}
-                aria-pressed={isEnabled}
-                aria-label={`${algo.name} ${
+            return (
+              <motion.div
+                key={algo.algorithmId}
+                layout
+                transition={{
+                  duration: motionTokens.duration.normal,
+                  ease: motionTokens.easing.smooth,
+                }}
+                className={`group flex min-h-[104px] min-w-0 flex-col rounded-[8px] border bg-[var(--bg-surface)] p-2.5 transition-[border-color,background-color] select-none ${
                   isEnabled
-                    ? t('studio.disableAlgo', { defaultValue: '已启用，点击停用' })
-                    : t('studio.enableAlgo', { defaultValue: '未启用，点击启用' })
+                    ? 'border-[var(--accent-green)]/50 bg-[var(--accent-green)]/10'
+                    : 'border-[var(--border)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-secondary)]'
                 }`}
-                className="absolute inset-0 flex cursor-pointer flex-col justify-between rounded-[8px] p-2.5 text-left focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset"
               >
-                {/* 卡片顶行：状态指示灯与 FPS */}
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`h-2 w-2 rounded-full ${
+                <div className="flex min-w-0 items-start gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onToggleAlgo(algo.algorithmId)}
+                    aria-pressed={isEnabled}
+                    aria-label={`${algo.name} ${
                       isEnabled
-                        ? 'animate-pulse bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
-                        : 'bg-zinc-600'
+                        ? t('studio.disableAlgo', { defaultValue: '已启用，点击停用' })
+                        : t('studio.enableAlgo', { defaultValue: '未启用，点击启用' })
                     }`}
-                  />
-                  {isEnabled && (
-                    <span className="font-mono text-[9px] font-bold text-emerald-400">
-                      {instance.analysisFps || 10}F
+                    className="flex min-w-0 flex-1 items-start gap-2 text-left focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none focus-visible:ring-inset"
+                  >
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border ${
+                        isEnabled
+                          ? 'border-[var(--accent-green)]/25 bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
+                          : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]'
+                      }`}
+                    >
+                      {icon}
                     </span>
+                    <span className="min-w-0 flex-1 pt-0.5">
+                      <span
+                        className={`block truncate text-[11px] font-semibold ${
+                          isEnabled ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
+                        }`}
+                        title={algo.name}
+                      >
+                        {algo.name}
+                      </span>
+                      <span className="mt-1 flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">
+                        <span
+                          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                            isEnabled ? 'bg-[var(--accent-green)]' : 'bg-[var(--text-muted)]/50'
+                          }`}
+                        />
+                        <span className="truncate">
+                          {isEnabled
+                            ? t('studio.algoEnabledStatus', { defaultValue: '已启用' })
+                            : t('studio.algoDisabledStatus', { defaultValue: '未启用' })}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+
+                  {isEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenParams(algo)}
+                      title={t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}
+                      aria-label={`${t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}: ${algo.name}`}
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--accent)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none"
+                    >
+                      <Settings2 className="h-3.5 w-3.5" />
+                    </button>
                   )}
                 </div>
 
-                {/* 卡片中心：矢量图标 */}
-                <div
-                  className={`flex items-center justify-center transition-colors ${
-                    isEnabled
-                      ? 'text-[var(--accent)]'
-                      : 'text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]'
-                  }`}
-                >
-                  {icon}
+                <div className="mt-auto flex min-w-0 items-center justify-between gap-2 pt-2 font-mono text-[10px] text-[var(--text-muted)]">
+                  <span className="min-w-0 truncate">{algo.algorithmId}</span>
+                  {isEnabled && (
+                    <span className="shrink-0 font-semibold text-[var(--accent-green)]">
+                      {instance.analysisFps || 10} FPS
+                    </span>
+                  )}
                 </div>
-
-                {/* 卡片底行：算法名称 */}
-                <div className="truncate text-center">
-                  <span
-                    className={`truncate text-[11px] font-semibold ${
-                      isEnabled ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'
-                    }`}
-                    title={algo.name}
-                  >
-                    {algo.name}
-                  </span>
-                </div>
-              </button>
-
-              {/* 调参按钮：仅在启用时浮现 */}
-              {isEnabled && (
-                <button
-                  type="button"
-                  onClick={() => onOpenParams(algo)}
-                  title={t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}
-                  aria-label={`${t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}: ${algo.name}`}
-                  className="absolute top-2 right-2 z-10 flex h-6 w-6 items-center justify-center rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--accent)] transition-all hover:scale-110 hover:bg-[var(--accent)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </motion.div>
-          )
-        })}
+              </motion.div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

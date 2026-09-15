@@ -254,9 +254,14 @@ export function CreateTaskModal({
           onClose()
         }
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#030408]/80 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-xs"
     >
-      <div className="relative flex max-h-[90vh] w-full max-w-3xl flex-col rounded-[10px] border border-t-2 border-[var(--border-strong)] border-t-[var(--accent)] bg-[var(--bg-surface-solid)] shadow-2xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-task-title"
+        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col rounded-[8px] border border-t border-[var(--border-strong)] border-t-[var(--border-strong)] bg-[var(--bg-surface-solid)] shadow-2xl"
+      >
         {/* 头部：标题 + 步骤指示 */}
         <div className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-secondary)]/45 p-5 pb-4">
           <button
@@ -270,11 +275,11 @@ export function CreateTaskModal({
           </button>
 
           <div className="flex items-center gap-3 pr-8">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] border border-[var(--accent)]/25 bg-[var(--accent-soft)] text-[var(--accent)]">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] border border-[var(--border)] bg-[var(--accent-soft)] text-[var(--accent)]">
               <Sliders className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-[var(--text-primary)]">
+              <h3 id="create-task-title" className="text-base font-bold text-[var(--text-primary)]">
                 {t('createTaskTitle', { defaultValue: '创建 AI 分析与布防任务' })}
               </h3>
               <p className="text-xs text-[var(--text-muted)]">
@@ -302,9 +307,9 @@ export function CreateTaskModal({
                   <span
                     className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
                       isCurrent
-                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                        ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] text-[var(--accent)]'
                         : isDone
-                          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500'
+                          ? 'border-[var(--accent-green)]/40 bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
                           : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)]'
                     }`}
                   >
@@ -363,7 +368,7 @@ export function CreateTaskModal({
                       className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border font-mono text-[10px] font-bold ${
                         step === 1
                           ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
-                          : 'border-emerald-500/50 bg-emerald-500/10 text-emerald-500'
+                          : 'border-[var(--accent-green)]/50 bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
                       }`}
                     >
                       {step > 1 ? <CheckCircle2 className="h-3.5 w-3.5" /> : '1'}
@@ -406,7 +411,7 @@ export function CreateTaskModal({
                     <div>
                       <label className="mb-1.5 block font-semibold text-[var(--text-primary)]">
                         {t('selectChannel', { defaultValue: '选择摄像头通道' })}
-                        <span className="ml-1 text-rose-500">*</span>
+                        <span className="ml-1 text-[var(--destructive)]">*</span>
                       </label>
                       <div className="grid max-h-56 grid-cols-1 gap-2 overflow-y-auto pr-0.5 sm:grid-cols-2">
                         {cameras.map((cam) => {
@@ -421,7 +426,7 @@ export function CreateTaskModal({
                               aria-pressed={isSelected}
                               className={`flex flex-col gap-1 rounded-xl border p-2.5 text-left transition-all ${
                                 isSelected
-                                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] shadow-xs'
+                                  ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] shadow-xs'
                                   : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]'
                               }`}
                             >
@@ -449,13 +454,13 @@ export function CreateTaskModal({
                                     : '—'}
                                 </span>
                                 <span>·</span>
-                                <span className="text-cyan-500">
+                                <span className="text-[var(--accent)]">
                                   {cam.lastCodec?.toUpperCase() || 'H264'}
                                 </span>
                                 {hasTask && (
                                   <>
                                     <span>·</span>
-                                    <span className="text-amber-500">
+                                    <span className="text-[var(--accent-amber)]">
                                       {t('alreadyConfiguredTag', {
                                         defaultValue: '· [已配置任务]',
                                       })}
@@ -468,7 +473,7 @@ export function CreateTaskModal({
                         })}
                       </div>
                       {selectedCam && existingCameraIdsWithTasks.has(selectedCam.cameraId) && (
-                        <p className="mt-1.5 text-[11px] text-amber-500">
+                        <p className="mt-1.5 text-[11px] text-[var(--accent-amber)]">
                           {t('alreadyHasTask', {
                             defaultValue: '(该通道已有任务，保存将覆盖更新)',
                           })}
@@ -483,7 +488,7 @@ export function CreateTaskModal({
                         className="mb-1.5 block font-semibold text-[var(--text-primary)]"
                       >
                         {t('taskName', { defaultValue: '任务名称' })}
-                        <span className="ml-1 text-rose-500">*</span>
+                        <span className="ml-1 text-[var(--destructive)]">*</span>
                       </label>
                       <input
                         id="create-task-name"
@@ -528,7 +533,9 @@ export function CreateTaskModal({
                           defaultValue: '创建后立即启动布防',
                         })}
                         className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
-                          desiredEnabled ? 'bg-[var(--accent)]' : 'bg-zinc-600'
+                          desiredEnabled
+                            ? 'bg-[var(--accent)]'
+                            : 'border border-[var(--border)] bg-[var(--bg-secondary)]'
                         }`}
                       >
                         <span
@@ -575,7 +582,7 @@ export function CreateTaskModal({
                                 aria-pressed={isSelected}
                                 className={`flex flex-col gap-1 rounded-xl border p-2.5 text-left transition-all ${
                                   isSelected
-                                    ? 'border-[var(--accent)] bg-[var(--accent-soft)] shadow-xs'
+                                    ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] shadow-xs'
                                     : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]'
                                 }`}
                               >
@@ -623,7 +630,7 @@ export function CreateTaskModal({
                             aria-pressed={analysisFps === fps}
                             className={`rounded-lg border py-1.5 font-semibold transition-all ${
                               analysisFps === fps
-                                ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                                ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] text-[var(--accent)]'
                                 : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]'
                             }`}
                           >
@@ -725,7 +732,7 @@ export function CreateTaskModal({
 
                 {/* 错误提示 */}
                 {errorMsg && (
-                  <div className="flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-500">
+                  <div className="flex items-center gap-2 rounded-[8px] border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]">
                     <AlertCircle className="h-4 w-4 shrink-0" />
                     <span>{errorMsg}</span>
                   </div>

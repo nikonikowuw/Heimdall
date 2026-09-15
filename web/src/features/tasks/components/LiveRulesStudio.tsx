@@ -86,6 +86,80 @@ function getRuleAnchor(rule: ExtendedRule): DetectionPoint | null {
   return { x: sum.x / rule.points.length, y: sum.y / rule.points.length }
 }
 
+interface MotionGateControlProps {
+  enabled: boolean
+  threshold: number
+  onToggle: () => void
+  onThresholdChange: (threshold: number) => void
+}
+
+function MotionGateControl({
+  enabled,
+  threshold,
+  onToggle,
+  onThresholdChange,
+}: MotionGateControlProps): React.ReactElement {
+  const { t } = useTranslation('task')
+
+  return (
+    <section className="space-y-2.5 rounded-[8px] border border-[var(--border)] bg-[var(--bg-surface)] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2">
+          <Activity className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-green)]" />
+          <div className="min-w-0">
+            <h3 className="text-xs font-bold text-[var(--text-primary)]">
+              {t('studio.motionGateTitle', { defaultValue: '运动检测门控' })}
+            </h3>
+            <p className="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)]">
+              {t('studio.motionGateDesc', {
+                defaultValue: '画面静止无像素变动时跳过 NPU 深度推理，显著降低芯片能耗与总线发热。',
+              })}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={enabled}
+          aria-label={t('studio.motionGateTitle', { defaultValue: '运动检测门控' })}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
+            enabled
+              ? 'bg-[var(--accent-green)]'
+              : 'border border-[var(--border)] bg-[var(--bg-secondary)]'
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
+              enabled ? 'translate-x-4' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </div>
+
+      {enabled && (
+        <div className="space-y-1.5 border-t border-[var(--border)] pt-2">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-[var(--text-secondary)]">
+              {t('studio.motionGateSensitivity', { defaultValue: '灵敏度阈值' })}
+            </span>
+            <span className="font-mono font-semibold text-[var(--accent)]">{threshold}%</span>
+          </div>
+          <input
+            type="range"
+            min={5}
+            max={80}
+            step={1}
+            value={threshold}
+            aria-label={t('studio.motionGateSensitivity', { defaultValue: '灵敏度阈值' })}
+            onChange={(event) => onThresholdChange(Number(event.target.value))}
+            className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent-green)]"
+          />
+        </div>
+      )}
+    </section>
+  )
+}
+
 interface ResolvedPoint {
   x: number
   y: number
@@ -516,14 +590,19 @@ export function LiveRulesStudio({
     finishDrawingPoints(currentPoints, tool)
   }, [currentPoints, finishDrawingPoints, tool])
 
-  const handleSelectTool = useCallback((nextTool: ToolMode) => {
-    setTool(nextTool)
-    setCurrentPoints([])
-    setDraftCursor({ cursor: null, snapped: null })
-    if (nextTool !== 'select') {
-      setSelectedRuleId(null)
-    }
-  }, [])
+  const handleSelectTool = useCallback(
+    (nextTool: ToolMode) => {
+      // 重复点击当前工具属于空操作：保留正在绘制的草稿，避免误触清空已落顶点
+      if (nextTool === tool) return
+      setTool(nextTool)
+      setCurrentPoints([])
+      setDraftCursor({ cursor: null, snapped: null })
+      if (nextTool !== 'select') {
+        setSelectedRuleId(null)
+      }
+    },
+    [tool],
+  )
 
   const handleCancelDrawing = useCallback(() => {
     setCurrentPoints([])
@@ -878,9 +957,9 @@ export function LiveRulesStudio({
   const hudHint = t(HUD_HINT_KEY[tool], { defaultValue: t('tools.hudSelect') })
 
   return (
-    <div className="flex h-full w-full max-w-full flex-1 flex-col overflow-hidden rounded-[10px] border border-t-2 border-[var(--border-strong)] border-t-[var(--accent)] bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <div className="flex h-full w-full max-w-full flex-1 flex-col overflow-hidden rounded-[8px] border border-[var(--border-strong)] border-t-[var(--border-strong)] bg-[var(--bg-primary)] text-[var(--text-primary)]">
       {/* 顶部综合态势导航栏 */}
-      <header className="relative z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b-2 border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-4">
+      <header className="relative z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-4">
         {/* 左侧：返回 + 摄像头通道身份 + 原地编辑任务名 */}
         <div className="flex min-w-0 items-center gap-3">
           {onBack && (
@@ -904,7 +983,7 @@ export function LiveRulesStudio({
             <span className="hidden font-mono text-[11px] text-[var(--text-secondary)] lg:inline">
               {camera.lastWidth || 1920}×{camera.lastHeight || 1080}
             </span>
-            <span className="hidden font-mono text-[11px] font-semibold text-cyan-400 lg:inline">
+            <span className="hidden font-mono text-[11px] font-semibold text-[var(--accent)] lg:inline">
               {camera.lastCodec?.toUpperCase() || 'H264'}
             </span>
           </div>
@@ -926,7 +1005,7 @@ export function LiveRulesStudio({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') setIsEditingTaskName(false)
                 }}
-                className="min-w-0 rounded-lg border border-[var(--accent)] bg-[var(--bg-surface)] px-2 py-0.5 text-xs font-semibold text-[var(--text-primary)] ring-1 ring-[var(--accent)] outline-none"
+                className="min-w-0 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface)] px-2 py-0.5 text-xs font-semibold text-[var(--text-primary)] ring-1 ring-[var(--border)] outline-none"
               />
             ) : (
               <button
@@ -947,7 +1026,7 @@ export function LiveRulesStudio({
         {/* 右侧：码流选择 + 布防总闸 + 保存 */}
         <div className="flex shrink-0 items-center gap-3">
           {saveToast && (
-            <span className="hidden font-mono text-xs font-semibold text-emerald-400 xl:inline">
+            <span className="hidden font-mono text-xs font-semibold text-[var(--accent-green)] xl:inline">
               {saveToast}
             </span>
           )}
@@ -960,7 +1039,7 @@ export function LiveRulesStudio({
               aria-pressed={streamMode === 'main'}
               className={`rounded-md px-2 py-1 font-medium transition-colors ${
                 streamMode === 'main'
-                  ? 'bg-cyan-500 font-semibold text-black shadow-2xs'
+                  ? 'bg-[var(--accent)] font-semibold text-white shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
               title={t('streamMode.mainDesc', {
@@ -975,7 +1054,7 @@ export function LiveRulesStudio({
               aria-pressed={streamMode === 'sub'}
               className={`rounded-md px-2 py-1 font-medium transition-colors ${
                 streamMode === 'sub'
-                  ? 'bg-amber-500 font-semibold text-black shadow-2xs'
+                  ? 'bg-[var(--accent-amber)] font-semibold text-[var(--text-primary)] shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
               title={t('streamMode.subDesc', {
@@ -1014,7 +1093,9 @@ export function LiveRulesStudio({
               aria-pressed={isArmed}
               aria-label={t('studio.masterArm', { defaultValue: '通道布防总闸' })}
               className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
-                isArmed ? 'bg-[var(--accent)]' : 'bg-zinc-700'
+                isArmed
+                  ? 'bg-[var(--accent)]'
+                  : 'border border-[var(--border)] bg-[var(--bg-secondary)]'
               }`}
             >
               <span
@@ -1061,7 +1142,7 @@ export function LiveRulesStudio({
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div
             ref={containerRef}
-            className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-[#06080d] p-2 sm:p-3"
+            className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-[var(--video-surface)] p-2 sm:p-3"
           >
             {/* 画布严格按摄像头物理宽高比等比呈现，保证归一化坐标与实景像素一一对应 */}
             <div
@@ -1070,7 +1151,7 @@ export function LiveRulesStudio({
               onMouseMove={handleStageMouseMove}
               onClick={handleStageClick}
               onDoubleClick={handleStageDoubleClick}
-              className={`relative touch-none overflow-hidden rounded-[6px] border border-white/15 bg-black shadow-2xl ${
+              className={`relative touch-none overflow-hidden rounded-[6px] border border-white/15 bg-[var(--video-surface)] shadow-2xl ${
                 DRAW_TOOLS.has(tool) ? 'cursor-crosshair' : ''
               }`}
               style={
@@ -1262,7 +1343,7 @@ export function LiveRulesStudio({
               ))}
               {draftCursor.snapped && (
                 <div
-                  className="pointer-events-none absolute z-20 h-5 w-5 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full border-2 border-cyan-400"
+                  className="pointer-events-none absolute z-20 h-5 w-5 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full border-2 border-[var(--accent)]"
                   style={{
                     left: `${draftCursor.snapped.x * 100}%`,
                     top: `${draftCursor.snapped.y * 100}%`,
@@ -1291,8 +1372,8 @@ export function LiveRulesStudio({
                     <div
                       className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[11px] shadow-lg backdrop-blur-xs ${
                         isSelected
-                          ? 'border-[var(--accent)]/60 bg-black/85 text-white'
-                          : 'border-white/15 bg-black/65 text-white/75'
+                          ? 'border-[var(--border-strong)] bg-[var(--video-surface)]/85 text-white'
+                          : 'border-white/15 bg-[var(--video-surface)]/65 text-white/75'
                       }`}
                     >
                       <span
@@ -1314,7 +1395,7 @@ export function LiveRulesStudio({
                             })
                           }
                           title={t('inspector.lineDirection', { defaultValue: '跨线判定方向' })}
-                          className="rounded px-1 font-mono text-[10px] text-cyan-300 hover:bg-white/15"
+                          className="rounded px-1 font-mono text-[10px] text-[var(--accent)] hover:bg-white/15"
                         >
                           {rule.lineDirection === 'both'
                             ? '⇄'
@@ -1330,7 +1411,7 @@ export function LiveRulesStudio({
                           onClick={() => handleDeleteRule(rule.id)}
                           aria-label={t('inspector.delete', { defaultValue: '删除防区' })}
                           title={t('inspector.delete', { defaultValue: '删除防区' })}
-                          className="rounded p-0.5 text-rose-300 hover:bg-rose-500/25"
+                          className="rounded p-0.5 text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -1341,8 +1422,8 @@ export function LiveRulesStudio({
               })}
 
               {/* 画板操作提示 HUD */}
-              <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 max-w-[calc(100%-2rem)] -translate-x-1/2">
-                <span className="rounded-full border border-white/10 bg-black/70 px-3 py-1 text-center font-mono text-[11px] text-white/70 backdrop-blur-xs">
+              <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center">
+                <span className="block max-w-full truncate rounded-full border border-white/10 bg-[var(--video-surface)]/70 px-3 py-1 font-mono text-[11px] whitespace-nowrap text-white/70 backdrop-blur-xs">
                   {hudHint}
                 </span>
               </div>
@@ -1364,16 +1445,16 @@ export function LiveRulesStudio({
           </div>
 
           {/* 真实遥测底栏：分辨率/编码来自探活，航迹与门控状态来自后端推送 */}
-          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-cyan-500/25 bg-[#0d111a] px-4 py-2 font-mono text-[11px] text-[var(--text-secondary)]">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-2 font-mono text-[11px] text-[var(--text-secondary)]">
             <div className="flex items-center gap-3">
               <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                <span className="h-2 w-2 rounded-full bg-[var(--accent-green)]" />
                 <span>
                   {camera.lastWidth || 1920}×{camera.lastHeight || 1080}
                 </span>
               </span>
               <span>·</span>
-              <span className="font-semibold text-cyan-400">
+              <span className="font-semibold text-[var(--accent)]">
                 {camera.lastCodec?.toUpperCase() || 'H264'}
               </span>
               <span>·</span>
@@ -1399,7 +1480,13 @@ export function LiveRulesStudio({
                 </span>
               </span>
               <span>·</span>
-              <span className={telemetry?.isMotionGated ? 'text-amber-400' : 'text-emerald-400'}>
+              <span
+                className={
+                  telemetry?.isMotionGated
+                    ? 'text-[var(--accent-amber)]'
+                    : 'text-[var(--accent-green)]'
+                }
+              >
                 {telemetry?.isMotionGated
                   ? t('studio.telemetryGated', { defaultValue: '门控待机' })
                   : t('studio.telemetryInferring', { defaultValue: '推理中' })}
@@ -1410,7 +1497,7 @@ export function LiveRulesStudio({
 
         {/* 停靠式上下文配置面板：全局算力视角 / 单防区属性视角 */}
         {isPanelOpen && (
-          <aside className="flex h-[44vh] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t-2 border-[var(--accent)] bg-[var(--bg-primary)] lg:h-auto lg:max-h-none lg:w-[360px] lg:border-t-0 lg:border-l-2 xl:w-[400px]">
+          <aside className="flex h-[44vh] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-[var(--border)] bg-[var(--bg-surface-solid)] lg:h-auto lg:max-h-none lg:w-[360px] lg:border-t-0 lg:border-l xl:w-[400px]">
             <div className="flex h-11 shrink-0 items-center justify-between border-b border-[var(--border)] px-3.5">
               <span className="flex min-w-0 items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
                 {selectedRule ? (
@@ -1467,9 +1554,16 @@ export function LiveRulesStudio({
                 </>
               )}
 
-              {/* 全局视角：算力机架 */}
+              {/* 全局视角：先配置通道级门控，再选择算法引擎 */}
               {!selectedRule && (
                 <>
+                  <MotionGateControl
+                    enabled={motionGateEnabled}
+                    threshold={motionGateThreshold}
+                    onToggle={() => setMotionGateEnabled((enabled) => !enabled)}
+                    onThresholdChange={setMotionGateThreshold}
+                  />
+                  <div className="h-px bg-[var(--border)]" />
                   <AlgorithmRack
                     availableAlgos={availableAlgos}
                     activeInstances={activeInstances}
@@ -1491,72 +1585,6 @@ export function LiveRulesStudio({
                 activeTool={tool}
                 activeAlgorithmNames={activeAlgorithmNames}
               />
-
-              {/* 运动门控（通道级算力策略，仅在全局视角暴露） */}
-              {!selectedRule && (
-                <>
-                  <div className="h-px bg-[var(--border)]" />
-                  <div className="space-y-2.5 rounded-[8px] border border-[var(--border)] bg-[var(--bg-surface)] p-3.5">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Activity className="h-4 w-4 text-[var(--accent)]" />
-                        <span className="text-xs font-bold text-[var(--text-primary)]">
-                          {t('studio.motionGateTitle', {
-                            defaultValue: '运动检测门控',
-                          })}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setMotionGateEnabled(!motionGateEnabled)}
-                        aria-pressed={motionGateEnabled}
-                        aria-label={t('studio.motionGateTitle', {
-                          defaultValue: '运动检测门控',
-                        })}
-                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
-                          motionGateEnabled ? 'bg-[var(--accent)]' : 'bg-zinc-700'
-                        }`}
-                      >
-                        <span
-                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
-                            motionGateEnabled ? 'translate-x-4' : 'translate-x-0.5'
-                          }`}
-                        />
-                      </button>
-                    </div>
-                    <p className="text-[11px] leading-relaxed text-[var(--text-muted)]">
-                      {t('studio.motionGateDesc', {
-                        defaultValue:
-                          '画面静止无像素变动时跳过 NPU 深度推理，显著降低芯片能耗与总线发热。',
-                      })}
-                    </p>
-                    {motionGateEnabled && (
-                      <div className="space-y-1.5 border-t border-[var(--border)] pt-2">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className="text-[var(--text-secondary)]">
-                            {t('studio.motionGateSensitivity', { defaultValue: '灵敏度阈值' })}
-                          </span>
-                          <span className="font-mono font-semibold text-[var(--accent)]">
-                            {motionGateThreshold}%
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={5}
-                          max={80}
-                          step={1}
-                          value={motionGateThreshold}
-                          aria-label={t('studio.motionGateSensitivity', {
-                            defaultValue: '灵敏度阈值',
-                          })}
-                          onChange={(e) => setMotionGateThreshold(Number(e.target.value))}
-                          className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent)]"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
             </div>
           </aside>
         )}

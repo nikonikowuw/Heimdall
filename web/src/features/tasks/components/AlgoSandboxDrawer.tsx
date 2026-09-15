@@ -24,7 +24,7 @@ export function AlgoSandboxDrawer({
   useDismissStack(isOpen, onClose)
 
   return (
-    <AnimatePresence>
+    <AnimatePresence mode="wait">
       {isOpen && algo && (
         <motion.div
           key="algo-drawer-backdrop"
@@ -35,7 +35,7 @@ export function AlgoSandboxDrawer({
           exit={{ opacity: 0 }}
           transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
           onClick={onClose}
-          className="fixed inset-0 z-50 flex cursor-pointer justify-end bg-black/60 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex cursor-pointer justify-end bg-[var(--overlay-scrim)] backdrop-blur-xs"
         >
           <motion.div
             key="algo-drawer-panel"
@@ -47,7 +47,7 @@ export function AlgoSandboxDrawer({
               ease: motionTokens.easing.smooth,
             }}
             onClick={(e) => e.stopPropagation()}
-            className="flex h-full w-96 cursor-default flex-col space-y-4 overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-surface-solid)] p-5 shadow-2xl"
+            className="lens-glass flex h-full w-96 cursor-default flex-col space-y-4 overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-surface-solid)] p-5 shadow-2xl"
           >
             <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
               <div className="flex items-center gap-2.5">
@@ -59,7 +59,8 @@ export function AlgoSandboxDrawer({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-lg p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
+                aria-label={t('studio.closeDrawerHint', { defaultValue: '关闭 (Esc / 点击遮罩)' })}
+                className="rounded-[6px] p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                 title={t('studio.closeDrawerHint', { defaultValue: '关闭 (Esc / 点击遮罩)' })}
               >
                 <X className="h-4 w-4" />
@@ -79,7 +80,7 @@ export function AlgoSandboxDrawer({
               </div>
               <div className="flex justify-between">
                 <span className="text-[var(--text-muted)]">{t('algoDrawer.platforms')}</span>
-                <span className="font-mono text-xs font-bold text-emerald-500">
+                <span className="font-mono text-xs font-bold text-[var(--accent-green)]">
                   {algo.supportedPlatforms.join(', ')}
                 </span>
               </div>
@@ -105,9 +106,9 @@ export function AlgoSandboxDrawer({
             </div>
 
             {/* 一级算法仓库解耦提示与导航入口 */}
-            <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4 text-xs">
+            <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--bg-secondary)] p-4 text-xs">
               <div className="flex items-center gap-2 font-semibold text-[var(--text-primary)]">
-                <ShieldCheck className="h-4 w-4 text-emerald-500" />
+                <ShieldCheck className="h-4 w-4 text-[var(--accent-green)]" />
                 <span>
                   {t('algoDrawer.managementTitle', { defaultValue: '算法资产与版本管理' })}
                 </span>
@@ -125,7 +126,7 @@ export function AlgoSandboxDrawer({
                     onClose()
                     onNavigateToAlgorithms()
                   }}
-                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--accent)] py-2 text-xs font-semibold text-white shadow-xs transition-opacity hover:opacity-90"
+                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-[6px] bg-[var(--accent)] py-2 text-xs font-semibold text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                 >
                   <span>{t('algoDrawer.goToRepo', { defaultValue: '前往算法仓库' })}</span>
                   <ExternalLink className="h-3.5 w-3.5" />
@@ -137,7 +138,7 @@ export function AlgoSandboxDrawer({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-xl bg-[var(--accent)] px-5 py-2 text-xs font-semibold text-white shadow-xs hover:opacity-90"
+                className="rounded-[6px] bg-[var(--accent)] px-5 py-2 text-xs font-semibold text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
               >
                 {t('algoDrawer.done')}
               </button>

@@ -58,7 +58,8 @@
     "healthy": "正常在线",
     "degraded": "网络波动",
     "offline": "离线",
-    "error": "故障"
+    "error": "故障",
+    "unprobed": "待探测"
   },
   "manage": {
     "title": "视频流设备管理",
@@ -129,7 +130,8 @@
     "deleting": "正在删除...",
     "saveSuccess": "摄像头配置已更新",
     "createSuccess": "摄像头接入成功",
-    "deleteSuccess": "摄像头已删除"
+    "deleteSuccess": "摄像头已删除",
+    "deleteCamera": "删除摄像头"
   },
   "protocol": {
     "all": "全部协议",

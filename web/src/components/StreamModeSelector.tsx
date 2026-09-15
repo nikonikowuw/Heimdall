@@ -27,10 +27,10 @@ export function StreamModeSelector({
           type="button"
           disabled={disabled}
           onClick={() => onChange('main')}
-          className={`flex flex-col items-center justify-center rounded-xl border p-2 text-center transition-all ${
+          className={`flex flex-col items-center justify-center rounded-[6px] border p-2 text-center transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
             value === 'main'
-              ? 'border-cyan-500/50 bg-cyan-500/15 font-semibold text-cyan-400 shadow-xs'
-              : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
+              ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] font-semibold text-[var(--accent)] shadow-xs'
+              : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
           } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
         >
           <span className="text-xs">
@@ -41,10 +41,10 @@ export function StreamModeSelector({
           type="button"
           disabled={disabled}
           onClick={() => onChange('sub')}
-          className={`flex flex-col items-center justify-center rounded-xl border p-2 text-center transition-all ${
+          className={`flex flex-col items-center justify-center rounded-[6px] border p-2 text-center transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
             value === 'sub'
-              ? 'border-cyan-500/50 bg-cyan-500/15 font-semibold text-cyan-400 shadow-xs'
-              : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
+              ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] font-semibold text-[var(--accent)] shadow-xs'
+              : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
           } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
         >
           <span className="text-xs">
@@ -55,10 +55,10 @@ export function StreamModeSelector({
           type="button"
           disabled={disabled}
           onClick={() => onChange('auto')}
-          className={`flex flex-col items-center justify-center rounded-xl border p-2 text-center transition-all ${
+          className={`flex flex-col items-center justify-center rounded-[6px] border p-2 text-center transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
             value === 'auto'
-              ? 'border-cyan-500/50 bg-cyan-500/15 font-semibold text-cyan-400 shadow-xs'
-              : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
+              ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] font-semibold text-[var(--accent)] shadow-xs'
+              : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
           } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
         >
           <span className="text-xs">

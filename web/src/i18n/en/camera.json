@@ -58,7 +58,8 @@
     "healthy": "Healthy",
     "degraded": "Degraded",
     "offline": "Offline",
-    "error": "Error"
+    "error": "Error",
+    "unprobed": "Pending probe"
   },
   "manage": {
     "title": "Camera Devices Management",
@@ -129,7 +130,8 @@
     "deleting": "Deleting...",
     "saveSuccess": "Camera configuration updated",
     "createSuccess": "Camera stream added successfully",
-    "deleteSuccess": "Camera deleted"
+    "deleteSuccess": "Camera deleted",
+    "deleteCamera": "Delete camera"
   },
   "protocol": {
     "all": "All Protocols",

@@ -1,6 +1,21 @@
 /** 算法 schema 中用于声明目标类别的常见字段名 */
 const TARGET_CLASS_KEYS = ['target_classes', 'allowed_classes', 'classes'] as const
 
+/**
+ * 旧版本前端在「应用参数」时无条件写入的键（含 camelCase 变体）。
+ *
+ * 这些键与参数应该出现在哪里无关：参数的位置与控件形态一律由 schema 决定，
+ * 不再由键名决定。此表仅用于清理历史脏值——凡是 schema 未声明的键都剥掉，
+ * 避免把前端臆造、算法包并不读取的字段持续下发。
+ */
+export const LEGACY_INJECTED_PARAM_KEYS = [
+  'confidence_threshold',
+  'confidenceThreshold',
+  'detection_confidence_threshold',
+  'target_classes',
+  'targetClasses',
+] as const
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -61,4 +76,42 @@ export function extractTargetClasses(version?: AlgoConfigSource | null): string[
   }
 
   return []
+}
+
+/**
+ * 剥离 schema 未声明的历史注入键。
+ *
+ * schema 声明过的键原样保留（例如 general_detection 确实声明了
+ * `confidence_threshold` / `target_classes`），只删除没有包声明过的臆造字段。
+ */
+export function stripLegacyInjectedParams(
+  params: Record<string, unknown>,
+  properties: Record<string, unknown>,
+): Record<string, unknown> {
+  const stripped = { ...params }
+  for (const key of LEGACY_INJECTED_PARAM_KEYS) {
+    if (!(key in properties)) {
+      delete stripped[key]
+    }
+  }
+  return stripped
+}
+
+/** 读取 array 型参数的候选项（`items.enum`）；非字符串枚举返回空数组 */
+export function getEnumOptions(prop: Record<string, unknown>): string[] {
+  const items = isRecord(prop.items) ? prop.items : undefined
+  const options = items?.enum
+  return isStringArray(options) && options.length > 0 ? [...options] : []
+}
+
+/**
+ * 解析 array 型参数的选中项。
+ *
+ * 优先采用运行时值（空数组是用户「清空」的合法结果，必须尊重），
+ * 其次 schema 默认值，最后回退到全部候选项。
+ */
+export function resolveEnumSelection(prop: Record<string, unknown>, raw: unknown): string[] {
+  if (isStringArray(raw)) return [...raw]
+  if (isStringArray(prop.default)) return [...prop.default]
+  return getEnumOptions(prop)
 }

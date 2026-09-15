@@ -40,21 +40,21 @@ const TOOLS: ToolDefinition[] = [
     icon: <Hexagon className="h-4 w-4" />,
     labelKey: 'tools.roi',
     shortcut: 'P',
-    activeClass: 'bg-cyan-500 text-white',
+    activeClass: 'bg-[var(--accent)] text-white',
   },
   {
     id: 'line',
     icon: <Slash className="h-4 w-4" />,
     labelKey: 'tools.line',
     shortcut: 'L',
-    activeClass: 'bg-emerald-500 text-white',
+    activeClass: 'bg-[var(--accent)] text-white',
   },
   {
     id: 'mask',
     icon: <ShieldAlert className="h-4 w-4" />,
     labelKey: 'tools.mask',
     shortcut: 'M',
-    activeClass: 'bg-rose-500 text-white',
+    activeClass: 'bg-[var(--accent)] text-white',
   },
 ]
 
@@ -78,7 +78,7 @@ export function StudioToolIsland({
 
   return (
     <div
-      className="absolute top-1/2 left-3 z-30 flex -translate-y-1/2 flex-col items-center gap-1 rounded-[8px] border border-white/15 bg-[#111827]/95 p-1.5 shadow-2xl backdrop-blur-md"
+      className="absolute top-1/2 left-3 z-30 flex -translate-y-1/2 flex-col items-center gap-1 rounded-[8px] border border-white/15 bg-[var(--video-surface)]/95 p-1.5 shadow-2xl backdrop-blur-md"
       onMouseDown={(event) => event.stopPropagation()}
       onMouseMove={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
@@ -119,7 +119,7 @@ export function StudioToolIsland({
         title={t('studio.snapMagnet', { defaultValue: '顶点自动磁吸' })}
         className={`flex h-9 w-9 items-center justify-center rounded-[6px] transition-all ${
           snapEnabled
-            ? 'text-cyan-400 hover:bg-cyan-500/15'
+            ? 'text-[var(--accent)] hover:bg-[var(--accent-soft)]'
             : 'text-[var(--text-muted)] opacity-60 hover:bg-[var(--accent-soft)]'
         }`}
       >
@@ -157,7 +157,7 @@ export function StudioToolIsland({
             onClick={onCancelDrawing}
             aria-label={t('studio.cancelDrawing', { defaultValue: '取消当前绘制' })}
             title={t('studio.cancelDrawing', { defaultValue: '取消当前绘制' })}
-            className="flex h-9 w-9 items-center justify-center rounded-[6px] text-rose-400 transition-all hover:bg-rose-500/15"
+            className="flex h-9 w-9 items-center justify-center rounded-[6px] text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10"
           >
             <X className="h-4 w-4" />
           </button>

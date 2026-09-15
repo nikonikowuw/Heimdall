@@ -157,5 +157,8 @@
   "toast": {
     "ruleTriggered": "检测到 {{target}} 触发规则",
     "viewEvidence": "查看证据"
+  },
+  "common": {
+    "cancel": "取消"
   }
 }

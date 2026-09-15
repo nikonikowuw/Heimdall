@@ -112,7 +112,7 @@ export function Layout() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-primary)] font-sans antialiased">
       {/* 左侧紧凑工具导航栏 */}
-      <aside className="frosted-glass relative z-30 flex w-16 flex-col items-center justify-between py-4">
+      <aside className="frosted-glass relative z-40 flex w-16 flex-col items-center justify-between py-4">
         <div className="flex flex-col items-center gap-5">
           {/* Logo 标志 */}
           <button

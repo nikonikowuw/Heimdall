@@ -37,7 +37,16 @@
     "activeCameras": "活躍攝影機",
     "activeTasks": "活躍任務",
     "todayAlarms": "今日告警",
-    "todayCaptures": "今日抓拍"
+    "todayCaptures": "今日抓拍",
+    "cpuCores": "CPU 核心",
+    "diskDetail": "磁碟詳情",
+    "live": "即時監控 (2s)",
+    "memoryDetail": "記憶體詳情",
+    "network": "網路流量",
+    "npu": "NPU 狀態",
+    "subtitle": "設備運行狀態與資源概覽",
+    "thermal": "溫度狀態",
+    "topProcesses": "行程資源佔用排行"
   },
   "account": {
     "title": "帳號與安全",
@@ -45,7 +54,8 @@
     "username": "使用者名稱",
     "createdAt": "建立時間",
     "updatedAt": "更新時間",
-    "changePassword": "修改密碼"
+    "changePassword": "修改密碼",
+    "subtitle": "管理目前管理員帳號"
   },
   "network": {
     "title": "網路/服務",
@@ -68,7 +78,36 @@
     "notAssigned": "未分配",
     "currentAccess": "目前存取埠",
     "wifiConnected": "無線已連",
-    "wifiDisconnected": "無線未連"
+    "wifiDisconnected": "無線未連",
+    "accessUrl": "存取位址",
+    "autoRollback": "後自動回滾",
+    "cancelFailed": "放棄配置失敗",
+    "cancelRollback": "立即放棄回滾",
+    "carrierDown": "網路線未插",
+    "carrierUp": "網路線已插",
+    "confirmFailed": "確認配置失敗",
+    "confirmPermanent": "確認永久生效",
+    "conflictDesc": "系統在配置下發前透過 ARP Probe 偵測到區域網路中已有活躍主機佔用該 IP。為防範廣播風暴及設備通訊癱瘓，系統已自動阻斷套用。",
+    "conflictSolution1": "排查區域網路衝突主機，或選擇其他未被分配的靜態 IP 位址",
+    "conflictSolution2": "或將網卡切換為 DHCP 自動取得模式，由路由器分配可用 IP",
+    "conflictSubtitle": "區域網路第二層位址衝突防護已生效",
+    "conflictTitle": "RFC 5227 靜態 IP 衝突攔截",
+    "conflictWarning": "工業安全攔截說明",
+    "known": "我知道了",
+    "newIp": "目標 IP",
+    "occupyingMac": "衝突主機 MAC",
+    "subtitle": "管理工業邊緣網路介面與 IP 配置",
+    "targetIp": "擬綁定 IP",
+    "trialActiveTitle": "網路變更試運行保護中",
+    "trialDesc": "網卡 {{name}} 正在進行新配置試運行。請確認新 IP 在區域網路內可達。若未在倒數結束前確認，系統獨立看門狗將無條件自動回滾至原配置。",
+    "collectingTrend": "正在收集即時曲線...",
+    "drop": "丟棄",
+    "err": "錯誤",
+    "noData": "暫無可用網卡資料",
+    "pkts": "封包",
+    "rx": "RX (接收)",
+    "trendWindow": "即時走勢 (近30秒)",
+    "tx": "TX (傳送)"
   },
   "storage": {
     "title": "儲存與保留策略",
@@ -123,7 +162,12 @@
       "estimatedSize": "預估約 {{size}} KB / 張",
       "resetDefaults": "恢復默認",
       "savedSuccess": "快照編碼配置已保存並即時生效"
-    }
+    },
+    "autoCleanupDesc": "依水位自動觸發清理任務",
+    "evidenceBreakdown": "證據儲存分佈",
+    "overwriteDesc": "磁碟寫滿時自動淘汰舊資料",
+    "stopOnFullDesc": "磁碟寫滿後停止寫入",
+    "subtitle": "管理磁碟配額、保留策略與自動清理"
   },
   "time": {
     "title": "對時服務",
@@ -151,7 +195,8 @@
     "setTime": "立即設定",
     "confirmTitle": "手動設定系統時間",
     "confirmMessage": "此操作將修改系統時鐘，可能導致視訊時間戳跳動，影響錄影回放連續性。建議優先使用 NTP 自動同步。",
-    "confirmSet": "確認設定"
+    "confirmSet": "確認設定",
+    "subtitle": "管理系統時鐘與 NTP 同步配置"
   },
   "gb28181": {
     "serviceTitle": "國標 GB/T 28181 原生服務",
@@ -185,5 +230,77 @@
     "cardPassword": "接入鑑權密碼",
     "cardHeartbeat": "心跳間隔建議: 60 秒 (超時時間: {{timeout}} 秒)",
     "cardStreamMode": "串流傳輸模式建議: TCP 被動 (推薦) 或 UDP"
+  },
+  "loadFailed": "載入失敗",
+  "saveFailed": "儲存失敗",
+  "setFailed": "設定失敗",
+  "cpu": {
+    "core": "核心 {{id}}",
+    "noData": "暫無 CPU 資料"
+  },
+  "diskMetrics": {
+    "available": "可用",
+    "freeAmount": "{{amount}} 剩餘",
+    "inode": "Inode 節點",
+    "inodeFree": "{{count}} 剩餘",
+    "inodeUsed": "{{count}} 已用",
+    "total": "總容量",
+    "usage": "磁碟使用率",
+    "used": "已用",
+    "usedAmount": "{{amount}} 已用"
+  },
+  "memoryMetrics": {
+    "available": "可用記憶體",
+    "buffer": "緩衝區",
+    "cached": "快取 (可回收)",
+    "swap": "交換分區",
+    "total": "總記憶體",
+    "usage": "記憶體使用率",
+    "used": "已用記憶體"
+  },
+  "npu": {
+    "avgUsage": "平均使用率",
+    "balance": "負載均衡度",
+    "core": "核心 {{id}}",
+    "deviceTypes": {
+      "ascend": "華為昇騰 Ascend NPU",
+      "rk3568": "Rockchip RK3568 NPU",
+      "rk3576": "Rockchip RK3576 NPU (2核)",
+      "rk3588": "Rockchip RK3588 NPU (3核)",
+      "rknn": "Rockchip RKNN NPU"
+    },
+    "inferences": "累計推理",
+    "memory": "記憶體",
+    "noData": "暫無 NPU 資料",
+    "sessions": "推理會話",
+    "temperature": "溫度"
+  },
+  "process": {
+    "cpu": "CPU 佔比",
+    "memory": "記憶體消耗",
+    "name": "行程名稱",
+    "noData": "暫無活躍行程監控資料",
+    "pid": "PID",
+    "title": "行程資源排行",
+    "topList": "高資源消耗行程 (Top 5)"
+  },
+  "thermal": {
+    "highest": "最高溫度",
+    "levels": {
+      "critical": "嚴重過熱",
+      "hot": "偏高",
+      "normal": "正常",
+      "warm": "溫熱"
+    },
+    "noData": "暫無溫度感測器資料",
+    "throttling": "偵測到溫度降頻保護，設備效能可能受限",
+    "types": {
+      "board": "主機板",
+      "cpu": "CPU",
+      "ddr": "DDR 記憶體",
+      "gpu": "GPU",
+      "npu": "NPU",
+      "other": "其他"
+    }
   }
 }

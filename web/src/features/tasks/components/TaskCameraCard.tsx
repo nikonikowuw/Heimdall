@@ -8,12 +8,11 @@ import {
   Layers,
   Pencil,
   Radio,
-  ShieldAlert,
   ShieldCheck,
   Trash2,
   Video,
 } from 'lucide-react'
-import { motion } from 'motion/react'
+import { motion, useReducedMotion } from 'motion/react'
 import { getProbeBadge } from '@/features/cameras/cameraStatus'
 import { copyToClipboard } from '@/lib/utils'
 import type { Camera, DetectionRule, StreamMode, TaskConfigDto } from '@/types'
@@ -36,23 +35,23 @@ function getPipelineRuntimeStatus(
     case 1:
       return {
         label: t('card.pipelineStarting', { defaultValue: '启动中' }),
-        className: 'text-amber-500',
+        className: 'text-[var(--accent-amber)]',
       }
     case 2:
       return {
         label: t('card.pipelineRunning', { defaultValue: '运行中' }),
-        className: 'text-emerald-500',
+        className: 'text-[var(--accent-green)]',
       }
     case 3:
     case 4:
       return {
         label: t('card.pipelineDegraded', { defaultValue: '重连中' }),
-        className: 'text-amber-500',
+        className: 'text-[var(--accent-amber)]',
       }
     case 5:
       return {
         label: t('card.pipelineError', { defaultValue: '异常' }),
-        className: 'text-rose-500',
+        className: 'text-[var(--destructive)]',
       }
     default:
       return {
@@ -85,6 +84,7 @@ export function TaskCameraCard({
   onDelete,
   t,
 }: TaskCameraCardProps): React.ReactElement {
+  const reduceMotion = useReducedMotion()
   const isArmed = config?.desiredEnabled ?? false
   const rules: DetectionRule[] = config?.rules ?? []
   const rulesCount = rules.length
@@ -114,18 +114,14 @@ export function TaskCameraCard({
 
   return (
     <motion.article
-      whileHover={{ y: -3 }}
-      className={`group relative flex flex-col overflow-hidden rounded-[10px] border border-l-4 bg-[var(--bg-surface-solid)] p-3.5 text-left shadow-[var(--shadow-sm)] transition-all ${
+      whileHover={reduceMotion ? undefined : { y: -1 }}
+      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+      className={`group relative flex flex-col overflow-hidden rounded-[8px] border border-l-4 bg-[var(--bg-surface-solid)] p-3.5 text-left shadow-[var(--shadow-sm)] transition-[border-color,box-shadow,transform] duration-200 ${
         isArmed
-          ? 'border-[var(--accent)]/50 border-l-[var(--accent)] shadow-md hover:border-[var(--accent)] hover:shadow-lg'
-          : 'border-[var(--border)] border-l-[var(--border-strong)] hover:border-[var(--accent)]/40 hover:shadow-md'
+          ? 'border-[var(--accent-green)]/50 border-l-[var(--accent-green)] shadow-md hover:border-[var(--accent-green)] hover:shadow-lg'
+          : 'border-[var(--border)] border-l-[var(--border-strong)] hover:border-[var(--border-strong)] hover:shadow-md'
       }`}
     >
-      {/* 已布防氛围光 */}
-      {isArmed && (
-        <div className="pointer-events-none absolute -top-12 -right-12 h-28 w-28 rounded-full bg-[var(--accent)]/15 blur-2xl transition-all group-hover:bg-[var(--accent)]/25" />
-      )}
-
       {/* 1. 头部：身份 + 操作 */}
       <div className="relative z-10 flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -155,13 +151,13 @@ export function TaskCameraCard({
             title={isArmed ? t('status.armed') : t('status.disarmed')}
             className={`flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-xs font-semibold transition-all ${
               isArmed
-                ? 'border-rose-500/30 bg-rose-500/15 text-rose-500 hover:bg-rose-500/25'
+                ? 'border-[var(--accent-green)]/35 bg-[var(--accent-green)]/10 text-[var(--accent-green)] hover:bg-[var(--accent-green)]/15'
                 : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)]'
             }`}
           >
             {isArmed ? (
               <>
-                <ShieldAlert className="h-3.5 w-3.5" />
+                <ShieldCheck className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{t('status.armed')}</span>
               </>
             ) : (
@@ -187,7 +183,7 @@ export function TaskCameraCard({
             onClick={onDelete}
             title={t('deleteTask', { defaultValue: '删除布防任务' })}
             aria-label={t('deleteTask', { defaultValue: '删除布防任务' })}
-            className="flex h-7 w-7 items-center justify-center rounded-[6px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-rose-500/40 hover:bg-rose-500/15 hover:text-rose-500"
+            className="flex h-7 w-7 items-center justify-center rounded-[6px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition-colors hover:border-[var(--destructive)]/40 hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -199,7 +195,7 @@ export function TaskCameraCard({
         type="button"
         onClick={onConfigure}
         aria-label={`${t('actions.configureRules', { defaultValue: '配置算法与布防规则' })} - ${camera.name || camera.cameraId}`}
-        className="relative mt-3 aspect-video w-full overflow-hidden rounded-[6px] border border-[var(--border)] bg-black/90 shadow-inner"
+        className="relative mt-3 aspect-video w-full overflow-hidden rounded-[6px] border border-[var(--border)] bg-[var(--video-surface)] shadow-inner"
       >
         <span
           className="pointer-events-none absolute inset-0 opacity-20"
@@ -273,8 +269,8 @@ export function TaskCameraCard({
           </svg>
         ) : (
           <span className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 text-[var(--text-muted)]">
-            <Hexagon className="h-5 w-5 text-cyan-400 opacity-40" />
-            <span className="font-mono text-[11px] tracking-wide opacity-70">
+            <Hexagon className="h-5 w-5 text-[var(--accent)] opacity-50" />
+            <span className="font-mono text-[11px] tracking-wide text-[var(--text-secondary)] opacity-80">
               {t('card.noRulesPlaceholder')}
             </span>
           </span>
@@ -283,7 +279,7 @@ export function TaskCameraCard({
         {/* 左上：规格与编码 */}
         <span className="pointer-events-none absolute top-2 left-2 z-10 flex items-center gap-1.5">
           <span className="flex items-center gap-1 rounded bg-black/75 px-2 py-0.5 font-mono text-[11px] text-white/90">
-            <span className="font-semibold text-cyan-400">
+            <span className="font-semibold text-[var(--accent)]">
               {camera.lastCodec?.toUpperCase() || 'H264'}
             </span>
             <span className="opacity-40">/</span>
@@ -292,17 +288,17 @@ export function TaskCameraCard({
           {rulesCount > 0 && (
             <span className="flex items-center gap-1 font-mono text-[10px]">
               {roiCount > 0 && (
-                <span className="rounded bg-cyan-500/25 px-1.5 py-0.5 font-semibold text-cyan-200">
+                <span className="rounded bg-[var(--accent)]/20 px-1.5 py-0.5 font-semibold text-[var(--accent)]">
                   {roiCount} ROI
                 </span>
               )}
               {lineCount > 0 && (
-                <span className="rounded bg-emerald-500/25 px-1.5 py-0.5 font-semibold text-emerald-200">
+                <span className="rounded bg-[var(--accent-green)]/20 px-1.5 py-0.5 font-semibold text-[var(--accent-green)]">
                   {lineCount} LINE
                 </span>
               )}
               {maskCount > 0 && (
-                <span className="rounded bg-rose-500/25 px-1.5 py-0.5 font-semibold text-rose-200">
+                <span className="rounded bg-[var(--destructive)]/20 px-1.5 py-0.5 font-semibold text-[var(--destructive)]">
                   {maskCount} MASK
                 </span>
               )}
@@ -324,23 +320,23 @@ export function TaskCameraCard({
 
       {/* 3. 配置摘要：规则 / 门控 / 算法 */}
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        <div className="flex items-center justify-between rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5">
-          <span className="flex items-center gap-1.5 text-[var(--text-secondary)]">
-            <Hexagon className="h-3.5 w-3.5 text-cyan-500" />
-            <span>{t('card.geometryRules')}</span>
+        <div className="flex min-w-0 items-center justify-between gap-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5">
+          <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
+            <Hexagon className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+            <span className="truncate whitespace-nowrap">{t('card.geometryRules')}</span>
           </span>
-          <span className="font-semibold text-cyan-500">
+          <span className="shrink-0 font-semibold whitespace-nowrap text-[var(--accent)]">
             {t('card.rulesCount', { count: rulesCount })}
           </span>
         </div>
 
-        <div className="flex items-center justify-between rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5">
-          <span className="flex items-center gap-1.5 text-[var(--text-secondary)]">
-            <Activity className="h-3.5 w-3.5 text-emerald-500" />
-            <span>{t('card.motionGate')}</span>
+        <div className="flex min-w-0 items-center justify-between gap-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5">
+          <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
+            <Activity className="h-3.5 w-3.5 shrink-0 text-[var(--accent-green)]" />
+            <span className="truncate whitespace-nowrap">{t('card.motionGate')}</span>
           </span>
           <span
-            className={`font-semibold ${isMotionGateEco ? 'text-emerald-500' : 'text-amber-500'}`}
+            className={`shrink-0 font-semibold whitespace-nowrap ${isMotionGateEco ? 'text-[var(--accent-green)]' : 'text-[var(--accent-amber)]'}`}
           >
             {isMotionGateEco ? t('card.motionGateEco') : t('card.motionGateAlways')}
           </span>
@@ -396,9 +392,9 @@ export function TaskCameraCard({
               })}
               className={`flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-0.5 font-mono text-[10px] font-semibold transition-all ${
                 camera.streamMode === 'main'
-                  ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-400'
+                  ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] text-[var(--accent)]'
                   : camera.streamMode === 'sub'
-                    ? 'border-amber-500/50 bg-amber-500/15 text-amber-500'
+                    ? 'border-[var(--accent-amber)]/50 bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]'
                     : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
               }`}
             >
@@ -422,8 +418,8 @@ export function TaskCameraCard({
             <Radio className="h-3.5 w-3.5" />
             {copied ? (
               <>
-                <Check className="h-3 w-3 text-emerald-500" />
-                <span className="text-emerald-500">{t('card.copied')}</span>
+                <Check className="h-3 w-3 text-[var(--accent-green)]" />
+                <span className="text-[var(--accent-green)]">{t('card.copied')}</span>
               </>
             ) : (
               <Copy className="h-3 w-3" />

@@ -127,7 +127,28 @@
     "notAssigned": "未分配",
     "currentAccess": "当前访问口",
     "wifiConnected": "无线已连",
-    "wifiDisconnected": "无线未连"
+    "wifiDisconnected": "无线未连",
+    "accessUrl": "访问地址",
+    "autoRollback": "后自动回滚",
+    "cancelFailed": "放弃配置失败",
+    "cancelRollback": "立即放弃回滚",
+    "carrierDown": "网线未插",
+    "carrierUp": "网线已插",
+    "confirmFailed": "确认配置失败",
+    "confirmPermanent": "确认永久生效",
+    "conflictDesc": "系统在配置下发前通过 ARP Probe 探测到局域网中已有活跃主机占用该 IP。为防范广播风暴及设备通信瘫痪，系统已自动阻断应用。",
+    "conflictSolution1": "排查局域网冲突主机，或选择其他未被分配的静态 IP 地址",
+    "conflictSolution2": "或者将网卡切换为 DHCP 自动获取模式，由路由器分配可用 IP",
+    "conflictSubtitle": "局域网二层地址冲突防护已生效",
+    "conflictTitle": "RFC 5227 静态 IP 冲突拦截",
+    "conflictWarning": "工业安全拦截说明",
+    "known": "我知道了",
+    "newIp": "目标 IP",
+    "occupyingMac": "冲突主机 MAC",
+    "subtitle": "管理工业边缘网络接口与 IP 配置",
+    "targetIp": "拟绑定 IP",
+    "trialActiveTitle": "网络变更试运行保护中",
+    "trialDesc": "网卡 {{name}} 正在进行新配置试运行。请确认新 IP 在局域网内可达。若未在倒计时结束前确认，系统独立看门狗将无条件自动回滚至原配置。"
   },
   "thermal": {
     "noData": "暂无温度传感器数据",
@@ -154,7 +175,8 @@
     "username": "用户名",
     "createdAt": "创建时间",
     "updatedAt": "更新时间",
-    "changePassword": "修改密码"
+    "changePassword": "修改密码",
+    "subtitle": "管理当前管理员账号"
   },
   "storage": {
     "title": "存储与保留策略",
@@ -209,7 +231,12 @@
       "estimatedSize": "预估约 {{size}} KB / 张",
       "resetDefaults": "恢复默认",
       "savedSuccess": "快照编码配置已保存并即时生效"
-    }
+    },
+    "autoCleanupDesc": "按水位自动触发清理任务",
+    "evidenceBreakdown": "证据存储分布",
+    "overwriteDesc": "磁盘写满时自动淘汰旧数据",
+    "stopOnFullDesc": "磁盘写满后停止写入",
+    "subtitle": "管理磁盘配额、保留策略与自动清理"
   },
   "time": {
     "title": "对时服务",
@@ -237,7 +264,8 @@
     "setTime": "立即设置",
     "confirmTitle": "手动设置系统时间",
     "confirmMessage": "此操作将修改系统时钟，可能导致视频时间戳跳变，影响录像回放连续性。建议优先使用 NTP 自动同步。",
-    "confirmSet": "确认设置"
+    "confirmSet": "确认设置",
+    "subtitle": "管理系统时钟与 NTP 同步配置"
   },
   "gb28181": {
     "serviceTitle": "国标 GB/T 28181 原生服务",
@@ -271,5 +299,8 @@
     "cardPassword": "接入鉴权密码",
     "cardHeartbeat": "心跳间隔建议: 60 秒 (超时时间: {{timeout}} 秒)",
     "cardStreamMode": "流传输模式建议: TCP 被动 (推荐) 或 UDP"
-  }
+  },
+  "loadFailed": "加载失败",
+  "saveFailed": "保存失败",
+  "setFailed": "设置失败"
 }
