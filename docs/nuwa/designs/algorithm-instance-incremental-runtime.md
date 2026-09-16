@@ -1,6 +1,6 @@
 # Design: 算法实例增量运行时与两阶段配置提交 (Incremental Algorithm Instance Runtime)
 
-> **状态**: Draft（架构设计，尚未实现）
+> **状态**: Implemented（后端 Phase 1-4、前端收敛状态展示与整体下发的乐观并发保护均已落地）
 > **目标**: 将算法实例的参数、启停、增删与模型替换从摄像头整路管线生命周期中解耦。
 > **关联规范**: [全局约定](../guides/conventions.md)、[架构概览](../guides/architecture-overview.md)、[并发模型](../backend/concurrency-guidelines.md)、[数据库规范](../backend/database-guidelines.md)、[API 规范](../backend/api-guidelines.md)、[算法 SDK](../backend/algo-sdk-guidelines.md)、[媒体管线](../backend/media-pipeline.md)
 
@@ -343,40 +343,63 @@ ALTER TABLE algorithm_instances
 
 ## 8. API 与前端职责
 
-### 8.1 实例级接口
+### 8.1 写路径只有任务级保存
 
-保留并收敛现有实例资源接口：
+实例级写接口（`POST/PUT/DELETE /api/v1/tasks/instances*`、`PUT .../enabled`、`GET .../runtime`）已移除。所有实例变更——新增、改参、启停、删除——都表现为「整份任务配置一次下发」：
 
-- `POST /api/v1/tasks/instances`：新增实例，返回实例身份和运行时应用状态。
-- `PUT /api/v1/tasks/instances/{instanceId}`：应用参数、FPS以及需要实例级更新的配置。
-- `PUT /api/v1/tasks/instances/{instanceId}/enabled`：立即启用或禁用目标实例。
-- `DELETE /api/v1/tasks/instances/{instanceId}`：删除实例并清理目标 Worker。
-- `GET /api/v1/tasks/instances/{instanceId}/runtime`：查询期望 revision、实际 revision、应用状态和错误原因。
+`PUT /api/v1/tasks/{cameraId}` 通过 `TaskRepo::save_task_with_instances` 在单个 SQLite 事务中保存任务名称、启停意图、实例集合（含各自 `analysisFps`/`algoParams`/`enabled`）、任务级规则与运动门控。
 
-Handler 只负责参数提取、调用实例服务和 DTO 映射；Worker 准备、运行时 diff、硬件调用和阻塞关闭归 `pipeline`/`infer`。
+选择这个形状的理由：
 
-所有更新必须使用 `instanceId`。请求体中的 `algorithmId` 仅用于新增时选择算法包，不能作为已有实例的更新定位符。
+- 算法实例的唯一权威副本是 `algorithm_instances` 行，不存在「任务级配置」与「实例级配置」两份数据；
+- 整体下发不产生额外代价——未变更实例在 Coordinator 的逐实例 diff 中判定为 `Noop`，不重建 Worker、不重新申请租约、不重启解码器；
+- 请求体大小与实例数量线性相关，仅数十 KB 量级，不构成瓶颈；真正的开销在「收到报文后乱重启」，而这已被 diff 消除。
 
-### 8.2 任务级保存
+因此控制面的不变量是：**任何写接口都只提交期望配置，收敛统一由 `sync_pipeline_for_camera` 从已提交的持久化配置驱动**。禁止任何入口用请求体临时拼装 `StartCameraPipelineParams`。
 
-`PUT /api/v1/tasks/{cameraId}` 继续通过 `TaskRepo::save_task_with_instances` 在单个 SQLite 事务中保存：
+### 8.2 收敛结果的返回位置
 
-- 任务名称和任务启停意图；
-- 算法实例的加入、移除和绑定关系；
-- 任务级规则、运动门控和码流模式；
-- 其他会改变任务结构的字段。
+没有实例级查询接口，收敛状态随任务资源一起返回：
 
-任务保存提交后，由 Coordinator 计算实例集合 diff，调用增量 `add/remove/replace/update`；只有媒体输入契约变化才走整路重建。
+- `PUT /api/v1/tasks/{cameraId}` 与 `GET /api/v1/tasks/{cameraId}` 的 `algorithmInstances[]` 逐实例携带 `instanceId`、`desiredRevision`、`appliedRevision`、`applyState`、`statusMessage`、`enabled`、`actualStatus`；
+- `GET /api/v1/tasks` 的摘要同样携带 `applyState`，供任务卡片展示未生效实例。
 
-任务保存请求不得用页面打开时的旧参数覆盖已经通过“应用参数”提交的新 revision。推荐将任务 DTO 中的实例部分收敛为 `instanceId + algorithmId + membership/enabled`，参数由实例级接口维护。过渡期若仍接受完整实例参数，必须携带 revision 并拒绝 stale write。
+写入成功与生效成功必须分开看：`applyState` 才是判据，HTTP 200 只代表期望配置已持久化。
 
-### 8.3 前端状态
+### 8.3 整体下发的并发保护（已实现）
 
-- `AlgoParamDrawer` 的“应用参数”直接调用实例级 API，不再调用任务级保存回调来承担持久化。
-- `LiveRulesStudio` 维护任务结构的未保存状态，并清晰区分“参数已应用”和“任务结构未保存”。
-- `activeInstances` 使用 `instanceId` 做 key，`algorithmId` 只作为展示和算法包查找字段。
-- API 返回 `pending/failed` 时不乐观地把实例标成运行成功；服务端资源状态由专用 hook 或查询缓存管理，不放入高频 UI state。
-- 所有可见状态和错误文案进入 i18n；不在组件内拼接服务端错误文本。
+整体下发是「整个数组覆盖」，两个客户端同时编辑同一任务时会丢失更新：A 删掉实例 X 后，B 用不含 X 的旧快照保存，X 会重新出现；A 改过的参数同理被静默回退。
+
+防护采用**任务级配置版本号**（ETag / `If-Match` 语义），而不是逐实例 `desiredRevision` 校验。理由是整体下发的正确性单位就是「整份配置」：实例集合的增删、任务级规则与门控都在同一次写入中覆盖，仅校验实例自身的代际无法发现「对方删除了一个本次请求里根本不存在的实例」。
+
+- **版本号**：`analysis_tasks.config_revision`（V16 迁移，整数，新任务从 1 起）；
+- **递增时机**：配置写入一律 +1——`save_task_with_instances_txn`（唯一面向客户端的整体下发入口，重复提交同一份内容也会推进，因为它同样是「一次覆盖写」）、`update_instance_and_sync_task`、`delete_instance_and_sync_task`。运行时簿记（`update_task_runtime_state`、`update_status`、`sync_task_actual_status_txn`、`mark_apply_*`）一律不递增，否则状态轮询会让客户端在途保存永远冲突；
+- **协议**：`GET /tasks/{cameraId}` 与 `GET /tasks` 返回 `configRevision`；`PUT /tasks/{cameraId}` 可携带 `configRevision`，服务端在事务内比对，不匹配则拒绝写入并返回 **HTTP 409 + 业务码 40903**，响应 `data` 为 `null`（不回传伪快照）；
+- **省略即不校验**：`configRevision` 可选，未携带时按旧行为写入。这是对脚本与旧客户端的兼容路径，也意味着它只是「配合才能生效」的防护，不是强一致约束；
+- **任务已被删除**：客户端携带非 0 版本号但库中无该任务时按冲突处理（`actual = 0`），否则一次删除会被别的会话静默反转成新建；
+- **`configRevision: 0` 表示「读取时该通道还没有任务」**：快速创建用它做乐观断言，通道已有任务（版本从 1 起）时被拒绝——`analysis_tasks.camera_id` 是 UNIQUE，并发创建若不拦截会把对方已配置好的实例与防区整个覆盖。
+
+前端恢复动作（工作台）：
+
+- 冲突提示为常驻红色徽标（`SaveFeedback.kind = 'conflict'`），不自动消失，避免用户以为已经保存成功；
+- 冲突响应不携带配置快照：API 根信封约定错误时 `data` 为 `null`，恢复所需的最新配置由前端重新 `GET` 获取；
+- **载入最新**：重新 `GET` 任务配置，按服务端快照覆盖本地编辑态并刷新版本号（丢弃本地修改）；
+- **覆盖保存**：先 `GET` 取回最新版本号，再用本地内容重新下发——先读后写，避免用陈旧版本号反复被拒；
+- 任务列表的布防开关同样回传列表快照的 `configRevision`；冲突时静默丢弃本次开关动作并刷新列表，不弹错误，因为用户并没有在编辑配置；
+- 快速创建模态框的冲突提示单独成句（「该通道已被其他会话创建了 AI 任务，请刷新列表后重试」），不把通用的「请载入最新配置后重试」透给用户——创建场景没有可载入的配置。
+
+### 8.4 前端状态（已实现）
+
+判定逻辑收敛在纯函数 [`applyState.ts`](../../../web/src/features/tasks/applyState.ts)：`summarizeInstanceApply` 把逐实例 `applyState` 归纳为「已生效 / 排队中 / 未生效」三态 + 未生效明细。判定边界与服务端一致——停用实例不参与判定，缺失 `applyState` 视为已生效，避免把未知状态渲染成故障。
+
+- `LiveRulesStudio`：保存后用**响应中的逐实例收敛结果**决定反馈，不再无条件显示"已保存并生效"。
+  - `applied`：绿色瞬时提示，3 秒后自动消失；
+  - `pending` / `failed`：琥珀 / 红色常驻提示，附服务端原因（悬停逐行展示）与「重试」按钮——重试即重新下发同一份期望配置触发再次收敛；
+  - 响应未携带逐实例状态时保持沉默，不宣称已生效；
+  - 进入工作台时即根据加载到的任务配置恢复上次的未收敛态势，不必再保存一次才发现问题。
+- `TaskCameraCard`：与运行状态正交地展示 `配置排队中` / `配置未生效` 轻量徽标（仅未生效时出现，悬停给出原因），日常已生效状态不产生噪声。
+- `activeInstances` 以 `algorithmId` 索引本地编辑态，落库后以响应中的 `instanceId` 为准做展示与键值。
+- 所有可见状态与错误文案进入 i18n；服务端原因作为数据逐行展示，不在组件内拼装面向用户的句子。
 
 ---
 
@@ -491,11 +514,36 @@ algorithm_instance_worker_shutdown_timeout_total
 
 ---
 
-## 14. 未决决策
+## 14. 决策与实现落点
 
-- 算法包 manifest 是否显式声明每个参数的 `hot`、`replace` 或 `restart` 能力，还是统一尝试热更新后按 `NotImplemented` 回退。
-- 是否允许同一任务挂载同一个 `algorithmId` 的多个不同 `instanceId`；若放开，数据库唯一约束和前端编辑器需要同步调整。
-- 当硬件资源不足以同时保留旧、新 Worker 时，产品是否接受目标实例短暂停机；默认策略是保留旧 Worker 并返回资源失败。
-- 规则和运动门控的实例级兼容字段何时迁移删除，避免任务级和实例级双写。
+### 14.1 已定决策
 
-在这些决策完成前，不应把整路重建继续作为算法实例 Apply 的默认行为；现有全量路径只作为冷启动、媒体能力变化和增量同步失败后的受控回退路径。
+- **单一收敛入口**：任务级保存与实例级写接口都只提交期望配置到数据库，收敛统一走 `sync_pipeline_for_camera`——媒体契约与实例集合都从已提交的持久化配置解析。禁止任何入口用请求体临时拼装 `StartCameraPipelineParams`，否则同一路管线会因媒体签名不一致（如请求体未携带 `motionGate` 而库里是默认值）被判定为「媒体变更」而整路重建，这正是增量设计要消除的行为。
+- **不做 manifest 能力声明**：统一先尝试 `instance_update_config`，插件返回 `NotImplemented` / `AV_ERR_NOT_IMPLEMENTED` 时降级为「只替换目标实例 Worker」。避免为每个参数维护额外元数据。
+- **按 `instanceId` 寻址**：抽帧槽、控制槽、租约与 Worker 句柄均以实例 ID 为键；`algorithmId` 只用于加载包与展示。数据库唯一约束暂不放开「同一任务多实例同算法」，待编辑器与约束同步调整后再放开。
+- **资源不足不驱逐其他实例**：新 Worker 分配失败时旧 Worker 继续服务，目标实例返回 `failed` 并附 `status_message`；不做「杀掉旧实例腾内存」的激进策略。
+- **规则/门控归属**：任务级 ROI/Mask/Line 与摄像头级运动门控为 canonical source，由任务级保存提交；实例表同名列为迁移期镜像字段，运行时不读取。
+- **并发保护用任务级版本号而非逐实例代际**：整体下发的正确性单位是整份配置（含实例集合的增删），只有任务级单数字能覆盖全部覆盖写字段；逐实例校验会漏判「对方删除了本次请求里不存在的实例」。
+
+### 14.2 实现落点
+
+| 层 | 落点 | 关键契约 |
+| --- | --- | --- |
+| DB | `V15__algorithm_instance_apply_revision.sql`、`V16__task_config_revision.sql`、`AlgorithmInstanceRepo::{mark_apply_applied, mark_apply_pending, mark_apply_failed, list_unapplied}` | `desired_revision` / `applied_revision` / `runtime_apply_state`；回写幂等且不倒退；`analysis_tasks.config_revision` 仅由配置写入推进 |
+| infer | `InferenceBackend::update_config`、`InferError::Unsupported`、`WorkerControl::UpdateConfig`、`InferenceWorkerHandle::update_config` | 热更新在有界控制通道内执行，1s 客户端超时熔断 |
+| pump | `PumpCommand`（Add/Remove/SetAnalysisFps）、`DecodeSlot.target_fps`、`ControlSlot.{target_fps, worker_generation}`、`AnalysisPump::{add,remove,set_fps,replace}_instance*` | 拓扑变更只在解码帧边界生效；Worker 替换后旧代际结果计入 `stale_results` 并丢弃 |
+| coordinator | `MediaContractSignature`、`InstanceDesiredConfig`、`InstanceApplyOutcome`、`TaskRuntimeCoordinator::{apply_instance_config, remove_instance_runtime, sync_camera_instances, requires_media_restart}` | 实例集合变更走增量；仅媒体契约变化才整路重建 |
+| api | `sync_pipeline_for_camera`（返回 `Option<CameraInstanceSyncOutcome>`）是唯一收敛入口，唯一写接口 `PUT /tasks/{cameraId}` 与任务查询都经由它；`TaskConfigDto.configRevision` / `TaskSummaryDto.configRevision`；`task_runtime_updates`、`persist_instance_outcomes`、`resolve_outcome_revision`；`DbError::RevisionConflict` → `ApiError::ConfigRevisionConflict`（409 / 40903） | 任务响应逐实例返回 `desiredRevision` / `appliedRevision` / `applyState` / `statusMessage`，未收敛不伪装成功；代际记 0（集合 diff 语义）时按库中当前期望代际收敛 |
+| 测试 | `pipeline/tests/{pump_incremental_instance_tests,coordinator_incremental_tests}.rs`、`api/tests/instance_apply_state_tests.rs`、`db/tests/task_repo_tests.rs`、`web/src/features/tasks/taskDraft.test.ts`、`web/src/lib/api.test.ts` | 增删/改帧率不重启解码器、代际栅栏丢弃迟到结果、失败如实回写、陈旧版本 409 且不落库、运行时簿记不推进版本号、创建断言与冲突识别 |
+
+### 14.3 已知取舍
+
+- `algorithm_instances.status_message` 同时承载实例健康文案（「运行中」「等待运行时挂载该算法实例」）与收敛失败原因，两者共用一列。控制面与前端必须以 `applyState` 为生效判据，`statusMessage` 只作为补充说明；若后续需要严格区分，应拆分 `apply_message` 列而不是继续复用。
+- 实例级 HTTP 接口已全部移除，只保留任务级保存；`TaskRepo` 层保留的实例级写方法（`update_instance_and_sync_task` / `set_instance_enabled_and_sync_task` / `delete_instance_and_sync_task` / `add_instance_to_task`）当前只被数据库层测试使用，如需彻底清理应连同测试一起评估。
+- 任务级版本号与实例级 `desiredRevision` 是两套独立编号：前者管「谁基于最新配置写入」，后者管「运行时是否用上了期望配置」。二者语义不同但不冲突，不要把 `configRevision` 当作实例收敛状态的判据。
+- `configRevision` 可省略即不校验，因此并发保护只对「配合的客户端」生效；若将来要强制，需要在 API 层区分内部调用与用户客户端（例如独立的一组内部写接口）。
+
+### 14.4 仍待处理
+
+- 实例表 `rules_json` / `motion_gate_json` 镜像列的迁移删除时机。
+- 重启恢复流程是否需要在 `app` 冷启动对账中显式消费 `list_unapplied`。
