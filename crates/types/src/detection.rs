@@ -51,6 +51,15 @@ pub struct FaceDetail {
     /// 人脸姿态综合质量评分 (0.0..=1.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_score: Option<f32>,
+    /// 低频人脸识别融合模板参与融合的非冗余帧数；仅算法包 sidecar 帧携带。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fused_count: Option<u32>,
+    /// 低频人脸识别融合模板的质量加权均值；仅算法包 sidecar 帧携带。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_quality: Option<f32>,
+    /// 模板首次成熟握手；普通帧与成熟后的帧均为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_mature: Option<bool>,
     /// 低频人脸识别 sidecar；绝不序列化到 TrackDto 或其它前端 DTO。
     #[serde(skip)]
     pub embedding: Option<FaceEmbedding>,
@@ -62,6 +71,9 @@ impl FaceDetail {
             bbox,
             confidence,
             quality_score: None,
+            fused_count: None,
+            template_quality: None,
+            template_mature: None,
             embedding: None,
         }
     }
@@ -71,6 +83,9 @@ impl FaceDetail {
             bbox: self.bbox,
             confidence: self.confidence,
             quality_score: self.quality_score,
+            fused_count: self.fused_count,
+            template_quality: self.template_quality,
+            template_mature: self.template_mature,
             embedding: None,
         }
     }
@@ -283,6 +298,9 @@ mod tests {
                 bbox: BoundingBox::new(0.12, 0.22, 0.28, 0.38),
                 confidence: 0.95,
                 quality_score: Some(0.8),
+                fused_count: Some(3),
+                template_quality: Some(0.78),
+                template_mature: Some(true),
                 embedding: Some(Box::new([0.25; 512])),
             }),
             embedding: Some(Box::new([0.25; 512])),
@@ -294,6 +312,9 @@ mod tests {
         assert!(object.face.as_ref().unwrap().embedding.is_some());
         assert!(public.embedding.is_none());
         assert!(public.face.as_ref().unwrap().embedding.is_none());
+        assert_eq!(public.face.as_ref().unwrap().fused_count, Some(3));
+        assert_eq!(public.face.as_ref().unwrap().template_quality, Some(0.78));
+        assert_eq!(public.face.as_ref().unwrap().template_mature, Some(true));
         assert_eq!(public.track_id, object.track_id);
         assert_eq!(public.face_bbox(), object.face_bbox());
         assert_eq!(public.trajectory, object.trajectory);
@@ -312,6 +333,9 @@ mod tests {
                 bbox: BoundingBox::new(0.20, 0.22, 0.30, 0.35),
                 confidence: 0.96,
                 quality_score: Some(0.92),
+                fused_count: None,
+                template_quality: None,
+                template_mature: None,
                 embedding: None,
             }),
             embedding: None,

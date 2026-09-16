@@ -135,7 +135,11 @@
     "sortedBySimilarity": "Sorted by Similarity (High to Low)",
     "compareView": "Side-by-Side Comparison",
     "noCandidates": "No candidates meeting threshold",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "peakFrame": "Peak Frame",
+    "peakFrameHint": "This evidence is the highest-quality frame retained during the settle window, not the trigger frame",
+    "subStream": "Sub Stream",
+    "subStreamHint": "Resolution is limited by the analysis sub stream; the main stream was not used for this evidence"
   },
   "modal": {
     "fullImage": "4K/1080P Full Frame",

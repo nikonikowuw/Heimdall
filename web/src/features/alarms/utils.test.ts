@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   calculateFittedImageRect,
+  deriveEvidenceOriginBadges,
   formatTimestamp,
   getRuleTypeLabel,
   parseBBoxCoords,
@@ -127,6 +128,31 @@ describe('alarms utils', () => {
       expect(rect.width).toBeCloseTo(1000 * (1080 / 1920), 1)
       expect(rect.y).toBe(0)
       expect(rect.x).toBeCloseTo((1000 - rect.width) / 2, 1)
+    })
+  })
+
+  describe('deriveEvidenceOriginBadges', () => {
+    it('labels peak candidate frames and sub stream frames in order', () => {
+      expect(deriveEvidenceOriginBadges('peak_candidate', 'sub')).toEqual([
+        'peakFrame',
+        'subStream',
+      ])
+      expect(deriveEvidenceOriginBadges('peak_candidate', 'main')).toEqual(['peakFrame'])
+      expect(deriveEvidenceOriginBadges('targeted', 'sub')).toEqual(['subStream'])
+    })
+
+    it('renders nothing for main stream targeted evidence', () => {
+      expect(deriveEvidenceOriginBadges('targeted', 'main')).toEqual([])
+    })
+
+    it('renders nothing for legacy rows without source markers', () => {
+      expect(deriveEvidenceOriginBadges(null, null)).toEqual([])
+      expect(deriveEvidenceOriginBadges(undefined, undefined)).toEqual([])
+      expect(deriveEvidenceOriginBadges('', '')).toEqual([])
+    })
+
+    it('is tolerant to unknown future values from a newer backend', () => {
+      expect(deriveEvidenceOriginBadges('main_replay', 'main')).toEqual([])
     })
   })
 

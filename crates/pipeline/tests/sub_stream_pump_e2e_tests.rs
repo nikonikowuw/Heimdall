@@ -9,6 +9,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 #[cfg(target_os = "macos")]
 use infer::package::AlgoPackage;
+#[cfg(target_os = "macos")]
+use infer::InferenceWorkerConfig;
 use infer::{InferenceBackend, InferenceWorker};
 #[cfg(target_os = "macos")]
 use media::decoder::DecodeDeliveryPolicy;

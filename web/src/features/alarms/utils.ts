@@ -259,3 +259,29 @@ export function deriveDownloadFilename(
   // 3. 安全回退：带时间戳的文件名，杜绝重名覆盖
   return `image_${Date.now()}.jpg`
 }
+
+/** 证据图来源徽标的类型（顺序即渲染顺序）。 */
+export type EvidenceOriginBadgeKind = 'peakFrame' | 'subStream'
+
+/**
+ * 推导一张证据图需要展示的来源徽标。
+ *
+ * 只标注运维需要知道的情形，避免每张卡片堆满标签：
+ * - 峰值候选帧：凭据取自结算窗口内的最优帧，而不是触发当帧；
+ * - 子码流帧：分辨率上限即分析码流，双流模式下的常态。
+ *
+ * 历史记录（迁移前落库）两个字段缺失，返回空数组而不是「未知」占位徽标。
+ */
+export function deriveEvidenceOriginBadges(
+  imageSource?: string | null,
+  imageStream?: string | null,
+): EvidenceOriginBadgeKind[] {
+  const badges: EvidenceOriginBadgeKind[] = []
+  if (imageSource === 'peak_candidate') {
+    badges.push('peakFrame')
+  }
+  if (imageStream === 'sub') {
+    badges.push('subStream')
+  }
+  return badges
+}

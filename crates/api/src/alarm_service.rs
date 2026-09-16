@@ -66,6 +66,8 @@ impl AlarmDispatchService {
             .unwrap_or_else(chrono::Utc::now);
 
         let bbox_json = crate::capture_service::serialize_field_bbox(&event.alarm.tracked_object);
+        let (fused_count, template_quality) =
+            crate::capture_service::template_metadata(&event.alarm.tracked_object);
 
         // 解析触发告警的算法业务告警类型 alarm_type_id（优先从算法库获取真实契约，如 "object_detect", "face_recognize", "intrusion"）
         let alarm_type_id = if event.algorithm_id.trim().is_empty() {
@@ -124,6 +126,11 @@ impl AlarmDispatchService {
                 image_rel_path: Set(snap.image_rel_path.clone()),
                 crop_image_id: Set(snap.crop_image_id.clone()),
                 crop_image_rel_path: Set(snap.crop_image_rel_path.clone()),
+                image_source: Set(snap.image_source.as_str().to_string()),
+                image_stream: Set(snap.image_stream.as_str().to_string()),
+                image_pts_ms: Set(snap.comparable_frame_pts_ms()),
+                fused_count: Set(fused_count),
+                template_quality: Set(template_quality),
                 captured_at: Set(occurred_at),
                 created_at: Set(chrono::Utc::now()),
             });

@@ -102,7 +102,7 @@ async fn test_dual_stream_main_stream_target_decode_flow() {
         .expect("主流快进解码抓拍应成功");
 
     // 5. 验证主流靶向解码成功
-    assert!(!snapshot.is_fallback_sub_stream, "主流就绪时不应降级");
+    assert!(!snapshot.is_sub_stream(), "主流就绪时不应降级");
     assert_eq!(snapshot.width, 1920, "主流快照应保持 1080P 高清分辨率");
     assert_eq!(snapshot.height, 1080);
     assert!(snapshot.file_size_bytes > 0, "JPEG 全景切片应正常产出");
@@ -156,7 +156,7 @@ async fn test_dual_stream_fallback_to_sub_stream() {
         .await
         .expect("平滑降级抓拍应成功");
 
-    assert!(snapshot.is_fallback_sub_stream, "应标志为降级使用子码流");
+    assert!(snapshot.is_sub_stream(), "应标志为降级使用子码流");
     assert_eq!(snapshot.width, 640);
     assert_eq!(snapshot.height, 360);
 
@@ -225,7 +225,7 @@ async fn test_large_gop_fast_mode_within_threshold() {
         .expect("极速模式单帧解码抓拍应成功");
 
     // 保持 1080P 高清，并验证目标帧追解成功而非回退至子码流。
-    assert!(!snapshot.is_fallback_sub_stream);
+    assert!(!snapshot.is_sub_stream());
     assert_eq!(snapshot.width, 1920);
     assert_eq!(snapshot.height, 1080);
 
@@ -319,7 +319,7 @@ async fn test_large_gop_sub_stream_reuse_on_large_gap() {
         .expect("抓拍应成功");
 
     // 相位差 2000ms >= 500ms 且配置 SubStreamOnLargeGap，直接复用子码流真实检测帧 (时标绝对精准，零 VPU 压力)
-    assert!(snapshot.is_fallback_sub_stream);
+    assert!(snapshot.is_sub_stream());
     assert_eq!(snapshot.width, 640);
     assert_eq!(snapshot.height, 360);
 
@@ -386,7 +386,7 @@ async fn test_large_gop_adaptive_burst_decode() {
         .expect("自适应追帧解码应成功");
 
     // 包数未超限，成功执行 Burst Decode 追帧至 1600ms，输出 1080P 高清大图
-    assert!(!snapshot.is_fallback_sub_stream);
+    assert!(!snapshot.is_sub_stream());
     assert_eq!(snapshot.width, 1920);
     assert_eq!(snapshot.height, 1080);
 
@@ -453,7 +453,7 @@ async fn test_large_gop_adaptive_burst_fallback_on_excessive_packets() {
         .expect("抓拍应平滑回退成功");
 
     // 包数超限，自动平滑复用子码流真实检测帧，防止 VPU 争抢阻塞
-    assert!(snapshot.is_fallback_sub_stream);
+    assert!(snapshot.is_sub_stream());
     assert_eq!(snapshot.width, 640);
     assert_eq!(snapshot.height, 360);
 
@@ -520,7 +520,7 @@ async fn test_large_gop_burst_timeout_budget_fuse() {
         .expect("熔断抓拍应成功");
 
     // 触发延时熔断，直接优雅回退至已解码备用帧
-    assert!(snapshot.is_fallback_sub_stream);
+    assert!(snapshot.is_sub_stream());
     assert_eq!(snapshot.width, 640);
     assert_eq!(snapshot.height, 360);
 
@@ -568,7 +568,7 @@ async fn test_scheme3_main_stream_zero_decode_direct_passthrough() {
 
     // 4. 验证零解码瞬时直通效果
     assert!(
-        !snapshot.is_fallback_sub_stream,
+        !snapshot.is_sub_stream(),
         "主流常驻解码帧直通，不应标记为降级"
     );
     assert_eq!(snapshot.width, 1920, "必须为 1080P 原生高保真大图");
@@ -616,7 +616,7 @@ async fn test_scheme3_tolerance_matching_and_fallback() {
         .await
         .expect("容差范围内零解码直通应成功");
 
-    assert!(!snapshot.is_fallback_sub_stream);
+    assert!(!snapshot.is_sub_stream());
     assert_eq!(snapshot.width, 1920);
 
     let _ = fs::remove_dir_all(&temp_dir);
@@ -671,7 +671,7 @@ async fn test_sub_stream_multiple_alarms_reuse_on_demand_frame() {
         .trigger_snapshot_for_frame(cam_id, 1080, Some(bbox1), analyzed_frame.clone())
         .await
         .expect("告警 1 抓拍应成功");
-    assert!(!snap1.is_fallback_sub_stream);
+    assert!(!snap1.is_sub_stream());
     assert_eq!(snap1.width, 1920);
 
     // 验证按需解码产物已缓存
@@ -686,7 +686,7 @@ async fn test_sub_stream_multiple_alarms_reuse_on_demand_frame() {
         .trigger_snapshot_for_frame(cam_id, 1080, Some(bbox2), analyzed_frame)
         .await
         .expect("告警 2 应复用同刻按需帧抓拍成功");
-    assert!(!snap2.is_fallback_sub_stream);
+    assert!(!snap2.is_sub_stream());
     assert_eq!(snap2.width, 1920);
     assert_ne!(snap1.crop_image_rel_path, snap2.crop_image_rel_path);
 

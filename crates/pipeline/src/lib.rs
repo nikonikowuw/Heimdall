@@ -1,3 +1,4 @@
+pub mod capture_settle;
 pub mod coordinator;
 pub mod decoded_ring;
 pub mod error;
@@ -11,9 +12,15 @@ pub mod roi;
 pub mod rules;
 pub mod snapshot;
 pub mod storage_cleaner;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod thermal;
 pub mod tracker;
 
+pub use capture_settle::{
+    CandidateEvidence, CandidateRetainRequest, CaptureAction, CaptureSettleConfig,
+    CaptureSettleController, FrameGeometry, RecordCandidateOutcome, SettleReason, SettleRequest,
+};
 pub use coordinator::{
     ActiveRuntimeEntry, CameraPipelineRuntimeInfo, CoordinatorError, InstanceLaunchConfig,
     InstanceRuntimeInfo, StartCameraPipelineParams, TaskRuntimeCoordinator, TaskRuntimeService,

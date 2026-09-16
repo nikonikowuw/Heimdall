@@ -4,6 +4,7 @@ pub mod camera;
 pub mod detection;
 pub mod error;
 pub mod event;
+pub mod evidence;
 pub mod frame;
 pub mod gb28181;
 pub mod oplog;
@@ -31,6 +32,7 @@ pub use event::{
     TOPIC_CAMERA_TELEMETRY, TOPIC_CAMERA_TRACKS, TOPIC_RECOGNITION_MATCHED,
     TOPIC_RECOGNITION_STATUS_CHANGED,
 };
+pub use evidence::{EvidenceImageSource, EvidenceImageStream};
 pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
 pub use gb28181::{
     BatchImportGbChannelsRequest, BatchImportGbChannelsResponse, DiscoveredDevice,

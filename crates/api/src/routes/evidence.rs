@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use db::{CaptureRepo, RecognitionRepo};
 
-use crate::capture_service::{isolate_gallery_evidence_photo, normalize_evidence_relative_path};
+use crate::capture_service::{
+    isolate_gallery_evidence_photo, normalize_evidence_relative_path, parse_evidence_origin,
+};
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
@@ -30,12 +32,24 @@ pub struct CaptureDto {
     pub image_rel_path: String,
     pub crop_image_id: String,
     pub crop_image_rel_path: String,
+    /// 证据图产生路径；历史记录未标注时为 `null`。
+    pub image_source: Option<types::EvidenceImageSource>,
+    /// 证据图所属码流；历史记录未标注时为 `null`。
+    pub image_stream: Option<types::EvidenceImageStream>,
+    /// 证据帧的可比 PTS（检测轴）；不可比或未知时为 `null`。
+    pub image_pts_ms: Option<i64>,
+    /// 匹配所用融合模板的参与帧数（仅新版算法包 sidecar 上报）。
+    pub fused_count: Option<i64>,
+    /// 匹配所用融合模板的质量加权均值（语义同上）。
+    pub template_quality: Option<f32>,
     pub captured_at: i64,
     pub created_at: i64,
 }
 
 impl From<db::entity::capture::Model> for CaptureDto {
     fn from(m: db::entity::capture::Model) -> Self {
+        let (image_source, image_stream, image_pts_ms) =
+            parse_evidence_origin(&m.image_source, &m.image_stream, m.image_pts_ms);
         Self {
             id: m.id,
             capture_id: m.capture_id,
@@ -49,6 +63,11 @@ impl From<db::entity::capture::Model> for CaptureDto {
             image_rel_path: m.image_rel_path,
             crop_image_id: m.crop_image_id,
             crop_image_rel_path: m.crop_image_rel_path,
+            image_source,
+            image_stream,
+            image_pts_ms,
+            fused_count: m.fused_count,
+            template_quality: m.template_quality,
             captured_at: m.captured_at.timestamp_millis(),
             created_at: m.created_at.timestamp_millis(),
         }
@@ -69,6 +88,16 @@ pub struct RecognitionDto {
     pub field_image_path: Option<String>,
     pub field_bbox_json: Option<String>,
     pub registered_photo_path: String,
+    /// 证据图产生路径；历史记录未标注时为 `null`。
+    pub image_source: Option<types::EvidenceImageSource>,
+    /// 证据图所属码流；历史记录未标注时为 `null`。
+    pub image_stream: Option<types::EvidenceImageStream>,
+    /// 证据帧的可比 PTS（检测轴）；不可比或未知时为 `null`。
+    pub image_pts_ms: Option<i64>,
+    /// 1:N 比对所用融合模板的参与帧数（仅新版算法包 sidecar 上报）。
+    pub fused_count: Option<i64>,
+    /// 1:N 比对所用融合模板的质量加权均值（语义同上）。
+    pub template_quality: Option<f32>,
     pub status: String,
     pub candidates: Vec<types::FaceCandidateItem>,
     pub reviewer_id: Option<String>,
@@ -86,6 +115,8 @@ impl From<db::entity::recognition::Model> for RecognitionDto {
             .unwrap_or_default();
         let field_image_path = Some(m.field_image_path).filter(|s| !s.trim().is_empty());
         let field_bbox_json = Some(m.field_bbox_json).filter(|s| !s.trim().is_empty());
+        let (image_source, image_stream, image_pts_ms) =
+            parse_evidence_origin(&m.image_source, &m.image_stream, m.image_pts_ms);
         Self {
             id: m.id,
             recognition_id: m.recognition_id,
@@ -98,6 +129,11 @@ impl From<db::entity::recognition::Model> for RecognitionDto {
             field_image_path,
             field_bbox_json,
             registered_photo_path: m.registered_photo_path,
+            image_source,
+            image_stream,
+            image_pts_ms,
+            fused_count: m.fused_count,
+            template_quality: m.template_quality,
             status: m.status,
             candidates,
             reviewer_id: m.reviewer_id,

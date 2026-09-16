@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use db::{CaptureRepo, DbError};
-use pipeline::{PipelineAnalysisEvent, PipelineCaptureEvent, PipelineManager};
+use pipeline::{PipelineAnalysisEvent, PipelineCaptureEvent, PipelineManager, SnapshotResult};
 use sea_orm::Set;
 
 use crate::state::AppState;
@@ -120,6 +120,50 @@ pub(crate) fn serialize_field_bbox(obj: &types::TrackedObject) -> String {
     }
 }
 
+/// 证据图来源三元组（路径标识 / 码流 / 可比帧 PTS），抓拍与识别对账共用。
+///
+/// 目标 3 可追溯性：没有这三个值，库里一张低清凭据无法区分「峰值候选帧」与「靶向快拍帧」、
+/// 「主码流高分辨率」与「子码流回退」，也无从判断证据帧与事件是否同刻。
+pub(crate) fn evidence_origin(snap: &SnapshotResult) -> (String, String, i64) {
+    (
+        snap.image_source.as_str().to_string(),
+        snap.image_stream.as_str().to_string(),
+        snap.comparable_frame_pts_ms(),
+    )
+}
+
+/// 解析落库的证据来源三元组；未知取值一律归一为 `None`（未标注）。
+///
+/// `image_pts_ms` 的 0 表示「不可比或未记录」（见 `V14` 迁移），同样归一为 `None`，
+/// 避免消费方把 0 当成 1970 年的时标渲染。
+pub(crate) fn parse_evidence_origin(
+    image_source: &str,
+    image_stream: &str,
+    image_pts_ms: i64,
+) -> (
+    Option<types::EvidenceImageSource>,
+    Option<types::EvidenceImageStream>,
+    Option<i64>,
+) {
+    (
+        types::EvidenceImageSource::from_wire(image_source),
+        types::EvidenceImageStream::from_wire(image_stream),
+        (image_pts_ms > 0).then_some(image_pts_ms),
+    )
+}
+
+/// 匹配所用融合模板的元数据（参与帧数 / 质量加权均值）。
+///
+/// 仅新版算法包在 sidecar 帧上报，旧包与未上报帧为 `None`；
+/// `template_mature` 是一次性成熟握手信号，不是可持久化的状态，故不在此列。
+pub(crate) fn template_metadata(obj: &types::TrackedObject) -> (Option<i64>, Option<f32>) {
+    let face = obj.face.as_ref();
+    (
+        face.and_then(|f| f.fused_count).map(i64::from),
+        face.and_then(|f| f.template_quality),
+    )
+}
+
 impl CaptureDispatchService {
     /// 从 `AppState` 中提取句柄构造默认抓拍分发服务实例
     pub fn from_state(state: &AppState) -> Self {
@@ -199,6 +243,9 @@ impl CaptureDispatchService {
 
         let quality_score = Self::resolve_quality_score(&event.tracked_object);
 
+        let (image_source, image_stream, image_pts_ms) = evidence_origin(snap);
+        let (fused_count, template_quality) = template_metadata(&event.tracked_object);
+
         Some(db::entity::capture::ActiveModel {
             id: sea_orm::NotSet,
             capture_id: Set(event.capture_id.clone()),
@@ -212,6 +259,11 @@ impl CaptureDispatchService {
             image_rel_path: Set(snap.image_rel_path.clone()),
             crop_image_id: Set(snap.crop_image_id.clone()),
             crop_image_rel_path: Set(snap.crop_image_rel_path.clone()),
+            image_source: Set(image_source),
+            image_stream: Set(image_stream),
+            image_pts_ms: Set(image_pts_ms),
+            fused_count: Set(fused_count),
+            template_quality: Set(template_quality),
             captured_at: Set(captured_at),
             created_at: Set(chrono::Utc::now()),
         })
@@ -395,6 +447,9 @@ impl CaptureDispatchService {
         let candidates_json =
             serde_json::to_string(&candidates).unwrap_or_else(|_| "[]".to_string());
 
+        let (image_source, image_stream, image_pts_ms) = evidence_origin(snap);
+        let (fused_count, template_quality) = template_metadata(&event.tracked_object);
+
         let active_rec = db::entity::recognition::ActiveModel {
             id: sea_orm::NotSet,
             recognition_id: Set(recognition_id.clone()),
@@ -407,6 +462,11 @@ impl CaptureDispatchService {
             field_image_path: Set(snap.image_rel_path.clone()),
             field_bbox_json: Set(serialize_field_bbox(&event.tracked_object)),
             registered_photo_path: Set(rec_gallery_rel),
+            image_source: Set(image_source),
+            image_stream: Set(image_stream),
+            image_pts_ms: Set(image_pts_ms),
+            fused_count: Set(fused_count),
+            template_quality: Set(template_quality),
             status: Set(status.as_str().to_string()),
             candidates_json: Set(Some(candidates_json)),
             reviewer_id: Set(None),
@@ -439,6 +499,10 @@ impl CaptureDispatchService {
                         "fieldImagePath": saved.field_image_path,
                         "fieldBboxJson": saved.field_bbox_json,
                         "registeredPhotoPath": saved.registered_photo_path,
+                        "imageSource": saved.image_source,
+                        "imageStream": saved.image_stream,
+                        "fusedCount": saved.fused_count,
+                        "templateQuality": saved.template_quality,
                         "status": saved.status,
                         "candidates": candidates,
                         "recognizedAt": saved.recognized_at.timestamp_millis(),

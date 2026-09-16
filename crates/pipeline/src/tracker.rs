@@ -228,6 +228,38 @@ struct TrackState {
     trajectory: Vec<(f64, f64)>,
     status: TrackStatus,
     lost_for_ms: i64,
+    /// 当前挂载融合模板的最近一次上报元数据。
+    ///
+    /// `embedding`（模板向量）本身已跨帧沿用：侧车只在模板变化帧携带，其余帧靠
+    /// [`Self::attach_embedding_to_face`] 回填。描述同一模板的 `fused_count` /
+    /// `template_quality` 必须同样跨帧沿用，否则绝大多数帧上有模板而无元数据，落库只剩 NULL。
+    ///
+    /// `template_mature` **不在此沿用**：它是成熟翻转的一次性握手信号（见
+    /// `docs/algo/face-best-shot-fusion-design.md` §5.5），沿用会让结算时机提前到轨道
+    /// 首次触发的那一帧，丢掉整个峰值留存窗口。
+    template_meta: TemplateMeta,
+}
+
+/// 融合模板的元数据（不含向量本身，也不含握手信号）。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct TemplateMeta {
+    fused_count: Option<u32>,
+    template_quality: Option<f32>,
+}
+
+impl TemplateMeta {
+    /// 从当帧挂载的 `face` 读取本次上报值；缺省字段保留旧值。
+    fn absorb(&mut self, face: Option<&FaceDetail>) {
+        let Some(face) = face else {
+            return;
+        };
+        if face.fused_count.is_some() {
+            self.fused_count = face.fused_count;
+        }
+        if face.template_quality.is_some() {
+            self.template_quality = face.template_quality;
+        }
+    }
 }
 
 impl TrackState {
@@ -239,6 +271,9 @@ impl TrackState {
     ) -> Self {
         let bbox = sanitize_bbox(detection.bbox);
         let kalman = KalmanBoxFilter::new(bbox);
+        let face = detection.face;
+        let mut template_meta = TemplateMeta::default();
+        template_meta.absorb(face.as_ref());
         let mut track = Self {
             track_id,
             class_id: detection.class_id,
@@ -248,11 +283,12 @@ impl TrackState {
             embedding,
             bbox,
             predicted_bbox: bbox,
-            face: detection.face,
+            face,
             kalman,
             trajectory: Vec::with_capacity(max_trajectory_len.min(32)),
             status: TrackStatus::Tracked,
             lost_for_ms: 0,
+            template_meta,
         };
         track.attach_embedding_to_face();
         track.push_trajectory(max_trajectory_len);
@@ -279,6 +315,7 @@ impl TrackState {
         } else if let Some(emb) = embedding {
             self.embedding = Some((*emb).clone());
         }
+        self.template_meta.absorb(self.face.as_ref());
         self.attach_embedding_to_face();
         self.status = TrackStatus::Tracked;
         self.lost_for_ms = 0;
@@ -294,6 +331,13 @@ impl TrackState {
         if let Some(face) = &mut self.face {
             if face.embedding.is_none() {
                 face.embedding = self.embedding.clone();
+            }
+            // 与模板向量同步回填元数据：两者描述的必须是同一个模板。
+            if face.fused_count.is_none() {
+                face.fused_count = self.template_meta.fused_count;
+            }
+            if face.template_quality.is_none() {
+                face.template_quality = self.template_meta.template_quality;
             }
         }
     }
@@ -1056,6 +1100,117 @@ mod tests {
         assert_eq!(first[0].embedding.as_deref(), Some(embedding.as_ref()));
         let second = tracker.update_with_embeddings(vec![detection], vec![None]);
         assert_eq!(second[0].embedding.as_deref(), Some(embedding.as_ref()));
+    }
+
+    /// 融合模板元数据必须跟模板向量一样跳帧沿用；成熟握手信号必须仍是帧内事件。
+    ///
+    /// 沿用元数据是为了让落库的 `fused_count`/`template_quality` 不是一片 NULL；
+    /// 不沿用 `template_mature` 是因为它是结算触发的一次性握手（§5.5），
+    /// 一旦变成常驻状态，轨道首帧即触发结算，整个峰值留存窗口失效。
+    #[test]
+    fn template_metadata_follows_track_but_maturity_handshake_does_not() {
+        let mut tracker = ByteTrack::new();
+        let bbox = BoundingBox::new(0.2, 0.2, 0.4, 0.5);
+        let sidecar_frame = Detection {
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.95,
+            quality_score: Some(0.9),
+            bbox,
+            face: Some(FaceDetail {
+                bbox,
+                confidence: 0.95,
+                quality_score: Some(0.9),
+                fused_count: Some(4),
+                template_quality: Some(0.72),
+                template_mature: Some(true),
+                embedding: None,
+            }),
+        };
+        let first = tracker.update_with_embeddings(vec![sidecar_frame], vec![None]);
+        let track_id = first[0].track_id;
+        let first_face = first[0].face.as_ref().expect("侧车帧必须挂载人脸详情");
+        assert_eq!(first_face.fused_count, Some(4));
+        assert_eq!(first_face.template_quality, Some(0.72));
+        assert_eq!(first_face.template_mature, Some(true));
+
+        // 普通帧：侧车不携带任何字段，模板元数据必须从轨道状态回填。
+        let plain_frame = Detection {
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.9,
+            quality_score: Some(0.8),
+            bbox,
+            face: Some(FaceDetail {
+                bbox,
+                confidence: 0.9,
+                quality_score: Some(0.8),
+                fused_count: None,
+                template_quality: None,
+                template_mature: None,
+                embedding: None,
+            }),
+        };
+        let second = tracker.update_with_embeddings(vec![plain_frame], vec![None]);
+        assert_eq!(second[0].track_id, track_id);
+        let second_face = second[0].face.as_ref().expect("人脸详情必须保留");
+        assert_eq!(second_face.fused_count, Some(4), "模板帧数必须跨帧沿用");
+        assert_eq!(
+            second_face.template_quality,
+            Some(0.72),
+            "模板质量必须跨帧沿用"
+        );
+        assert_eq!(
+            second_face.template_mature, None,
+            "成熟握手是帧内事件，不得沿用来改结算时机"
+        );
+
+        // 新模板上报：轨道状态必须被新值覆盖，不能保留旧模板的陈旧元数据。
+        let reseed_frame = Detection {
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.9,
+            quality_score: Some(0.8),
+            bbox,
+            face: Some(FaceDetail {
+                bbox,
+                confidence: 0.9,
+                quality_score: Some(0.8),
+                fused_count: Some(6),
+                template_quality: Some(0.83),
+                template_mature: None,
+                embedding: Some(Box::new([0.25; 512])),
+            }),
+        };
+        let third = tracker.update_with_embeddings(vec![reseed_frame], vec![None]);
+        let third_face = third[0].face.as_ref().expect("人脸详情必须保留");
+        assert_eq!(third_face.fused_count, Some(6));
+        assert_eq!(third_face.template_quality, Some(0.83));
+
+        let fourth = tracker.update_with_embeddings(
+            vec![Detection {
+                class_id: 0,
+                label: "face".to_string(),
+                confidence: 0.9,
+                quality_score: Some(0.8),
+                bbox,
+                face: Some(FaceDetail {
+                    bbox,
+                    confidence: 0.9,
+                    quality_score: Some(0.8),
+                    fused_count: None,
+                    template_quality: None,
+                    template_mature: None,
+                    embedding: None,
+                }),
+            }],
+            vec![None],
+        );
+        let fourth_face = fourth[0].face.as_ref().expect("人脸详情必须保留");
+        assert_eq!(fourth_face.fused_count, Some(6), "必须沿用最新模板的帧数");
+        assert_eq!(fourth_face.template_quality, Some(0.83));
+        let expected: FaceEmbedding = Box::new([0.25_f32; 512]);
+        assert_eq!(fourth_face.embedding.as_deref(), Some(expected.as_ref()));
     }
 
     #[test]

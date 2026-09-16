@@ -24,6 +24,14 @@ pub struct FaceRecognizer {
     pub best_shots: crate::best_shot::BestShotManager,
 }
 
+#[derive(Debug, Clone)]
+struct BestShotSidecar {
+    embedding: Option<String>,
+    fused_count: Option<u32>,
+    template_quality: Option<f32>,
+    template_mature: Option<bool>,
+}
+
 impl std::fmt::Debug for FaceRecognizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FaceRecognizer")
@@ -130,10 +138,8 @@ impl AlgoPlugin for FaceRecognizer {
                     &self.config.quality_thresholds,
                 );
 
-                let embedding_str = match internal_track_id {
-                    Some(track_id) => {
-                        self.best_shot_embedding(&frame, &face, &quality, track_id)?
-                    }
+                let embedding_sidecar = match internal_track_id {
+                    Some(track_id) => self.best_shot_sidecar(&frame, &face, &quality, track_id)?,
                     None => None,
                 };
 
@@ -142,7 +148,18 @@ impl AlgoPlugin for FaceRecognizer {
                     bbox: crate::postprocess::normalized_xywh_to_xyxy(face.bbox),
                     confidence: face.score.clamp(0.0, 1.0),
                     quality_score: Some(quality.score.clamp(0.0, 1.0)),
-                    embedding: embedding_str,
+                    embedding: embedding_sidecar
+                        .as_ref()
+                        .and_then(|sidecar| sidecar.embedding.clone()),
+                    fused_count: embedding_sidecar
+                        .as_ref()
+                        .and_then(|sidecar| sidecar.fused_count),
+                    template_quality: embedding_sidecar
+                        .as_ref()
+                        .and_then(|sidecar| sidecar.template_quality),
+                    template_mature: embedding_sidecar
+                        .as_ref()
+                        .and_then(|sidecar| sidecar.template_mature),
                 })
             } else {
                 None
@@ -178,63 +195,92 @@ impl AlgoPlugin for FaceRecognizer {
 }
 
 impl FaceRecognizer {
-    /// 低频 best-shot 链路：质量门控 → ROI 特征提取 → 时域融合 → Base64 编码。
+    /// 低频 best-shot 链路：质量门控 → 帧池采样 → 时域融合 → sidecar 编码。
     ///
-    /// 质量不足或尚未到重试窗口时返回 `None`，不触碰特征库。
-    fn best_shot_embedding(
+    /// 质量不足或尚未到重试窗口时返回 `None`，不触碰特征提取；模板成熟但本帧没有
+    /// 新 embedding 时，也可以只发射一次 `template_mature` 握手。
+    fn best_shot_sidecar(
         &mut self,
         frame: &SafeFrame<'_>,
         face: &crate::detect::RawFace,
         quality: &crate::quality::FaceQuality,
         track_id: u64,
-    ) -> Result<Option<String>, AlgoError> {
+    ) -> Result<Option<BestShotSidecar>, AlgoError> {
         if !quality.accepted(&self.config.quality_thresholds, self.config.min_face_size) {
             return Ok(None);
         }
         let frame_id = frame.frame_id() as usize;
-        if !self
+        if self
             .best_shots
             .should_update_best_shot(track_id, quality, frame_id)
         {
-            return Ok(None);
+            // ROI 裁切失败与设备侧推理失败共用同一退避重试路径。
+            let extract = || -> Result<[f32; 512], AlgoError> {
+                let aligned = extract_aligned_face(frame, face)?;
+                self.models.worker.embed_host(aligned)
+            };
+            match extract() {
+                Ok(normalized) => {
+                    let update = self.best_shots.update_with_fusion_result(
+                        track_id,
+                        face.bbox,
+                        face.landmarks,
+                        face.score,
+                        *quality,
+                        &normalized,
+                        frame_id,
+                    );
+                    return encode_fusion_sidecar(update);
+                }
+                Err(error) => {
+                    self.best_shots.record_attempt_without_embedding(
+                        track_id,
+                        face.bbox,
+                        face.landmarks,
+                        face.score,
+                        *quality,
+                        frame_id,
+                    );
+                    tracing::warn!(
+                        %error,
+                        track_id,
+                        "best-shot RKNN 设备侧 EdgeFace 提取失败，按退避策略允许后续重试"
+                    );
+                    return Ok(None);
+                }
+            }
         }
 
-        // ROI 裁切失败与设备侧推理失败共用同一退避重试路径。
-        let extract = || -> Result<[f32; 512], AlgoError> {
-            let aligned = extract_aligned_face(frame, face)?;
-            self.models.worker.embed_host(aligned)
-        };
-        match extract() {
-            Ok(normalized) => {
-                let fused = self.best_shots.update_with_fusion(
-                    track_id,
-                    face.bbox,
-                    face.landmarks,
-                    face.score,
-                    *quality,
-                    &normalized,
-                    frame_id,
-                );
-                crate::postprocess::encode_embedding(fused.as_slice()).map(Some)
-            }
-            Err(error) => {
-                self.best_shots.record_attempt_without_embedding(
-                    track_id,
-                    face.bbox,
-                    face.landmarks,
-                    face.score,
-                    *quality,
-                    frame_id,
-                );
-                tracing::warn!(
-                    %error,
-                    track_id,
-                    "best-shot RKNN 设备侧 EdgeFace 提取失败，按退避策略允许后续重试"
-                );
-                Ok(None)
-            }
+        if let Some(update) = self.best_shots.maturity_signal(track_id, frame_id) {
+            encode_fusion_sidecar(update)
+        } else {
+            Ok(None)
         }
     }
+}
+
+fn encode_fusion_sidecar(
+    update: crate::best_shot::FusionUpdate,
+) -> Result<Option<BestShotSidecar>, AlgoError> {
+    if !update.template_changed && !update.template_mature {
+        return Ok(None);
+    }
+    let fused_count = u32::try_from(update.fused_count).map_err(|_| AlgoError::Inference {
+        reason: format!("融合帧计数超出 sidecar 范围: {}", update.fused_count),
+    })?;
+    let embedding = if update.template_changed {
+        Some(crate::postprocess::encode_embedding(
+            update.template.as_slice(),
+        )?)
+    } else {
+        None
+    };
+    Ok(Some(BestShotSidecar {
+        embedding,
+        fused_count: Some(fused_count),
+        template_quality: Some(update.template_quality.clamp(0.0, 1.0)),
+        template_mature: update.template_mature.then_some(true),
+    }))
 }
 
 /// 只读取对齐采样域覆盖的 ROI，避免 best-shot 路径把整帧 DMA-BUF 映射回 CPU。

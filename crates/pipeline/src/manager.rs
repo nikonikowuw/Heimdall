@@ -10,10 +10,14 @@ use media::decoder::VideoDecoder;
 use media::ring_buffer::{MainStreamRingBuffer, RingBufferConfig};
 use media::{StreamClockAnchor, StreamItem, StreamSubscription};
 use types::{
-    AnalysisTask, BoundingBox, Camera, Detection, DetectionRule, EncodedPacket, FrameRef,
-    TrackedObject,
+    AnalysisTask, BoundingBox, Camera, Detection, DetectionRule, EncodedPacket,
+    EvidenceImageStream, FrameRef, TrackedObject,
 };
 
+use crate::capture_settle::{
+    CandidateEvidence, CandidateRetainRequest, CaptureAction, CaptureSettleController,
+    RecordCandidateOutcome,
+};
 use crate::decoded_ring::DecodedFrameRingBuffer;
 use crate::error::PipelineError;
 use crate::events::{
@@ -53,6 +57,18 @@ impl StreamClockAnchors {
     }
 }
 
+/// 取得结算控制器锁。
+///
+/// 控制器内部只有纯内存状态机（航迹表、时间戳），一次 panic 不会让状态失去一致性，
+/// 因此锁中毒时沿用内部值，而不是把中毒传播成整路分析失败。
+fn lock_capture_settle(
+    ctx: &CameraPipelineContext,
+) -> std::sync::MutexGuard<'_, CaptureSettleController> {
+    ctx.capture_settle
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 单路摄像头管线运行时上下文
 pub struct CameraPipelineContext {
     pub camera_id: String,
@@ -80,6 +96,10 @@ pub struct CameraPipelineContext {
     pub tracker: TokioMutex<ByteTrack>,
     /// 多算法独立 ByteTrack 跟踪器映射表 (algorithm_id -> ByteTrack)
     pub trackers: TokioMutex<HashMap<String, ByteTrack>>,
+    /// 识别类通行抓拍结算状态机 (algorithm_id × track_id 维度, 纯同步计算)。
+    ///
+    /// 与 tracker 锁的固定获取顺序：先 `trackers` 后 `capture_settle`，禁止反向嵌套。
+    pub capture_settle: std::sync::Mutex<CaptureSettleController>,
     /// 多算法 tracker 与清理操作之间的会话代际。
     pub(crate) tracking_generation: Arc<AtomicU64>,
     /// 每路摄像头按算法实例维护的最新活跃航迹快照 (algorithm_id -> Vec<TrackedObject>)
@@ -120,6 +140,7 @@ impl CameraPipelineContext {
             snapshot_decoder: TokioMutex::new(None),
             tracker: TokioMutex::new(ByteTrack::new()),
             trackers: TokioMutex::new(HashMap::new()),
+            capture_settle: std::sync::Mutex::new(CaptureSettleController::new()),
             tracking_generation: Arc::new(AtomicU64::new(0)),
             current_tracks: TokioRwLock::new(HashMap::new()),
             roi_mapper: TokioRwLock::new(RoiAffineMapper::identity()),
@@ -186,8 +207,8 @@ pub struct AnalysisOutcome {
     pub tracked: Vec<TrackedObject>,
     /// 触发的违规告警集合 (针对 detection 类防范算法)
     pub alarms: Vec<TriggeredAlarm>,
-    /// 触发的客观通行抓拍目标 (针对 recognition 类识别算法)
-    pub captures: Vec<TrackedObject>,
+    /// 通行抓拍结算动作 (针对 recognition 类识别算法: 峰值候选留存 / 结算)
+    pub capture_actions: Vec<CaptureAction>,
 }
 
 #[inline]
@@ -536,6 +557,10 @@ impl PipelineManager {
                 tracker.clear();
             }
             ctx.tracker.lock().await.clear();
+            {
+                let mut settle = lock_capture_settle(&ctx);
+                settle.clear();
+            }
             let mut current = ctx.current_tracks.write().await;
             current.drain().map(|(id, _)| id).collect()
         };
@@ -573,9 +598,13 @@ impl PipelineManager {
             if generation != ctx.tracking_generation.load(Ordering::Acquire) {
                 false
             } else {
-                trackers
+                let expired = trackers
                     .get_mut(algorithm_id)
-                    .is_some_and(|tracker| tracker.expire_if_stale_at(timestamp_ms))
+                    .is_some_and(|tracker| tracker.expire_if_stale_at(timestamp_ms));
+                if expired {
+                    lock_capture_settle(&ctx).clear_algorithm(algorithm_id);
+                }
+                expired
             }
         };
         if !expired || generation != ctx.tracking_generation.load(Ordering::Acquire) {
@@ -600,6 +629,96 @@ impl PipelineManager {
             ));
         }
         removed
+    }
+
+    /// 留存峰值候选证据（`pump.rs` 分析循环消费 `CaptureAction::RetainCandidate`）。
+    ///
+    /// 复用当帧 `analyzed_frame` 编码为内存字节并登记到结算控制器；超预算或轨道已结算时
+    /// 丢弃本次产物。推理帧与请求时间戳不一致时拒绝编码。
+    pub async fn retain_capture_candidate(
+        &self,
+        camera_id: &str,
+        algorithm_id: &str,
+        request: &CandidateRetainRequest,
+        analyzed_frame: FrameRef,
+    ) -> Result<RecordCandidateOutcome, PipelineError> {
+        let geometry = request.geometry;
+        if analyzed_frame.camera_id != camera_id || analyzed_frame.timestamp != geometry.pts_ms {
+            return Err(PipelineError::Snapshot(format!(
+                "候选帧与请求不一致 (camera={}, framePts={}, reqPts={})",
+                analyzed_frame.camera_id, analyzed_frame.timestamp, geometry.pts_ms
+            )));
+        }
+        let Some(ctx) = self.get_pipeline_context(camera_id).await else {
+            return Err(PipelineError::PipelineNotFound {
+                camera_id: camera_id.to_string(),
+            });
+        };
+        // 冻结编码时刻的码流来源：结算可能在一个结算窗口之后才发生，
+        // 届时重新采样 `is_main_stream_analysis` 可能已换流，记录来源就会失真。
+        let stream = if ctx.is_main_stream_analysis.load(Ordering::Acquire) {
+            EvidenceImageStream::Main
+        } else {
+            EvidenceImageStream::Sub
+        };
+        let crop_bbox = geometry.face_bbox.unwrap_or(geometry.bbox);
+        let encoded = self
+            .snapshot_engine
+            .encode_candidate_async(camera_id, analyzed_frame, Some(crop_bbox), stream)
+            .await?;
+        let evidence = CandidateEvidence {
+            full_jpeg: encoded.full_jpeg.into(),
+            crop_jpeg: encoded.crop_jpeg.into(),
+            width: encoded.width,
+            height: encoded.height,
+            geometry,
+            stream,
+        };
+        let outcome = {
+            let mut settle = lock_capture_settle(&ctx);
+            settle.record_candidate(algorithm_id, request.track_id, evidence)
+        };
+        match outcome {
+            RecordCandidateOutcome::Accepted => {}
+            RecordCandidateOutcome::Dismissed => {
+                tracing::debug!(
+                    camera_id,
+                    algorithm_id,
+                    track_id = request.track_id,
+                    "候选对应轨道已结算，本次编码产物已丢弃"
+                );
+            }
+            RecordCandidateOutcome::RejectedBudget => {
+                let (pending_bytes, rejections) = {
+                    let settle = lock_capture_settle(&ctx);
+                    (settle.pending_bytes(), settle.budget_rejections())
+                };
+                tracing::warn!(
+                    camera_id,
+                    algorithm_id,
+                    track_id = request.track_id,
+                    pending_bytes,
+                    rejections,
+                    "候选字节预算已满，本次候选丢弃（结算将回退当帧快照）"
+                );
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// 将结算携带的内存候选一次性写入正式证据目录（唯一一次落盘）。
+    ///
+    /// 写盘走 `SnapshotEngine` 的专用编码线程队列，这是全进程唯一允许碰平台编码器/
+    /// 写证据文件的线程；不占用 Tokio worker，也不另开 `spawn_blocking`。
+    /// 第二个文件失败时由线程内的 `write_candidate_evidence` 回滚首个文件。
+    pub async fn write_capture_candidate(
+        &self,
+        camera_id: &str,
+        evidence: &CandidateEvidence,
+    ) -> Result<SnapshotResult, PipelineError> {
+        self.snapshot_engine
+            .write_candidate_async(camera_id, evidence.clone())
+            .await
     }
 
     /// 标记该路摄像头是否为主码流直接进行 AI 分析 (StreamMode::Main 模式)
@@ -868,7 +987,7 @@ impl PipelineManager {
                 );
                 return self
                     .snapshot_engine
-                    .save_snapshot_async(camera_id, frame, bbox, false)
+                    .save_snapshot_async(camera_id, frame, bbox, EvidenceImageStream::Main)
                     .await;
             }
             Some(FallbackCandidate::sub_stream(frame))
@@ -900,7 +1019,7 @@ impl PipelineManager {
                 );
                 return self
                     .snapshot_engine
-                    .save_snapshot_async(camera_id, frame, bbox, false)
+                    .save_snapshot_async(camera_id, frame, bbox, EvidenceImageStream::Main)
                     .await;
             }
 
@@ -943,7 +1062,7 @@ impl PipelineManager {
                 );
                 return self
                     .snapshot_engine
-                    .save_snapshot_async(camera_id, cached, bbox, false)
+                    .save_snapshot_async(camera_id, cached, bbox, EvidenceImageStream::Main)
                     .await;
             }
         }
@@ -979,7 +1098,7 @@ impl PipelineManager {
         )
         .await;
 
-        let (frame_to_process, is_fallback) = match permit_res {
+        let (frame_to_process, is_sub_stream_frame) = match permit_res {
             Ok(Ok(permit)) => {
                 let res = {
                     let mut decoder_guard = ctx.snapshot_decoder.lock().await;
@@ -1048,7 +1167,16 @@ impl PipelineManager {
         };
 
         self.snapshot_engine
-            .save_snapshot_async(camera_id, frame_to_process, bbox, is_fallback)
+            .save_snapshot_async(
+                camera_id,
+                frame_to_process,
+                bbox,
+                if is_sub_stream_frame {
+                    EvidenceImageStream::Sub
+                } else {
+                    EvidenceImageStream::Main
+                },
+            )
             .await
     }
 
@@ -1218,7 +1346,7 @@ impl PipelineManager {
         let rules = ctx.rules.read().await.clone();
 
         // 2. 独立算法实例的航迹关联更新。所有锁内工作均为同步计算，避免持锁跨 await。
-        let (tracked_objects, alarms, captures) = {
+        let (tracked_objects, alarms, capture_actions) = {
             let mut trackers = ctx.trackers.lock().await;
             if generation != ctx.tracking_generation.load(Ordering::Acquire) {
                 return AnalysisOutcome::default();
@@ -1238,15 +1366,14 @@ impl PipelineManager {
             }
 
             let tracked_objects = update.objects;
-            let (alarms, captures) = if algorithm_kind.is_recognition() {
-                let captures = ctx.rule_evaluator.evaluate_captures(
-                    &rules,
-                    &tracked_objects,
-                    tracker,
-                    timestamp_ms,
-                    5000,
-                );
-                (Vec::new(), captures)
+            let (alarms, capture_actions) = if algorithm_kind.is_recognition() {
+                // 识别类：抓拍结算状态机推进（峰值跟踪/候选留存/结算判定）。
+                // 冷却与结算时机由控制器统一管理，不再在进入 ROI 的首帧直接产事件。
+                let actions = {
+                    let mut settle = lock_capture_settle(&ctx);
+                    settle.observe(algorithm_id, &tracked_objects, &rules, timestamp_ms)
+                };
+                (Vec::new(), actions)
             } else {
                 let alarms = ctx.rule_evaluator.evaluate(
                     &rules,
@@ -1257,7 +1384,7 @@ impl PipelineManager {
                 );
                 (alarms, Vec::new())
             };
-            (tracked_objects, alarms, captures)
+            (tracked_objects, alarms, capture_actions)
         };
 
         // 清理/换流可能在 tracker 锁释放后发生，代际校验阻止旧结果回写公共快照。
@@ -1287,7 +1414,7 @@ impl PipelineManager {
             applied: true,
             tracked: tracked_objects,
             alarms,
-            captures,
+            capture_actions,
         }
     }
 
@@ -1604,6 +1731,8 @@ impl PipelineManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture_settle::FrameGeometry;
+    use crate::test_support::{dir_entry_count, test_nv12_frame};
     use bytes::Bytes;
     use types::{CodecType, FrameHandle, PixelFormat, StrideInfo};
 
@@ -1720,7 +1849,7 @@ mod tests {
             .await
             .expect("抓拍应成功");
 
-        assert!(snapshot.is_fallback_sub_stream);
+        assert!(snapshot.is_sub_stream());
         assert_eq!(snapshot.width, 640);
         assert_eq!(snapshot.height, 360);
 
@@ -1898,7 +2027,7 @@ mod tests {
             .await
             .expect("配额超限自适应降级抓拍应成功");
 
-        assert!(snapshot.is_fallback_sub_stream);
+        assert!(snapshot.is_sub_stream());
         assert_eq!(snapshot.width, 640);
         assert_eq!(snapshot.height, 360);
 
@@ -1982,7 +2111,7 @@ mod tests {
             .await
             .expect("主流推理帧直通抓拍应成功");
 
-        assert!(!snapshot.is_fallback_sub_stream);
+        assert!(!snapshot.is_sub_stream());
         assert_eq!(snapshot.width, 64);
         assert_eq!(snapshot.height, 64);
         assert!(temp_dir.join(&snapshot.image_rel_path).is_file());
@@ -2288,6 +2417,281 @@ mod tests {
         assert!(!manager.has_preview_subscribers(cam_id).await);
     }
 
+    /// 候选全生命周期：留存仅编码驻留内存、覆盖写保持单份、结算时唯一一次写盘、清轨释放。
+    #[tokio::test]
+    async fn capture_candidate_encodes_in_memory_and_writes_once_at_settle() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_capture_settle_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager =
+            PipelineManager::with_all_options(temp_dir.clone(), SnapshotConfig::default(), 2, 1000);
+        let camera_id = "cam_settle_lifecycle";
+        let algorithm_id = "algo_face";
+        let ctx = manager.get_or_create_context(camera_id).await;
+        let rules: Vec<DetectionRule> = Vec::new();
+
+        let object = TrackedObject {
+            track_id: 7,
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.95,
+            quality_score: Some(0.80),
+            embedding: None,
+            bbox: BoundingBox::new(0.4, 0.3, 0.6, 0.6),
+            face: None,
+            trajectory: vec![(0.5, 0.6)],
+        };
+
+        // 首帧进入 ROI：挂起并产出首张候选留存动作（不再直接抓拍）
+        let actions = {
+            let mut settle = lock_capture_settle(&ctx);
+            settle.observe(algorithm_id, std::slice::from_ref(&object), &rules, 1000)
+        };
+        assert!(matches!(
+            actions[0],
+            crate::capture_settle::CaptureAction::RetainCandidate(_)
+        ));
+
+        // 1. 留存 = 仅编码驻留内存：不产生任何盘上产物
+        let first = CandidateRetainRequest {
+            track_id: 7,
+            geometry: FrameGeometry {
+                bbox: object.bbox,
+                face_bbox: None,
+                pts_ms: 1000,
+                quality: 0.80,
+            },
+        };
+        manager
+            .retain_capture_candidate(
+                camera_id,
+                algorithm_id,
+                &first,
+                test_nv12_frame(camera_id, 1000),
+            )
+            .await
+            .expect("候选留存失败");
+        let first_bytes = {
+            let settle = lock_capture_settle(&ctx);
+            settle.pending_bytes()
+        };
+        assert!(first_bytes > 0, "候选必须驻留内存");
+        assert_eq!(
+            dir_entry_count(&temp_dir),
+            0,
+            "候选留存阶段不得创建盘上产物"
+        );
+
+        // 2. 覆盖写：驻留替换为单份新候选（JPEG 字节随轨道条目释放，不累积）
+        let second = CandidateRetainRequest {
+            track_id: 7,
+            geometry: FrameGeometry {
+                bbox: BoundingBox::new(0.35, 0.25, 0.65, 0.65),
+                face_bbox: Some(BoundingBox::new(0.45, 0.35, 0.55, 0.5)),
+                pts_ms: 1200,
+                quality: 0.85,
+            },
+        };
+        manager
+            .retain_capture_candidate(
+                camera_id,
+                algorithm_id,
+                &second,
+                test_nv12_frame(camera_id, 1200),
+            )
+            .await
+            .expect("覆盖候选失败");
+        let replaced_bytes = {
+            let settle = lock_capture_settle(&ctx);
+            settle.pending_bytes()
+        };
+        assert!(
+            replaced_bytes <= 2 * first_bytes,
+            "覆盖写后驻留仍应为单份候选 (first={first_bytes}, replaced={replaced_bytes})"
+        );
+        assert_eq!(dir_entry_count(&temp_dir), 0, "覆盖写不得产生盘上产物");
+
+        // 3. 平台期结算：候选随结算动作携出，写入正式证据目录（唯一一次落盘）
+        let actions = {
+            let mut settle = lock_capture_settle(&ctx);
+            settle.observe(algorithm_id, std::slice::from_ref(&object), &rules, 1600)
+        };
+        let candidate = match &actions[0] {
+            crate::capture_settle::CaptureAction::Settle(request) => request
+                .candidate
+                .clone()
+                .expect("平台期结算必须携带驻留候选"),
+            other => panic!("期望结算动作，实际为 {other:?}"),
+        };
+        assert_eq!(candidate.geometry.pts_ms, 1200);
+        let written = manager
+            .write_capture_candidate(camera_id, &candidate)
+            .await
+            .expect("结算写盘失败");
+        assert!(
+            written.image_rel_path.starts_with(&format!("{camera_id}/")),
+            "结算产物必须落在正式证据目录"
+        );
+        assert!(temp_dir.join(&written.image_rel_path).is_file());
+        assert!(temp_dir.join(&written.crop_image_rel_path).is_file());
+        assert_eq!(written.width, 320);
+        assert_eq!(written.height, 240);
+        assert_eq!(
+            written.image_source,
+            types::EvidenceImageSource::PeakCandidate,
+            "结算写盘产物必须标记为峰值候选帧"
+        );
+        assert_eq!(
+            written.image_stream,
+            types::EvidenceImageStream::Sub,
+            "候选帧来自分析码流：测试上下文未启主码流常驻分析，即子码流"
+        );
+        assert_eq!(written.frame_pts_ms, candidate.geometry.pts_ms);
+        assert_eq!(
+            written.comparable_frame_pts_ms(),
+            written.frame_pts_ms,
+            "峰值候选帧与检测帧同轴，PTS 必须可直接比对"
+        );
+
+        // 4. 冷却后重入并留存：清轨必须同步释放内存候选，且不产生额外盘上产物
+        let actions = {
+            let mut settle = lock_capture_settle(&ctx);
+            settle.observe(algorithm_id, std::slice::from_ref(&object), &rules, 7000)
+        };
+        assert!(matches!(
+            actions[0],
+            crate::capture_settle::CaptureAction::RetainCandidate(_)
+        ));
+        let third = CandidateRetainRequest {
+            track_id: 7,
+            geometry: FrameGeometry {
+                bbox: object.bbox,
+                face_bbox: None,
+                pts_ms: 7000,
+                quality: 0.80,
+            },
+        };
+        manager
+            .retain_capture_candidate(
+                camera_id,
+                algorithm_id,
+                &third,
+                test_nv12_frame(camera_id, 7000),
+            )
+            .await
+            .expect("重入候选留存失败");
+        manager.clear_tracking(camera_id).await;
+        {
+            let settle = lock_capture_settle(&ctx);
+            assert_eq!(settle.pending_bytes(), 0, "清轨必须释放内存候选");
+        }
+        assert_eq!(
+            dir_entry_count(&temp_dir.join(camera_id)),
+            2,
+            "盘上只应有结算写下的两份正式证据"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 端到端：识别类算法走过生产入口 `process_detections_for_algo_*`，
+    /// 抓拍结算动作必须由真实分析路径产出（而不是只在测试里直接敲状态机），
+    /// 且 RetainCandidate 携带的几何必须与当帧检测同源。
+    #[tokio::test]
+    async fn recognition_settle_actions_flow_through_process_detections() {
+        let manager = Arc::new(PipelineManager::new());
+        let camera_id = "cam_settle_e2e";
+        let algorithm_id = "algo_face_e2e";
+        let face_bbox = BoundingBox::new(0.45, 0.35, 0.55, 0.5);
+        let object_bbox = BoundingBox::new(0.4, 0.3, 0.6, 0.6);
+
+        let detection = |quality: f32, with_face: bool| Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            quality_score: Some(quality),
+            bbox: object_bbox,
+            face: with_face.then_some(types::FaceDetail {
+                bbox: face_bbox,
+                confidence: 0.95,
+                quality_score: Some(quality),
+                fused_count: None,
+                template_quality: None,
+                template_mature: None,
+                embedding: None,
+            }),
+        };
+
+        // 首帧：挂起 + 产出候选留存（几何取自当帧检测）。
+        let outcome = manager
+            .process_detections_for_algo(
+                camera_id,
+                algorithm_id,
+                types::AlgorithmKind::Recognition,
+                vec![detection(0.80, true)],
+                1000,
+            )
+            .await;
+        assert!(outcome.applied);
+        assert_eq!(
+            outcome.capture_actions.len(),
+            1,
+            "识别类首帧必须产出候选留存动作"
+        );
+        let CaptureAction::RetainCandidate(request) = &outcome.capture_actions[0] else {
+            panic!(
+                "期望 RetainCandidate，实际 {:?}",
+                outcome.capture_actions[0]
+            );
+        };
+        assert_eq!(request.geometry.pts_ms, 1000, "候选时标必须等于当帧时标");
+        assert_eq!(request.geometry.bbox, object_bbox);
+        assert_eq!(request.geometry.face_bbox, Some(face_bbox));
+        assert_eq!(request.geometry.quality, 0.80);
+
+        // 瞬时丢脸：宽限期内不得结算，避免烧掉冷却并丢掉峰值候选。
+        let transient = manager
+            .process_detections_for_algo(
+                camera_id,
+                algorithm_id,
+                types::AlgorithmKind::Recognition,
+                vec![detection(0.80, false)],
+                1040,
+            )
+            .await;
+        assert!(
+            transient.capture_actions.is_empty(),
+            "瞬时丢脸不得直接离场结算：{:?}",
+            transient.capture_actions
+        );
+
+        // 人脸恢复并进入平台期：结算动作必须从同一入口产出。
+        let settled = manager
+            .process_detections_for_algo(
+                camera_id,
+                algorithm_id,
+                types::AlgorithmKind::Recognition,
+                vec![detection(0.78, true)],
+                1400,
+            )
+            .await;
+        let settle = settled
+            .capture_actions
+            .iter()
+            .find_map(|action| match action {
+                CaptureAction::Settle(request) => Some(request.as_ref()),
+                CaptureAction::RetainCandidate(_) => None,
+            })
+            .expect("平台期必须产出结算动作");
+        assert_eq!(
+            settle.reason,
+            crate::capture_settle::SettleReason::QualityPlateau
+        );
+        assert_eq!(settle.track_id, outcome.tracked[0].track_id);
+        assert!(settle.candidate.is_none(), "未经编码留存时不得伪造候选");
+    }
+
     #[tokio::test]
     async fn test_get_current_tracks() {
         let manager = Arc::new(PipelineManager::new());
@@ -2338,10 +2742,14 @@ mod tests {
             )
             .await;
         assert_eq!(
-            rec_outcome.captures.len(),
+            rec_outcome.capture_actions.len(),
             1,
-            "face_recognition 类别算法必须产生抓拍凭证"
+            "face_recognition 类别算法必须产生峰值候选留存动作"
         );
+        assert!(matches!(
+            rec_outcome.capture_actions[0],
+            crate::capture_settle::CaptureAction::RetainCandidate(_)
+        ));
         assert!(
             rec_outcome.alarms.is_empty(),
             "face_recognition 类别算法绝不产生违规告警"

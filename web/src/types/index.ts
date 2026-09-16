@@ -289,11 +289,27 @@ export interface CaptureRecord {
   imageRelPath: string
   cropImageId: string
   cropImageRelPath: string
+  /** 证据图产生路径；历史记录未标注时为 null */
+  imageSource?: EvidenceImageSource | null
+  /** 证据图所属码流；历史记录未标注时为 null */
+  imageStream?: EvidenceImageStream | null
+  /** 证据帧的可比 PTS（检测轴）；不可比或未知时为 null */
+  imagePtsMs?: number | null
+  /** 匹配所用融合模板的参与帧数（仅新版算法包上报） */
+  fusedCount?: number | null
+  /** 匹配所用融合模板的质量加权均值 */
+  templateQuality?: number | null
   capturedAt: number
   createdAt: number
 }
 
 export type RecognitionStatus = 'confirmed' | 'pending_review' | 'rejected'
+
+/** 证据图产生路径：结算峰值候选帧 / 靶向快拍帧 */
+export type EvidenceImageSource = 'peak_candidate' | 'targeted'
+
+/** 证据图所属码流：主码流高分辨率帧 / 子码流帧 */
+export type EvidenceImageStream = 'main' | 'sub'
 
 export interface FaceCandidateItem {
   rank: number
@@ -316,6 +332,16 @@ export interface RecognitionRecord {
   fieldImagePath: string | null
   fieldBboxJson: string | null
   registeredPhotoPath: string
+  /** 证据图产生路径；历史记录未标注时为 null */
+  imageSource?: EvidenceImageSource | null
+  /** 证据图所属码流；历史记录未标注时为 null */
+  imageStream?: EvidenceImageStream | null
+  /** 证据帧的可比 PTS（检测轴）；不可比或未知时为 null */
+  imagePtsMs?: number | null
+  /** 1:N 比对所用融合模板的参与帧数（仅新版算法包上报） */
+  fusedCount?: number | null
+  /** 1:N 比对所用融合模板的质量加权均值 */
+  templateQuality?: number | null
   status: RecognitionStatus
   candidates?: FaceCandidateItem[]
   reviewerId?: string | null

@@ -14,6 +14,7 @@ pub mod plugin;
 pub mod postprocess;
 pub mod quality;
 pub mod rknn;
+pub mod template_pool;
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_int;

@@ -75,7 +75,14 @@ impl InferenceBackend for MockInferBackend {
 fn create_packet(pts_ms: i64, is_keyframe: bool) -> Arc<EncodedPacket> {
     let mut payload = vec![0x00, 0x00, 0x00, 0x01];
     if is_keyframe {
-        payload.extend_from_slice(&[0x67, 0x42, 0x00, 0x1f]); // 模拟 SPS/IDR
+        // 真实关键帧访问单元必然携带 SPS + PPS。这不只是仿真度问题：
+        // `SourceReset` 会把消费者 mailbox 置为 `recovering`，此后所有包被丢弃，
+        // 唯一的恢复路径是分发层用关键帧缓存重组 `Replay`；而重组要求缓存里
+        // **SPS 与 PPS 同时存在**。少了 PPS（缺失 PPS 时可重构性不足），
+        // mailbox 会永久停在 `recovering`，后续推送全部静默丢弃。
+        payload.extend_from_slice(&[0x67, 0x42, 0x00, 0x1f]); // SPS
+        payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        payload.extend_from_slice(&[0x68, 0xce, 0x3c, 0x80]); // PPS
     } else {
         payload.extend_from_slice(&[0x41, 0x9a]); // 模拟 P 帧
     }
@@ -160,31 +167,47 @@ async fn test_coordinator_full_lifecycle_and_events() {
     assert!(info.is_pump_running);
     assert_eq!(info.target_fps, 25);
 
-    main_session.dispatcher.publish(create_packet(1000, true));
-    sub_session.dispatcher.publish(create_packet(1000, true));
-
-    // 等待子流解码与推理
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    // 双流分工下必须继续维护主码流压缩包证据环，供告警时按需追帧取证
+    // 假接入器对 mock URL 握手失败后会重连并发布 `SourceReset`，它同时做两件事：
+    // 清空主码流压缩包证据环、把消费者 mailbox 置为 `recovering`（此后丢包直到关键帧
+    // 触发 `Replay` 重组）。两者都是产品侧的刻意行为，因此这里不屏蔽接入器，而是持续
+    // 补发关键帧并轮询断言——顺带覆盖「epoch 重置后靠完整 GOP 恢复」这条真实路径。
     let dual_ctx = pipeline_mgr
         .get_pipeline_context(cam_id)
         .await
         .expect("双流模式下应存在管线上下文");
-    assert!(
-        !dual_ctx.ring_buffer.is_empty(),
-        "双流模式下主码流压缩包证据环必须保持活跃"
-    );
 
-    // 4. 验证事件通道能收到 Tracks 事件
+    // 双流分工下必须继续维护主码流压缩包证据环，供告警时按需追帧取证。
+    // 入环由独立的 `attach_main_stream` 任务异步完成，重连可能中途清环，故在期限内轮询。
+    // 宽限取 3s：本用例覆盖「订阅 → 接入失败重连 → 解码 → 推理 → 事件」整条链路，
+    // 冷启动/CI 抢占下 1s 级别的窗口会假失败；断言本身仍是严格的。
+    let mut ring_alive = false;
+    for _ in 0..120 {
+        main_session.dispatcher.publish(create_packet(1000, true));
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        if !dual_ctx.ring_buffer.is_empty() {
+            ring_alive = true;
+            break;
+        }
+    }
+    assert!(ring_alive, "双流模式下主码流压缩包证据环必须保持活跃");
+
+    // 4. 验证事件通道能收到 Tracks 事件。
+    // 事件送达依赖「解码 → 抽帧 → 推理 → 规则」整条链路，固定 sleep 会与启动时序竞争；
+    // 本断言要证明的是「事件能送达」而不是「送达得多快」，故在期限内补发关键帧并轮询。
     let mut received_track = false;
-    while let Ok(evt) = event_rx.try_recv() {
-        if let PipelineAnalysisEvent::Tracks(track_evt) = evt {
-            if track_evt.camera_id == cam_id {
-                received_track = true;
-                assert!(!track_evt.tracks.is_empty());
-                break;
+    for _ in 0..120 {
+        sub_session.dispatcher.publish(create_packet(1000, true));
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        while let Ok(evt) = event_rx.try_recv() {
+            if let PipelineAnalysisEvent::Tracks(track_evt) = evt {
+                if track_evt.camera_id == cam_id {
+                    assert!(!track_evt.tracks.is_empty());
+                    received_track = true;
+                }
             }
+        }
+        if received_track {
+            break;
         }
     }
     assert!(received_track, "应通过广播事件通道收到航迹跟踪事件");

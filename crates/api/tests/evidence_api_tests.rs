@@ -59,6 +59,7 @@ async fn test_review_recognition_lifecycle_and_broadcast() {
         reviewed_at: Set(None),
         recognized_at: Set(chrono::Utc::now()),
         created_at: Set(chrono::Utc::now()),
+        ..Default::default()
     };
     let inserted = RecognitionRepo::insert(&state.db, rec).await.unwrap();
     assert_eq!(
@@ -222,6 +223,7 @@ async fn test_review_recognition_self_copy_safety_does_not_truncate() {
         reviewed_at: Set(None),
         recognized_at: Set(chrono::Utc::now()),
         created_at: Set(chrono::Utc::now()),
+        ..Default::default()
     };
     RecognitionRepo::insert(&state.db, rec).await.unwrap();
 
@@ -273,6 +275,7 @@ async fn test_evidence_captures_and_recognitions_count_api() {
         crop_image_rel_path: Set("captures/crop1.jpg".to_string()),
         captured_at: Set(chrono::Utc::now()),
         created_at: Set(chrono::Utc::now()),
+        ..Default::default()
     };
     let c2 = CaptureActiveModel {
         id: sea_orm::NotSet,
@@ -289,6 +292,7 @@ async fn test_evidence_captures_and_recognitions_count_api() {
         crop_image_rel_path: Set("captures/crop2.jpg".to_string()),
         captured_at: Set(chrono::Utc::now()),
         created_at: Set(chrono::Utc::now()),
+        ..Default::default()
     };
     CaptureRepo::insert(&state.db, c1).await.unwrap();
     CaptureRepo::insert(&state.db, c2).await.unwrap();
@@ -312,6 +316,7 @@ async fn test_evidence_captures_and_recognitions_count_api() {
         reviewed_at: Set(None),
         recognized_at: Set(chrono::Utc::now()),
         created_at: Set(chrono::Utc::now()),
+        ..Default::default()
     };
     RecognitionRepo::insert(&state.db, r1).await.unwrap();
 
@@ -374,6 +379,88 @@ async fn test_evidence_captures_and_recognitions_count_api() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["data"]["total"], 0);
+}
+
+#[tokio::test]
+async fn test_captures_list_exposes_evidence_origin_and_template_metadata() {
+    use db::entity::capture::ActiveModel as CaptureActiveModel;
+    use db::CaptureRepo;
+
+    let (app, state, token) = setup_test_app().await;
+
+    // 一条峰值候选帧凭据 + 一条无来源标识的历史记录（迁移前遗留）
+    let peak = CaptureActiveModel {
+        id: sea_orm::NotSet,
+        capture_id: Set("cap_peak".to_string()),
+        camera_id: Set("CAM-01".to_string()),
+        track_id: Set(7),
+        target_label: Set("face".to_string()),
+        confidence: Set(0.97),
+        quality_score: Set(0.88),
+        bbox_json: Set("{}".to_string()),
+        image_id: Set("img_peak".to_string()),
+        image_rel_path: Set("captures/img_peak.jpg".to_string()),
+        crop_image_id: Set("crop_peak".to_string()),
+        crop_image_rel_path: Set("captures/crop_peak.jpg".to_string()),
+        image_source: Set("peak_candidate".to_string()),
+        image_stream: Set("sub".to_string()),
+        image_pts_ms: Set(1_741_100_060_000),
+        fused_count: Set(Some(4)),
+        template_quality: Set(Some(0.72)),
+        captured_at: Set(chrono::Utc::now()),
+        created_at: Set(chrono::Utc::now()),
+    };
+    let legacy = CaptureActiveModel {
+        capture_id: Set("cap_legacy".to_string()),
+        camera_id: Set("CAM-01".to_string()),
+        track_id: Set(8),
+        target_label: Set("person".to_string()),
+        image_rel_path: Set("captures/img_legacy.jpg".to_string()),
+        crop_image_rel_path: Set("captures/crop_legacy.jpg".to_string()),
+        captured_at: Set(chrono::Utc::now()),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    CaptureRepo::insert(&state.db, peak).await.unwrap();
+    CaptureRepo::insert(&state.db, legacy).await.unwrap();
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/captures?camera_id=CAM-01")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let items = json["data"].as_array().expect("列表响应必须为数组");
+    assert_eq!(items.len(), 2);
+
+    let by_id = |capture_id: &str| {
+        items
+            .iter()
+            .find(|item| item["captureId"] == capture_id)
+            .expect("记录必须存在")
+    };
+
+    // 1. 强类型枚举 + camelCase 字段名：前端可直接按取值分支
+    let peak_json = by_id("cap_peak");
+    assert_eq!(peak_json["imageSource"], "peak_candidate");
+    assert_eq!(peak_json["imageStream"], "sub");
+    assert_eq!(peak_json["imagePtsMs"], 1_741_100_060_000_i64);
+    assert_eq!(peak_json["fusedCount"], 4);
+    assert_eq!(peak_json["templateQuality"], 0.72);
+
+    // 2. 历史记录未标注：必须为 null，不能把 0 当成 1970 年时标暴露给前端
+    let legacy_json = by_id("cap_legacy");
+    assert!(legacy_json["imageSource"].is_null());
+    assert!(legacy_json["imageStream"].is_null());
+    assert!(legacy_json["imagePtsMs"].is_null());
+    assert!(legacy_json["fusedCount"].is_null());
+    assert!(legacy_json["templateQuality"].is_null());
 }
 
 #[tokio::test]

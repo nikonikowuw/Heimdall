@@ -3,7 +3,9 @@
 //! 1. 区域遮罩 (Mask): 静默过滤屏蔽区域内的目标；
 //! 2. 多边形入侵 (Roi): 检测目标底面中心点是否侵入布防多边形；
 //! 3. 绊线越界 (Line): 结合航迹历史移动向量检测是否越界（单向 A->B, B->A 或双向）；
-//! 4. 防刷屏机制: 每一个 (track_id, rule_id) 具备独立的 5 秒防重复报警冷却。
+//! 4. 防刷屏机制: 每一个 (track_id, rule_id) 具备独立的 5 秒防重复报警冷却；
+//! 5. 识别类通行抓拍的空间触发判定 (`is_capture_triggering`)，结算时机与冷却由
+//!    `capture_settle` 模块统一承担。
 
 use types::{DetectionRule, DetectionRuleRole, TrackedObject};
 
@@ -100,6 +102,37 @@ fn check_rule_triggered(
     }
 }
 
+/// 识别类通行抓拍的空间触发判定（不含冷却）。
+///
+/// 语义与告警一致：Mask 遮罩内静默过滤；配置了正向规则（ROI/Line）时仅命中时触发；
+/// 未配置正向规则时默认全屏感应布防。抓拍冷却与结算时机由
+/// `crate::capture_settle::CaptureSettleController` 统一管理，本函数保持纯几何语义。
+#[inline]
+pub(crate) fn is_capture_triggering(rules: &[DetectionRule], obj: &TrackedObject) -> bool {
+    // 人脸识别类任务的人员目标：若当前帧未检测到人脸（如背身、低头），
+    // 暂不进行抓拍判定，等待其转正脸时再触发。
+    if obj.label == "person" && obj.face.is_none() {
+        return false;
+    }
+
+    let bottom_center = obj.bbox.bottom_center();
+    if is_object_masked(rules, bottom_center) {
+        return false;
+    }
+
+    let has_positive_rules = rules
+        .iter()
+        .any(|r| matches!(r.role, DetectionRuleRole::Roi | DetectionRuleRole::Line));
+
+    if !has_positive_rules {
+        return true;
+    }
+
+    rules
+        .iter()
+        .any(|rule| check_rule_triggered(rule, bottom_center, &obj.trajectory))
+}
+
 /// 几何规则引擎
 #[derive(Debug, Default)]
 pub struct RuleEvaluator;
@@ -167,69 +200,6 @@ impl RuleEvaluator {
         }
 
         alarms
-    }
-
-    /// 执行识别类目标的通行抓拍判定
-    ///
-    /// 工业级通行抓拍规范：
-    /// - 过滤落在 Mask 遮罩区域内的目标；
-    /// - 若配置了正向规则（ROI 区域或 Line 越界绊线），则在目标进入 ROI 或跨越 Line 绊线时触发抓拍；
-    /// - 若未配置正向规则，默认全屏视野抓拍（开箱即用，绝不产生违规告警工单）；
-    /// - 目标受防高频重复抓拍冷却保护 (cooldown_ms)。
-    pub fn evaluate_captures(
-        &self,
-        rules: &[DetectionRule],
-        tracked_objects: &[TrackedObject],
-        tracker: &mut ByteTrack,
-        current_time_ms: i64,
-        cooldown_ms: i64,
-    ) -> Vec<TrackedObject> {
-        let mut captures = Vec::new();
-
-        let has_positive_rules = rules
-            .iter()
-            .any(|r| matches!(r.role, DetectionRuleRole::Roi | DetectionRuleRole::Line));
-
-        for obj in tracked_objects {
-            // 人脸识别类任务的人员目标：若当前帧未检测到人脸（如背身、低头），
-            // 暂不触发抓拍判定，避免在无脸帧消耗防抖冷却，等待其转正脸时再触发抓拍。
-            if obj.label == "person" && obj.face.is_none() {
-                continue;
-            }
-
-            let bottom_center = obj.bbox.bottom_center();
-
-            if is_object_masked(rules, bottom_center) {
-                continue;
-            }
-
-            let captured = if !has_positive_rules {
-                tracker.check_and_mark_rule(
-                    obj.track_id,
-                    DEFAULT_FULLSCREEN_RULE_INDEX,
-                    DetectionRuleRole::Roi,
-                    current_time_ms,
-                    cooldown_ms,
-                )
-            } else {
-                rules.iter().enumerate().any(|(rule_idx, rule)| {
-                    check_rule_triggered(rule, bottom_center, &obj.trajectory)
-                        && tracker.check_and_mark_rule(
-                            obj.track_id,
-                            rule_idx,
-                            rule.role,
-                            current_time_ms,
-                            cooldown_ms,
-                        )
-                })
-            };
-
-            if captured {
-                captures.push(obj.clone());
-            }
-        }
-
-        captures
     }
 }
 
@@ -441,128 +411,78 @@ mod tests {
         );
     }
 
+    fn capture_obj(label: &str, bottom_y: f64, trajectory: Vec<(f64, f64)>) -> TrackedObject {
+        TrackedObject {
+            track_id: 1,
+            class_id: 0,
+            label: label.to_string(),
+            confidence: 0.95,
+            quality_score: Some(0.9),
+            bbox: BoundingBox::new(0.4, (bottom_y - 0.3) as f32, 0.6, bottom_y as f32),
+            face: None,
+            embedding: None,
+            trajectory,
+        }
+    }
+
     #[test]
-    fn test_evaluate_captures_fullscreen_and_roi_and_cooldown() {
-        let evaluator = RuleEvaluator::new();
-        let mut tracker = ByteTrack::new();
+    fn test_is_capture_triggering_fullscreen_mask_roi_line() {
+        // 1. 未配置任何区域：识别类目标默认全屏触发。
+        let obj = capture_obj("face", 0.6, vec![(0.5, 0.6)]);
+        assert!(is_capture_triggering(&[], &obj));
 
-        let face_obj = TrackedObject {
-            track_id: 201,
-            class_id: 0,
-            label: "face".to_string(),
-            confidence: 0.96,
-            quality_score: Some(0.88),
-            embedding: None,
-            bbox: BoundingBox::new(0.4, 0.4, 0.6, 0.6),
-            face: None,
-            trajectory: vec![(0.5, 0.6)],
+        // 2. 人员目标当帧无脸：不触发（等待转正脸，避免无脸帧空转）。
+        let person = capture_obj("person", 0.6, vec![(0.5, 0.6)]);
+        assert!(!is_capture_triggering(&[], &person));
+
+        // 3. Mask 遮罩内静默过滤（bottom_center 位于遮罩多边形内）。
+        let mask = DetectionRule {
+            role: DetectionRuleRole::Mask,
+            line_direction: DetectionLineDirection::Both,
+            points: vec![
+                DetectionPoint::new(0.0, 0.0),
+                DetectionPoint::new(0.3, 0.0),
+                DetectionPoint::new(0.3, 0.3),
+                DetectionPoint::new(0.0, 0.3),
+            ],
         };
+        let masked = TrackedObject {
+            bbox: BoundingBox::new(0.05, 0.0, 0.15, 0.2),
+            ..capture_obj("face", 0.2, vec![(0.1, 0.2)])
+        };
+        assert!(!is_capture_triggering(&[mask], &masked));
 
-        // 1. 未配置任何区域：识别类目标默认全屏抓拍
-        let caps = evaluator.evaluate_captures(
-            &[],
-            std::slice::from_ref(&face_obj),
-            &mut tracker,
-            1000,
-            5000,
-        );
-        assert_eq!(caps.len(), 1, "识别类目标未配置区域时应全屏抓拍");
-        assert_eq!(caps[0].track_id, 201);
-
-        // 2. 5 秒冷却内重复帧不抓拍
-        let caps_cooldown = evaluator.evaluate_captures(
-            &[],
-            std::slice::from_ref(&face_obj),
-            &mut tracker,
-            2000,
-            5000,
-        );
-        assert!(caps_cooldown.is_empty(), "防高频连拍冷却期内不重复抓拍");
-
-        // 3. 冷却过后再次抓拍
-        let caps_after = evaluator.evaluate_captures(&[], &[face_obj], &mut tracker, 7000, 5000);
-        assert_eq!(caps_after.len(), 1);
-
-        // 4. 配置了 ROI 区域时，仅在 ROI 内部抓拍
-        let roi_rule = DetectionRule {
+        // 4. 配置 ROI 时仅命中区域触发。
+        let roi = DetectionRule {
             role: DetectionRuleRole::Roi,
-            line_direction: types::DetectionLineDirection::Both,
+            line_direction: DetectionLineDirection::Both,
             points: vec![
-                types::DetectionPoint::new(0.0, 0.0),
-                types::DetectionPoint::new(0.3, 0.0),
-                types::DetectionPoint::new(0.3, 0.3),
-                types::DetectionPoint::new(0.0, 0.3),
+                DetectionPoint::new(0.0, 0.0),
+                DetectionPoint::new(0.3, 0.0),
+                DetectionPoint::new(0.3, 0.3),
+                DetectionPoint::new(0.0, 0.3),
             ],
         };
-        let out_obj = TrackedObject {
-            track_id: 202,
-            class_id: 0,
-            label: "face".to_string(),
-            confidence: 0.95,
-            quality_score: Some(0.85),
-            embedding: None,
-            bbox: BoundingBox::new(0.5, 0.5, 0.7, 0.7),
-            face: None,
-            trajectory: vec![(0.6, 0.7)],
+        let inside = TrackedObject {
+            bbox: BoundingBox::new(0.05, 0.0, 0.15, 0.2),
+            ..capture_obj("face", 0.2, vec![(0.1, 0.2)])
         };
-        let in_obj = TrackedObject {
-            track_id: 203,
-            class_id: 0,
-            label: "face".to_string(),
-            confidence: 0.95,
-            quality_score: Some(0.89),
-            embedding: None,
-            bbox: BoundingBox::new(0.1, 0.1, 0.2, 0.2),
-            face: None,
-            trajectory: vec![(0.15, 0.2)],
-        };
+        let outside = capture_obj("face", 0.7, vec![(0.6, 0.7)]);
+        assert!(is_capture_triggering(std::slice::from_ref(&roi), &inside));
+        assert!(!is_capture_triggering(&[roi], &outside));
 
-        let caps_roi =
-            evaluator.evaluate_captures(&[roi_rule], &[out_obj, in_obj], &mut tracker, 8000, 5000);
-        assert_eq!(caps_roi.len(), 1, "只抓拍落在 ROI 内的人脸");
-        assert_eq!(caps_roi[0].track_id, 203);
-
-        // 5. 配置了 Line 绊线规则时，跨越绊线触发通行抓拍
-        let line_rule = DetectionRule {
+        // 5. 绊线：跨越触发，未跨越不触发。
+        let line = DetectionRule {
             role: DetectionRuleRole::Line,
-            line_direction: types::DetectionLineDirection::Both,
-            points: vec![
-                types::DetectionPoint::new(0.0, 0.5),
-                types::DetectionPoint::new(1.0, 0.5),
-            ],
+            line_direction: DetectionLineDirection::Both,
+            points: vec![DetectionPoint::new(0.0, 0.5), DetectionPoint::new(1.0, 0.5)],
         };
-        let mut crossing_face = TrackedObject {
-            track_id: 204,
-            class_id: 0,
-            label: "face".to_string(),
-            confidence: 0.97,
-            quality_score: Some(0.91),
-            embedding: None,
-            bbox: BoundingBox::new(0.4, 0.4, 0.6, 0.6),
-            face: None,
-            // 从 y=0.4 移动到 y=0.6，跨越 y=0.5 绊线
-            trajectory: vec![(0.5, 0.4), (0.5, 0.6)],
-        };
-        let caps_line = evaluator.evaluate_captures(
-            std::slice::from_ref(&line_rule),
-            std::slice::from_ref(&crossing_face),
-            &mut tracker,
-            9000,
-            5000,
-        );
-        assert_eq!(caps_line.len(), 1, "跨越绊线的人脸应被成功抓拍");
-        assert_eq!(caps_line[0].track_id, 204);
-
-        // 未跨越绊线的目标不抓拍
-        crossing_face.trajectory = vec![(0.5, 0.2), (0.5, 0.3)];
-        crossing_face.track_id = 205;
-        let caps_no_cross = evaluator.evaluate_captures(
-            &[line_rule],
-            std::slice::from_ref(&crossing_face),
-            &mut tracker,
-            9100,
-            5000,
-        );
-        assert!(caps_no_cross.is_empty(), "未跨越绊线的目标不应触发抓拍");
+        let crossing = capture_obj("face", 0.6, vec![(0.5, 0.4), (0.5, 0.6)]);
+        let staying = capture_obj("face", 0.3, vec![(0.5, 0.2), (0.5, 0.3)]);
+        assert!(is_capture_triggering(
+            std::slice::from_ref(&line),
+            &crossing
+        ));
+        assert!(!is_capture_triggering(&[line], &staying));
     }
 }

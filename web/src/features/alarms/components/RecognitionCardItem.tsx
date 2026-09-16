@@ -4,6 +4,7 @@ import { evidenceApi } from '../../../lib/api'
 import type { RecognitionRecord } from '../../../types'
 import { formatCosineSimilarityPercent } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
+import { EvidenceOriginBadge } from './EvidenceOriginBadge'
 import { ImagePreviewModal } from './ImagePreviewModal'
 import { RecognitionEvidencePreview } from './RecognitionEvidencePreview'
 
@@ -80,10 +81,17 @@ export function RecognitionCardItem({
         </span>
 
         <span
-          className="max-w-[130px] truncate text-[11px] font-medium text-[var(--text-secondary)]"
+          className="flex shrink-0 items-center gap-1.5"
           title={cameraName || recognition.cameraId}
         >
-          {cameraName || recognition.cameraId}
+          <EvidenceOriginBadge
+            imageSource={recognition.imageSource}
+            imageStream={recognition.imageStream}
+            t={t}
+          />
+          <span className="max-w-[130px] truncate text-[11px] font-medium text-[var(--text-secondary)]">
+            {cameraName || recognition.cameraId}
+          </span>
         </span>
       </div>
 

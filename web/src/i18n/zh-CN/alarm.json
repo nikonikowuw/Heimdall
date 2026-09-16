@@ -135,7 +135,11 @@
     "sortedBySimilarity": "相似度由高至低排列",
     "compareView": "并排对比",
     "noCandidates": "底库无符合门槛的候选人",
-    "cancel": "取消"
+    "cancel": "取消",
+    "peakFrame": "最优帧",
+    "peakFrameHint": "该凭据取自结算窗口内质量最优的一帧，而非触发当帧",
+    "subStream": "子码流",
+    "subStreamHint": "该凭据分辨率受分析子码流上限约束，未使用主码流取证"
   },
   "modal": {
     "fullImage": "全景超清大图",

@@ -135,7 +135,11 @@
     "sortedBySimilarity": "相似度由高至低排列",
     "compareView": "並排對比",
     "noCandidates": "底庫無符合門檻的候選人",
-    "cancel": "取消"
+    "cancel": "取消",
+    "peakFrame": "最優帧",
+    "peakFrameHint": "該憑證取自結算視窗內品質最優的一帧，而非觸發當帧",
+    "subStream": "子碼流",
+    "subStreamHint": "該憑證解析度受分析子碼流上限約束，未使用主碼流取證"
   },
   "modal": {
     "fullImage": "全景超清大圖",

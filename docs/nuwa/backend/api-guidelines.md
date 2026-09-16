@@ -41,6 +41,13 @@
 当前 [AlarmDto](../../../crates/api/src/routes/alarm.rs) 使用平铺的 `imageId` / `cropImageId` 与 `bboxJson` 字符串；不要求改成 `evidence` / `target` 包装。
 稳定 `ruleId` 与 `evidenceStatus` 是待实现的增量字段，接入时同步持久化、DTO、WS 类型和消费者；图片生成状态不能复用人工处理的 `status`。
 
+[CaptureDto](../../../crates/api/src/routes/evidence.rs) / [RecognitionDto](../../../crates/api/src/routes/evidence.rs)
+已暴露证据图来源：`imageSource` / `imageStream` / `imagePtsMs` / `fusedCount` / `templateQuality`。
+其中 `imageSource` / `imageStream` 是强类型枚举（TS 联合类型），库内未知取值与空串统一序列化为 `null`；
+`imagePtsMs` 为 `null` 表示与检测轴不可比或未记录，**不是** 0 时标。
+新增枚举取值必须同时升级宿主与前端：旧前端对未知取值的行为是「不渲染徽标」，而非报错。
+`alarm_records` 尚未加同类列（告警不走峰值候选路径，`image_source` 无变化）；若需评估告警特写图的降级率，另立迁移。
+
 ## 快照编码系统配置
 
 快照编码质量与裁剪参数统一由 `GET/PUT /api/v1/system/snapshot/config` 管理：

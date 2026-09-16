@@ -13,6 +13,15 @@ pub struct FaceDetailObject {
     pub quality_score: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<String>,
+    /// 当前模板参与融合的非冗余帧数。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fused_count: Option<u32>,
+    /// 当前模板参与融合帧的质量加权均值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_quality: Option<f32>,
+    /// 仅在模板首次成熟的帧上发射 `true`，作为宿主结算握手。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_mature: Option<bool>,
 }
 
 /// 宿主检测解析器消费的稳定目标对象。
@@ -135,6 +144,9 @@ mod tests {
                 confidence: 0.92,
                 quality_score: Some(0.88),
                 embedding: None,
+                fused_count: None,
+                template_quality: None,
+                template_mature: None,
             }),
         }];
 
@@ -167,11 +179,17 @@ mod tests {
                 confidence: 0.92,
                 quality_score: Some(0.9),
                 embedding: Some(encoded),
+                fused_count: Some(2),
+                template_quality: Some(0.86),
+                template_mature: Some(true),
             }),
         };
         let json = serde_json::to_string(&object).expect("目标序列化应成功");
         assert!(json.contains("face"));
         assert!(json.contains("embedding"));
+        assert!(json.contains("\"fused_count\":2"));
+        assert!(json.contains("\"template_quality\":0.86"));
+        assert!(json.contains("\"template_mature\":true"));
     }
 
     #[test]

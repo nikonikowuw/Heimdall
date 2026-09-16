@@ -289,3 +289,95 @@ fn test_v8_migration_adds_stream_mode_with_default_auto() {
         .expect("query stream_mode");
     assert_eq!(stream_mode, "auto");
 }
+
+#[test]
+fn test_v14_migration_backfills_evidence_origin_without_guessing_unknowns() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    let v1 = include_str!("../src/migration/migrations/V1__init_schema.sql");
+    let v2 = include_str!("../src/migration/migrations/V2__evidence_triad_and_galleries.sql");
+    let v14 = include_str!(
+        "../src/migration/migrations/V14__evidence_image_source_and_template_metadata.sql"
+    );
+
+    conn.execute_batch(v1).expect("apply V1");
+    conn.execute_batch(v2).expect("apply V2");
+    conn.execute(
+        r#"
+        INSERT INTO capture_records (
+            capture_id, camera_id, track_id, target_label, confidence, quality_score,
+            bbox_json, image_id, image_rel_path, crop_image_id, crop_image_rel_path,
+            captured_at
+        ) VALUES (
+            'capture_origin_v14', 'CAM_V14', 9, 'face', 0.97, 0.9,
+            '[]', 'image_v14', 'CAM_V14/image_v14.jpg', 'crop_v14', 'CAM_V14/crop_v14.jpg',
+            CURRENT_TIMESTAMP
+        )
+        "#,
+        [],
+    )
+    .expect("insert capture before migration");
+    conn.execute(
+        r#"
+        INSERT INTO recognition_records (
+            recognition_id, camera_id, gallery_id, subject_id, subject_name, similarity,
+            field_crop_path, registered_photo_path, recognized_at
+        ) VALUES (
+            'recognition_origin_v14', 'CAM_V14', 'default', 'subject_v14', 'V14', 0.9,
+            'CAM_V14/crop_v14.jpg', 'galleries/subject_v14.jpg', CURRENT_TIMESTAMP
+        )
+        "#,
+        [],
+    )
+    .expect("insert recognition before migration");
+
+    conn.execute_batch(v14).expect("apply V14");
+
+    type Origin = (String, String, i64, Option<i64>, Option<f64>);
+    let capture: Origin = conn
+        .query_row(
+            "SELECT image_source, image_stream, image_pts_ms, fused_count, template_quality
+             FROM capture_records WHERE capture_id = 'capture_origin_v14';",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("query capture origin");
+
+    // 1. 峰值候选机制与本迁移同批引入，更早的记录必然来自靶向快拍路径 → 可安全回填
+    assert_eq!(capture.0, "targeted");
+    // 2. 其余三列在旧 schema 中无等价来源：保持「未标注 / 未记录」，不得用近似值伪装已知事实
+    assert_eq!(capture.1, "");
+    assert_eq!(capture.2, 0);
+    assert_eq!(capture.3, None);
+    assert_eq!(capture.4, None);
+
+    let recognition: Origin = conn
+        .query_row(
+            "SELECT image_source, image_stream, image_pts_ms, fused_count, template_quality
+             FROM recognition_records WHERE recognition_id = 'recognition_origin_v14';",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("query recognition origin");
+    assert_eq!(recognition.0, "targeted");
+    assert_eq!(recognition.1, "");
+    assert_eq!(recognition.2, 0);
+    assert_eq!(recognition.3, None);
+    assert_eq!(recognition.4, None);
+}

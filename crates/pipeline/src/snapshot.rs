@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{
     AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
 };
-use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -21,12 +21,13 @@ use media::decoder::{DecodeDeliveryPolicy, VideoDecoder};
 use media::ring_buffer::MainStreamRingBuffer;
 use media::SnapEncoder;
 use tokio::sync::oneshot;
-use types::{BoundingBox, FrameRef};
+use types::{BoundingBox, EvidenceImageSource, EvidenceImageStream, FrameRef};
 
+use crate::capture_settle::CandidateEvidence;
 use crate::error::PipelineError;
 
 /// 快照抓拍产物信息
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SnapshotResult {
     pub image_id: String,
     pub crop_image_id: String,
@@ -35,8 +36,34 @@ pub struct SnapshotResult {
     pub file_size_bytes: usize,
     pub width: u32,
     pub height: u32,
-    /// 是否使用了子码流候选帧（历史字段名；主码流 decoded_ring 复用不会置 true）
-    pub is_fallback_sub_stream: bool,
+    /// 证据图实际采用的帧 PTS（检测流轴）。
+    ///
+    /// INV-3 审计用：调用方拿它与事件几何的 PTS 比对，一旦回溯/降级取到了另一刻的
+    /// 帧，不一致会显式可见，而不是静默产出一对时空错配的「图 + 框」。
+    pub frame_pts_ms: i64,
+    /// 证据图产生路径（峰值候选 / 靶向快拍）。
+    pub image_source: EvidenceImageSource,
+    /// 证据图所属码流（主码流高分辨率 / 子码流）。
+    pub image_stream: EvidenceImageStream,
+}
+
+impl SnapshotResult {
+    /// 子码流帧：INV-3 同轴审计与日志降级判定均以此为准。
+    pub fn is_sub_stream(&self) -> bool {
+        self.image_stream.is_sub()
+    }
+
+    /// 可与检测轴直接比较的证据帧 PTS（不可比时返回 0）。
+    ///
+    /// 主码流靶向快拍帧位于主码流时钟轴（原点由该路 RTSP PLAY 应答决定，见
+    /// `EvidenceTarget`），与检测轴不可直接比较。落库时写 0 表示「不可比」，
+    /// 而不是写入一个看起来可用、实际跨轴的时标让人误读时序。
+    pub fn comparable_frame_pts_ms(&self) -> i64 {
+        match (self.image_source, self.image_stream) {
+            (EvidenceImageSource::Targeted, EvidenceImageStream::Main) => 0,
+            _ => self.frame_pts_ms,
+        }
+    }
 }
 
 /// 证据快照抓拍策略模式
@@ -290,29 +317,94 @@ impl AtomicSnapshotConfig {
     }
 }
 
-const SNAPSHOT_WORK_QUEUE_CAPACITY: usize = 8;
+/// 高优先级通道（正式证据）容量。告警/结算证据绝不能被候选编码的突发流量顶掉。
+const SNAPSHOT_EVIDENCE_QUEUE_CAPACITY: usize = 8;
+/// 低优先级通道（峰值候选编码）容量。满载即刻拒绝，候选缺失仅导致结算回退当帧快照。
+const SNAPSHOT_CANDIDATE_QUEUE_CAPACITY: usize = 4;
 const SNAPSHOT_WORKER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SNAPSHOT_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// 快照作业优先级通道。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotLane {
+    /// 告警 / 结算证据：必须产出，不得被候选编码挤占。
+    Evidence,
+    /// 峰值候选编码：可丢弃，丢弃后结算回退当帧快照。
+    Candidate,
+}
+
+impl SnapshotLane {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Evidence => "evidence",
+            Self::Candidate => "candidate",
+        }
+    }
+}
+
+/// 快照作业：一条作业要么直接产出正式证据，要么只编码峰值候选字节。
+enum SnapshotTask {
+    /// 正式证据：编码并直接落盘至 `{camera}/`。
+    Evidence {
+        frame: FrameRef,
+        target_bbox: Option<BoundingBox>,
+        stream: EvidenceImageStream,
+    },
+    /// 峰值候选：仅编码为内存字节，结算时再写盘（INV-5：无盘上中间态）。
+    EncodeCandidate {
+        frame: FrameRef,
+        target_bbox: Option<BoundingBox>,
+        stream: EvidenceImageStream,
+    },
+    /// 结算落盘：把已驻留内存的候选字节一次性写入正式证据目录。
+    ///
+    /// 走本线程而非 `spawn_blocking`：证据文件落盘属于
+    /// `docs/nuwa/backend/concurrency-guidelines.md` 规定的固定专用 OS Worker 职责。
+    WriteCandidate { evidence: CandidateEvidence },
+}
+
+/// 编码后的峰值候选字节（内存驻留；结算时写入正式证据目录）。
+#[derive(Debug, Clone)]
+pub(crate) struct EncodedCandidate {
+    /// 全景 JPEG 字节
+    pub full_jpeg: Vec<u8>,
+    /// 特写 JPEG 字节（无有效裁剪时与全景同源）
+    pub crop_jpeg: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// 快照作业产物。
+enum SnapshotPayload {
+    /// 正式证据：已落盘
+    Evidence(SnapshotResult),
+    /// 峰值候选：编码字节
+    Candidate(EncodedCandidate),
+}
+
 struct SnapshotWork {
     camera_id: String,
-    frame: FrameRef,
-    target_bbox: Option<BoundingBox>,
-    is_sub_stream: bool,
+    task: SnapshotTask,
     base_evidence_dir: PathBuf,
     config: SnapshotConfig,
-    reply: oneshot::Sender<Result<SnapshotResult, PipelineError>>,
+    reply: oneshot::Sender<Result<SnapshotPayload, PipelineError>>,
 }
 
 struct SnapshotWorker {
-    tx: Option<SyncSender<SnapshotWork>>,
+    /// 高优先级队列：正式证据落盘（告警 / 结算）。
+    evidence_tx: Option<SyncSender<SnapshotWork>>,
+    /// 低优先级队列：峰值候选编码。
+    candidate_tx: Option<SyncSender<SnapshotWork>>,
     cancel: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
 impl SnapshotWorker {
     fn new() -> Result<Self, String> {
-        let (tx, rx) = mpsc::sync_channel::<SnapshotWork>(SNAPSHOT_WORK_QUEUE_CAPACITY);
+        let (evidence_tx, evidence_rx) =
+            mpsc::sync_channel::<SnapshotWork>(SNAPSHOT_EVIDENCE_QUEUE_CAPACITY);
+        let (candidate_tx, candidate_rx) =
+            mpsc::sync_channel::<SnapshotWork>(SNAPSHOT_CANDIDATE_QUEUE_CAPACITY);
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let join = thread::Builder::new()
@@ -322,30 +414,65 @@ impl SnapshotWorker {
                 let encoder = SnapEncoder::try_new();
                 tracing::info!(encoder = %encoder.name(), "快照专用编码线程已就绪");
                 while !worker_cancel.load(Ordering::Acquire) {
-                    let work = match rx.recv_timeout(SNAPSHOT_WORKER_POLL_INTERVAL) {
+                    // 优先排空高优先级队列：候选编码再频繁，也不得推迟一条告警证据。
+                    // 只有高优先级队列为空时才以 50ms 超时等候选作业，硬件上下文仍在单线程串行。
+                    let work = match evidence_rx.try_recv() {
                         Ok(work) => work,
-                        Err(RecvTimeoutError::Timeout) => continue,
-                        Err(RecvTimeoutError::Disconnected) => break,
+                        Err(TryRecvError::Disconnected) => break,
+                        Err(TryRecvError::Empty) => {
+                            match candidate_rx.recv_timeout(SNAPSHOT_WORKER_POLL_INTERVAL) {
+                                Ok(work) => work,
+                                Err(RecvTimeoutError::Timeout) => continue,
+                                Err(RecvTimeoutError::Disconnected) => {
+                                    // 候选通道关闭后仍须把证据队列排空再停机。
+                                    match evidence_rx.recv_timeout(SNAPSHOT_WORKER_POLL_INTERVAL) {
+                                        Ok(work) => work,
+                                        Err(RecvTimeoutError::Timeout) => continue,
+                                        Err(RecvTimeoutError::Disconnected) => break,
+                                    }
+                                }
+                            }
+                        }
                     };
                     if worker_cancel.load(Ordering::Acquire) {
                         break;
                     }
-                    let result = encode_and_save_snapshot(
-                        &work.camera_id,
-                        work.frame,
-                        work.target_bbox,
-                        &work.base_evidence_dir,
-                        work.is_sub_stream,
-                        &work.config,
-                        &encoder,
-                    );
+                    let result = match work.task {
+                        SnapshotTask::Evidence {
+                            frame,
+                            target_bbox,
+                            stream,
+                        } => encode_and_save_snapshot(
+                            &work.camera_id,
+                            frame,
+                            target_bbox,
+                            &work.base_evidence_dir,
+                            stream,
+                            &work.config,
+                            &encoder,
+                        )
+                        .map(SnapshotPayload::Evidence),
+                        SnapshotTask::EncodeCandidate {
+                            frame,
+                            target_bbox,
+                            stream,
+                        } => encode_candidate(frame, target_bbox, stream, &work.config, &encoder)
+                            .map(SnapshotPayload::Candidate),
+                        SnapshotTask::WriteCandidate { evidence } => write_candidate_evidence(
+                            &work.camera_id,
+                            &evidence,
+                            &work.base_evidence_dir,
+                        )
+                        .map(SnapshotPayload::Evidence),
+                    };
                     let _ = work.reply.send(result);
                 }
                 tracing::info!("快照专用编码线程已退出");
             })
             .map_err(|error| format!("创建快照专用线程失败: {error}"))?;
         Ok(Self {
-            tx: Some(tx),
+            evidence_tx: Some(evidence_tx),
+            candidate_tx: Some(candidate_tx),
             cancel,
             join: Some(join),
         })
@@ -355,7 +482,11 @@ impl SnapshotWorker {
 impl std::fmt::Debug for SnapshotWorker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SnapshotWorker")
-            .field("queue_capacity", &SNAPSHOT_WORK_QUEUE_CAPACITY)
+            .field("evidence_queue_capacity", &SNAPSHOT_EVIDENCE_QUEUE_CAPACITY)
+            .field(
+                "candidate_queue_capacity",
+                &SNAPSHOT_CANDIDATE_QUEUE_CAPACITY,
+            )
             .field("running", &self.join.is_some())
             .finish()
     }
@@ -364,7 +495,8 @@ impl std::fmt::Debug for SnapshotWorker {
 impl Drop for SnapshotWorker {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
-        self.tx.take();
+        self.evidence_tx.take();
+        self.candidate_tx.take();
 
         let Some(join) = self.join.take() else {
             return;
@@ -770,8 +902,88 @@ impl SnapshotEngine {
         camera_id: &str,
         frame: FrameRef,
         target_bbox: Option<BoundingBox>,
-        is_sub_stream: bool,
+        stream: EvidenceImageStream,
     ) -> Result<SnapshotResult, PipelineError> {
+        match self
+            .dispatch(
+                camera_id,
+                SnapshotTask::Evidence {
+                    frame,
+                    target_bbox,
+                    stream,
+                },
+                SnapshotLane::Evidence,
+            )
+            .await?
+        {
+            SnapshotPayload::Evidence(snapshot) => Ok(snapshot),
+            SnapshotPayload::Candidate(_) => {
+                Err(PipelineError::Snapshot("快照作业产物类型不匹配".into()))
+            }
+        }
+    }
+
+    /// 将峰值候选编码作业提交至低优先级通道（只编码，不落盘）。
+    ///
+    /// 返回的字节由 `capture_settle` 控制器按路预算登记驻留；结算时经
+    /// [`SnapshotTask::WriteCandidate`] 一次性写入正式证据目录，因此不存在任何盘上中间态。
+    /// 低优先级意味着候选编码满载只会拒绝自身，绝不会挤占告警证据队列。
+    pub(crate) async fn encode_candidate_async(
+        &self,
+        camera_id: &str,
+        frame: FrameRef,
+        target_bbox: Option<BoundingBox>,
+        stream: EvidenceImageStream,
+    ) -> Result<EncodedCandidate, PipelineError> {
+        match self
+            .dispatch(
+                camera_id,
+                SnapshotTask::EncodeCandidate {
+                    frame,
+                    target_bbox,
+                    stream,
+                },
+                SnapshotLane::Candidate,
+            )
+            .await?
+        {
+            SnapshotPayload::Candidate(candidate) => Ok(candidate),
+            SnapshotPayload::Evidence(_) => {
+                Err(PipelineError::Snapshot("快照作业产物类型不匹配".into()))
+            }
+        }
+    }
+
+    /// 把已驻留内存的峰值候选字节一次性写入正式证据目录（结算路径）。
+    ///
+    /// 走高优先级通道：结算写盘决定一条抓拍记录能否落库，不允许因候选编码突发而丢失。
+    pub(crate) async fn write_candidate_async(
+        &self,
+        camera_id: &str,
+        evidence: CandidateEvidence,
+    ) -> Result<SnapshotResult, PipelineError> {
+        match self
+            .dispatch(
+                camera_id,
+                SnapshotTask::WriteCandidate { evidence },
+                SnapshotLane::Evidence,
+            )
+            .await?
+        {
+            SnapshotPayload::Evidence(snapshot) => Ok(snapshot),
+            SnapshotPayload::Candidate(_) => {
+                Err(PipelineError::Snapshot("快照作业产物类型不匹配".into()))
+            }
+        }
+    }
+
+    /// 提交作业到指定优先级通道；满载即刻拒绝，不阻塞 Tokio worker 也不堆积。
+    async fn dispatch(
+        &self,
+        camera_id: &str,
+        task: SnapshotTask,
+        lane: SnapshotLane,
+    ) -> Result<SnapshotPayload, PipelineError> {
         let worker = self
             .worker
             .as_ref()
@@ -779,27 +991,32 @@ impl SnapshotEngine {
         let (reply, result) = oneshot::channel();
         let work = SnapshotWork {
             camera_id: camera_id.to_string(),
-            frame,
-            target_bbox,
-            is_sub_stream,
+            task,
             base_evidence_dir: self.base_evidence_dir.clone(),
             config: self.config(),
             reply,
         };
-        let sender = worker
-            .tx
-            .as_ref()
-            .ok_or_else(|| PipelineError::Snapshot("快照专用线程已关闭".into()))?;
+        let sender = match lane {
+            SnapshotLane::Evidence => worker.evidence_tx.as_ref(),
+            SnapshotLane::Candidate => worker.candidate_tx.as_ref(),
+        }
+        .ok_or_else(|| PipelineError::Snapshot("快照专用线程已关闭".into()))?;
+
         match sender.try_send(work) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                tracing::warn!(camera_id, "快照专用队列已满，丢弃本次抓拍");
+                tracing::warn!(
+                    camera_id,
+                    lane = lane.as_str(),
+                    "快照专用队列已满，丢弃本次作业"
+                );
                 return Err(PipelineError::Snapshot("快照工作队列已满".into()));
             }
             Err(TrySendError::Disconnected(_)) => {
                 return Err(PipelineError::Snapshot("快照专用线程已退出".into()));
             }
         }
+
         result
             .await
             .map_err(|_| PipelineError::Snapshot("快照专用线程未返回结果".into()))?
@@ -825,8 +1042,17 @@ impl SnapshotEngine {
             )
             .await?;
 
-        self.save_snapshot_async(camera_id, frame, target_bbox, is_fallback)
-            .await
+        self.save_snapshot_async(
+            camera_id,
+            frame,
+            target_bbox,
+            if is_fallback {
+                EvidenceImageStream::Sub
+            } else {
+                EvidenceImageStream::Main
+            },
+        )
+        .await
     }
 }
 
@@ -836,47 +1062,13 @@ pub(crate) fn encode_and_save_snapshot(
     frame: FrameRef,
     target_bbox: Option<BoundingBox>,
     base_evidence_dir: &std::path::Path,
-    is_fallback: bool,
+    stream: EvidenceImageStream,
     config: &SnapshotConfig,
     encoder: &SnapEncoder,
 ) -> Result<SnapshotResult, PipelineError> {
-    // 0. 物理存储空间与 Inode 全维度硬断路器 (Storage Circuit Breaker)
-    // 写入前做轻量级 statvfs 预检：根据健康决策评估硬熔断与紧急抓拍降级
-    if let Ok(stat) = crate::storage_cleaner::stat_fs(base_evidence_dir) {
-        let decision = crate::storage_cleaner::StorageCircuitBreaker::evaluate_with_defaults(&stat);
-        if decision.is_circuit_broken {
-            let reason = decision
-                .reason
-                .as_deref()
-                .unwrap_or("存储资源严重匮乏触发熔断");
-            tracing::error!(
-                %camera_id,
-                %reason,
-                "触发存储写盘硬熔断保护，拒绝写入快照以保全系统数据库核心生命线"
-            );
-            return Err(PipelineError::Snapshot(format!(
-                "触发写盘断路保护: {reason}"
-            )));
-        }
+    check_storage_breaker(camera_id, base_evidence_dir, target_bbox)?;
 
-        // 紧急严重水位：抑制普通抓拍，仅放行携带靶向检测目标的违规告警凭据
-        if !decision.allow_normal_capture && target_bbox.is_none() {
-            let reason = decision
-                .reason
-                .as_deref()
-                .unwrap_or("存储处于紧急水位，已抑制普通抓拍");
-            tracing::warn!(
-                %camera_id,
-                %reason,
-                "存储处于紧急水位：自动抑制普通抓拍写入，保全关键违规告警证据"
-            );
-            return Err(PipelineError::Snapshot(format!(
-                "存储紧急降级抑制: {reason}"
-            )));
-        }
-    }
-
-    let (panoramic_q, crop_q) = config.quality_for_stream(is_fallback);
+    let (panoramic_q, crop_q) = config.quality_for_stream(stream.is_sub());
 
     // 1. [snapshot_readback_path] 完成全景与特写编码后再写盘。
     // CPU fallback 会复用同一次 D2H readback，硬件路径也保持单线程串行。
@@ -933,7 +1125,7 @@ pub(crate) fn encode_and_save_snapshot(
         encoder = %encoder.name(),
         file_size_bytes,
         frame_pts = frame.timestamp,
-        is_fallback,
+        image_stream = stream.as_str(),
         "靶向证据高清抓拍完成 (dedicated snapshot worker)"
     );
 
@@ -945,7 +1137,144 @@ pub(crate) fn encode_and_save_snapshot(
         file_size_bytes,
         width,
         height,
-        is_fallback_sub_stream: is_fallback,
+        // 该证据图与 `frame` 同帧；`stream` 只描述来源码流，与时序无关。
+        frame_pts_ms: frame.timestamp,
+        image_source: EvidenceImageSource::Targeted,
+        image_stream: stream,
+    })
+}
+
+/// 物理存储空间与 Inode 全维度硬断路器 (Storage Circuit Breaker)。
+///
+/// 写入前做轻量级 statvfs 预检：硬熔断时拒绝任何写入；紧急水位时仅放行携带靶向目标的
+/// 告警凭据，普通抓拍一律抑制。
+fn check_storage_breaker(
+    camera_id: &str,
+    base_evidence_dir: &std::path::Path,
+    target_bbox: Option<BoundingBox>,
+) -> Result<(), PipelineError> {
+    if let Ok(stat) = crate::storage_cleaner::stat_fs(base_evidence_dir) {
+        let decision = crate::storage_cleaner::StorageCircuitBreaker::evaluate_with_defaults(&stat);
+        if decision.is_circuit_broken {
+            let reason = decision
+                .reason
+                .as_deref()
+                .unwrap_or("存储资源严重匮乏触发熔断");
+            tracing::error!(
+                %camera_id,
+                %reason,
+                "触发存储写盘硬熔断保护，拒绝写入快照以保全系统数据库核心生命线"
+            );
+            return Err(PipelineError::Snapshot(format!(
+                "触发写盘断路保护: {reason}"
+            )));
+        }
+
+        // 紧急严重水位：抑制普通抓拍，仅放行携带靶向检测目标的违规告警凭据
+        if !decision.allow_normal_capture && target_bbox.is_none() {
+            let reason = decision
+                .reason
+                .as_deref()
+                .unwrap_or("存储处于紧急水位，已抑制普通抓拍");
+            tracing::warn!(
+                %camera_id,
+                %reason,
+                "存储处于紧急水位：自动抑制普通抓拍写入，保全关键违规告警证据"
+            );
+            return Err(PipelineError::Snapshot(format!(
+                "存储紧急降级抑制: {reason}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 同步编码峰值候选（仅编码，不落盘；由专用编码线程串行执行）。
+pub(crate) fn encode_candidate(
+    frame: FrameRef,
+    target_bbox: Option<BoundingBox>,
+    stream: EvidenceImageStream,
+    config: &SnapshotConfig,
+    encoder: &SnapEncoder,
+) -> Result<EncodedCandidate, PipelineError> {
+    let (panoramic_q, crop_q) = config.quality_for_stream(stream.is_sub());
+
+    let (full_jpeg_bytes, crop_jpeg_bytes) = encoder
+        .encode_full_and_crop(
+            &frame,
+            target_bbox,
+            config.crop_padding_ratio,
+            panoramic_q,
+            crop_q,
+        )
+        .map_err(|e| PipelineError::Snapshot(format!("候选 JPEG 编码失败: {e}")))?;
+    let crop_jpeg_bytes = crop_jpeg_bytes.unwrap_or_else(|| full_jpeg_bytes.clone());
+
+    Ok(EncodedCandidate {
+        width: frame.width,
+        height: frame.height,
+        full_jpeg: full_jpeg_bytes,
+        crop_jpeg: crop_jpeg_bytes,
+    })
+}
+
+/// 将内存候选一次性写入正式证据目录（结算路径；复用原子写与存储断路器）。
+///
+/// 第二个文件写入失败时撤销第一个文件，避免半份证据进入 `capture_records`。
+fn write_candidate_evidence(
+    camera_id: &str,
+    evidence: &CandidateEvidence,
+    base_evidence_dir: &std::path::Path,
+) -> Result<SnapshotResult, PipelineError> {
+    check_storage_breaker(camera_id, base_evidence_dir, Some(evidence.geometry.bbox))?;
+
+    let cam_dir = base_evidence_dir.join(camera_id);
+    fs::create_dir_all(&cam_dir)
+        .map_err(|e| PipelineError::Snapshot(format!("创建证据目录失败: {e}")))?;
+
+    let image_id = format!("img_{}_{}", now_compact_ts(), uuid::Uuid::now_v7().simple());
+    let crop_image_id = format!(
+        "crop_{}_{}",
+        now_compact_ts(),
+        uuid::Uuid::now_v7().simple()
+    );
+    let full_path = cam_dir.join(format!("{image_id}.jpg"));
+    let crop_path = cam_dir.join(format!("{crop_image_id}.jpg"));
+    let image_rel_path = format!("{camera_id}/{image_id}.jpg");
+    let crop_image_rel_path = format!("{camera_id}/{crop_image_id}.jpg");
+
+    atomic_write_file(&full_path, &evidence.full_jpeg)
+        .map_err(|e| PipelineError::Snapshot(format!("写入候选全景图失败: {e}")))?;
+    if let Err(error) = atomic_write_file(&crop_path, &evidence.crop_jpeg) {
+        let _ = fs::remove_file(&full_path);
+        return Err(PipelineError::Snapshot(format!(
+            "写入候选特写图失败: {error}"
+        )));
+    }
+
+    tracing::info!(
+        camera_id = %camera_id,
+        image_id = %image_id,
+        crop_id = %crop_image_id,
+        frame_pts = evidence.geometry.pts_ms,
+        peak_quality = evidence.geometry.quality,
+        file_size_bytes = evidence.full_jpeg.len(),
+        "峰值候选已写入正式证据目录"
+    );
+
+    Ok(SnapshotResult {
+        image_id,
+        crop_image_id,
+        image_rel_path,
+        crop_image_rel_path,
+        file_size_bytes: evidence.full_jpeg.len(),
+        width: evidence.width,
+        height: evidence.height,
+        frame_pts_ms: evidence.geometry.pts_ms,
+        image_source: EvidenceImageSource::PeakCandidate,
+        // 用编码时刻的码流来源，而不是结算时刻重新采样的模式：
+        // 二者相差最多一个结算窗口，中途换流会让记录的来源描述失真。
+        image_stream: evidence.stream,
     })
 }
 
@@ -1042,7 +1371,7 @@ mod tests {
             .await
             .expect("抓拍应当成功");
 
-        assert!(result.is_fallback_sub_stream);
+        assert!(result.is_sub_stream());
         assert_eq!(result.width, 320);
         assert_eq!(result.height, 240);
         assert!(result.file_size_bytes > 0);
@@ -1200,7 +1529,7 @@ mod tests {
                         "cam_ovl",
                         frame,
                         Some(BoundingBox::new(0.1, 0.1, 0.5, 0.5)),
-                        false,
+                        EvidenceImageStream::Main,
                     )
                     .await
             });
@@ -1217,6 +1546,91 @@ mod tests {
 
         // 必然有部分任务由于超过有界队列阈值被及时拒绝，杜绝了无限内存泄漏
         assert!(overloaded > 0, "队列饱和时必须返回队列已满错误");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 回归：候选编码洪峰不得挤占正式证据队列。
+    ///
+    /// 旧实现让两类作业共用一条容量 8 的队列，候选先到就能把告警/结算证据顶出去。
+    /// 现在分为两条独立有界通道（证据 8 / 候选 4），本用例先灌候选洪峰、再提交少量
+    /// 证据：只要通道是独立的，证据就不可能因候选而失败；一旦退回共享队列，
+    /// 被候选填满的队列会直接拒掉证据，本断言就会失败。
+    #[tokio::test]
+    async fn evidence_lane_is_not_starved_by_candidate_flood() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_lane_isolation_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let engine = std::sync::Arc::new(SnapshotEngine::new(&temp_dir));
+        let dummy_nv12: std::sync::Arc<[u8]> = vec![128u8; (320 * 240 * 3 / 2) as usize].into();
+        let make_frame = || {
+            FrameRef::new(
+                "cam_lane".to_string(),
+                1741100000000,
+                320,
+                240,
+                StrideInfo::new(320, 240),
+                PixelFormat::Nv12,
+                FrameHandle::Host(dummy_nv12.clone()),
+            )
+        };
+
+        let mut join_set = tokio::task::JoinSet::new();
+        // 先用候选作业把候选通道灌满（远超其容量 4）。
+        for _ in 0..24 {
+            let engine_ref = engine.clone();
+            let frame = make_frame();
+            join_set.spawn(async move {
+                let result = engine_ref
+                    .encode_candidate_async(
+                        "cam_lane",
+                        frame,
+                        Some(BoundingBox::new(0.1, 0.1, 0.5, 0.5)),
+                        EvidenceImageStream::Main,
+                    )
+                    .await
+                    .map(|_| ());
+                (false, result)
+            });
+        }
+        tokio::task::yield_now().await;
+        // 再提交少量证据：证据通道容量 8，2 条证据无论候选多挤都必须进队。
+        for _ in 0..2 {
+            let engine_ref = engine.clone();
+            let frame = make_frame();
+            join_set.spawn(async move {
+                let result = engine_ref
+                    .save_snapshot_async(
+                        "cam_lane",
+                        frame,
+                        Some(BoundingBox::new(0.1, 0.1, 0.5, 0.5)),
+                        EvidenceImageStream::Main,
+                    )
+                    .await
+                    .map(|_| ());
+                (true, result)
+            });
+        }
+
+        let mut evidence_ok = 0;
+        let mut candidate_rejected = 0;
+        while let Some(res) = join_set.join_next().await {
+            let Ok((is_evidence, result)) = res else {
+                continue;
+            };
+            match (is_evidence, result) {
+                (true, Ok(())) => evidence_ok += 1,
+                (true, Err(error)) => panic!("候选洪峰不得导致证据被拒: {error}"),
+                (false, Err(_)) => candidate_rejected += 1,
+                (false, Ok(())) => {}
+            }
+        }
+        assert_eq!(evidence_ok, 2, "全部证据作业必须成功落盘");
+        assert!(
+            candidate_rejected > 0,
+            "候选洪峰必须体现为候选自身被拒绝（容量 4），而非无界堆积"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -1251,11 +1665,22 @@ mod tests {
             frame,
             Some(BoundingBox::new(0.2, 0.2, 0.6, 0.6)),
             &temp_dir,
-            false,
+            EvidenceImageStream::Main,
             &config,
             &encoder,
         );
         let res = res.expect("编码与落盘必须成功");
+        assert_eq!(
+            res.image_source,
+            EvidenceImageSource::Targeted,
+            "靶向快拍必须标记为 targeted，不能冒充峰值候选帧"
+        );
+        assert_eq!(res.image_stream, EvidenceImageStream::Main);
+        assert_eq!(
+            res.comparable_frame_pts_ms(),
+            0,
+            "主码流靶向帧位于另一条时钟轴，落库时标必须写 0 而非跨轴值"
+        );
 
         let full_file = temp_dir.join(&res.image_rel_path);
         let crop_file = temp_dir.join(&res.crop_image_rel_path);

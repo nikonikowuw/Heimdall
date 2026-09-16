@@ -22,6 +22,15 @@
 - 表名单数 snake_case；主键 `id`，事件保留唯一 `event_id: TEXT` 用于幂等。
 - 绝对时间用 `INTEGER/i64` UTC 毫秒（见 [全局约定](../guides/conventions.md#时间)），布尔用 0/1；图片/视频存文件，库内只保存相对路径。
 - Alarms、Captures、Recognitions 分开管理；告警支持待处理/已核验状态流转。
+- **证据图来源可追溯**：`capture_records` / `recognition_records` 必须记录 `image_source`
+  （`peak_candidate` / `targeted`）与 `image_stream`（`main` / `sub`），并附 `image_pts_ms`。
+  枚举取值定义在 [types/evidence.rs](../../../crates/types/src/evidence.rs)，库内以 snake_case 字符串存储，
+  空串表示「未标注」（迁移前遗留行），读取侧一律归一为 `null`，不得用默认值猜测语义。
+- `image_pts_ms` **只能在与检测轴同轴时写入**；跨轴取证帧（如主码流回溯）写 0 表示不可比，
+  否则会把两条不同时钟轴的时标混在一个列里。判定统一由
+  [`SnapshotResult::comparable_frame_pts_ms`](../../../crates/pipeline/src/snapshot.rs) 给出，不在 API 层重算。
+- 融合模板元数据（`fused_count` / `template_quality`）可空存储；一次性握手信号（如 `template_mature`）
+  不落库：把「是否成熟」这种事件写成列，只会得到无法解释的 NULL。
 - **[规划设计] 录像切片实体 (RecordSegments)**：独立于抓拍单张图管理，表名为 `record_segments`。记录 `camera_id`、`stream_type`、`start_time_ms`、`end_time_ms`、`duration_ms`、`file_path`（必须为相对路径）、`has_motion`、`has_alarm`、`alarm_ids` 及 `status`。必须建立 `(camera_id, start_time_ms, end_time_ms)` 与 `(status, has_alarm, start_time_ms)` 复合索引，满足时间轴毫秒级范围检索与高效淘汰。详见 [视频录像与回放引擎设计](../designs/video-recording-and-playback-engine.md)。
 - 查询封装在 Repository，`api` / `pipeline` 不直接使用 SeaORM DSL；列表必须有 `limit`。
 - 时间范围与摄像头过滤建立对应复合索引，例如 `(camera_id, timestamp)`；分页遵循 [API 契约](./api-guidelines.md#分页)。

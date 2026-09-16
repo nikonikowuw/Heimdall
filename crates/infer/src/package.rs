@@ -634,6 +634,14 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
         quality_score: Option<f32>,
         #[serde(default)]
         embedding: Option<String>,
+        #[serde(default, alias = "fusedCount")]
+        /// 融合帧计数由算法包声明，宿主只透传、不解释其取值上界：KMAX 属于包内契约，
+        /// 宿主在此硬编码区间会把“包内提高池上限”变成老宿主的硬拒绝。
+        fused_count: Option<u32>,
+        #[serde(default, alias = "templateQuality")]
+        template_quality: Option<f32>,
+        #[serde(default, alias = "templateMature")]
+        template_mature: Option<bool>,
     }
 
     #[derive(Deserialize)]
@@ -795,6 +803,8 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
             let f_bbox = raw_face.bbox.to_bounding_box()?;
             let f_conf = raw_face.confidence.unwrap_or(item.confidence);
             let f_qual = raw_face.quality_score.map(|s| s.clamp(0.0, 1.0));
+            let f_fused_count = raw_face.fused_count;
+            let f_template_quality = raw_face.template_quality.map(|s| s.clamp(0.0, 1.0));
             let f_emb = raw_face
                 .embedding
                 .as_deref()
@@ -805,6 +815,9 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
                     bbox: f_bbox,
                     confidence: f_conf,
                     quality_score: f_qual,
+                    fused_count: f_fused_count,
+                    template_quality: f_template_quality,
+                    template_mature: raw_face.template_mature,
                     embedding: f_emb.clone(),
                 }),
                 f_emb,
@@ -822,6 +835,9 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
                     bbox: f_bbox,
                     confidence: item.confidence,
                     quality_score,
+                    fused_count: None,
+                    template_quality: None,
+                    template_mature: None,
                     embedding: f_emb.clone(),
                 }),
                 f_emb,
@@ -1665,6 +1681,94 @@ mod tests {
         assert_eq!(face.bbox, BoundingBox::new(0.2, 0.22, 0.35, 0.45));
         assert_eq!(face.confidence, 0.96);
         assert_eq!(face.quality_score, Some(0.87));
+        assert_eq!(face.fused_count, None);
+        assert_eq!(face.template_quality, None);
+        assert_eq!(face.template_mature, None);
+    }
+
+    #[test]
+    fn test_parse_fusion_sidecar_fields_and_camel_aliases() {
+        let envelope = serde_json::json!({
+            "schema_version": 1,
+            "objects": [{
+                "class_id": 0,
+                "label": "person",
+                "confidence": 0.94,
+                "bbox": [0.1, 0.2, 0.5, 0.9],
+                "face": {
+                    "bbox": [0.2, 0.22, 0.35, 0.45],
+                    "confidence": 0.96,
+                    "quality_score": 0.87,
+                    "fused_count": 4,
+                    "template_quality": 0.81,
+                    "template_mature": true
+                }
+            }]
+        });
+        let detections = parse_alarm_objects_with_metadata(&envelope.to_string())
+            .expect("融合 sidecar 应解析成功");
+        let face = detections[0]
+            .detection
+            .face
+            .as_ref()
+            .expect("应有嵌套人脸详情");
+        assert_eq!(face.fused_count, Some(4));
+        assert_eq!(face.template_quality, Some(0.81));
+        assert_eq!(face.template_mature, Some(true));
+
+        let aliases = serde_json::json!({
+            "schema_version": 1,
+            "objects": [{
+                "class_id": 0,
+                "label": "person",
+                "confidence": 0.94,
+                "bbox": [0.1, 0.2, 0.5, 0.9],
+                "face": {
+                    "bbox": [0.2, 0.22, 0.35, 0.45],
+                    "fusedCount": 3,
+                    "templateQuality": 0.72,
+                    "templateMature": true
+                }
+            }]
+        });
+        let detections = parse_alarm_objects_with_metadata(&aliases.to_string())
+            .expect("camelCase sidecar 别名应解析成功");
+        let face = detections[0]
+            .detection
+            .face
+            .as_ref()
+            .expect("应有嵌套人脸详情");
+        assert_eq!(face.fused_count, Some(3));
+        assert_eq!(face.template_quality, Some(0.72));
+        assert_eq!(face.template_mature, Some(true));
+
+        // 融合帧计数是包内不变量（KMAX），宿主不解释其上界；越界只作为契约疑点记录，
+        // 不阻断整帧解析，否则老宿主会因为新包提高 KMAX 而丢弃该帧全部检测。
+        let oversized = serde_json::json!({
+            "schema_version": 1,
+            "objects": [{
+                "class_id": 0,
+                "label": "person",
+                "confidence": 0.94,
+                "bbox": [0.1, 0.2, 0.5, 0.9],
+                "face": {
+                    "bbox": [0.2, 0.22, 0.35, 0.45],
+                    "fused_count": 9
+                }
+            }]
+        });
+        let detections = parse_alarm_objects_with_metadata(&oversized.to_string())
+            .expect("融合帧计数越界不得阻断整帧解析");
+        assert_eq!(
+            detections[0]
+                .detection
+                .face
+                .as_ref()
+                .expect("应有嵌套人脸详情")
+                .fused_count,
+            Some(9),
+            "宿主必须原样透传包内声明的融合帧计数"
+        );
     }
 
     #[test]

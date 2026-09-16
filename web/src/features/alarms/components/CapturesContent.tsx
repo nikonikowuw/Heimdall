@@ -2,6 +2,7 @@ import React from 'react'
 import { Camera as CameraIcon, Clock } from 'lucide-react'
 import { evidenceApi } from '../../../lib/api'
 import type { CaptureRecord } from '../../../types'
+import { EvidenceOriginBadge } from './EvidenceOriginBadge'
 import { formatTimestamp, preloadImage } from '../utils'
 
 export interface CaptureCardItemProps {
@@ -46,6 +47,13 @@ export function CaptureCardItem({
             {capture.targetLabel}
           </span>
         </div>
+
+        <EvidenceOriginBadge
+          imageSource={capture.imageSource}
+          imageStream={capture.imageStream}
+          t={t}
+          className="absolute top-2 right-2"
+        />
       </div>
 
       <div className="space-y-1.5 p-3 text-xs">

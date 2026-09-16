@@ -20,6 +20,7 @@ use types::{DetectionRule, FrameRef, MotionGateConfig, StreamTag, TrackedObject}
 
 use infer::{InferenceWorker, InferenceWorkerHandle};
 
+use crate::capture_settle::{CaptureAction, RecordCandidateOutcome};
 use crate::events::{
     EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
     PipelineTrackEvent,
@@ -187,6 +188,11 @@ pub struct PumpMetrics {
     pub alarms_triggered: AtomicU64,
     /// 累计成功落地的证据快照数
     pub snapshots_saved: AtomicU64,
+    /// 因每路候选字节预算已满而被拒绝的峰值候选数。
+    ///
+    /// 该计数器上升说明结算将回退到当帧/环内证据（质量下降），是容量调优的唯一依据；
+    /// 不暴露它就只能看到“抓拍变差”，看不到“为何变差”。
+    pub candidate_budget_rejections: AtomicU64,
 }
 
 /// 抽帧节流控制器 (按目标 FPS 采样分析帧)
@@ -347,7 +353,7 @@ impl<'a> SnapshotRecorder<'a> {
                     algorithm_id = %self.algorithm_id,
                     target_pts = self.timestamp,
                     path = %snapshot_res.image_rel_path,
-                    is_fallback = snapshot_res.is_fallback_sub_stream,
+                    is_fallback = snapshot_res.is_sub_stream(),
                     "{context_desc}快照落地成功"
                 );
                 Ok(snapshot_res)
@@ -362,6 +368,185 @@ impl<'a> SnapshotRecorder<'a> {
                     "{context_desc}快照捕获失败"
                 );
                 Err(err_str)
+            }
+        }
+    }
+}
+
+/// 消费识别类抓拍结算动作：留存峰值候选 / 结算并发射通行抓拍事件。
+///
+/// - `RetainCandidate`：复用当帧 `analyzed_frame` 编码峰值候选并把字节驻留内存（覆盖旧候选，软失败）；
+/// - `Settle`：优先把内存候选一次性写入正式证据目录；写盘失败或本无候选时回退同帧快照或按
+///   最后可见 PTS 取证。`tracked_object` 的 bbox 在候选路径下替换为峰值帧几何（INV-3）。
+#[allow(clippy::too_many_arguments)]
+async fn execute_capture_actions(
+    pipeline_mgr: &PipelineManager,
+    camera_id: &str,
+    algorithm_id: &str,
+    actions: Vec<CaptureAction>,
+    analyzed_frame: &FrameRef,
+    timestamp: i64,
+    infer_metrics: &InstanceMetrics,
+    pump_metrics: &PumpMetrics,
+) {
+    for action in actions {
+        match action {
+            CaptureAction::RetainCandidate(request) => {
+                match pipeline_mgr
+                    .retain_capture_candidate(
+                        camera_id,
+                        algorithm_id,
+                        &request,
+                        analyzed_frame.clone(),
+                    )
+                    .await
+                {
+                    Ok(RecordCandidateOutcome::Accepted)
+                    | Ok(RecordCandidateOutcome::Dismissed) => {}
+                    Ok(RecordCandidateOutcome::RejectedBudget) => {
+                        pump_metrics
+                            .candidate_budget_rejections
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(error) => {
+                        tracing::debug!(
+                            camera_id,
+                            algorithm_id,
+                            track_id = request.track_id,
+                            pts = request.geometry.pts_ms,
+                            error = %error,
+                            "峰值候选编码留存失败 (软失败，不阻塞分析循环)"
+                        );
+                    }
+                }
+            }
+            CaptureAction::Settle(settle) => {
+                let settle = *settle;
+                let mut candidate_geometry = None;
+                let mut snapshot = None;
+                if let Some(candidate) = settle.candidate.as_ref() {
+                    // 结算即唯一一次落盘：此前候选仅以编码字节驻留内存。
+                    match pipeline_mgr
+                        .write_capture_candidate(camera_id, candidate)
+                        .await
+                    {
+                        Ok(result) => {
+                            snapshot = Some(result);
+                            candidate_geometry = Some(candidate.geometry);
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                camera_id,
+                                algorithm_id,
+                                track_id = settle.track_id,
+                                error = %error,
+                                "峰值候选写盘失败，回退当帧/环内取证"
+                            );
+                        }
+                    }
+                }
+
+                if snapshot.is_none() {
+                    let crop_bbox = settle
+                        .tracked_object
+                        .face_bbox()
+                        .unwrap_or(settle.tracked_object.bbox);
+                    let capture_result = if settle.target_in_current_frame
+                        && settle.last_seen_pts_ms == timestamp
+                    {
+                        pipeline_mgr
+                            .trigger_snapshot_for_frame(
+                                camera_id,
+                                timestamp,
+                                Some(crop_bbox),
+                                analyzed_frame.clone(),
+                            )
+                            .await
+                    } else {
+                        pipeline_mgr
+                            .trigger_snapshot(camera_id, settle.last_seen_pts_ms, Some(crop_bbox))
+                            .await
+                    };
+                    match capture_result {
+                        Ok(result) => snapshot = Some(result),
+                        Err(error) => {
+                            tracing::error!(
+                                camera_id,
+                                algorithm_id,
+                                track_id = settle.track_id,
+                                reason = settle.reason.as_str(),
+                                error = %error,
+                                "通行抓拍结算证据生成失败"
+                            );
+                        }
+                    }
+                }
+
+                if let Some(result) = &snapshot {
+                    // INV-3 审计：只有「无候选 → 回溯/回退取证」这条路径可能取到另一刻的帧。
+                    // 候选路径不能进这个比对：它的 `frame_pts_ms` 是**峰值帧**时标，与
+                    // `last_seen_pts_ms`（最后一次触发）本就不同，且事件几何已同步替换为峰值帧
+                    // 几何，属于设计预期而非不一致。
+                    // 子码流回退帧与检测帧同轴，可直接比对；主码流取证帧位于另一条 PTS 轴
+                    // （见 `EvidenceTarget`），跨轴比较无意义。
+                    if candidate_geometry.is_none()
+                        && result.is_sub_stream()
+                        && result.frame_pts_ms != settle.last_seen_pts_ms
+                    {
+                        tracing::warn!(
+                            camera_id,
+                            algorithm_id,
+                            track_id = settle.track_id,
+                            evidence_pts = result.frame_pts_ms,
+                            event_pts = settle.last_seen_pts_ms,
+                            "证据图与事件几何不在同一刻（取证降级），记录已保留但需审计"
+                        );
+                    }
+                    infer_metrics
+                        .snapshots_saved
+                        .fetch_add(1, Ordering::Relaxed);
+                    pump_metrics.snapshots_saved.fetch_add(1, Ordering::Relaxed);
+                    tracing::info!(
+                        camera_id,
+                        algorithm_id,
+                        track_id = settle.track_id,
+                        reason = settle.reason.as_str(),
+                        target_pts = settle.last_seen_pts_ms,
+                        path = %result.image_rel_path,
+                        // 目标 3 可追溯性：结算事件必须留下所用模板的成熟度凭据，
+                        // 否则事后无法分辨“抓拍差”是质量模型未成熟还是取帧降级。
+                        fused_count = tracing::field::debug(
+                            settle.tracked_object.face.as_ref().and_then(|face| face.fused_count)
+                        ),
+                        template_quality = tracing::field::debug(
+                            settle.tracked_object.face.as_ref().and_then(|face| face.template_quality)
+                        ),
+                        template_mature = tracing::field::debug(
+                            settle.tracked_object.face.as_ref().and_then(|face| face.template_mature)
+                        ),
+                        "通行抓拍结算完成"
+                    );
+                }
+
+                let mut event_object = settle.tracked_object;
+                if let Some(geometry) = candidate_geometry {
+                    // INV-3：事件 bbox 必须与所存图像同帧（候选提升时替换为峰值帧几何）。
+                    event_object.bbox = geometry.bbox;
+                    if let Some(face) = event_object.face.as_mut() {
+                        face.bbox = geometry.face_bbox.unwrap_or(geometry.bbox);
+                    }
+                }
+
+                pipeline_mgr.publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(
+                    PipelineCaptureEvent {
+                        capture_id: uuid::Uuid::now_v7().to_string(),
+                        camera_id: camera_id.to_string(),
+                        algorithm_id: algorithm_id.to_string(),
+                        tracked_object: event_object,
+                        snapshot,
+                        timestamp: settle.last_seen_pts_ms,
+                    },
+                )));
             }
         }
     }
@@ -605,28 +790,18 @@ impl AnalysisPump {
                                             pump_metrics: &pump_metrics,
                                         };
 
-                                        if !outcome.captures.is_empty() {
-                                            for target in outcome.captures {
-                                                let capture_id = uuid::Uuid::now_v7().to_string();
-                                                let crop_bbox = target.face_bbox().unwrap_or(target.bbox);
-                                                let snapshot = snapshot_recorder
-                                                    .capture(crop_bbox, "通行识别抓拍")
-                                                    .await
-                                                    .ok();
-
-                                                pipeline_mgr_infer.publish_analysis_event(
-                                                    PipelineAnalysisEvent::Capture(Box::new(
-                                                        PipelineCaptureEvent {
-                                                            capture_id,
-                                                            camera_id: cam_id_infer.clone(),
-                                                            algorithm_id: algorithm_id_infer.clone(),
-                                                            tracked_object: target,
-                                                            snapshot,
-                                                            timestamp,
-                                                        },
-                                                    )),
-                                                );
-                                            }
+                                        if !outcome.capture_actions.is_empty() {
+                                            execute_capture_actions(
+                                                &pipeline_mgr_infer,
+                                                &cam_id_infer,
+                                                &algorithm_id_infer,
+                                                outcome.capture_actions,
+                                                &analyzed_frame,
+                                                timestamp,
+                                                &infer_metrics,
+                                                &pump_metrics,
+                                            )
+                                            .await;
                                         }
 
                                         // 检测类算法：安全防范规则告警处理 (联动高清快照与 alarm.triggered 广播)
@@ -1079,6 +1254,204 @@ pub type SubStreamAnalysisPump = AnalysisPump;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture_settle::{CandidateRetainRequest, FrameGeometry};
+    use crate::test_support::{dir_entry_count, test_nv12_frame};
+    use types::{BoundingBox, FaceDetail};
+
+    fn capture_object(track_id: u64, bbox: BoundingBox, quality: f32) -> TrackedObject {
+        TrackedObject {
+            track_id,
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.95,
+            quality_score: Some(quality),
+            embedding: None,
+            bbox,
+            face: Some(FaceDetail {
+                bbox: BoundingBox::new(0.45, 0.35, 0.55, 0.5),
+                confidence: 0.95,
+                quality_score: Some(quality),
+                fused_count: None,
+                template_quality: None,
+                template_mature: None,
+                embedding: None,
+            }),
+            trajectory: vec![(0.5, 0.6)],
+        }
+    }
+
+    /// 结算动作必须把内存候选一次性写入正式证据目录，并将事件 bbox 对齐到所存图像同帧（INV-3）。
+    #[tokio::test]
+    async fn settle_action_writes_memory_candidate_and_aligns_event_geometry() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_capture_actions_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager = PipelineManager::with_all_options(
+            temp_dir.clone(),
+            crate::snapshot::SnapshotConfig::default(),
+            2,
+            1000,
+        );
+        let camera_id = "cam_action";
+        let algorithm_id = "algo_face";
+        let ctx = manager.get_or_create_context(camera_id).await;
+        let mut events = manager.subscribe_analysis_events();
+
+        // 峰值帧几何与当前帧刻意不同，用于验证事件几何被替换为峰值帧。
+        let peak_bbox = BoundingBox::new(0.4, 0.3, 0.6, 0.6);
+        let peak_face_bbox = BoundingBox::new(0.45, 0.35, 0.55, 0.5);
+        let peak_object = capture_object(3, peak_bbox, 0.86);
+        let current_bbox = BoundingBox::new(0.5, 0.4, 0.7, 0.7);
+        let current_object = capture_object(3, current_bbox, 0.80);
+
+        let _ = {
+            let mut settle = ctx
+                .capture_settle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            settle.observe(algorithm_id, std::slice::from_ref(&peak_object), &[], 1000)
+        };
+        manager
+            .retain_capture_candidate(
+                camera_id,
+                algorithm_id,
+                &CandidateRetainRequest {
+                    track_id: 3,
+                    geometry: FrameGeometry {
+                        bbox: peak_bbox,
+                        face_bbox: Some(peak_face_bbox),
+                        pts_ms: 1000,
+                        quality: 0.86,
+                    },
+                },
+                test_nv12_frame(camera_id, 1000),
+            )
+            .await
+            .expect("峰值候选留存失败");
+        assert_eq!(dir_entry_count(&temp_dir), 0, "留存阶段不得产生盘上产物");
+
+        let actions = {
+            let mut settle = ctx
+                .capture_settle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            settle.observe(
+                algorithm_id,
+                std::slice::from_ref(&current_object),
+                &[],
+                1600,
+            )
+        };
+        assert_eq!(actions.len(), 1, "平台期应只产出结算动作");
+
+        let infer_metrics = InstanceMetrics::default();
+        let pump_metrics = PumpMetrics::default();
+        execute_capture_actions(
+            &manager,
+            camera_id,
+            algorithm_id,
+            actions,
+            &test_nv12_frame(camera_id, 1600),
+            1600,
+            &infer_metrics,
+            &pump_metrics,
+        )
+        .await;
+
+        match events.recv().await.expect("通行抓拍事件") {
+            PipelineAnalysisEvent::Capture(event) => {
+                assert_eq!(event.timestamp, 1600);
+                assert_eq!(
+                    event.tracked_object.bbox, peak_bbox,
+                    "INV-3：事件 bbox 必须与所存图像同帧"
+                );
+                assert_eq!(
+                    event.tracked_object.face.as_ref().expect("人脸细节").bbox,
+                    peak_face_bbox,
+                    "INV-3：人脸 bbox 同样需对齐峰值帧"
+                );
+                let snapshot = event.snapshot.expect("候选结算必须产出证据快照");
+                assert!(snapshot
+                    .image_rel_path
+                    .starts_with(&format!("{camera_id}/")));
+                assert!(temp_dir.join(&snapshot.image_rel_path).is_file());
+                assert!(temp_dir.join(&snapshot.crop_image_rel_path).is_file());
+            }
+            other => panic!("期望通行抓拍事件，实际为 {other:?}"),
+        }
+        assert_eq!(infer_metrics.snapshots_saved.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            dir_entry_count(&temp_dir.join(camera_id)),
+            2,
+            "结算只应写下全景与特写两份正式证据"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 无候选可用（弱帧播种后未生成候选）时，结算必须回退为同帧快照取证，不得丢失事件。
+    #[tokio::test]
+    async fn settle_action_without_candidate_falls_back_to_frame_snapshot() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_capture_fallback_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager = PipelineManager::with_all_options(
+            temp_dir.clone(),
+            crate::snapshot::SnapshotConfig::default(),
+            2,
+            1000,
+        );
+        let camera_id = "cam_fallback";
+        let algorithm_id = "algo_face";
+        let ctx = manager.get_or_create_context(camera_id).await;
+        let mut events = manager.subscribe_analysis_events();
+
+        let object = capture_object(9, BoundingBox::new(0.4, 0.3, 0.6, 0.6), 0.86);
+        // 只推进状态机、不执行 RetainCandidate → 控制器无候选可写盘。
+        let _ = {
+            let mut settle = ctx
+                .capture_settle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            settle.observe(algorithm_id, std::slice::from_ref(&object), &[], 1000)
+        };
+        let actions = {
+            let mut settle = ctx
+                .capture_settle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            settle.observe(algorithm_id, std::slice::from_ref(&object), &[], 1600)
+        };
+
+        let infer_metrics = InstanceMetrics::default();
+        let pump_metrics = PumpMetrics::default();
+        execute_capture_actions(
+            &manager,
+            camera_id,
+            algorithm_id,
+            actions,
+            &test_nv12_frame(camera_id, 1600),
+            1600,
+            &infer_metrics,
+            &pump_metrics,
+        )
+        .await;
+
+        match events.recv().await.expect("通行抓拍事件") {
+            PipelineAnalysisEvent::Capture(event) => {
+                let snapshot = event.snapshot.expect("回退路径仍必须产出证据快照");
+                assert!(snapshot
+                    .image_rel_path
+                    .starts_with(&format!("{camera_id}/")));
+                assert!(temp_dir.join(&snapshot.image_rel_path).is_file());
+            }
+            other => panic!("期望通行抓拍事件，实际为 {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn test_fps_governor_unlimited() {

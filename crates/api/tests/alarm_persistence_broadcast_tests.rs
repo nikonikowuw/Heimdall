@@ -14,8 +14,8 @@ use pipeline::{
 use sea_orm::Set;
 use tower::ServiceExt;
 use types::{
-    BoundingBox, DetectionRuleRole, TrackedObject, TOPIC_ALARM_STATUS_CHANGED,
-    TOPIC_ALARM_TRIGGERED,
+    BoundingBox, DetectionRuleRole, EvidenceImageSource, EvidenceImageStream, FaceDetail,
+    TrackedObject, TOPIC_ALARM_STATUS_CHANGED, TOPIC_ALARM_TRIGGERED,
 };
 
 use api::AlarmDispatchService;
@@ -60,7 +60,10 @@ fn create_mock_alarm_event(
             file_size_bytes: 10240,
             width: 1920,
             height: 1080,
-            is_fallback_sub_stream: false,
+            // 证据图与事件同帧（INV-3 审计字段）
+            frame_pts_ms: timestamp,
+            image_source: EvidenceImageSource::Targeted,
+            image_stream: EvidenceImageStream::Main,
         })
     } else {
         None
@@ -377,7 +380,7 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
 
     let mut ws_rx = state.event_broadcaster.subscribe();
 
-    // 构建一个识别类客观通行抓拍事件
+    // 构建一个识别类客观通行抓拍事件（M2 结算峰值候选帧：内存候选字节落盘 + 融合模板特征）
     let capture_id = uuid::Uuid::now_v7().to_string();
     let mock_capture = PipelineCaptureEvent {
         capture_id: capture_id.clone(),
@@ -391,7 +394,15 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
             quality_score: Some(0.86),
             embedding: None,
             bbox: BoundingBox::new(0.3, 0.3, 0.5, 0.5),
-            face: None,
+            face: Some(FaceDetail {
+                bbox: BoundingBox::new(0.32, 0.32, 0.48, 0.48),
+                confidence: 0.98,
+                quality_score: Some(0.86),
+                fused_count: Some(4),
+                template_quality: Some(0.72),
+                template_mature: Some(true),
+                embedding: None,
+            }),
             trajectory: vec![(0.4, 0.4)],
         },
         snapshot: Some(SnapshotResult {
@@ -402,7 +413,10 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
             file_size_bytes: 10240,
             width: 1920,
             height: 1080,
-            is_fallback_sub_stream: false,
+            // 峰值帧与事件同一刻（结算前最后一帧即峰值）
+            frame_pts_ms: 1741100060000,
+            image_source: EvidenceImageSource::PeakCandidate,
+            image_stream: EvidenceImageStream::Sub,
         }),
         timestamp: 1741100060000,
     };
@@ -427,6 +441,12 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
     assert_eq!(cap.track_id, 301);
     assert_eq!(cap.image_rel_path, "2026/03/04/CAM-01/full_301.jpg");
     assert_eq!(cap.crop_image_rel_path, "2026/03/04/CAM-01/crop_301.jpg");
+    // 目标 3 可追溯性：来源路径/码流/帧 PTS 与所用融合模板元数据必须全部落库
+    assert_eq!(cap.image_source, "peak_candidate");
+    assert_eq!(cap.image_stream, "sub");
+    assert_eq!(cap.image_pts_ms, 1741100060000);
+    assert_eq!(cap.fused_count, Some(4));
+    assert_eq!(cap.template_quality, Some(0.72));
 
     // 2. 关键核心断言：alarm_records 表绝对不能产生虚假违规告警！
     let alarms = AlarmRepo::list_recent(&state.db, Some("CAM-01"), 10, 0)
@@ -471,7 +491,9 @@ async fn test_cold_start_pending_capture_drain_and_batch_persistence() {
                 file_size_bytes: 1024,
                 width: 1920,
                 height: 1080,
-                is_fallback_sub_stream: false,
+                frame_pts_ms: 1741100200000 + (i as i64) * 1000,
+                image_source: EvidenceImageSource::Targeted,
+                image_stream: EvidenceImageStream::Sub,
             }),
             timestamp: 1741100200000 + (i as i64) * 1000,
         };
@@ -503,6 +525,13 @@ async fn test_cold_start_pending_capture_drain_and_batch_persistence() {
         .await
         .unwrap();
     assert_eq!(captures.len(), 3, "所有冷启动积压通行抓拍必须全部落库");
+    // 冷启动补偿队列与实时通道共用同一落库映射：来源标识同样不能丢
+    assert!(
+        captures
+            .iter()
+            .all(|c| c.image_source == "targeted" && c.image_stream == "sub"),
+        "补偿落库必须保留证据来源标识"
+    );
 }
 
 #[tokio::test]

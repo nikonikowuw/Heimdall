@@ -20,6 +20,18 @@ pub struct Model {
     pub image_rel_path: String,
     pub crop_image_id: String,
     pub crop_image_rel_path: String,
+    /// 证据图产生路径（`peak_candidate` / `targeted`）；空串 = 未标注。
+    #[sea_orm(column_type = "Text")]
+    pub image_source: String,
+    /// 证据图所属码流（`main` / `sub`）；空串 = 未标注。
+    #[sea_orm(column_type = "Text")]
+    pub image_stream: String,
+    /// 证据图帧 PTS（仅与检测轴同轴时记录，不同轴或未知为 0）。
+    pub image_pts_ms: i64,
+    /// 匹配所用融合模板的参与帧数；无 sidecar 的旧包与未上报帧为 NULL。
+    pub fused_count: Option<i64>,
+    /// 匹配所用融合模板的质量加权均值；语义同上。
+    pub template_quality: Option<f32>,
     pub captured_at: DateTimeUtc,
     pub created_at: DateTimeUtc,
 }
