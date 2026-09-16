@@ -6,10 +6,20 @@ import React, {
   useState,
   useSyncExternalStore,
 } from 'react'
-import { Activity, ArrowLeft, Camera as CameraIcon, Layers, Pencil, Save, X } from 'lucide-react'
+import {
+  Activity,
+  ArrowLeft,
+  Camera as CameraIcon,
+  Layers,
+  Pencil,
+  RefreshCw,
+  Save,
+  TriangleAlert,
+  X,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LivePlayer } from '@/features/live/components/LivePlayer'
-import { algorithmApi, taskApi } from '@/lib/api'
+import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
 import { telemetryStore } from '@/lib/telemetryStore'
 import type {
   AlgoManifest,
@@ -20,6 +30,11 @@ import type {
   TaskAlgorithmInstanceDto,
   TaskConfigDto,
 } from '@/types'
+import {
+  summarizeInstanceApply,
+  unappliedNoticeLines,
+  type InstanceApplySummary,
+} from '../applyState'
 import { useUndoableState } from '../hooks/use-undoable-state'
 import { ActivityZonesSection } from './ActivityZonesSection'
 import { AlgoParamDrawer } from './AlgoParamDrawer'
@@ -40,6 +55,13 @@ import {
   isPointNearLine,
   ToolMode,
 } from './rulesStudioTypes'
+
+/** 保存反馈：已生效仅作瞬时提示；未收敛必须保留到用户重试或改配置；请求失败是另一类问题 */
+type SaveFeedback =
+  | { kind: 'applied' }
+  | { kind: 'unapplied'; summary: InstanceApplySummary }
+  | { kind: 'requestFailed'; message: string }
+  | { kind: 'conflict' }
 
 export interface LiveRulesStudioProps {
   camera: Camera
@@ -222,8 +244,22 @@ export function LiveRulesStudio({
 
   // 保存与反馈状态
   const [isSaving, setIsSaving] = useState(false)
-  const [saveToast, setSaveToast] = useState<string | null>(null)
+  // 保存反馈必须以后端逐实例收敛结果为准：数据库写入成功不等于运行时已生效
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null)
+  // 本地编辑所基于的任务配置快照版本：保存时回传，服务端据此拒绝被其他会话抢先改过的写入
+  const configRevisionRef = useRef<number | undefined>(undefined)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showSaveFailedFeedback = useCallback(() => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setSaveFeedback({
+      kind: 'requestFailed',
+      message: t('footer.saveFailed', {
+        defaultValue: '保存失败，请检查网络或后端状态',
+      }),
+    })
+    toastTimerRef.current = setTimeout(() => setSaveFeedback(null), 3000)
+  }, [t])
 
   useEffect(
     () => () => {
@@ -339,73 +375,88 @@ export function LiveRulesStudio({
     }
   }, [])
 
-  // 2. 加载选定摄像头的任务布防配置
+  // 2. 把服务端任务配置映射到工作台本地编辑状态
+  const applyTaskConfig = useCallback(
+    (dto: TaskConfigDto) => {
+      // 记录本次编辑所基于的快照版本，保存时回传；服务端不匹配即拒绝写入
+      configRevisionRef.current = dto.configRevision
+      setTaskName(dto.name || camera.name || `Task-${camera.cameraId}`)
+      setIsArmed(dto.desiredEnabled)
+      if (dto.streamMode) {
+        setStreamMode(dto.streamMode)
+      }
+
+      // 恢复所有已绑定的算法实例
+      const instancesMap: Record<string, AlgorithmInstanceItem> = {}
+      const dtoList = dto.algorithmInstances ?? []
+      for (const inst of dtoList) {
+        instancesMap[inst.algorithmId] = {
+          algorithmId: inst.algorithmId,
+          analysisFps: inst.analysisFps ?? 10,
+          algoParams: (inst.algoParams as Record<string, unknown>) ?? {},
+          enabled: inst.enabled ?? true,
+        }
+      }
+
+      // 兼容单实例旧字段
+      if (dto.algorithmId && !instancesMap[dto.algorithmId]) {
+        instancesMap[dto.algorithmId] = {
+          algorithmId: dto.algorithmId,
+          analysisFps: dto.analysisFps ?? 10,
+          algoParams: dto.algoParams ?? {},
+          enabled: true,
+        }
+      }
+
+      setActiveInstances(instancesMap)
+
+      // 上次保存留下的未生效实例必须在进入工作台时就可见，而不是只能靠再保存一次发现
+      const initialSummary = summarizeInstanceApply(dtoList)
+      setSaveFeedback(
+        initialSummary.tone === 'ok' ? null : { kind: 'unapplied', summary: initialSummary },
+      )
+
+      if (dto.motionGate) {
+        setMotionGateEnabled(dto.motionGate.enabled)
+        if (dto.motionGate.threshold !== undefined) {
+          setMotionGateThreshold(dto.motionGate.threshold)
+        }
+      }
+
+      let roiIdx = 0
+      const extRules: ExtendedRule[] = dto.rules.map((r, idx) => {
+        const color = getInitialRuleColor(r.role, roiIdx)
+        if (r.role === 'roi') {
+          roiIdx += 1
+        }
+
+        return {
+          ...r,
+          lineDirection:
+            r.lineDirection ||
+            (r as unknown as { line_direction?: DetectionLineDirection }).line_direction ||
+            'both',
+          id: `rule_${idx}_${Date.now()}`,
+          name: getDefaultRuleName(r.role, idx + 1, t),
+          visible: true,
+          color,
+        }
+      })
+      resetRules(extRules)
+      setSelectedRuleId(extRules.length > 0 ? extRules[0].id : null)
+      // 新建任务尚无任何防区时，直接切到绘制工具，进入工作台即可下笔
+      setTool(extRules.length === 0 ? 'roi' : 'select')
+    },
+    [camera.cameraId, camera.name, t, resetRules],
+  )
+
+  // 3. 加载选定摄像头的任务布防配置
   useEffect(() => {
     let isMounted = true
     taskApi
       .getTask(camera.cameraId)
       .then((dto) => {
-        if (!isMounted) return
-        setTaskName(dto.name || camera.name || `Task-${camera.cameraId}`)
-        setIsArmed(dto.desiredEnabled)
-        if (dto.streamMode) {
-          setStreamMode(dto.streamMode)
-        }
-
-        // 恢复所有已绑定的算法实例
-        const instancesMap: Record<string, AlgorithmInstanceItem> = {}
-        const dtoList = dto.algorithmInstances ?? []
-        for (const inst of dtoList) {
-          instancesMap[inst.algorithmId] = {
-            algorithmId: inst.algorithmId,
-            analysisFps: inst.analysisFps ?? 10,
-            algoParams: (inst.algoParams as Record<string, unknown>) ?? {},
-            enabled: inst.enabled ?? true,
-          }
-        }
-
-        // 兼容单实例旧字段
-        if (dto.algorithmId && !instancesMap[dto.algorithmId]) {
-          instancesMap[dto.algorithmId] = {
-            algorithmId: dto.algorithmId,
-            analysisFps: dto.analysisFps ?? 10,
-            algoParams: dto.algoParams ?? {},
-            enabled: true,
-          }
-        }
-
-        setActiveInstances(instancesMap)
-
-        if (dto.motionGate) {
-          setMotionGateEnabled(dto.motionGate.enabled)
-          if (dto.motionGate.threshold !== undefined) {
-            setMotionGateThreshold(dto.motionGate.threshold)
-          }
-        }
-
-        let roiIdx = 0
-        const extRules: ExtendedRule[] = dto.rules.map((r, idx) => {
-          const color = getInitialRuleColor(r.role, roiIdx)
-          if (r.role === 'roi') {
-            roiIdx += 1
-          }
-
-          return {
-            ...r,
-            lineDirection:
-              r.lineDirection ||
-              (r as unknown as { line_direction?: DetectionLineDirection }).line_direction ||
-              'both',
-            id: `rule_${idx}_${Date.now()}`,
-            name: getDefaultRuleName(r.role, idx + 1, t),
-            visible: true,
-            color,
-          }
-        })
-        resetRules(extRules)
-        setSelectedRuleId(extRules.length > 0 ? extRules[0].id : null)
-        // 新建任务尚无任何防区时，直接切到绘制工具，进入工作台即可下笔
-        setTool(extRules.length === 0 ? 'roi' : 'select')
+        if (isMounted) applyTaskConfig(dto)
       })
       .catch(() => {
         if (isMounted) {
@@ -416,7 +467,7 @@ export function LiveRulesStudio({
     return () => {
       isMounted = false
     }
-  }, [camera, t, resetRules])
+  }, [camera.cameraId, camera.name, applyTaskConfig])
 
   // 3. 算法启闭切换操作
   const handleToggleAlgo = (algoId: string) => {
@@ -919,21 +970,74 @@ export function LiveRulesStudio({
           motionHoldFrames: 10,
         },
         algorithmInstances: payloadInstances,
+        // 回传编辑开始时的快照版本：其他会话抢先保存过就让服务端拒绝，而不是静默覆盖
+        configRevision: configRevisionRef.current,
       }
 
       const updated = await taskApi.updateTask(camera.cameraId, payloadDto)
+      configRevisionRef.current = updated.configRevision
       setTaskName(updated.name || finalName)
       if (updated.streamMode) {
         setStreamMode(updated.streamMode)
       }
-      setSaveToast(t('footer.saveSuccess', { defaultValue: '任务配置已保存并生效！' }))
-    } catch {
-      setSaveToast(t('footer.saveFailed', { defaultValue: '保存失败，请检查网络或后端状态' }))
-    } finally {
+      const summary = updated.algorithmInstances
+        ? summarizeInstanceApply(updated.algorithmInstances)
+        : null
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
-      toastTimerRef.current = setTimeout(() => setSaveToast(null), 3000)
+      if (summary === null) {
+        // 响应没有带回逐实例收敛状态时保持沉默，不得宣称已生效
+        setSaveFeedback(null)
+      } else if (summary.tone === 'ok') {
+        // 已生效只是瞬时状态，提示后自动消失
+        setSaveFeedback({ kind: 'applied' })
+        toastTimerRef.current = setTimeout(() => setSaveFeedback(null), 3000)
+      } else {
+        // 未收敛的态势必须留在界面上，直到用户重试或改配置
+        setSaveFeedback({ kind: 'unapplied', summary })
+      }
+    } catch (error) {
+      if (isConfigConflictError(error)) {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+        // 版本冲突：本地快照已过期，必须由用户显式选择「载入最新」还是「覆盖保存」
+        setSaveFeedback({ kind: 'conflict' })
+      } else {
+        showSaveFailedFeedback()
+      }
+    } finally {
       setIsSaving(false)
     }
+  }
+
+  /** 冲突恢复之一：丢弃本地编辑，载入服务端当前配置与最新版本号 */
+  const handleLoadLatestConfig = async () => {
+    setIsSaving(true)
+    try {
+      const latest = await taskApi.getTask(camera.cameraId)
+      applyTaskConfig(latest)
+    } catch {
+      showSaveFailedFeedback()
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  /**
+   * 冲突恢复之二：以本地内容覆盖保存。
+   *
+   * 覆盖前必须重新读取最新版本号：用陈旧版本重发只会再次被拒绝，
+   * 而绕过版本校验直接写入会静默丢弃对方刚提交的配置。
+   */
+  const handleOverwriteConfig = async () => {
+    setIsSaving(true)
+    try {
+      const latest = await taskApi.getTask(camera.cameraId)
+      configRevisionRef.current = latest.configRevision
+    } catch {
+      showSaveFailedFeedback()
+      setIsSaving(false)
+      return
+    }
+    await handleSave()
   }
 
   const selectedRule = useMemo(
@@ -1025,9 +1129,81 @@ export function LiveRulesStudio({
 
         {/* 右侧：码流选择 + 布防总闸 + 保存 */}
         <div className="flex shrink-0 items-center gap-3">
-          {saveToast && (
+          {saveFeedback?.kind === 'applied' && (
             <span className="hidden font-mono text-xs font-semibold text-[var(--accent-green)] xl:inline">
-              {saveToast}
+              {t('footer.saveSuccess', { defaultValue: '任务配置已保存并生效' })}
+            </span>
+          )}
+
+          {saveFeedback?.kind === 'requestFailed' && (
+            <span className="hidden font-mono text-xs font-semibold text-[var(--destructive)] xl:inline">
+              {saveFeedback.message}
+            </span>
+          )}
+
+          {saveFeedback?.kind === 'conflict' && (
+            <span
+              className="inline-flex items-center gap-2 rounded-[6px] border border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-2 py-1 font-mono text-[11px] font-semibold text-[var(--destructive)]"
+              title={t('footer.conflictHint', {
+                defaultValue:
+                  '本次编辑基于的配置版本已被其他会话修改。可以载入服务端最新配置（放弃本地修改），或以当前内容覆盖保存。',
+              })}
+            >
+              <TriangleAlert className="h-3 w-3 shrink-0" />
+              <span className="max-w-[14rem] truncate" role="alert">
+                {t('footer.conflict', { defaultValue: '配置已被其他会话修改' })}
+              </span>
+              <button
+                type="button"
+                onClick={handleLoadLatestConfig}
+                disabled={isSaving}
+                className="flex items-center gap-1 rounded border border-current/30 px-1.5 py-0.5 transition-colors hover:bg-current/10 disabled:opacity-50"
+              >
+                <RefreshCw className="h-2.5 w-2.5" />
+                <span>{t('footer.loadLatest', { defaultValue: '载入最新' })}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleOverwriteConfig}
+                disabled={isSaving}
+                title={t('footer.overwriteHint', {
+                  defaultValue: '先读取最新版本号，再用本地内容覆盖服务端配置',
+                })}
+                className="flex items-center gap-1 rounded border border-current/30 px-1.5 py-0.5 transition-colors hover:bg-current/10 disabled:opacity-50"
+              >
+                <Save className="h-2.5 w-2.5" />
+                <span>{t('footer.overwrite', { defaultValue: '覆盖保存' })}</span>
+              </button>
+            </span>
+          )}
+
+          {saveFeedback?.kind === 'unapplied' && (
+            <span
+              className={`inline-flex items-center gap-2 rounded-[6px] border px-2 py-1 font-mono text-[11px] font-semibold ${
+                saveFeedback.summary.tone === 'failed'
+                  ? 'border-[var(--destructive)]/40 bg-[var(--destructive)]/10 text-[var(--destructive)]'
+                  : 'border-[var(--accent-amber)]/40 bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]'
+              }`}
+              title={unappliedNoticeLines(saveFeedback.summary).join('\n')}
+            >
+              <TriangleAlert className="h-3 w-3 shrink-0" />
+              <span className="max-w-[14rem] truncate" role="status">
+                {saveFeedback.summary.tone === 'failed'
+                  ? t('footer.applyFailed', { defaultValue: '已保存，但运行时未生效' })
+                  : t('footer.applyPending', { defaultValue: '已保存，运行时正在收敛' })}
+              </span>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={isSaving}
+                title={t('footer.retryHint', {
+                  defaultValue: '重新下发同一份期望配置，让运行时再次尝试生效',
+                })}
+                className="flex items-center gap-1 rounded border border-current/30 px-1.5 py-0.5 transition-colors hover:bg-current/10 disabled:opacity-50"
+              >
+                <RefreshCw className="h-2.5 w-2.5" />
+                <span>{t('footer.retry', { defaultValue: '重试' })}</span>
+              </button>
             </span>
           )}
 

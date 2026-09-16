@@ -5,7 +5,8 @@
   },
   "errors": {
     "createFailed": "创建任务失败，请稍后重试",
-    "deleteFailed": "删除任务失败，请稍后重试"
+    "deleteFailed": "删除任务失败，请稍后重试",
+    "cameraTaskConflict": "该通道已被其他会话创建了 AI 任务，请刷新列表后重试"
   },
   "noCamerasHint": "AI 任务需要绑定在有效的视频流通道上运行。",
   "title": "AI 任务与空间布防",
@@ -106,7 +107,9 @@
     "targetClasses": "警戒类别:",
     "classesCount": "{{count}} 类",
     "algorithmUnbound": "未绑定算法",
-    "fpsAuto": "自动"
+    "fpsAuto": "自动",
+    "applyPending": "配置排队中",
+    "applyFailed": "配置未生效"
   },
   "sandbox": {
     "title": "六步沙箱安全自检",
@@ -214,7 +217,16 @@
     "saveTask": "保存配置",
     "saving": "正在保存...",
     "saveSuccess": "布防规则已成功同步并生效！",
-    "saveFailed": "保存失败，请检查网络或后端状态"
+    "saveFailed": "保存失败，请检查网络或后端状态",
+    "applyPending": "已保存，运行时正在收敛",
+    "applyFailed": "已保存，但运行时未生效",
+    "retry": "重试",
+    "retryHint": "重新下发同一份期望配置，让运行时再次尝试生效",
+    "conflict": "配置已被其他会话修改",
+    "conflictHint": "本次编辑基于的配置版本已被其他会话修改。可以载入服务端最新配置（放弃本地修改），或以当前内容覆盖保存。",
+    "loadLatest": "载入最新",
+    "overwrite": "覆盖保存",
+    "overwriteHint": "先读取最新版本号，再用本地内容覆盖服务端配置"
   },
   "layers": {
     "title": "布防规则图层",

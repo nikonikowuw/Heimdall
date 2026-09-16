@@ -10,12 +10,14 @@ import {
   Radio,
   ShieldCheck,
   Trash2,
+  TriangleAlert,
   Video,
 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { getProbeBadge } from '@/features/cameras/cameraStatus'
 import { copyToClipboard } from '@/lib/utils'
 import type { Camera, DetectionRule, StreamMode, TaskConfigDto } from '@/types'
+import { summarizeInstanceApply, unappliedNoticeLines } from '../applyState'
 
 export interface TaskCameraCardProps {
   camera: Camera
@@ -99,6 +101,8 @@ export function TaskCameraCard({
   const analysisFps = primaryInstance?.analysisFps ?? config?.analysisFps ?? 0
   const actualStatus = primaryInstance?.actualStatus ?? config?.actualStatus ?? 0
   const runtimeStatus = getPipelineRuntimeStatus(actualStatus, t)
+  // 配置收敛态势与运行状态正交：运行中也可能存在“期望配置未生效”的实例
+  const applySummary = summarizeInstanceApply(algorithmInstances)
 
   const [copied, setCopied] = useState(false)
   const probeBadge = getProbeBadge(camera.lastProbeStatus, t)
@@ -369,6 +373,23 @@ export function TaskCameraCard({
             {analysisFps > 0 ? `${analysisFps} FPS` : t('card.fpsAuto', { defaultValue: '自动' })}
           </span>
           <span className={runtimeStatus.className}>{runtimeStatus.label}</span>
+          {applySummary.tone !== 'ok' && (
+            <span
+              className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
+                applySummary.tone === 'failed'
+                  ? 'border-[var(--destructive)]/40 bg-[var(--destructive)]/10 text-[var(--destructive)]'
+                  : 'border-[var(--accent-amber)]/40 bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]'
+              }`}
+              title={unappliedNoticeLines(applySummary).join('\n')}
+            >
+              <TriangleAlert className="h-2.5 w-2.5 shrink-0" />
+              <span>
+                {applySummary.tone === 'failed'
+                  ? t('card.applyFailed', { defaultValue: '配置未生效' })
+                  : t('card.applyPending', { defaultValue: '配置排队中' })}
+              </span>
+            </span>
+          )}
         </span>
       </div>
 

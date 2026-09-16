@@ -3,7 +3,7 @@ import { Plus, RefreshCw, ShieldAlert, Sliders, Video } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { motionTokens } from '@/lib/motionTokens'
-import { cameraApi, taskApi } from '../../lib/api'
+import { cameraApi, isConfigConflictError, taskApi } from '../../lib/api'
 import type { Camera, TaskConfigDto, StreamMode } from '../../types'
 import { CreateTaskModal } from './components/CreateTaskModal'
 import { DeleteTaskModal } from './components/DeleteTaskModal'
@@ -54,6 +54,7 @@ export function TasksPage({
           algorithmInstances: item.algorithmInstances,
           rules: item.rules || [],
           motionGate: item.motionGate,
+          configRevision: item.configRevision,
         }
       }
       setTaskConfigs(configs)
@@ -96,7 +97,12 @@ export function TasksPage({
       })
       const updated = await taskApi.updateTask(camera.cameraId, payload)
       setTaskConfigs((prev) => ({ ...prev, [camera.cameraId]: updated }))
-    } catch {
+    } catch (error) {
+      if (isConfigConflictError(error)) {
+        // 配置已被其他会话改写：静默丢弃本次开关动作并刷新列表，避免用旧快照覆盖新配置
+        await loadData()
+        return
+      }
       // ignore
     }
   }

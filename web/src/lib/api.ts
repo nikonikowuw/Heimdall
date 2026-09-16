@@ -4,7 +4,6 @@ import type {
   AdminUserDto,
   AlarmRecord,
   AlarmStatus,
-  AlgorithmInstanceDto,
   AlgorithmItem,
   AlgorithmStats,
   AlgorithmVersionItem,
@@ -14,7 +13,6 @@ import type {
   Camera,
   CaptureRecord,
   ChangePasswordRequest,
-  CreateAlgorithmInstanceRequest,
   CreateCameraRequest,
   DiscoveredDevice,
   Gb28181ConfigResponse,
@@ -34,7 +32,6 @@ import type {
   SysGb28181Config,
   TaskConfigDto,
   TaskSummaryDto,
-  UpdateAlgorithmInstanceRequest,
   UpdateCameraRequest,
   UpdateGb28181ConfigRequest,
   UploadAlgorithmResponse,
@@ -47,6 +44,19 @@ export class ApiError extends Error {
     this.name = 'ApiError'
     this.code = code
   }
+}
+
+/**
+ * 任务配置版本冲突：整份任务配置下发的快照版本与库中当前版本不一致（HTTP 409）。
+ *
+ * 恢复方式只有两条：放弃本地编辑载入最新配置，或显式以本地内容覆盖保存
+ * （覆盖前需要先重新读取最新版本号，否则会再次被拒绝）。
+ */
+export const API_CODE_CONFIG_CONFLICT = 40903
+
+/** 判断错误是否为任务配置版本冲突 */
+export function isConfigConflictError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === API_CODE_CONFIG_CONFLICT
 }
 
 const BASE_URL = '/api/v1'
@@ -546,29 +556,6 @@ export const algorithmApi = {
     return api.delete<void>(
       `/algorithms/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}`,
     )
-  },
-}
-
-export const instanceApi = {
-  list(cameraId?: string): Promise<AlgorithmInstanceDto[]> {
-    const qs = toQueryString({ cameraId })
-    return api.get<AlgorithmInstanceDto[]>(`/tasks/instances${qs}`)
-  },
-
-  create(data: CreateAlgorithmInstanceRequest): Promise<AlgorithmInstanceDto> {
-    return api.post<AlgorithmInstanceDto>('/tasks/instances', data)
-  },
-
-  update(instanceId: string, data: UpdateAlgorithmInstanceRequest): Promise<AlgorithmInstanceDto> {
-    return api.put<AlgorithmInstanceDto>(`/tasks/instances/${encodeURIComponent(instanceId)}`, data)
-  },
-
-  setEnabled(instanceId: string, enabled: boolean): Promise<void> {
-    return api.put<void>(`/tasks/instances/${encodeURIComponent(instanceId)}/enabled`, { enabled })
-  },
-
-  delete(instanceId: string): Promise<void> {
-    return api.delete<void>(`/tasks/instances/${encodeURIComponent(instanceId)}`)
   },
 }
 

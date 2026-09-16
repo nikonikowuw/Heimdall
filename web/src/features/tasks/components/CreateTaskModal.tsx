@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
-import { algorithmApi, taskApi } from '@/lib/api'
+import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
 import type { AlgorithmItem, Camera, TaskConfigDto } from '@/types'
 import { extractTargetClasses } from '../algoMetadata'
 import {
@@ -190,11 +190,20 @@ export function CreateTaskModal({
       onSuccess(cam, created)
       onClose()
     } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : t('errors.createFailed', { defaultValue: '创建任务失败，请稍后重试' })
-      setErrorMsg(msg)
+      if (isConfigConflictError(err)) {
+        // 该通道在本次操作期间已被其他会话建立任务：提示重新选择，避免覆盖对方配置
+        setErrorMsg(
+          t('errors.cameraTaskConflict', {
+            defaultValue: '该通道已被其他会话创建了 AI 任务，请刷新列表后重试',
+          }),
+        )
+      } else {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : t('errors.createFailed', { defaultValue: '创建任务失败，请稍后重试' })
+        setErrorMsg(msg)
+      }
     } finally {
       setIsSubmitting(false)
     }

@@ -8,6 +8,8 @@ import {
   alarmApi,
   evidenceApi,
   ApiError,
+  API_CODE_CONFIG_CONFLICT,
+  isConfigConflictError,
 } from './api'
 import { useAuthStore } from '../stores/auth'
 
@@ -17,6 +19,16 @@ describe('API Client', () => {
     expect(err.message).toBe('密码错误')
     expect(err.code).toBe(10007)
     expect(err.name).toBe('ApiError')
+  })
+
+  it('isConfigConflictError only matches the config revision conflict code', () => {
+    expect(isConfigConflictError(new ApiError('冲突', API_CODE_CONFIG_CONFLICT))).toBe(true)
+    expect(API_CODE_CONFIG_CONFLICT).toBe(40903)
+    // 其他冲突与普通错误不得被误判为版本冲突，否则界面会显示错误的恢复动作
+    expect(isConfigConflictError(new ApiError('算力占用', 40901))).toBe(false)
+    expect(isConfigConflictError(new ApiError('未授权', 401))).toBe(false)
+    expect(isConfigConflictError(new Error('网络异常'))).toBe(false)
+    expect(isConfigConflictError(null)).toBe(false)
   })
 
   it('getInitStatus should return parsed data', async () => {

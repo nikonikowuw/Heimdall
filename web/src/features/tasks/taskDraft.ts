@@ -95,7 +95,9 @@ export interface QuickCreateInput {
  * - 省略 `streamMode`：不在创建阶段改写摄像头级配置，交由工作台或设备管理决定；
  * - 省略 `motionGate`：使用服务端默认门控，而不是前端硬编码常量；
  * - `rules` 恒为 `[]`：新任务本无防区，防区一律在工作台的动态子码流画布上绘制；
- * - `algoParams` 只写算法 schema 声明的键，不注入前端臆造的键名。
+ * - `algoParams` 只写算法 schema 声明的键，不注入前端臆造的键名；
+ * - `configRevision: 0`：断言「选择该通道时它还没有任务」。若别的会话抢先建了任务，
+ *   服务端会以版本冲突拒绝，而不是把对方的实例与防区静默覆盖掉。
  */
 export function buildQuickCreatePayload(input: QuickCreateInput): TaskConfigDto {
   const instance: TaskAlgorithmInstanceDto = {
@@ -111,6 +113,7 @@ export function buildQuickCreatePayload(input: QuickCreateInput): TaskConfigDto 
     desiredEnabled: input.desiredEnabled,
     rules: [],
     algorithmInstances: [instance],
+    configRevision: 0,
   }
 }
 
@@ -118,6 +121,8 @@ export interface ArmToggleSource {
   name?: string
   rules?: DetectionRule[]
   motionGate?: MotionGateConfig
+  /** 列表快照的任务配置版本号，用于服务端乐观并发校验 */
+  configRevision?: number
 }
 
 export interface ArmToggleInput {
@@ -134,6 +139,9 @@ export interface ArmToggleInput {
  * 必须省略 `algorithmInstances`：列表接口返回的实例摘要不含 `algoParams`，若据此重建实例数组，
  * 服务端会把 `algo_params` 反序列化为空对象并覆盖 `params_json`，导致工作台中调好的
  * 置信度、目标类别与自定义参数被清空。省略后由服务端保留实例参数并仅同步 enabled。
+ *
+ * `configRevision` 原样回传列表快照的版本号：布防开关同样是整份配置下发，
+ * 若不带版本号，一个按下开关的旧快照会静默覆盖工作台刚保存的算法参数与防区。
  */
 export function buildArmTogglePayload(input: ArmToggleInput): TaskConfigDto {
   return {
@@ -142,5 +150,6 @@ export function buildArmTogglePayload(input: ArmToggleInput): TaskConfigDto {
     desiredEnabled: input.nextDesired,
     rules: input.current?.rules ?? [],
     ...(input.current?.motionGate ? { motionGate: input.current.motionGate } : {}),
+    configRevision: input.current?.configRevision,
   }
 }

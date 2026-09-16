@@ -5,7 +5,8 @@
   },
   "errors": {
     "createFailed": "建立任務失敗，請稍後重試",
-    "deleteFailed": "刪除任務失敗，請稍後重試"
+    "deleteFailed": "刪除任務失敗，請稍後重試",
+    "cameraTaskConflict": "該通道已被其他工作階段建立了 AI 任務，請重新整理清單後重試"
   },
   "noCamerasHint": "AI 任務需要綁定在有效的視訊流通道上運行。",
   "title": "AI 任務與空間布防",
@@ -106,7 +107,9 @@
     "targetClasses": "警戒類別:",
     "classesCount": "{{count}} 類",
     "algorithmUnbound": "未綁定演算法",
-    "fpsAuto": "自動"
+    "fpsAuto": "自動",
+    "applyPending": "配置排隊中",
+    "applyFailed": "配置未生效"
   },
   "sandbox": {
     "title": "六步沙箱安全自檢",
@@ -214,7 +217,16 @@
     "saveTask": "儲存配置",
     "saving": "正在保存...",
     "saveSuccess": "布防規則已成功同步並生效！",
-    "saveFailed": "保存失敗，請檢查網路或後端狀態"
+    "saveFailed": "保存失敗，請檢查網路或後端狀態",
+    "applyPending": "已儲存，執行時正在收斂",
+    "applyFailed": "已儲存，但執行時未生效",
+    "retry": "重試",
+    "retryHint": "重新下發同一份期望設定，讓執行時再次嘗試生效",
+    "conflict": "設定已被其他工作階段修改",
+    "conflictHint": "本次編輯所依據的設定版本已被其他工作階段修改。可以載入伺服器最新設定（放棄本機修改），或以目前內容覆寫儲存。",
+    "loadLatest": "載入最新",
+    "overwrite": "覆寫儲存",
+    "overwriteHint": "先讀取最新版本號，再用本機內容覆寫伺服器設定"
   },
   "layers": {
     "title": "布防規則圖層",

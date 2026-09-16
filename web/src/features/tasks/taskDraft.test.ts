@@ -233,6 +233,16 @@ describe('buildQuickCreatePayload', () => {
 
     expect(payload.algorithmInstances?.[0]?.algoParams).toEqual({})
   })
+  it('asserts the channel has no task yet so a concurrent create is rejected', () => {
+    const payload = buildQuickCreatePayload({
+      cameraId: 'cam-1',
+      name: '  库房正门  ',
+      algorithmId: 'general_detection',
+      desiredEnabled: false,
+    })
+
+    expect(payload.configRevision).toBe(0)
+  })
 })
 
 describe('buildArmTogglePayload', () => {
@@ -261,6 +271,29 @@ describe('buildArmTogglePayload', () => {
     expect(payload.name).toBe('周界防护')
     expect(payload.rules).toEqual(rules)
     expect(payload.motionGate).toEqual({ enabled: true, threshold: 30 })
+  })
+
+  it('carries the snapshot config revision so a stale toggle cannot overwrite newer edits', () => {
+    const payload = buildArmTogglePayload({
+      cameraId: 'cam-1',
+      fallbackName: 'cam-1',
+      current: { name: '周界防护', rules, configRevision: 7 },
+      nextDesired: true,
+    })
+
+    expect(payload.configRevision).toBe(7)
+  })
+
+  it('omits configRevision when the snapshot has none', () => {
+    const payload = buildArmTogglePayload({
+      cameraId: 'cam-1',
+      fallbackName: 'cam-1',
+      current: { name: '周界防护', rules },
+      nextDesired: true,
+    })
+
+    expect('configRevision' in payload).toBe(true)
+    expect(payload.configRevision).toBeUndefined()
   })
 
   it('falls back to the camera name when the task has none', () => {

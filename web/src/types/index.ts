@@ -443,6 +443,15 @@ export interface SandboxCheckResult {
   manifest?: AlgoManifest
 }
 
+/**
+ * 算法实例期望配置的运行时收敛状态。
+ *
+ * 与实例健康状态正交：`applied` 表示期望 revision 已在目标 Worker 生效，
+ * `pending` 表示已持久化但仍在排队 / 创建 Worker / 等待帧边界，
+ * `failed` 表示期望配置已持久化但目标 Worker 未能使用它（保留旧配置继续运行）。
+ */
+export type InstanceApplyState = 'applied' | 'pending' | 'failed'
+
 export interface MotionGateConfig {
   enabled: boolean
   threshold?: number
@@ -458,6 +467,12 @@ export interface TaskAlgorithmInstanceDto {
   algoParams?: Record<string, unknown>
   enabled?: boolean
   actualStatus?: number
+  /** 期望配置版本号；每次期望配置提交递增 */
+  desiredRevision?: number
+  /** 已在目标 Worker 上生效的配置版本号 */
+  appliedRevision?: number
+  /** 期望配置的运行时收敛状态；未生效时不得显示为应用成功 */
+  applyState?: InstanceApplyState
   statusMessage?: string
   createdAt?: number
   updatedAt?: number
@@ -469,6 +484,7 @@ export interface TaskAlgorithmInstanceSummaryDto {
   analysisFps: number
   enabled: boolean
   actualStatus: number
+  applyState: InstanceApplyState
   statusMessage: string
 }
 
@@ -488,6 +504,8 @@ export interface TaskSummaryDto {
   motionGateEnabled: boolean
   rules: DetectionRule[]
   motionGate?: MotionGateConfig
+  /** 任务配置版本号：整体下发时必须原样回传给服务端做乐观并发校验 */
+  configRevision: number
   createdAt: number
   updatedAt: number
 }
@@ -505,6 +523,13 @@ export interface TaskConfigDto {
   algorithmInstances?: TaskAlgorithmInstanceDto[]
   rules: DetectionRule[]
   motionGate?: MotionGateConfig
+  /**
+   * 任务配置版本号。
+   *
+   * 读取时由服务端返回；保存时必须回传读取到的值，服务端不匹配即拒绝写入（409 / 40903），
+   * 避免两个编辑会话基于同一旧快照互相覆盖。省略表示不做版本校验。
+   */
+  configRevision?: number
 }
 
 export interface AlgorithmVersionItem {
@@ -564,40 +589,6 @@ export interface UploadAlgorithmResponse {
     isActive: boolean
   }
   manifest?: Record<string, unknown>
-}
-
-export interface AlgorithmInstanceDto {
-  id: number
-  instanceId: string
-  cameraId: string
-  algorithmId: string
-  analysisFps: number
-  params: Record<string, unknown>
-  rules: DetectionRule[]
-  motionGate: MotionGateConfig
-  enabled: boolean
-  actualStatus: number
-  statusMessage: string
-  createdAt: number
-  updatedAt: number
-}
-
-export interface CreateAlgorithmInstanceRequest {
-  cameraId: string
-  algorithmId: string
-  analysisFps?: number
-  params?: Record<string, unknown>
-  rules?: DetectionRule[]
-  motionGate?: MotionGateConfig
-  enabled?: boolean
-}
-
-export interface UpdateAlgorithmInstanceRequest {
-  analysisFps?: number
-  params?: Record<string, unknown>
-  rules?: DetectionRule[]
-  motionGate?: MotionGateConfig
-  enabled?: boolean
 }
 
 export interface OperationLog {

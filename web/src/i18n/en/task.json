@@ -5,7 +5,8 @@
   },
   "errors": {
     "createFailed": "Failed to create task, please try again",
-    "deleteFailed": "Failed to delete task, please try again"
+    "deleteFailed": "Failed to delete task, please try again",
+    "cameraTaskConflict": "Another session just created an AI task for this camera. Refresh the list and try again."
   },
   "noCamerasHint": "AI tasks must be bound to an active video channel.",
   "title": "AI Tasks & Arming",
@@ -106,7 +107,9 @@
     "targetClasses": "Target Classes:",
     "classesCount": "{{count}} Classes",
     "algorithmUnbound": "No algorithm bound",
-    "fpsAuto": "Auto"
+    "fpsAuto": "Auto",
+    "applyPending": "Config pending",
+    "applyFailed": "Config not applied"
   },
   "sandbox": {
     "title": "6-Step Sandbox Self-Test",
@@ -214,7 +217,16 @@
     "saveTask": "Save Config",
     "saving": "Saving...",
     "saveSuccess": "Rules successfully synchronized and applied!",
-    "saveFailed": "Failed to save configuration, please check network or server status"
+    "saveFailed": "Failed to save configuration, please check network or server status",
+    "applyPending": "Saved; runtime is converging",
+    "applyFailed": "Saved, but not applied at runtime",
+    "retry": "Retry",
+    "retryHint": "Resend the same desired config so the runtime applies it again",
+    "conflict": "Config changed by another session",
+    "conflictHint": "This edit was based on a config version that another session has since modified. Load the latest server config (discarding local edits), or save your current content over it.",
+    "loadLatest": "Load latest",
+    "overwrite": "Overwrite",
+    "overwriteHint": "Read the latest revision first, then overwrite the server config with your local content"
   },
   "layers": {
     "title": "Rule Layers",
