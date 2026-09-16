@@ -46,7 +46,9 @@ pub enum CoordinatorError {
 /// 单个算法实例启动配置
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceLaunchConfig {
-    /// 算法包唯一标识
+    /// 算法实例唯一标识（运行时控制、状态与结果隔离的主键）
+    pub instance_id: String,
+    /// 算法包唯一标识（用于加载包与展示名称，不作为寻址依据）
     pub algorithm_id: String,
     /// 算法初始化业务自定义参数
     pub algo_params: serde_json::Value,
@@ -57,6 +59,7 @@ pub struct InstanceLaunchConfig {
 impl InstanceLaunchConfig {
     /// 从持久化参数解析构建启动配置并校验
     pub fn from_persisted(
+        instance_id: impl Into<String>,
         algorithm_id: impl Into<String>,
         params_json: &str,
         analysis_fps: i32,
@@ -65,6 +68,10 @@ impl InstanceLaunchConfig {
             return Err(format!(
                 "analysis_fps 超出 0..=60 范围 (当前: {analysis_fps})"
             ));
+        }
+        let instance_id = instance_id.into();
+        if instance_id.trim().is_empty() {
+            return Err("instance_id 不能为空".to_string());
         }
         let algo_params = match serde_json::from_str::<serde_json::Value>(params_json) {
             Ok(value) if value.is_object() => value,
@@ -77,11 +84,26 @@ impl InstanceLaunchConfig {
             10
         };
         Ok(Self {
+            instance_id,
             algorithm_id: algorithm_id.into(),
             algo_params,
             target_fps,
         })
     }
+}
+
+/// 媒体输入契约签名（不含算法实例集合）
+///
+/// 用于判定一次期望配置变更是否真的需要重建解码器与物理连接：
+/// 地址、编码格式、传输策略或运动门控变化才重建，实例集合变化走增量收敛。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaContractSignature {
+    pub main_rtsp_url: String,
+    pub main_codec: CodecType,
+    pub sub_rtsp_url: String,
+    pub sub_codec: CodecType,
+    pub transport_policy: TransportPolicy,
+    pub motion_gate: Option<MotionGateConfig>,
 }
 
 /// 启动单路摄像头分析管线参数
@@ -120,6 +142,7 @@ impl StartCameraPipelineParams {
         target_fps: u32,
         motion_gate_enabled: bool,
     ) -> Self {
+        let algorithm_id = algorithm_id.into();
         Self {
             camera_id: camera_id.into(),
             main_rtsp_url: main_rtsp_url.into(),
@@ -129,11 +152,45 @@ impl StartCameraPipelineParams {
             transport_policy,
             motion_gate: motion_gate_enabled.then(MotionGateConfig::default),
             instances: vec![InstanceLaunchConfig {
-                algorithm_id: algorithm_id.into(),
+                // 兼容单算法构造器没有独立实例身份，退化为以算法 ID 作实例主键。
+                instance_id: algorithm_id.clone(),
+                algorithm_id,
                 algo_params,
                 target_fps,
             }],
         }
+    }
+
+    /// 媒体输入契约签名：只有这些字段变化才需要重建整路媒体/解码运行时。
+    ///
+    /// 实例集合（增删算法、改阈值、改抽帧频率）不在此签名内，可增量收敛。
+    pub fn media_signature(&self) -> MediaContractSignature {
+        MediaContractSignature {
+            main_rtsp_url: self.main_rtsp_url.clone(),
+            main_codec: self.main_codec,
+            sub_rtsp_url: self.sub_rtsp_url.clone(),
+            sub_codec: self.sub_codec,
+            transport_policy: self.transport_policy,
+            motion_gate: self.motion_gate.clone(),
+        }
+    }
+
+    /// 就地更新（或追加）单个算法实例的期望配置快照
+    pub fn upsert_instance(&mut self, launch: &InstanceLaunchConfig) {
+        match self
+            .instances
+            .iter_mut()
+            .find(|inst| inst.instance_id == launch.instance_id)
+        {
+            Some(existing) => *existing = launch.clone(),
+            None => self.instances.push(launch.clone()),
+        }
+    }
+
+    /// 移除单个算法实例的期望配置快照
+    pub fn remove_instance(&mut self, instance_id: &str) {
+        self.instances
+            .retain(|inst| inst.instance_id != instance_id);
     }
 
     /// 获取主算法 ID (首个算法实例)
@@ -189,7 +246,25 @@ impl StartCameraPipelineParams {
         }
 
         let mut seen = HashSet::with_capacity(self.instances.len());
+        let mut seen_instance_ids = HashSet::with_capacity(self.instances.len());
         for inst in &self.instances {
+            let instance_id = inst.instance_id.trim();
+            if instance_id.is_empty() {
+                return Err(CoordinatorError::Validation {
+                    reason: "instance_id 不能为空".to_string(),
+                });
+            }
+            if instance_id.len() > 128 || instance_id.contains('\0') {
+                return Err(CoordinatorError::Validation {
+                    reason: "instance_id 长度或字符非法".to_string(),
+                });
+            }
+            if !seen_instance_ids.insert(instance_id) {
+                return Err(CoordinatorError::Validation {
+                    reason: format!("存在重复的 instance_id: {instance_id}"),
+                });
+            }
+
             let algo_id = inst.algorithm_id.trim();
             if algo_id.is_empty() {
                 return Err(CoordinatorError::Validation {
@@ -249,19 +324,53 @@ fn validate_rtsp_url(field: &str, url: &str) -> Result<(), CoordinatorError> {
     Ok(())
 }
 
+/// 单个算法实例的运行时归属
+///
+/// 租约与 Worker 句柄按 `instanceId` 独立持有，增量增删实例时只动自己这一份，
+/// 不影响其他实例与共享解码器。
+pub struct ActiveInstanceEntry {
+    pub instance_id: String,
+    pub algorithm_id: String,
+    /// 算力租约；实例卸载时随条目一起释放。
+    ///
+    /// 注入式启动路径（直接给定 Worker、不经注册表）没有租约，此类实例无法
+    /// 就地重建 Worker，只能等到任务重启时重新收敛。
+    pub lease: Option<infer::AlgoLease>,
+    pub worker_handle: infer::InferenceWorkerHandle,
+}
+
 /// 某路摄像头当前活跃的分析运行时条目
 pub struct ActiveRuntimeEntry {
     pub camera_id: String,
     pub generation: u64,
+    /// 当前期望的启动参数快照（含实例集合）；增量变更后同步更新，
+    /// 保证完整启动请求的幂等比较仍基于最新期望配置。
     pub params: StartCameraPipelineParams,
     pub main_stream_key: String,
     pub main_attach_handle: Option<AbortOnDropHandle<()>>,
     pub sub_stream_key: String,
     pub sub_session: Arc<media::stream_hub::CameraStreamSession>,
-    pub worker_handle: infer::InferenceWorkerHandle,
-    pub worker_handles: Vec<(String, infer::InferenceWorkerHandle)>,
-    pub algo_leases: Vec<infer::AlgoLease>,
+    /// 实例级运行时归属表
+    pub instances: Vec<ActiveInstanceEntry>,
     pub started_at_ms: i64,
+}
+
+impl std::fmt::Debug for ActiveInstanceEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActiveInstanceEntry")
+            .field("instance_id", &self.instance_id)
+            .field("algorithm_id", &self.algorithm_id)
+            .field("worker_alive", &self.worker_handle.is_alive())
+            .finish()
+    }
+}
+
+impl ActiveRuntimeEntry {
+    pub fn instance_entry(&self, instance_id: &str) -> Option<&ActiveInstanceEntry> {
+        self.instances
+            .iter()
+            .find(|entry| entry.instance_id == instance_id)
+    }
 }
 
 impl std::fmt::Debug for ActiveRuntimeEntry {
@@ -272,7 +381,14 @@ impl std::fmt::Debug for ActiveRuntimeEntry {
             .field("params", &self.params)
             .field("main_stream_key", &self.main_stream_key)
             .field("sub_stream_key", &self.sub_stream_key)
-            .field("worker_handle", &self.worker_handle)
+            .field(
+                "instances",
+                &self
+                    .instances
+                    .iter()
+                    .map(|entry| (&entry.instance_id, &entry.algorithm_id))
+                    .collect::<Vec<_>>(),
+            )
             .field("started_at_ms", &self.started_at_ms)
             .finish()
     }
@@ -282,6 +398,7 @@ impl std::fmt::Debug for ActiveRuntimeEntry {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceRuntimeInfo {
+    pub instance_id: String,
     pub algorithm_id: String,
     pub target_fps: u32,
 }
@@ -301,6 +418,113 @@ pub struct CameraPipelineRuntimeInfo {
     pub frames_inferred: u64,
     pub alarms_triggered: u64,
     pub started_at_ms: i64,
+}
+
+/// 单个算法实例的期望配置快照（数据库为唯一事实来源）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceDesiredConfig {
+    pub camera_id: String,
+    pub instance_id: String,
+    pub algorithm_id: String,
+    /// 分析采样目标帧率；0 表示不限帧率，1..=60 为目标帧率
+    pub analysis_fps: i32,
+    /// 算法自定义参数 JSON
+    pub params_json: String,
+    /// 该实例是否应处于运行态
+    pub enabled: bool,
+    /// 期望配置版本号（`algorithm_instances.desired_revision`）
+    pub desired_revision: i64,
+}
+
+impl InstanceDesiredConfig {
+    /// 从启动配置构造期望快照（整路保存路径没有单实例版本号，`desired_revision` 记 0）
+    pub fn from_launch(camera_id: &str, launch: &InstanceLaunchConfig) -> Self {
+        Self {
+            camera_id: camera_id.to_string(),
+            instance_id: launch.instance_id.clone(),
+            algorithm_id: launch.algorithm_id.clone(),
+            analysis_fps: launch.target_fps as i32,
+            params_json: launch.algo_params.to_string(),
+            enabled: true,
+            desired_revision: 0,
+        }
+    }
+
+    /// 解析并校验期望配置，得到运行时可直接使用的启动配置
+    fn launch_config(&self) -> Result<InstanceLaunchConfig, CoordinatorError> {
+        InstanceLaunchConfig::from_persisted(
+            &self.instance_id,
+            &self.algorithm_id,
+            &self.params_json,
+            self.analysis_fps,
+        )
+        .map_err(|reason| CoordinatorError::Validation { reason })
+    }
+
+    fn outcome(
+        &self,
+        apply_state: types::InstanceApplyState,
+        mechanism: InstanceApplyMechanism,
+        status_message: impl Into<String>,
+    ) -> InstanceApplyOutcome {
+        let applied_revision =
+            (apply_state == types::InstanceApplyState::Applied).then_some(self.desired_revision);
+        InstanceApplyOutcome {
+            instance_id: self.instance_id.clone(),
+            desired_revision: self.desired_revision,
+            applied_revision,
+            apply_state,
+            mechanism,
+            status_message: status_message.into(),
+        }
+    }
+}
+
+/// 期望配置的收敛机制（用于回答「这份参数到底是怎么生效的」）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InstanceApplyMechanism {
+    /// 摄像头任务未运行，期望配置停留在持久层
+    NoRuntime,
+    /// 期望值与运行值一致，无需动作
+    Noop,
+    /// 在目标 Worker 的硬件上下文内原地热更新
+    HotUpdate,
+    /// 只在帧边界重设抽帧频率
+    FrameRate,
+    /// 替换目标实例的 Worker（无法热更新的变更）
+    WorkerReplace,
+    /// 新增挂载实例
+    Mount,
+    /// 卸载实例
+    Unmount,
+    /// 整路解码器重建后重新挂载
+    PipelineRestart,
+}
+
+/// 单个算法实例期望配置的运行时收敛结果
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceApplyOutcome {
+    pub instance_id: String,
+    pub desired_revision: i64,
+    /// 收敛后运行时实际生效的版本号；仅 `applied` 状态有值
+    pub applied_revision: Option<i64>,
+    pub apply_state: types::InstanceApplyState,
+    pub mechanism: InstanceApplyMechanism,
+    /// 非 `applied` 时的可读原因，直接透出给控制面与前端
+    pub status_message: String,
+}
+
+/// 整路摄像头实例集合的增量收敛结果
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraInstanceSyncOutcome {
+    pub camera_id: String,
+    /// 是否发生整路重建（仅媒体输入契约变化时为 true）
+    pub restarted: bool,
+    /// 逐实例收敛结果；整路重建时逐实例结果为空，以 `restarted` 为准
+    pub outcomes: Vec<InstanceApplyOutcome>,
 }
 
 /// 启动操作获得的 camera 级串行槽状态
@@ -359,6 +583,575 @@ impl TaskRuntimeCoordinator {
     }
 }
 
+impl TaskRuntimeCoordinator {
+    /// 收敛单个算法实例的期望配置（增量路径）
+    ///
+    /// 只影响目标实例：解码器、物理连接、其他实例及其 Worker 保持不动。
+    /// 返回结果必须区分 `applied` / `pending` / `failed`，不允许用「数据库写成功」
+    /// 冒充「运行时已生效」。
+    pub async fn apply_instance_config(
+        &self,
+        desired: InstanceDesiredConfig,
+    ) -> Result<InstanceApplyOutcome, CoordinatorError> {
+        let _operation_guard = self.camera_operation_guard(&desired.camera_id).await;
+        self.apply_instance_locked(&desired).await
+    }
+
+    /// 从运行中的摄像头任务卸载单个算法实例（禁用与删除共用）
+    ///
+    /// `Ok(false)` 表示该实例本来就不在运行时时无需卸载。
+    pub async fn remove_instance_runtime(
+        &self,
+        camera_id: &str,
+        instance_id: &str,
+    ) -> Result<bool, CoordinatorError> {
+        let _operation_guard = self.camera_operation_guard(camera_id).await;
+        let descriptors = self.pipeline_mgr.get_instance_descriptors(camera_id).await;
+        if !descriptors
+            .iter()
+            .any(|descriptor| descriptor.instance_id == instance_id)
+        {
+            return Ok(false);
+        }
+        let removed = self
+            .pipeline_mgr
+            .remove_pump_instance(camera_id, instance_id)
+            .await?;
+        if removed {
+            self.forget_runtime_instance(camera_id, instance_id).await;
+        }
+        Ok(removed)
+    }
+
+    /// 按最新期望配置收敛某路摄像头的算法实例集合
+    ///
+    /// 媒体输入契约未变化时走增量路径：只增删/更新目标实例。
+    /// 仅当主/子码流地址、编码格式、传输策略或运动门控变化时才整路重建。
+    pub async fn sync_camera_instances(
+        &self,
+        params: StartCameraPipelineParams,
+    ) -> Result<CameraInstanceSyncOutcome, CoordinatorError> {
+        let camera_id = params.camera_id.clone();
+        let restarted = self.requires_media_restart(&params).await;
+        if restarted {
+            let generation = self.start_camera_pipeline(params).await?;
+            tracing::info!(
+                camera_id = %camera_id,
+                generation,
+                "媒体输入契约已变化，整路重建摄像头分析管线"
+            );
+            return Ok(CameraInstanceSyncOutcome {
+                camera_id,
+                restarted: true,
+                outcomes: Vec::new(),
+            });
+        }
+
+        let _operation_guard = self.camera_operation_guard(&camera_id).await;
+        let desired: Vec<InstanceLaunchConfig> = params.instances.clone();
+        let outcomes = self.reconcile_instances_locked(&params, &desired).await?;
+        // 期望快照与本次提交对齐，保证后续整路启动请求的幂等比较基于最新期望
+        {
+            let mut runtimes = self.runtimes.write().await;
+            if let Some(entry) = runtimes.get_mut(&camera_id) {
+                entry.params = params;
+            }
+        }
+        Ok(CameraInstanceSyncOutcome {
+            camera_id,
+            restarted: false,
+            outcomes,
+        })
+    }
+
+    /// 实例集合增量收敛：先卸载再挂载，单个实例失败不影响其他实例
+    async fn reconcile_instances_locked(
+        &self,
+        params: &StartCameraPipelineParams,
+        desired: &[InstanceLaunchConfig],
+    ) -> Result<Vec<InstanceApplyOutcome>, CoordinatorError> {
+        let camera_id = params.camera_id.as_str();
+        let mut outcomes = Vec::with_capacity(desired.len());
+
+        // 1. 先卸载不再期望挂载的实例，尽早归还 NPU / 内存配额
+        let current = self.pipeline_mgr.get_instance_descriptors(camera_id).await;
+        for descriptor in current {
+            if desired
+                .iter()
+                .any(|inst| inst.instance_id == descriptor.instance_id)
+            {
+                continue;
+            }
+            let stale = InstanceDesiredConfig {
+                camera_id: camera_id.to_string(),
+                instance_id: descriptor.instance_id.clone(),
+                algorithm_id: descriptor.algorithm_id,
+                analysis_fps: 0,
+                params_json: "{}".to_string(),
+                enabled: false,
+                desired_revision: 0,
+            };
+            outcomes.push(self.unmount_instance_locked(camera_id, &stale).await?);
+        }
+
+        // 2. 再按期望挂载或更新
+        for launch in desired {
+            let instance_desired = InstanceDesiredConfig::from_launch(camera_id, launch);
+            outcomes.push(self.apply_instance_locked(&instance_desired).await?);
+        }
+        Ok(outcomes)
+    }
+
+    /// 判断给定期望配置是否需要整路重建。
+    ///
+    /// 只有媒体输入契约（地址、编码格式、传输策略、运动门控）变化才需要重建解码器与
+    /// 物理连接；算法实例集合变化一律走增量收敛。
+    pub async fn requires_media_restart(&self, params: &StartCameraPipelineParams) -> bool {
+        match self.current_media_signature(&params.camera_id).await {
+            Some(signature) => signature != params.media_signature(),
+            None => true,
+        }
+    }
+
+    /// 读取当前运行时的媒体输入契约签名
+    async fn current_media_signature(&self, camera_id: &str) -> Option<MediaContractSignature> {
+        let runtimes = self.runtimes.read().await;
+        runtimes
+            .get(camera_id)
+            .map(|entry| entry.params.media_signature())
+    }
+
+    /// 收敛单个实例（调用方必须已持有 camera 级操作锁）
+    async fn apply_instance_locked(
+        &self,
+        desired: &InstanceDesiredConfig,
+    ) -> Result<InstanceApplyOutcome, CoordinatorError> {
+        let launch = desired.launch_config()?;
+        let camera_id = desired.camera_id.as_str();
+
+        if !self.is_pipeline_running(camera_id).await {
+            // 运行时不在：期望配置只在持久层，任务启动时统一收敛。
+            return Ok(desired.outcome(
+                types::InstanceApplyState::Applied,
+                InstanceApplyMechanism::NoRuntime,
+                "摄像头任务未运行，期望配置已持久化，将在下次启动时收敛",
+            ));
+        }
+
+        let descriptor = self
+            .pipeline_mgr
+            .get_instance_descriptors(camera_id)
+            .await
+            .into_iter()
+            .find(|descriptor| descriptor.instance_id == desired.instance_id);
+
+        if !desired.enabled {
+            return self.unmount_instance_locked(camera_id, desired).await;
+        }
+
+        let Some(descriptor) = descriptor else {
+            return self.mount_instance_locked(desired, &launch).await;
+        };
+
+        // 已挂载：优先在目标 Worker 的硬件上下文内原地热更新
+        let mut mechanism = InstanceApplyMechanism::Noop;
+        let desired_config_json = launch_config_json(&launch);
+        if !config_json_matches(
+            descriptor.config_json.as_deref(),
+            desired_config_json.as_deref(),
+        ) {
+            let update = self
+                .pipeline_mgr
+                .update_pump_instance_config(
+                    camera_id,
+                    &desired.instance_id,
+                    desired_config_json.as_deref().unwrap_or("{}"),
+                )
+                .await?;
+            match update {
+                crate::pump::InstanceConfigUpdateOutcome::Applied => {
+                    mechanism = InstanceApplyMechanism::HotUpdate;
+                    tracing::info!(
+                        camera_id = %camera_id,
+                        instance_id = %desired.instance_id,
+                        "算法实例配置已在目标 Worker 硬件上下文内原地热更新"
+                    );
+                }
+                crate::pump::InstanceConfigUpdateOutcome::Unsupported => {
+                    tracing::info!(
+                        camera_id = %camera_id,
+                        instance_id = %desired.instance_id,
+                        "算法包不支持配置热更新，降级为仅替换目标实例 Worker"
+                    );
+                    if let Err(outcome) = self
+                        .replace_instance_worker_locked(camera_id, desired, &launch)
+                        .await?
+                    {
+                        return Ok(outcome);
+                    }
+                    mechanism = InstanceApplyMechanism::WorkerReplace;
+                }
+                crate::pump::InstanceConfigUpdateOutcome::NotFound => {
+                    return self.mount_instance_locked(desired, &launch).await;
+                }
+                crate::pump::InstanceConfigUpdateOutcome::Rejected { reason } => {
+                    return Ok(desired.outcome(
+                        types::InstanceApplyState::Failed,
+                        InstanceApplyMechanism::HotUpdate,
+                        format!("算法包拒绝该配置: {reason}"),
+                    ));
+                }
+            }
+        }
+
+        // 抽帧频率在帧边界由 governor 生效，不重建 Worker
+        if descriptor.target_fps != launch.target_fps {
+            let applied = self
+                .pipeline_mgr
+                .set_pump_instance_fps(camera_id, &desired.instance_id, launch.target_fps)
+                .await?;
+            if !applied {
+                return Ok(desired.outcome(
+                    types::InstanceApplyState::Failed,
+                    mechanism,
+                    format!("抽帧频率未能在帧边界生效 (目标 {} FPS)", launch.target_fps),
+                ));
+            }
+            if mechanism == InstanceApplyMechanism::Noop {
+                mechanism = InstanceApplyMechanism::FrameRate;
+            }
+        }
+
+        if mechanism != InstanceApplyMechanism::Noop {
+            // 运行时快照与期望对齐，避免后续整路启动请求误判为参数变化
+            let mut runtimes = self.runtimes.write().await;
+            if let Some(entry) = runtimes.get_mut(camera_id) {
+                entry.params.upsert_instance(&launch);
+            }
+        }
+        Ok(desired.outcome(types::InstanceApplyState::Applied, mechanism, ""))
+    }
+
+    /// 卸载目标实例并归还其算力租约
+    async fn unmount_instance_locked(
+        &self,
+        camera_id: &str,
+        desired: &InstanceDesiredConfig,
+    ) -> Result<InstanceApplyOutcome, CoordinatorError> {
+        let mounted = self
+            .pipeline_mgr
+            .get_instance_descriptors(camera_id)
+            .await
+            .into_iter()
+            .any(|descriptor| descriptor.instance_id == desired.instance_id);
+        if !mounted {
+            return Ok(desired.outcome(
+                types::InstanceApplyState::Applied,
+                InstanceApplyMechanism::Noop,
+                "",
+            ));
+        }
+
+        let removed = self
+            .pipeline_mgr
+            .remove_pump_instance(camera_id, &desired.instance_id)
+            .await?;
+        if !removed {
+            // 保留运行时归属，等待控制面重试；此时实例已停止发帧但不驱逐租约。
+            return Ok(desired.outcome(
+                types::InstanceApplyState::Failed,
+                InstanceApplyMechanism::Unmount,
+                "目标实例 Worker 关停未确认，已保留运行时归属等待重试",
+            ));
+        }
+        self.forget_runtime_instance(camera_id, &desired.instance_id)
+            .await;
+        tracing::info!(
+            camera_id = %camera_id,
+            instance_id = %desired.instance_id,
+            "算法实例已从运行中的分析泵卸载并归还算力租约"
+        );
+        Ok(desired.outcome(
+            types::InstanceApplyState::Applied,
+            InstanceApplyMechanism::Unmount,
+            "",
+        ))
+    }
+
+    /// 新增挂载目标实例
+    ///
+    /// 资源准入失败时不得驱逐任何已运行实例：租约获取或 Worker 创建失败直接把
+    /// `failed` 回给控制面，由用户显式决策。
+    async fn mount_instance_locked(
+        &self,
+        desired: &InstanceDesiredConfig,
+        launch: &InstanceLaunchConfig,
+    ) -> Result<InstanceApplyOutcome, CoordinatorError> {
+        let camera_id = desired.camera_id.as_str();
+        let lease = match self
+            .algo_registry
+            .acquire_lease(&desired.algorithm_id)
+            .await
+        {
+            Ok(lease) => lease,
+            Err(err) => {
+                let message = err.to_string();
+                let outcome = if message.contains("未在注册中心就绪") {
+                    desired.outcome(
+                        types::InstanceApplyState::Pending,
+                        InstanceApplyMechanism::Mount,
+                        format!(
+                            "算法包 {} 未在注册中心就绪，等待就绪后重新应用",
+                            desired.algorithm_id
+                        ),
+                    )
+                } else {
+                    desired.outcome(
+                        types::InstanceApplyState::Failed,
+                        InstanceApplyMechanism::Mount,
+                        format!("获取算法算力租约失败: {err}"),
+                    )
+                };
+                return Ok(outcome);
+            }
+        };
+
+        let package = lease.package().clone();
+        let algorithm_type = package.manifest().algorithm_type.clone();
+        let config_json = launch_config_json(launch);
+        let worker = match self
+            .create_instance_worker(&package, &desired.instance_id, config_json.as_deref())
+            .await
+        {
+            Ok(worker) => worker,
+            Err(err) => {
+                tracing::error!(
+                    camera_id = %camera_id,
+                    instance_id = %desired.instance_id,
+                    error = %err,
+                    "增量挂载算法实例失败，保留现有实例运行状态"
+                );
+                return Ok(desired.outcome(
+                    types::InstanceApplyState::Failed,
+                    InstanceApplyMechanism::Mount,
+                    format!("创建推理 Worker 失败: {err}"),
+                ));
+            }
+        };
+
+        let handle = worker.handle();
+        let added = self
+            .pipeline_mgr
+            .add_pump_instance(
+                camera_id,
+                crate::pump::WorkerInstanceConfig {
+                    instance_id: desired.instance_id.clone(),
+                    algorithm_id: desired.algorithm_id.clone(),
+                    algorithm_type,
+                    target_fps: launch.target_fps,
+                    config_json,
+                },
+                worker,
+            )
+            .await?;
+        if !added {
+            return Ok(desired.outcome(
+                types::InstanceApplyState::Failed,
+                InstanceApplyMechanism::Mount,
+                "分析泵已停止或目标实例已挂载，增量挂载未生效",
+            ));
+        }
+
+        {
+            let mut runtimes = self.runtimes.write().await;
+            if let Some(entry) = runtimes.get_mut(camera_id) {
+                entry
+                    .instances
+                    .retain(|item| item.instance_id != desired.instance_id);
+                entry.instances.push(ActiveInstanceEntry {
+                    instance_id: desired.instance_id.clone(),
+                    algorithm_id: desired.algorithm_id.clone(),
+                    lease: Some(lease),
+                    worker_handle: handle,
+                });
+                entry.params.upsert_instance(launch);
+            }
+        }
+        tracing::info!(
+            camera_id = %camera_id,
+            instance_id = %desired.instance_id,
+            algorithm_id = %desired.algorithm_id,
+            "算法实例已增量挂载至运行中的分析泵"
+        );
+        Ok(desired.outcome(
+            types::InstanceApplyState::Applied,
+            InstanceApplyMechanism::Mount,
+            "",
+        ))
+    }
+
+    /// 仅替换目标实例的 Worker（模型路径、算法版本等无法热更新的变更）
+    ///
+    /// 先创建新 Worker 再切换：新 Worker 分配失败时旧 Worker 继续服务，
+    /// 避免 NPU 双份内存导致整路实例被驱逐。
+    async fn replace_instance_worker_locked(
+        &self,
+        camera_id: &str,
+        desired: &InstanceDesiredConfig,
+        launch: &InstanceLaunchConfig,
+    ) -> Result<Result<(), InstanceApplyOutcome>, CoordinatorError> {
+        let Some(package) = self.instance_package(camera_id, &desired.instance_id).await else {
+            return Ok(Err(desired.outcome(
+                types::InstanceApplyState::Pending,
+                InstanceApplyMechanism::WorkerReplace,
+                "目标实例当前未持有算法包租约，无法就地重建 Worker，等待任务重启后收敛",
+            )));
+        };
+
+        let config_json = launch_config_json(launch);
+        let worker = match self
+            .create_instance_worker(&package, &desired.instance_id, config_json.as_deref())
+            .await
+        {
+            Ok(worker) => worker,
+            Err(err) => {
+                return Ok(Err(desired.outcome(
+                    types::InstanceApplyState::Failed,
+                    InstanceApplyMechanism::WorkerReplace,
+                    format!("创建替换 Worker 失败，保留原 Worker 继续服务: {err}"),
+                )));
+            }
+        };
+
+        match self
+            .pipeline_mgr
+            .replace_pump_instance_worker(camera_id, &desired.instance_id, worker)
+            .await
+        {
+            Ok(true) => {
+                tracing::info!(
+                    camera_id = %camera_id,
+                    instance_id = %desired.instance_id,
+                    "目标实例 Worker 已在帧边界完成增量替换"
+                );
+                Ok(Ok(()))
+            }
+            Ok(false) => Ok(Err(desired.outcome(
+                types::InstanceApplyState::Failed,
+                InstanceApplyMechanism::WorkerReplace,
+                "目标实例槽位不存在，Worker 替换未生效",
+            ))),
+            Err(PipelineError::PipelineNotFound { .. }) => Ok(Err(desired.outcome(
+                types::InstanceApplyState::Pending,
+                InstanceApplyMechanism::WorkerReplace,
+                "摄像头分析泵已停止，等待任务重启后收敛",
+            ))),
+            Err(err) => Err(CoordinatorError::Pipeline(err)),
+        }
+    }
+
+    /// 在专用阻塞线程内创建推理 Worker（NPU 上下文绑定线程，不得占用 Tokio worker）
+    async fn create_instance_worker(
+        &self,
+        package: &Arc<infer::package::AlgoPackage>,
+        instance_id: &str,
+        config_json: Option<&str>,
+    ) -> Result<infer::InferenceWorker, CoordinatorError> {
+        let package = package.clone();
+        let worker_name = format!(
+            "infer-worker-{}-{instance_id}",
+            package.manifest().algorithm_id
+        );
+        let instance_id = instance_id.to_string();
+        let config_json = config_json.map(str::to_owned);
+        match tokio::task::spawn_blocking(move || {
+            let worker_config = infer::InferenceWorkerConfig {
+                worker_name,
+                ..Default::default()
+            };
+            package.create_worker(&instance_id, config_json.as_deref(), worker_config)
+        })
+        .await
+        {
+            Ok(Ok(worker)) => Ok(worker),
+            Ok(Err(err)) => Err(CoordinatorError::AlgorithmInstance {
+                reason: err.to_string(),
+            }),
+            Err(err) => Err(CoordinatorError::TaskJoin(err)),
+        }
+    }
+
+    /// 读取目标实例当前持有的算力租约对应的算法包
+    async fn instance_package(
+        &self,
+        camera_id: &str,
+        instance_id: &str,
+    ) -> Option<Arc<infer::package::AlgoPackage>> {
+        let runtimes = self.runtimes.read().await;
+        runtimes
+            .get(camera_id)?
+            .instance_entry(instance_id)?
+            .lease
+            .as_ref()
+            .map(|lease| lease.package().clone())
+    }
+
+    /// 释放目标实例的运行时归属（算力租约随条目一起归还）
+    async fn forget_runtime_instance(&self, camera_id: &str, instance_id: &str) {
+        let dropped = {
+            let mut runtimes = self.runtimes.write().await;
+            runtimes.get_mut(camera_id).and_then(|entry| {
+                let before = entry.instances.len();
+                entry
+                    .instances
+                    .retain(|item| item.instance_id != instance_id);
+                entry.params.remove_instance(instance_id);
+                (entry.instances.len() != before).then_some(entry.instances.len())
+            })
+        };
+        if dropped.is_some() {
+            tracing::debug!(
+                camera_id = %camera_id,
+                instance_id = %instance_id,
+                "已释放算法实例运行时归属"
+            );
+        }
+    }
+}
+
+/// 实例配置 JSON 是否等价（按解析后的结构比较，忽略键顺序与空白差异）
+fn config_json_matches(current: Option<&str>, desired: Option<&str>) -> bool {
+    match (current, desired) {
+        (None, None) => true,
+        (Some(current), Some(desired)) => {
+            match (
+                serde_json::from_str::<serde_json::Value>(current),
+                serde_json::from_str::<serde_json::Value>(desired),
+            ) {
+                (Ok(current), Ok(desired)) => current == desired,
+                _ => current.trim() == desired.trim(),
+            }
+        }
+        (None, Some(desired)) => desired
+            .trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}')
+            .trim()
+            .is_empty(),
+        (Some(current), None) => current
+            .trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}')
+            .trim()
+            .is_empty(),
+    }
+}
+
+/// 构造算法实例的创建配置 JSON（空配置不传，保持与冷启动路径一致）
+fn launch_config_json(launch: &InstanceLaunchConfig) -> Option<String> {
+    (!launch.algo_params.is_null()).then(|| launch.algo_params.to_string())
+}
+
 /// 视频分析任务运行时服务抽象接口 (支持依赖注入与 Mock 测试)
 #[async_trait::async_trait]
 pub trait TaskRuntimeService: Send + Sync + std::fmt::Debug {
@@ -386,6 +1179,27 @@ pub trait TaskRuntimeService: Send + Sync + std::fmt::Debug {
 
     /// 为指定摄像机配置空间几何布防规则 (ROI 区域入侵、越界绊线、Mask 遮罩)
     async fn set_camera_rules(&self, camera_id: &str, rules: Vec<types::DetectionRule>);
+
+    /// 按最新期望配置收敛某路摄像头的算法实例集合
+    ///
+    /// 媒体输入契约未变化时只增删/更新目标实例；变化时整路重建。
+    async fn sync_camera_instances(
+        &self,
+        params: StartCameraPipelineParams,
+    ) -> Result<CameraInstanceSyncOutcome, CoordinatorError>;
+
+    /// 收敛单个算法实例的期望配置（增量路径，不重启整路管线）
+    async fn apply_instance_config(
+        &self,
+        desired: InstanceDesiredConfig,
+    ) -> Result<InstanceApplyOutcome, CoordinatorError>;
+
+    /// 从运行中的摄像头任务卸载单个算法实例
+    async fn remove_instance_runtime(
+        &self,
+        camera_id: &str,
+        instance_id: &str,
+    ) -> Result<bool, CoordinatorError>;
 }
 
 #[async_trait::async_trait]
@@ -419,6 +1233,28 @@ impl TaskRuntimeService for TaskRuntimeCoordinator {
 
     async fn set_camera_rules(&self, camera_id: &str, rules: Vec<types::DetectionRule>) {
         self.pipeline_mgr.set_camera_rules(camera_id, rules).await;
+    }
+
+    async fn sync_camera_instances(
+        &self,
+        params: StartCameraPipelineParams,
+    ) -> Result<CameraInstanceSyncOutcome, CoordinatorError> {
+        self.sync_camera_instances(params).await
+    }
+
+    async fn apply_instance_config(
+        &self,
+        desired: InstanceDesiredConfig,
+    ) -> Result<InstanceApplyOutcome, CoordinatorError> {
+        self.apply_instance_config(desired).await
+    }
+
+    async fn remove_instance_runtime(
+        &self,
+        camera_id: &str,
+        instance_id: &str,
+    ) -> Result<bool, CoordinatorError> {
+        self.remove_instance_runtime(camera_id, instance_id).await
     }
 }
 
@@ -569,7 +1405,9 @@ impl TaskRuntimeCoordinator {
             leases.push(lease);
 
             let algorithm_type = pkg.manifest().algorithm_type.clone();
-            let worker_instance_id = params.camera_id.clone();
+            // 插件可见的实例身份使用算法实例 ID（而非 camera_id）：同一摄像头挂载
+            // 多个同款算法时身份必须互不冲突，且需与增量挂载路径保持一致。
+            let worker_instance_id = inst.instance_id.clone();
             let worker_config_json = if inst.algo_params.is_null() {
                 None
             } else {
@@ -603,6 +1441,7 @@ impl TaskRuntimeCoordinator {
             };
             let handle = worker.handle();
             instance_configs.push(crate::pump::WorkerInstanceConfig {
+                instance_id: inst.instance_id.clone(),
                 algorithm_id: inst.algorithm_id.clone(),
                 algorithm_type,
                 target_fps: inst.target_fps,
@@ -612,7 +1451,7 @@ impl TaskRuntimeCoordinator {
                     Some(inst.algo_params.to_string())
                 },
             });
-            workers.push((inst.algorithm_id.clone(), handle, Some(worker)));
+            workers.push((inst.instance_id.clone(), handle, Some(worker)));
         }
 
         let decoder_camera_id = params.camera_id.clone();
@@ -685,22 +1524,28 @@ impl TaskRuntimeCoordinator {
 
         if params.instances.is_empty() {
             instance_configs.push(crate::pump::WorkerInstanceConfig {
+                instance_id: crate::pump::LEGACY_SINGLE_WORKER_ID.to_string(),
                 algorithm_id: "default".to_string(),
                 algorithm_type: "detection".to_string(),
                 target_fps: 0,
                 config_json: None,
             });
-            workers.push(("default".to_string(), handle, managed_worker_opt));
+            workers.push((
+                crate::pump::LEGACY_SINGLE_WORKER_ID.to_string(),
+                handle,
+                managed_worker_opt,
+            ));
         } else {
             for inst in &params.instances {
                 instance_configs.push(crate::pump::WorkerInstanceConfig {
+                    instance_id: inst.instance_id.clone(),
                     algorithm_id: inst.algorithm_id.clone(),
                     algorithm_type: "detection".to_string(),
                     target_fps: inst.target_fps,
                     config_json: None,
                 });
                 workers.push((
-                    inst.algorithm_id.clone(),
+                    inst.instance_id.clone(),
                     handle.clone(),
                     managed_worker_opt.take(),
                 ));
@@ -733,15 +1578,14 @@ impl TaskRuntimeCoordinator {
         let mut decoder_opt = Some(decoder);
         let mut workers_opt = Some(workers);
 
-        let primary_handle = workers_opt
-            .as_ref()
-            .and_then(|w| w.first())
-            .map(|(_, h, _)| h.clone())
-            .expect("workers must not be empty");
-
+        // 实例级运行时归属：按 instanceId 组装（workers 与 leases 均与 params.instances 同序）
         let worker_handles = workers_opt
             .as_ref()
-            .map(|w| w.iter().map(|(id, h, _)| (id.clone(), h.clone())).collect())
+            .map(|w| {
+                w.iter()
+                    .map(|(id, h, _)| (id.clone(), h.clone()))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         let result: Result<u64, CoordinatorError> = async {
@@ -829,6 +1673,19 @@ impl TaskRuntimeCoordinator {
             pump_started = true;
             self.pipeline_mgr.set_ai_active(&camera_id, true).await;
 
+            let mut instances = Vec::with_capacity(params.instances.len());
+            // 注入式启动路径不提供租约，此时实例归属仍按 instanceId 建立，只是缺少
+            // 就地重建 Worker 的能力（`lease = None`）。
+            let mut leases = algo_leases.into_iter().map(Some);
+            for (inst, (_, handle)) in params.instances.iter().zip(worker_handles) {
+                instances.push(ActiveInstanceEntry {
+                    instance_id: inst.instance_id.clone(),
+                    algorithm_id: inst.algorithm_id.clone(),
+                    lease: leases.next().flatten(),
+                    worker_handle: handle,
+                });
+            }
+
             let generation = self.generation_counter.fetch_add(1, Ordering::SeqCst);
             let entry = ActiveRuntimeEntry {
                 camera_id: camera_id.clone(),
@@ -838,9 +1695,7 @@ impl TaskRuntimeCoordinator {
                 main_attach_handle: main_attach_handle.take(),
                 sub_stream_key: sub_stream_key.clone(),
                 sub_session,
-                worker_handle: primary_handle,
-                worker_handles,
-                algo_leases,
+                instances,
                 started_at_ms: chrono::Utc::now().timestamp_millis(),
             };
             self.runtimes.write().await.insert(camera_id.clone(), entry);
@@ -1055,6 +1910,7 @@ impl TaskRuntimeCoordinator {
             .instances
             .iter()
             .map(|i| InstanceRuntimeInfo {
+                instance_id: i.instance_id.clone(),
                 algorithm_id: i.algorithm_id.clone(),
                 target_fps: i.target_fps,
             })

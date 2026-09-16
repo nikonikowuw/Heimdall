@@ -138,14 +138,12 @@ async fn test_algorithms_and_instances_api_endpoints() {
         .await
         .unwrap();
 
-    // POST /api/v1/tasks/instances
+    // POST /api/v1/tasks/instances 已移除：实例绑定只通过任务级保存维护
     let create_body = serde_json::json!({
         "cameraId": "CAM-INST-01",
         "algorithmId": "test_yolo",
         "analysisFps": 15,
         "params": { "threshold": 0.6 },
-        "rules": [],
-        "motionGate": { "enabled": true },
         "enabled": true
     });
     let req = Request::builder()
@@ -156,36 +154,78 @@ async fn test_algorithms_and_instances_api_endpoints() {
         .body(Body::from(create_body.to_string()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    // /tasks/instances 已不是路由，路径落到 /tasks/{camera_id}（只接受 GET/PUT/DELETE）
+    assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 
+    // 任务级保存是唯一写路径：新增实例 -> 改参 -> 启停 -> 删除
+    let task_body = serde_json::json!({
+        "cameraId": "CAM-INST-01",
+        "name": "算法实例绑定任务",
+        "desiredEnabled": false,
+        "rules": [],
+        "algorithmInstances": [
+            {
+                "algorithmId": "test_yolo",
+                "analysisFps": 15,
+                "algoParams": { "threshold": 0.6 },
+                "enabled": true
+            }
+        ]
+    });
+    let req = Request::builder()
+        .uri("/api/v1/tasks/CAM-INST-01")
+        .method("PUT")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .body(Body::from(task_body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
         .await
         .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let instance_id = val["data"]["instanceId"].as_str().unwrap().to_string();
+    let instance = &val["data"]["algorithmInstances"][0];
+    assert_eq!(instance["algorithmId"], "test_yolo");
+    assert_eq!(instance["analysisFps"], 15);
+    assert_eq!(instance["applyState"], "applied");
+    assert!(
+        instance["instanceId"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "任务级保存必须返回实例身份"
+    );
+    let instance_id = instance["instanceId"].as_str().unwrap().to_string();
 
-    // GET /api/v1/tasks/instances?cameraId=CAM-INST-01
+    // 实例随任务查询可见，且参数持久化
     let req = Request::builder()
-        .uri("/api/v1/tasks/instances?cameraId=CAM-INST-01")
+        .uri("/api/v1/tasks/CAM-INST-01")
         .method("GET")
         .header("Authorization", format!("Bearer {token}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(val["data"]["algorithmInstances"][0]["analysisFps"], 15);
+    assert_eq!(
+        val["data"]["algorithmInstances"][0]["algoParams"]["threshold"],
+        0.6
+    );
 
-    // PUT /api/v1/tasks/instances/{instance_id}
-    let update_body = serde_json::json!({
-        "analysisFps": 25,
-        "params": { "threshold": 0.85 },
-        "enabled": true
-    });
+    // 整体下发修改参数：其余字段保持，代际递增并收敛
+    let mut updated = task_body.clone();
+    updated["algorithmInstances"][0]["analysisFps"] = serde_json::json!(25);
+    updated["algorithmInstances"][0]["algoParams"] = serde_json::json!({ "threshold": 0.85 });
     let req = Request::builder()
-        .uri(format!("/api/v1/tasks/instances/{instance_id}"))
+        .uri("/api/v1/tasks/CAM-INST-01")
         .method("PUT")
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")
-        .body(Body::from(update_body.to_string()))
+        .body(Body::from(updated.to_string()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -193,31 +233,51 @@ async fn test_algorithms_and_instances_api_endpoints() {
         .await
         .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(val["code"], 0);
-    assert_eq!(val["data"]["analysisFps"], 25);
-    assert_eq!(val["data"]["params"]["threshold"], 0.85);
-    assert_eq!(val["data"]["enabled"], true);
+    let instance = &val["data"]["algorithmInstances"][0];
+    assert_eq!(instance["analysisFps"], 25);
+    assert_eq!(instance["algoParams"]["threshold"], 0.85);
+    assert_eq!(instance["desiredRevision"], 1);
+    assert_eq!(instance["appliedRevision"], 1);
+    assert_eq!(instance["applyState"], "applied");
 
-    // PUT /api/v1/tasks/instances/{instance_id}/enabled
+    let stored = db::AlgorithmInstanceRepo::find_by_instance_id(&state.db, &instance_id)
+        .await
+        .unwrap()
+        .expect("实例应持久化");
+    assert_eq!(stored.analysis_fps, 25);
+    assert_eq!(stored.params_json, r#"{"threshold":0.85}"#);
+
+    // 停用实例：条目保留在集合中
+    updated["algorithmInstances"][0]["enabled"] = serde_json::json!(false);
     let req = Request::builder()
-        .uri(format!("/api/v1/tasks/instances/{instance_id}/enabled"))
+        .uri("/api/v1/tasks/CAM-INST-01")
         .method("PUT")
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")
-        .body(Body::from(r#"{"enabled":false}"#))
+        .body(Body::from(updated.to_string()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // DELETE /api/v1/tasks/instances/{instance_id}
+    // 从集合中移除即删除实例记录
+    let mut emptied = updated.clone();
+    emptied["algorithmInstances"] = serde_json::json!([]);
     let req = Request::builder()
-        .uri(format!("/api/v1/tasks/instances/{instance_id}"))
-        .method("DELETE")
+        .uri("/api/v1/tasks/CAM-INST-01")
+        .method("PUT")
         .header("Authorization", format!("Bearer {token}"))
-        .body(Body::empty())
+        .header("Content-Type", "application/json")
+        .body(Body::from(emptied.to_string()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        db::AlgorithmInstanceRepo::find_by_instance_id(&state.db, &instance_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "移出集合后不得残留实例记录"
+    );
 }
 
 #[tokio::test]

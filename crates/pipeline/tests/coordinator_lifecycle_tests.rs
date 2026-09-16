@@ -139,6 +139,8 @@ async fn test_coordinator_full_lifecycle_and_events() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "test_algo_01_inst".to_string(),
+
             algorithm_id: "test_algo_01".to_string(),
             algo_params: serde_json::json!({ "threshold": 0.5 }),
             target_fps: 25,
@@ -274,6 +276,8 @@ async fn test_main_stream_analysis_does_not_maintain_compressed_ring_buffer() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "test_algo_main_inst".to_string(),
+
             algorithm_id: "test_algo_main".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 25,
@@ -356,6 +360,8 @@ async fn test_coordinator_idempotency_and_reconfiguration() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "general_detection_inst".to_string(),
+
             algorithm_id: "general_detection".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 15,
@@ -444,6 +450,8 @@ async fn test_coordinator_validation_and_rollback() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "algo_1_inst".to_string(),
+
             algorithm_id: "algo_1".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 20,
@@ -465,6 +473,8 @@ async fn test_coordinator_validation_and_rollback() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "non_existent_algo_inst".to_string(),
+
             algorithm_id: "non_existent_algo".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 20,
@@ -536,6 +546,8 @@ async fn test_coordinator_alarm_trigger_and_event_broadcast() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "tripwire_algo_inst".to_string(),
+
             algorithm_id: "tripwire_algo".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 25,
@@ -609,6 +621,8 @@ async fn test_coordinator_validation_detailed() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "algo_test_inst".to_string(),
+
             algorithm_id: "algo_test".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 25,
@@ -631,6 +645,7 @@ async fn test_coordinator_validation_detailed() {
     // 2b. 重复 algorithm_id
     let mut p = base_params.clone();
     p.instances.push(InstanceLaunchConfig {
+        instance_id: "algo_test_dup_inst".to_string(),
         algorithm_id: "algo_test".to_string(),
         algo_params: serde_json::json!({}),
         target_fps: 10,
@@ -699,6 +714,8 @@ async fn test_coordinator_concurrent_starts_serialized() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "algo_concurrent_inst".to_string(),
+
             algorithm_id: "algo_concurrent".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 20,
@@ -791,6 +808,8 @@ async fn test_coordinator_start_cancellation_safety() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "algo_cancel_inst".to_string(),
+
             algorithm_id: "algo_cancel".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 20,
@@ -876,6 +895,8 @@ async fn test_coordinator_alarm_evidence_failure_preserves_alarm() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "fail_ev_algo_inst".to_string(),
+
             algorithm_id: "fail_ev_algo".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 25,
@@ -986,6 +1007,8 @@ async fn test_coordinator_empty_tracks_broadcast() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "empty_algo_inst".to_string(),
+
             algorithm_id: "empty_algo".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 20,
@@ -1079,6 +1102,8 @@ async fn test_coordinator_startup_failure_disposes_decoder_on_rollback() {
         sub_codec: CodecType::H264,
         transport_policy: TransportPolicy::Tcp,
         instances: vec![InstanceLaunchConfig {
+            instance_id: "test_algo_inst".to_string(),
+
             algorithm_id: "test_algo".to_string(),
             algo_params: serde_json::json!({}),
             target_fps: 25,
@@ -1166,6 +1191,8 @@ async fn test_coordinator_stop_all_parallel_and_worker_handle() {
             sub_codec: CodecType::H264,
             transport_policy: TransportPolicy::Tcp,
             instances: vec![InstanceLaunchConfig {
+                instance_id: "test_algo_inst".to_string(),
+
                 algorithm_id: "test_algo".to_string(),
                 algo_params: serde_json::json!({}),
                 target_fps: 20,
@@ -1257,11 +1284,13 @@ async fn test_coordinator_multi_algorithm_instances() {
         transport_policy: TransportPolicy::Tcp,
         instances: vec![
             InstanceLaunchConfig {
+                instance_id: "inst_face_01".to_string(),
                 algorithm_id: "algo_face".to_string(),
                 algo_params: serde_json::json!({ "model": "face_v1" }),
                 target_fps: 15,
             },
             InstanceLaunchConfig {
+                instance_id: "inst_helmet_01".to_string(),
                 algorithm_id: "algo_helmet".to_string(),
                 algo_params: serde_json::json!({ "model": "helmet_v2" }),
                 target_fps: 10,

@@ -61,6 +61,9 @@ pub enum ApiError {
     #[error("人脸特征提取任务冲突: {0}")]
     FaceExtractionConflict(String),
 
+    #[error("任务配置已被其他会话修改（本地版本 {expected}，当前版本 {actual}）")]
+    ConfigRevisionConflict { expected: i64, actual: i64 },
+
     // ─── 系统设置 51xxx ───
     #[error("网卡不存在: {0}")]
     NetworkInterfaceNotFound(String),
@@ -148,6 +151,11 @@ impl IntoResponse for ApiError {
             Self::FaceAlgorithmNotLoaded(m) => (StatusCode::SERVICE_UNAVAILABLE, 50301, m.clone()),
             Self::FaceQualityRejected(m) => (StatusCode::BAD_REQUEST, 40002, m.clone()),
             Self::FaceExtractionConflict(m) => (StatusCode::CONFLICT, 40902, m.clone()),
+            Self::ConfigRevisionConflict { .. } => (
+                StatusCode::CONFLICT,
+                40903,
+                "任务配置已被其他会话修改，请载入最新配置后重试".to_string(),
+            ),
             Self::NetworkInterfaceNotFound(m) => (StatusCode::NOT_FOUND, 51007, m.clone()),
             Self::NetworkInterfaceReadOnly(m) => (StatusCode::BAD_REQUEST, 51005, m.clone()),
             Self::NetworkPendingOperation => (StatusCode::CONFLICT, 51006, self.to_string()),

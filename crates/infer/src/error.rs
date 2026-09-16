@@ -33,6 +33,9 @@ pub enum InferError {
     #[error("推理后端 {backend} 未编译进本次构建")]
     BackendUnavailable { backend: &'static str },
 
+    #[error("推理后端不支持该能力: {capability}")]
+    Unsupported { capability: &'static str },
+
     #[error("硬件推理超时，超过 {0:?}")]
     Timeout(std::time::Duration),
 
@@ -56,6 +59,7 @@ impl InferError {
             Self::JsonParse { .. } => 30017,
             Self::ShapeMismatch { .. } => 30018,
             Self::BackendUnavailable { .. } => 30019,
+            Self::Unsupported { .. } => 30023,
             Self::Timeout(_) => 30020,
             Self::Execution { .. } => 30021,
             Self::Frame(_) => 30022,

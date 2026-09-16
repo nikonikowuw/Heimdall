@@ -21,6 +21,12 @@ pub struct SaveTaskWithInstancesParams {
     pub motion_gate_json: String,
     pub status_message: Option<String>,
     pub instances: Option<Vec<SaveTaskAlgorithmInstanceParams>>,
+    /// 客户端读取到的任务配置版本号（整体下发的乐观并发控制）。
+    ///
+    /// `Some(n)` 时要求库中当前版本号等于 n，否则拒绝写入并返回 `RevisionConflict`；
+    /// `Some(0)` 表示「读取时该通道尚无任务」，用于快速创建的乐观断言；
+    /// `None` 表示不做版本校验（脚本与迁移期客户端）。
+    pub expected_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +51,9 @@ pub struct UpdateTaskInstanceParams {
     pub rules_json: Option<String>,
     pub motion_gate_json: Option<String>,
     pub enabled: Option<bool>,
+    /// 是否把本次变更计为一个新的期望配置代际（参数/帧率/启停变更时为 true）。
+    /// 纯镜像字段（规则、门控）同步不递增代际，避免制造无需运行时收敛的 pending。
+    pub bump_revision: bool,
 }
 
 /// 兼容单算法参数结构
@@ -168,6 +177,17 @@ impl TaskRepo {
     ) -> Result<Model, DbError> {
         let task =
             if let Some(existing) = Self::find_by_camera_id_txn(txn, &params.camera_id).await? {
+                // 整体覆盖写入前先校验快照版本：不匹配说明别的会话已经改过这份配置，
+                // 继续写入会用旧快照覆盖对方刚提交的实例集合与参数。
+                if let Some(expected) = params.expected_revision {
+                    if existing.config_revision != expected {
+                        return Err(DbError::RevisionConflict {
+                            expected,
+                            actual: existing.config_revision,
+                        });
+                    }
+                }
+                let existing_revision = existing.config_revision;
                 let mut active: ActiveModel = existing.into();
                 active.name = Set(params.name.clone());
                 active.desired_enabled = Set(params.desired_enabled);
@@ -179,9 +199,21 @@ impl TaskRepo {
                 if let Some(msg) = params.status_message {
                     active.status_message = Set(msg);
                 }
+                active.config_revision = Set(existing_revision + 1);
                 active.updated_at = Set(chrono::Utc::now());
                 active.update(txn).await?
             } else {
+                if let Some(expected) = params.expected_revision {
+                    // 版本号只在「读到过一个真实版本」时才有意义：显式的 0 表示读取时
+                    // 该通道还没有任务（快速创建的乐观断言），创建本身是期望结果；
+                    // 非 0 却找不到行说明任务已被删除，属于更严重的快照失效。
+                    if expected != 0 {
+                        return Err(DbError::RevisionConflict {
+                            expected,
+                            actual: 0,
+                        });
+                    }
+                }
                 let now = chrono::Utc::now();
                 let active = ActiveModel {
                     id: sea_orm::ActiveValue::NotSet,
@@ -192,6 +224,7 @@ impl TaskRepo {
                     rules_json: Set(params.rules_json.clone()),
                     motion_gate_json: Set(params.motion_gate_json.clone()),
                     status_message: Set(params.status_message.unwrap_or_default()),
+                    config_revision: Set(1),
                     created_at: Set(now),
                     updated_at: Set(now),
                 };
@@ -261,6 +294,11 @@ impl TaskRepo {
 
                 if let Some(model) = existing_instances.get(&instance.algorithm_id) {
                     desired_ids.push(model.id);
+                    // 任务级保存只应在真的改变了期望配置（参数/帧率/启停）时代际 +1；
+                    // 仅镜像写入规则与门控字段不构成需要运行时收敛的变更。
+                    let config_changed = model.analysis_fps != instance.analysis_fps
+                        || model.params_json != instance.params_json
+                        || model.enabled != instance_enabled;
                     let mut active: InstActiveModel = model.clone().into();
                     active.analysis_fps = Set(instance.analysis_fps);
                     active.params_json = Set(instance.params_json.clone());
@@ -268,6 +306,16 @@ impl TaskRepo {
                     active.motion_gate_json = Set(params.motion_gate_json.clone());
                     active.enabled = Set(instance_enabled);
                     active.camera_id = Set(params.camera_id.clone());
+                    if config_changed {
+                        active.desired_revision = Set(model.desired_revision + 1);
+                        active.runtime_apply_state =
+                            Set(types::InstanceApplyState::Pending.as_i32());
+                        if types::InstanceApplyState::from_i32(model.runtime_apply_state)
+                            == Some(types::InstanceApplyState::Failed)
+                        {
+                            active.status_message = Set(String::new());
+                        }
+                    }
                     active.updated_at = Set(chrono::Utc::now());
                     active.update(txn).await?;
                 } else {
@@ -285,6 +333,9 @@ impl TaskRepo {
                         enabled: Set(instance_enabled),
                         actual_status: Set(types::TaskStatus::STOPPED),
                         status_message: Set(String::new()),
+                        desired_revision: Set(0),
+                        applied_revision: Set(0),
+                        runtime_apply_state: Set(types::InstanceApplyState::Applied.as_i32()),
                         created_at: Set(now),
                         updated_at: Set(now),
                     }
@@ -395,6 +446,7 @@ impl TaskRepo {
                             status_message: Set(String::new()),
                             rules_json: Set("[]".to_string()),
                             motion_gate_json: Set("{}".to_string()),
+                            config_revision: Set(1),
                             created_at: Set(now),
                             updated_at: Set(now),
                         };
@@ -438,6 +490,7 @@ impl TaskRepo {
                         motion_gate_json: task.motion_gate_json,
                         status_message: None,
                         instances: Some(instances_params),
+                        expected_revision: None,
                     },
                 )
                 .await?;
@@ -508,6 +561,9 @@ impl TaskRepo {
                     })?;
 
                 let task_id = model.task_id;
+                let bump_revision = params.bump_revision;
+                let previous_apply_state = model.runtime_apply_state;
+                let desired_revision_before = model.desired_revision;
                 let mut active: InstActiveModel = model.into();
                 if let Some(fps) = params.analysis_fps {
                     active.analysis_fps = Set(fps);
@@ -524,21 +580,34 @@ impl TaskRepo {
                 if let Some(en) = params.enabled {
                     active.enabled = Set(en);
                 }
+                if bump_revision {
+                    // 期望配置变化：代际 +1 并把应用状态置为 pending，直到运行时回写 applied。
+                    let desired_revision = desired_revision_before + 1;
+                    active.desired_revision = Set(desired_revision);
+                    active.runtime_apply_state = Set(types::InstanceApplyState::Pending.as_i32());
+                    if types::InstanceApplyState::from_i32(previous_apply_state)
+                        == Some(types::InstanceApplyState::Failed)
+                    {
+                        // 上一次失败原因属于旧代际，新代际未收敛前先用中性文案表示排队中。
+                        active.status_message = Set(String::new());
+                    }
+                }
                 active.updated_at = Set(chrono::Utc::now());
                 let updated = active.update(txn).await?;
 
-                if params.rules_json.is_some() || params.motion_gate_json.is_some() {
-                    if let Some(task_model) = Entity::find_by_id(task_id).one(txn).await? {
-                        let mut task_active: ActiveModel = task_model.into();
-                        if let Some(rj) = params.rules_json {
-                            task_active.rules_json = Set(rj);
-                        }
-                        if let Some(mg) = params.motion_gate_json {
-                            task_active.motion_gate_json = Set(mg);
-                        }
-                        task_active.updated_at = Set(chrono::Utc::now());
-                        task_active.update(txn).await?;
+                // 实例配置与任务级规则/门控都属于任务配置，任何写入都必须让快照版本失效
+                if let Some(task_model) = Entity::find_by_id(task_id).one(txn).await? {
+                    let next_revision = task_model.config_revision + 1;
+                    let mut task_active: ActiveModel = task_model.into();
+                    if let Some(rj) = params.rules_json {
+                        task_active.rules_json = Set(rj);
                     }
+                    if let Some(mg) = params.motion_gate_json {
+                        task_active.motion_gate_json = Set(mg);
+                    }
+                    task_active.config_revision = Set(next_revision);
+                    task_active.updated_at = Set(chrono::Utc::now());
+                    task_active.update(txn).await?;
                 }
 
                 Self::sync_task_actual_status_txn(txn, task_id).await?;
@@ -560,6 +629,7 @@ impl TaskRepo {
             instance_id,
             UpdateTaskInstanceParams {
                 enabled: Some(enabled),
+                bump_revision: true,
                 ..Default::default()
             },
         )
@@ -589,6 +659,14 @@ impl TaskRepo {
                     .filter(InstColumn::InstanceId.eq(&instance_id))
                     .exec(txn)
                     .await?;
+
+                if let Some(task_model) = Entity::find_by_id(task_id).one(txn).await? {
+                    let next_revision = task_model.config_revision + 1;
+                    let mut task_active: ActiveModel = task_model.into();
+                    task_active.config_revision = Set(next_revision);
+                    task_active.updated_at = Set(chrono::Utc::now());
+                    task_active.update(txn).await?;
+                }
 
                 Self::sync_task_actual_status_txn(txn, task_id).await?;
 
@@ -663,6 +741,7 @@ impl TaskRepo {
                 motion_gate_json: params.motion_gate_json,
                 status_message: None,
                 instances,
+                expected_revision: None,
             },
         )
         .await
@@ -687,6 +766,7 @@ impl TaskRepo {
                 motion_gate_json: motion_gate_json.to_string(),
                 status_message: None,
                 instances: None,
+                expected_revision: None,
             },
         )
         .await

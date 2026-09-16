@@ -150,6 +150,7 @@ async fn test_algorithm_and_version_repository_lifecycle() {
             motion_gate_json: "{}".into(),
             status_message: None,
             instances: Some(vec![]),
+            expected_revision: None,
         },
     )
     .await

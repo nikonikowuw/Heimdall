@@ -17,6 +17,8 @@ pub struct Model {
     pub motion_gate_json: String,
     #[sea_orm(column_type = "Text")]
     pub status_message: String,
+    /// 任务配置版本号：任何改变期望配置的写入 +1，用于整体下发的乐观并发控制
+    pub config_revision: i64,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

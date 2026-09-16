@@ -175,6 +175,66 @@ impl std::fmt::Display for TaskStatus {
     }
 }
 
+/// 算法实例配置应用状态（两阶段配置提交的运行时收敛结果）
+///
+/// 与 [`TaskStatus`] 正交：`TaskStatus` 描述实例健康生命周期，本枚举描述
+/// 「用户期望的那份参数是否已经在目标 Worker 上生效」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+#[repr(i32)]
+pub enum InstanceApplyState {
+    /// 期望 revision 已在目标运行时生效
+    #[default]
+    Applied = 0,
+    /// 已持久化，正在排队、创建 Worker 或等待安全帧边界
+    Pending = 1,
+    /// 期望配置已持久化，但目标 Worker 未能使用它
+    Failed = 2,
+}
+
+impl InstanceApplyState {
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    pub const fn from_i32(val: i32) -> Option<Self> {
+        match val {
+            0 => Some(Self::Applied),
+            1 => Some(Self::Pending),
+            2 => Some(Self::Failed),
+            _ => None,
+        }
+    }
+
+    /// 按枚举名解析稳定字符串取值，未知取值返回 `None`，不用默认值猜测语义
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "applied" => Some(Self::Applied),
+            "pending" => Some(Self::Pending),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+impl TryFrom<i32> for InstanceApplyState {
+    type Error = crate::error::TypeError;
+
+    fn try_from(val: i32) -> Result<Self, crate::error::TypeError> {
+        Self::from_i32(val).ok_or(crate::error::TypeError::UnknownInstanceApplyState(val))
+    }
+}
+
+impl std::fmt::Display for InstanceApplyState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Applied => write!(f, "applied"),
+            Self::Pending => write!(f, "pending"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
 pub fn default_algo_params() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }

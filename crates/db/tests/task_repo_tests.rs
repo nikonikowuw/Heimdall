@@ -165,6 +165,7 @@ async fn test_save_task_with_multiple_instances() {
                     enabled: Some(false),
                 },
             ]),
+            expected_revision: None,
         },
     )
     .await
@@ -208,6 +209,7 @@ async fn test_save_task_with_multiple_instances() {
                     enabled: None,
                 },
             ]),
+            expected_revision: None,
         },
     )
     .await;
@@ -461,6 +463,7 @@ async fn test_update_task_runtime_state_granular() {
                     enabled: Some(true),
                 },
             ]),
+            expected_revision: None,
         },
     )
     .await
@@ -533,6 +536,7 @@ async fn test_update_instance_and_sync_task_propagates_rules_and_motion_gate() {
                 params_json: "{}".to_string(),
                 enabled: Some(true),
             }]),
+            expected_revision: None,
         },
     )
     .await
@@ -556,6 +560,7 @@ async fn test_update_instance_and_sync_task_propagates_rules_and_motion_gate() {
             rules_json: Some(updated_rules.to_string()),
             motion_gate_json: Some(updated_motion.to_string()),
             enabled: Some(true),
+            bump_revision: true,
         },
     )
     .await
@@ -564,6 +569,36 @@ async fn test_update_instance_and_sync_task_propagates_rules_and_motion_gate() {
     assert_eq!(updated_instance.analysis_fps, 20);
     assert_eq!(updated_instance.rules_json, updated_rules);
     assert_eq!(updated_instance.motion_gate_json, updated_motion);
+    // 期望配置变更必须推进代际并标记为等待运行时收敛，不能直接伪装成已生效。
+    assert_eq!(updated_instance.desired_revision, 1);
+    assert_eq!(updated_instance.applied_revision, 0);
+    assert_eq!(
+        updated_instance.runtime_apply_state,
+        types::InstanceApplyState::Pending.as_i32()
+    );
+    assert_eq!(
+        AlgorithmInstanceRepo::list_unapplied(&db)
+            .await
+            .expect("list unapplied")
+            .len(),
+        1,
+        "期望配置未收敛的实例必须出现在恢复列表中"
+    );
+
+    // 运行时确认收敛后，期望与实际代际对齐并回到 applied。
+    let applied = AlgorithmInstanceRepo::mark_apply_applied(&db, instance_id, 1)
+        .await
+        .expect("mark applied")
+        .expect("instance exists");
+    assert_eq!(applied.applied_revision, 1);
+    assert_eq!(
+        applied.runtime_apply_state,
+        types::InstanceApplyState::Applied.as_i32()
+    );
+    assert!(AlgorithmInstanceRepo::list_unapplied(&db)
+        .await
+        .expect("list unapplied")
+        .is_empty());
 
     // 验证父任务的 rules_json 与 motion_gate_json 也已原子同步
     let parent_task = TaskRepo::find_by_camera_id(&db, "CAM-001")
@@ -606,4 +641,165 @@ async fn test_camera_repo_update_stream_mode() {
         .expect("no-op update")
         .expect("camera exists");
     assert_eq!(no_op.stream_mode, "main");
+}
+
+/// 整体下发写入必须携带快照版本：不匹配即拒绝，避免旧快照覆盖并发会话的提交。
+#[tokio::test]
+async fn test_save_task_with_instances_enforces_config_revision() {
+    let db = init_test_db().await.expect("init db");
+    setup_test_camera_and_algo(&db).await;
+
+    let make_params =
+        |expected_revision: Option<i64>, name: &str, fps: i32| SaveTaskWithInstancesParams {
+            camera_id: "CAM-001".to_string(),
+            name: name.to_string(),
+            desired_enabled: true,
+            rules_json: "[]".to_string(),
+            motion_gate_json: r#"{"enabled":true}"#.to_string(),
+            status_message: None,
+            instances: Some(vec![SaveTaskAlgorithmInstanceParams {
+                algorithm_id: "general_detection".to_string(),
+                analysis_fps: fps,
+                params_json: "{}".to_string(),
+                enabled: Some(true),
+            }]),
+            expected_revision,
+        };
+
+    // 首次创建：无快照可校验，写入后版本号为 1
+    let created = TaskRepo::save_task_with_instances(&db, make_params(None, "初始任务", 10))
+        .await
+        .expect("create task");
+    assert_eq!(created.config_revision, 1);
+
+    // 携带当前版本号：写入成功并递增
+    let updated = TaskRepo::save_task_with_instances(&db, make_params(Some(1), "会话A", 15))
+        .await
+        .expect("update with current revision");
+    assert_eq!(updated.config_revision, 2);
+    assert_eq!(updated.name, "会话A");
+
+    // 陈旧版本号（会话B仍持有 1）：拒绝写入，库中内容保持不变
+    let conflict = TaskRepo::save_task_with_instances(&db, make_params(Some(1), "会话B", 30))
+        .await
+        .expect_err("stale revision must be rejected");
+    match conflict {
+        DbError::RevisionConflict { expected, actual } => {
+            assert_eq!(expected, 1);
+            assert_eq!(actual, 2);
+        }
+        other => panic!("期望 RevisionConflict，实际 {other:?}"),
+    }
+
+    let after_conflict = TaskRepo::find_by_camera_id(&db, "CAM-001")
+        .await
+        .expect("find task")
+        .expect("task exists");
+    assert_eq!(after_conflict.name, "会话A");
+    assert_eq!(after_conflict.config_revision, 2);
+    let instances = TaskRepo::list_instances_by_task_id(&db, after_conflict.id)
+        .await
+        .expect("list instances");
+    assert_eq!(instances[0].analysis_fps, 15, "冲突请求不得写入实例配置");
+
+    // 客户端持有版本号但任务已被删除：同样视为冲突（actual = 0 表示任务不存在），
+    // 否则会静默把别人的删除操作反转成一次无版本约束的新建。
+    TaskRepo::delete_by_camera_id(&db, "CAM-001")
+        .await
+        .expect("delete task");
+    let deleted = TaskRepo::save_task_with_instances(&db, make_params(Some(2), "删除后写入", 10))
+        .await
+        .expect_err("deleted task with revision must conflict");
+    match deleted {
+        DbError::RevisionConflict { expected, actual } => {
+            assert_eq!(expected, 2);
+            assert_eq!(actual, 0);
+        }
+        other => panic!("期望 RevisionConflict，实际 {other:?}"),
+    }
+
+    // 版本 0 是「读取时该通道还没有任务」的乐观断言：任务确实不存在时，创建就是期望结果
+    let fresh = TaskRepo::save_task_with_instances(&db, make_params(Some(0), "快速创建", 10))
+        .await
+        .expect("expected 0 on absent task is a creation");
+    assert_eq!(fresh.config_revision, 1);
+
+    // 同一个断言落到已存在的任务上必须失败，否则并发创建会静默覆盖对方配置
+    let race = TaskRepo::save_task_with_instances(&db, make_params(Some(0), "并发创建", 30))
+        .await
+        .expect_err("expected 0 on existing task must conflict");
+    match race {
+        DbError::RevisionConflict { expected, actual } => {
+            assert_eq!(expected, 0);
+            assert_eq!(actual, 1);
+        }
+        other => panic!("期望 RevisionConflict，实际 {other:?}"),
+    }
+    let after_race = TaskRepo::find_by_camera_id(&db, "CAM-001")
+        .await
+        .expect("find task")
+        .expect("task exists");
+    assert_eq!(after_race.name, "快速创建");
+
+    // 不带版本号仍可写入（脚本与旧客户端兼容路径），版本号照常推进
+    let no_check = TaskRepo::save_task_with_instances(&db, make_params(None, "脚本更新", 10))
+        .await
+        .expect("write without revision");
+    assert_eq!(no_check.config_revision, 2);
+}
+
+/// 运行时状态回写不得推进配置版本号，否则轮询会作废在途的配置保存。
+#[tokio::test]
+async fn test_runtime_state_updates_do_not_bump_config_revision() {
+    let db = init_test_db().await.expect("init db");
+    setup_test_camera_and_algo(&db).await;
+
+    let saved = TaskRepo::save_task_with_instances(
+        &db,
+        SaveTaskWithInstancesParams {
+            camera_id: "CAM-001".to_string(),
+            name: "任务".to_string(),
+            desired_enabled: true,
+            rules_json: "[]".to_string(),
+            motion_gate_json: "{}".to_string(),
+            status_message: None,
+            instances: Some(vec![SaveTaskAlgorithmInstanceParams {
+                algorithm_id: "general_detection".to_string(),
+                analysis_fps: 10,
+                params_json: "{}".to_string(),
+                enabled: Some(true),
+            }]),
+            expected_revision: None,
+        },
+    )
+    .await
+    .expect("save task");
+    assert_eq!(saved.config_revision, 1);
+    let instance_id = TaskRepo::list_instances_by_task_id(&db, saved.id)
+        .await
+        .expect("list instances")[0]
+        .instance_id
+        .clone();
+
+    TaskRepo::update_task_runtime_state(
+        &db,
+        "CAM-001".to_string(),
+        types::TaskStatus::Running,
+        "运行中".to_string(),
+        Vec::new(),
+    )
+    .await
+    .expect("update runtime state");
+    AlgorithmInstanceRepo::mark_apply_applied(&db, &instance_id, saved.config_revision)
+        .await
+        .expect("mark applied");
+
+    let after = TaskRepo::find_by_camera_id(&db, "CAM-001")
+        .await
+        .expect("find task")
+        .expect("task exists");
+    assert_eq!(
+        after.config_revision, 1,
+        "运行时簿记不得推进配置版本号，否则客户端在途保存会被误判为冲突"
+    );
 }

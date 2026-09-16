@@ -32,6 +32,24 @@ fn current_epoch_ms() -> u64 {
 /// 推理 Worker 启动握手超时上限；若库/模型初始化卡死，线程进入隔离池而不是脱管。
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Worker 控制消息通道容量；控制消息不得静默丢弃，满载时调用方收到明确的拥塞错误。
+const WORKER_CONTROL_CHANNEL_CAPACITY: usize = 8;
+
+/// 控制消息排队等待上限；超时说明目标 Worker 已长时间无法接受控制面指令。
+const WORKER_CONTROL_SEND_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// 工作线程控制消息
+///
+/// 所有控制消息只在该 Worker 的专属 OS 线程内串行执行，保证底层 SDK/FFI 调用的
+/// 线程归属与创建时一致。
+enum WorkerControl {
+    /// 在当前硬件上下文内原地更新实例配置
+    UpdateConfig {
+        config_json: String,
+        reply: oneshot::Sender<Result<(), InferError>>,
+    },
+}
+
 /// 被隔离的挂死推理工作线程条目
 ///
 /// 后端对象由工作线程闭包独占持有；即使线程卡在同步 C ABI 调用中，
@@ -179,6 +197,7 @@ pub struct InferenceWorkerHandle {
     slot: Arc<SharedSlot>,
     is_alive: Arc<AtomicBool>,
     timeout: Duration,
+    control_tx: tokio::sync::mpsc::Sender<WorkerControl>,
 }
 
 impl std::fmt::Debug for InferenceWorkerHandle {
@@ -252,6 +271,49 @@ impl InferenceWorkerHandle {
     /// 提交一帧执行推理检测（具备 Drop-Oldest 丢旧帧保护）。
     pub async fn submit(&self, frame: FrameRef) -> Result<Vec<Detection>, InferError> {
         Ok(self.submit_with_metadata(frame).await?.detections)
+    }
+
+    /// 在当前 Worker 的硬件上下文内原地更新实例配置。
+    ///
+    /// 返回 [`InferError::Unsupported`] 表示该后端不能原地换配置，调用方必须回退到
+    /// 目标实例级 Worker 替换；其他错误表示插件拒绝或 FFI 失败，旧配置继续生效。
+    pub async fn update_config(&self, config_json: String) -> Result<(), InferError> {
+        if !self.is_alive.load(Ordering::Relaxed) {
+            return Err(InferError::Execution {
+                reason: "推理工作线程已退出或处于隔离状态".to_string(),
+            });
+        }
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let message = WorkerControl::UpdateConfig {
+            config_json,
+            reply: reply_tx,
+        };
+
+        match tokio::time::timeout(WORKER_CONTROL_SEND_TIMEOUT, self.control_tx.send(message)).await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                return Err(InferError::Execution {
+                    reason: "推理工作线程控制通道已关闭".to_string(),
+                })
+            }
+            Err(_) => {
+                return Err(InferError::Execution {
+                    reason: "推理工作线程控制通道拥塞，控制面指令未被接受".to_string(),
+                })
+            }
+        }
+
+        // 与单帧推理一致的客户端断路保护：底层同步 FFI 卡死时不让控制面无限等待。
+        let client_timeout = self.timeout.saturating_add(Duration::from_millis(100));
+        match tokio::time::timeout(client_timeout, reply_rx).await {
+            Ok(Ok(res)) => res,
+            Ok(Err(_)) => Err(InferError::Execution {
+                reason: "推理工作线程控制通道意外关闭".to_string(),
+            }),
+            Err(_) => Err(InferError::Timeout(self.timeout)),
+        }
     }
 
     /// 获取因负载过高累计被丢弃的旧帧计数
@@ -358,18 +420,24 @@ impl InferenceWorker {
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let (exit_tx, exit_rx) = std::sync::mpsc::channel();
         let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
+        let (control_tx, mut control_rx) =
+            tokio::sync::mpsc::channel::<WorkerControl>(WORKER_CONTROL_CHANNEL_CAPACITY);
 
         let timeout_duration = Duration::from_millis(config.timeout_ms);
         let handle = InferenceWorkerHandle {
             slot: slot.clone(),
             is_alive: is_alive.clone(),
             timeout: timeout_duration,
+            control_tx: control_tx.clone(),
         };
 
         let worker_name = config.worker_name.clone();
         let thread_worker_name = worker_name.clone();
         let thread_slot = slot.clone();
         let thread_is_alive = is_alive.clone();
+        // 工作线程自持一份发送端：控制面句柄全部释放后，接收端仍能感知通道存活，
+        // 避免 `recv()` 持续返回 None 导致 select 空转；线程退出仍由 shutdown watch 驱动。
+        let thread_control_guard = control_tx.clone();
 
         let thread_handle = std::thread::Builder::new()
             .name(worker_name.clone())
@@ -419,6 +487,17 @@ impl InferenceWorker {
                                 }
                             }
 
+                            // 控制面指令优先于推理帧：配置热更新必须在下一个安全帧边界前落地
+                            control = control_rx.recv() => {
+                                if let Some(control) = control {
+                                    handle_worker_control(
+                                        backend.as_ref(),
+                                        control,
+                                        loop_worker_name,
+                                    );
+                                }
+                            }
+
                             // 监听待推理帧到达
                             _ = thread_slot.notify.notified() => {
                                 let maybe_job = thread_slot.job.lock().ok().and_then(|mut g| g.take());
@@ -446,6 +525,7 @@ impl InferenceWorker {
 
                 // backend 在此线程闭包结束时析构，保证 C ABI instance_destroy 与创建/调用线程一致。
                 thread_is_alive.store(false, Ordering::Relaxed);
+                drop(thread_control_guard);
 
                 // 排空并响应队列中可能残留的未执行任务，防止调用方悬挂
                 if let Ok(mut guard) = thread_slot.job.lock() {
@@ -577,6 +657,45 @@ impl InferenceWorker {
 impl Drop for InferenceWorker {
     fn drop(&mut self) {
         let _ = self.shutdown();
+    }
+}
+
+/// 在 Worker 专属 OS 线程内处理一条控制面指令
+///
+/// 与单帧推理一致地隔离 panic：插件在配置解析或硬件重配中崩溃不能让工作线程死亡。
+fn handle_worker_control(
+    backend: &dyn InferenceBackend,
+    control: WorkerControl,
+    worker_name: &str,
+) {
+    match control {
+        WorkerControl::UpdateConfig { config_json, reply } => {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                backend.update_config(&config_json)
+            }))
+            .unwrap_or_else(|payload| {
+                let msg = format_panic_message(payload);
+                tracing::error!(%worker_name, error = %msg, "插件配置热更新发生 Panic，已安全隔离");
+                Err(InferError::Execution {
+                    reason: format!("配置热更新 Panic 异常: {msg}"),
+                })
+            });
+
+            match &result {
+                Ok(()) => tracing::info!(%worker_name, "算法实例配置已在 Worker 线程内生效"),
+                Err(InferError::Unsupported { capability }) => tracing::debug!(
+                    %worker_name,
+                    capability,
+                    "插件不支持原地配置更新，需回退目标实例 Worker 替换"
+                ),
+                Err(error) => {
+                    tracing::warn!(%worker_name, error = %error, "算法实例配置热更新被拒绝")
+                }
+            }
+
+            // 调用方可能已断路超时；发送失败仅说明无人等待，不影响已发生的配置状态。
+            let _ = reply.send(result);
+        }
     }
 }
 
@@ -803,6 +922,152 @@ mod tests {
         // 停止后再提交任务应该立即被拒绝
         let res_after = handle.submit(make_dummy_frame(2000)).await;
         assert!(res_after.is_err());
+    }
+
+    /// 支持原地热更新的后端：阈值在 Worker 线程内被改写，且必须由创建它的线程持有。
+    #[derive(Debug, Default)]
+    struct HotUpdatableBackend {
+        threshold: std::sync::Mutex<f32>,
+        update_owner: std::sync::Mutex<Option<std::thread::ThreadId>>,
+    }
+
+    #[async_trait(?Send)]
+    impl InferenceBackend for HotUpdatableBackend {
+        fn name(&self) -> &'static str {
+            "HotUpdatable"
+        }
+
+        async fn detect(&self, _frame: &FrameRef) -> Result<Vec<Detection>, InferError> {
+            let threshold = *self.threshold.lock().unwrap();
+            Ok(vec![Detection {
+                class_id: 0,
+                label: "person".to_string(),
+                confidence: threshold,
+                quality_score: None,
+                bbox: BoundingBox::new(0.1, 0.1, 0.2, 0.2),
+                face: None,
+            }])
+        }
+
+        fn update_config(&self, config_json: &str) -> Result<(), InferError> {
+            let parsed: serde_json::Value =
+                serde_json::from_str(config_json).map_err(|err| InferError::JsonParse {
+                    reason: err.to_string(),
+                })?;
+            let threshold = parsed
+                .get("threshold")
+                .and_then(|value| value.as_f64())
+                .ok_or_else(|| InferError::Execution {
+                    reason: "缺少 threshold".to_string(),
+                })?;
+            *self.threshold.lock().unwrap() = threshold as f32;
+            *self.update_owner.lock().unwrap() = Some(std::thread::current().id());
+            Ok(())
+        }
+    }
+
+    /// 配置热更新必须在该 Worker 的专属 OS 线程内执行，且新配置从下一帧开始生效。
+    #[tokio::test]
+    async fn test_inference_worker_hot_config_update_on_worker_thread() {
+        let backend = Arc::new(HotUpdatableBackend::default());
+        let backend_ref = backend.clone();
+        let caller_thread_id = std::thread::current().id();
+
+        let worker = InferenceWorker::new(backend);
+        let handle = worker.handle();
+
+        let before = handle
+            .submit(make_dummy_frame(1000))
+            .await
+            .expect("推理调用失败");
+        assert_eq!(before[0].confidence, 0.0);
+
+        handle
+            .update_config(r#"{"threshold":0.88}"#.to_string())
+            .await
+            .expect("热更新应成功");
+
+        let after = handle
+            .submit(make_dummy_frame(2000))
+            .await
+            .expect("推理调用失败");
+        assert_eq!(after[0].confidence, 0.88, "新配置必须从下一帧开始生效");
+
+        let worker_thread_id = backend_ref
+            .update_owner
+            .lock()
+            .unwrap()
+            .expect("必须记录更新线程");
+        assert_ne!(
+            worker_thread_id, caller_thread_id,
+            "配置更新必须发生在 Worker 专属线程，而不是调用方线程"
+        );
+    }
+
+    /// 插件不支持原地更新时必须返回明确的 Unsupported，不得误报配置已生效。
+    #[tokio::test]
+    async fn test_inference_worker_config_update_reports_unsupported() {
+        let backend = Arc::new(MockEchoBackend { sleep_ms: 0 });
+        let worker = InferenceWorker::new(backend);
+        let handle = worker.handle();
+
+        let err = handle
+            .update_config(r#"{"threshold":0.5}"#.to_string())
+            .await
+            .expect_err("未实现热更新必须返回错误");
+        assert!(
+            matches!(err, InferError::Unsupported { .. }),
+            "必须返回 Unsupported 以便调用方回退 Worker 替换，实际: {err:?}"
+        );
+    }
+
+    #[derive(Debug)]
+    struct PanickingUpdateBackend;
+
+    #[async_trait(?Send)]
+    impl InferenceBackend for PanickingUpdateBackend {
+        fn name(&self) -> &'static str {
+            "PanickingUpdate"
+        }
+
+        async fn detect(&self, _frame: &FrameRef) -> Result<Vec<Detection>, InferError> {
+            Ok(Vec::new())
+        }
+
+        fn update_config(&self, _config_json: &str) -> Result<(), InferError> {
+            panic!("插件配置解析致命断言失败 (模拟 Panic)");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_inference_worker_config_update_panic_isolation() {
+        clear_quarantine_pool_for_test();
+        let worker = InferenceWorker::new(Arc::new(PanickingUpdateBackend));
+        let handle = worker.handle();
+
+        let err = handle
+            .update_config("{}".to_string())
+            .await
+            .expect_err("Panic 必须被捕获并转换为 Err");
+        assert!(matches!(err, InferError::Execution { .. }));
+        assert!(handle.is_alive(), "配置热更新 Panic 不得杀死常驻工作线程");
+        assert!(
+            handle.submit(make_dummy_frame(1000)).await.is_ok(),
+            "热更新失败后线程仍必须能够继续推理"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_inference_worker_config_update_rejected_after_stop() {
+        let mut worker = InferenceWorker::new(Arc::new(HotUpdatableBackend::default()));
+        let handle = worker.handle();
+
+        assert!(worker.stop(Duration::from_millis(300)));
+        let err = handle
+            .update_config("{}".to_string())
+            .await
+            .expect_err("已停止的 Worker 必须拒绝配置更新");
+        assert!(matches!(err, InferError::Execution { .. }));
     }
 
     #[derive(Debug)]

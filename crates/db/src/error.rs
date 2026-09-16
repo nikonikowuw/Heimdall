@@ -33,6 +33,9 @@ pub enum DbError {
 
     #[error("数据校验错误: {0}")]
     Validation(String),
+
+    #[error("配置版本冲突: 期望 {expected}，当前 {actual}")]
+    RevisionConflict { expected: i64, actual: i64 },
 }
 
 impl From<sea_orm::TransactionError<DbError>> for DbError {

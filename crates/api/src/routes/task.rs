@@ -1,4 +1,4 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -11,67 +11,6 @@ use crate::response::ApiResponse;
 use crate::state::AppState;
 use crate::task_service;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ListInstancesQuery {
-    pub camera_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AlgorithmInstanceDto {
-    pub id: i64,
-    pub instance_id: String,
-    pub camera_id: String,
-    pub algorithm_id: String,
-    pub analysis_fps: i32,
-    pub params: serde_json::Value,
-    pub rules: serde_json::Value,
-    pub motion_gate: serde_json::Value,
-    pub enabled: bool,
-    pub actual_status: i32,
-    pub status_message: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-impl From<db::entity::algorithm_instance::Model> for AlgorithmInstanceDto {
-    fn from(m: db::entity::algorithm_instance::Model) -> Self {
-        let params = serde_json::from_str(&m.params_json).unwrap_or_else(|_| serde_json::json!({}));
-        let rules = serde_json::from_str(&m.rules_json).unwrap_or_else(|_| serde_json::json!([]));
-        let motion_gate =
-            serde_json::from_str(&m.motion_gate_json).unwrap_or_else(|_| serde_json::json!({}));
-
-        Self {
-            id: m.id,
-            instance_id: m.instance_id,
-            camera_id: m.camera_id,
-            algorithm_id: m.algorithm_id,
-            analysis_fps: m.analysis_fps,
-            params,
-            rules,
-            motion_gate,
-            enabled: m.enabled,
-            actual_status: m.actual_status,
-            status_message: m.status_message,
-            created_at: m.created_at.timestamp_millis(),
-            updated_at: m.updated_at.timestamp_millis(),
-        }
-    }
-}
-
-fn deserialize_null_as_empty_object<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let opt = Option::<serde_json::Value>::deserialize(deserializer)?;
-    match opt {
-        Some(serde_json::Value::Null) | None => Ok(default_algo_params()),
-        Some(v) => Ok(v),
-    }
-}
-
-/// 响应：算法实例完整信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskAlgorithmInstanceDto {
@@ -91,6 +30,12 @@ pub struct TaskAlgorithmInstanceDto {
     #[serde(default)]
     pub actual_status: i32,
     #[serde(default)]
+    pub desired_revision: i64,
+    #[serde(default)]
+    pub applied_revision: i64,
+    #[serde(default)]
+    pub apply_state: types::InstanceApplyState,
+    #[serde(default)]
     pub status_message: String,
     #[serde(default)]
     pub created_at: i64,
@@ -109,6 +54,9 @@ impl From<&db::entity::algorithm_instance::Model> for TaskAlgorithmInstanceDto {
             algo_params,
             enabled: Some(m.enabled),
             actual_status: m.actual_status,
+            desired_revision: m.desired_revision,
+            applied_revision: m.applied_revision,
+            apply_state: m.runtime_apply_state(),
             status_message: m.status_message.clone(),
             created_at: m.created_at.timestamp_millis(),
             updated_at: m.updated_at.timestamp_millis(),
@@ -131,6 +79,7 @@ pub struct TaskAlgorithmInstanceSummaryDto {
     pub analysis_fps: i32,
     pub enabled: bool,
     pub actual_status: i32,
+    pub apply_state: types::InstanceApplyState,
     pub status_message: String,
 }
 
@@ -142,41 +91,25 @@ impl From<&db::entity::algorithm_instance::Model> for TaskAlgorithmInstanceSumma
             analysis_fps: m.analysis_fps,
             enabled: m.enabled,
             actual_status: m.actual_status,
+            apply_state: m.runtime_apply_state(),
             status_message: m.status_message.clone(),
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateInstanceRequest {
-    pub camera_id: String,
-    pub algorithm_id: String,
-    pub analysis_fps: Option<i32>,
-    pub params: Option<serde_json::Value>,
-    pub rules: Option<serde_json::Value>,
-    pub motion_gate: Option<serde_json::Value>,
-    pub enabled: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateInstanceRequest {
-    pub analysis_fps: Option<i32>,
-    pub params: Option<serde_json::Value>,
-    pub rules: Option<serde_json::Value>,
-    pub motion_gate: Option<serde_json::Value>,
-    pub enabled: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetInstanceEnabledRequest {
-    pub enabled: bool,
-}
-
 fn default_algo_params() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
+}
+
+fn deserialize_null_as_empty_object<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match opt {
+        Some(serde_json::Value::Null) | None => Ok(default_algo_params()),
+        Some(v) => Ok(v),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +135,13 @@ pub struct TaskConfigDto {
     pub stream_mode: Option<types::StreamMode>,
     #[serde(default)]
     pub algorithm_instances: Option<Vec<TaskAlgorithmInstanceDto>>,
+    /// 任务配置版本号。
+    ///
+    /// 请求：客户端读取到的版本号，服务端不匹配时返回 409（整体下发的乐观并发控制）；
+    /// 省略表示不做版本校验（新建任务等场景）。
+    /// 响应：当前版本号，客户端必须用它更新本地快照。
+    #[serde(default)]
+    pub config_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +164,8 @@ pub struct TaskSummaryDto {
     pub motion_gate_enabled: bool,
     pub rules: Vec<DetectionRule>,
     pub motion_gate: Option<MotionGateConfig>,
+    /// 任务配置版本号：列表返回的快照版本，启停等整体下发时必须原样回传
+    pub config_revision: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -269,25 +211,15 @@ fn build_task_config_dto(
                 .map(TaskAlgorithmInstanceDto::from)
                 .collect(),
         ),
+        config_revision: Some(task.config_revision),
     }
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/", get(list_tasks))
-        .route("/instances", get(list_instances).post(create_instance))
-        .route(
-            "/instances/{instance_id}",
-            axum::routing::put(update_instance).delete(delete_instance),
-        )
-        .route(
-            "/instances/{instance_id}/enabled",
-            axum::routing::put(set_instance_enabled),
-        )
-        .route(
-            "/{camera_id}",
-            get(get_task).put(update_task).delete(delete_task),
-        )
+    Router::new().route("/", get(list_tasks)).route(
+        "/{camera_id}",
+        get(get_task).put(update_task).delete(delete_task),
+    )
 }
 
 async fn list_tasks(
@@ -332,6 +264,7 @@ async fn list_tasks(
             motion_gate,
             created_at: task.created_at.timestamp_millis(),
             updated_at: task.updated_at.timestamp_millis(),
+            config_revision: task.config_revision,
         });
     }
     Ok(ApiResponse::success(dtos))
@@ -368,6 +301,7 @@ async fn get_task(
             motion_gate: Some(MotionGateConfig::default()),
             stream_mode,
             algorithm_instances: Some(Vec::new()),
+            config_revision: None,
         }))
     }
 }
@@ -424,6 +358,7 @@ async fn update_task(
             motion_gate_json: mg_json,
             status_message: None,
             instances: Some(instances),
+            expected_revision: dto.config_revision,
         },
     )
     .await
@@ -432,6 +367,9 @@ async fn update_task(
         db::DbError::Type(err) => ApiError::BadRequest(err.to_string()),
         db::DbError::NotFound { entity, key } => {
             ApiError::NotFound(format!("未找到{entity}: {key}"))
+        }
+        db::DbError::RevisionConflict { expected, actual } => {
+            ApiError::ConfigRevisionConflict { expected, actual }
         }
         other => ApiError::Internal(other.to_string()),
     })?;
@@ -446,20 +384,15 @@ async fn update_task(
 
     // 3. 编排运行时启停并同步实际状态
     let (_final_actual_status, _final_status_message) = if dto.desired_enabled {
-        let main_url = camera.rtsp_url.trim().to_string();
-        if main_url.is_empty() {
-            let err_msg = "摄像头主码流 RTSP 地址为空".to_string();
-            TaskRepo::update_status(
-                &state.db,
-                &camera_id,
-                types::TaskStatus::Error.as_i32(),
-                &err_msg,
-            )
-            .await?;
-            state.pipeline.set_ai_active(&camera_id, false).await;
-            (types::TaskStatus::Error.as_i32(), err_msg)
+        let err_msg = if camera.rtsp_url.trim().is_empty() {
+            Some("摄像头主码流 RTSP 地址为空".to_string())
         } else if saved_instances.is_empty() {
-            let err_msg = "任务未绑定任何可运行的算法实例".to_string();
+            Some("任务未绑定任何可运行的算法实例".to_string())
+        } else {
+            None
+        };
+
+        if let Some(err_msg) = err_msg {
             TaskRepo::update_status(
                 &state.db,
                 &camera_id,
@@ -467,116 +400,80 @@ async fn update_task(
                 &err_msg,
             )
             .await?;
-            state.pipeline.set_ai_active(&camera_id, false).await;
+            stop_unrunnable_runtime(&state, &camera_id).await?;
             (types::TaskStatus::Error.as_i32(), err_msg)
         } else {
-            let launch_instances: Vec<pipeline::InstanceLaunchConfig> = saved_instances
-                .iter()
-                .filter(|i| i.enabled)
-                .map(|i| {
-                    pipeline::InstanceLaunchConfig::from_persisted(
-                        &i.algorithm_id,
-                        &i.params_json,
-                        i.analysis_fps,
-                    )
-                    .unwrap_or_else(|_| pipeline::InstanceLaunchConfig {
-                        algorithm_id: i.algorithm_id.clone(),
-                        algo_params: serde_json::json!({}),
-                        target_fps: 10,
-                    })
-                })
-                .collect();
-
-            if launch_instances.is_empty() {
-                let err_msg = "任务未启用任何算法实例".to_string();
-                TaskRepo::update_status(
-                    &state.db,
-                    &camera_id,
-                    types::TaskStatus::Error.as_i32(),
-                    &err_msg,
-                )
-                .await?;
-                state.pipeline.set_ai_active(&camera_id, false).await;
-                (types::TaskStatus::Error.as_i32(), err_msg)
-            } else {
-                let params = task_service::build_start_params_async(
-                    &camera_id,
-                    &camera,
-                    launch_instances,
-                    dto.motion_gate.as_ref(),
-                )
-                .await;
-
-                match state.task_coordinator.start_camera_pipeline(params).await {
-                    Ok(_) => {
-                        let instance_updates: Vec<db::TaskInstanceStateUpdate> = saved_instances
-                            .iter()
-                            .map(|inst| db::TaskInstanceStateUpdate {
-                                instance_id: inst.instance_id.clone(),
-                                actual_status: if inst.enabled {
-                                    types::TaskStatus::Running
-                                } else {
-                                    types::TaskStatus::Stopped
-                                },
-                                status_message: if inst.enabled {
-                                    "运行中".to_string()
-                                } else {
-                                    "已停用".to_string()
-                                },
-                            })
-                            .collect();
-                        if let Err(err) = TaskRepo::update_task_runtime_state(
-                            &state.db,
-                            camera_id.clone(),
-                            types::TaskStatus::Running,
-                            String::new(),
-                            instance_updates,
-                        )
-                        .await
-                        {
-                            if let Err(stop_err) = state
-                                .task_coordinator
-                                .stop_camera_pipeline(&camera_id)
-                                .await
-                            {
-                                tracing::error!(
-                                    camera_id = %camera_id,
-                                    error = %stop_err,
-                                    "运行状态写入失败后回滚分析管线也失败"
-                                );
-                            }
-                            state.pipeline.set_ai_active(&camera_id, false).await;
-                            return Err(ApiError::Db(err));
-                        }
-                        state.pipeline.set_ai_active(&camera_id, true).await;
-                        (types::TaskStatus::Running.as_i32(), String::new())
-                    }
-                    Err(e) => {
-                        let err_msg = format!("启动分析管线失败: {e}");
-                        tracing::warn!(
+            // 复用统一收敛入口：媒体契约与实例集合都从已提交的持久化配置解析，
+            // 避免用请求体临时拼装出与实例级接口不一致的媒体签名；「没有任何启用实例」
+            // 也由它统一停机、清理规则并收敛代际。
+            match sync_pipeline_for_camera(&state, &camera_id).await {
+                Ok(Some(sync)) => {
+                    if sync.restarted {
+                        tracing::info!(
                             camera_id = %camera_id,
-                            error = %err_msg,
-                            "分析管线启动失败，保留期望状态并记录错误"
+                            "媒体输入契约已变化，任务保存触发整路重建"
                         );
-                        let instance_updates: Vec<db::TaskInstanceStateUpdate> = saved_instances
-                            .iter()
-                            .map(|inst| db::TaskInstanceStateUpdate {
-                                instance_id: inst.instance_id.clone(),
-                                actual_status: types::TaskStatus::Error,
-                                status_message: err_msg.clone(),
-                            })
-                            .collect();
-                        let _ = TaskRepo::update_task_runtime_state(
-                            &state.db,
-                            camera_id.clone(),
-                            types::TaskStatus::Error,
-                            err_msg.clone(),
-                            instance_updates,
-                        )
-                        .await;
-                        state.pipeline.set_ai_active(&camera_id, false).await;
-                        (types::TaskStatus::Error.as_i32(), err_msg)
                     }
+                    let (task_status, instance_updates) =
+                        task_runtime_updates(&saved_instances, &sync.outcomes, sync.restarted);
+                    if let Err(err) = TaskRepo::update_task_runtime_state(
+                        &state.db,
+                        camera_id.clone(),
+                        task_status,
+                        String::new(),
+                        instance_updates,
+                    )
+                    .await
+                    {
+                        if let Err(stop_err) = state
+                            .task_coordinator
+                            .stop_camera_pipeline(&camera_id)
+                            .await
+                        {
+                            tracing::error!(
+                                camera_id = %camera_id,
+                                error = %stop_err,
+                                "运行状态写入失败后回滚分析管线也失败"
+                            );
+                        }
+                        state.pipeline.set_ai_active(&camera_id, false).await;
+                        return Err(ApiError::Db(err));
+                    }
+                    (task_status.as_i32(), String::new())
+                }
+                Ok(None) => {
+                    // 本次没有可收敛的运行时，保留已提交的期望配置与真实运行状态
+                    let (task_status, _) = TaskRepo::find_by_camera_id(&state.db, &camera_id)
+                        .await?
+                        .map(|task| (task.actual_status, task.status_message))
+                        .unwrap_or((types::TaskStatus::Stopped.as_i32(), String::new()));
+                    (task_status, String::new())
+                }
+                Err(e) => {
+                    let err_msg = format!("启动分析管线失败: {e}");
+                    tracing::warn!(
+                        camera_id = %camera_id,
+                        error = %err_msg,
+                        "分析管线启动失败，保留期望状态并记录错误"
+                    );
+                    let instance_updates: Vec<db::TaskInstanceStateUpdate> = saved_instances
+                        .iter()
+                        .map(|inst| db::TaskInstanceStateUpdate {
+                            instance_id: inst.instance_id.clone(),
+                            actual_status: types::TaskStatus::Error,
+                            status_message: err_msg.clone(),
+                        })
+                        .collect();
+                    let _ = TaskRepo::update_task_runtime_state(
+                        &state.db,
+                        camera_id.clone(),
+                        types::TaskStatus::Error,
+                        err_msg.clone(),
+                        instance_updates,
+                    )
+                    .await;
+                    state.pipeline.set_ai_active(&camera_id, false).await;
+                    (types::TaskStatus::Error.as_i32(), err_msg)
                 }
             }
         }
@@ -605,6 +502,9 @@ async fn update_task(
                     instance_updates,
                 )
                 .await?;
+                // 无运行时时期望配置就是下次启动要用的那一份，必须立即收敛代际；
+                // 否则实例会长期停在 pending，无法区分「排队中」与「已生效」。
+                converge_instance_revisions(&state, &camera_id).await?;
                 (types::TaskStatus::Stopped.as_i32(), String::new())
             }
             Err(e) => {
@@ -818,165 +718,206 @@ async fn delete_task(
     Ok(ApiResponse::success(()))
 }
 
-// -------------------------------------------------------------
-// 算法实例路由处理函数
-// -------------------------------------------------------------
-
-async fn list_instances(
-    State(state): State<AppState>,
-    Query(query): Query<ListInstancesQuery>,
-) -> Result<ApiResponse<Vec<AlgorithmInstanceDto>>, ApiError> {
-    let list = if let Some(cid) = query.camera_id {
-        AlgorithmInstanceRepo::list_by_camera_id(&state.db, &cid).await?
-    } else {
-        AlgorithmInstanceRepo::list_all(&state.db).await?
-    };
-
-    let dtos = list.into_iter().map(AlgorithmInstanceDto::from).collect();
-    Ok(ApiResponse::success(dtos))
-}
-
-async fn create_instance(
-    State(state): State<AppState>,
-    Json(req): Json<CreateInstanceRequest>,
-) -> Result<ApiResponse<AlgorithmInstanceDto>, ApiError> {
-    let config = types::TaskAlgorithmInstanceConfig {
-        instance_id: None,
-        algorithm_id: req.algorithm_id,
-        analysis_fps: req.analysis_fps,
-        algo_params: req.params,
-        enabled: Some(req.enabled.unwrap_or(false)),
-    };
-    config
-        .validate()
-        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
-    let params_json = config
-        .normalized_algo_params_json()
-        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
-    let analysis_fps = config.normalized_analysis_fps();
-
-    let created = TaskRepo::add_instance_to_task(
-        &state.db,
-        &req.camera_id,
-        db::SaveTaskAlgorithmInstanceParams {
-            algorithm_id: config.algorithm_id,
-            analysis_fps,
-            params_json,
-            enabled: config.enabled,
-        },
+/// 解析收敛结果对应的期望代际。
+///
+/// 实例级接口携带真实代际；任务级保存路径只有「实例集合 diff」信息，代际记 0，
+/// 此时以数据库中当前的期望代际为准——同步成功即代表运行时已追上该代际。
+async fn resolve_outcome_revision(
+    state: &AppState,
+    outcome: &pipeline::InstanceApplyOutcome,
+) -> Result<Option<i64>, ApiError> {
+    if outcome.desired_revision > 0 {
+        return Ok(Some(outcome.desired_revision));
+    }
+    Ok(
+        AlgorithmInstanceRepo::find_by_instance_id(&state.db, &outcome.instance_id)
+            .await?
+            .map(|model| model.desired_revision),
     )
-    .await
-    .map_err(|e| match e {
-        db::DbError::Validation(msg) => ApiError::BadRequest(msg),
-        db::DbError::Type(err) => ApiError::BadRequest(err.to_string()),
-        db::DbError::NotFound { entity, key } => {
-            ApiError::NotFound(format!("未找到{entity}: {key}"))
-        }
-        other => ApiError::Internal(other.to_string()),
-    })?;
-
-    Ok(ApiResponse::success(AlgorithmInstanceDto::from(created)))
 }
 
-async fn update_instance(
-    State(state): State<AppState>,
-    Path(instance_id): Path<String>,
-    Json(req): Json<UpdateInstanceRequest>,
-) -> Result<ApiResponse<AlgorithmInstanceDto>, ApiError> {
-    if let Some(fps) = req.analysis_fps {
-        if !(0..=60).contains(&fps) {
-            return Err(ApiError::BadRequest(
-                "analysisFps 必须在 0..=60 之间".to_string(),
-            ));
-        }
+/// 两阶段配置提交的第二阶段：把运行时收敛结果回写数据库。
+///
+/// 只回写单实例自身的结果，绝不因为某个实例失败而改写其他实例的状态。
+async fn persist_instance_outcome(
+    state: &AppState,
+    outcome: &pipeline::InstanceApplyOutcome,
+) -> Result<(), ApiError> {
+    if outcome.apply_state == types::InstanceApplyState::Failed {
+        AlgorithmInstanceRepo::mark_apply_failed(
+            &state.db,
+            &outcome.instance_id,
+            &outcome.status_message,
+        )
+        .await?;
+        return Ok(());
     }
 
-    let params_json = match req.params {
-        Some(value) => {
-            if !value.is_object() {
-                return Err(ApiError::BadRequest(
-                    "params 必须为 JSON Object 对象".to_string(),
-                ));
-            }
-            let json = serde_json::to_string(&value)
-                .map_err(|err| ApiError::BadRequest(format!("params 序列化失败: {err}")))?;
-            if json.len() > 64 * 1024 || json.contains('\0') {
-                return Err(ApiError::BadRequest(
-                    "params 序列化过大或包含非法字符".to_string(),
-                ));
-            }
-            Some(json)
-        }
-        None => None,
+    let Some(revision) = resolve_outcome_revision(state, outcome).await? else {
+        // 实例已被删除：收敛结果无处回写，属于正常竞态
+        return Ok(());
     };
-    let rules_json = req
-        .rules
-        .map(|value| serde_json::to_string(&value))
-        .transpose()
-        .map_err(|err| ApiError::BadRequest(format!("rules 序列化失败: {err}")))?;
-    let motion_gate_json = req
-        .motion_gate
-        .map(|value| serde_json::to_string(&value))
-        .transpose()
-        .map_err(|err| ApiError::BadRequest(format!("motionGate 序列化失败: {err}")))?;
 
-    let updated = TaskRepo::update_instance_and_sync_task(
-        &state.db,
-        &instance_id,
-        db::UpdateTaskInstanceParams {
-            analysis_fps: req.analysis_fps,
-            params_json,
-            rules_json,
-            motion_gate_json,
-            enabled: req.enabled,
-        },
-    )
-    .await
-    .map_err(|e| match e {
-        db::DbError::Validation(msg) => ApiError::BadRequest(msg),
-        db::DbError::Type(err) => ApiError::BadRequest(err.to_string()),
-        db::DbError::NotFound { entity, key } => {
-            ApiError::NotFound(format!("未找到{entity}: {key}"))
-        }
-        other => ApiError::Internal(other.to_string()),
-    })?;
-
-    let camera_id = updated.camera_id.clone();
-    sync_pipeline_for_camera(&state, &camera_id).await?;
-
-    Ok(ApiResponse::success(AlgorithmInstanceDto::from(updated)))
+    if outcome.apply_state == types::InstanceApplyState::Applied {
+        AlgorithmInstanceRepo::mark_apply_applied(&state.db, &outcome.instance_id, revision)
+            .await?;
+    } else {
+        AlgorithmInstanceRepo::mark_apply_pending(
+            &state.db,
+            &outcome.instance_id,
+            revision,
+            &outcome.status_message,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
+/// 批量回写实例集合收敛结果，并把未收敛实例的原因记录到日志
+async fn persist_instance_outcomes(
+    state: &AppState,
+    outcomes: &[pipeline::InstanceApplyOutcome],
+) -> Result<(), ApiError> {
+    for outcome in outcomes {
+        if outcome.apply_state != types::InstanceApplyState::Applied {
+            tracing::warn!(
+                instance_id = %outcome.instance_id,
+                apply_state = %outcome.apply_state,
+                mechanism = ?outcome.mechanism,
+                "算法实例期望配置尚未在运行时生效"
+            );
+        }
+        persist_instance_outcome(state, outcome).await?;
+    }
+    Ok(())
+}
+
+/// 由逐实例收敛结果推导任务级状态与实例状态回写。
+///
+/// `applyState` 与实例健康状态正交：仅当目标 Worker 确实用上了期望配置才算运行中，
+/// 未收敛的实例必须写回真实原因，不能用任务级"启动成功"掩盖单实例失败。
+///
+/// `restarted` 为真表示刚刚整路重建成功，此时期望集合中的启用实例都已挂载，
+/// 不需要逐实例收敛结果即可判定为运行中。
+fn task_runtime_updates(
+    saved_instances: &[db::entity::algorithm_instance::Model],
+    outcomes: &[pipeline::InstanceApplyOutcome],
+    restarted: bool,
+) -> (types::TaskStatus, Vec<db::TaskInstanceStateUpdate>) {
+    use std::collections::HashMap;
+
+    let by_instance: HashMap<&str, &pipeline::InstanceApplyOutcome> = outcomes
+        .iter()
+        .map(|outcome| (outcome.instance_id.as_str(), outcome))
+        .collect();
+
+    let mut statuses = Vec::with_capacity(saved_instances.len());
+    let updates = saved_instances
+        .iter()
+        .map(|inst| {
+            let (status, message) = match by_instance.get(inst.instance_id.as_str()) {
+                Some(outcome) => match outcome.apply_state {
+                    types::InstanceApplyState::Applied if inst.enabled => {
+                        (types::TaskStatus::Running, "运行中".to_string())
+                    }
+                    types::InstanceApplyState::Applied => {
+                        (types::TaskStatus::Stopped, "已停用".to_string())
+                    }
+                    types::InstanceApplyState::Pending => {
+                        (types::TaskStatus::Starting, outcome.status_message.clone())
+                    }
+                    types::InstanceApplyState::Failed => {
+                        (types::TaskStatus::Error, outcome.status_message.clone())
+                    }
+                },
+                None if inst.enabled && restarted => {
+                    (types::TaskStatus::Running, "运行中".to_string())
+                }
+                None if inst.enabled => (
+                    types::TaskStatus::Starting,
+                    "等待运行时挂载该算法实例".to_string(),
+                ),
+                None => (types::TaskStatus::Stopped, "已停用".to_string()),
+            };
+            statuses.push(status);
+            db::TaskInstanceStateUpdate {
+                instance_id: inst.instance_id.clone(),
+                actual_status: status,
+                status_message: message,
+            }
+        })
+        .collect();
+
+    (
+        types::aggregate_task_instance_status(true, &statuses),
+        updates,
+    )
+}
+
+/// 任务未运行（未布防或无启用实例）时收敛待生效的期望配置。
+///
+/// 此时期望配置就是任务启动时会使用的那一份，不存在「未生效」的可重试状态，
+/// 因此把仍在 pending/failed 的代际标记为已收敛，避免界面长期显示处理中。
+/// 期望配置不可运行（无码流地址 / 无实例）时，运行时必须真正停下并清理布防规则，
+/// 不能只在数据库里把任务标成 Error 而让解码器继续空转、实例长期停在 pending。
+async fn stop_unrunnable_runtime(state: &AppState, camera_id: &str) -> Result<(), ApiError> {
+    let _ = state.task_coordinator.stop_camera_pipeline(camera_id).await;
+    state.pipeline.set_ai_active(camera_id, false).await;
+    state
+        .task_coordinator
+        .set_camera_rules(camera_id, Vec::new())
+        .await;
+    converge_instance_revisions(state, camera_id).await
+}
+
+/// 任务未运行、实例未启用，或整路重建已完成时，把待生效的期望配置收敛为已生效。
+///
+/// 这三种情况下运行时确实会用上（或已经用上）期望配置，不存在「未生效」的可重试状态，
+/// 因此把仍在 pending/failed 的代际标记为已收敛，避免界面长期显示处理中。
+/// 仍持有旧配置与旧 Worker 的失败路径绝不能走这里，否则「已生效」会退化成「数据库写成功」。
+async fn converge_instance_revisions(state: &AppState, camera_id: &str) -> Result<(), ApiError> {
+    for model in AlgorithmInstanceRepo::list_by_camera_id(&state.db, camera_id).await? {
+        if model.desired_revision == model.applied_revision {
+            continue;
+        }
+        AlgorithmInstanceRepo::mark_apply_applied(
+            &state.db,
+            &model.instance_id,
+            model.desired_revision,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// 单一收敛入口：以数据库中的期望配置为准，把该摄像头的算法实例集合收敛到运行时。
+///
+/// 返回 `None` 表示本次没有可收敛的运行时（无任务、无摄像头、任务未布防或没有已启用实例），
+/// 返回 `Some` 则携带逐实例收敛结果，供调用方回写状态与展示未生效原因。
+///
+/// 所有写接口都必须走这里：媒体契约与实例集合都从持久化配置解析，
+/// 避免不同入口用请求体临时拼装出不一致的媒体签名，导致本应增量的变更触发整路重建。
 pub(crate) async fn sync_pipeline_for_camera(
     state: &AppState,
     camera_id: &str,
-) -> Result<(), ApiError> {
+) -> Result<Option<pipeline::CameraInstanceSyncOutcome>, ApiError> {
     let Some(task) = TaskRepo::find_by_camera_id(&state.db, camera_id).await? else {
-        let _ = state.task_coordinator.stop_camera_pipeline(camera_id).await;
-        state.pipeline.set_ai_active(camera_id, false).await;
-        state
-            .task_coordinator
-            .set_camera_rules(camera_id, Vec::new())
-            .await;
-        return Ok(());
+        stop_unrunnable_runtime(state, camera_id).await?;
+        return Ok(None);
     };
 
     let has_runtime = state.task_coordinator.has_active_runtime(camera_id).await;
     if !task.desired_enabled && !has_runtime {
-        return Ok(());
+        converge_instance_revisions(state, camera_id).await?;
+        return Ok(None);
     }
 
     let Some(camera) = db::CameraRepo::find_by_camera_id(&state.db, camera_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
     else {
-        let _ = state.task_coordinator.stop_camera_pipeline(camera_id).await;
-        state.pipeline.set_ai_active(camera_id, false).await;
-        state
-            .task_coordinator
-            .set_camera_rules(camera_id, Vec::new())
-            .await;
-        return Ok(());
+        stop_unrunnable_runtime(state, camera_id).await?;
+        return Ok(None);
     };
 
     let instances = AlgorithmInstanceRepo::list_by_camera_id(&state.db, camera_id).await?;
@@ -985,11 +926,13 @@ pub(crate) async fn sync_pipeline_for_camera(
         .filter(|i| i.enabled)
         .map(|i| {
             pipeline::InstanceLaunchConfig::from_persisted(
+                &i.instance_id,
                 &i.algorithm_id,
                 &i.params_json,
                 i.analysis_fps,
             )
             .unwrap_or_else(|_| pipeline::InstanceLaunchConfig {
+                instance_id: i.instance_id.clone(),
                 algorithm_id: i.algorithm_id.clone(),
                 algo_params: serde_json::json!({}),
                 target_fps: 10,
@@ -998,111 +941,59 @@ pub(crate) async fn sync_pipeline_for_camera(
         .collect();
 
     if !task.desired_enabled || launch_instances.is_empty() {
-        let _ = state.task_coordinator.stop_camera_pipeline(camera_id).await;
-        state.pipeline.set_ai_active(camera_id, false).await;
-        state
-            .task_coordinator
-            .set_camera_rules(camera_id, Vec::new())
-            .await;
-        let msg = if !task.desired_enabled {
-            ""
+        stop_unrunnable_runtime(state, camera_id).await?;
+        let (status, msg) = if !task.desired_enabled {
+            (types::TaskStatus::Stopped, "")
         } else {
-            "无已启用的算法实例"
-        };
-        let status = if !task.desired_enabled {
-            types::TaskStatus::Stopped
-        } else {
-            types::TaskStatus::Error
+            (types::TaskStatus::Error, "无已启用的算法实例")
         };
         TaskRepo::update_status(&state.db, camera_id, status.as_i32(), msg).await?;
-    } else {
-        let motion_gate = serde_json::from_str::<MotionGateConfig>(&task.motion_gate_json).ok();
-        let params = task_service::build_start_params_async(
-            camera_id,
-            &camera,
-            launch_instances,
-            motion_gate.as_ref(),
-        )
+        return Ok(None);
+    }
+
+    let motion_gate = serde_json::from_str::<MotionGateConfig>(&task.motion_gate_json).ok();
+    let params = task_service::build_start_params_async(
+        camera_id,
+        &camera,
+        launch_instances,
+        motion_gate.as_ref(),
+    )
+    .await;
+    // 媒体输入契约未变化时只增量收敛实例集合：增删算法、改阈值、改抽帧频率
+    // 都不会重启解码器与其他实例的 Worker。
+    let sync = state
+        .task_coordinator
+        .sync_camera_instances(params)
+        .await
+        .map_err(ApiError::Coordinator)?;
+    if sync.restarted {
+        tracing::info!(camera_id = %camera_id, "媒体输入契约已变化，分析管线整路重建");
+    }
+    persist_instance_outcomes(state, &sync.outcomes).await?;
+    if sync.restarted {
+        // 整路重建成功后，期望集合中的实例都按期望配置完成了挂载，代际随之收敛；
+        // 重建路径不产生逐实例 outcomes，若不在此收敛，实例会长期停在 pending。
+        converge_instance_revisions(state, camera_id).await?;
+    }
+    state.pipeline.set_ai_active(camera_id, true).await;
+
+    let rules = match DetectionRule::parse_rules_json(&task.rules_json) {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::warn!(
+                camera_id = %camera_id,
+                error = %err,
+                "任务空间布防规则解析失败，回退为空规则"
+            );
+            Vec::new()
+        }
+    };
+    state
+        .task_coordinator
+        .set_camera_rules(camera_id, rules)
         .await;
-        state
-            .task_coordinator
-            .start_camera_pipeline(params)
-            .await
-            .map_err(ApiError::Coordinator)?;
-        state.pipeline.set_ai_active(camera_id, true).await;
-
-        let rules = match DetectionRule::parse_rules_json(&task.rules_json) {
-            Ok(r) => r,
-            Err(err) => {
-                tracing::warn!(
-                    camera_id = %camera_id,
-                    error = %err,
-                    "任务空间布防规则解析失败，回退为空规则"
-                );
-                Vec::new()
-            }
-        };
-        state
-            .task_coordinator
-            .set_camera_rules(camera_id, rules)
-            .await;
-    }
-    Ok(())
+    Ok(Some(sync))
 }
-
-async fn set_instance_enabled(
-    State(state): State<AppState>,
-    Path(instance_id): Path<String>,
-    Json(req): Json<SetInstanceEnabledRequest>,
-) -> Result<ApiResponse<()>, ApiError> {
-    let instance = AlgorithmInstanceRepo::find_by_instance_id(&state.db, &instance_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("算法实例未找到: {instance_id}")))?;
-    let camera_id = instance.camera_id;
-
-    TaskRepo::set_instance_enabled_and_sync_task(&state.db, &instance_id, req.enabled)
-        .await
-        .map_err(|e| match e {
-            db::DbError::NotFound { entity, key } => {
-                ApiError::NotFound(format!("未找到{entity}: {key}"))
-            }
-            other => ApiError::Internal(other.to_string()),
-        })?;
-
-    sync_pipeline_for_camera(&state, &camera_id).await?;
-
-    Ok(ApiResponse::success(()))
-}
-
-async fn delete_instance(
-    State(state): State<AppState>,
-    Path(instance_id): Path<String>,
-) -> Result<ApiResponse<()>, ApiError> {
-    let instance = AlgorithmInstanceRepo::find_by_instance_id(&state.db, &instance_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("算法实例未找到: {instance_id}")))?;
-    let camera_id = instance.camera_id;
-
-    let rows = TaskRepo::delete_instance_and_sync_task(&state.db, &instance_id)
-        .await
-        .map_err(|e| match e {
-            db::DbError::NotFound { entity, key } => {
-                ApiError::NotFound(format!("未找到{entity}: {key}"))
-            }
-            other => ApiError::Internal(other.to_string()),
-        })?;
-    if rows == 0 {
-        return Err(ApiError::NotFound(format!("算法实例未找到: {instance_id}")));
-    }
-
-    sync_pipeline_for_camera(&state, &camera_id).await?;
-
-    Ok(ApiResponse::success(()))
-}
-
-// -------------------------------------------------------------
-// 测试
-// -------------------------------------------------------------
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -1125,6 +1016,7 @@ mod tests {
         camera_rules: Mutex<HashMap<String, Vec<types::DetectionRule>>>,
         should_fail: Mutex<Option<String>>,
         stop_should_fail: Mutex<Option<String>>,
+        apply_failure: Mutex<Option<String>>,
     }
 
     impl MockTaskRuntimeService {
@@ -1154,6 +1046,28 @@ mod tests {
 
         fn camera_rules(&self, camera_id: &str) -> Option<Vec<types::DetectionRule>> {
             self.camera_rules.lock().unwrap().get(camera_id).cloned()
+        }
+
+        /// 让实例集合收敛返回 failed，用于验证两阶段提交的失败回写
+        fn set_instance_apply_failure(&self, reason: impl Into<String>) {
+            *self.apply_failure.lock().unwrap() = Some(reason.into());
+        }
+
+        /// 清除收敛失败开关，模拟硬件资源恢复
+        fn set_instance_apply_failure_to_none(&self) {
+            *self.apply_failure.lock().unwrap() = None;
+        }
+
+        /// 读回运行时实例快照的抽帧频率（增量生效的运行时证据）
+        fn active_instance_fps(&self, camera_id: &str, algorithm_id: &str) -> Option<u32> {
+            self.active_params
+                .lock()
+                .unwrap()
+                .get(camera_id)?
+                .instances
+                .iter()
+                .find(|inst| inst.algorithm_id == algorithm_id)
+                .map(|inst| inst.target_fps)
         }
     }
 
@@ -1208,6 +1122,85 @@ mod tests {
             Ok(had_runtime)
         }
 
+        async fn sync_camera_instances(
+            &self,
+            params: pipeline::StartCameraPipelineParams,
+        ) -> Result<pipeline::CameraInstanceSyncOutcome, pipeline::CoordinatorError> {
+            let camera_id = params.camera_id.clone();
+            let media_changed = self
+                .active_params
+                .lock()
+                .unwrap()
+                .get(&camera_id)
+                .map(|active| active.media_signature() != params.media_signature())
+                .unwrap_or(true);
+            if media_changed {
+                let generation = self.start_camera_pipeline(params).await?;
+                assert_eq!(generation, 1);
+                return Ok(pipeline::CameraInstanceSyncOutcome {
+                    camera_id,
+                    restarted: true,
+                    outcomes: Vec::new(),
+                });
+            }
+
+            // 媒体契约未变化：只更新实例集合快照，逐实例上报收敛结果
+            let failure = self.apply_failure.lock().unwrap().clone();
+            let outcomes = {
+                let mut active_params = self.active_params.lock().unwrap();
+                let active = active_params
+                    .get_mut(&camera_id)
+                    .expect("增量收敛要求存在活跃运行时");
+                *active = params.clone();
+                params
+                    .instances
+                    .iter()
+                    .map(|inst| pipeline::InstanceApplyOutcome {
+                        instance_id: inst.instance_id.clone(),
+                        desired_revision: 0,
+                        applied_revision: failure.is_none().then_some(0),
+                        apply_state: match &failure {
+                            Some(_) => types::InstanceApplyState::Failed,
+                            None => types::InstanceApplyState::Applied,
+                        },
+                        mechanism: pipeline::InstanceApplyMechanism::Noop,
+                        status_message: failure.clone().unwrap_or_default(),
+                    })
+                    .collect()
+            };
+            Ok(pipeline::CameraInstanceSyncOutcome {
+                camera_id,
+                restarted: false,
+                outcomes,
+            })
+        }
+
+        async fn apply_instance_config(
+            &self,
+            desired: pipeline::InstanceDesiredConfig,
+        ) -> Result<pipeline::InstanceApplyOutcome, pipeline::CoordinatorError> {
+            let failure = self.apply_failure.lock().unwrap().clone();
+            Ok(pipeline::InstanceApplyOutcome {
+                instance_id: desired.instance_id,
+                desired_revision: desired.desired_revision,
+                applied_revision: failure.is_none().then_some(desired.desired_revision),
+                apply_state: match &failure {
+                    Some(_) => types::InstanceApplyState::Failed,
+                    None => types::InstanceApplyState::Applied,
+                },
+                mechanism: pipeline::InstanceApplyMechanism::Noop,
+                status_message: failure.unwrap_or_default(),
+            })
+        }
+
+        async fn remove_instance_runtime(
+            &self,
+            _camera_id: &str,
+            _instance_id: &str,
+        ) -> Result<bool, pipeline::CoordinatorError> {
+            Ok(false)
+        }
+
         async fn stop_all(&self) {
             self.active_params.lock().unwrap().clear();
             self.active_cameras.lock().unwrap().clear();
@@ -1225,6 +1218,7 @@ mod tests {
                     algorithm_id: "test_algo".to_string(),
                     target_fps: 10,
                     instances: vec![pipeline::InstanceRuntimeInfo {
+                        instance_id: "test_algo".to_string(),
                         algorithm_id: "test_algo".to_string(),
                         target_fps: 10,
                     }],
@@ -1250,6 +1244,7 @@ mod tests {
                     algorithm_id: "test_algo".to_string(),
                     target_fps: 10,
                     instances: vec![pipeline::InstanceRuntimeInfo {
+                        instance_id: "test_algo".to_string(),
                         algorithm_id: "test_algo".to_string(),
                         target_fps: 10,
                     }],
@@ -1325,6 +1320,44 @@ mod tests {
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
         }
+    }
+
+    /// 任务级保存是唯一写路径：把整份任务配置（含全部算法实例）下发一次。
+    async fn put_task_config(
+        app: &Router,
+        token: &str,
+        camera_id: &str,
+        body: &serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let req = Request::builder()
+            .uri(format!("/api/v1/tasks/{camera_id}"))
+            .method("PUT")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(serde_json::to_vec(body).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// 读取任务配置（含逐实例 applyState / desiredRevision / appliedRevision）
+    async fn get_task_config(app: &Router, token: &str, camera_id: &str) -> serde_json::Value {
+        let req = Request::builder()
+            .uri(format!("/api/v1/tasks/{camera_id}"))
+            .method("GET")
+            .header("Authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
     }
 
     #[tokio::test]
@@ -1899,7 +1932,7 @@ mod tests {
         // coordinator 识别相同参数并复用既有运行时，不应重复创建 worker。
         assert_eq!(mock_coord.started_params().len(), 1);
 
-        // 变更 FPS 后，coordinator 应先回收旧运行时再启动新配置。
+        // 变更 FPS 只应在帧边界重设抽帧频率：不得回收运行时，也不得整路重建解码器。
         let changed_payload = serde_json::json!({
             "cameraId": "CAM-IDEMP-01",
             "name": "幂等任务",
@@ -1918,10 +1951,22 @@ mod tests {
             .unwrap();
         let resp3 = app.clone().oneshot(req3).await.unwrap();
         assert_eq!(resp3.status(), StatusCode::OK);
-        assert_eq!(mock_coord.started_params().len(), 2);
-        assert!(mock_coord
-            .stopped_cameras()
-            .contains(&"CAM-IDEMP-01".to_string()));
+        assert_eq!(
+            mock_coord.started_params().len(),
+            1,
+            "抽帧频率变更必须走增量路径，不得整路重建"
+        );
+        assert!(
+            !mock_coord
+                .stopped_cameras()
+                .contains(&"CAM-IDEMP-01".to_string()),
+            "抽帧频率变更不得回收正在运行的分析运行时"
+        );
+        assert_eq!(
+            mock_coord.active_instance_fps("CAM-IDEMP-01", "idemp_algo"),
+            Some(20),
+            "新的抽帧频率必须已提交到运行时实例快照"
+        );
     }
 
     #[tokio::test]
@@ -2085,7 +2130,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_task_multi_instance_api_full_flow() {
-        let (app, state, token, _mock_coord) = setup_test_app().await;
+        let (app, state, token, mock_coord) = setup_test_app().await;
 
         let camera_model = test_camera_model("CAM-MULTI-01", "rtsp://127.0.0.1:8554/live");
         db::CameraRepo::insert(&state.db, camera_model)
@@ -2251,77 +2296,315 @@ mod tests {
             0
         );
 
-        // 8. 兼容接口 /api/v1/tasks/instances 创建并拦截重复
-        let inst_req = serde_json::json!({
-            "cameraId": "CAM-MULTI-01",
-            "algorithmId": "general_detection",
-            "analysisFps": 10
-        });
-        let req = Request::builder()
-            .uri("/api/v1/tasks/instances")
-            .method("POST")
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .body(Body::from(serde_json::to_vec(&inst_req).unwrap()))
-            .unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        // 8. 重新布防多实例任务：整体下发是唯一写路径，未变实例不触发任何重建
+        let mut rearm = put_body.clone();
+        rearm["name"] = serde_json::json!("重新布防多算法任务");
+        let (status, json) = put_task_config(&app, &token, "CAM-MULTI-01", &rearm).await;
+        assert_eq!(status, StatusCode::OK);
+        let instances = json["data"]["algorithmInstances"].as_array().unwrap();
+        assert_eq!(instances.len(), 2);
+        for inst in instances {
+            assert_eq!(inst["applyState"], "applied");
+            assert_eq!(
+                inst["desiredRevision"], inst["appliedRevision"],
+                "已收敛实例的期望代际必须等于已生效代际"
+            );
+        }
+        assert_eq!(
+            mock_coord.started_params().len(),
+            2,
+            "从停机状态恢复布防需要启动一次；未变更的实例集合不得触发第二次启动"
+        );
 
-        let instance_id = db::AlgorithmInstanceRepo::list_by_camera_id(&state.db, "CAM-MULTI-01")
+        // 9. 只改一个实例的参数：整体下发，其他实例保持原配置且不重建
+        let mut tweaked = rearm.clone();
+        tweaked["algorithmInstances"][0]["analysisFps"] = serde_json::json!(12);
+        tweaked["algorithmInstances"][0]["algoParams"] = serde_json::json!({"confidence": 0.8});
+        let (status, json) = put_task_config(&app, &token, "CAM-MULTI-01", &tweaked).await;
+        assert_eq!(status, StatusCode::OK);
+        let instances = json["data"]["algorithmInstances"].as_array().unwrap();
+        let general = instances
+            .iter()
+            .find(|i| i["algorithmId"] == "general_detection")
+            .expect("通用检测实例应存在");
+        assert_eq!(general["analysisFps"], 12);
+        assert_eq!(general["algoParams"]["confidence"], 0.8);
+        assert_eq!(general["applyState"], "applied");
+        let face = instances
+            .iter()
+            .find(|i| i["algorithmId"] == "face_recognition")
+            .expect("人脸识别实例应存在");
+        assert_eq!(face["analysisFps"], 5, "未变更实例必须保持原配置");
+        assert_eq!(face["applyState"], "applied");
+        assert_eq!(
+            mock_coord.started_params().len(),
+            2,
+            "改单个实例参数不得重启解码器或其他实例"
+        );
+        assert_eq!(
+            mock_coord.active_instance_fps("CAM-MULTI-01", "general_detection"),
+            Some(12),
+            "整体下发后目标实例的新抽帧频率必须在运行时生效"
+        );
+
+        let general_row = db::AlgorithmInstanceRepo::list_by_camera_id(&state.db, "CAM-MULTI-01")
             .await
             .unwrap()
             .into_iter()
             .find(|instance| instance.algorithm_id == "general_detection")
-            .map(|instance| instance.instance_id)
-            .expect("实例创建后应可查询到实例 ID");
-        let update_instance_body = serde_json::json!({
-            "analysisFps": 12,
-            "params": {"confidence": 0.8},
+            .expect("通用检测实例应存在");
+        assert_eq!(general_row.analysis_fps, 12);
+        assert_eq!(general_row.params_json, r#"{"confidence":0.8}"#);
+        assert_eq!(general_row.desired_revision, general_row.applied_revision);
+    }
+
+    /// 运行时未能让目标 Worker 用上期望配置时，接口必须如实返回 failed 并落库原因，
+    /// 不得因为「数据库写成功」就显示为已应用。
+    #[tokio::test]
+    async fn test_instance_apply_failure_is_reported_and_persisted() {
+        let (app, state, token, mock_coord) = setup_test_app().await;
+
+        let camera_model = test_camera_model("CAM-FAIL-01", "rtsp://127.0.0.1:8554/live");
+        db::CameraRepo::insert(&state.db, camera_model)
+            .await
+            .unwrap();
+
+        db::AlgorithmRepo::upsert_algorithm(
+            &state.db,
+            db::UpsertAlgorithmParams {
+                algorithm_id: "fail_algo".into(),
+                name: "失败算法".into(),
+                algorithm_type: "detection".into(),
+                alarm_type_id: "intrusion".into(),
+                active_version: "1.0.0".into(),
+                description: "test".into(),
+                is_builtin: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        // 1. 布防任务，实例进入运行中
+        let put_body = serde_json::json!({
+            "cameraId": "CAM-FAIL-01",
+            "name": "失败回写任务",
+            "desiredEnabled": true,
             "rules": [],
-            "motionGate": {"enabled": true, "threshold": 20},
-            "enabled": true
+            "algorithmInstances": [
+                { "algorithmId": "fail_algo", "analysisFps": 10, "algoParams": { "confidence": 0.5 } }
+            ]
         });
         let req = Request::builder()
-            .uri(format!("/api/v1/tasks/instances/{instance_id}"))
+            .uri("/api/v1/tasks/CAM-FAIL-01")
             .method("PUT")
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
-            .body(Body::from(
-                serde_json::to_vec(&update_instance_body).unwrap(),
-            ))
+            .body(Body::from(serde_json::to_vec(&put_body).unwrap()))
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["data"]["algorithmId"], "general_detection");
-        assert_eq!(json["data"]["analysisFps"], 12);
 
-        let updated_instance =
-            db::AlgorithmInstanceRepo::find_by_instance_id(&state.db, &instance_id)
-                .await
-                .unwrap()
-                .expect("更新后的实例应存在");
-        assert_eq!(updated_instance.analysis_fps, 12);
-        assert_eq!(updated_instance.params_json, r#"{"confidence":0.8}"#);
-        assert_eq!(updated_instance.rules_json, "[]");
+        let instance_id = db::AlgorithmInstanceRepo::list_by_camera_id(&state.db, "CAM-FAIL-01")
+            .await
+            .unwrap()
+            .first()
+            .map(|inst| inst.instance_id.clone())
+            .expect("实例应存在");
+
+        // 2. 让运行时收敛失败（模拟 NPU 资源不足等硬件侧拒绝）
+        mock_coord.set_instance_apply_failure("创建推理 Worker 失败: 设备内存不足");
+
+        // 任务级整体下发：只改目标实例参数，其余配置保持原样
+        let mut failing = put_body.clone();
+        failing["algorithmInstances"][0]["analysisFps"] = serde_json::json!(20);
+        failing["algorithmInstances"][0]["algoParams"] = serde_json::json!({"confidence": 0.9});
+        let (status, json) = put_task_config(&app, &token, "CAM-FAIL-01", &failing).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let instance = json["data"]["algorithmInstances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["algorithmId"] == "fail_algo")
+            .expect("失败算法实例应在响应中");
         assert_eq!(
-            updated_instance.motion_gate_json,
-            r#"{"enabled":true,"threshold":20}"#
+            instance["applyState"], "failed",
+            "运行时未生效时不得因为数据库写入成功而显示为已应用"
+        );
+        assert_eq!(instance["analysisFps"], 20);
+        assert!(
+            instance["statusMessage"]
+                .as_str()
+                .is_some_and(|msg| msg.contains("内存不足")),
+            "失败必须带上可读原因，实际: {}",
+            instance["statusMessage"]
+        );
+        assert_ne!(
+            instance["appliedRevision"], instance["desiredRevision"],
+            "未生效的期望代际不得被记为已生效"
         );
 
-        // 再次创建相同算法实例应当被拦截并返回 400
-        let req = Request::builder()
-            .uri("/api/v1/tasks/instances")
-            .method("POST")
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .body(Body::from(serde_json::to_vec(&inst_req).unwrap()))
+        // 3. 数据库必须保留期望配置并记录失败状态，供重启后重试
+        let persisted = db::AlgorithmInstanceRepo::find_by_instance_id(&state.db, &instance_id)
+            .await
+            .unwrap()
+            .expect("实例应仍存在");
+        assert_eq!(persisted.analysis_fps, 20);
+        assert_eq!(persisted.params_json, r#"{"confidence":0.9}"#);
+        assert_eq!(
+            persisted.runtime_apply_state(),
+            types::InstanceApplyState::Failed
+        );
+        assert!(persisted.desired_revision > persisted.applied_revision);
+        assert!(persisted.status_message.contains("内存不足"));
+
+        // 4. 任务查询接口必须返回同样的失败信息
+        let task_json = get_task_config(&app, &token, "CAM-FAIL-01").await;
+        let instance = task_json["data"]["algorithmInstances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["algorithmId"] == "fail_algo")
+            .expect("失败算法实例应在任务响应中");
+        assert_eq!(instance["applyState"], "failed");
+        assert_eq!(instance["desiredRevision"], persisted.desired_revision);
+        assert_eq!(instance["appliedRevision"], persisted.applied_revision);
+
+        // 5. 运行时恢复后重新下发同一份配置：期望代际追上即收敛为 applied
+        mock_coord.set_instance_apply_failure_to_none();
+        let (status, json) = put_task_config(&app, &token, "CAM-FAIL-01", &failing).await;
+        assert_eq!(status, StatusCode::OK);
+        let instance = json["data"]["algorithmInstances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["algorithmId"] == "fail_algo")
+            .expect("失败算法实例应在响应中");
+        assert_eq!(
+            instance["applyState"], "applied",
+            "运行时恢复后必须回到已应用状态"
+        );
+        assert_eq!(instance["desiredRevision"], instance["appliedRevision"]);
+        let recovered = db::AlgorithmInstanceRepo::find_by_instance_id(&state.db, &instance_id)
+            .await
+            .unwrap()
+            .expect("实例应仍存在");
+        assert_eq!(
+            recovered.runtime_apply_state(),
+            types::InstanceApplyState::Applied
+        );
+        assert!(
+            !recovered.status_message.contains("内存不足"),
+            "收敛成功后必须清理过期失败原因，实际: {}",
+            recovered.status_message
+        );
+    }
+
+    /// 保存即生效：改一个实例的参数后，期望代际必须收敛为已生效，不能长期停留在 pending。
+    #[tokio::test]
+    async fn test_task_save_converges_instance_revision() {
+        let (app, state, token, mock_coord) = setup_test_app().await;
+
+        let camera_model = test_camera_model("CAM-REV-01", "rtsp://127.0.0.1:8554/live");
+        db::CameraRepo::insert(&state.db, camera_model)
+            .await
             .unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        db::AlgorithmRepo::upsert_algorithm(
+            &state.db,
+            db::UpsertAlgorithmParams {
+                algorithm_id: "rev_algo".into(),
+                name: "代际算法".into(),
+                algorithm_type: "detection".into(),
+                alarm_type_id: "intrusion".into(),
+                active_version: "1.0.0".into(),
+                description: "test".into(),
+                is_builtin: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let put_body = serde_json::json!({
+            "cameraId": "CAM-REV-01",
+            "name": "代际收敛任务",
+            "desiredEnabled": true,
+            "rules": [],
+            "algorithmInstances": [
+                { "algorithmId": "rev_algo", "analysisFps": 10, "algoParams": { "confidence": 0.5 } }
+            ]
+        });
+        let (status, _) = put_task_config(&app, &token, "CAM-REV-01", &put_body).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let instance_id = db::AlgorithmInstanceRepo::list_by_camera_id(&state.db, "CAM-REV-01")
+            .await
+            .unwrap()
+            .first()
+            .map(|inst| inst.instance_id.clone())
+            .expect("实例应存在");
+
+        // 改目标实例参数：期望代际 +1，运行时已生效 -> 必须收敛为 applied
+        let mut update_body = put_body.clone();
+        update_body["algorithmInstances"][0]["analysisFps"] = serde_json::json!(12);
+        update_body["algorithmInstances"][0]["algoParams"] =
+            serde_json::json!({ "confidence": 0.7 });
+        let (status, json) = put_task_config(&app, &token, "CAM-REV-01", &update_body).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let instance = &json["data"]["algorithmInstances"][0];
+        assert_eq!(instance["applyState"], "applied");
+        assert_eq!(instance["desiredRevision"], 1);
+        assert_eq!(
+            instance["appliedRevision"], 1,
+            "运行中实例的期望代际必须被回写为已生效"
+        );
+        assert_eq!(
+            instance["analysisFps"], 12,
+            "实例级变更必须立即生效到运行时快照"
+        );
+        assert!(
+            instance["statusMessage"]
+                .as_str()
+                .is_some_and(|msg| !msg.contains("未")),
+            "已收敛的实例不得携带未生效原因，实际: {}",
+            instance["statusMessage"]
+        );
+        assert_eq!(
+            mock_coord.active_instance_fps("CAM-REV-01", "rev_algo"),
+            Some(12),
+            "抽帧频率必须在运行时快照中生效，且不重建 Worker"
+        );
+        assert_eq!(
+            mock_coord.started_params().len(),
+            1,
+            "改参数不得重启分析管线"
+        );
+
+        let persisted = db::AlgorithmInstanceRepo::find_by_instance_id(&state.db, &instance_id)
+            .await
+            .unwrap()
+            .expect("实例应存在");
+        assert_eq!(persisted.desired_revision, 1);
+        assert_eq!(persisted.applied_revision, 1);
+        assert_eq!(
+            persisted.runtime_apply_state(),
+            types::InstanceApplyState::Applied
+        );
+
+        // 再次下发完全相同的配置：不递增代际，也不产生新的管线重建
+        let (status, json) = put_task_config(&app, &token, "CAM-REV-01", &update_body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["data"]["algorithmInstances"][0]["desiredRevision"], 1);
+        assert_eq!(
+            json["data"]["algorithmInstances"][0]["applyState"],
+            "applied"
+        );
+        assert_eq!(
+            mock_coord.started_params().len(),
+            1,
+            "重发未变更的配置不得重启分析管线"
+        );
     }
 
     #[tokio::test]
@@ -2389,54 +2672,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(instances.len(), 1);
-        let instance_id = &instances[0].instance_id;
 
-        // 2. 禁用实例 -> 管线由于无启用实例而停机，规则被清理
-        let req = Request::builder()
-            .uri(format!("/api/v1/tasks/instances/{instance_id}/enabled"))
-            .method("PUT")
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .body(Body::from(
-                serde_json::to_vec(&serde_json::json!({"enabled": false})).unwrap(),
-            ))
-            .unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        // 2. 禁用实例（整体下发，条目保留但 enabled=false）-> 管线因无启用实例停机，规则被清理
+        let mut disable_body = put_task_body.clone();
+        disable_body["algorithmInstances"][0]["enabled"] = serde_json::json!(false);
+        let (status, json) = put_task_config(&app, &token, "CAM-SYNC-01", &disable_body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["data"]["algorithmInstances"][0]["enabled"], false);
+        assert_eq!(
+            json["data"]["algorithmInstances"][0]["applyState"], "applied",
+            "停用实例后不存在可重试的未生效状态，代际必须收敛"
+        );
 
         assert!(!mock_coord.has_active_runtime("CAM-SYNC-01").await);
         let rules_after_disable = mock_coord.camera_rules("CAM-SYNC-01").unwrap_or_default();
         assert!(rules_after_disable.is_empty());
 
-        // 3. 停机状态下通过 update_instance 重新启用实例 -> 必须自愈唤醒拉起管线并恢复布防规则
-        let update_instance_body = serde_json::json!({
-            "analysisFps": 20,
-            "params": {"confidence": 0.8},
-            "enabled": true
-        });
-        let req = Request::builder()
-            .uri(format!("/api/v1/tasks/instances/{instance_id}"))
-            .method("PUT")
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .body(Body::from(
-                serde_json::to_vec(&update_instance_body).unwrap(),
-            ))
-            .unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        // 3. 停机状态下重新启用实例并改参数 -> 自愈唤醒拉起管线并恢复布防规则
+        let mut rearm_body = put_task_body.clone();
+        rearm_body["algorithmInstances"][0]["enabled"] = serde_json::json!(true);
+        rearm_body["algorithmInstances"][0]["analysisFps"] = serde_json::json!(20);
+        rearm_body["algorithmInstances"][0]["algoParams"] =
+            serde_json::json!({ "confidence": 0.8 });
+        let (status, json) = put_task_config(&app, &token, "CAM-SYNC-01", &rearm_body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["data"]["algorithmInstances"][0]["applyState"],
+            "applied"
+        );
 
         assert!(
             mock_coord.has_active_runtime("CAM-SYNC-01").await,
             "启用实例后停机的任务必须被自愈拉起"
         );
+        assert_eq!(
+            mock_coord.active_instance_fps("CAM-SYNC-01", "general_detection"),
+            Some(20)
+        );
+        let revision_after_rearm = json["data"]["algorithmInstances"][0]["desiredRevision"]
+            .as_i64()
+            .unwrap();
         let rules_recovered = mock_coord
             .camera_rules("CAM-SYNC-01")
             .expect("rules recovered");
         assert_eq!(rules_recovered.len(), 1);
         assert_eq!(rules_recovered[0].role, types::DetectionRuleRole::Line);
 
-        // 4. 更新实例级规则 -> 原子同步到任务并热更新到管线
+        // 4. 任务级规则是唯一来源：改规则整体下发，直接热更新到运行中的管线
         let new_polygon_rule = serde_json::json!({
             "role": "roi",
             "points": [
@@ -2446,25 +2728,25 @@ mod tests {
                 {"x": 0.1, "y": 0.9}
             ]
         });
-        let update_rules_body = serde_json::json!({
-            "rules": [new_polygon_rule],
-            "enabled": true
-        });
-        let req = Request::builder()
-            .uri(format!("/api/v1/tasks/instances/{instance_id}"))
-            .method("PUT")
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .body(Body::from(serde_json::to_vec(&update_rules_body).unwrap()))
-            .unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        let mut rules_body = rearm_body.clone();
+        rules_body["rules"] = serde_json::json!([new_polygon_rule]);
+        let (status, json) = put_task_config(&app, &token, "CAM-SYNC-01", &rules_body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["data"]["algorithmInstances"][0]["applyState"], "applied",
+            "仅规则变化不得让实例偏离已应用状态"
+        );
+        assert_eq!(
+            json["data"]["algorithmInstances"][0]["desiredRevision"], revision_after_rearm,
+            "仅规则变化不构成需要运行时重建的实例配置变更"
+        );
 
         let rules_updated = mock_coord
             .camera_rules("CAM-SYNC-01")
             .expect("rules updated");
         assert_eq!(rules_updated.len(), 1);
         assert_eq!(rules_updated[0].role, types::DetectionRuleRole::Roi);
+        assert_eq!(rules_updated[0].points.len(), 4);
         assert_eq!(rules_updated[0].points.len(), 4);
     }
 }

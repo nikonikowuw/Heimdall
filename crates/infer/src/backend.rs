@@ -44,6 +44,16 @@ pub trait InferenceBackend: 'static {
         let detections = self.detect(frame).await?;
         Ok(InferenceResult::without_embeddings(detections))
     }
+
+    /// 在当前硬件上下文内原地更新实例配置。
+    ///
+    /// 默认返回 [`InferError::Unsupported`]，表示该后端不能在不重建 session 的前提下
+    /// 接受新配置，调用方必须走目标实例级 Worker 替换；绝不能误报配置已生效。
+    fn update_config(&self, _config_json: &str) -> Result<(), InferError> {
+        Err(InferError::Unsupported {
+            capability: "update_config",
+        })
+    }
 }
 
 #[async_trait(?Send)]
@@ -59,6 +69,10 @@ impl<B: InferenceBackend + ?Sized> InferenceBackend for Box<B> {
     async fn detect_with_metadata(&self, frame: &FrameRef) -> Result<InferenceResult, InferError> {
         (**self).detect_with_metadata(frame).await
     }
+
+    fn update_config(&self, config_json: &str) -> Result<(), InferError> {
+        (**self).update_config(config_json)
+    }
 }
 
 #[async_trait(?Send)]
@@ -73,5 +87,9 @@ impl<B: InferenceBackend + ?Sized> InferenceBackend for std::sync::Arc<B> {
 
     async fn detect_with_metadata(&self, frame: &FrameRef) -> Result<InferenceResult, InferError> {
         (**self).detect_with_metadata(frame).await
+    }
+
+    fn update_config(&self, config_json: &str) -> Result<(), InferError> {
+        (**self).update_config(config_json)
     }
 }

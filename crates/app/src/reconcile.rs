@@ -370,6 +370,7 @@ fn parse_launch_instances(
     let mut launch_instances = Vec::with_capacity(instances.len());
     for instance in instances {
         let launch_config = pipeline::InstanceLaunchConfig::from_persisted(
+            &instance.instance_id,
             &instance.algorithm_id,
             &instance.params_json,
             instance.analysis_fps,
@@ -463,6 +464,37 @@ mod tests {
                 .unwrap()
                 .insert(camera_id.to_string(), rules);
         }
+
+        async fn sync_camera_instances(
+            &self,
+            params: StartCameraPipelineParams,
+        ) -> std::result::Result<pipeline::CameraInstanceSyncOutcome, CoordinatorError> {
+            // 启动对账路径下媒体契约必然变化（此前无运行时），一律视为整路重建
+            let camera_id = params.camera_id.clone();
+            self.start_camera_pipeline(params).await?;
+            Ok(pipeline::CameraInstanceSyncOutcome {
+                camera_id,
+                restarted: true,
+                outcomes: Vec::new(),
+            })
+        }
+
+        async fn apply_instance_config(
+            &self,
+            _desired: pipeline::InstanceDesiredConfig,
+        ) -> std::result::Result<pipeline::InstanceApplyOutcome, CoordinatorError> {
+            Err(CoordinatorError::Validation {
+                reason: "启动对账路径不支持实例级增量收敛".to_string(),
+            })
+        }
+
+        async fn remove_instance_runtime(
+            &self,
+            _camera_id: &str,
+            _instance_id: &str,
+        ) -> std::result::Result<bool, CoordinatorError> {
+            Ok(false)
+        }
     }
 
     async fn seed_test_camera(db: &DatabaseConnection, camera_id: &str, probe_status: &str) {
@@ -542,6 +574,7 @@ mod tests {
                     params_json: r#"{"threshold":0.5}"#.to_string(),
                     enabled: Some(true),
                 }]),
+                expected_revision: None,
             },
         )
         .await
@@ -598,6 +631,7 @@ mod tests {
                     params_json: "{}".to_string(),
                     enabled: Some(true),
                 }]),
+                expected_revision: None,
             },
         )
         .await
@@ -650,6 +684,7 @@ mod tests {
                     params_json: "{}".to_string(),
                     enabled: Some(true),
                 }]),
+                expected_revision: None,
             },
         )
         .await
@@ -700,6 +735,7 @@ mod tests {
                     params_json: "{}".to_string(),
                     enabled: Some(true),
                 }]),
+                expected_revision: None,
             },
         )
         .await
@@ -749,6 +785,7 @@ mod tests {
                 motion_gate_json: "{}".to_string(),
                 status_message: None,
                 instances: Some(vec![]),
+                expected_revision: None,
             },
         )
         .await

@@ -1697,6 +1697,102 @@ impl PipelineManager {
         pumps.get(camera_id).map(|p| p.metrics().clone())
     }
 
+    /// 获取某路摄像头各算法实例的运行指标快照（按 instanceId 维度）
+    pub async fn get_instance_metrics(
+        &self,
+        camera_id: &str,
+    ) -> Vec<(String, Arc<crate::pump::InstanceMetrics>)> {
+        let Some(handle) = self.pump_control_handle(camera_id).await else {
+            return Vec::new();
+        };
+        handle.instance_metrics().await
+    }
+
+    /// 列出某路摄像头当前挂载的算法实例描述（instanceId / algorithmId / 生效配置）
+    pub async fn get_instance_descriptors(
+        &self,
+        camera_id: &str,
+    ) -> Vec<crate::pump::InstanceDescriptor> {
+        let Some(handle) = self.pump_control_handle(camera_id).await else {
+            return Vec::new();
+        };
+        handle.instance_descriptors().await
+    }
+
+    /// 向运行中的分析泵增量挂载算法实例（Worker 已创建并完成资源准入）
+    pub async fn add_pump_instance(
+        &self,
+        camera_id: &str,
+        config: crate::pump::WorkerInstanceConfig,
+        worker: infer::InferenceWorker,
+    ) -> Result<bool, PipelineError> {
+        let handle = self.require_pump_control_handle(camera_id).await?;
+        Ok(handle.add_instance(config, worker).await)
+    }
+
+    /// 从运行中的分析泵移除算法实例并回收其 Worker
+    pub async fn remove_pump_instance(
+        &self,
+        camera_id: &str,
+        instance_id: &str,
+    ) -> Result<bool, PipelineError> {
+        let handle = self.require_pump_control_handle(camera_id).await?;
+        Ok(handle.remove_instance(instance_id).await)
+    }
+
+    /// 在帧边界更新目标实例的抽帧频率
+    pub async fn set_pump_instance_fps(
+        &self,
+        camera_id: &str,
+        instance_id: &str,
+        target_fps: u32,
+    ) -> Result<bool, PipelineError> {
+        let handle = self.require_pump_control_handle(camera_id).await?;
+        Ok(handle.set_instance_fps(instance_id, target_fps).await)
+    }
+
+    /// 在目标实例的 Worker 硬件上下文内原地更新配置
+    pub async fn update_pump_instance_config(
+        &self,
+        camera_id: &str,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<crate::pump::InstanceConfigUpdateOutcome, PipelineError> {
+        let handle = self.require_pump_control_handle(camera_id).await?;
+        Ok(handle
+            .update_instance_config(instance_id, config_json)
+            .await)
+    }
+
+    /// 替换目标实例的 Worker（模型/算法版本变更路径）
+    pub async fn replace_pump_instance_worker(
+        &self,
+        camera_id: &str,
+        instance_id: &str,
+        worker: infer::InferenceWorker,
+    ) -> Result<bool, PipelineError> {
+        let handle = self.require_pump_control_handle(camera_id).await?;
+        Ok(handle.replace_instance_worker(instance_id, worker).await)
+    }
+
+    /// 获取指定摄像头分析泵的控制面句柄，未运行时返回 PipelineNotFound 错误
+    async fn require_pump_control_handle(
+        &self,
+        camera_id: &str,
+    ) -> Result<crate::pump::PumpControlHandle, PipelineError> {
+        self.pump_control_handle(camera_id)
+            .await
+            .ok_or_else(|| PipelineError::PipelineNotFound {
+                camera_id: camera_id.to_string(),
+            })
+    }
+
+    /// 克隆指定摄像头分析泵的控制面句柄（在注册表锁内完成克隆后立即释放锁）
+    async fn pump_control_handle(&self, camera_id: &str) -> Option<crate::pump::PumpControlHandle> {
+        let pumps = self.pumps.read().await;
+        pumps.get(camera_id).map(|pump| pump.control_handle())
+    }
+
     /// 停止某路摄像头的分析任务
     pub async fn stop_task(&self, camera_id: &str) -> Result<(), PipelineError> {
         let removed = {

@@ -58,6 +58,6 @@ pub use system::{
 };
 pub use task::{
     aggregate_task_instance_status, validate_task_algorithm_instances, AnalysisTask,
-    DetectionLineDirection, DetectionPoint, DetectionRule, DetectionRuleRole, MotionGateConfig,
-    TaskAlgorithmInstanceConfig, TaskStatus,
+    DetectionLineDirection, DetectionPoint, DetectionRule, DetectionRuleRole, InstanceApplyState,
+    MotionGateConfig, TaskAlgorithmInstanceConfig, TaskStatus,
 };

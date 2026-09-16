@@ -27,6 +27,9 @@ pub enum TypeError {
     #[error("状态码不在已知范围内: {0}")]
     UnknownTaskStatusCode(i32),
 
+    #[error("算法实例配置应用状态码不在已知范围内: {0}")]
+    UnknownInstanceApplyState(i32),
+
     #[error("算法 ID 不能为空")]
     EmptyAlgorithmId,
 }

@@ -299,6 +299,43 @@ impl AlgoInstance {
     pub fn algorithm_id(&self) -> &str {
         &self.algorithm_id
     }
+
+    /// 在当前实例的硬件上下文内原地更新配置。
+    ///
+    /// 插件未实现 `instance_update_config` 或明确返回 `AV_ERR_NOT_IMPLEMENTED` 时返回
+    /// [`InferError::Unsupported`]，调用方据此回退到目标实例级 Worker 替换；
+    /// 其他非零状态码统一映射为携带 `last_error` 详情的 [`InferError::CAbiError`]。
+    fn apply_config_update(&self, config_json: &str) -> Result<(), InferError> {
+        let abi = self.raw_lib.lib().abi();
+        let Some(update_fn) = abi.instance_update_config else {
+            return Err(InferError::Unsupported {
+                capability: "instance_update_config",
+            });
+        };
+
+        // CString 绑定具名变量覆盖整个 FFI 调用期，避免悬垂指针。
+        let config_c = CString::new(config_json).map_err(|_| InferError::Execution {
+            reason: "实例配置 JSON 包含非法空字节".to_string(),
+        })?;
+
+        // SAFETY: self.raw 是本实例句柄且仅在其创建线程内调用；config_c 在调用期存活。
+        let code = unsafe {
+            update_fn(
+                self.raw,
+                config_c.as_ptr(),
+                config_c.as_bytes().len() as u32,
+            )
+        };
+
+        match code {
+            AV_OK => Ok(()),
+            AV_ERR_NOT_IMPLEMENTED => Err(InferError::Unsupported {
+                capability: "instance_update_config",
+            }),
+            // SAFETY: abi 有效；实例级错误使用自身句柄提取详情。
+            _ => Err(unsafe { check_c_status(code, abi, self.raw) }),
+        }
+    }
 }
 
 impl Drop for AlgoInstance {
@@ -446,6 +483,10 @@ impl InferenceBackend for AlgoInstance {
             detections,
             embeddings,
         })
+    }
+
+    fn update_config(&self, config_json: &str) -> Result<(), InferError> {
+        self.apply_config_update(config_json)
     }
 }
 

@@ -21,6 +21,12 @@ pub struct Model {
     pub enabled: bool,
     pub actual_status: i32,
     pub status_message: String,
+    /// 用户期望配置代际，每次实例级 Apply 提交期望配置时递增
+    pub desired_revision: i64,
+    /// 运行时确认目标 Worker 已生效的配置代际；与 `desired_revision` 相等即已收敛
+    pub applied_revision: i64,
+    /// 运行时配置应用状态：0=applied / 1=pending / 2=failed
+    pub runtime_apply_state: i32,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }
@@ -29,3 +35,11 @@ pub struct Model {
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl Model {
+    /// 解析运行时配置应用状态；未知取值回退为 `failed`（宁可显式暴露异常，也不假装已生效）
+    pub fn runtime_apply_state(&self) -> types::InstanceApplyState {
+        types::InstanceApplyState::from_i32(self.runtime_apply_state)
+            .unwrap_or(types::InstanceApplyState::Failed)
+    }
+}

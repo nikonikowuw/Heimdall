@@ -22,8 +22,10 @@ pub use capture_settle::{
     CaptureSettleController, FrameGeometry, RecordCandidateOutcome, SettleReason, SettleRequest,
 };
 pub use coordinator::{
-    ActiveRuntimeEntry, CameraPipelineRuntimeInfo, CoordinatorError, InstanceLaunchConfig,
-    InstanceRuntimeInfo, StartCameraPipelineParams, TaskRuntimeCoordinator, TaskRuntimeService,
+    ActiveInstanceEntry, ActiveRuntimeEntry, CameraInstanceSyncOutcome, CameraPipelineRuntimeInfo,
+    CoordinatorError, InstanceApplyMechanism, InstanceApplyOutcome, InstanceDesiredConfig,
+    InstanceLaunchConfig, InstanceRuntimeInfo, MediaContractSignature, StartCameraPipelineParams,
+    TaskRuntimeCoordinator, TaskRuntimeService,
 };
 pub use decoded_ring::{DecodedFrameRingBuffer, DecodedRingConfig};
 pub use error::PipelineError;
@@ -38,9 +40,9 @@ pub use manager::{
 };
 pub use motion_gate::{MaskBitmap, MotionGate, MotionGateDecision};
 pub use pump::{
-    AnalysisFpsGovernor, AnalysisPump, AnalysisPumpConfig, InstanceMetrics,
-    MotionGateRuntimeConfig, PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig,
-    WorkerInstanceConfig,
+    AnalysisFpsGovernor, AnalysisPump, AnalysisPumpConfig, InstanceConfigUpdateOutcome,
+    InstanceDescriptor, InstanceMetrics, MotionGateRuntimeConfig, PumpMetrics,
+    SubStreamAnalysisPump, SubStreamPumpConfig, WorkerInstanceConfig,
 };
 pub use roi::RoiAffineMapper;
 pub use rules::{RuleEvaluator, RuleIdentifier, TriggeredAlarm, DEFAULT_FULLSCREEN_RULE_INDEX};
