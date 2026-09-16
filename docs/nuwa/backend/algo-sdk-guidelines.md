@@ -7,6 +7,7 @@
 - Heimdall 根 workspace 只构建宿主 crate 与 `algo-sdk`；根 `Cargo.toml` 不列出任何具体算法包。
 - `algo-packages/` 按平台和硬件运行时拆分为 `macos`、`rknn/rk3568`、`rknn/rk3576` 三个独立 workspace，各自维护成员、算法侧依赖版本、锁文件和构建缓存。算法包通过各自 workspace 的相对路径依赖使用 `crates/algo-sdk`，不通过宿主业务 crate 反向依赖运行时。
 - 算法包构建、测试、格式化和交叉编译均以目标平台 workspace 的 manifest 为入口；交付前生成的 `.so/.dylib` 复制到包内 `lib/`，再由 Makefile 打成归档。
+- 包内 `lib/` 的插件库是本地构建产物，**不入版本库**（`algo-packages/` 各级 `.gitignore` 已覆盖 `*.so` / `*.dylib`）：版本库只承载 manifest、config schema、模型与源码。从干净检出开始时必须先在该包 workspace 执行 `make` / `make package` 生成 `lib/`（归档同样不入库）；否则宿主启动自愈扫描会因缺少插件库而无法自检装载该内置包，依赖真实包的沙箱测试也只会静默跳过。
 - 多个平台 workspace 可以共享 SDK 源码，但不共享 Cargo 的成员集合、锁文件或构建缓存。宿主只在运行时通过 manifest 和 C ABI 动态加载算法制品。
 
 ## 权威定义
