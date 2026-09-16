@@ -93,6 +93,7 @@ export function TaskCameraCard({
   const roiCount = rules.filter((r) => r.role === 'roi').length
   const lineCount = rules.filter((r) => r.role === 'line').length
   const maskCount = rules.filter((r) => r.role === 'mask').length
+  const precropCount = rules.filter((r) => r.role === 'precrop').length
   const isMotionGateEco = config?.motionGate?.enabled ?? false
   const algorithmInstances = config?.algorithmInstances ?? []
   const enabledInstances = algorithmInstances.filter((instance) => instance.enabled)
@@ -267,6 +268,20 @@ export function TaskCameraCard({
                     />
                   )
                 }
+                if (rule.role === 'precrop' && rule.points.length >= 2) {
+                  const pts = rule.points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')
+                  return (
+                    <polygon
+                      key={idx}
+                      points={pts}
+                      fill="rgba(132, 204, 22, 0.16)"
+                      stroke="#84cc16"
+                      strokeWidth="1.8"
+                      strokeDasharray="3 3"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  )
+                }
                 return null
               })
             })()}
@@ -304,6 +319,11 @@ export function TaskCameraCard({
               {maskCount > 0 && (
                 <span className="rounded bg-[var(--destructive)]/20 px-1.5 py-0.5 font-semibold text-[var(--destructive)]">
                   {maskCount} MASK
+                </span>
+              )}
+              {precropCount > 0 && (
+                <span className="rounded bg-lime-500/20 px-1.5 py-0.5 font-semibold text-lime-400">
+                  CROP
                 </span>
               )}
             </span>

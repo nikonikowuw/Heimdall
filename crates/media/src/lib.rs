@@ -7,6 +7,7 @@ pub mod dmabuf_sync;
 pub mod encoders;
 pub mod error;
 pub mod flv;
+pub mod frame_crop;
 pub mod gb28181;
 pub mod gop_queue;
 pub mod image_convert;
@@ -41,6 +42,7 @@ pub use encoders::{
 };
 pub use error::MediaError;
 pub use flv::{FlvMuxer, FlvStreamPipeline};
+pub use frame_crop::crop_frame;
 pub use gop_queue::{
     GopAwarePacketQueue, GopDropState, GopQueueConfig, GopQueueMetrics, PushAction,
 };

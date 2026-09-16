@@ -170,9 +170,21 @@ export const MASK_COLOR_THEME: RuleColorTheme = {
   badgeBg: 'bg-slate-500/10',
 }
 
+/** 特写取景框：与 ROI 调色板、绊线、遮罩均不撞色，避免叠图时无法区分画幅框与告警规则 */
+export const PRECROP_COLOR_THEME: RuleColorTheme = {
+  stroke: '#84cc16',
+  selectedStroke: '#a3e635',
+  fill: 'rgba(132, 204, 22, 0.16)',
+  handleBg: 'bg-lime-400 border-black/80',
+  handleRing: 'ring-lime-400/50',
+  badgeText: 'text-lime-400',
+  badgeBg: 'bg-lime-500/10',
+}
+
 export function getRuleTheme(rule: ExtendedRule, index = 0): RuleColorTheme {
   if (rule.role === 'line') return LINE_COLOR_THEME
   if (rule.role === 'mask') return MASK_COLOR_THEME
+  if (rule.role === 'precrop') return PRECROP_COLOR_THEME
   if (rule.color) {
     const found = ROI_COLOR_PALETTES.find((p) => p.stroke === rule.color)
     if (found) return found
@@ -183,7 +195,7 @@ export function getRuleTheme(rule: ExtendedRule, index = 0): RuleColorTheme {
 export function getToolTheme(tool: ToolMode, currentRoiCount = 0): RuleColorTheme {
   if (tool === 'line') return LINE_COLOR_THEME
   if (tool === 'mask') return MASK_COLOR_THEME
-  if (tool === 'precrop') return ROI_COLOR_PALETTES[1] // amber
+  if (tool === 'precrop') return PRECROP_COLOR_THEME
   return ROI_COLOR_PALETTES[currentRoiCount % ROI_COLOR_PALETTES.length]
 }
 
@@ -195,6 +207,8 @@ export function getInitialRuleColor(role: DetectionRuleRole, roiIndex: number): 
       return LINE_COLOR_THEME.stroke
     case 'mask':
       return MASK_COLOR_THEME.stroke
+    case 'precrop':
+      return PRECROP_COLOR_THEME.stroke
   }
 }
 
@@ -211,6 +225,8 @@ export function getDefaultRuleName(
         return t('rules.defaultLineName', { index, defaultValue: `越界绊线 ${index}` })
       case 'mask':
         return t('rules.defaultMaskName', { index, defaultValue: `屏蔽遮罩 ${index}` })
+      case 'precrop':
+        return t('rules.defaultPrecropName', { index, defaultValue: `特写取景 ${index}` })
       default:
         return t('rules.defaultRuleName', { index, defaultValue: `规则 ${index}` })
     }
@@ -222,6 +238,8 @@ export function getDefaultRuleName(
       return `越界绊线 ${index}`
     case 'mask':
       return `屏蔽遮罩 ${index}`
+    case 'precrop':
+      return `特写取景 ${index}`
     default:
       return `规则 ${index}`
   }

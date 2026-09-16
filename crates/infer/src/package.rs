@@ -381,7 +381,25 @@ impl InferenceBackend for AlgoInstance {
 
         match frame.format {
             PixelFormat::Nv12 => desc.pixel_format = AV_PIX_NV12,
-            PixelFormat::Rgba | PixelFormat::Bgr24 => desc.pixel_format = AV_PIX_BGRA,
+            PixelFormat::Yuv420p => desc.pixel_format = AV_PIX_I420,
+            PixelFormat::Rgb24 => {
+                desc.pixel_format = AV_PIX_RGB24;
+                let bpp_stride = if frame.stride.hor_stride as usize >= frame.width as usize * 3 {
+                    frame.stride.hor_stride as i32
+                } else {
+                    (frame.stride.hor_stride.max(frame.width) * 3) as i32
+                };
+                desc.stride = [bpp_stride, 0, 0, 0];
+            }
+            PixelFormat::Rgba => {
+                desc.pixel_format = AV_PIX_BGRA;
+                let bpp_stride = if frame.stride.hor_stride as usize >= frame.width as usize * 4 {
+                    frame.stride.hor_stride as i32
+                } else {
+                    (frame.stride.hor_stride.max(frame.width) * 4) as i32
+                };
+                desc.stride = [bpp_stride, 0, 0, 0];
+            }
             _ => desc.pixel_format = AV_PIX_UNKNOWN,
         }
 

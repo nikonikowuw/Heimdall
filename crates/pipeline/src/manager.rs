@@ -104,8 +104,9 @@ pub struct CameraPipelineContext {
     pub(crate) tracking_generation: Arc<AtomicU64>,
     /// 每路摄像头按算法实例维护的最新活跃航迹快照 (algorithm_id -> Vec<TrackedObject>)
     pub current_tracks: TokioRwLock<HashMap<String, Vec<TrackedObject>>>,
-    /// 局部特写预裁剪仿射变换映射器
-    pub roi_mapper: TokioRwLock<RoiAffineMapper>,
+    /// 局部特写预裁剪取景区域（归一化），由任务规则中的 precrop 规则同步；
+    /// 仅供分析泵在送模前取用，**不参与坐标还原**——坐标还原必须使用当帧实际生效的矩形。
+    pub precrop_roi: TokioRwLock<Option<BoundingBox>>,
     /// 任务级空间几何规则
     pub rules: Arc<TokioRwLock<Vec<DetectionRule>>>,
     /// 规则版本递增计数器，供解码泵做无锁变更探测
@@ -143,7 +144,7 @@ impl CameraPipelineContext {
             capture_settle: std::sync::Mutex::new(CaptureSettleController::new()),
             tracking_generation: Arc::new(AtomicU64::new(0)),
             current_tracks: TokioRwLock::new(HashMap::new()),
-            roi_mapper: TokioRwLock::new(RoiAffineMapper::identity()),
+            precrop_roi: TokioRwLock::new(None),
             rules: Arc::new(TokioRwLock::new(Vec::new())),
             rules_version: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             rule_evaluator: RuleEvaluator::new(),
@@ -1207,8 +1208,12 @@ impl PipelineManager {
         let ctx = self.get_or_create_context(&camera.camera_id).await;
 
         // 同步任务定义的空间几何布防规则至管线上下文
-        *ctx.rules.write().await = rules;
+        *ctx.rules.write().await = rules.clone();
         ctx.rules_version.fetch_add(1, Ordering::Release);
+
+        // 同步提取并配置摄像头的局部特写 Pre-crop ROI 取景区域
+        let precrop_roi = DetectionRule::extract_precrop_roi(&rules);
+        self.set_camera_roi(&camera.camera_id, precrop_roi).await;
 
         // 同步设置主码流分析模式状态 (方案三：零解码瞬时直通)
         // 注意：生产环境统一由 TaskRuntimeCoordinator 依据网络动态探活决议生效模式；
@@ -1226,16 +1231,27 @@ impl PipelineManager {
         Ok(())
     }
 
-    /// 配置摄像头的局部特写 Pre-crop ROI 映射区域
-    pub async fn set_camera_roi(&self, camera_id: &str, roi: Option<BoundingBox>) {
+    /// 配置摄像头的局部特写 Pre-crop ROI 取景区域
+    async fn set_camera_roi(&self, camera_id: &str, roi: Option<BoundingBox>) {
         let ctx = self.get_or_create_context(camera_id).await;
-        let mut mapper = ctx.roi_mapper.write().await;
-        *mapper = RoiAffineMapper::new(roi);
-        tracing::info!(camera_id = %camera_id, ?roi, "已配置摄像头局部 Pre-crop ROI 映射");
+        let mut current = ctx.precrop_roi.write().await;
+        *current = roi;
+        tracing::info!(camera_id = %camera_id, ?roi, "已配置摄像头局部 Pre-crop ROI 取景区域");
+    }
+
+    /// 获取摄像头的局部特写 Pre-crop ROI 取景区域
+    pub async fn get_camera_roi(&self, camera_id: &str) -> Option<BoundingBox> {
+        let ctx = self.get_or_create_context(camera_id).await;
+        let roi = ctx.precrop_roi.read().await;
+        *roi
     }
 
     /// 配置摄像头的空间几何布防规则集合
     pub async fn set_camera_rules(&self, camera_id: &str, rules: Vec<DetectionRule>) {
+        // 取景区域与规则同源：规则中已无 precrop 时必须一并清除，否则会留下陈旧取景框。
+        let precrop_roi = DetectionRule::extract_precrop_roi(&rules);
+        self.set_camera_roi(camera_id, precrop_roi).await;
+
         let ctx = self.get_or_create_context(camera_id).await;
         let mut r = ctx.rules.write().await;
         *r = rules;
@@ -1244,7 +1260,8 @@ impl PipelineManager {
     }
 
     /// 统一处理算法推理输出的检测结果并执行指定算法实例的航迹跟踪与几何规则判定：
-    /// 1. 执行 Pre-crop ROI 线性仿射坐标还原（将局部归一化 [0,1] 映射至全景大图 [0,1]）；
+    /// 1. 按**当帧实际生效的取景矩形** `roi` 做线性仿射坐标还原（局部 [0,1] → 全景 [0,1]）；
+    ///    `roi` 为 `None` 表示当帧未裁切，检测结果已是全景坐标，此时不得做任何缩放；
     /// 2. 独立算法实例的航迹关联更新（按 algorithm_id 隔离 Tracker，避免航迹冲刷）；
     /// 3. 根据 algorithm_kind 自动区分责任流向：
     ///    - `AlgorithmKind::Recognition`：客观通行抓拍流，默认全屏捕获/ROI/Line判定，绝不误报入侵；
@@ -1257,6 +1274,7 @@ impl PipelineManager {
         algorithm_kind: impl Into<types::AlgorithmKind>,
         detections: Vec<Detection>,
         timestamp_ms: i64,
+        roi: Option<BoundingBox>,
     ) -> AnalysisOutcome {
         let embeddings = (0..detections.len()).map(|_| None).collect();
         self.process_detections_for_algo_with_embeddings(
@@ -1266,11 +1284,13 @@ impl PipelineManager {
             detections,
             embeddings,
             timestamp_ms,
+            roi,
         )
         .await
     }
 
     /// 处理检测结果并转移 C ABI 低频特征 sidecar。
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_detections_for_algo_with_embeddings(
         &self,
         camera_id: &str,
@@ -1279,6 +1299,7 @@ impl PipelineManager {
         detections: Vec<Detection>,
         embeddings: Vec<Option<types::FaceEmbedding>>,
         timestamp_ms: i64,
+        roi: Option<BoundingBox>,
     ) -> AnalysisOutcome {
         self.process_detections_for_algo_with_embeddings_internal(
             camera_id,
@@ -1287,6 +1308,7 @@ impl PipelineManager {
             detections,
             embeddings,
             timestamp_ms,
+            roi,
             None,
         )
         .await
@@ -1302,6 +1324,7 @@ impl PipelineManager {
         detections: Vec<Detection>,
         embeddings: Vec<Option<types::FaceEmbedding>>,
         timestamp_ms: i64,
+        roi: Option<BoundingBox>,
         expected_generation: u64,
     ) -> AnalysisOutcome {
         self.process_detections_for_algo_with_embeddings_internal(
@@ -1311,6 +1334,7 @@ impl PipelineManager {
             detections,
             embeddings,
             timestamp_ms,
+            roi,
             Some(expected_generation),
         )
         .await
@@ -1325,6 +1349,7 @@ impl PipelineManager {
         mut detections: Vec<Detection>,
         embeddings: Vec<Option<types::FaceEmbedding>>,
         timestamp_ms: i64,
+        roi: Option<BoundingBox>,
         expected_generation: Option<u64>,
     ) -> AnalysisOutcome {
         let ctx = self.get_or_create_context(camera_id).await;
@@ -1334,8 +1359,10 @@ impl PipelineManager {
             return AnalysisOutcome::default();
         }
 
-        // 1. 局部仿射映射至全景坐标系 (原地变换，避免多余堆分配)
-        let mapper = *ctx.roi_mapper.read().await;
+        // 1. 按当帧实际生效的取景矩形做局部仿射映射至全景坐标系（原地变换，避免多余堆分配）。
+        // 矩形来自调用方（分析泵在裁切时确定的生效矩形），不从共享状态重读：
+        // 否则裁切与还原会各自独立判断，一旦裁切失败就会把全景坐标当成局部坐标二次缩放。
+        let mapper = RoiAffineMapper::new(roi);
         for det in &mut detections {
             det.bbox = mapper.map_bbox(&det.bbox);
             if let Some(f) = &mut det.face {
@@ -1424,6 +1451,7 @@ impl PipelineManager {
         camera_id: &str,
         detections: Vec<Detection>,
         timestamp_ms: i64,
+        roi: Option<BoundingBox>,
     ) -> (Vec<TrackedObject>, Vec<TriggeredAlarm>) {
         let outcome = self
             .process_detections_for_algo(
@@ -1432,6 +1460,7 @@ impl PipelineManager {
                 types::AlgorithmKind::Detection,
                 detections,
                 timestamp_ms,
+                roi,
             )
             .await;
         (outcome.tracked, outcome.alarms)
@@ -2026,11 +2055,6 @@ mod tests {
         let manager = PipelineManager::with_evidence_dir(&temp_dir);
         let cam_id = "cam_eval_001";
 
-        // 配置 Pre-crop ROI (右半区域 [0.5, 0.0, 1.0, 1.0])
-        manager
-            .set_camera_roi(cam_id, Some(BoundingBox::new(0.5, 0.0, 1.0, 1.0)))
-            .await;
-
         // 配置入侵布防规则
         manager
             .set_camera_rules(
@@ -2048,6 +2072,9 @@ mod tests {
             )
             .await;
 
+        // 本帧取景于右半区域 [0.5, 0.0, 1.0, 1.0]，算法输出的是局部坐标
+        let frame_roi = BoundingBox::new(0.5, 0.0, 1.0, 1.0);
+
         // 模拟算法输出局部检测框 [0.2, 0.2, 0.4, 0.4]
         // 经仿射变换后映射为全景坐标: x1 = 0.5 + 0.2*0.5 = 0.6, y1 = 0.2, x2 = 0.7, y2 = 0.4
         let local_det1 = vec![Detection {
@@ -2059,7 +2086,9 @@ mod tests {
             face: None,
         }];
 
-        let (tracked1, alarms1) = manager.process_detections(cam_id, local_det1, 1000).await;
+        let (tracked1, alarms1) = manager
+            .process_detections(cam_id, local_det1, 1000, Some(frame_roi))
+            .await;
         assert_eq!(tracked1.len(), 1);
         assert_eq!(alarms1.len(), 1, "侵入全景布防区必须触发报警");
         let tid = tracked1[0].track_id;
@@ -2077,10 +2106,185 @@ mod tests {
             face: None,
         }];
 
-        let (tracked2, alarms2) = manager.process_detections(cam_id, local_det2, 2000).await;
+        let (tracked2, alarms2) = manager
+            .process_detections(cam_id, local_det2, 2000, Some(frame_roi))
+            .await;
         assert_eq!(tracked2.len(), 1);
         assert_eq!(tracked2[0].track_id, tid, "Track ID 必须在帧间保持连续");
         assert_eq!(alarms2.len(), 0, "5 秒防刷屏冷却期内不应重复报警");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_manager_precrop_rule_auto_config() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("test_precrop_{}", uuid::Uuid::now_v7().simple()));
+        let manager = PipelineManager::with_evidence_dir(&temp_dir);
+        let cam_id = "cam_precrop_auto";
+
+        // 通过 set_camera_rules 配置 Precrop 规则与 ROI 入侵规则
+        manager
+            .set_camera_rules(
+                cam_id,
+                vec![
+                    types::DetectionRule {
+                        role: types::DetectionRuleRole::Precrop,
+                        line_direction: types::DetectionLineDirection::Both,
+                        points: vec![
+                            types::DetectionPoint::new(0.4, 0.4),
+                            types::DetectionPoint::new(0.8, 0.8),
+                        ],
+                    },
+                    types::DetectionRule {
+                        role: types::DetectionRuleRole::Roi,
+                        line_direction: types::DetectionLineDirection::Both,
+                        points: vec![
+                            types::DetectionPoint::new(0.0, 0.0),
+                            types::DetectionPoint::new(1.0, 0.0),
+                            types::DetectionPoint::new(1.0, 1.0),
+                            types::DetectionPoint::new(0.0, 1.0),
+                        ],
+                    },
+                ],
+            )
+            .await;
+
+        // 验证 Pre-crop ROI 被正确提取并挂载到管线上
+        let roi = manager
+            .get_camera_roi(cam_id)
+            .await
+            .expect("Precrop ROI 必须自动提取并挂载");
+        assert!((roi.x1 - 0.4).abs() < 1e-4);
+        assert!((roi.y1 - 0.4).abs() < 1e-4);
+        assert!((roi.x2 - 0.8).abs() < 1e-4);
+        assert!((roi.y2 - 0.8).abs() < 1e-4);
+
+        // 算法在特写局部内检测到目标 [0.5, 0.5, 1.0, 1.0]
+        // 经仿射变换还原至全景坐标系:
+        // x1 = 0.4 + 0.5 * 0.4 = 0.6, y1 = 0.4 + 0.5 * 0.4 = 0.6
+        // x2 = 0.4 + 1.0 * 0.4 = 0.8, y2 = 0.4 + 1.0 * 0.4 = 0.8
+        let local_det = vec![Detection {
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            quality_score: None,
+            bbox: BoundingBox::new(0.5, 0.5, 1.0, 1.0),
+            face: None,
+        }];
+
+        // 分析泵按裁切结果送模：裁切成功则携带生效矩形，坐标必须是局部坐标
+        let (tracked, alarms) = manager
+            .process_detections(cam_id, local_det.clone(), 1000, Some(roi))
+            .await;
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(alarms.len(), 1);
+        assert!((tracked[0].bbox.x1 - 0.6).abs() < 1e-4);
+        assert!((tracked[0].bbox.y1 - 0.6).abs() < 1e-4);
+        assert!((tracked[0].bbox.x2 - 0.8).abs() < 1e-4);
+        assert!((tracked[0].bbox.y2 - 0.8).abs() < 1e-4);
+
+        // 裁切不可用（平台无设备侧零拷贝裁切 / 裁切失败）时必须按全景帧分析：
+        // 此时绝不允许再按取景框缩放坐标，否则整条告警链的几何全部错位。
+        let (tracked_full_frame, _) = manager
+            .process_detections(cam_id, local_det, 3000, None)
+            .await;
+        assert_eq!(tracked_full_frame.len(), 1);
+        assert!((tracked_full_frame[0].bbox.x1 - 0.5).abs() < 1e-4);
+        assert!((tracked_full_frame[0].bbox.x2 - 1.0).abs() < 1e-4);
+
+        // 撤销取景框后必须同步清除配置，不留陈旧取景区域
+        manager
+            .set_camera_rules(
+                cam_id,
+                vec![types::DetectionRule {
+                    role: types::DetectionRuleRole::Roi,
+                    line_direction: types::DetectionLineDirection::Both,
+                    points: vec![
+                        types::DetectionPoint::new(0.0, 0.0),
+                        types::DetectionPoint::new(1.0, 0.0),
+                        types::DetectionPoint::new(1.0, 1.0),
+                    ],
+                }],
+            )
+            .await;
+        assert!(
+            manager.get_camera_roi(cam_id).await.is_none(),
+            "规则中已无 precrop 时必须清除取景区域"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_manager_start_task_initializes_precrop_roi() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_start_task_precrop_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager = PipelineManager::with_evidence_dir(&temp_dir);
+        let cam_id = "cam_start_task_precrop";
+
+        let camera = Camera {
+            id: 1,
+            camera_id: cam_id.to_string(),
+            name: "Test Cam".into(),
+            protocol: "rtsp".into(),
+            rtsp_url: "rtsp://localhost/live".into(),
+            sub_rtsp_url: "".into(),
+            stream_mode: types::StreamMode::Auto,
+            remark: "".into(),
+            transport_policy: types::TransportPolicy::Auto,
+            last_probe_status: types::ProbeStatus::Healthy,
+            last_probe_at: None,
+            last_probe_error_code: "".into(),
+            last_success_at: None,
+            last_codec: "h264".into(),
+            last_width: 1920,
+            last_height: 1080,
+            last_fps: 25.0,
+            gb28181_device_id: None,
+            gb28181_channel_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let task = AnalysisTask {
+            camera_id: cam_id.to_string(),
+            name: "task_precrop_init".into(),
+            desired_enabled: true,
+            actual_status: types::TaskStatus::Running,
+            status_message: "".into(),
+            algorithm_id: "algo_test".into(),
+            analysis_fps: 15,
+            algo_params: types::task::default_algo_params(),
+            rules: vec![types::DetectionRule {
+                role: types::DetectionRuleRole::Precrop,
+                line_direction: types::DetectionLineDirection::Both,
+                points: vec![
+                    types::DetectionPoint::new(0.2, 0.2),
+                    types::DetectionPoint::new(0.6, 0.6),
+                ],
+            }],
+            motion_gate: types::MotionGateConfig::default(),
+            last_frame_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        manager
+            .start_task(&camera, task)
+            .await
+            .expect("start_task 应当成功");
+
+        let roi = manager
+            .get_camera_roi(cam_id)
+            .await
+            .expect("start_task 启动后 Precrop ROI 必须自动提取并挂载");
+        assert!((roi.x1 - 0.2).abs() < 1e-4);
+        assert!((roi.y1 - 0.2).abs() < 1e-4);
+        assert!((roi.x2 - 0.6).abs() < 1e-4);
+        assert!((roi.y2 - 0.6).abs() < 1e-4);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -2727,6 +2931,7 @@ mod tests {
                 types::AlgorithmKind::Recognition,
                 vec![detection(0.80, true)],
                 1000,
+                None,
             )
             .await;
         assert!(outcome.applied);
@@ -2754,6 +2959,7 @@ mod tests {
                 types::AlgorithmKind::Recognition,
                 vec![detection(0.80, false)],
                 1040,
+                None,
             )
             .await;
         assert!(
@@ -2770,6 +2976,7 @@ mod tests {
                 types::AlgorithmKind::Recognition,
                 vec![detection(0.78, true)],
                 1400,
+                None,
             )
             .await;
         let settle = settled
@@ -2786,6 +2993,61 @@ mod tests {
         );
         assert_eq!(settle.track_id, outcome.tracked[0].track_id);
         assert!(settle.candidate.is_none(), "未经编码留存时不得伪造候选");
+    }
+
+    /// 低质量人脸在识别类生产入口下同样必须产出候选留存动作。
+    ///
+    /// 宿主不对候选做质量准入：小脸/侧脸（质量分低于旧门限 0.4）在一路广角机位实测占比可达 14%，
+    /// 这些轨道若无候选，结算只能回溯取证，主码流分析模式下必然失败并丢掉整条通行记录。
+    #[tokio::test]
+    async fn low_quality_recognition_frame_still_produces_candidate() {
+        let manager = Arc::new(PipelineManager::new());
+        let camera_id = "cam_settle_low_quality";
+        let algorithm_id = "algo_face_low_quality";
+        let face_bbox = BoundingBox::new(0.45, 0.35, 0.55, 0.5);
+        let object_bbox = BoundingBox::new(0.4, 0.3, 0.6, 0.6);
+
+        let outcome = manager
+            .process_detections_for_algo(
+                camera_id,
+                algorithm_id,
+                types::AlgorithmKind::Recognition,
+                vec![Detection {
+                    class_id: 0,
+                    label: "person".to_string(),
+                    confidence: 0.95,
+                    quality_score: Some(0.22),
+                    bbox: object_bbox,
+                    face: Some(types::FaceDetail {
+                        bbox: face_bbox,
+                        confidence: 0.95,
+                        quality_score: Some(0.22),
+                        fused_count: None,
+                        template_quality: None,
+                        template_mature: None,
+                        embedding: None,
+                    }),
+                }],
+                1000,
+                None,
+            )
+            .await;
+
+        assert!(outcome.applied);
+        assert_eq!(
+            outcome.capture_actions.len(),
+            1,
+            "低质量首帧同样必须产出候选留存动作：{:?}",
+            outcome.capture_actions
+        );
+        let CaptureAction::RetainCandidate(request) = &outcome.capture_actions[0] else {
+            panic!(
+                "期望 RetainCandidate，实际 {:?}",
+                outcome.capture_actions[0]
+            );
+        };
+        assert_eq!(request.geometry.quality, 0.22);
+        assert_eq!(request.geometry.pts_ms, 1000, "候选时标必须等于当帧时标");
     }
 
     #[tokio::test]
@@ -2805,7 +3067,7 @@ mod tests {
         };
 
         let outcome = manager
-            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det], 1000)
+            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det], 1000, None)
             .await;
         assert_eq!(outcome.tracked.len(), 1);
 
@@ -2815,7 +3077,7 @@ mod tests {
 
         // 空帧更新该算法，应自动清除
         manager
-            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![], 2000)
+            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![], 2000, None)
             .await;
         assert!(manager.get_current_tracks(cam_id).await.is_empty());
 
@@ -2835,6 +3097,7 @@ mod tests {
                 "face_recognition",
                 vec![face_det],
                 3000,
+                None,
             )
             .await;
         assert_eq!(
@@ -2867,13 +3130,27 @@ mod tests {
         };
 
         let first = manager
-            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det.clone()], 1000)
+            .process_detections_for_algo(
+                cam_id,
+                "algo_1",
+                "detection",
+                vec![det.clone()],
+                1000,
+                None,
+            )
             .await;
         assert!(first.applied);
         assert_eq!(manager.get_current_tracks(cam_id).await.len(), 1);
 
         let stale = manager
-            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det.clone()], 900)
+            .process_detections_for_algo(
+                cam_id,
+                "algo_1",
+                "detection",
+                vec![det.clone()],
+                900,
+                None,
+            )
             .await;
         assert!(!stale.applied);
         assert_eq!(manager.get_current_tracks(cam_id).await.len(), 1);
@@ -2895,6 +3172,7 @@ mod tests {
                 vec![det.clone()],
                 vec![None],
                 1_050,
+                None,
                 old_generation,
             )
             .await;
@@ -2902,7 +3180,7 @@ mod tests {
         assert!(manager.get_current_tracks(cam_id).await.is_empty());
 
         let second = manager
-            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det], 1100)
+            .process_detections_for_algo(cam_id, "algo_1", "detection", vec![det], 1100, None)
             .await;
         assert!(second.applied);
         assert_eq!(manager.get_current_tracks(cam_id).await.len(), 1);

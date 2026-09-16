@@ -86,7 +86,7 @@ fn check_rule_triggered(
     trajectory: &[(f64, f64)],
 ) -> bool {
     match rule.role {
-        DetectionRuleRole::Mask => false,
+        DetectionRuleRole::Mask | DetectionRuleRole::Precrop => false,
         DetectionRuleRole::Roi => point_in_polygon(point, &rule.points),
         DetectionRuleRole::Line => {
             trajectory.len() >= 2

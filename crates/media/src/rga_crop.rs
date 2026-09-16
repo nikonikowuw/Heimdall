@@ -214,6 +214,31 @@ impl std::fmt::Debug for RgaRuntime {
     }
 }
 
+// SAFETY: RgaRuntime 持有的动态库句柄在生命周期内有效，其内部函数调用通过 Mutex 序列化同步
+unsafe impl Send for RgaRuntime {}
+// SAFETY: 跨线程共享引用安全
+unsafe impl Sync for RgaRuntime {}
+
+static GLOBAL_RGA: std::sync::OnceLock<Option<std::sync::Arc<RgaRuntime>>> =
+    std::sync::OnceLock::new();
+
+/// 获取进程级全局 RGA 运行时单例。
+pub fn get_global_rga() -> Result<std::sync::Arc<RgaRuntime>, MediaError> {
+    let opt = GLOBAL_RGA.get_or_init(|| match RgaRuntime::try_load() {
+        Ok(rt) => {
+            tracing::info!("RGA 硬件加速运行时加载成功");
+            Some(std::sync::Arc::new(rt))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "未加载到 librga 运行时，RGA 硬件加速不可用");
+            None
+        }
+    });
+    opt.as_ref()
+        .cloned()
+        .ok_or_else(|| MediaError::Unsupported("librga 动态加载失败或当前平台未安装 librga.so"))
+}
+
 impl Drop for RgaRuntime {
     fn drop(&mut self) {
         // SAFETY: library 来自成功的 dlopen；所有导入 handle 均由上层在 runtime
@@ -553,6 +578,87 @@ impl RgaRuntime {
                 .into_owned()
         }
     }
+}
+
+/// 基于 Rockchip RGA 2D 硬件加速器执行零拷贝取景预裁剪。
+///
+/// 严格保证：
+/// - 纯设备侧硬件零拷贝（DRM DMA-BUF src_fd → RGA 硬件 Blit → DRM DMA-BUF dst_fd）；
+/// - 全程零 CPU 像素遍历；
+/// - 输出 Stride 严格满足 16 字节硬件对齐约束。
+pub fn crop_dmabuf_rga(
+    src_fd: std::os::fd::RawFd,
+    frame: &types::FrameRef,
+    sx: u32,
+    sy: u32,
+    crop_w: u32,
+    crop_h: u32,
+    w_stride: u32,
+) -> Result<types::FrameRef, MediaError> {
+    use std::os::fd::{AsRawFd, OwnedFd};
+    use std::sync::Arc;
+    use types::{FrameHandle, PixelFormat, StrideInfo};
+
+    if frame.format != PixelFormat::Nv12 {
+        return Err(MediaError::Unsupported(
+            "RGA 硬件取景预裁剪当前仅支持 NV12 格式帧",
+        ));
+    }
+
+    let rga = get_global_rga()?;
+
+    // 1. 严格校验 RGA 硬件输入输出步长对齐要求
+    crate::rga::RgaPolicyChecker::validate_nv12_strides(
+        crate::rga::RgaCore::Rga2,
+        crop_w,
+        crop_h,
+        w_stride,
+        crop_h,
+    )?;
+
+    // 2. 为裁剪后的目标帧在内核 DMA 堆中分配缓冲区
+    let dst_size = (w_stride as usize * crop_h as usize * 3) / 2;
+    let dst_fd: OwnedFd = crate::dmabuf_sync::alloc_dma_buf(dst_size)?;
+
+    // 3. 将目标 DMA-BUF 导入为 RGA 句柄
+    let dst_handle =
+        rga.import_buffer_fd(dst_fd.as_raw_fd(), w_stride, crop_h, RK_FORMAT_YCbCr_420_SP)?;
+
+    // 4. 构造 RGA 裁剪 Job 并同步执行硬件 Blit
+    let src_hor_stride = (frame.stride.hor_stride.max(frame.width) + 1) & !1;
+    let src_ver_stride = (frame.stride.ver_stride.max(frame.height) + 1) & !1;
+
+    let job = RgaCropJob {
+        src_fd,
+        src_w: frame.width,
+        src_h: frame.height,
+        src_hor_stride,
+        src_ver_stride,
+        sx,
+        sy,
+        crop_w,
+        crop_h,
+        dst_fd: dst_fd.as_raw_fd(),
+        dst_w: w_stride,
+        dst_h: crop_h,
+    };
+
+    let blit_res = rga.crop_blit_sync(job, dst_handle);
+    rga.release_buffer_handle(dst_handle);
+    blit_res?;
+
+    Ok(types::FrameRef::new(
+        frame.camera_id.clone(),
+        frame.timestamp,
+        crop_w,
+        crop_h,
+        StrideInfo::new(w_stride, crop_h),
+        PixelFormat::Nv12,
+        FrameHandle::DmaBuf {
+            fd: Arc::new(dst_fd),
+            _lease: None,
+        },
+    ))
 }
 
 #[cfg(test)]

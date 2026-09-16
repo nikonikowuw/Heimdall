@@ -121,6 +121,7 @@ export function ActivityZonesSection({
             const isSelected = rule.id === selectedRuleId
             const isRoi = rule.role === 'roi'
             const isLine = rule.role === 'line'
+            const isPrecrop = rule.role === 'precrop'
 
             return (
               <div
@@ -140,7 +141,9 @@ export function ActivityZonesSection({
                       ? t('tools.roi', { defaultValue: '多边形防区' })
                       : isLine
                         ? t('tools.line', { defaultValue: '越界绊线' })
-                        : t('tools.mask', { defaultValue: '屏蔽遮罩' })
+                        : isPrecrop
+                          ? t('tools.precrop', { defaultValue: '特写取景' })
+                          : t('tools.mask', { defaultValue: '屏蔽遮罩' })
                   }`}
                   className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none"
                 >
@@ -150,10 +153,12 @@ export function ActivityZonesSection({
                         ? 'border border-[var(--border-strong)] bg-[var(--accent-soft)] text-[var(--accent)]'
                         : isLine
                           ? 'border border-[var(--accent-green)]/30 bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
-                          : 'border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 text-[var(--destructive)]'
+                          : isPrecrop
+                            ? 'border border-lime-400/30 bg-lime-500/10 text-lime-400'
+                            : 'border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 text-[var(--destructive)]'
                     }`}
                   >
-                    {isRoi ? 'ROI' : isLine ? 'LINE' : 'MASK'}
+                    {isRoi ? 'ROI' : isLine ? 'LINE' : isPrecrop ? 'CROP' : 'MASK'}
                   </span>
 
                   <div className="min-w-0">

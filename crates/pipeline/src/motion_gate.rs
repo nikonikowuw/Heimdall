@@ -103,6 +103,8 @@ impl MaskBitmap {
                         }
                     }
                 }
+                // 取景预裁剪（Precrop）仅决定送模画幅，不参与运动门控：
+                // 若把它并入侵入防区的 ROI 掩码，只画取景框的任务会静默变成「只算框内运动」。
                 DetectionRuleRole::Roi => {
                     has_roi = true;
                     for y in start_y..end_y {

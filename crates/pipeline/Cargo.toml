@@ -6,6 +6,7 @@ license.workspace = true
 
 [features]
 default = []
+rga = ["media/rga"]
 hw-snap-mpp = ["media/hw-snap-mpp"]
 
 [lints]

@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::detection::BoundingBox;
+
 /// 检测规则角色
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -11,6 +13,8 @@ pub enum DetectionRuleRole {
     Mask,
     /// 绊线越界检测
     Line,
+    /// 特写取景预裁剪区域
+    Precrop,
 }
 
 /// 分界线越界方向
@@ -57,6 +61,48 @@ impl DetectionRule {
             return Ok(Vec::new());
         }
         serde_json::from_str(trimmed)
+    }
+
+    /// 从空间几何规则列表中提取特写取景预裁剪区域 (Pre-crop ROI)。
+    ///
+    /// 语义：
+    /// - 取景框是**画幅**约定（决定算法看到什么），不是告警规则，不参与规则引擎与运动门控；
+    /// - 生效范围为**摄像头级**且同一时刻只生效一个：取规则列表中首个有有效面积的 precrop 规则；
+    /// - 顶点按外接矩形 (AABB) 归一化到 `[0, 1]`，非法顶点舍弃；宽或高不足 `0.01` 视为未配置。
+    pub fn extract_precrop_roi(rules: &[DetectionRule]) -> Option<BoundingBox> {
+        rules
+            .iter()
+            .filter(|r| r.role == DetectionRuleRole::Precrop)
+            .find_map(|r| {
+                if r.points.is_empty() {
+                    return None;
+                }
+                let mut min_x = 1.0f32;
+                let mut min_y = 1.0f32;
+                let mut max_x = 0.0f32;
+                let mut max_y = 0.0f32;
+                let mut seen = false;
+                for p in &r.points {
+                    if !p.x.is_finite() || !p.y.is_finite() {
+                        continue;
+                    }
+                    seen = true;
+                    let px = (p.x as f32).clamp(0.0, 1.0);
+                    let py = (p.y as f32).clamp(0.0, 1.0);
+                    min_x = min_x.min(px);
+                    min_y = min_y.min(py);
+                    max_x = max_x.max(px);
+                    max_y = max_y.max(py);
+                }
+                if !seen {
+                    return None;
+                }
+                if max_x - min_x > 0.01 && max_y - min_y > 0.01 {
+                    Some(BoundingBox::new(min_x, min_y, max_x, max_y))
+                } else {
+                    None
+                }
+            })
     }
 }
 
@@ -606,5 +652,42 @@ mod tests {
             aggregate_task_instance_status(true, &[TaskStatus::Stopped, TaskStatus::Running]),
             TaskStatus::Degraded
         );
+    }
+
+    #[test]
+    fn test_detection_rule_precrop_serde_and_extraction() {
+        let json = r#"[
+            {"role":"precrop","points":[{"x":0.2,"y":0.3},{"x":0.8,"y":0.7}]},
+            {"role":"roi","points":[{"x":0.0,"y":0.0},{"x":1.0,"y":0.0},{"x":1.0,"y":1.0}]}
+        ]"#;
+        let rules = DetectionRule::parse_rules_json(json).expect("precrop rules should parse");
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].role, DetectionRuleRole::Precrop);
+
+        let roi = DetectionRule::extract_precrop_roi(&rules).expect("should extract precrop roi");
+        assert!((roi.x1 - 0.2).abs() < 1e-5);
+        assert!((roi.y1 - 0.3).abs() < 1e-5);
+        assert!((roi.x2 - 0.8).abs() < 1e-5);
+        assert!((roi.y2 - 0.7).abs() < 1e-5);
+
+        // 仅有普通 ROI 时应返回 None
+        let roi_none = DetectionRule::extract_precrop_roi(&rules[1..]);
+        assert!(roi_none.is_none());
+
+        // 首个 precrop 规则退化（零面积）时必须继续找后续有效取景框，
+        // 否则前端遗留的退化规则会让合法取景配置静默失效。
+        let with_degenerate = DetectionRule::parse_rules_json(
+            r#"[
+                {"role":"precrop","points":[{"x":0.5,"y":0.5},{"x":0.5,"y":0.5}]},
+                {"role":"precrop","points":[{"x":0.1,"y":0.2},{"x":0.9,"y":0.8}]}
+            ]"#,
+        )
+        .expect("precrop rules should parse");
+        let roi = DetectionRule::extract_precrop_roi(&with_degenerate)
+            .expect("应取首个有有效面积的取景框");
+        assert!((roi.x1 - 0.1).abs() < 1e-5);
+        assert!((roi.y1 - 0.2).abs() < 1e-5);
+        assert!((roi.x2 - 0.9).abs() < 1e-5);
+        assert!((roi.y2 - 0.8).abs() < 1e-5);
     }
 }

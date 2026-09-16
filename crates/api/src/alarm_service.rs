@@ -60,6 +60,7 @@ impl AlarmDispatchService {
             DetectionRuleRole::Roi => "roi",
             DetectionRuleRole::Line => "line",
             DetectionRuleRole::Mask => "mask",
+            DetectionRuleRole::Precrop => "precrop",
         };
 
         let occurred_at = chrono::DateTime::from_timestamp_millis(event.timestamp)

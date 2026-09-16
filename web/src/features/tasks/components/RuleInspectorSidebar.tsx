@@ -1,6 +1,7 @@
 import React from 'react'
 import {
   Copy,
+  Crop,
   Eye,
   EyeOff,
   Layers,
@@ -106,6 +107,7 @@ export function RuleInspectorSidebar({
                   )}
                   {rule.role === 'line' && <Slash className="h-4 w-4 text-emerald-500" />}
                   {rule.role === 'mask' && <ShieldAlert className="h-4 w-4 text-slate-400" />}
+                  {rule.role === 'precrop' && <Crop className="h-4 w-4 text-lime-400" />}
                   <span className="max-w-[140px] truncate text-sm font-medium">{rule.name}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -148,8 +150,16 @@ export function RuleInspectorSidebar({
             <span>{t('inspector.title')}</span>
           </span>
           {selectedRule && (
-            <span className="rounded-md border border-[var(--border)] bg-[var(--accent-soft)] px-2.5 py-0.5 font-mono text-xs font-bold text-[var(--accent)] uppercase">
-              {selectedRule.role}
+            <span
+              className={`rounded-md border px-2.5 py-0.5 font-mono text-xs font-bold uppercase ${
+                selectedRule.role === 'precrop'
+                  ? 'border-lime-500/30 bg-lime-500/10 text-lime-400'
+                  : 'border-[var(--border)] bg-[var(--accent-soft)] text-[var(--accent)]'
+              }`}
+            >
+              {selectedRule.role === 'precrop'
+                ? t('tools.precrop', { defaultValue: '特写取景' })
+                : selectedRule.role}
             </span>
           )}
         </div>
@@ -172,8 +182,23 @@ export function RuleInspectorSidebar({
               />
             </div>
 
-            {/* 规则生效目标筛选（仅当算法具有多类别时展示） */}
-            {hasClasses && (
+            {/* 特写取景专属说明卡片 */}
+            {selectedRule.role === 'precrop' && (
+              <div className="rounded-xl border border-lime-500/30 bg-lime-500/10 p-3 text-xs text-lime-400">
+                <p className="font-semibold">
+                  {t('inspector.precropTitle', { defaultValue: '局部特写取景' })}
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed opacity-90">
+                  {t('inspector.precropScopeHint', {
+                    defaultValue:
+                      '特写取景框定摄像机送入算法模型的物理画幅，全局唯一生效，不参与报警判定。',
+                  })}
+                </p>
+              </div>
+            )}
+
+            {/* 规则生效目标筛选（仅当算法具有多类别且非特写取景时展示） */}
+            {hasClasses && selectedRule.role !== 'precrop' && (
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
                   <label className="font-mono text-xs tracking-wider text-[var(--text-muted)] uppercase">
@@ -269,8 +294,20 @@ export function RuleInspectorSidebar({
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
                 type="button"
+                disabled={selectedRule.role === 'precrop'}
                 onClick={() => onCloneRule(selectedRule.id)}
-                className="flex items-center justify-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] py-2 text-xs font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]"
+                className={`flex items-center justify-center gap-1.5 rounded-xl border py-2 text-xs font-semibold transition-colors ${
+                  selectedRule.role === 'precrop'
+                    ? 'cursor-not-allowed border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] opacity-50'
+                    : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--accent)] hover:bg-[var(--accent-soft)]'
+                }`}
+                title={
+                  selectedRule.role === 'precrop'
+                    ? t('inspector.precropNoClone', {
+                        defaultValue: '特写取景区域全局唯一，不支持克隆',
+                      })
+                    : t('inspector.clone')
+                }
               >
                 <Copy className="h-3.5 w-3.5" />
                 <span>{t('inspector.clone')}</span>

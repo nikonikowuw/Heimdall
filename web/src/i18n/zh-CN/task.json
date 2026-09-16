@@ -207,6 +207,7 @@
     "hudLine": "单击起点和终点 · Esc 取消",
     "hudMask": "单击落点 · 双击闭合 · Esc 取消",
     "hudRect": "单击两个对角点 · Esc 取消",
+    "hudPrecrop": "单击两个对角点框定特写取景 · Esc 取消",
     "hudSelect": "单击选中 · 拖动平移 · 拖动端点 · ⌫ 删除"
   },
   "footer": {
@@ -260,12 +261,16 @@
     "hidden": "隐藏",
     "scopeTitle": "算力作用域",
     "noActiveAlgo": "尚未启用任何算法，本规则暂不参与判定",
-    "scopeHint": "几何规则由该通道内全部已启用算法共享判定，命中后统一触发告警。"
+    "scopeHint": "几何规则由该通道内全部已启用算法共享判定，命中后统一触发告警。",
+    "precropNoClone": "特写取景区域全局唯一，不支持克隆",
+    "precropTitle": "局部特写取景",
+    "precropScopeHint": "特写取景框定摄像机送入算法模型的物理画幅，全局唯一生效，不参与报警判定。"
   },
   "rules": {
     "defaultRoiName": "入侵防区 {{index}}",
     "defaultLineName": "越界绊线 {{index}}",
     "defaultMaskName": "屏蔽遮罩 {{index}}",
+    "defaultPrecropName": "特写取景 {{index}}",
     "defaultRuleName": "规则 {{index}}"
   },
   "algoDrawer": {

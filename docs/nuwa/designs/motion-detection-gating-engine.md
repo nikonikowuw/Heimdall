@@ -15,6 +15,7 @@
    - **保活心跳（Keepalive）**：达到 `keepaliveIntervalMs`（默认 2000ms）强制放行 1 帧，刷新模型与跟踪器内部状态；
    - **运动余晖（Afterglow）**：检测到有效运动后维持连续 $N$ 帧（默认 10 帧）放行推理，防止目标微小停顿导致 ByteTrack 航迹断连。
 4. **空间规则遮罩抑制**：支持结合 `DetectionRuleRole::Mask` 剔除干扰区域（如树叶、路面）；支持 `DetectionRuleRole::Roi` 防区过滤。
+   `Precrop`（特写取景框）是**画幅**规则，只决定送模画面，**不得**并入掩码构建：否则「只画取景框」的任务会静默变成「只算框内运动」。见 [媒体管线](../backend/media-pipeline.md#特写取景预裁剪pre-crop-roi)。
 
 ---
 

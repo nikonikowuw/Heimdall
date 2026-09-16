@@ -29,6 +29,7 @@
 - `image_pts_ms` **只能在与检测轴同轴时写入**；跨轴取证帧（如主码流回溯）写 0 表示不可比，
   否则会把两条不同时钟轴的时标混在一个列里。判定统一由
   [`SnapshotResult::comparable_frame_pts_ms`](../../../crates/pipeline/src/snapshot.rs) 给出，不在 API 层重算。
+- **抓拍行必须与证据图成对（无图不成行）**：`capture_records` 的行本身就是证据产物（人工复核、识别裁剪、存储统计的输入），快照生成失败时跳过落库并记 WARN，**不得**写入空 `image_rel_path` 的行——不可复核的行会污染证据表并掩盖证据缺失率。告警表相反：告警事实由规则引擎独立判定，证据失败时行必须保留并标注证据状态（`evidenceStatus`，待实现，见 [契约](./detection-alarm-contract.md)）。取证失败的可观测性由日志计数承担，不靠造无图行。
 - 融合模板元数据（`fused_count` / `template_quality`）可空存储；一次性握手信号（如 `template_mature`）
   不落库：把「是否成熟」这种事件写成列，只会得到无法解释的 NULL。
 - **[规划设计] 录像切片实体 (RecordSegments)**：独立于抓拍单张图管理，表名为 `record_segments`。记录 `camera_id`、`stream_type`、`start_time_ms`、`end_time_ms`、`duration_ms`、`file_path`（必须为相对路径）、`has_motion`、`has_alarm`、`alarm_ids` 及 `status`。必须建立 `(camera_id, start_time_ms, end_time_ms)` 与 `(status, has_alarm, start_time_ms)` 复合索引，满足时间轴毫秒级范围检索与高效淘汰。详见 [视频录像与回放引擎设计](../designs/video-recording-and-playback-engine.md)。

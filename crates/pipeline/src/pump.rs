@@ -16,7 +16,7 @@ use media::decoder::VideoDecoder;
 use media::stream_hub::CameraStreamSession;
 use media::{ConsumerKind, StreamItem};
 use tokio_util::sync::CancellationToken;
-use types::{DetectionRule, FrameRef, MotionGateConfig, StreamTag, TrackedObject};
+use types::{BoundingBox, DetectionRule, FrameRef, MotionGateConfig, StreamTag, TrackedObject};
 
 use infer::{InferenceWorker, InferenceWorkerHandle};
 
@@ -31,6 +31,66 @@ use crate::snapshot::SnapshotResult;
 
 /// 向后兼容单 Worker 模式使用的伪算法 ID
 pub(crate) const LEGACY_SINGLE_WORKER_ID: &str = "__legacy_single__";
+
+/// 取景裁剪失败的告警节流：首次立即告警，其后每 [`CROP_WARN_INTERVAL_MS`] 最多一条，
+/// 附带被抑制次数。避免在常驻推理循环里按帧率刷屏。
+struct CropWarnThrottle {
+    last_warn_ms: Option<i64>,
+    suppressed: u32,
+}
+
+impl CropWarnThrottle {
+    const INIT: Self = Self {
+        last_warn_ms: None,
+        suppressed: 0,
+    };
+
+    /// 判定本条失败是否应当告警；返回 `Some(被抑制条数)` 表示应当告警。
+    fn admit(&mut self, now_ms: i64) -> Option<u32> {
+        let should_warn = self
+            .last_warn_ms
+            .is_none_or(|last| now_ms.saturating_sub(last) >= CROP_WARN_INTERVAL_MS);
+        if !should_warn {
+            self.suppressed = self.suppressed.saturating_add(1);
+            return None;
+        }
+        self.last_warn_ms = Some(now_ms);
+        Some(std::mem::take(&mut self.suppressed))
+    }
+}
+
+/// 取景裁剪失败告警的最小间隔（10 秒）
+const CROP_WARN_INTERVAL_MS: i64 = 10_000;
+
+/// 解析本帧真正送模的输入帧与坐标还原基准。
+///
+/// **裁剪与坐标还原是同一个决策**：只有真正裁切成功，才把「局部坐标系」交给下游还原；
+/// 未配置取景框、取景框覆盖全幅、或当前平台无法在设备侧零拷贝裁切时，
+/// 一律按全景帧分析并返回 `None`，绝不允许“帧没裁、坐标却按取景框缩放”。
+fn resolve_infer_frame(
+    frame: &FrameRef,
+    requested_roi: Option<BoundingBox>,
+    warn_throttle: &mut CropWarnThrottle,
+) -> (FrameRef, Option<BoundingBox>) {
+    let Some(roi) = requested_roi else {
+        return (frame.clone(), None);
+    };
+
+    match media::crop_frame(frame, roi) {
+        Ok(cropped) => (cropped.frame, cropped.roi),
+        Err(err) => {
+            if let Some(suppressed) = warn_throttle.admit(frame.timestamp) {
+                tracing::warn!(
+                    camera_id = %frame.camera_id,
+                    error = %err,
+                    suppressed,
+                    "取景预裁剪不可用，本次按全景帧送模（检测与证据几何保持全景坐标）"
+                );
+            }
+            (frame.clone(), None)
+        }
+    }
+}
 
 /// 单个算法实例在驱动泵中的运行指标
 #[derive(Debug, Default)]
@@ -411,6 +471,9 @@ fn spawn_instance_runtime(
             "多算法实例推理循环已启动"
         );
 
+        // 取景预裁剪与坐标还原基准必须成对产生（见 resolve_infer_frame）。
+        let mut crop_warn = CropWarnThrottle::INIT;
+
         loop {
             tokio::select! {
                 biased;
@@ -432,8 +495,16 @@ fn spawn_instance_runtime(
                         let slot_generation = sampled_frame.slot_generation;
                         let current_worker = infer_worker_holder.read().await.clone();
                         let analyzed_frame = sampled_frame.frame.clone();
+
+                        // 取景预裁剪：按抽帧粒度读取一次取景区域（单值拷贝，无需像规则那样做版本缓存），
+                        // 由 resolve_infer_frame 决定本帧是局部送模还是全景送模，并给出配对的坐标还原基准。
+                        let requested_roi =
+                            pipeline_mgr_infer.get_camera_roi(&cam_id_infer).await;
+                        let (infer_frame, analysis_roi) =
+                            resolve_infer_frame(&sampled_frame.frame, requested_roi, &mut crop_warn);
+
                         match current_worker
-                            .submit_with_metadata(sampled_frame.frame)
+                            .submit_with_metadata(infer_frame)
                             .await
                         {
                             Ok(inference_result) => {
@@ -472,6 +543,7 @@ fn spawn_instance_runtime(
                                         detections,
                                         embeddings,
                                         timestamp,
+                                        analysis_roi,
                                         generation,
                                     )
                                     .await;
@@ -1922,7 +1994,93 @@ mod tests {
     use super::*;
     use crate::capture_settle::{CandidateRetainRequest, FrameGeometry};
     use crate::test_support::{dir_entry_count, test_nv12_frame};
-    use types::{BoundingBox, FaceDetail};
+    use types::{BoundingBox, FaceDetail, FrameHandle, PixelFormat, StrideInfo};
+
+    /// 取景框未配置：原帧直通，且不得要求任何坐标还原。
+    #[test]
+    fn no_requested_crop_passes_frame_through() {
+        let frame = test_nv12_frame("cam_crop_test", 1000);
+        let original = match frame.handle() {
+            FrameHandle::Host(slice) => slice.as_ptr(),
+            _ => panic!("测试帧应为 Host 句柄"),
+        };
+
+        let mut throttle = CropWarnThrottle::INIT;
+        let (resolved, roi) = resolve_infer_frame(&frame, None, &mut throttle);
+
+        assert!(roi.is_none());
+        match resolved.handle() {
+            FrameHandle::Host(slice) => {
+                assert_eq!(slice.as_ptr(), original, "未裁切时不应发生任何拷贝")
+            }
+            _ => panic!("应当复用原句柄"),
+        }
+    }
+
+    /// 裁切成功：必须携带生效矩形，供下游把局部坐标还原回全景。
+    #[test]
+    fn successful_crop_binds_applied_roi() {
+        let frame = test_nv12_frame("cam_crop_test", 1000);
+        let mut throttle = CropWarnThrottle::INIT;
+
+        let (resolved, roi) = resolve_infer_frame(
+            &frame,
+            Some(BoundingBox::new(0.25, 0.25, 0.75, 0.75)),
+            &mut throttle,
+        );
+
+        assert!(roi.is_some(), "裁切成功必须携带坐标还原基准");
+        assert!(resolved.width < frame.width && resolved.height < frame.height);
+        assert_eq!(resolved.timestamp, frame.timestamp, "时标不得因裁切而改变");
+    }
+
+    /// 裁切失败（如当前平台无设备侧零拷贝裁切）：降级为全景帧
+    /// **并且**必须把坐标还原基准置空，否则全景坐标会被二次缩放。
+    #[test]
+    fn failed_crop_falls_back_to_full_frame_without_mapping() {
+        let lease: Arc<dyn Send + Sync> = Arc::new(());
+        let frame = FrameRef::new(
+            "cam_crop_fail".into(),
+            1000,
+            64,
+            64,
+            StrideInfo::new(64, 64),
+            PixelFormat::Nv12,
+            FrameHandle::DeviceMemory {
+                ptr: std::ptr::NonNull::dangling(),
+                size: 64 * 64 * 3 / 2,
+                _lease: lease,
+            },
+        );
+
+        let mut throttle = CropWarnThrottle::INIT;
+        let (resolved, roi) = resolve_infer_frame(
+            &frame,
+            Some(BoundingBox::new(0.25, 0.25, 0.75, 0.75)),
+            &mut throttle,
+        );
+
+        assert!(roi.is_none(), "裁切失败时不得声称坐标系已变换");
+        assert_eq!(resolved.timestamp, frame.timestamp);
+        assert!(matches!(
+            resolved.handle(),
+            FrameHandle::DeviceMemory { .. }
+        ));
+    }
+
+    /// 逐帧失败不得刷屏：首次立即告警，其后按间隔限流并统计被抑制条数。
+    #[test]
+    fn crop_warn_throttle_limits_frequency() {
+        let mut throttle = CropWarnThrottle::INIT;
+        assert_eq!(throttle.admit(1_000), Some(0), "首次失败必须告警");
+        assert_eq!(throttle.admit(1_100), None);
+        assert_eq!(throttle.admit(9_000), None);
+        assert_eq!(
+            throttle.admit(11_000),
+            Some(2),
+            "超过间隔后应携带着被抑制的 2 条重新告警"
+        );
+    }
 
     fn capture_object(track_id: u64, bbox: BoundingBox, quality: f32) -> TrackedObject {
         TrackedObject {

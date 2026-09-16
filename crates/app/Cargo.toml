@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [features]
 default = []
+rga = ["pipeline/rga"]
 hw-snap-mpp = ["pipeline/hw-snap-mpp"]
 
 [lints]

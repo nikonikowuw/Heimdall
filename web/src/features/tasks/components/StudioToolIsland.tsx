@@ -1,5 +1,15 @@
 import React from 'react'
-import { Hexagon, Magnet, MousePointer2, Redo2, ShieldAlert, Slash, Undo2, X } from 'lucide-react'
+import {
+  Crop,
+  Hexagon,
+  Magnet,
+  MousePointer2,
+  Redo2,
+  ShieldAlert,
+  Slash,
+  Undo2,
+  X,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ToolMode } from './rulesStudioTypes'
 
@@ -54,6 +64,13 @@ const TOOLS: ToolDefinition[] = [
     icon: <ShieldAlert className="h-4 w-4" />,
     labelKey: 'tools.mask',
     shortcut: 'M',
+    activeClass: 'bg-[var(--accent)] text-white',
+  },
+  {
+    id: 'precrop',
+    icon: <Crop className="h-4 w-4" />,
+    labelKey: 'tools.precrop',
+    shortcut: 'C',
     activeClass: 'bg-[var(--accent)] text-white',
   },
 ]

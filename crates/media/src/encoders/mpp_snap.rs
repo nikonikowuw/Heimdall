@@ -8,7 +8,7 @@
 
 #![cfg(all(target_os = "linux", feature = "hw-snap-mpp"))]
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
@@ -265,29 +265,6 @@ impl Drop for MppEncCfgGuard {
     }
 }
 
-// ============================================================================
-// Scratchpad DMA-BUF 分配
-// ============================================================================
-
-const DMA_HEAP_PATHS: [&[u8]; 6] = [
-    b"/dev/dma_heap/cma\0",
-    b"/dev/dma_heap/cma-uncached\0",
-    b"/dev/dma_heap/system-dma32\0",
-    b"/dev/dma_heap/system-uncached-dma32\0",
-    b"/dev/dma_heap/system\0",
-    b"/dev/dma_heap/system-uncached\0",
-];
-
-#[repr(C)]
-struct DmaHeapAlloc {
-    len: u64,
-    fd: u32,
-    fd_flags: u32,
-    heap_flags: u64,
-}
-
-const DMA_HEAP_IOCTL_ALLOC: libc::c_ulong = 0xc018_4800;
-
 fn align_up(value: u32, alignment: u32) -> Result<u32, MediaError> {
     if alignment == 0 {
         return Err(MediaError::Encode {
@@ -310,62 +287,6 @@ fn nv12_size(hor_stride: u32, ver_stride: u32) -> Result<usize, MediaError> {
         .ok_or_else(|| MediaError::Encode {
             reason: "NV12 DMA-BUF 大小计算溢出".into(),
         })
-}
-
-fn alloc_dma_buf_from_path(heap_path: &[u8], size: usize) -> Result<OwnedFd, MediaError> {
-    let page_size = 4096usize;
-    let alloc_len = size
-        .max(1)
-        .checked_add(page_size - 1)
-        .map(|v| v / page_size * page_size)
-        .ok_or_else(|| MediaError::Encode {
-            reason: "DMA-BUF 页面对齐溢出".into(),
-        })?;
-
-    // SAFETY: 系统调用打开标准 Linux DMA 堆字符设备。
-    let heap_fd = unsafe {
-        libc::open(
-            heap_path.as_ptr() as *const _,
-            libc::O_RDWR | libc::O_CLOEXEC,
-        )
-    };
-    if heap_fd < 0 {
-        return Err(MediaError::Encode {
-            reason: format!("open 失败: {}", std::io::Error::last_os_error()),
-        });
-    }
-
-    // NOTE: Linux 内核 dma_heap_ioctl_allocate 要求输入的 fd 必须为 0，
-    // 若传入非零值内核会直接返回 -EINVAL (os error 22)。分配成功后内核将向此字段写入新 fd。
-    let mut alloc = DmaHeapAlloc {
-        len: alloc_len as u64,
-        fd: 0,
-        fd_flags: (libc::O_RDWR | libc::O_CLOEXEC) as u32,
-        heap_flags: 0,
-    };
-
-    // SAFETY: ioctl DMA_HEAP_IOCTL_ALLOC 遵循 Linux dma-heap UAPI。
-    let ret = unsafe { libc::ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &mut alloc) };
-    let ioctl_err = std::io::Error::last_os_error();
-    // SAFETY: 关闭临时打开的堆文件描述符。
-    unsafe {
-        libc::close(heap_fd);
-    }
-
-    if ret == 0 {
-        let fd = alloc.fd as RawFd;
-        if fd >= 0 {
-            // SAFETY: alloc.fd 为系统内核分配的有效文件描述符。
-            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
-        }
-        return Err(MediaError::Encode {
-            reason: format!("DMA-BUF 分配成功但返回无效描述符: fd={fd}"),
-        });
-    }
-
-    Err(MediaError::Encode {
-        reason: format!("ioctl 失败: {ioctl_err}"),
-    })
 }
 
 // ============================================================================
@@ -475,53 +396,43 @@ impl MppSnapEncoder {
             }
         };
 
-        // 优先探测物理连续内存堆 (CMA)，这对未挂载 IOMMU 的 RGA 驱动至关重要；
-        // 随后尝试 DMA32 与通用系统堆。
-        let mut errors = Vec::new();
-        for heap_path in DMA_HEAP_PATHS {
-            let path_str = std::ffi::CStr::from_bytes_with_nul(heap_path)
-                .map(|c| c.to_string_lossy())
-                .unwrap_or_default();
+        let fd = match crate::dmabuf_sync::alloc_dma_buf(scratchpad_size) {
+            Ok(fd) => fd,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "RGA 设备侧特写裁剪画板未能就绪，特写裁剪将平滑降级至 CPU readback（全景快照仍维持 100% MPP 硬件加速）"
+                );
+                return None;
+            }
+        };
 
-            let fd = match alloc_dma_buf_from_path(heap_path, scratchpad_size) {
-                Ok(fd) => fd,
-                Err(e) => {
-                    errors.push(format!("{path_str}: {e}"));
-                    continue;
-                }
-            };
-
-            match rga.import_buffer_fd(
-                fd.as_raw_fd(),
-                stride,
-                Self::SCRATCHPAD_MAX_HEIGHT,
-                crate::rga_crop::RK_FORMAT_YCbCr_420_SP,
-            ) {
-                Ok(handle) => {
-                    info!(
-                        heap = %path_str,
-                        scratchpad_fd = fd.as_raw_fd(),
-                        scratchpad_size,
-                        "RGA Scratchpad DMA-BUF 分配并成功导入硬件句柄"
-                    );
-                    return Some(RgaScratchpad {
-                        rga,
-                        fd,
-                        handle,
-                        size: scratchpad_size,
-                    });
-                }
-                Err(e) => {
-                    errors.push(format!("{path_str} import 失败: {e}"));
-                }
+        match rga.import_buffer_fd(
+            fd.as_raw_fd(),
+            stride,
+            Self::SCRATCHPAD_MAX_HEIGHT,
+            crate::rga_crop::RK_FORMAT_YCbCr_420_SP,
+        ) {
+            Ok(handle) => {
+                info!(
+                    scratchpad_fd = fd.as_raw_fd(),
+                    scratchpad_size, "RGA Scratchpad DMA-BUF 分配并成功导入硬件句柄"
+                );
+                Some(RgaScratchpad {
+                    rga,
+                    fd,
+                    handle,
+                    size: scratchpad_size,
+                })
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "RGA Scratchpad 导入失败，特写裁剪将平滑降级至 CPU readback"
+                );
+                None
             }
         }
-
-        warn!(
-            "RGA 设备侧特写裁剪画板未能就绪，特写裁剪将平滑降级至 CPU readback（全景快照仍维持 100% MPP 硬件加速）。尝试记录: [{}]",
-            errors.join("; ")
-        );
-        None
     }
 
     pub fn try_new(quality: u8) -> Result<Self, MediaError> {

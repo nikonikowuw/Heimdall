@@ -1232,6 +1232,8 @@ impl TaskRuntimeService for TaskRuntimeCoordinator {
     }
 
     async fn set_camera_rules(&self, camera_id: &str, rules: Vec<types::DetectionRule>) {
+        // 取景区域由 PipelineManager::set_camera_rules 从同一份规则中提取，此处不重复提取：
+        // 两处各自提取会出现「一处清、一处不清」的语义分叉。
         self.pipeline_mgr.set_camera_rules(camera_id, rules).await;
     }
 

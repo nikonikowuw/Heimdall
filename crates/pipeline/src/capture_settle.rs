@@ -25,8 +25,6 @@ pub const SETTLE_WINDOW_MS: i64 = 1500;
 pub const SETTLE_MIN_QUALITY: f32 = 0.50;
 /// 峰值刷新门限：新帧质量需超过当前峰值该幅度才刷新。
 pub const PEAK_DELTA: f32 = 0.05;
-/// 候选留存的最低帧质量（防垃圾图）。
-pub const CANDIDATE_MIN_QUALITY: f32 = 0.40;
 /// 候选留存节流（毫秒）：同一轨道两次编码留存的最小间隔。
 pub const CANDIDATE_THROTTLE_MS: i64 = 200;
 /// 峰值平台判定窗口（毫秒，≈8 帧 @25fps）。
@@ -53,7 +51,6 @@ pub struct CaptureSettleConfig {
     pub settle_window_ms: i64,
     pub settle_min_quality: f32,
     pub peak_delta: f32,
-    pub candidate_min_quality: f32,
     pub candidate_throttle_ms: i64,
     pub plateau_ms: i64,
     pub cooldown_ms: i64,
@@ -69,7 +66,6 @@ impl Default for CaptureSettleConfig {
             settle_window_ms: SETTLE_WINDOW_MS,
             settle_min_quality: SETTLE_MIN_QUALITY,
             peak_delta: PEAK_DELTA,
-            candidate_min_quality: CANDIDATE_MIN_QUALITY,
             candidate_throttle_ms: CANDIDATE_THROTTLE_MS,
             plateau_ms: PLATEAU_MS,
             cooldown_ms: CAPTURE_COOLDOWN_MS,
@@ -351,7 +347,10 @@ impl CaptureSettleController {
                         ) {
                             actions.push(CaptureAction::Settle(Box::new(request)));
                         }
-                    } else if quality >= config.candidate_min_quality {
+                    } else {
+                        // 无质量准入下界：候选的作用是「让每次结算都有一张同刻证据」，
+                        // 而不是筛好图。宿主若按分数设门，等于用算法包内部的评分尺度
+                        // 决定证据是否存在（尺度随检测器与参数变化），必然漏记对账。
                         if let Some(pending) = entry.pending.as_mut() {
                             pending.last_candidate_attempt_ms = now_ms;
                         }
@@ -362,9 +361,7 @@ impl CaptureSettleController {
                     }
                 }
                 Some(pending) => {
-                    if quality > pending.best.quality + config.peak_delta
-                        && quality >= config.candidate_min_quality
-                    {
+                    if quality > pending.best.quality + config.peak_delta {
                         pending.best = geometry;
                         pending.last_improve_pts_ms = now_ms;
                         if now_ms - pending.last_candidate_attempt_ms
@@ -625,21 +622,45 @@ mod tests {
     }
 
     #[test]
-    fn seed_below_candidate_min_quality_does_not_retain() {
+    fn low_quality_seed_still_retains_candidate() {
         let mut controller = CaptureSettleController::new();
         let rules = empty_rules();
 
-        // 弱帧播种：允许挂起（作为几何兜底），但不得触发候选写盘。
+        // 证据存在性优先于画面质量：宿主不做候选质量准入，弱帧同样必须留盘。
+        // 否则该轨结算时无候选，只能回溯取证——主码流分析模式必然失败，整条通行记录丢失。
         let actions = controller.observe("algo", &[face_object(1, 0.30)], &rules, 1000);
-        assert!(actions.is_empty(), "低于候选门限的帧不应触发留盘");
-
-        // 质量达标帧：触发一次留盘。
-        let actions = controller.observe("algo", &[face_object(1, 0.62)], &rules, 1040);
-        assert_eq!(actions.len(), 1);
+        assert_eq!(actions.len(), 1, "低质量首帧同样必须留存候选");
         let request = retain_request(&actions[0]);
         assert_eq!(request.track_id, 1);
-        assert_eq!(request.geometry.pts_ms, 1040);
-        assert_eq!(request.geometry.quality, 0.62);
+        assert_eq!(request.geometry.pts_ms, 1000);
+        assert_eq!(request.geometry.quality, 0.30);
+
+        // 首帧留存同样占用节流锚点：40ms 内的提升被抑制（峰值照常刷新，但不重复写盘）。
+        let actions = controller.observe("algo", &[face_object(1, 0.62)], &rules, 1040);
+        assert!(actions.is_empty(), "节流窗口内的提升不重复写盘");
+
+        // 超过节流间隔后的提升重新放行。
+        let actions = controller.observe("algo", &[face_object(1, 0.70)], &rules, 1300);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(retain_request(&actions[0]).geometry.quality, 0.70);
+    }
+
+    #[test]
+    fn low_quality_track_refreshes_candidate_on_peak_improvement() {
+        let mut controller = CaptureSettleController::new();
+        let rules = empty_rules();
+
+        let actions = controller.observe("algo", &[face_object(2, 0.12)], &rules, 1000);
+        assert_eq!(retain_request(&actions[0]).geometry.quality, 0.12);
+
+        // 提升幅度不足 PEAK_DELTA(0.05)：不刷新峰值。
+        let actions = controller.observe("algo", &[face_object(2, 0.15)], &rules, 1300);
+        assert!(actions.is_empty(), "提升不足 PEAK_DELTA 不得刷新峰值");
+
+        // 低质量区间内的有效提升：仍必须刷新峰值并留存（无质量准入下界）。
+        let actions = controller.observe("algo", &[face_object(2, 0.30)], &rules, 1400);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(retain_request(&actions[0]).geometry.quality, 0.30);
     }
 
     #[test]

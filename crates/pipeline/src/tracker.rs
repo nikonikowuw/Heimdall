@@ -657,6 +657,7 @@ impl ByteTrack {
             DetectionRuleRole::Roi => 1,
             DetectionRuleRole::Line => 2,
             DetectionRuleRole::Mask => 3,
+            DetectionRuleRole::Precrop => 4,
         };
         self.check_and_mark_cooldown(
             track_id,

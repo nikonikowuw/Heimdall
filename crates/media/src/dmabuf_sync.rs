@@ -301,6 +301,89 @@ impl DmaBufSyncGuard {
     }
 }
 
+// ============================================================================
+// DMA-BUF 堆内存分配 (dma-heap UAPI)
+// ============================================================================
+
+#[cfg(target_os = "linux")]
+const DMA_HEAP_PATHS: [&[u8]; 6] = [
+    b"/dev/dma_heap/cma\0",
+    b"/dev/dma_heap/cma-uncached\0",
+    b"/dev/dma_heap/system-dma32\0",
+    b"/dev/dma_heap/system-uncached-dma32\0",
+    b"/dev/dma_heap/system\0",
+    b"/dev/dma_heap/system-uncached\0",
+];
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct DmaHeapAlloc {
+    len: u64,
+    fd: u32,
+    fd_flags: u32,
+    heap_flags: u64,
+}
+
+#[cfg(target_os = "linux")]
+const DMA_HEAP_IOCTL_ALLOC: libc::c_ulong = 0xc018_4800;
+
+/// 从 Linux 标准 DMA 堆节点（如 cma / system-dma32 / system）分配连续 DMA-BUF
+#[cfg(target_os = "linux")]
+pub fn alloc_dma_buf(size: usize) -> Result<OwnedFd, MediaError> {
+    let page_size = 4096usize;
+    let alloc_len = size
+        .max(1)
+        .checked_add(page_size - 1)
+        .map(|v| v / page_size * page_size)
+        .ok_or_else(|| MediaError::Encode {
+            reason: "DMA-BUF 页面对齐溢出".into(),
+        })?;
+
+    let mut last_error = String::new();
+    for heap_path in DMA_HEAP_PATHS {
+        // SAFETY: 打开标准 Linux dma-heap 字符设备
+        let heap_fd = unsafe {
+            libc::open(
+                heap_path.as_ptr() as *const _,
+                libc::O_RDWR | libc::O_CLOEXEC,
+            )
+        };
+        if heap_fd < 0 {
+            last_error = format!("open 失败: {}", std::io::Error::last_os_error());
+            continue;
+        }
+
+        let mut alloc = DmaHeapAlloc {
+            len: alloc_len as u64,
+            fd: 0,
+            fd_flags: (libc::O_RDWR | libc::O_CLOEXEC) as u32,
+            heap_flags: 0,
+        };
+
+        // SAFETY: 调用标准 DMA_HEAP_IOCTL_ALLOC
+        let ret = unsafe { libc::ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &mut alloc) };
+        let ioctl_err = std::io::Error::last_os_error();
+        // SAFETY: 关闭临时打开的堆文件描述符
+        unsafe {
+            libc::close(heap_fd);
+        }
+
+        if ret == 0 {
+            let fd = alloc.fd as RawFd;
+            if fd >= 0 {
+                // SAFETY: 内核成功分配的合法 DMA-BUF 文件描述符
+                return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
+            }
+        } else {
+            last_error = format!("ioctl 失败: {ioctl_err}");
+        }
+    }
+
+    Err(MediaError::Encode {
+        reason: format!("所有 DMA 堆节点分配失败: {last_error}"),
+    })
+}
+
 impl Drop for DmaBufSyncGuard {
     fn drop(&mut self) {
         if self.active {
@@ -334,6 +417,18 @@ mod tests {
 
         assert_eq!(size_of::<DmaBufExportSyncFile>(), 8);
         assert_eq!(size_of::<DmaBufImportSyncFile>(), 8);
+
+        #[cfg(target_os = "linux")]
+        {
+            use std::mem::offset_of;
+            assert_eq!(size_of::<DmaHeapAlloc>(), 24);
+            assert_eq!(align_of::<DmaHeapAlloc>(), 8);
+            assert_eq!(offset_of!(DmaHeapAlloc, len), 0);
+            assert_eq!(offset_of!(DmaHeapAlloc, fd), 8);
+            assert_eq!(offset_of!(DmaHeapAlloc, fd_flags), 12);
+            assert_eq!(offset_of!(DmaHeapAlloc, heap_flags), 16);
+            assert_eq!(DMA_HEAP_IOCTL_ALLOC, 0xc018_4800);
+        }
     }
 
     #[test]

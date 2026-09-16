@@ -53,6 +53,7 @@ import {
   getToolTheme,
   isPointInPolygon,
   isPointNearLine,
+  LINE_COLOR_THEME,
   ToolMode,
 } from './rulesStudioTypes'
 
@@ -75,7 +76,7 @@ const HUD_HINT_KEY: Record<ToolMode, string> = {
   roi: 'tools.hudRoi',
   polygon: 'tools.hudPolygon',
   rect: 'tools.hudRect',
-  precrop: 'tools.hudRect',
+  precrop: 'tools.hudPrecrop',
   line: 'tools.hudLine',
   mask: 'tools.hudMask',
 }
@@ -615,7 +616,14 @@ export function LiveRulesStudio({
         return
       }
 
-      const role = activeTool === 'line' ? 'line' : activeTool === 'mask' ? 'mask' : 'roi'
+      const role =
+        activeTool === 'line'
+          ? 'line'
+          : activeTool === 'mask'
+            ? 'mask'
+            : activeTool === 'precrop'
+              ? 'precrop'
+              : 'roi'
       const existingRoiCount = rules.filter((r) => r.role === 'roi').length
 
       const newRule: ExtendedRule = {
@@ -628,7 +636,11 @@ export function LiveRulesStudio({
         color: getInitialRuleColor(role, existingRoiCount),
       }
 
-      setRules((prev) => [...prev, newRule])
+      setRules((prev) => {
+        // 任务级只保留一个 Pre-crop ROI 特写取景框；若绘制新取景框则自动替换旧取景框
+        const filtered = role === 'precrop' ? prev.filter((r) => r.role !== 'precrop') : prev
+        return [...filtered, newRule]
+      })
       setSelectedRuleId(newRule.id)
       setCurrentPoints([])
       setDraftCursor({ cursor: null, snapped: null })
@@ -698,6 +710,9 @@ export function LiveRulesStudio({
       }
       if (e.key === 'm' || e.key === 'M') {
         handleSelectTool('mask')
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        handleSelectTool('precrop')
       }
       if (e.key === 's' || e.key === 'S') {
         setSnapEnabled((prev) => !prev)
@@ -857,6 +872,31 @@ export function LiveRulesStudio({
       return
     }
 
+    if (tool === 'rect' || tool === 'precrop') {
+      if (currentPoints.length === 0) {
+        setCurrentPoints([pt])
+      } else {
+        const p0 = currentPoints[0]
+        const minX = Math.min(p0.x, pt.x)
+        const maxX = Math.max(p0.x, pt.x)
+        const minY = Math.min(p0.y, pt.y)
+        const maxY = Math.max(p0.y, pt.y)
+        if (maxX - minX > 0.01 && maxY - minY > 0.01) {
+          const rectPoints = [
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY },
+          ]
+          finishDrawingPoints(rectPoints, tool)
+        } else {
+          setCurrentPoints([])
+          setDraftCursor({ cursor: null, snapped: null })
+        }
+      }
+      return
+    }
+
     if (currentPoints.length >= 3) {
       const first = currentPoints[0]
       if (Math.hypot(first.x - pt.x, first.y - pt.y) < 0.03) {
@@ -911,6 +951,18 @@ export function LiveRulesStudio({
     (ruleId: string) => {
       const source = rules.find((r) => r.id === ruleId)
       if (!source) return
+      // Precrop 取景预裁剪在单摄像机下全局唯一生效，禁止重复克隆
+      if (source.role === 'precrop') {
+        setSaveFeedback({
+          kind: 'requestFailed',
+          message: t('inspector.precropNoClone', {
+            defaultValue: '特写取景区域全局唯一，不支持克隆',
+          }),
+        })
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+        toastTimerRef.current = setTimeout(() => setSaveFeedback(null), 3000)
+        return
+      }
       const cloneId = `rule_${Date.now()}`
       const offset = 0.03
       const clone: ExtendedRule = {
@@ -1368,7 +1420,7 @@ export function LiveRulesStudio({
                     refY="4"
                     orient="auto"
                   >
-                    <path d="M 1 1 L 7 4 L 1 7 Z" fill="#10b981" />
+                    <path d="M 1 1 L 7 4 L 1 7 Z" fill={LINE_COLOR_THEME.stroke} />
                   </marker>
                   <marker
                     id="line-arrow-b-to-a"
@@ -1378,7 +1430,7 @@ export function LiveRulesStudio({
                     refY="4"
                     orient="auto-start-reverse"
                   >
-                    <path d="M 1 1 L 7 4 L 1 7 Z" fill="#10b981" />
+                    <path d="M 1 1 L 7 4 L 1 7 Z" fill={LINE_COLOR_THEME.stroke} />
                   </marker>
                 </defs>
 
@@ -1471,7 +1523,22 @@ export function LiveRulesStudio({
                             vectorEffect="non-scaling-stroke"
                           />
                         )}
-                        {draftCursor.cursor && (
+                        {(tool === 'rect' || tool === 'precrop') &&
+                          currentPoints.length === 1 &&
+                          draftCursor.cursor && (
+                            <rect
+                              x={`${Math.min(currentPoints[0].x, draftCursor.cursor.x) * 100}%`}
+                              y={`${Math.min(currentPoints[0].y, draftCursor.cursor.y) * 100}%`}
+                              width={`${Math.abs(draftCursor.cursor.x - currentPoints[0].x) * 100}%`}
+                              height={`${Math.abs(draftCursor.cursor.y - currentPoints[0].y) * 100}%`}
+                              fill={activeToolTheme.fill}
+                              stroke={activeToolTheme.stroke}
+                              strokeWidth={1.5}
+                              strokeDasharray="4 4"
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          )}
+                        {tool !== 'rect' && tool !== 'precrop' && draftCursor.cursor && (
                           <line
                             x1={`${currentPoints[currentPoints.length - 1].x * 100}%`}
                             y1={`${currentPoints[currentPoints.length - 1].y * 100}%`}

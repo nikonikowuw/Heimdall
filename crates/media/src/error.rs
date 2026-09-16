@@ -27,6 +27,10 @@ pub enum MediaError {
     #[error("不支持的编解码格式: {0}")]
     UnsupportedCodec(String),
 
+    /// 当前平台/当前帧句柄类型暂不具备该能力（必须如实上报，不得静默降级伪装成功）
+    #[error("当前平台不支持该操作: {0}")]
+    Unsupported(&'static str),
+
     #[error("媒体探测超时 (超过 {0:?})")]
     ProbeTimeout(std::time::Duration),
 
@@ -59,6 +63,7 @@ impl MediaError {
             Self::Encode { .. } => 20012,
             Self::EncoderInit { .. } => 20013,
             Self::UnsupportedCodec(_) => 20007,
+            Self::Unsupported(_) => 20015,
             Self::SessionNotFound(_) => 20008,
             Self::Frame(_) => 20009,
             Self::Io(_) => 20010,

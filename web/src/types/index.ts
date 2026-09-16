@@ -229,7 +229,7 @@ export interface CameraTelemetry {
   isMotionGated: boolean
 }
 
-export type DetectionRuleRole = 'roi' | 'mask' | 'line'
+export type DetectionRuleRole = 'roi' | 'mask' | 'line' | 'precrop'
 export type DetectionLineDirection = 'both' | 'a_to_b' | 'b_to_a'
 
 export interface DetectionPoint {

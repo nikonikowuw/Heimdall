@@ -19,6 +19,8 @@
 | D3 | 底库渐进增强（gallery augmentation） | ❌ **本版本不做**（2026-09-15 决定）：设计归档至附录 B；后续版本如重启需重新评审（此前评审结论：能力在包内、策略在宿主、开关为实例参数且不做全局配置） | 2026-09-15 |
 | D4 | margin 误认防控（M4） | ❌ **本版本不做**（2026-09-15 决定）：设计归档至附录 C；后续版本再评估 | 2026-09-15 |
 | D5 | 峰值候选的驻留介质：盘上 `pending/` 还是内存 | ✅ 批准（2026-09-15）：候选以**内存编码字节**驻留（按路预算限流、覆盖式替换），**磁盘只承载已结算证据**；根除 `pending/` 的 TTL 清扫、启动清扫、cleaner 豁免、崩溃残留四类手续 | 2026-09-15 |
+| D6 | 宿主侧候选质量准入（`CANDIDATE_MIN_QUALITY=0.40`） | ✅ 批准删除（2026-09-16，实机验证）：候选留存**不做质量下界**。该门限用算法包内部的评分尺度决定证据是否存在，尺度随检测器/参数漂移（实机换 SCRFD 包后低于 0.40 的轨道由 0.7% → 14.2%），而无候选轨道在主码流分析模式下回溯取证必然失败，直接丢整条通行记录（实测丢 24%）。识别侧的 `quality_thresholds.min_score` 仍归算法包，不参与证据判定 | 2026-09-16 |
+| D7 | 无证据图的通行抓拍是否落库 | ✅ 批准**不落库**（2026-09-16）：`capture_records` 的行**本身就是证据产物**（消费者：人工复核、识别裁剪、存储统计），无图行不可复核、会污染证据表并掩盖证据缺失率，故「无图不成行」。告警侧的「事实保留」**不适用**于抓拍侧：告警事实由规则引擎独立判定、行必须留（`evidenceStatus=failed` 标注，见 `detection-alarm-contract.md`）；抓拍行没有独立的事实来源，图缺失即无可复核内容 | 2026-09-16 |
 
 ### 0.2 术语
 
@@ -173,8 +175,11 @@ struct CandidateEvidence { full_jpeg: Arc<[u8]>, crop_jpeg: Arc<[u8]>, width: u3
 **每帧推进（锁内纯计算）**：
 
 1. 命中 ROI（复用 `rules.rs` 的 mask/ROI/fullscreen 逻辑）且冷却已过 → 创建 pending；
-2. `q = 当帧 face.quality_score`；若 `q > best.quality + PEAK_DELTA(0.05)` 且 `q ≥ CANDIDATE_MIN_QUALITY(0.4)`：
-   刷新 `best`，并产出 `RetainCandidate` 动作（节流：距上次编码 ≥ `CANDIDATE_THROTTLE_MS(200)`）；
+2. 首帧（尚无 pending）**无条件**产出一次 `RetainCandidate`；此后取 `q = 当帧 face.quality_score`，
+   若 `q > best.quality + PEAK_DELTA(0.05)`：刷新 `best` 并产出 `RetainCandidate` 动作
+   （节流：距上次编码 ≥ `CANDIDATE_THROTTLE_MS(200)`，首帧同样占用节流锚点）；
+   - **候选留存无质量下界**（D6）：候选的作用是「让每次结算都有一张同刻证据」，不是筛选好图；
+     宿主按分数设门，等于用包内评分尺度决定证据是否存在；
 3. 结算判定（按优先级，任一满足即产出 `Settle` 动作）：
    - ① `face.template_mature == true`（M2 生效；M1 阶段该字段缺省不触发）；
    - ② 峰值平台：`now - last_improve_pts_ms ≥ PLATEAU_MS(320ms≈8帧@25fps)` 且 `best.quality ≥ SETTLE_MIN_QUALITY(0.50)`；
@@ -231,7 +236,6 @@ struct CandidateEvidence { full_jpeg: Arc<[u8]>, crop_jpeg: Arc<[u8]>, width: u3
 | `SETTLE_WINDOW_MS` | 1500 | 结算兜底窗口 |
 | `SETTLE_MIN_QUALITY` | 0.50 | 平台期结算的最低峰值质量 |
 | `PEAK_DELTA` | 0.05 | 峰值刷新门限 |
-| `CANDIDATE_MIN_QUALITY` | 0.40 | 候选编码最低质量（防垃圾图） |
 | `CANDIDATE_THROTTLE_MS` | 200 | 候选编码节流 |
 | `PLATEAU_MS` | 320 | 峰值平台判定（≈8 帧@25fps） |
 | `CAPTURE_COOLDOWN_MS` | 5000 | 同一轨道两次结算之间的冷却（防刷屏） |
@@ -241,6 +245,9 @@ struct CandidateEvidence { full_jpeg: Arc<[u8]>, crop_jpeg: Arc<[u8]>, width: u3
 > `EXIT_GRACE_MS` 不可省略：`is_capture_triggering` 为 `false` 既可能是「离开 ROI」，
 > 也可能只是背身/低头导致一两帧丢脸。若当帧即按离场结算，会烧掉整段冷却，并把最优证据
 > 从峰值候选降级为当帧回退图。宽限以**最后一次真正触发**的帧时标为基准。
+>
+> `CANDIDATE_MIN_QUALITY`（原 0.40）已按 D6 删除：候选留存不做质量准入，首帧即留一张同刻候选。
+> 分数低的图仍带 `quality_score` 落库供消费方筛选，但**不允许**因分数低而让记录消失。
 
 ### 4.6 文件级改动清单
 
@@ -296,6 +303,15 @@ struct CandidateEvidence { full_jpeg: Arc<[u8]>, crop_jpeg: Arc<[u8]>, width: u3
 | DTO 把未标注记录暴露成 `0`/空串（而不是 `null`） | `api` 集成：`test_captures_list_exposes_evidence_origin_and_template_metadata` |
 | 前端无条件渲染来源徽标 | `web` 单测：`utils.test.ts::deriveEvidenceOriginBadges`（4/4 失败） |
 | V14 去掉历史行回填 | `db` 集成：`migration_tests::test_v14_migration_backfills_evidence_origin_without_guessing_unknowns` |
+
+**结算取证降级链（2026-09-16，P0 兑现在 `17cc7df`，D6 准入下界移除在后续变更，均已实测）**
+
+- P0（`pump.rs::execute_capture_actions` 的 `Settle` 分支）：回溯取证未命中时不再报错放弃，降级为当帧快照并 warn（`回索取证未命中，降级为当帧快照（图与事件几何可能不同刻，记录保留）`），落实 §6.2 回退链「候选缺失 → 当帧快照」与 §4.1 第 ④ 条的「默认：用当帧兜底，避免漏记对账」。实机（RK3568 / camera 0aec）：修复前 16:23–16:50 丢 215 条记录，修复后 0 条且 55 次降级全部落库。
+- D6：删除宿主侧候选质量准入，首帧即留候选 ⇒ 主码流分析模式下正常轨道不再进入回溯分支。
+- 新增测试：`pump::tests::exit_settle_without_candidate_degrades_to_current_frame_in_main_stream_mode`（主码流分析模式离场结算必须降级取证，断言 `image_stream=Main`、`frame_pts_ms` 与图落盘）、`capture_settle::tests::low_quality_seed_still_retains_candidate`（首帧无条件留存 + 节流锚点）、`capture_settle::tests::low_quality_track_refreshes_candidate_on_peak_improvement`（低质量区间仍刷新峰值）、`manager::tests::low_quality_recognition_frame_still_produces_candidate`（生产入口低质量首帧仍产出候选动作）。
+- 变异验证：恢复 `CANDIDATE_MIN_QUALITY=0.40` 准入（种子 + 峰值刷新两处）→ 上述三条低质量测试 3/3 失败；移除 P0 兜底 → 离场结算降级测试失败。
+- 无图不落库（D7，2026-09-16 复核确认）：`api::capture_service::event_to_active_model` 在 `snapshot == None` 时继续跳过落库（「无图不成行」），与告警侧 `alarm_service.rs` 的既定约定一致（告警行可无图存活，抓拍行必须与快照成对落库）。P0 + D6 之后无图路径已是病态兜底：候选必留 + 回溯未命中降级当帧，只有快照引擎整体失败才会走到这里；失败可见性由 WARN `通行抓拍快照未就绪或捕获失败，跳过无图抓拍记录落库`（可按路/分钟计数）承担，不靠造无图行。
+- 候选预算余量（D6 带来的唯一风险项，实机实测）：候选全景图体积中位 257KB（1080p 主码流，n=300）→ 8 MiB/路 可容 **~32 条**并发待结算轨；而近 24h 结算并发峰值为 **7 条/2s 窗口**（``≤ ~6`` 轨同时 pending）≈ 1.5 MB，余量约 5 倍。因此保留 `CANDIDATE_BUDGET_BYTES` 与「超限拒绝新候选 + 回退链兜底」策略不变（非残留，是轻内存上界的既定设计）；稳态人群密集场景若实测 `candidate_budget_rejections` 抬头，再立专项改「淘汰最低质量」。
 
 ---
 

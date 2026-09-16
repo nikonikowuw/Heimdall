@@ -207,6 +207,7 @@
     "hudLine": "Click start and end points · Esc to cancel",
     "hudMask": "Click vertices · Double-click to close · Esc to cancel",
     "hudRect": "Click corners · Esc to cancel",
+    "hudPrecrop": "Click two diagonal corners to set the close-up frame · Esc to cancel",
     "hudSelect": "Click select · Drag to move · Drag handles · ⌫ Delete"
   },
   "footer": {
@@ -260,12 +261,16 @@
     "hidden": "Hidden",
     "scopeTitle": "Compute scope",
     "noActiveAlgo": "No algorithm enabled — this rule is not evaluated yet",
-    "scopeHint": "All enabled algorithms on this channel share the same zones; a zone hit raises one alarm."
+    "scopeHint": "All enabled algorithms on this channel share the same zones; a zone hit raises one alarm.",
+    "precropNoClone": "Pre-crop ROI is camera-unique and cannot be cloned",
+    "precropTitle": "Pre-crop Framing",
+    "precropScopeHint": "Pre-crop ROI defines the physical inference view sent to algorithm models, is globally unique, and does not trigger alarms directly."
   },
   "rules": {
     "defaultRoiName": "Intrusion Zone {{index}}",
     "defaultLineName": "Tripwire {{index}}",
     "defaultMaskName": "Privacy Mask {{index}}",
+    "defaultPrecropName": "Pre-crop ROI {{index}}",
     "defaultRuleName": "Rule {{index}}"
   },
   "algoDrawer": {

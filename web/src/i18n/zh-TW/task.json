@@ -207,6 +207,7 @@
     "hudLine": "單擊確定起點 · 引導線跟隨滑鼠 · 再次單擊確定終點 | Esc 取消",
     "hudMask": "單擊生成遮罩頂點 · 橡皮線跟隨滑鼠 · 連續打點 · 雙擊或點擊首點閉合 | Esc 取消",
     "hudRect": "單擊確定起點 · 矩形線框跟隨滑鼠 · 再次單擊對角完成 | Esc 取消",
+    "hudPrecrop": "單擊兩個對角點框定特寫取景 · Esc 取消",
     "hudSelect": "單擊選中防區 · 按住圖形平移 · 拖曳端點微調 · ⌫ 刪除"
   },
   "footer": {
@@ -260,12 +261,16 @@
     "hidden": "隱藏",
     "scopeTitle": "算力作用域",
     "noActiveAlgo": "尚未啟用任何演算法，本規則暫不參與判定",
-    "scopeHint": "幾何規則由該通道內全部已啟用演算法共享判定，命中後統一觸發告警。"
+    "scopeHint": "幾何規則由該通道內全部已啟用演算法共享判定，命中後統一觸發告警。",
+    "precropNoClone": "特寫取景區域全域唯一，不支援克隆",
+    "precropTitle": "局部特寫取景",
+    "precropScopeHint": "特寫取景框定攝影機送入演算法模型的物理畫幅，全域唯一生效，不參與報警判定。"
   },
   "rules": {
     "defaultRoiName": "入侵防區 {{index}}",
     "defaultLineName": "越界絆線 {{index}}",
     "defaultMaskName": "屏蔽遮罩 {{index}}",
+    "defaultPrecropName": "特寫取景 {{index}}",
     "defaultRuleName": "規則 {{index}}"
   },
   "algoDrawer": {
