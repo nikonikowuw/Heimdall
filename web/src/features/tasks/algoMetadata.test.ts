@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { extractConfigProperties, extractTargetClasses } from './algoMetadata'
+import {
+  buildSchemaDefaultParams,
+  extractConfigProperties,
+  extractTargetClasses,
+} from './algoMetadata'
 
 describe('algoMetadata', () => {
   it('reads target classes from the schema enum', () => {
@@ -66,5 +70,42 @@ describe('algoMetadata', () => {
       manifestRaw: {},
     })
     expect(Object.keys(props)).toEqual(['confidence_threshold'])
+  })
+})
+
+describe('buildSchemaDefaultParams', () => {
+  it('prefers declared defaults and falls back to minimum for bare numbers', () => {
+    expect(
+      buildSchemaDefaultParams({
+        configSchema: {
+          properties: {
+            score_threshold: { type: 'number', default: 0.4 },
+            iou_threshold: { type: 'number', minimum: 0.2, maximum: 0.9 },
+          },
+        },
+        manifestRaw: {},
+      }),
+    ).toEqual({ score_threshold: 0.4, iou_threshold: 0.2 })
+  })
+
+  it('defaults booleans to false, string enums to their first entry, and omits unknown types', () => {
+    expect(
+      buildSchemaDefaultParams({
+        configSchema: {
+          properties: {
+            track_enabled: { type: 'boolean' },
+            normalize: { type: 'string', enum: ['none', 'imagenet'] },
+            opaque_handle: { type: 'object' },
+          },
+        },
+        manifestRaw: {},
+      }),
+    ).toEqual({ track_enabled: false, normalize: 'none' })
+  })
+
+  it('returns empty params for a malformed or missing schema', () => {
+    expect(buildSchemaDefaultParams(undefined)).toEqual({})
+    expect(buildSchemaDefaultParams(null)).toEqual({})
+    expect(buildSchemaDefaultParams({ configSchema: 'oops', manifestRaw: {} })).toEqual({})
   })
 })

@@ -97,6 +97,44 @@ export function stripLegacyInjectedParams(
   return stripped
 }
 
+/**
+ * 依据算法 configSchema 生成初始参数。
+ *
+ * 只写 schema 声明的键：array/enum 型优先取 `default`，无默认值时回退到全部候选项
+ * （「未选择即全选」由算法包声明的候选集表达），其余类型取 default / minimum / 类型零值。
+ * 严禁在此注入 schema 未声明的键名，否则会下发算法包并不读取的字段。
+ */
+export function buildSchemaDefaultParams(
+  version?: AlgoConfigSource | null,
+): Record<string, unknown> {
+  const properties = extractConfigProperties(version)
+  const params: Record<string, unknown> = {}
+
+  for (const [key, prop] of Object.entries(properties)) {
+    if (getEnumOptions(prop).length > 0) {
+      params[key] = resolveEnumSelection(prop, undefined)
+      continue
+    }
+    if (prop.default !== undefined) {
+      params[key] = prop.default
+      continue
+    }
+    if (prop.type === 'number' || prop.type === 'integer') {
+      params[key] = prop.minimum ?? 0
+      continue
+    }
+    if (prop.type === 'boolean') {
+      params[key] = false
+      continue
+    }
+    if (prop.type === 'string') {
+      params[key] = (isStringArray(prop.enum) && prop.enum[0]) || ''
+    }
+  }
+
+  return params
+}
+
 /** 读取 array 型参数的候选项（`items.enum`）；非字符串枚举返回空数组 */
 export function getEnumOptions(prop: Record<string, unknown>): string[] {
   const items = isRecord(prop.items) ? prop.items : undefined

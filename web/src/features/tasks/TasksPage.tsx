@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus, RefreshCw, ShieldAlert, Sliders, Video } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -9,6 +9,7 @@ import { CreateTaskModal } from './components/CreateTaskModal'
 import { DeleteTaskModal } from './components/DeleteTaskModal'
 import { LiveRulesStudio } from './components/LiveRulesStudio'
 import { TaskCameraCard } from './components/TaskCameraCard'
+import { buildArmTogglePayload } from './taskDraft'
 
 export interface TasksPageProps {
   onNavigateToCameras?: () => void
@@ -85,17 +86,14 @@ export function TasksPage({
     const nextDesired = !(currentCfg?.desiredEnabled ?? false)
 
     try {
-      const payload: TaskConfigDto = {
+      // 载荷必须省略 algorithmInstances：列表接口的实例摘要不含 algoParams，
+      // 据此重建实例会把工作台调好的参数清成空对象，交由服务端仅同步启停状态。
+      const payload = buildArmTogglePayload({
         cameraId: camera.cameraId,
-        name: currentCfg?.name || camera.name || `Task-${camera.cameraId}`,
-        desiredEnabled: nextDesired,
-        rules: currentCfg?.rules || [],
-        motionGate: currentCfg?.motionGate || { enabled: true },
-        algorithmInstances: currentCfg?.algorithmInstances?.map((inst) => ({
-          ...inst,
-          enabled: nextDesired,
-        })),
-      }
+        fallbackName: camera.name || `Task-${camera.cameraId}`,
+        current: currentCfg,
+        nextDesired,
+      })
       const updated = await taskApi.updateTask(camera.cameraId, payload)
       setTaskConfigs((prev) => ({ ...prev, [camera.cameraId]: updated }))
     } catch {
@@ -133,7 +131,8 @@ export function TasksPage({
   // 真正绑定了 AI 任务的摄像头通道
   const camerasWithTasks = cameras.filter((c) => taskConfigs[c.cameraId] !== undefined)
   const totalArmed = Object.values(taskConfigs).filter((cfg) => cfg.desiredEnabled).length
-  const existingCameraIdsWithTasks = new Set(Object.keys(taskConfigs))
+  // 引用必须稳定：创建向导依赖它推导候选通道，每次渲染新建 Set 会把向导状态重置
+  const existingCameraIdsWithTasks = useMemo(() => new Set(Object.keys(taskConfigs)), [taskConfigs])
 
   return (
     <AnimatePresence mode="wait">
@@ -293,11 +292,8 @@ export function TasksPage({
             preselectedCameraId={initialConfigCameraId}
             onClose={() => setIsCreateTaskModalOpen(false)}
             onSuccess={handleTaskCreated}
-            onGoToCameras={() => {
-              if (onNavigateToCameras) {
-                onNavigateToCameras()
-              }
-            }}
+            onGoToCameras={onNavigateToCameras}
+            onGoToAlgorithms={onNavigateToAlgorithms}
           />
 
           {/* 删除布防任务确认模态框 */}
