@@ -12,6 +12,8 @@ pub mod gb28181;
 pub mod gop_queue;
 pub mod image_convert;
 pub mod media_ingestor;
+#[cfg(all(target_os = "linux", feature = "rga"))]
+pub mod motion_thumb;
 pub mod probe;
 pub mod retina_ingest;
 pub mod rga;

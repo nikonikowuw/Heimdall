@@ -75,7 +75,7 @@ Pose 模型固定使用 **`640×384`**：标准 16:9 内容保持为 `640×360`�
 
 | 执行阶段 | 执行单元 | 输入/输出规格 | 物理耗时 | 说明 |
 | :--- | :--- | :--- | :--- | :--- |
-| **前置运动门控** | CPU (SIMD) | $160 \times 90$ Y 平面 | $\le 0.4\text{ ms}$ | 静态无运动直接跳帧放行（0 NPU 开销） |
+| **前置运动门控** | RGA2 + CPU (SIMD) | 原图 NV12 $\to 320\times 180$ Y 平面（57.6KB 回读）| RGA $\approx 0.5\text{ ms}$ + CPU 差分 $\le 0.4\text{ ms}$，待真机回填 | 静态无运动直接跳帧放行（0 NPU 开销）；阈值口径以评估栅格像素为准（见 [运动门控设计 §1.3](./motion-detection-gating-engine.md#1-设计原则)） |
 | **RGA 全图 Letterbox** | RGA2 硬件 | 原图 NV12 $\to 640\times 384$ RGB888 | $\approx 1.2\text{ ms}$ | 16:9 内容缩放到 $640\times 360$，上下各补 12px；硬件色彩转换 + 16 字节对齐 |
 | **YOLOv8n-Pose 推理** | RKNPU2 (INT8) | $640 \times 384 \times 3$ (9 纯卷积输出) | 设计预算 $\le 25\text{ ms}$，待真机测量 | 输入像素较 $640\times640$ 减少 40%；单核 NPU 执行，不能按线性比例承诺最终时延 |
 | **Pose NEON 后处理** | CPU (NEON) | 9 输出 $\to$ 框 + 17 关键点（5040 anchors） | $\approx 1.8\text{ ms}$，待真机测量 | C/Rust 向量化 DFL + NMS；需以 5040 anchor 版本实测 |

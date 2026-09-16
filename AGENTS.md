@@ -40,6 +40,7 @@ Heimdall 仓库级协作入口，适用于 AI 智能体与工程师。本文只�
 - **三大路径严格区隔与零拷贝边界精确定义**：
   - 严禁笼统宣称“全链路零拷贝”。压缩输入码流存在一次网络/Host 内存向硬件解码器的 Host→Device DMA 复制（数据量极小）；
   - **常驻推理主路径 (`infer_fast_path`)**：生产媒体管线必须沿 `FrameRef` 传递平台原生 buffer（如 DMA-BUF、CVPixelBuffer 或 device memory），解码输出到推理输入严格维持纯设备侧零拷贝（VPU/DVPP -> RGA/VPC/AIPP -> RKNN/ACL），严禁在常驻推理流水线上发生任何 CPU 像素拷贝、CPU 色彩转换或 CPU 软解；
+  - **常驻推理主路径唯一例外（运动门控缩略图）**：允许 2D 加速器（RGA/VPC）在设备侧降采样出**定长缩略图**后回读其 Y 平面用于运动判定。该例外必须同时满足：① 回读量为定长且远小于源帧（当前 320×180、57.6KB/帧，与原分辨率无关）；② 回读量不得随分辨率增长；③ RGA/VPC 与 DMA-BUF 操作必须在**专用 OS Worker 线程**内执行，不得跑在 Tokio worker 上；④ 缩略图链路不可用时不得静默——保守放行、按类首次告警并计入 `frames_gate_bypassed`；
   - **低频证据生成路径 (`snapshot_readback_path`)**：作为显式特例，仅在告警触发或人工抓拍时按需单帧触发，允许将物理设备帧执行 Device-to-Host readback（如 `aclrtMemcpy(D2H)`、`mmap` cache sync）并交由 CPU 转为 RGB / JPEG 存盘；
   - **开发调试回退路径 (`debug_cpu_fallback_path`)**：仅在目标环境物理上确无硬件加速单元时作为保底，严禁伪装为硬件加速。
 - **算法实例帧输入契约**：常驻分析泵将解码后的平台原生 `FrameRef`（如 DMA-BUF、CVPixelBuffer 或 device memory）直接交给各算法实例；算法包自行选择输入尺寸、裁切、色彩转换和归一化，并在支持的平台上使用 RGA/VPC/AIPP 等设备侧能力。若宿主未来承担预处理，必须先按算法实例能力协商格式与尺寸，禁止用一个全局模型尺寸覆盖不同算法。

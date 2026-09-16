@@ -111,8 +111,16 @@ impl DetectionRule {
 #[serde(rename_all = "camelCase")]
 pub struct MotionGateConfig {
     pub enabled: bool,
+    /// 灰度差阈值（`0..=255`）：作用在**评估栅格像素**上。
+    ///
+    /// 评估栅格由帧载体决定：硬件缩略图链路（Rockchip DMA-BUF）为定长缩略图（16:9 源 320×180），
+    /// 无该链路的载体（`Host` / `CVPixelBuffer`）为源帧可见尺寸。
     #[serde(default = "default_threshold")]
     pub threshold: u8,
+    /// 有效变动像素数阈值：口径同样是**评估栅格像素**，因此标定必须按载体进行。
+    ///
+    /// 规则防区（ROI）在栅格上的覆盖像素数低于该值时，本路除保活心跳外永不推理，
+    /// 门控会在光栅化时 `WARN` 一次。
     #[serde(default = "default_contour_area")]
     pub contour_area: u32,
     #[serde(

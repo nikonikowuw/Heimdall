@@ -6,6 +6,7 @@ pub mod events;
 pub mod geometry;
 pub mod manager;
 pub mod motion_gate;
+pub mod motion_gate_worker;
 pub mod op_log;
 pub mod pump;
 pub mod roi;
@@ -39,6 +40,7 @@ pub use manager::{
     DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,
 };
 pub use motion_gate::{MaskBitmap, MotionGate, MotionGateDecision};
+pub use motion_gate_worker::{GateOutcome, MotionGateWorker};
 pub use pump::{
     AnalysisFpsGovernor, AnalysisPump, AnalysisPumpConfig, InstanceConfigUpdateOutcome,
     InstanceDescriptor, InstanceMetrics, MotionGateRuntimeConfig, PumpMetrics,

@@ -44,7 +44,7 @@
 - 有效宽高、分配宽高、各平面 stride/offset 分开使用；不能假设 `stride == width`。
 - MPP 常见横向 16/64、纵向 16 对齐（1080 可能分配为 1088）；DVPP 宽 16、高 2、行跨度 128 等约束以具体接口为准。
 - 时间基准见 [全局约定](../guides/conventions.md#时间)；插件 ABI 纳秒转换仅在 [适配边界](./algo-sdk-guidelines.md#帧契约) 进行。
-- 允许的 CPU readback 前后执行 DMA-BUF cache sync START/END；常驻推理不得为 CPU 门控额外读回像素。
+- 允许的 CPU readback 前后执行 DMA-BUF cache sync START/END；常驻推理路径**禁止全尺寸回读**，运动门控只允许回读设备侧降采样后的定长缩略图（Rockchip 经 RGA 出 $320 \times 180$ Y 平面 57.6KB/帧，见 [运动门控设计](../designs/motion-detection-gating-engine.md#4-跨平台-y-平面提取策略)）。
 
 ## 跨流证据时标轴
 
@@ -83,7 +83,9 @@
 
 - DVPP/MPP 重配遵循尺寸校验和 drain-before-switch：旧通道在途帧归零后才销毁并重建池。
 - [DVPP](../../../crates/media/src/decoders/dvpp.rs) 尺寸白名单为宽 `128..=3840`、高 `128..=2160`，偶数对齐；5000ms 冷却，60000ms 内 3 次变更熔断降级。
-- 门控顺序为抽帧 → 运动/ROI 过滤 → NPU，不能不加预算把全帧率送入推理；CPU 小图门控只用于符合上述路径边界的场景。
+- 门控顺序为抽帧 → 运动/ROI 过滤 → NPU，不能不加预算把全帧率送入推理；门控小图必须由设备侧降采样产出（Rockchip DMA-BUF 走 RGA 缩略图），`threshold` 与 `contour_area` 的口径是**评估栅格像素**而非源分辨率像素：硬件缩略图链路下是定长缩略图（$320 \times 180$），无缩略图链路（`Host` / `CVPixelBuffer`）时就是源帧可见尺寸，因此标定必须按载体分别做（见 [运动门控设计 §1.3](../designs/motion-detection-gating-engine.md#1-设计原则)）。
+- **门控评估不得跑在 Tokio Worker 上**：RGA/VPC 降采样与 DMA-BUF 回读都是平台 FFI（单次阻塞可达百毫秒级），必须由**每路一个的专用 OS Worker 线程**承接，硬件上下文在线程内常驻；请求通道有界（容量 1），调用方带超时，Worker 卡死或崩断时本路保守放行且计入 `frames_gate_bypassed`，绝不反压阻塞解码。掩模/防区位图在评估栅格上惰性光栅化，亚像素规则不得凭空消失，防区覆盖像素数低于 `contour_area` 的死区必须 `WARN` 一次。
+- 门控无法判定帧载体时必须保守放行，但必须按原因类别首次告警（或初始化失败/连续失败熔断时 `ERROR`）并计入 `frames_gate_bypassed` 与 `MotionGate::bypassed_frames()`，严禁静默失效。
 - [StreamHub](../../../crates/media/src/stream_hub.rs) 健康必须依据真实 NALU 到达，当前探活窗口 4000ms；Degraded 容错后再判 Failed，不以协程存活代替通流。
 - 健康状态保留 10000ms 容错与连续 3 次失败确认，具体探测入口见 [camera_probe.rs](../../../crates/api/src/camera_probe.rs)。
 

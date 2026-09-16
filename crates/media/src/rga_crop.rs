@@ -184,19 +184,61 @@ impl Drop for RgaImportGuard {
     }
 }
 
+/// RGA 源 DMA-BUF 面：可见尺寸与分配跨步（NV12）
+///
+/// 裁剪与降采样两条路径共用同一份布局契约：`hor_stride/ver_stride` 是分配跨步，
+/// 可能大于可见宽高（硬解常按 16 对齐分配），因此不能假设 `stride == width`。
+#[derive(Debug, Clone, Copy)]
+pub struct RgaSource {
+    pub fd: c_int,
+    pub width: u32,
+    pub height: u32,
+    pub hor_stride: u32,
+    pub ver_stride: u32,
+}
+
+impl RgaSource {
+    /// 校验源面布局：NV12 可见宽高偶数对齐，分配跨步不小于可见尺寸且偶数对齐
+    fn validate(&self) -> Result<(), MediaError> {
+        if self.fd < 0
+            || self.width == 0
+            || self.height == 0
+            || (self.width & 1) != 0
+            || (self.height & 1) != 0
+            || self.hor_stride < self.width
+            || self.ver_stride < self.height
+            || (self.hor_stride & 1) != 0
+            || (self.ver_stride & 1) != 0
+        {
+            return Err(MediaError::Encode {
+                reason: format!("非法 RGA 源面布局: {self:?}"),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// RGA 目标面：常驻导入句柄 + 本次写入的可见区域 + 分配跨步。
+///
+/// 目标句柄由调用方预先导入并在生命周期内保持有效；定长缓冲（门控缩略图）的可见尺寸
+/// 与分配跨步相等，裁剪填充场景的可见宽可小于分配跨步。
+#[derive(Debug, Clone, Copy)]
+struct RgaTarget {
+    handle: u32,
+    width: u32,
+    height: u32,
+    hor_stride: u32,
+    ver_stride: u32,
+}
+
 /// RGA 裁剪与填充任务参数结构体（收敛多参数，消除数据泥团代码坏味道）
 #[derive(Debug, Clone, Copy)]
 pub struct RgaCropJob {
-    pub src_fd: c_int,
-    pub src_w: u32,
-    pub src_h: u32,
-    pub src_hor_stride: u32,
-    pub src_ver_stride: u32,
+    pub src: RgaSource,
     pub sx: u32,
     pub sy: u32,
     pub crop_w: u32,
     pub crop_h: u32,
-    pub dst_fd: c_int,
     pub dst_w: u32,
     pub dst_h: u32,
 }
@@ -234,9 +276,9 @@ pub fn get_global_rga() -> Result<std::sync::Arc<RgaRuntime>, MediaError> {
             None
         }
     });
-    opt.as_ref()
-        .cloned()
-        .ok_or_else(|| MediaError::Unsupported("librga 动态加载失败或当前平台未安装 librga.so"))
+    opt.as_ref().cloned().ok_or(MediaError::Unsupported(
+        "librga 动态加载失败或当前平台未安装 librga.so",
+    ))
 }
 
 impl Drop for RgaRuntime {
@@ -425,19 +467,10 @@ impl RgaRuntime {
 
     /// 构造 RGA 裁剪 + 填充 + blit 并同步执行。
     ///
-    /// `dst_handle` 必须由 `job.dst_fd` 预先导入，并在调用方生命周期内保持有效。
+    /// 目标使用调用方预先导入的常驻句柄，并在调用方生命周期内保持有效。
     pub fn crop_blit_sync(&self, job: RgaCropJob, dst_handle: u32) -> Result<(), MediaError> {
-        if job.src_fd < 0
-            || job.dst_fd < 0
-            || dst_handle == 0
-            || job.src_w == 0
-            || job.src_h == 0
-            || (job.src_w & 1) != 0
-            || (job.src_h & 1) != 0
-            || job.src_hor_stride < job.src_w
-            || job.src_ver_stride < job.src_h
-            || (job.src_hor_stride & 1) != 0
-            || (job.src_ver_stride & 1) != 0
+        job.src.validate()?;
+        if dst_handle == 0
             || job.crop_w == 0
             || job.crop_h == 0
             || (job.crop_w & 1) != 0
@@ -445,11 +478,11 @@ impl RgaRuntime {
             || job.crop_w < RGA_MIN_DIMENSION
             || job.crop_h < RGA_MIN_DIMENSION
             || match job.sx.checked_add(job.crop_w) {
-                Some(v) => v > job.src_w,
+                Some(v) => v > job.src.width,
                 None => true,
             }
             || match job.sy.checked_add(job.crop_h) {
-                Some(v) => v > job.src_h,
+                Some(v) => v > job.src.height,
                 None => true,
             }
             || job.dst_w < job.crop_w
@@ -463,17 +496,48 @@ impl RgaRuntime {
         }
 
         // 等待上游设备完成后再进入 RGA 临界区，避免持有锁执行可能阻塞的 poll。
-        wait_dmabuf_readable(job.src_fd, 100)?;
+        wait_dmabuf_readable(job.src.fd, 100)?;
         let _lock = self.lock.lock().map_err(|_| MediaError::Encode {
             reason: "RGA 锁中毒".into(),
         })?;
 
-        // 1. 源 DMA-BUF 随帧导入；目标使用输出池初始化时导入的常驻句柄。
+        self.blit_unlocked(
+            job.src,
+            ImRect {
+                x: job.sx as c_int,
+                y: job.sy as c_int,
+                width: job.crop_w as c_int,
+                height: job.crop_h as c_int,
+            },
+            RgaTarget {
+                handle: dst_handle,
+                width: job.crop_w,
+                height: job.crop_h,
+                hor_stride: job.dst_w,
+                ver_stride: job.dst_h,
+            },
+            true,
+        )
+    }
+
+    /// RGA 同步 blit / 缩放的公共核心：导入源面 → wrapbuffer → imcheck →（可选 imfill）→ improcess。
+    ///
+    /// 调用方必须已持有 [`Self::lock`]，并已完成源 DMA-BUF 的可读栅障等待。
+    /// `fill_black` 为 true 时先将目标可见区域填黑，避免裁剪后未覆盖区域花屏；
+    /// 整帧降采样会完整覆盖目标，无需填充。
+    fn blit_unlocked(
+        &self,
+        src: RgaSource,
+        src_rect: ImRect,
+        dst: RgaTarget,
+        fill_black: bool,
+    ) -> Result<(), MediaError> {
+        // 1. 源 DMA-BUF 随帧导入，作用域结束即释放（严禁 wrapbuffer_fd 脏缓存）
         let ffi_ptr: *const RgaFfi = &self.ffi;
         let src_raw = self.import_buffer_unlocked(
-            job.src_fd,
-            job.src_hor_stride,
-            job.src_ver_stride,
+            src.fd,
+            src.hor_stride,
+            src.ver_stride,
             RK_FORMAT_YCbCr_420_SP,
         )?;
         let src_guard = RgaImportGuard::new(ffi_ptr, src_raw);
@@ -483,40 +547,34 @@ impl RgaRuntime {
         let mut src_buf = unsafe {
             (self.ffi.wrap_buffer)(
                 src_guard.handle,
-                job.src_w as c_int,
-                job.src_h as c_int,
-                job.src_hor_stride as c_int,
-                job.src_ver_stride as c_int,
+                src.width as c_int,
+                src.height as c_int,
+                src.hor_stride as c_int,
+                src.ver_stride as c_int,
                 RK_FORMAT_YCbCr_420_SP,
             )
         };
         src_buf.color_space_mode = 0;
 
-        // SAFETY: dst_handle 是调用方为仍存活的 scratchpad DMA-BUF 导入的有效句柄。
+        // SAFETY: dst.handle 是调用方为仍存活的 DMA-BUF 导入的有效句柄。
         let mut dst_buf = unsafe {
             (self.ffi.wrap_buffer)(
-                dst_handle,
-                job.crop_w as c_int,
-                job.crop_h as c_int,
-                job.dst_w as c_int,
-                job.dst_h as c_int,
+                dst.handle,
+                dst.width as c_int,
+                dst.height as c_int,
+                dst.hor_stride as c_int,
+                dst.ver_stride as c_int,
                 RK_FORMAT_YCbCr_420_SP,
             )
         };
         dst_buf.color_space_mode = 0;
 
-        // 3. 裁剪矩形
-        let src_rect = ImRect {
-            x: job.sx as c_int,
-            y: job.sy as c_int,
-            width: job.crop_w as c_int,
-            height: job.crop_h as c_int,
-        };
+        // 3. 目标矩形固定为整块可见区域
         let dst_rect = ImRect {
             x: 0,
             y: 0,
-            width: job.crop_w as c_int,
-            height: job.crop_h as c_int,
+            width: dst.width as c_int,
+            height: dst.height as c_int,
         };
 
         // 4. imcheck 校验
@@ -535,20 +593,16 @@ impl RgaRuntime {
             });
         }
 
-        // 5. 填充目标全黑（防止未覆盖区域花屏）
-        let fill_rect = ImRect {
-            x: 0,
-            y: 0,
-            width: job.crop_w as c_int,
-            height: job.crop_h as c_int,
-        };
-        // SAFETY: dst_buf 已经过 wrap_buffer 初始化且在 guard 保护范围内
-        let fill_ret = unsafe { (self.ffi.fill)(dst_buf, fill_rect, 0x000000, IM_SYNC) };
-        if fill_ret != IM_STATUS_SUCCESS && fill_ret != IM_STATUS_NOERROR {
-            warn!(fill_ret, "RGA imfill 黑色填充失败，继续执行 blit");
+        // 5. 填充目标全黑（防止裁剪后未覆盖区域花屏）
+        if fill_black {
+            // SAFETY: dst_buf 已经过 wrap_buffer 初始化且在 guard 保护范围内
+            let fill_ret = unsafe { (self.ffi.fill)(dst_buf, dst_rect, 0x000000, IM_SYNC) };
+            if fill_ret != IM_STATUS_SUCCESS && fill_ret != IM_STATUS_NOERROR {
+                warn!(fill_ret, "RGA imfill 黑色填充失败，继续执行 blit");
+            }
         }
 
-        // 6. improcess 同步执行裁剪 blit
+        // 6. improcess 同步执行裁剪 blit / 缩放
         // SAFETY: 所有 buffer 与 rect 参数经由 imcheck 校验合法
         let process_ret = unsafe {
             (self.ffi.process)(
@@ -559,11 +613,68 @@ impl RgaRuntime {
         if process_ret != IM_STATUS_SUCCESS && process_ret != IM_STATUS_NOERROR {
             let err_text = self.status_text(process_ret);
             return Err(MediaError::Encode {
-                reason: format!("RGA improcess blit 失败: {err_text} (status={process_ret})"),
+                reason: format!("RGA improcess 失败: {err_text} (status={process_ret})"),
             });
         }
 
         Ok(())
+    }
+
+    /// 构造 RGA 整帧降采样并同步执行（NV12 整帧 → 定长 NV12 缩略图）。
+    ///
+    /// 与 [`Self::crop_blit_sync`] 的差异：
+    /// - 源矩形为整帧可见区域、目标矩形为整张缩略图，缩放由 RGA 硬件完成（`improcess` 按 rect 自动缩放）；
+    /// - 目标 stride 恒等于可见宽度，整图被完整覆盖，故不做黑色填充；
+    /// - 仅允许缩小：放大既无收益，又凭空拉高 RGA 带宽并破坏门控灵敏度口径。
+    ///
+    /// 目标句柄由调用方预先导入并常驻（解析为门控缩略图见 `crate::motion_thumb`）。
+    pub fn scale_sync(
+        &self,
+        src: RgaSource,
+        dst_handle: u32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Result<(), MediaError> {
+        src.validate()?;
+        if dst_handle == 0
+            || dst_w == 0
+            || dst_h == 0
+            || (dst_h & 1) != 0
+            || dst_w < RGA_MIN_DIMENSION
+            || dst_h < RGA_MIN_DIMENSION
+            // 目标 stride == 可见宽度，必须满足 RGA2 的 4 像素步长对齐；更严的 RGA3 约束交由 imcheck 裁定
+            || !dst_w.is_multiple_of(4)
+            || dst_w > src.width
+            || dst_h > src.height
+        {
+            return Err(MediaError::Encode {
+                reason: format!("非法 RGA scale 布局: {src:?} → {dst_w}x{dst_h}"),
+            });
+        }
+
+        // 等待上游硬解完成写栅障后再进入 RGA 临界区，避免持锁执行可能阻塞的 poll。
+        wait_dmabuf_readable(src.fd, 100)?;
+        let _lock = self.lock.lock().map_err(|_| MediaError::Encode {
+            reason: "RGA 锁中毒".into(),
+        })?;
+
+        self.blit_unlocked(
+            src,
+            ImRect {
+                x: 0,
+                y: 0,
+                width: src.width as c_int,
+                height: src.height as c_int,
+            },
+            RgaTarget {
+                handle: dst_handle,
+                width: dst_w,
+                height: dst_h,
+                hor_stride: dst_w,
+                ver_stride: dst_h,
+            },
+            false,
+        )
     }
 
     fn status_text(&self, status: c_int) -> String {
@@ -629,16 +740,17 @@ pub fn crop_dmabuf_rga(
     let src_ver_stride = (frame.stride.ver_stride.max(frame.height) + 1) & !1;
 
     let job = RgaCropJob {
-        src_fd,
-        src_w: frame.width,
-        src_h: frame.height,
-        src_hor_stride,
-        src_ver_stride,
+        src: RgaSource {
+            fd: src_fd,
+            width: frame.width,
+            height: frame.height,
+            hor_stride: src_hor_stride,
+            ver_stride: src_ver_stride,
+        },
         sx,
         sy,
         crop_w,
         crop_h,
-        dst_fd: dst_fd.as_raw_fd(),
         dst_w: w_stride,
         dst_h: crop_h,
     };

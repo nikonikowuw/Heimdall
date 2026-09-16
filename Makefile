@@ -71,7 +71,8 @@ CARGO       := cargo
 RELEASE     := --release
 
 # 主程序交叉编译 feature 组合 (RKNN 平台)
-RKNN_APP_FEATURES := hw-snap-mpp,infer/backend-rknn
+# rga: 运动门控缩略图（RGA 硬件降采样）所需，与算法包共用同一套 RGA 硬件能力
+RKNN_APP_FEATURES := hw-snap-mpp,rga,infer/backend-rknn
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 颜色输出

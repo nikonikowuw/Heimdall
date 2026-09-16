@@ -27,6 +27,7 @@ use crate::events::{
 };
 use crate::manager::PipelineManager;
 use crate::motion_gate::MotionGate;
+use crate::motion_gate_worker::MotionGateWorker;
 use crate::snapshot::SnapshotResult;
 
 /// 向后兼容单 Worker 模式使用的伪算法 ID
@@ -279,6 +280,8 @@ pub struct PumpMetrics {
     pub frames_inferred: AtomicU64,
     /// 累计因运动门控跳过的推理帧数
     pub frames_skipped_motion: AtomicU64,
+    /// 累计未参与门控判定而被放行的帧数（载体不支持或门控缩略图链路失败）
+    pub frames_gate_bypassed: AtomicU64,
     /// 累计因丢帧恢复而重放的视频包数
     pub replay_packets: AtomicU64,
     /// 累计因队列积压跳过的网络包数 (Lagged)
@@ -1319,10 +1322,18 @@ impl AnalysisPump {
                 "多算法驱动泵解码循环已启动"
             );
 
-            let mut motion_gate = motion.gate.map(MotionGate::new);
+            let motion_gate = motion.gate.map(|gate| {
+                let gate = MotionGate::new(gate).with_camera_id(cam_id.as_str());
+                // 门控在 DMA-BUF 载体上会调用 RGA 平台 FFI，必须绑定到每路一个的专用 OS Worker
+                MotionGateWorker::spawn(gate, cam_id.as_str())
+            });
             let motion_rules = motion.rules;
             let motion_rules_version = motion.rules_version;
             let mut applied_rules_version: u64 = 0;
+            // 门控绕过计数快照：按增量上报到指标，避免每帧重复累加同一数值
+            let mut gate_bypassed_seen: u64 = 0;
+            // 门控 Worker 不可用（线程创建失败/退出/断路）只告警一次，逐帧只累计指标
+            let mut gate_unavailable_warned = false;
 
             let mut replay_queue: VecDeque<Arc<types::EncodedPacket>> = VecDeque::new();
             // 自持一份发送端：控制面全部释放后仍能感知通道存活，避免 select 在 None 上空转。
@@ -1416,33 +1427,67 @@ impl AnalysisPump {
                                 .await;
 
                             // 2. 运动门控过滤：静止帧跳过所有槽位推理，节省算力
-                            if let Some(gate) = motion_gate.as_mut() {
+                            if let Some(gate) = motion_gate.as_ref() {
+                                // 规则版本变更时随帧下发，避免逐帧克隆规则；
+                                // 降级状态下 Worker 不会再消费规则，连克隆都不做
                                 let current_rules_ver =
                                     motion_rules_version.load(Ordering::Acquire);
-                                if current_rules_ver != applied_rules_version {
-                                    let latest_rules = motion_rules.read().await.clone();
-                                    gate.update_rules(
-                                        &latest_rules,
-                                        frame.width as usize,
-                                        frame.height as usize,
-                                    );
-                                    applied_rules_version = current_rules_ver;
-                                }
+                                let rules = if gate.is_alive()
+                                    && current_rules_ver != applied_rules_version
+                                {
+                                    Some(Arc::new(motion_rules.read().await.clone()))
+                                } else {
+                                    None
+                                };
+                                let sending_rules = rules.is_some();
 
-                                let decision = gate.evaluate_frame(&frame, frame.timestamp);
-                                pipeline_mgr_decode
-                                    .report_motion_telemetry(
-                                        &cam_id,
-                                        frame.timestamp,
-                                        decision.motion_score,
-                                        decision.should_skip,
-                                    )
-                                    .await;
-                                if decision.should_skip {
-                                    metrics_clone
-                                        .frames_skipped_motion
-                                        .fetch_add(1, Ordering::Relaxed);
-                                    continue;
+                                match gate.evaluate(frame.clone(), frame.timestamp, rules).await {
+                                    Some(outcome) => {
+                                        // 请求已到达 Worker：随帧下发的规则确已生效，才推进版本号；
+                                        // 否则下一帧会自动重发，不会出现“标记已应用但 Worker 仍用旧规则”
+                                        if sending_rules {
+                                            applied_rules_version = current_rules_ver;
+                                        }
+                                        // 门控绕过计数（载体不支持/缩略图链路失败）：静默失效必须变成可观测指标
+                                        let bypassed = outcome.bypassed_frames;
+                                        if bypassed > gate_bypassed_seen {
+                                            metrics_clone.frames_gate_bypassed.fetch_add(
+                                                bypassed - gate_bypassed_seen,
+                                                Ordering::Relaxed,
+                                            );
+                                            gate_bypassed_seen = bypassed;
+                                        }
+                                        pipeline_mgr_decode
+                                            .report_motion_telemetry(
+                                                &cam_id,
+                                                frame.timestamp,
+                                                outcome.decision.motion_score,
+                                                outcome.decision.should_skip,
+                                            )
+                                            .await;
+                                        if outcome.decision.should_skip {
+                                            metrics_clone
+                                                .frames_skipped_motion
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            continue;
+                                        }
+                                    }
+                                    None => {
+                                        // 门控 Worker 不可用（线程创建失败/退出/断路）：保守放行并计入绕过计数。
+                                        // 该帧从未进入门控 Worker，门控自身计数器不包含它，故直接补记指标；
+                                        // 注意：不得递增 gate_bypassed_seen（该水位仅用于抵扣 Worker 内部
+                                        // 产生的累计绕过计数，若在此垫高会导致后续 Worker 内部绕过被漏计）。
+                                        metrics_clone
+                                            .frames_gate_bypassed
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        if !gate_unavailable_warned {
+                                            gate_unavailable_warned = true;
+                                            tracing::error!(
+                                                camera_id = %cam_id,
+                                                "运动门控工作线程不可用，本路门控保守放行全部帧"
+                                            );
+                                        }
+                                    }
                                 }
                             }
 
@@ -2381,5 +2426,45 @@ mod tests {
         assert!(gov.should_sample(5000));
         assert!(!gov.should_sample(5050));
         assert!(gov.should_sample(1000), "时间戳回跳必须自适应重置采样基准");
+    }
+
+    /// 验证门控绕过指标增量核算：Worker 不可用时的外部计数不得影响 Worker 内部累计绕过的增量抵扣，
+    /// 杜绝“外部单帧拥塞导致后续 Worker 内部绕过被漏计”。
+    #[test]
+    fn test_gate_bypassed_delta_accounting_resilience() {
+        let metrics = PumpMetrics::default();
+        let mut gate_bypassed_seen: u64 = 0;
+
+        // 1. Worker 内部上报了 2 帧绕过
+        let outcome_bypassed = 2u64;
+        if outcome_bypassed > gate_bypassed_seen {
+            metrics
+                .frames_gate_bypassed
+                .fetch_add(outcome_bypassed - gate_bypassed_seen, Ordering::Relaxed);
+            gate_bypassed_seen = outcome_bypassed;
+        }
+        assert_eq!(metrics.frames_gate_bypassed.load(Ordering::Relaxed), 2);
+        assert_eq!(gate_bypassed_seen, 2);
+
+        // 2. 外部发生 1 次 None（通道繁忙或超时断路）：直接累加外部指标，但不污染 gate_bypassed_seen 水位
+        metrics.frames_gate_bypassed.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(metrics.frames_gate_bypassed.load(Ordering::Relaxed), 3);
+        assert_eq!(gate_bypassed_seen, 2, "外部失败不得垫高 Worker 内部水位");
+
+        // 3. Worker 内部恢复并新增 1 帧内部绕过（累计变为 3 帧）
+        let outcome_bypassed = 3u64;
+        if outcome_bypassed > gate_bypassed_seen {
+            metrics
+                .frames_gate_bypassed
+                .fetch_add(outcome_bypassed - gate_bypassed_seen, Ordering::Relaxed);
+            gate_bypassed_seen = outcome_bypassed;
+        }
+        // 总数必须为 2 (前期内部) + 1 (外部) + 1 (后期新增内部) = 4
+        assert_eq!(
+            metrics.frames_gate_bypassed.load(Ordering::Relaxed),
+            4,
+            "新增的 Worker 内部绕过帧不得因中间发生过外部 None 而被漏计"
+        );
+        assert_eq!(gate_bypassed_seen, 3);
     }
 }

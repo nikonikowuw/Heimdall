@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 use crate::dmabuf_sync::wait_dmabuf_readable;
 use crate::encoders::{compute_crop_roi, DeviceSnapEncoder};
 use crate::error::MediaError;
-use crate::rga_crop::{RgaCropJob, RgaRuntime};
+use crate::rga_crop::{RgaCropJob, RgaRuntime, RgaSource};
 use types::{BoundingBox, FrameHandle, FrameRef, PixelFormat};
 
 // ============================================================================
@@ -954,16 +954,17 @@ impl DeviceSnapEncoder for MppSnapEncoder {
         // 3. RGA crop: src DMA-BUF → scratchpad DMA-BUF
         let dst_fd = sp.fd.as_raw_fd();
         let job = RgaCropJob {
-            src_fd,
-            src_w,
-            src_h,
-            src_hor_stride,
-            src_ver_stride,
+            src: RgaSource {
+                fd: src_fd,
+                width: src_w,
+                height: src_h,
+                hor_stride: src_hor_stride,
+                ver_stride: src_ver_stride,
+            },
             sx,
             sy,
             crop_w,
             crop_h,
-            dst_fd,
             dst_w: w_stride,
             dst_h: crop_h,
         };
