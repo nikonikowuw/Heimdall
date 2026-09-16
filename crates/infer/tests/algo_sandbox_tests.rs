@@ -16,6 +16,22 @@ fn resolve_path(rel: &str) -> Option<std::path::PathBuf> {
     None
 }
 
+/// 解析算法包目录，并要求其插件库已构建。
+///
+/// `lib/` 下的 `.so` / `.dylib` 是本地构建产物、不入版本库（见
+/// [algo-sdk-guidelines](../../../docs/nuwa/backend/algo-sdk-guidelines.md)）。干净检出上包目录
+/// 齐全但制品缺失，依赖真实制品的前向自测应带着原因跳过，而不是把「尚未构建」报成沙箱缺陷。
+fn resolve_built_package(rel: &str, algorithm_id: &str) -> Option<std::path::PathBuf> {
+    let pkg_path = resolve_path(rel)?;
+    if infer::sandbox::find_entry_library(&pkg_path, algorithm_id).is_ok() {
+        return Some(pkg_path);
+    }
+    eprintln!(
+        "跳过 {rel}: 缺少插件库 lib/{algorithm_id}.*（不入库，请先在该包 workspace 执行 make）"
+    );
+    None
+}
+
 #[test]
 fn test_platform_id_normalization() {
     assert_eq!(normalize_platform_id("macos-arm64"), "macos-arm64");
@@ -42,7 +58,10 @@ fn test_sandbox_real_package_in_process_self_test() {
     if infer::sandbox::current_platform_id() != "macos-arm64" {
         return;
     }
-    let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
+    let Some(pkg_path) = resolve_built_package(
+        "algo-packages/macos-arm64/general_detection",
+        "general_detection",
+    ) else {
         return;
     };
 
@@ -61,9 +80,11 @@ fn test_sandbox_rust_yolo26n_package_in_process_self_test() {
     if infer::sandbox::current_platform_id() != "macos-arm64" {
         return;
     }
-    let Some(pkg_path) = resolve_path("algo-packages/macos/arm64/general_detection")
-        .or_else(|| resolve_path("algo-packages/macos/arm64/yolo26n"))
-    else {
+    let Some(pkg_path) = resolve_built_package(
+        "algo-packages/macos/arm64/general_detection",
+        "general_detection",
+    )
+    .or_else(|| resolve_built_package("algo-packages/macos/arm64/yolo26n", "general_detection")) else {
         return;
     };
 
@@ -86,7 +107,10 @@ fn test_sandbox_subprocess_self_test() {
     if infer::sandbox::current_platform_id() != "macos-arm64" {
         return;
     }
-    let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
+    let Some(pkg_path) = resolve_built_package(
+        "algo-packages/macos-arm64/general_detection",
+        "general_detection",
+    ) else {
         return;
     };
     let candidates = [
@@ -110,6 +134,23 @@ async fn test_algo_package_load_and_registry_lifecycle() {
     let Some(base_dir) = resolve_path("algo-packages") else {
         return;
     };
+    // 干净检出上没有任何已构建的 macOS 制品时 `scan_and_register` 必然扫出 0 个包，
+    // 断言会退化成「没构建」的报错：跳过，构建后再跑才是有效覆盖。
+    let any_built = [
+        (
+            "algo-packages/macos-arm64/general_detection",
+            "general_detection",
+        ),
+        (
+            "algo-packages/macos/arm64/general_detection",
+            "general_detection",
+        ),
+    ]
+    .iter()
+    .any(|(rel, algorithm_id)| resolve_built_package(rel, algorithm_id).is_some());
+    if !any_built {
+        return;
+    }
 
     let registry = AlgoRegistry::new();
     let count = registry
@@ -144,7 +185,10 @@ async fn test_algo_instance_detect_with_real_frame() {
     if infer::sandbox::current_platform_id() != "macos-arm64" {
         return;
     }
-    let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
+    let Some(pkg_path) = resolve_built_package(
+        "algo-packages/macos-arm64/general_detection",
+        "general_detection",
+    ) else {
         return;
     };
 
@@ -215,12 +259,11 @@ fn test_rknn_rk3576_package_structure_and_sandbox_guards() {
         return;
     };
 
-    // 检查基础文件存在性
+    // 检查基础文件存在性（`lib/` 是本地构建产物、不入版本库，故不在此断言）
     assert!(pkg_path.join("manifest.json").is_file());
     assert!(pkg_path.join("config.schema.json").is_file());
     assert!(pkg_path.join("testimage.jpg").is_file());
     assert!(pkg_path.join("model/yolov8n-640x384-rk3576.rknn").is_file());
-    assert!(pkg_path.join("lib/libgeneral_detection.so").is_file());
 
     // 解析 manifest
     let manifest_str =
@@ -232,9 +275,11 @@ fn test_rknn_rk3576_package_structure_and_sandbox_guards() {
     assert_eq!(manifest.platform_id, "linux-rknn");
     assert_eq!(normalize_platform_id(&manifest.platform_id), "linux-rknn");
 
-    // 查找动态库入口
-    let entry = infer::sandbox::find_entry_library(&pkg_path, &manifest.algorithm_id)
-        .expect("查找动态库失败");
+    // 查找动态库入口；未构建该包时跳过制品相关检查，而不是把「没构建」当成结构缺陷。
+    let Ok(entry) = infer::sandbox::find_entry_library(&pkg_path, &manifest.algorithm_id) else {
+        eprintln!("跳过 rk3576 制品检查: lib/libgeneral_detection.so 尚未构建");
+        return;
+    };
     assert!(entry.ends_with("libgeneral_detection.so"));
 
     // 沙箱平台防护测试：在非 rknn 宿主环境上执行校验时，应精准拦截平台不匹配错误
@@ -261,7 +306,10 @@ async fn test_algo_package_open_without_sandbox_self_test() {
     if infer::sandbox::current_platform_id() != "macos-arm64" {
         return;
     }
-    let Some(pkg_path) = resolve_path("algo-packages/macos-arm64/general_detection") else {
+    let Some(pkg_path) = resolve_built_package(
+        "algo-packages/macos-arm64/general_detection",
+        "general_detection",
+    ) else {
         return;
     };
 
