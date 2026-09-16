@@ -455,3 +455,91 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[tokio::test]
+async fn test_sub_stream_pump_drops_orphan_p_frames_before_first_keyframe() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_pump_orphan_p_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let manager = Arc::new(PipelineManager::with_evidence_dir(&temp_dir));
+    let cam_id = "cam_orphan_p_test";
+
+    let session = CameraStreamSession::mock(cam_id, "rtsp://mock-sub/live", TransportPolicy::Tcp);
+    let infer_backend = Arc::new(E2eMockInferBackend {
+        current_y: std::sync::Mutex::new(0.45),
+    });
+    let worker = InferenceWorker::new(infer_backend);
+    let decoder: Box<dyn VideoDecoder + Send> =
+        Box::new(MockDecoder::new(cam_id, CodecType::H264, 640, 360));
+
+    let config = SubStreamPumpConfig {
+        target_fps: 25,
+        motion_gate: None,
+    };
+    manager
+        .start_analysis_pump(cam_id, session.clone(), decoder, worker.handle(), config)
+        .await;
+
+    let dispatcher = session.dispatcher.clone();
+
+    // 1. 发送孤儿 P 帧（无前置关键帧）
+    for pts_ms in [1000, 1040, 1080] {
+        dispatcher.publish(Arc::new(EncodedPacket {
+            pts_ms,
+            is_keyframe: false,
+            codec: CodecType::H264,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41]),
+            ..Default::default()
+        }));
+    }
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let metrics = manager
+        .get_analysis_pump_metrics(cam_id)
+        .await
+        .expect("驱动泵指标必须可读取");
+    assert_eq!(
+        metrics.frames_decoded.load(Ordering::Relaxed),
+        0,
+        "在首个关键帧到达前，孤儿 P 帧必须全部被拦截丢弃"
+    );
+
+    // 2. 发送首个合法 IDR 关键帧
+    dispatcher.publish(Arc::new(EncodedPacket {
+        pts_ms: 1120,
+        is_keyframe: true,
+        codec: CodecType::H264,
+        payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x65, 0x88]),
+        ..Default::default()
+    }));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        metrics.frames_decoded.load(Ordering::Relaxed),
+        1,
+        "收到首个关键帧后必须开始正常解码"
+    );
+
+    // 3. 随后发送的 P 帧可以正常解码
+    dispatcher.publish(Arc::new(EncodedPacket {
+        pts_ms: 1160,
+        is_keyframe: false,
+        codec: CodecType::H264,
+        payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41]),
+        ..Default::default()
+    }));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        metrics.frames_decoded.load(Ordering::Relaxed),
+        2,
+        "关键帧对齐后后续 P 帧必须正常解码"
+    );
+
+    assert!(manager.stop_analysis_pump(cam_id).await);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

@@ -838,6 +838,8 @@ impl RetinaIngestor {
         let mut frames_received: u64 = 0;
         let mut video_frames_received: u64 = 0;
         let mut audio_frames_received: u64 = 0;
+        let mut waiting_for_clean_keyframe = true;
+        let mut video_stream_aligned = false;
 
         // 清理伪唤醒
         let _ = cancel_rx.borrow_and_update();
@@ -947,20 +949,53 @@ impl RetinaIngestor {
                 if frame.stream_id() == video_idx {
                     frames_received += 1;
                     video_frames_received += 1;
+                    let loss = frame.loss();
                     let pts_ms = self.process_track_frame(
                         "video",
                         &mut video_timestamps,
                         &mut rtp_diagnostics,
                         frame.timestamp(),
-                        frame.loss(),
+                        loss,
                         base_timestamp_ms,
                     );
                     self.observe_ingest_lag(pts_ms);
 
                     let is_keyframe = frame.is_random_access_point();
+
+                    // GOP 熔断保护与对齐恢复机制 (GOP Circuit Breaker)
+                    // 1. 若检测到 RTP 丢包 (loss > 0)，当前帧分片残缺且后续参考链断裂，立即触发熔断并清空在途 GOP 缓存
+                    if loss > 0 && !waiting_for_clean_keyframe {
+                        tracing::warn!(
+                            camera_id = %self.camera_id,
+                            lost_packets = loss,
+                            is_keyframe,
+                            pts_ms,
+                            "Retina 检测到 RTP 丢包，启动 GOP 熔断保护，拦截残缺切片并等待下一个完整关键帧"
+                        );
+                        waiting_for_clean_keyframe = true;
+                        self.dispatcher.invalidate_current_gop();
+                    }
+
+                    // 2. 处于熔断保护或未收到初始未受损关键帧：拦截丢弃所有非关键帧与受损关键帧
+                    if waiting_for_clean_keyframe {
+                        if is_keyframe && loss == 0 {
+                            if video_stream_aligned {
+                                tracing::info!(
+                                    camera_id = %self.camera_id,
+                                    pts_ms,
+                                    "收到未受损的关键帧，GOP 熔断恢复正常分发"
+                                );
+                            }
+                            waiting_for_clean_keyframe = false;
+                        } else {
+                            continue;
+                        }
+                    }
+
                     // 零拷贝借出底层 Vec<u8> 生成 Bytes，已包含 Annex B 0x00000001。
                     let payload = Bytes::from(frame.into_data());
-                    if video_frames_received == 1 {
+                    if !video_stream_aligned {
+                        video_stream_aligned = true;
                         tracing::info!(
                             camera_id = %self.camera_id,
                             video_frames_received,
@@ -968,7 +1003,7 @@ impl RetinaIngestor {
                             is_keyframe,
                             pts_ms,
                             payload_bytes = payload.len(),
-                            "Retina 已收到首个视频帧"
+                            "Retina 已对齐首个未受损视频关键帧并开始下发"
                         );
                     } else if video_frames_received.is_multiple_of(100) {
                         tracing::debug!(

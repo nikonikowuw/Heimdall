@@ -1230,6 +1230,7 @@ impl AnalysisPump {
             // 自持一份发送端：控制面全部释放后仍能感知通道存活，避免 select 在 None 上空转。
             let _command_tx_guard = command_tx_guard;
             let mut command_rx = command_rx;
+            let mut waiting_for_keyframe = true;
 
             loop {
                 let (stream_item, is_replay) = if let Some(packet) = replay_queue.pop_front() {
@@ -1277,6 +1278,7 @@ impl AnalysisPump {
                     }
                     StreamItem::SourceReset { epoch } => {
                         replay_queue.clear();
+                        waiting_for_keyframe = true;
                         if let Err(error) = decoder.reset().await {
                             tracing::warn!(camera_id = %cam_id, epoch, error = %error, "源流重建后分析解码器重置失败");
                         }
@@ -1287,6 +1289,14 @@ impl AnalysisPump {
 
                 if pkt.stream_tag == StreamTag::Audio || !pkt.codec.is_video() {
                     continue;
+                }
+
+                if waiting_for_keyframe {
+                    if pkt.is_keyframe {
+                        waiting_for_keyframe = false;
+                    } else {
+                        continue;
+                    }
                 }
 
                 if is_replay {
@@ -1374,7 +1384,9 @@ impl AnalysisPump {
                     Ok(None) => {}
                     Err(e) => {
                         metrics_clone.decode_errors.fetch_add(1, Ordering::Relaxed);
-                        tracing::warn!(camera_id = %cam_id, error = %e, "解码分析码流数据包失败");
+                        tracing::warn!(camera_id = %cam_id, error = %e, "解码分析码流数据包失败，重置硬件解码器并等待下一关键帧对齐");
+                        let _ = decoder.reset().await;
+                        waiting_for_keyframe = true;
                     }
                 }
             }

@@ -465,6 +465,15 @@ impl KeyframeCacheStore {
         };
     }
 
+    /// 触发 GOP 熔断保护时清空在途破损 GOP，防止向下游重放残缺参考链。
+    /// 保留 SPS / PPS / VPS 参数集与编码元数据，确保后续关键帧仍能快速对齐。
+    pub fn invalidate_current_gop(&self) {
+        let mut cache = self.inner.write();
+        cache.gop_packets.clear();
+        cache.total_payload_bytes = 0;
+        cache.last_keyframe = None;
+    }
+
     pub fn snapshot_cache(&self) -> KeyframeCache {
         self.inner.read().clone()
     }
@@ -762,6 +771,11 @@ impl PacketDispatcher {
         for id in closed_ids {
             self.unsubscribe(id);
         }
+    }
+
+    /// 触发 GOP 熔断保护时使当前在途破损 GOP 缓存失效
+    pub fn invalidate_current_gop(&self) {
+        self.cache.invalidate_current_gop();
     }
 
     pub fn source_reset(&self) -> u64 {
@@ -1130,5 +1144,29 @@ mod tests {
             .subscribe("third", ConsumerKind::HttpFlv)
             .expect_err("limit must reject");
         assert_eq!(error, DispatcherError::TooManyConsumers { max: 2 });
+    }
+
+    #[test]
+    fn invalidate_current_gop_preserves_parameters_and_clears_broken_chain() {
+        let dispatcher = Arc::new(PacketDispatcher::new(test_config()));
+        dispatcher.publish(packet(1000, true));
+        dispatcher.publish(packet(1040, false));
+
+        let cache_before = dispatcher.cache().snapshot_cache();
+        assert!(cache_before.sps.is_some());
+        assert!(cache_before.pps.is_some());
+        assert_eq!(cache_before.gop_packets.len(), 2);
+        assert!(cache_before.last_keyframe.is_some());
+
+        dispatcher.invalidate_current_gop();
+
+        let cache_after = dispatcher.cache().snapshot_cache();
+        assert!(cache_after.sps.is_some(), "SPS 参数集必须在熔断后保留");
+        assert!(cache_after.pps.is_some(), "PPS 参数集必须在熔断后保留");
+        assert_eq!(cache_after.gop_packets.len(), 0, "破损 GOP 队列必须清空");
+        assert!(
+            cache_after.last_keyframe.is_none(),
+            "在途关键帧引用必须重置"
+        );
     }
 }
