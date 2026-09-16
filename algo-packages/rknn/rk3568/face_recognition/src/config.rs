@@ -61,7 +61,7 @@ impl Default for InstanceConfig {
             // 缺省回退必须等同于控制台未改动表单时的下发值，否则“缺省路径”与“表单路径”行为分叉。
             detection_confidence_threshold: 0.25,
             person_confidence_threshold: 0.4,
-            min_face_size: 30,
+            min_face_size: 60,
             quality_thresholds: QualityThresholds::default(),
             explicit_fields: 0,
         }
@@ -246,7 +246,7 @@ impl QualityThresholds {
         0.3
     }
     const fn default_max_yaw() -> f32 {
-        45.0
+        25.0
     }
     const fn default_max_pitch() -> f32 {
         30.0
@@ -292,9 +292,9 @@ mod tests {
         let config = InstanceConfig::default();
         assert_eq!(config.detection_confidence_threshold, 0.25);
         assert_eq!(config.person_confidence_threshold, 0.4);
-        assert_eq!(config.min_face_size, 30);
+        assert_eq!(config.min_face_size, 60);
         assert_eq!(config.quality_thresholds.min_score, 0.3);
-        assert_eq!(config.quality_thresholds.max_yaw, 45.0);
+        assert_eq!(config.quality_thresholds.max_yaw, 25.0);
         assert_eq!(config.quality_thresholds.max_pitch, 30.0);
         assert_eq!(config.quality_thresholds.max_blur, 0.7);
         assert!(config.validate().is_ok());
@@ -439,6 +439,6 @@ mod tests {
         assert_eq!(config.person_confidence_threshold, 0.65);
         assert_eq!(config.min_face_size, 50);
         assert_eq!(config.quality_thresholds.min_score, 0.60);
-        assert_eq!(config.quality_thresholds.max_yaw, 45.0);
+        assert_eq!(config.quality_thresholds.max_yaw, 25.0);
     }
 }

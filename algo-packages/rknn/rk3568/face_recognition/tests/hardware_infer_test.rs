@@ -19,7 +19,7 @@ fn test_rknn_hardware_face_detection_and_embedding() {
     };
     let person_detector_model = pkg_root.join("model/yolov8n-640x384-rk3568.rknn");
     let detector_model = pkg_root.join("model/yolov8n-face-640x384_rk3568_mixed_face.rknn");
-    let embedder_model = pkg_root.join("model/edgeface_xs_gamma_06_rk3568_fp16.rknn");
+    let embedder_model = pkg_root.join("model/edgeface_s_gamma_05_rk3568_fp16.rknn");
     let test_image_path = pkg_root.join("testimage.jpg");
 
     assert!(

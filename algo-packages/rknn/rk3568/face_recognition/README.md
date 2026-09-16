@@ -13,7 +13,7 @@
 
 - `model/yolov8n-640x384-rk3568.rknn`: YOLOv8n COCO 人体检测模型（640×384，9 个 NCHW 输出，类别 0 为 person）
 - `model/yolov8n-face-640x384_rk3568_mixed_face.rknn`: 人脸检测与 5 点关键点模型（640×384 混合精度）
-- `model/edgeface_xs_gamma_06_rk3568_fp16.rknn`: 512 维人脸特征提取模型（112×112 FP16）
+- `model/edgeface_s_gamma_05_rk3568_fp16.rknn`: 512 维人脸特征提取模型（112×112 FP16，EdgeFace-S 骨干）
 
 ## 算法核心流水线
 

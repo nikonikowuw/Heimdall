@@ -3,8 +3,13 @@
 ## 转换来源
 
 ### 1. EdgeFace (人脸特征提取)
-- **原始模型**: edgeface_xs_gamma_06
-- **精度**: FP16
+- **模型文件**: `edgeface_s_gamma_05_rk3568_fp16.rknn`
+- **原始模型**: edgeface_s_gamma_05 (InsightFace rknn_model_zoo)
+- **输入**: `[1, 112, 112, 3]` RGB24 (NHWC)
+- **输出**: `[1, 512]` Float32 512 维特征向量
+- **精度**: FP16 (`do_quantization=False`)
+- **模型 SHA-256**: `350e4808a553494d18a27c8eb331a0aa7963549bc1362f345481ac471f914a69` (8221104 字节)
+- **历史版本**: `edgeface_xs_gamma_06_rk3568_fp16.rknn` (4977461 字节，因类间间隔较窄已升级为 S 系列)
 
 ### 2. YOLOv8n-Face (人脸检测)
 - **视频流模型**: `yolov8n-face-640x384_rk3568_mixed_face.rknn` (16:9 横屏监控优化)

@@ -26,7 +26,7 @@
       "title": "最小人脸尺寸",
       "description": "人脸框最小边长像素限制（低于该尺寸的人脸将被过滤）",
       "minimum": 1,
-      "default": 30
+      "default": 60
     },
     "quality_min_score": {
       "type": "number",
@@ -42,7 +42,7 @@
       "description": "人脸水平偏转最大角度限制，超过此角度的大侧脸将被过滤",
       "minimum": 0.0,
       "maximum": 180.0,
-      "default": 45.0
+      "default": 25.0
     },
     "quality_max_pitch": {
       "type": "number",

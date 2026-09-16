@@ -159,7 +159,7 @@ impl LoadedPackage {
         let embedder_path = env.resolve_model_path(
             &root,
             "EMBEDDER_MODEL_PATH",
-            "model/edgeface_xs_gamma_06_rk3568_fp16.rknn",
+            "model/edgeface_s_gamma_05_rk3568_fp16.rknn",
         )?;
 
         verify_model_file(&detector_path)?;
