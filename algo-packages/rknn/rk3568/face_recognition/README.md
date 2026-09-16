@@ -1,6 +1,6 @@
 # RK3568 人脸识别算法包 (EdgeFace Face Recognition)
 
-基于 Rockchip RK3568 平台的工业级人脸识别算法包，集成 **YOLOv8n-face** 检测器（含 5 点关键点）与 **EdgeFace-xs** 512 维特征提取器。
+基于 Rockchip RK3568 平台的工业级人脸识别算法包，集成 **SCRFD-2.5G BNKPS** 人脸专用检测器（含高精度 5 点关键点）与 **EdgeFace-S** 512 维特征提取器。
 
 ## 平台契约
 
@@ -12,7 +12,8 @@
 ## 模型清单
 
 - `model/yolov8n-640x384-rk3568.rknn`: YOLOv8n COCO 人体检测模型（640×384，9 个 NCHW 输出，类别 0 为 person）
-- `model/yolov8n-face-640x384_rk3568_mixed_face.rknn`: 人脸检测与 5 点关键点模型（640×384 混合精度）
+- `model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn`: 视频流人脸检测与 5 点关键点模型（640×384 混合精度，SCRFD-2.5G BNKPS 骨干）
+- `model/scrfd_2.5g_bnkps_640x640_rk3568_mixed.rknn`: 底库注册人脸检测与 5 点定位模型（640×640 混合精度）
 - `model/edgeface_s_gamma_05_rk3568_fp16.rknn`: 512 维人脸特征提取模型（112×112 FP16，EdgeFace-S 骨干）
 
 ## 算法核心流水线

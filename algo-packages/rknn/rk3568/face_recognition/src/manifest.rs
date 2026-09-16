@@ -12,34 +12,28 @@ use algo_sdk::error::AlgoError;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_MODEL_BYTES: u64 = 256 * 1024 * 1024;
 
-pub const DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 12] = [
-    [1, 64, 48, 80],
-    [1, 1, 48, 80],
-    [1, 1, 48, 80],
-    [1, 15, 48, 80],
-    [1, 64, 24, 40],
-    [1, 1, 24, 40],
-    [1, 1, 24, 40],
-    [1, 15, 24, 40],
-    [1, 64, 12, 20],
-    [1, 1, 12, 20],
-    [1, 1, 12, 20],
-    [1, 15, 12, 20],
+pub const DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 9] = [
+    [7680, 1, 1, 1],
+    [1920, 1, 1, 1],
+    [480, 1, 1, 1],
+    [7680, 4, 1, 1],
+    [1920, 4, 1, 1],
+    [480, 4, 1, 1],
+    [7680, 10, 1, 1],
+    [1920, 10, 1, 1],
+    [480, 10, 1, 1],
 ];
 
-pub const DETECTOR_640X640_OUTPUT_SHAPES: [[u32; 4]; 12] = [
-    [1, 64, 80, 80],
-    [1, 1, 80, 80],
-    [1, 1, 80, 80],
-    [1, 15, 80, 80],
-    [1, 64, 40, 40],
-    [1, 1, 40, 40],
-    [1, 1, 40, 40],
-    [1, 15, 40, 40],
-    [1, 64, 20, 20],
-    [1, 1, 20, 20],
-    [1, 1, 20, 20],
-    [1, 15, 20, 20],
+pub const DETECTOR_640X640_OUTPUT_SHAPES: [[u32; 4]; 9] = [
+    [12800, 1, 1, 1],
+    [3200, 1, 1, 1],
+    [800, 1, 1, 1],
+    [12800, 4, 1, 1],
+    [3200, 4, 1, 1],
+    [800, 4, 1, 1],
+    [12800, 10, 1, 1],
+    [3200, 10, 1, 1],
+    [800, 10, 1, 1],
 ];
 
 pub const PERSON_DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 9] = [
@@ -149,12 +143,12 @@ impl LoadedPackage {
         let detector_path = env.resolve_model_path(
             &root,
             "DETECTOR_MODEL_PATH",
-            "model/yolov8n-face-640x384_rk3568_mixed_face.rknn",
+            "model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn",
         )?;
         let registration_detector_path = env.resolve_optional_model_path(
             &root,
             "REGISTRATION_DETECTOR_MODEL_PATH",
-            "model/yolov8n-face-640x640_rk3568_mixed_face.rknn",
+            "model/scrfd_2.5g_bnkps_640x640_rk3568_mixed.rknn",
         )?;
         let embedder_path = env.resolve_model_path(
             &root,

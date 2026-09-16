@@ -488,6 +488,128 @@ pub fn normalize_to_relative(faces: &mut [RawFace], layout: &LetterboxLayout) {
     }
 }
 
+/// 三尺度合并解码 SCRFD 人脸检测模型（如 SCRFD-2.5G BNKPS）输出
+///
+/// 契约说明：
+/// `float_outputs`: 9 个 float32 张量切片：
+/// - 0..3: 3 个尺度的 score: score_8, score_16, score_32 (已由模型 Sigmoid 激活)
+/// - 3..6: 3 个尺度的 bbox: bbox_8, bbox_16, bbox_32 (每个 anchor 4 通道: l, t, r, b 偏移)
+/// - 6..9: 3 个尺度的 kps: kps_8, kps_16, kps_32 (每个 anchor 10 通道: 5 点 x, y 偏移)
+///
+/// 每个 grid cell 预设 2 个 anchors。
+pub fn decode_scrfd_face(
+    float_outputs: &[&[f32]],
+    output_attrs: &[[u32; 4]],
+    layout: &LetterboxLayout,
+    conf_threshold: f32,
+    nms_threshold: f32,
+) -> Result<Vec<RawFace>, AlgoError> {
+    if !conf_threshold.is_finite()
+        || !(0.0..=1.0).contains(&conf_threshold)
+        || !nms_threshold.is_finite()
+        || !(0.0..=1.0).contains(&nms_threshold)
+    {
+        return Err(AlgoError::Inference {
+            reason: "SCRFD 阈值必须是 [0, 1] 范围内的有限数".to_string(),
+        });
+    }
+    if float_outputs.len() != 9 || output_attrs.len() != 9 {
+        return Err(AlgoError::Inference {
+            reason: format!(
+                "SCRFD 输出数量必须为 9: tensors={}, attrs={}",
+                float_outputs.len(),
+                output_attrs.len()
+            ),
+        });
+    }
+
+    let strides = [8u32, 16, 32];
+    let num_anchors = 2usize;
+    let mut all_faces = Vec::new();
+
+    for (scale_idx, &stride) in strides.iter().enumerate() {
+        let grid_w = usize::try_from(layout.dst_w / stride).map_err(|_| AlgoError::OutOfMemory)?;
+        let grid_h = usize::try_from(layout.dst_h / stride).map_err(|_| AlgoError::OutOfMemory)?;
+        if grid_w == 0 || grid_h == 0 {
+            return Err(AlgoError::Inference {
+                reason: format!("SCRFD 尺度 {scale_idx} (stride={stride}) 网格尺寸为 0"),
+            });
+        }
+        let total_anchors = grid_h * grid_w * num_anchors;
+
+        let score_slice = float_outputs[scale_idx];
+        let bbox_slice = float_outputs[scale_idx + 3];
+        let kps_slice = float_outputs[scale_idx + 6];
+
+        if score_slice.len() < total_anchors
+            || bbox_slice.len() < total_anchors * 4
+            || kps_slice.len() < total_anchors * 10
+        {
+            return Err(AlgoError::Inference {
+                reason: format!(
+                    "SCRFD 尺度 {scale_idx} 张量长度不足: score={}, bbox={}, kps={}, expected_anchors={}",
+                    score_slice.len(),
+                    bbox_slice.len(),
+                    kps_slice.len(),
+                    total_anchors
+                ),
+            });
+        }
+
+        let stride_f32 = stride as f32;
+
+        for gy in 0..grid_h {
+            let center_y = (gy as f32) * stride_f32;
+            for gx in 0..grid_w {
+                let center_x = (gx as f32) * stride_f32;
+                for a in 0..num_anchors {
+                    let anchor_idx = (gy * grid_w + gx) * num_anchors + a;
+                    let score = score_slice[anchor_idx];
+                    if !score.is_finite() || score < conf_threshold {
+                        continue;
+                    }
+
+                    let b_offset = anchor_idx * 4;
+                    let dx1 = bbox_slice[b_offset] * stride_f32;
+                    let dy1 = bbox_slice[b_offset + 1] * stride_f32;
+                    let dx2 = bbox_slice[b_offset + 2] * stride_f32;
+                    let dy2 = bbox_slice[b_offset + 3] * stride_f32;
+
+                    let x1 = center_x - dx1;
+                    let y1 = center_y - dy1;
+                    let x2 = center_x + dx2;
+                    let y2 = center_y + dy2;
+
+                    let w = x2 - x1;
+                    let h = y2 - y1;
+                    if w <= 0.0 || h <= 0.0 {
+                        continue;
+                    }
+
+                    let k_offset = anchor_idx * 10;
+                    let mut landmarks = [[0.0f32; 2]; NUM_LANDMARKS];
+                    for (p, point) in landmarks.iter_mut().enumerate() {
+                        let px = center_x + kps_slice[k_offset + p * 2] * stride_f32;
+                        let py = center_y + kps_slice[k_offset + p * 2 + 1] * stride_f32;
+                        *point = [px, py];
+                    }
+
+                    all_faces.push(RawFace {
+                        bbox: [x1, y1, w, h],
+                        landmarks,
+                        landmark_scores: [score; NUM_LANDMARKS],
+                        score,
+                    });
+                }
+            }
+        }
+    }
+
+    nms(&mut all_faces, nms_threshold);
+    normalize_to_relative(&mut all_faces, layout);
+    Ok(all_faces)
+}
+
 /// 三尺度合并解码 YOLOv8n-face 输出
 ///
 /// `float_outputs`: 来自 RKNN 的 12 个 float32 张量切片
@@ -670,6 +792,66 @@ mod tests {
         let outputs: Vec<&[f32]> = vec![&[]; 12];
         assert!(decode_yolov8_face(&outputs, &attrs, &layout, 0.25, 0.45).is_err());
         assert!(decode_yolov8_face(&outputs, &attrs, &layout, f32::NAN, 0.45).is_err());
+
+        let scrfd_attrs = [[7680, 1, 1, 1]; 9];
+        let scrfd_outputs: Vec<&[f32]> = vec![&[]; 9];
+        assert!(decode_scrfd_face(&scrfd_outputs, &scrfd_attrs, &layout, 0.25, 0.45).is_err());
+        assert!(decode_scrfd_face(&scrfd_outputs, &scrfd_attrs, &layout, f32::NAN, 0.45).is_err());
+    }
+
+    #[test]
+    fn test_decode_scrfd_face_synthetic() {
+        let layout = LetterboxLayout {
+            scale: 1.0,
+            pad_left: 0,
+            pad_top: 0,
+            dst_w: 640,
+            dst_h: 384,
+            scaled_w: 640,
+            scaled_h: 384,
+        };
+        let attrs = crate::manifest::DETECTOR_OUTPUT_SHAPES;
+        let mut score_8 = vec![0.0f32; 7680];
+        let score_16 = vec![0.0f32; 1920];
+        let score_32 = vec![0.0f32; 480];
+        let mut bbox_8 = vec![0.0f32; 7680 * 4];
+        let bbox_16 = vec![0.0f32; 1920 * 4];
+        let bbox_32 = vec![0.0f32; 480 * 4];
+        let mut kps_8 = vec![0.0f32; 7680 * 10];
+        let kps_16 = vec![0.0f32; 1920 * 10];
+        let kps_32 = vec![0.0f32; 480 * 10];
+
+        // 在 (gx=10, gy=10), anchor=0 构造一个人脸候选
+        // stride = 8, center_x = 80.0, center_y = 80.0
+        let anchor_idx = (10 * 80 + 10) * 2;
+        score_8[anchor_idx] = 0.95;
+        // dx1 = 2.0 (16px), dy1 = 2.0 (16px), dx2 = 3.0 (24px), dy2 = 3.0 (24px)
+        // x1 = 64.0, y1 = 64.0, x2 = 104.0, y2 = 104.0, w = 40.0, h = 40.0
+        bbox_8[anchor_idx * 4] = 2.0;
+        bbox_8[anchor_idx * 4 + 1] = 2.0;
+        bbox_8[anchor_idx * 4 + 2] = 3.0;
+        bbox_8[anchor_idx * 4 + 3] = 3.0;
+
+        // kps: 5 点相对 center 的 offset
+        for p in 0..5 {
+            kps_8[anchor_idx * 10 + p * 2] = (p as f32) * 0.5;
+            kps_8[anchor_idx * 10 + p * 2 + 1] = (p as f32) * 0.5;
+        }
+
+        let outputs: [&[f32]; 9] = [
+            &score_8, &score_16, &score_32, &bbox_8, &bbox_16, &bbox_32, &kps_8, &kps_16, &kps_32,
+        ];
+
+        let faces =
+            decode_scrfd_face(&outputs, &attrs, &layout, 0.5, 0.45).expect("SCRFD 解码应成功");
+        assert_eq!(faces.len(), 1);
+        let f = &faces[0];
+        assert!((f.score - 0.95).abs() < 1e-5);
+        // 归一化后的 bbox: x = 64/640 = 0.1, y = 64/384 = 0.166667, w = 40/640 = 0.0625, h = 40/384 = 0.104167
+        assert!((f.bbox[0] - 0.1).abs() < 1e-4);
+        assert!((f.bbox[1] - (64.0 / 384.0)).abs() < 1e-4);
+        assert!((f.bbox[2] - 0.0625).abs() < 1e-4);
+        assert!((f.bbox[3] - (40.0 / 384.0)).abs() < 1e-4);
     }
 
     #[test]

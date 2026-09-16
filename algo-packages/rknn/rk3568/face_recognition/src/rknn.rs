@@ -1304,7 +1304,14 @@ fn validate_output_attr(
     let mut actual = [1u32; 4];
     actual[..actual_dims].copy_from_slice(&attr.dims[..actual_dims]);
     let embedder_channels_last = expected == [1, 512, 1, 1] && actual == [1, 1, 1, 512];
-    if actual != expected && !embedder_channels_last {
+    let total_expected: u64 = expected.iter().map(|&x| u64::from(x)).product();
+    let total_actual: u64 = actual.iter().map(|&x| u64::from(x)).product();
+    let scrfd_2d_match = total_expected == total_actual
+        && (actual == expected
+            || (actual[0] == 1 && actual[1] == expected[0] && actual[2] == expected[1])
+            || (expected[0] == 1 && expected[1] == actual[0] && expected[2] == actual[1])
+            || (actual[0] == expected[0] && actual[1] == expected[1]));
+    if !scrfd_2d_match && !embedder_channels_last {
         return Err(AlgoError::ModelLoad {
             reason: format!(
                 "RKNN 输出 {index} 形状不匹配: expected={expected:?}, actual={:?}",

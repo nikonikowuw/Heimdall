@@ -578,7 +578,7 @@ fn decode_detector_output(
         .iter()
         .map(|attr| [attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3]])
         .collect();
-    detect::decode_yolov8_face(values, &shapes, layout, min_score, 0.45)
+    detect::decode_scrfd_face(values, &shapes, layout, min_score, 0.45)
 }
 
 static SHARED_MODELS: OnceLock<Mutex<HashMap<PathBuf, Weak<SharedModels>>>> = OnceLock::new();
