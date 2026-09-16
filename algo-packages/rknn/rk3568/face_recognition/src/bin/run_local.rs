@@ -320,6 +320,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             orig_h,
             &best.landmarks,
         )?;
+        face_recognition_rk3568::align::dump_debug_aligned_face("run_local", &aligned, best.score);
         let t2 = Instant::now();
         let embed_result = models.worker.embed_host(aligned)?;
         let embed_ms = t2.elapsed().as_secs_f64() * 1000.0;

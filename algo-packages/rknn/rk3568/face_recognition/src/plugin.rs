@@ -217,6 +217,11 @@ impl FaceRecognizer {
             // ROI 裁切失败与设备侧推理失败共用同一退避重试路径。
             let extract = || -> Result<[f32; 512], AlgoError> {
                 let aligned = extract_aligned_face(frame, face)?;
+                crate::align::dump_debug_aligned_face(
+                    &format!("live_track{track_id}"),
+                    &aligned,
+                    quality.score,
+                );
                 self.models.worker.embed_host(aligned)
             };
             match extract() {

@@ -317,6 +317,113 @@ pub fn align_face(
     align_face_pixels(image, width, height, &source)
 }
 
+/// ArcFace 5 点官方标准坐标 (112x112 画布)
+pub const ARC_FACE_BENCHMARK_PTS: [(u32, u32); 5] = [
+    (38, 52), // 左眼 (38.29, 51.70)
+    (74, 52), // 右眼 (73.53, 51.70)
+    (56, 72), // 鼻尖 (56.03, 71.74)
+    (42, 92), // 左嘴角 (41.55, 92.37)
+    (71, 92), // 右嘴角 (70.73, 92.37)
+];
+
+/// 调试落盘对齐人脸：保存 112x112 原始 RGB 图以及叠加 ArcFace 标准模板准星十字的对照图。
+///
+/// 通过环境变量控制：
+/// - `HEIMDALL_DUMP_ALIGNED=1`: 显式开启落盘 (无论是 Debug 还是 Release)
+/// - `HEIMDALL_ALIGNED_DIR=/path/to/dir`: 自定义落盘目录，默认为 `/tmp/heimdall_aligned`
+pub fn dump_debug_aligned_face(tag: &str, rgb_112: &[u8], quality_score: f32) {
+    let enabled = std::env::var("HEIMDALL_DUMP_ALIGNED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+        || (cfg!(debug_assertions) && std::env::var("HEIMDALL_DUMP_ALIGNED_DISABLE").is_err());
+
+    if !enabled {
+        return;
+    }
+
+    if rgb_112.len() != (ALIGNED_SIZE * ALIGNED_SIZE * 3) as usize {
+        return;
+    }
+
+    let dump_dir = std::env::var("HEIMDALL_ALIGNED_DIR")
+        .unwrap_or_else(|_| "/tmp/heimdall_aligned".to_string());
+    if std::fs::create_dir_all(&dump_dir).is_err() {
+        return;
+    }
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let q = (quality_score.clamp(0.0, 1.0) * 100.0) as u32;
+
+    // 1. 保存纯净 112x112 原始切片 (用于检查色彩 RGB/BGR、原图清晰度)
+    let raw_name = format!("{tag}_q{q}_{ts}_raw.png");
+    let raw_path = std::path::Path::new(&dump_dir).join(raw_name);
+    let _ = image::save_buffer(
+        &raw_path,
+        rgb_112,
+        ALIGNED_SIZE,
+        ALIGNED_SIZE,
+        image::ExtendedColorType::Rgb8,
+    );
+
+    // 2. 保存叠加 ArcFace 官方标准模板准星 (5 点高亮绿色十字，用于检查关键点对齐误差)
+    let mut overlay_rgb = rgb_112.to_vec();
+    for &(cx, cy) in &ARC_FACE_BENCHMARK_PTS {
+        // 水平线段 (中心点左右各延展 3 像素)
+        for dx in -3i32..=3 {
+            let px = cx as i32 + dx;
+            if (0..ALIGNED_SIZE as i32).contains(&px) {
+                let idx = ((cy as usize * ALIGNED_SIZE as usize) + px as usize) * 3;
+                overlay_rgb[idx] = 0; // R
+                overlay_rgb[idx + 1] = 255; // G (高亮绿)
+                overlay_rgb[idx + 2] = 0; // B
+            }
+        }
+        // 垂直线段 (中心点上下各延展 3 像素)
+        for dy in -3i32..=3 {
+            let py = cy as i32 + dy;
+            if (0..ALIGNED_SIZE as i32).contains(&py) {
+                let idx = ((py as usize * ALIGNED_SIZE as usize) + cx as usize) * 3;
+                overlay_rgb[idx] = 0; // R
+                overlay_rgb[idx + 1] = 255; // G (高亮绿)
+                overlay_rgb[idx + 2] = 0; // B
+            }
+        }
+    }
+
+    let overlay_name = format!("{tag}_q{q}_{ts}_overlay.png");
+    let overlay_path = std::path::Path::new(&dump_dir).join(overlay_name);
+    let _ = image::save_buffer(
+        &overlay_path,
+        &overlay_rgb,
+        ALIGNED_SIZE,
+        ALIGNED_SIZE,
+        image::ExtendedColorType::Rgb8,
+    );
+
+    tracing::info!(
+        tag,
+        quality = quality_score,
+        raw = %raw_path.display(),
+        overlay = %overlay_path.display(),
+        "【DEBUG】112x112 对齐人脸已落盘"
+    );
+
+    if std::env::var("HEIMDALL_DUMP_ALIGNED_STDOUT")
+        .map(|v| v != "0")
+        .unwrap_or(true)
+    {
+        println!(
+            "[ALIGN DEBUG] [{tag}] Q={:.1}% -> Raw: {}, Overlay: {}",
+            quality_score * 100.0,
+            raw_path.display(),
+            overlay_path.display()
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +476,42 @@ mod tests {
             .iter()
             .flatten()
             .all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn dump_debug_aligned_face_handles_valid_and_invalid_buffers() {
+        // 短 buffer 直接无害返回
+        dump_debug_aligned_face("test_invalid", &[1, 2, 3], 0.8);
+
+        // 合法 112x112 RGB 写入临时目录验证
+        let temp_dir = std::env::temp_dir().join(format!(
+            "heimdall_test_dump_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::env::set_var("HEIMDALL_DUMP_ALIGNED", "1");
+        std::env::set_var(
+            "HEIMDALL_ALIGNED_DIR",
+            temp_dir.to_str().expect("有效 UTF-8 临时路径"),
+        );
+        std::env::set_var("HEIMDALL_DUMP_ALIGNED_STDOUT", "0");
+
+        let valid_rgb = vec![120u8; 112 * 112 * 3];
+        dump_debug_aligned_face("test_valid", &valid_rgb, 0.95);
+
+        let files: Vec<_> = std::fs::read_dir(&temp_dir)
+            .expect("读取目录")
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(files.len(), 2, "应生成 raw 和 overlay 两张图片");
+
+        // 清理临时文件与环境变量
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::env::remove_var("HEIMDALL_DUMP_ALIGNED");
+        std::env::remove_var("HEIMDALL_ALIGNED_DIR");
+        std::env::remove_var("HEIMDALL_DUMP_ALIGNED_STDOUT");
     }
 }

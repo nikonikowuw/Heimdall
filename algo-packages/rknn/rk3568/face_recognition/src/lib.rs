@@ -925,6 +925,7 @@ unsafe fn extract_face_impl(
     // 杜绝重缩放至 640x384 灰色 letterbox 导致的特征模糊、关键点漂移与失真。
     if orig_w == 112 && orig_h == 112 {
         let aligned = image.as_raw().to_vec();
+        align::dump_debug_aligned_face("extract_direct112", &aligned, 1.0);
         let embedding = match models.worker.embed_host(aligned.clone()) {
             Ok(embedding) => embedding,
             Err(error) => {
@@ -1069,6 +1070,7 @@ unsafe fn extract_face_impl(
             }
         }
     };
+    align::dump_debug_aligned_face("extract_face", &aligned, quality.score);
     let embedding = match models.worker.embed_host(aligned.clone()) {
         Ok(embedding) => embedding,
         Err(error) => {
