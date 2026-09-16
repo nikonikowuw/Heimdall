@@ -428,11 +428,7 @@ impl CaptureDispatchService {
         }
 
         let best_match = &candidates[0];
-        let status = if best_match.similarity >= adaptive_confirm {
-            types::RecognitionStatus::Confirmed
-        } else {
-            types::RecognitionStatus::PendingReview
-        };
+        let status = evaluate_recognition_status(&candidates, adaptive_confirm);
 
         let recognition_id = uuid::Uuid::now_v7().to_string();
         let recognized_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
@@ -613,5 +609,95 @@ impl CaptureDispatchService {
                 }
             }
         })
+    }
+}
+
+/// 业务决策层硬核校验的 Top-1 与 Top-2 最小排他优势差值 (Margin 防控)
+pub const MIN_CONFIRM_MARGIN: f32 = 0.05;
+
+/// 根据候选人列表与自适应确认门槛判定最终识别状态。
+///
+/// 遵循 docs/algo/face-best-shot-fusion-design.md 附录 C 的 Margin 误认防控机制：
+/// 业务决策层硬核校验 Top-1 与 Top-2 排他优势差值 (不交给用户配置)；
+/// 若两名候选人相似度咬得太紧 (差值 < MIN_CONFIRM_MARGIN)，判定为混淆匹配，强制降级为 PendingReview 避免冒认。
+pub fn evaluate_recognition_status(
+    candidates: &[types::FaceCandidateItem],
+    adaptive_confirm: f32,
+) -> types::RecognitionStatus {
+    let Some(best_match) = candidates.first() else {
+        return types::RecognitionStatus::PendingReview;
+    };
+
+    if best_match.similarity < adaptive_confirm {
+        return types::RecognitionStatus::PendingReview;
+    }
+
+    if let Some(second_match) = candidates.get(1) {
+        let margin = best_match.similarity - second_match.similarity;
+        if margin < MIN_CONFIRM_MARGIN {
+            tracing::info!(
+                top1_subject = %best_match.subject_name,
+                top1_similarity = best_match.similarity,
+                top2_subject = %second_match.subject_name,
+                top2_similarity = second_match.similarity,
+                margin,
+                min_margin = MIN_CONFIRM_MARGIN,
+                "人脸识别命中候选优势差值不足，触发 Margin 防控，强制降级为 PendingReview"
+            );
+            return types::RecognitionStatus::PendingReview;
+        }
+    }
+
+    types::RecognitionStatus::Confirmed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use types::{FaceCandidateItem, RecognitionStatus};
+
+    fn make_candidate(subject_id: &str, name: &str, similarity: f32) -> FaceCandidateItem {
+        FaceCandidateItem {
+            rank: 1,
+            subject_id: subject_id.to_string(),
+            subject_name: name.to_string(),
+            similarity,
+            face_id: format!("face_{subject_id}"),
+            photo_rel_path: format!("galleries/{subject_id}/face.jpg"),
+        }
+    }
+
+    #[test]
+    fn test_single_candidate_passes_threshold() {
+        let candidates = vec![make_candidate("s1", "张三", 0.78)];
+        let status = evaluate_recognition_status(&candidates, 0.75);
+        assert_eq!(status, RecognitionStatus::Confirmed);
+    }
+
+    #[test]
+    fn test_single_candidate_below_threshold() {
+        let candidates = vec![make_candidate("s1", "张三", 0.72)];
+        let status = evaluate_recognition_status(&candidates, 0.75);
+        assert_eq!(status, RecognitionStatus::PendingReview);
+    }
+
+    #[test]
+    fn test_dual_candidate_with_ample_margin_is_confirmed() {
+        let candidates = vec![
+            make_candidate("s1", "张三", 0.82),
+            make_candidate("s2", "李四", 0.75), // 差值 0.07 >= 0.05
+        ];
+        let status = evaluate_recognition_status(&candidates, 0.75);
+        assert_eq!(status, RecognitionStatus::Confirmed);
+    }
+
+    #[test]
+    fn test_dual_candidate_with_tight_margin_is_demoted_to_pending_review() {
+        let candidates = vec![
+            make_candidate("s1", "张三", 0.80),
+            make_candidate("s2", "李四", 0.77), // 差值 0.03 < 0.05，触发混淆拦截
+        ];
+        let status = evaluate_recognition_status(&candidates, 0.75);
+        assert_eq!(status, RecognitionStatus::PendingReview);
     }
 }
