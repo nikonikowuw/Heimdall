@@ -379,24 +379,31 @@ async fn serve_evidence_image(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let base_dir = state.pipeline.snapshot_engine().base_evidence_dir();
+    let engine = state.pipeline.snapshot_engine();
+    let base_dir = engine.base_evidence_dir();
     let full_path = base_dir.join(clean_path);
 
-    // 校验 base_dir 存在性
-    if !base_dir.exists() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    let canonical_base = match tokio::fs::canonicalize(base_dir).await {
-        Ok(p) => p,
-        Err(_) => return Err(StatusCode::NOT_FOUND),
+    // 优先复用 SnapshotEngine 启动时已规范化的 base_dir 句柄，避免每次高频图片请求都对根目录重复执行系统调用
+    let fallback_canonical_base;
+    let canonical_base: &std::path::Path = match engine.canonical_base_evidence_dir() {
+        Some(p) => p,
+        None => {
+            if !base_dir.exists() {
+                return Err(StatusCode::NOT_FOUND);
+            }
+            fallback_canonical_base = match tokio::fs::canonicalize(base_dir).await {
+                Ok(p) => p,
+                Err(_) => return Err(StatusCode::NOT_FOUND),
+            };
+            &fallback_canonical_base
+        }
     };
     let canonical_target = match tokio::fs::canonicalize(&full_path).await {
         Ok(p) => p,
         Err(_) => return Err(StatusCode::NOT_FOUND),
     };
 
-    if !canonical_target.starts_with(&canonical_base) {
+    if !canonical_target.starts_with(canonical_base) {
         return Err(StatusCode::FORBIDDEN);
     }
 

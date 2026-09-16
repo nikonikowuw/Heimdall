@@ -395,7 +395,7 @@ fn dequant_i8(value: i8, zero_point: i32, scale: f32) -> f32 {
 }
 
 fn activate_yolov8_score(value: f32) -> f32 {
-    if value > 1.0 || value < -0.1 {
+    if !(-0.1..=1.0).contains(&value) {
         1.0 / (1.0 + (-value).exp())
     } else {
         value

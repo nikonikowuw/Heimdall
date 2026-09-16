@@ -31,7 +31,8 @@ export function AlarmCardItem({
   return (
     <div
       onClick={onSelect}
-      onMouseEnter={() => preloadImage(evidenceApi.getImageUrl(alarm.imageRelPath))}
+      onPointerEnter={() => preloadImage(evidenceApi.getImageUrl(alarm.imageRelPath))}
+      onTouchStart={() => preloadImage(evidenceApi.getImageUrl(alarm.imageRelPath))}
       className={`group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-[var(--bg-surface)] shadow-xs transition-all duration-200 hover:shadow-md ${
         isSelected
           ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]/50'

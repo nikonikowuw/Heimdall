@@ -9,13 +9,18 @@ use types::{BoundingBox, FrameRef};
 
 use crate::error::MediaError;
 use crate::image_convert::snapshot_readback_to_rgb_image;
-use crate::rga::RGA3_MIN_DIMENSION;
 
-/// 判断当前 MPP/RGA3 特写路径是否必须回退到 CPU。
-fn crop_requires_cpu_fallback(frame: &FrameRef, bbox: BoundingBox, padding_ratio: f32) -> bool {
+/// 判断当前特写路径是否因小于目标硬件编码器的物理下限而必须回退到 CPU。
+fn crop_requires_cpu_fallback(
+    hw: Option<&dyn DeviceSnapEncoder>,
+    frame: &FrameRef,
+    bbox: BoundingBox,
+    padding_ratio: f32,
+) -> bool {
+    let min_dim = hw.map(|h| h.min_crop_dimension()).unwrap_or(2);
     let (_, _, crop_w, crop_h, _) =
         compute_crop_roi(frame.width, frame.height, bbox, padding_ratio);
-    crop_w < RGA3_MIN_DIMENSION || crop_h < RGA3_MIN_DIMENSION
+    crop_w < min_dim || crop_h < min_dim
 }
 
 /// 设备侧快照编码器统一抽象
@@ -50,6 +55,16 @@ pub trait DeviceSnapEncoder {
 
     /// 编码器是否就绪（硬件上下文已初始化且可用）
     fn is_ready(&self) -> bool;
+
+    /// 硬件特写裁剪支持的最小输入/输出边长（像素）
+    ///
+    /// - RGA2 / 一般硬件默认支持至 2px；
+    /// - RGA3 (如 RK3588 纯 RGA3 调度) 硬件限制为 68px。
+    ///
+    /// 只有当计算出的实际裁剪 ROI 宽高低于此阈值时，才提前绕过硬件进入 CPU 降级。
+    fn min_crop_dimension(&self) -> u32 {
+        2
+    }
 }
 
 /// 计算符合硬件（如 RGA/VPU/DVPP）约束的裁剪 ROI
@@ -220,7 +235,9 @@ impl SnapEncoder {
         padding_ratio: f32,
         quality: u8,
     ) -> Result<Vec<u8>, MediaError> {
-        if crop_requires_cpu_fallback(frame, bbox, padding_ratio) {
+        let cpu_crop_fallback =
+            crop_requires_cpu_fallback(self.hw_encoder.as_deref(), frame, bbox, padding_ratio);
+        if cpu_crop_fallback {
             return self
                 .cpu_encoder
                 .encode_crop(frame, bbox, padding_ratio, quality);
@@ -259,7 +276,8 @@ impl SnapEncoder {
                 .map(|jpeg| (jpeg, None));
         };
 
-        let cpu_crop_fallback = crop_requires_cpu_fallback(frame, bbox, padding_ratio);
+        let cpu_crop_fallback =
+            crop_requires_cpu_fallback(self.hw_encoder.as_deref(), frame, bbox, padding_ratio);
 
         if let Some(ref hw) = self.hw_encoder {
             if hw.is_ready() {
@@ -461,6 +479,11 @@ mod tests {
         impl DeviceSnapEncoder for CropTrackingEncoder {
             fn name(&self) -> &'static str {
                 "mock-hardware"
+            }
+
+            fn min_crop_dimension(&self) -> u32 {
+                // 模拟 RGA3 纯硬件核心 68px 下限
+                crate::rga::RGA3_MIN_DIMENSION
             }
 
             fn encode_full_frame(

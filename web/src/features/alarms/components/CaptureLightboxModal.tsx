@@ -143,7 +143,7 @@ export function CaptureLightboxModal({
                 <img
                   src={evidenceApi.getImageUrl(capture.cropImageRelPath)}
                   alt="Preview Placeholder"
-                  className="max-h-[70%] max-w-[70%] rounded-xl object-contain opacity-75 shadow-2xl transition-opacity duration-300"
+                  className="max-h-[70%] max-w-[70%] rounded-xl object-contain opacity-75 shadow-2xl transition-opacity duration-150"
                 />
                 {isFullLoading && (
                   <div className="absolute bottom-4 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-3 py-1 text-[11px] text-slate-200 shadow-lg backdrop-blur-md">
@@ -178,7 +178,9 @@ export function CaptureLightboxModal({
                 <img
                   src={fullImageSrc}
                   alt="Capture"
-                  className={`h-full w-full object-contain transition-opacity duration-300 ${
+                  fetchPriority="high"
+                  decoding="async"
+                  className={`h-full w-full object-contain transition-opacity duration-150 ${
                     isFullLoaded ? 'opacity-100' : 'opacity-0'
                   }`}
                   onLoad={handleImageLoad}

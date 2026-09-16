@@ -21,7 +21,8 @@ export function CaptureCardItem({
   return (
     <div
       onClick={onSelect}
-      onMouseEnter={() => preloadImage(evidenceApi.getImageUrl(capture.imageRelPath))}
+      onPointerEnter={() => preloadImage(evidenceApi.getImageUrl(capture.imageRelPath))}
+      onTouchStart={() => preloadImage(evidenceApi.getImageUrl(capture.imageRelPath))}
       className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] transition-all duration-200 hover:border-cyan-500/50 hover:shadow-md"
     >
       <div className="relative aspect-square w-full overflow-hidden bg-black/90">

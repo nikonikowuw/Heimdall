@@ -929,21 +929,47 @@ async fn execute_capture_actions(
                         .tracked_object
                         .face_bbox()
                         .unwrap_or(settle.tracked_object.bbox);
-                    let capture_result = if settle.target_in_current_frame
+                    let retro_result = if settle.target_in_current_frame
                         && settle.last_seen_pts_ms == timestamp
                     {
-                        pipeline_mgr
-                            .trigger_snapshot_for_frame(
-                                camera_id,
-                                timestamp,
-                                Some(crop_bbox),
-                                analyzed_frame.clone(),
-                            )
-                            .await
+                        None
                     } else {
-                        pipeline_mgr
+                        // 先按「最后可见 PTS」向证据源回溯；未命中再退当帧快照。
+                        match pipeline_mgr
                             .trigger_snapshot(camera_id, settle.last_seen_pts_ms, Some(crop_bbox))
                             .await
+                        {
+                            Ok(result) => Some(Ok(result)),
+                            Err(retro_error) => {
+                                // 主码流分析模式没有压缩证据环，`decoded_ring` 只保 5 帧/300ms，
+                                // 而离场宽限自 400ms 起算，回溯必然未命中。此处若直接失败，api 层会因
+                                // `snapshot == None` 丢弃整条通行记录（含 1:N 对账），因此回退链必须有终点。
+                                tracing::warn!(
+                                    camera_id,
+                                    algorithm_id,
+                                    track_id = settle.track_id,
+                                    event_pts = settle.last_seen_pts_ms,
+                                    frame_pts = timestamp,
+                                    error = %retro_error,
+                                    "回索取证未命中，降级为当帧快照（图与事件几何可能不同刻，记录保留）"
+                                );
+                                None
+                            }
+                        }
+                    };
+
+                    let capture_result = match retro_result {
+                        Some(res) => res,
+                        None => {
+                            pipeline_mgr
+                                .trigger_snapshot_for_frame(
+                                    camera_id,
+                                    timestamp,
+                                    Some(crop_bbox),
+                                    analyzed_frame.clone(),
+                                )
+                                .await
+                        }
                     };
                     match capture_result {
                         Ok(result) => snapshot = Some(result),
@@ -2089,6 +2115,85 @@ mod tests {
             }
             other => panic!("期望通行抓拍事件，实际为 {other:?}"),
         }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 主码流分析模式不维护压缩证据环，离场结算按「最后可见 PTS」回溯必然未命中
+    /// （`decoded_ring` 仅有 100ms 容差，而 `EXIT_GRACE_MS` 从 400ms 起算）。
+    /// 该路径必须降级为当帧快照取证，而不是让 api 层因无图丢弃整条通行记录。
+    #[tokio::test]
+    async fn exit_settle_without_candidate_degrades_to_current_frame_in_main_stream_mode() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_capture_exit_degrade_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager = PipelineManager::with_all_options(
+            temp_dir.clone(),
+            crate::snapshot::SnapshotConfig::default(),
+            2,
+            1000,
+        );
+        let camera_id = "cam_exit_degrade";
+        let algorithm_id = "algo_face";
+        manager.set_main_stream_analysis(camera_id, true).await;
+        let ctx = manager.get_or_create_context(camera_id).await;
+        let mut events = manager.subscribe_analysis_events();
+
+        let object = capture_object(11, BoundingBox::new(0.4, 0.3, 0.6, 0.6), 0.86);
+        // 只推进状态机、不执行 RetainCandidate → 控制器无候选可写盘。
+        let _ = {
+            let mut settle = ctx
+                .capture_settle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            settle.observe(algorithm_id, std::slice::from_ref(&object), &[], 1000)
+        };
+        // 目标不再触发且已过离场宽限：结算帧 1600 距最后可见帧 1000 为 600ms，
+        // 远超回溯容差，主码流模式下无任何可回退的压缩帧。
+        let actions = {
+            let mut settle = ctx
+                .capture_settle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            settle.observe(algorithm_id, &[], &[], 1600)
+        };
+        assert_eq!(actions.len(), 1, "离场应只产出结算动作");
+        assert!(
+            matches!(
+                actions[0],
+                CaptureAction::Settle(ref settle)
+                    if settle.reason == crate::capture_settle::SettleReason::TrackExited
+            ),
+            "必须复现 track_exited 结算"
+        );
+
+        let infer_metrics = InstanceMetrics::default();
+        let pump_metrics = PumpMetrics::default();
+        execute_capture_actions(
+            &manager,
+            camera_id,
+            algorithm_id,
+            actions,
+            &test_nv12_frame(camera_id, 1600),
+            1600,
+            &infer_metrics,
+            &pump_metrics,
+        )
+        .await;
+
+        match events.recv().await.expect("通行抓拍事件") {
+            PipelineAnalysisEvent::Capture(event) => {
+                let snapshot = event
+                    .snapshot
+                    .expect("主码流分析模式离场结算必须降级取证，不得丢弃整条通行记录");
+                assert_eq!(snapshot.image_stream, types::EvidenceImageStream::Main);
+                assert_eq!(snapshot.frame_pts_ms, 1600, "降级取证只能取当帧");
+                assert!(temp_dir.join(&snapshot.image_rel_path).is_file());
+            }
+            other => panic!("期望通行抓拍事件，实际为 {other:?}"),
+        }
+        assert_eq!(infer_metrics.snapshots_saved.load(Ordering::Relaxed), 1);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

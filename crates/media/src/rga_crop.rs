@@ -29,8 +29,8 @@ use crate::error::MediaError;
 const IM_STATUS_SUCCESS: c_int = 1;
 const IM_STATUS_NOERROR: c_int = 2;
 const IM_SYNC: c_int = 1 << 19;
-/// 目标 RGA BSP 的安全公共最小 ROI；不足时由上层转 CPU crop。
-const RGA_MIN_DIMENSION: u32 = 68;
+/// RGA 硬件规范允许的物理最小输入/输出维度（RGA2 下限 2px，更严格约束由驱动层 imcheck 裁定）
+const RGA_MIN_DIMENSION: u32 = 2;
 
 /// librga 像素格式枚举常量（遵循 Rockchip rga.h 标准，值全部向左偏移 8 位以与 Android HAL 区分）
 ///

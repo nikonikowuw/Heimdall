@@ -546,6 +546,7 @@ pub struct EvidenceTarget {
 /// 快照抓拍引擎
 pub struct SnapshotEngine {
     base_evidence_dir: PathBuf,
+    canonical_base_dir: Option<PathBuf>,
     config: AtomicSnapshotConfig,
     /// 快照编码工作线程；队列固定容量，避免 Tokio blocking pool 无界堆积。
     worker: Option<SnapshotWorker>,
@@ -555,6 +556,7 @@ impl std::fmt::Debug for SnapshotEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SnapshotEngine")
             .field("base_evidence_dir", &self.base_evidence_dir)
+            .field("canonical_base_dir", &self.canonical_base_dir)
             .field("config", &self.config())
             .field("worker", &self.worker)
             .finish()
@@ -582,8 +584,11 @@ impl SnapshotEngine {
             }
         };
         let base_dir: PathBuf = base_evidence_dir.into();
+        let _ = std::fs::create_dir_all(&base_dir);
+        let canonical_base_dir = std::fs::canonicalize(&base_dir).ok();
         Self {
             base_evidence_dir: base_dir,
+            canonical_base_dir,
             worker,
             config: AtomicSnapshotConfig::new(config),
         }
@@ -591,6 +596,11 @@ impl SnapshotEngine {
 
     pub fn base_evidence_dir(&self) -> &std::path::Path {
         &self.base_evidence_dir
+    }
+
+    /// 获取服务启动/初始化时缓存的已规范化根目录路径，避免每次请求重复系统调用
+    pub fn canonical_base_evidence_dir(&self) -> Option<&std::path::Path> {
+        self.canonical_base_dir.as_deref()
     }
 
     pub fn config(&self) -> SnapshotConfig {
@@ -1688,5 +1698,26 @@ mod tests {
         assert!(crop_file.is_file(), "特写文件必须存在");
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_canonical_base_evidence_dir_ensures_directory_and_caches_path() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_evidence_canonical_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        assert!(!temp_dir.exists(), "测试起始时目标目录应不存在");
+
+        let engine = SnapshotEngine::new(temp_dir.clone());
+        assert!(temp_dir.exists(), "SnapshotEngine 构造必须确保根目录存在");
+        let cached = engine
+            .canonical_base_evidence_dir()
+            .expect("canonical_base_evidence_dir 必须在初始化时成功解析");
+        assert_eq!(
+            cached,
+            std::fs::canonicalize(&temp_dir).expect("规范化路径")
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

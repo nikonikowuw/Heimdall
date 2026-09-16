@@ -945,6 +945,10 @@ impl DeviceSnapEncoder for MppSnapEncoder {
     fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
+    fn min_crop_dimension(&self) -> u32 {
+        // RK3568 (RGA2) 硬件最小支持 2px；RK3588 驱动层亦可调度 RGA2 或支持多核心
+        2
+    }
 
     fn encode_full_frame(&self, frame: &FrameRef, quality: u8) -> Result<Vec<u8>, MediaError> {
         let (fd, w, h, hs, vs) = match frame.handle() {
