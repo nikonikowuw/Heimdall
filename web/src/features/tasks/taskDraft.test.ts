@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { AlgorithmItem, AlgorithmVersionItem, Camera, DetectionRule } from '@/types'
+import type { AlgorithmItem, AlgorithmVersionItem, Camera } from '@/types'
 import {
   DEFAULT_ANALYSIS_FPS,
-  buildArmTogglePayload,
   buildQuickCreatePayload,
   pickActiveVersion,
   pickRecommendedAlgorithmId,
@@ -242,69 +241,5 @@ describe('buildQuickCreatePayload', () => {
     })
 
     expect(payload.configRevision).toBe(0)
-  })
-})
-
-describe('buildArmTogglePayload', () => {
-  const rules: DetectionRule[] = [{ role: 'roi', points: [{ x: 0.1, y: 0.1 }] }]
-
-  it('omits algorithmInstances so instance params survive an arm toggle', () => {
-    const payload = buildArmTogglePayload({
-      cameraId: 'cam-1',
-      fallbackName: 'cam-1',
-      current: { name: '周界防护', rules, motionGate: { enabled: true, threshold: 30 } },
-      nextDesired: true,
-    })
-
-    expect('algorithmInstances' in payload).toBe(false)
-  })
-
-  it('carries existing rules and motion gate through unchanged', () => {
-    const payload = buildArmTogglePayload({
-      cameraId: 'cam-1',
-      fallbackName: 'cam-1',
-      current: { name: '周界防护', rules, motionGate: { enabled: true, threshold: 30 } },
-      nextDesired: false,
-    })
-
-    expect(payload.desiredEnabled).toBe(false)
-    expect(payload.name).toBe('周界防护')
-    expect(payload.rules).toEqual(rules)
-    expect(payload.motionGate).toEqual({ enabled: true, threshold: 30 })
-  })
-
-  it('carries the snapshot config revision so a stale toggle cannot overwrite newer edits', () => {
-    const payload = buildArmTogglePayload({
-      cameraId: 'cam-1',
-      fallbackName: 'cam-1',
-      current: { name: '周界防护', rules, configRevision: 7 },
-      nextDesired: true,
-    })
-
-    expect(payload.configRevision).toBe(7)
-  })
-
-  it('omits configRevision when the snapshot has none', () => {
-    const payload = buildArmTogglePayload({
-      cameraId: 'cam-1',
-      fallbackName: 'cam-1',
-      current: { name: '周界防护', rules },
-      nextDesired: true,
-    })
-
-    expect('configRevision' in payload).toBe(true)
-    expect(payload.configRevision).toBeUndefined()
-  })
-
-  it('falls back to the camera name when the task has none', () => {
-    const payload = buildArmTogglePayload({
-      cameraId: 'cam-1',
-      fallbackName: '库房正门',
-      nextDesired: true,
-    })
-
-    expect(payload.name).toBe('库房正门')
-    expect(payload.rules).toEqual([])
-    expect('motionGate' in payload).toBe(false)
   })
 })

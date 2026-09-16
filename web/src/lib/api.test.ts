@@ -21,6 +21,28 @@ describe('API Client', () => {
     expect(err.name).toBe('ApiError')
   })
 
+  it('setEnabled posts to the task state sub-resource with an explicit intent', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: { cameraId: 'cam-1', desiredEnabled: true, configRevision: 4 },
+        timestamp: 1747584000000,
+      }),
+    })
+
+    await taskApi.setEnabled('cam-1', true)
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/tasks/cam-1/enabled',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ enabled: true }),
+      }),
+    )
+  })
+
   it('isConfigConflictError only matches the config revision conflict code', () => {
     expect(isConfigConflictError(new ApiError('冲突', API_CODE_CONFIG_CONFLICT))).toBe(true)
     expect(API_CODE_CONFIG_CONFLICT).toBe(40903)

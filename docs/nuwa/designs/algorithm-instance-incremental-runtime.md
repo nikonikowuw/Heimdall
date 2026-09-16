@@ -357,6 +357,23 @@ ALTER TABLE algorithm_instances
 
 因此控制面的不变量是：**任何写接口都只提交期望配置，收敛统一由 `sync_pipeline_for_camera` 从已提交的持久化配置驱动**。禁止任何入口用请求体临时拼装 `StartCameraPipelineParams`。
 
+### 8.1.1 状态动词：布防开关不进整份配置载荷
+
+整份下发适合「编辑一次配置」，不适合「翻转一个布尔值」：早期布防开关不得不回传从列表快照读来的名称、防区与门控，同时省略 `algorithmInstances` 以借助「省略即保留」保住工作台调好的算法参数——一个只想改状态的意图，被迫携带一堆它并不拥有的配置，还得记住哪些字段必须省略。
+
+现在拆出状态动词：
+
+```
+PUT /api/v1/tasks/{cameraId}/enabled   { "enabled": bool }   // 必填，缺失即 422，不得默认成撤防
+```
+
+- 只写 `desired_enabled`（撤防时一并视为停机），不触碰名称、规则、门控与实例集合；
+- **仍然推进 `config_revision`**：布防意图是配置，基于旧快照的整份覆盖写会被 409 拒绝，而不是静默把布防状态改回去；
+- 运行时编排与整份下发**共用同一份代码**（`apply_persisted_runtime`）：两个入口各写一份「期望变化 → 运行时动作」的映射，迟早分叉成同一份配置因入口不同而得到不同行为；
+- 摄像头不存在时撤防仍必须成功，布防则明确 404——不制造「布防成功但立刻失败」的假象；任务不存在一律 404，状态动词不隐式创建任务。
+
+顺带修正了总闸与分闸的耦合：`algorithm_instances.enabled`（分闸，表达「用户要不要这个算法」）与 `analysis_tasks.desired_enabled`（总闸，表达「这个通道现在跑不跑」）是两个独立开关。此前整份下发在撤防时把所有分闸一并写成 `false`，于是只翻转总闸的入口（列表开关）在撤防后会因为「无已启用的算法实例」而启不来，同时丢掉用户的逐算法意图。现在运行与否只由总闸判定，写入侧不再连坐。
+
 ### 8.2 收敛结果的返回位置
 
 没有实例级查询接口，收敛状态随任务资源一起返回：
@@ -385,7 +402,7 @@ ALTER TABLE algorithm_instances
 - 冲突响应不携带配置快照：API 根信封约定错误时 `data` 为 `null`，恢复所需的最新配置由前端重新 `GET` 获取；
 - **载入最新**：重新 `GET` 任务配置，按服务端快照覆盖本地编辑态并刷新版本号（丢弃本地修改）；
 - **覆盖保存**：先 `GET` 取回最新版本号，再用本地内容重新下发——先读后写，避免用陈旧版本号反复被拒；
-- 任务列表的布防开关同样回传列表快照的 `configRevision`；冲突时静默丢弃本次开关动作并刷新列表，不弹错误，因为用户并没有在编辑配置；
+- 任务列表的布防开关走状态动词端点，不再回传整份配置，因此不存在「用旧快照覆盖新配置」的窗口；开关失败时保留列表原样，由下一次刷新带回服务端真实状态；
 - 快速创建模态框的冲突提示单独成句（「该通道已被其他会话创建了 AI 任务，请刷新列表后重试」），不把通用的「请载入最新配置后重试」透给用户——创建场景没有可载入的配置。
 
 ### 8.4 前端状态（已实现）
@@ -524,6 +541,7 @@ algorithm_instance_worker_shutdown_timeout_total
 - **资源不足不驱逐其他实例**：新 Worker 分配失败时旧 Worker 继续服务，目标实例返回 `failed` 并附 `status_message`；不做「杀掉旧实例腾内存」的激进策略。
 - **规则/门控归属**：任务级 ROI/Mask/Line 与摄像头级运动门控为 canonical source，由任务级保存提交；实例表同名列为迁移期镜像字段，运行时不读取。
 - **并发保护用任务级版本号而非逐实例代际**：整体下发的正确性单位是整份配置（含实例集合的增删），只有任务级单数字能覆盖全部覆盖写字段；逐实例校验会漏判「对方删除了本次请求里不存在的实例」。
+- **配置写入与状态动作分离**：整份下发负责配置，`PUT /tasks/{cameraId}/enabled` 负责布防总闸这一个状态。状态动作不携带配置、不依赖「省略即保留」，但仍推进同一个版本号，因此不会绕过并发保护。这与工业界把 `load`/`unload`/`scale` 这类动词独立成子资源的做法一致。
 
 ### 14.2 实现落点
 
@@ -533,8 +551,8 @@ algorithm_instance_worker_shutdown_timeout_total
 | infer | `InferenceBackend::update_config`、`InferError::Unsupported`、`WorkerControl::UpdateConfig`、`InferenceWorkerHandle::update_config` | 热更新在有界控制通道内执行，1s 客户端超时熔断 |
 | pump | `PumpCommand`（Add/Remove/SetAnalysisFps）、`DecodeSlot.target_fps`、`ControlSlot.{target_fps, worker_generation}`、`AnalysisPump::{add,remove,set_fps,replace}_instance*` | 拓扑变更只在解码帧边界生效；Worker 替换后旧代际结果计入 `stale_results` 并丢弃 |
 | coordinator | `MediaContractSignature`、`InstanceDesiredConfig`、`InstanceApplyOutcome`、`TaskRuntimeCoordinator::{apply_instance_config, remove_instance_runtime, sync_camera_instances, requires_media_restart}` | 实例集合变更走增量；仅媒体契约变化才整路重建 |
-| api | `sync_pipeline_for_camera`（返回 `Option<CameraInstanceSyncOutcome>`）是唯一收敛入口，唯一写接口 `PUT /tasks/{cameraId}` 与任务查询都经由它；`TaskConfigDto.configRevision` / `TaskSummaryDto.configRevision`；`task_runtime_updates`、`persist_instance_outcomes`、`resolve_outcome_revision`；`DbError::RevisionConflict` → `ApiError::ConfigRevisionConflict`（409 / 40903） | 任务响应逐实例返回 `desiredRevision` / `appliedRevision` / `applyState` / `statusMessage`，未收敛不伪装成功；代际记 0（集合 diff 语义）时按库中当前期望代际收敛 |
-| 测试 | `pipeline/tests/{pump_incremental_instance_tests,coordinator_incremental_tests}.rs`、`api/tests/instance_apply_state_tests.rs`、`db/tests/task_repo_tests.rs`、`web/src/features/tasks/taskDraft.test.ts`、`web/src/lib/api.test.ts` | 增删/改帧率不重启解码器、代际栅栏丢弃迟到结果、失败如实回写、陈旧版本 409 且不落库、运行时簿记不推进版本号、创建断言与冲突识别 |
+| api | `sync_pipeline_for_camera`（返回 `Option<CameraInstanceSyncOutcome>`）是唯一收敛入口，`PUT /tasks/{cameraId}` 与 `PUT /tasks/{cameraId}/enabled` 两个写入口共用 `apply_persisted_runtime` 编排运行时；`TaskConfigDto.configRevision` / `TaskSummaryDto.configRevision`；`task_runtime_updates`、`persist_instance_outcomes`、`resolve_outcome_revision`；`DbError::RevisionConflict` → `ApiError::ConfigRevisionConflict`（409 / 40903） | 任务响应逐实例返回 `desiredRevision` / `appliedRevision` / `applyState` / `statusMessage`，未收敛不伪装成功；代际记 0（集合 diff 语义）时按库中当前期望代际收敛 |
+| 测试 | `pipeline/tests/{pump_incremental_instance_tests,coordinator_incremental_tests}.rs`、`api/tests/{instance_apply_state_tests,task_enabled_verb_tests}.rs`、`db/tests/task_repo_tests.rs`、`web/src/features/tasks/taskDraft.test.ts`、`web/src/lib/api.test.ts` | 增删/改帧率不重启解码器、代际栅栏丢弃迟到结果、失败如实回写、陈旧版本 409 且不落库、运行时簿记不推进版本号、创建断言与冲突识别 |
 
 ### 14.3 已知取舍
 

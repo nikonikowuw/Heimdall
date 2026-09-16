@@ -286,11 +286,11 @@ impl TaskRepo {
             let mut desired_ids = Vec::with_capacity(instances.len());
 
             for instance in &instances {
-                let instance_enabled = if params.desired_enabled {
-                    instance.enabled.unwrap_or(true)
-                } else {
-                    false
-                };
+                // 分闸与总闸是两个独立开关：实例的 enabled 表达「用户要不要这个算法」，
+                // 任务的 desired_enabled 表达「这个通道现在跑不跑」。撤防时把分闸一并写成
+                // false 会丢掉用户的逐算法意图——再次布防（尤其是只翻转总闸的状态动词）时
+                // 就会因为「无已启用的算法实例」而启不来。运行与否由总闸判定，不在写入侧连坐。
+                let instance_enabled = instance.enabled.unwrap_or(true);
 
                 if let Some(model) = existing_instances.get(&instance.algorithm_id) {
                     desired_ids.push(model.id);
@@ -770,6 +770,43 @@ impl TaskRepo {
             },
         )
         .await
+    }
+
+    /// 只写入任务的布防意图（状态动词），不触碰名称、规则、门控与算法实例集合。
+    ///
+    /// 布防开关是一次显式的期望状态断言，不是配置编辑：撤防不改变任何算法参数，
+    /// 因此这里不做「读取现有配置再整体回写」——避免把编辑器里的旧快照顺带写回。
+    ///
+    /// 但版本号必须推进：布防意图同样属于配置，若旧客户端基于早于本次开关的快照做整体下发，
+    /// 会被 `save_task_with_instances_txn` 的版本校验拒绝，而不是静默把布防状态改回去。
+    pub async fn set_task_enabled(
+        db: &DatabaseConnection,
+        camera_id: &str,
+        enabled: bool,
+    ) -> Result<Model, DbError> {
+        let cid = camera_id.to_string();
+        db.transaction::<_, Model, DbError>(|txn| {
+            Box::pin(async move {
+                let Some(existing) = Self::find_by_camera_id_txn(txn, &cid).await? else {
+                    return Err(DbError::NotFound {
+                        entity: "analysis_task",
+                        key: cid,
+                    });
+                };
+
+                let mut active: ActiveModel = existing.clone().into();
+                active.desired_enabled = Set(enabled);
+                if !enabled {
+                    // 与整体下发同一语义：撤防即视为停机，真实状态由运行时编排回写刷新
+                    active.actual_status = Set(types::TaskStatus::Stopped.as_i32());
+                }
+                active.config_revision = Set(existing.config_revision + 1);
+                active.updated_at = Set(chrono::Utc::now());
+                Ok(active.update(txn).await?)
+            })
+        })
+        .await
+        .map_err(DbError::from)
     }
 
     /// 兼容接口：更新任务状态（同时同步其所有关联实例）

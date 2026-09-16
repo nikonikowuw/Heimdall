@@ -803,3 +803,72 @@ async fn test_runtime_state_updates_do_not_bump_config_revision() {
         "运行时簿记不得推进配置版本号，否则客户端在途保存会被误判为冲突"
     );
 }
+
+/// 布防开关是状态动词：只写布防意图，不改动名称、规则、门控与实例集合，
+/// 但必须推进配置版本号，否则基于旧快照的整体下发会把开关状态静默改回去。
+#[tokio::test]
+async fn test_set_task_enabled_only_toggles_intent() {
+    let db = init_test_db().await.expect("init db");
+    setup_test_camera_and_algo(&db).await;
+
+    let saved = TaskRepo::save_task_with_instances(
+        &db,
+        SaveTaskWithInstancesParams {
+            camera_id: "CAM-001".to_string(),
+            name: "周界防护".to_string(),
+            desired_enabled: false,
+            rules_json: r#"[{"role":"line","points":[{"x":0.1,"y":0.5},{"x":0.9,"y":0.5}]}]"#
+                .to_string(),
+            motion_gate_json: r#"{"enabled":true,"threshold":30}"#.to_string(),
+            status_message: None,
+            instances: Some(vec![SaveTaskAlgorithmInstanceParams {
+                algorithm_id: "general_detection".to_string(),
+                analysis_fps: 15,
+                params_json: r#"{"confidence":0.6}"#.to_string(),
+                enabled: Some(true),
+            }]),
+            expected_revision: None,
+        },
+    )
+    .await
+    .expect("save task");
+    assert_eq!(saved.config_revision, 1);
+    let instance_before = TaskRepo::list_instances_by_task_id(&db, saved.id)
+        .await
+        .expect("list instances")
+        .remove(0);
+
+    // 布防：只翻转意图，其余配置逐字节保持
+    let armed = TaskRepo::set_task_enabled(&db, "CAM-001", true)
+        .await
+        .expect("arm task");
+    assert!(armed.desired_enabled);
+    assert_eq!(armed.config_revision, 2);
+    assert_eq!(armed.name, saved.name);
+    assert_eq!(armed.rules_json, saved.rules_json);
+    assert_eq!(armed.motion_gate_json, saved.motion_gate_json);
+
+    let instance_after = TaskRepo::list_instances_by_task_id(&db, saved.id)
+        .await
+        .expect("list instances")
+        .remove(0);
+    assert_eq!(instance_after.params_json, instance_before.params_json);
+    assert_eq!(instance_after.analysis_fps, instance_before.analysis_fps);
+    assert_eq!(instance_after.enabled, instance_before.enabled);
+    assert_eq!(
+        instance_after.desired_revision, instance_before.desired_revision,
+        "状态动词不得制造需要运行时收敛的新代际"
+    );
+
+    // 撤防：意图变化 + 视为停机，版本号继续推进
+    let disarmed = TaskRepo::set_task_enabled(&db, "CAM-001", false)
+        .await
+        .expect("disarm task");
+    assert!(!disarmed.desired_enabled);
+    assert_eq!(disarmed.config_revision, 3);
+    assert_eq!(disarmed.actual_status, types::TaskStatus::Stopped.as_i32());
+
+    // 任务不存在：状态动词不隐式创建任务，创建仍由整体下发负责
+    let missing = TaskRepo::set_task_enabled(&db, "CAM-UNKNOWN", true).await;
+    assert!(matches!(missing, Err(DbError::NotFound { .. })));
+}

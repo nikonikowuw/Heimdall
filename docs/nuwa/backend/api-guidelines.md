@@ -23,6 +23,20 @@
 
 流端点细节以 [live.rs](../../../crates/api/src/routes/live.rs) 为准。旧 WHEP 示例尚未注册，不作为现有接口使用。
 
+## 任务配置写入
+
+任务配置有两条写入口，共用同一个 `analysis_tasks.config_revision`：
+
+| 入口 | 语义 | 载荷 |
+| --- | --- | --- |
+| `PUT /api/v1/tasks/{cameraId}` | 整份配置覆盖写：名称、布防意图、防区、门控、算法实例集合 | 完整配置，可带 `configRevision` |
+| `PUT /api/v1/tasks/{cameraId}/enabled` | 状态动词：只翻转布防总闸，不改动其余配置 | `{ "enabled": bool }`，必填 |
+
+- `algorithmInstances` 是集合替换语义：不在数组中的实例会被删除；省略该字段表示保留现有集合。`statusMessage`、`streamMode` 同理由服务端保留现值。
+- `configRevision`：响应必带；请求可省略，省略即不做版本校验。`0` 表示「读取时该通道还没有任务」，供快速创建做乐观断言。不匹配返回 `409` + `40903`，且错误响应 `data` 为 `null`。
+- 两条入口都只提交期望配置：运行时收敛一律由 `sync_pipeline_for_camera` 从已提交的持久化配置驱动，禁止任何入口用请求体拼装 `StartCameraPipelineParams`。
+- 布防总闸（`analysis_tasks.desired_enabled`）与实例分闸（`algorithm_instances.enabled`）是两个独立开关：撤防不写回分闸，运行与否由总闸判定。
+
 ## JSON、时间与错误
 
 ```json

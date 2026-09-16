@@ -3,13 +3,12 @@ import { Plus, RefreshCw, ShieldAlert, Sliders, Video } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { motionTokens } from '@/lib/motionTokens'
-import { cameraApi, isConfigConflictError, taskApi } from '../../lib/api'
+import { cameraApi, taskApi } from '../../lib/api'
 import type { Camera, TaskConfigDto, StreamMode } from '../../types'
 import { CreateTaskModal } from './components/CreateTaskModal'
 import { DeleteTaskModal } from './components/DeleteTaskModal'
 import { LiveRulesStudio } from './components/LiveRulesStudio'
 import { TaskCameraCard } from './components/TaskCameraCard'
-import { buildArmTogglePayload } from './taskDraft'
 
 export interface TasksPageProps {
   onNavigateToCameras?: () => void
@@ -87,23 +86,13 @@ export function TasksPage({
     const nextDesired = !(currentCfg?.desiredEnabled ?? false)
 
     try {
-      // 载荷必须省略 algorithmInstances：列表接口的实例摘要不含 algoParams，
-      // 据此重建实例会把工作台调好的参数清成空对象，交由服务端仅同步启停状态。
-      const payload = buildArmTogglePayload({
-        cameraId: camera.cameraId,
-        fallbackName: camera.name || `Task-${camera.cameraId}`,
-        current: currentCfg,
-        nextDesired,
-      })
-      const updated = await taskApi.updateTask(camera.cameraId, payload)
+      // 状态动词：只提交期望的布防状态，服务端从已持久化配置读取防区、门控与实例参数，
+      // 不再有「省略哪些字段才不会被清空」的载荷约定。
+      const updated = await taskApi.setEnabled(camera.cameraId, nextDesired)
       setTaskConfigs((prev) => ({ ...prev, [camera.cameraId]: updated }))
-    } catch (error) {
-      if (isConfigConflictError(error)) {
-        // 配置已被其他会话改写：静默丢弃本次开关动作并刷新列表，避免用旧快照覆盖新配置
-        await loadData()
-        return
-      }
-      // ignore
+    } catch {
+      // 开关失败保持列表原样，并重新拉取服务端真实状态避免状态残留
+      await loadData()
     }
   }
 

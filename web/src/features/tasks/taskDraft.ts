@@ -2,8 +2,6 @@ import type {
   AlgorithmItem,
   AlgorithmVersionItem,
   Camera,
-  DetectionRule,
-  MotionGateConfig,
   TaskAlgorithmInstanceDto,
   TaskConfigDto,
 } from '@/types'
@@ -16,6 +14,9 @@ import { buildSchemaDefaultParams } from './algoMetadata'
  * `algorithmInstances` 三个字段是全量覆盖写（见 `crates/db/src/repository/task.rs`
  * `save_task_with_instances_txn`）。因此载荷组装必须精确表达「本次意图」，
  * 未涉及的字段一律省略或原样回传，避免以写入之名清空既有配置。
+ *
+ * 唯一的例外是「布防开关」：它由状态动词 `PUT /api/v1/tasks/{cameraId}/enabled`
+ * 单独承担，不需要在这里构造任何配置载荷。
  */
 
 /** 快速创建时的推理算力起步档；与工作台首次挂载算法保持一致（LiveRulesStudio.handleToggleAlgo） */
@@ -114,42 +115,5 @@ export function buildQuickCreatePayload(input: QuickCreateInput): TaskConfigDto 
     rules: [],
     algorithmInstances: [instance],
     configRevision: 0,
-  }
-}
-
-export interface ArmToggleSource {
-  name?: string
-  rules?: DetectionRule[]
-  motionGate?: MotionGateConfig
-  /** 列表快照的任务配置版本号，用于服务端乐观并发校验 */
-  configRevision?: number
-}
-
-export interface ArmToggleInput {
-  cameraId: string
-  /** 任务名为空时的回退名 */
-  fallbackName: string
-  current?: ArmToggleSource
-  nextDesired: boolean
-}
-
-/**
- * 构造布防/撤防载荷。
- *
- * 必须省略 `algorithmInstances`：列表接口返回的实例摘要不含 `algoParams`，若据此重建实例数组，
- * 服务端会把 `algo_params` 反序列化为空对象并覆盖 `params_json`，导致工作台中调好的
- * 置信度、目标类别与自定义参数被清空。省略后由服务端保留实例参数并仅同步 enabled。
- *
- * `configRevision` 原样回传列表快照的版本号：布防开关同样是整份配置下发，
- * 若不带版本号，一个按下开关的旧快照会静默覆盖工作台刚保存的算法参数与防区。
- */
-export function buildArmTogglePayload(input: ArmToggleInput): TaskConfigDto {
-  return {
-    cameraId: input.cameraId,
-    name: input.current?.name?.trim() || input.fallbackName,
-    desiredEnabled: input.nextDesired,
-    rules: input.current?.rules ?? [],
-    ...(input.current?.motionGate ? { motionGate: input.current.motionGate } : {}),
-    configRevision: input.current?.configRevision,
   }
 }

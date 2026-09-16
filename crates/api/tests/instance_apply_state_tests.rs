@@ -178,8 +178,8 @@ async fn test_task_save_apply_state_contract_without_running_task() {
     assert_eq!(instance["desiredRevision"], 0);
     assert_eq!(instance["appliedRevision"], 0);
     assert_eq!(
-        instance["enabled"], false,
-        "未布防任务下实例保持停用，期望配置仍会随任务启动生效"
+        instance["enabled"], true,
+        "实例的分闸意图独立于任务总闸保存；未布防只是不启动运行时，不是把分闸写回关闭"
     );
 
     let instance_id = db::AlgorithmInstanceRepo::list_by_camera_id(&state.db, "CAM-APPLY-01")

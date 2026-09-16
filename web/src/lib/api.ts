@@ -248,6 +248,18 @@ export const taskApi = {
     return api.get<TaskConfigDto>(`/tasks/${encodeURIComponent(cameraId)}`)
   },
 
+  /**
+   * 布防开关（状态动词）：只提交「该通道的 AI 分析应该运行 / 停止」这一个期望。
+   *
+   * 与整份配置下发（`updateTask`）分工明确：名称、防区、门控与算法参数不变，
+   * 因此不需要回传一份可能已经过期的整份配置，返回的仍是完整任务快照。
+   */
+  setEnabled(cameraId: string, enabled: boolean): Promise<TaskConfigDto> {
+    return api.put<TaskConfigDto>(`/tasks/${encodeURIComponent(cameraId)}/enabled`, {
+      enabled,
+    })
+  },
+
   updateTask(cameraId: string, data: TaskConfigDto): Promise<TaskConfigDto> {
     return api.put<TaskConfigDto>(`/tasks/${encodeURIComponent(cameraId)}`, data)
   },
