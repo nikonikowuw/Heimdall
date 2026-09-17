@@ -183,6 +183,7 @@ pub fn router() -> Router<AppState> {
         .route("/captures/count", get(count_captures))
         .route("/recognitions", get(list_recognitions))
         .route("/recognitions/count", get(count_recognitions))
+        .route("/recognitions/{recognition_id}", get(get_recognition))
         .route(
             "/recognitions/{recognition_id}/review",
             post(review_recognition),
@@ -262,6 +263,16 @@ async fn list_recognitions(
     .await?;
     let dtos = list.into_iter().map(RecognitionDto::from).collect();
     Ok(ApiResponse::success(dtos))
+}
+
+async fn get_recognition(
+    State(state): State<AppState>,
+    Path(recognition_id): Path<String>,
+) -> Result<ApiResponse<RecognitionDto>, ApiError> {
+    let rec = RecognitionRepo::find_by_recognition_id(&state.db, &recognition_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("识别记录不存在".to_string()))?;
+    Ok(ApiResponse::success(RecognitionDto::from(rec)))
 }
 
 #[derive(Debug, Deserialize)]

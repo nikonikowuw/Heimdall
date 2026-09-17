@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use db::{CaptureRepo, DbError};
 use pipeline::{PipelineAnalysisEvent, PipelineCaptureEvent, PipelineManager, SnapshotResult};
@@ -81,6 +81,9 @@ pub const DEFAULT_CAPTURE_BATCH_SIZE: usize = 32;
 /// 默认抓拍攒批最大刷新等待时间 (毫秒)
 pub const DEFAULT_CAPTURE_FLUSH_INTERVAL_MS: u64 = 500;
 
+/// 默认人脸识别对账异步排队有界队列容量 (条)
+pub const DEFAULT_RECOGNITION_QUEUE_CAPACITY: usize = 256;
+
 /// 低频识别输入；embedding 只在 API 后台内存中存在。
 #[derive(Debug, Clone, Copy)]
 struct RecognitionFeature {
@@ -104,7 +107,16 @@ pub struct CaptureDispatchService {
     pub gallery_index: Option<Arc<crate::gallery_index::FaceFeatureIndex>>,
     pub algo_registry: Option<Arc<infer::package::AlgoRegistry>>,
     pub event_broadcaster: Option<broadcast::Sender<crate::state::WsBroadcastEvent>>,
-    recognition_lock: Arc<tokio::sync::Mutex<()>>,
+    recognition_tx: mpsc::Sender<PipelineCaptureEvent>,
+    recognition_rx: RecognitionRxCell,
+}
+
+type RecognitionRxCell = Arc<Mutex<Option<mpsc::Receiver<PipelineCaptureEvent>>>>;
+
+/// 初始化人脸识别对账有界异步排队通道
+fn create_recognition_channel() -> (mpsc::Sender<PipelineCaptureEvent>, RecognitionRxCell) {
+    let (tx, rx) = mpsc::channel(DEFAULT_RECOGNITION_QUEUE_CAPACITY);
+    (tx, Arc::new(Mutex::new(Some(rx))))
 }
 
 /// 序列化现场主体及挂载人脸的归一化检测框，供抓拍与识别证据共同复用。
@@ -167,6 +179,7 @@ pub(crate) fn template_metadata(obj: &types::TrackedObject) -> (Option<i64>, Opt
 impl CaptureDispatchService {
     /// 从 `AppState` 中提取句柄构造默认抓拍分发服务实例
     pub fn from_state(state: &AppState) -> Self {
+        let (recognition_tx, recognition_rx) = create_recognition_channel();
         Self {
             db: state.db.clone(),
             pipeline: state.pipeline.clone(),
@@ -176,7 +189,8 @@ impl CaptureDispatchService {
             gallery_index: Some(state.gallery_index.clone()),
             algo_registry: Some(state.algo_registry.clone()),
             event_broadcaster: Some(state.event_broadcaster.clone()),
-            recognition_lock: Arc::new(tokio::sync::Mutex::new(())),
+            recognition_tx,
+            recognition_rx,
         }
     }
 
@@ -188,6 +202,7 @@ impl CaptureDispatchService {
         batch_size: usize,
         flush_interval_ms: u64,
     ) -> Self {
+        let (recognition_tx, recognition_rx) = create_recognition_channel();
         Self {
             db,
             pipeline,
@@ -197,8 +212,14 @@ impl CaptureDispatchService {
             gallery_index: None,
             algo_registry: None,
             event_broadcaster: None,
-            recognition_lock: Arc::new(tokio::sync::Mutex::new(())),
+            recognition_tx,
+            recognition_rx,
         }
+    }
+
+    /// 当前人脸识别对账排队队列中的在途积压任务数
+    pub fn recognition_queue_depth(&self) -> usize {
+        DEFAULT_RECOGNITION_QUEUE_CAPACITY.saturating_sub(self.recognition_tx.capacity())
     }
 
     /// 提取抓拍对象的有效质量评分（优先使用人脸质量分，回退至目标质量分或置信度）
@@ -288,16 +309,25 @@ impl CaptureDispatchService {
             "客观通行抓拍凭证批量落库成功 (单事务攒批)"
         );
 
-        // 对人脸通行抓拍事件尝试触发 1:N 底库比对与识别对账（仅在底库存在特征时异步分发，且不阻塞抓拍落库）
+        // 对人脸通行抓拍事件尝试触发 1:N 底库比对与识别对账（分发至有界异步排队队列）
         if let Some(gallery_index) = &self.gallery_index {
             if gallery_index.count().await > 0 {
                 for evt in events {
                     if Self::is_face_event(evt) {
-                        let this = self.clone();
-                        let event = evt.clone();
-                        tokio::spawn(async move {
-                            this.try_match_and_record_recognition(&event).await;
-                        });
+                        match self.recognition_tx.try_send(evt.clone()) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(dropped)) => {
+                                tracing::warn!(
+                                    camera_id = %dropped.camera_id,
+                                    track_id = dropped.tracked_object.track_id,
+                                    queue_capacity = DEFAULT_RECOGNITION_QUEUE_CAPACITY,
+                                    "人脸识别对账有界队列已满，丢弃溢出抓拍比对事件"
+                                );
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                tracing::debug!("人脸识别对账队列已关闭，跳过事件分发");
+                            }
+                        }
                     }
                 }
             }
@@ -346,15 +376,6 @@ impl CaptureDispatchService {
 
     /// 针对人脸通行抓拍尝试触发 1:N 底库特征检索并落地识别对账记录
     async fn try_match_and_record_recognition(&self, event: &PipelineCaptureEvent) {
-        // 互斥保护：非阻塞单飞模式，已有比对在执行时跳过本次触发，杜绝并发冲击 NPU 硬件推理通道
-        let _lock = match self.recognition_lock.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                tracing::debug!("已有在途人脸识别比对任务执行中，跳过本次抓拍比对以保护 NPU");
-                return;
-            }
-        };
-
         let Some(gallery_index) = &self.gallery_index else {
             return;
         };
@@ -412,15 +433,15 @@ impl CaptureDispatchService {
             .resolve_recognition_thresholds(&event.camera_id, &event.algorithm_id)
             .await;
 
-        // 遵循 docs/algo/EdgeFace.md 约定的自适应置信度动态微调
-        // 质量评分围绕 0.50 基准点浮动 ±0.05，质量越低门槛越高，抑制低质误报
-        let quality_adjustment = (feature.quality_score - 0.5) * 0.1;
+        // 遵循 docs/algo/EdgeFace.md §4.4 约定的质量感知动态阈值微调（实机标定系数 0.15）：
+        // 质量评分围绕 0.50 基准点浮动 ±0.075，对高质量多帧成熟融合模板放宽门槛对抗监控-寸照域偏移，对低质单帧提高门槛抑制误认
+        let quality_adjustment = (feature.quality_score - 0.5) * 0.15;
         let adaptive_confirm = (confirm_threshold - quality_adjustment).clamp(0.40, 0.95);
         let adaptive_review = (review_threshold - quality_adjustment).clamp(0.30, adaptive_confirm);
 
-        // 执行 1:N 余弦比对 Top-5，底线门槛为 adaptive_review
+        // 执行 1:N 余弦比对 Top-5，不设分数截断门槛 (-1.0)，保证返回完整的 Top-5 候选人以留存完整识别过程
         let candidates = gallery_index
-            .search_top_k(&feature.embedding, 5, adaptive_review)
+            .search_top_k(&feature.embedding, 5, -1.0)
             .await;
 
         if candidates.is_empty() {
@@ -428,17 +449,21 @@ impl CaptureDispatchService {
         }
 
         let best_match = &candidates[0];
-        let status = evaluate_recognition_status(&candidates, adaptive_confirm);
+        let status = evaluate_recognition_status(&candidates, adaptive_confirm, adaptive_review);
 
         let recognition_id = uuid::Uuid::now_v7().to_string();
         let recognized_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
             .unwrap_or_else(chrono::Utc::now);
 
-        // 遵循证据隔离原则：若存在候选人样本，复制一份至 recognitions 目录
-        let rec_gallery_rel =
+        // 遵循证据隔离原则：若识别已确认或需复核，复制一份底库样本至 recognitions 目录；
+        // 若判定为 Rejected (陌生人/未达门槛)，仅保留引用，跳过物理磁盘复制以杜绝海量陌生人造成存储膨胀
+        let rec_gallery_rel = if status == types::RecognitionStatus::Rejected {
+            best_match.photo_rel_path.clone()
+        } else {
             isolate_gallery_evidence_photo(base_dir, &best_match.photo_rel_path, &recognition_id)
                 .await
-                .unwrap_or_else(|| best_match.photo_rel_path.clone());
+                .unwrap_or_else(|| best_match.photo_rel_path.clone())
+        };
 
         let candidates_json =
             serde_json::to_string(&candidates).unwrap_or_else(|_| "[]".to_string());
@@ -482,29 +507,14 @@ impl CaptureDispatchService {
             );
 
             if let Some(broadcaster) = &self.event_broadcaster {
-                let _ = broadcaster.send(crate::state::WsBroadcastEvent {
-                    topic: types::TOPIC_RECOGNITION_MATCHED.to_string(),
-                    payload: serde_json::json!({
-                        "recognitionId": saved.recognition_id,
-                        "cameraId": saved.camera_id,
-                        "galleryId": saved.gallery_id,
-                        "subjectId": saved.subject_id,
-                        "subjectName": saved.subject_name,
-                        "similarity": saved.similarity,
-                        "fieldCropPath": saved.field_crop_path,
-                        "fieldImagePath": saved.field_image_path,
-                        "fieldBboxJson": saved.field_bbox_json,
-                        "registeredPhotoPath": saved.registered_photo_path,
-                        "imageSource": saved.image_source,
-                        "imageStream": saved.image_stream,
-                        "fusedCount": saved.fused_count,
-                        "templateQuality": saved.template_quality,
-                        "status": saved.status,
-                        "candidates": candidates,
-                        "recognizedAt": saved.recognized_at.timestamp_millis(),
-                    }),
-                    timestamp: event.timestamp,
-                });
+                let dto = crate::routes::evidence::RecognitionDto::from(saved);
+                if let Ok(payload) = serde_json::to_value(&dto) {
+                    let _ = broadcaster.send(crate::state::WsBroadcastEvent {
+                        topic: types::TOPIC_RECOGNITION_MATCHED.to_string(),
+                        payload,
+                        timestamp: event.timestamp,
+                    });
+                }
             }
         }
     }
@@ -548,65 +558,119 @@ impl CaptureDispatchService {
         total_processed
     }
 
-    /// 启动常驻异步持久化工作线程
+    /// 启动常驻异步持久化工作线程（包含抓拍攒批写入与人脸识别对账异步排队）
     pub fn start_worker(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
-        let mut analysis_rx = self.pipeline.subscribe_analysis_events();
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let flush_interval = Duration::from_millis(self.flush_interval_ms);
+        let rec_rx = self
+            .recognition_rx
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
 
         tokio::spawn(async move {
-            tracing::info!("后台客观通行抓拍异步持久化工作线程已启动 (攒批写入)");
+            let (batch_done_tx, batch_done_rx) = tokio::sync::oneshot::channel::<()>();
 
-            // 1. 冷启动初期，先排空启动前积压的补偿队列
-            self.drain_and_persist_pending().await;
-
-            let mut batch_buffer: Vec<PipelineCaptureEvent> = Vec::with_capacity(self.batch_size);
-            let mut ticker = tokio::time::interval(flush_interval);
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            loop {
-                tokio::select! {
-                    _ = shutdown_rx.recv() => {
-                        tracing::info!("接收到系统停机信号，通行抓拍持久化工作线程准备优雅退出");
-                        self.flush_batch(&mut batch_buffer, "停机退出").await;
-                        self.drain_and_persist_pending().await;
-                        break;
-                    }
-                    _ = ticker.tick() => {
-                        self.flush_batch(&mut batch_buffer, "定时刷新").await;
-                        // 注意：严禁在此处无条件周期性调用 drain_and_persist_pending()！
-                        // 正常广播事件已在 analysis_rx 中接收；管线补偿队列仅在冷启动、RecvError::Lagged 或停机时才需排空。
-                    }
-                    recv_res = analysis_rx.recv() => {
-                        match recv_res {
-                            Ok(PipelineAnalysisEvent::Capture(capture_evt)) => {
-                                batch_buffer.push(*capture_evt);
-                                if batch_buffer.len() >= self.batch_size {
-                                    self.flush_batch(&mut batch_buffer, "满批阈值").await;
+            // 1. 启动独立的人脸识别对账有界异步排队工作任务 (单协程顺序消费，消除并发竞争与丢比对)
+            let rec_handle = if let Some(mut rx) = rec_rx {
+                let this = self.clone();
+                let mut rec_shutdown_rx = self.shutdown_tx.subscribe();
+                Some(tokio::spawn(async move {
+                    tracing::info!(
+                        capacity = DEFAULT_RECOGNITION_QUEUE_CAPACITY,
+                        "后台人脸识别对账异步排队工作线程已启动 (有界队列排队)"
+                    );
+                    loop {
+                        tokio::select! {
+                            _ = rec_shutdown_rx.recv() => {
+                                tracing::info!("接收到系统停机信号，等待抓拍批次持久化完成后排空对账队列");
+                                // 等待抓拍批次持久化完全刷盘并推进识别事件（最多等待 2 秒保护）
+                                let _ = tokio::time::timeout(Duration::from_secs(2), batch_done_rx).await;
+                                while let Ok(event) = rx.try_recv() {
+                                    this.try_match_and_record_recognition(&event).await;
+                                }
+                                break;
+                            }
+                            maybe_event = rx.recv() => {
+                                match maybe_event {
+                                    Some(event) => {
+                                        this.try_match_and_record_recognition(&event).await;
+                                    }
+                                    None => {
+                                        tracing::info!("人脸识别对账事件通道已关闭，工作线程退出");
+                                        break;
+                                    }
                                 }
                             }
-                            Ok(PipelineAnalysisEvent::Alarm(_)) => {
-                                // 违规告警由 AlarmDispatchService 处理
-                            }
-                            Ok(PipelineAnalysisEvent::Tracks(_)) | Ok(PipelineAnalysisEvent::Telemetry(_)) => {
-                                // 航迹与遥测由 TrackDispatchService 处理
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                                tracing::warn!(
-                                    skipped,
-                                    "通行抓拍广播通道滞后，尝试从管线内存队列中补偿恢复待持久化抓拍"
-                                );
-                                self.drain_and_persist_pending().await;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                tracing::info!("管线分析广播通道已关闭，退出抓拍工作线程");
-                                self.flush_batch(&mut batch_buffer, "通道关闭").await;
-                                self.drain_and_persist_pending().await;
-                                break;
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+
+            // 2. 启动客观通行抓拍异步持久化工作任务 (攒批写入)
+            let this = self.clone();
+            let batch_handle = tokio::spawn(async move {
+                let mut analysis_rx = this.pipeline.subscribe_analysis_events();
+                let mut shutdown_rx = this.shutdown_tx.subscribe();
+                let flush_interval = Duration::from_millis(this.flush_interval_ms);
+
+                tracing::info!("后台客观通行抓拍异步持久化工作线程已启动 (攒批写入)");
+
+                // 冷启动初期，先排空启动前积压的补偿队列
+                this.drain_and_persist_pending().await;
+
+                let mut batch_buffer: Vec<PipelineCaptureEvent> =
+                    Vec::with_capacity(this.batch_size);
+                let mut ticker = tokio::time::interval(flush_interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+                loop {
+                    tokio::select! {
+                        _ = shutdown_rx.recv() => {
+                            tracing::info!("接收到系统停机信号，通行抓拍持久化工作线程准备优雅退出");
+                            this.flush_batch(&mut batch_buffer, "停机退出").await;
+                            this.drain_and_persist_pending().await;
+                            let _ = batch_done_tx.send(());
+                            break;
+                        }
+                        _ = ticker.tick() => {
+                            this.flush_batch(&mut batch_buffer, "定时刷新").await;
+                        }
+                        recv_res = analysis_rx.recv() => {
+                            match recv_res {
+                                Ok(PipelineAnalysisEvent::Capture(capture_evt)) => {
+                                    batch_buffer.push(*capture_evt);
+                                    if batch_buffer.len() >= this.batch_size {
+                                        this.flush_batch(&mut batch_buffer, "满批阈值").await;
+                                    }
+                                }
+                                Ok(PipelineAnalysisEvent::Alarm(_)) => {}
+                                Ok(PipelineAnalysisEvent::Tracks(_)) | Ok(PipelineAnalysisEvent::Telemetry(_)) => {}
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                    tracing::warn!(
+                                        skipped,
+                                        "通行抓拍广播通道滞后，尝试从管线内存队列中补偿恢复待持久化抓拍"
+                                    );
+                                    this.drain_and_persist_pending().await;
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    tracing::info!("管线分析广播通道已关闭，退出抓拍工作线程");
+                                    this.flush_batch(&mut batch_buffer, "通道关闭").await;
+                                    this.drain_and_persist_pending().await;
+                                    let _ = batch_done_tx.send(());
+                                    break;
+                                }
                             }
                         }
                     }
                 }
+            });
+
+            // 3. 联合等待双协程安全回收，确保无遗留脱缰协程
+            if let Some(h) = rec_handle {
+                let _ = tokio::join!(batch_handle, h);
+            } else {
+                let _ = batch_handle.await;
             }
         })
     }
@@ -615,18 +679,26 @@ impl CaptureDispatchService {
 /// 业务决策层硬核校验的 Top-1 与 Top-2 最小排他优势差值 (Margin 防控)
 pub const MIN_CONFIRM_MARGIN: f32 = 0.05;
 
-/// 根据候选人列表与自适应确认门槛判定最终识别状态。
+/// 根据候选人列表与自适应确认/复核门槛判定最终识别状态。
 ///
 /// 遵循 docs/algo/face-best-shot-fusion-design.md 附录 C 的 Margin 误认防控机制：
-/// 业务决策层硬核校验 Top-1 与 Top-2 排他优势差值 (不交给用户配置)；
-/// 若两名候选人相似度咬得太紧 (差值 < MIN_CONFIRM_MARGIN)，判定为混淆匹配，强制降级为 PendingReview 避免冒认。
+/// 1. 若 Top-1 相似度低于 adaptive_review，判定为 Rejected (未达核验门槛/陌生人)；
+/// 2. 若 Top-1 相似度低于 adaptive_confirm，判定为 PendingReview (疑似区间，待人工核验)；
+/// 3. 若 Top-1 达到 adaptive_confirm，硬核校验 Top-1 与 Top-2 排他优势差值 (Margin 防控)；
+///    若两名候选人相似度咬得太紧 (差值 < MIN_CONFIRM_MARGIN)，判定为混淆匹配，强制降级为 PendingReview 避免冒认；
+/// 4. 否则判定为 Confirmed。
 pub fn evaluate_recognition_status(
     candidates: &[types::FaceCandidateItem],
     adaptive_confirm: f32,
+    adaptive_review: f32,
 ) -> types::RecognitionStatus {
     let Some(best_match) = candidates.first() else {
-        return types::RecognitionStatus::PendingReview;
+        return types::RecognitionStatus::Rejected;
     };
+
+    if best_match.similarity < adaptive_review {
+        return types::RecognitionStatus::Rejected;
+    }
 
     if best_match.similarity < adaptive_confirm {
         return types::RecognitionStatus::PendingReview;
@@ -670,15 +742,29 @@ mod tests {
     #[test]
     fn test_single_candidate_passes_threshold() {
         let candidates = vec![make_candidate("s1", "张三", 0.78)];
-        let status = evaluate_recognition_status(&candidates, 0.75);
+        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
         assert_eq!(status, RecognitionStatus::Confirmed);
     }
 
     #[test]
     fn test_single_candidate_below_threshold() {
         let candidates = vec![make_candidate("s1", "张三", 0.72)];
-        let status = evaluate_recognition_status(&candidates, 0.75);
+        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
         assert_eq!(status, RecognitionStatus::PendingReview);
+    }
+
+    #[test]
+    fn test_single_candidate_below_review_threshold_is_rejected() {
+        let candidates = vec![make_candidate("s1", "张三", 0.45)];
+        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
+        assert_eq!(status, RecognitionStatus::Rejected);
+    }
+
+    #[test]
+    fn test_empty_candidates_is_rejected() {
+        let candidates = vec![];
+        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
+        assert_eq!(status, RecognitionStatus::Rejected);
     }
 
     #[test]
@@ -687,7 +773,7 @@ mod tests {
             make_candidate("s1", "张三", 0.82),
             make_candidate("s2", "李四", 0.75), // 差值 0.07 >= 0.05
         ];
-        let status = evaluate_recognition_status(&candidates, 0.75);
+        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
         assert_eq!(status, RecognitionStatus::Confirmed);
     }
 
@@ -697,7 +783,52 @@ mod tests {
             make_candidate("s1", "张三", 0.80),
             make_candidate("s2", "李四", 0.77), // 差值 0.03 < 0.05，触发混淆拦截
         ];
-        let status = evaluate_recognition_status(&candidates, 0.75);
+        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
         assert_eq!(status, RecognitionStatus::PendingReview);
+    }
+
+    #[test]
+    fn test_recognition_queue_capacity_and_depth() {
+        let (tx, mut rx) = mpsc::channel(4);
+        assert_eq!(tx.capacity(), 4);
+
+        let make_event = |id: &str, track_id: u64| PipelineCaptureEvent {
+            capture_id: id.to_string(),
+            camera_id: "cam_1".to_string(),
+            algorithm_id: "face_recognition".to_string(),
+            timestamp: 1000,
+            tracked_object: types::TrackedObject {
+                track_id,
+                class_id: 0,
+                label: "face".to_string(),
+                confidence: 0.9,
+                quality_score: Some(0.8),
+                embedding: None,
+                bbox: types::BoundingBox::new(0.1, 0.1, 0.2, 0.2),
+                face: None,
+                trajectory: vec![],
+            },
+            snapshot: None,
+        };
+
+        // 模拟构造 4 个占位事件填满队列
+        for i in 0..4 {
+            assert!(tx.try_send(make_event(&format!("cap_{i}"), i)).is_ok());
+        }
+
+        assert_eq!(tx.capacity(), 0);
+
+        // 第 5 个事件应当触发 TrySendError::Full 丢弃保护，杜绝无界积压
+        let overflow = make_event("cap_overflow", 999);
+        match tx.try_send(overflow) {
+            Err(mpsc::error::TrySendError::Full(dropped)) => {
+                assert_eq!(dropped.capture_id, "cap_overflow");
+            }
+            other => panic!("预期 TrySendError::Full，实际得到: {:?}", other),
+        }
+
+        // 消费 1 个后通道容量应恢复
+        assert!(rx.try_recv().is_ok());
+        assert_eq!(tx.capacity(), 1);
     }
 }

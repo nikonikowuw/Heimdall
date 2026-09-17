@@ -212,6 +212,15 @@
 
 所有维度均可在 CPU 上以 <0.5ms 完成，无额外模型开销。
 
+#### 对齐后轻量自适应光照补偿 (In-place Gamma LUT)
+
+在经过质量门禁后，监控中常出现顶部直射光（眼窝鼻下深浓阴影）或逆光背光（面部偏暗失真）。
+在 112×112 对齐人脸输入 EdgeFace 之前，统计全图平均亮度 (ITU-R BT.601)：
+- 对偏暗人脸 (`avg_luma < 70` 且 `>= 40`)：应用 $\gamma = 0.75$ 自适应提亮暗部细节；
+- 对过曝人脸 (`avg_luma > 185` 且 `<= 220`)：应用 $\gamma = 1.25$ 适度压制高光；
+- 正常曝光区间 (`70 <= avg_luma <= 185`)：直接直通，零开销。
+通过预生成 256 字节 LUT 并在 RGB 缓冲区原地替换，单图耗时 <0.02ms，全平台（RK3568/RK3576/macOS）保持统一。
+
 #### 姿态角无模型估算
 
 直接复用检测器已输出的 5 点关键点，通过几何关系估算 yaw 角：
@@ -482,8 +491,9 @@ def adaptive_threshold(base_threshold, face_quality_score):
     """
     质量越高 → 阈值可以越低 → 更容易通过
     quality_score: 0~1, 1 = 完美
+    实机标定：系数采用 0.15 (±0.075 浮动)，对抗监控现场图与底库寸照之间的域偏移 (Domain Shift)
     """
-    adjustment = (face_quality_score - 0.5) * 0.1  # ±0.05 浮动
+    adjustment = (face_quality_score - 0.5) * 0.15  # ±0.075 浮动
     return base_threshold - adjustment
 ```
 

@@ -383,6 +383,10 @@ export const evidenceApi = {
     return api.get<RecognitionRecord[]>(`/evidence/recognitions${qs}`)
   },
 
+  getRecognition(recognitionId: string): Promise<RecognitionRecord> {
+    return api.get<RecognitionRecord>(`/evidence/recognitions/${recognitionId}`)
+  },
+
   countRecognitions(params?: {
     cameraId?: string
     status?: string

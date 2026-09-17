@@ -559,3 +559,79 @@ async fn test_serve_evidence_image_streaming_and_etag_304() {
 
     let _ = std::fs::remove_dir_all(&relative_dir);
 }
+
+#[tokio::test]
+async fn test_get_recognition_by_id_and_topk_candidates() {
+    let (app, state, token) = setup_test_app().await;
+
+    // 1. 插入一条包含 Top-5 候选人的识别对账记录 (模拟未达 review 阈值归入 rejected 的识别)
+    let candidates = serde_json::json!([
+        { "rank": 1, "subjectId": "s1", "subjectName": "Candidate 1", "faceId": "f1", "photoRelPath": "p1.jpg", "similarity": 0.48 },
+        { "rank": 2, "subjectId": "s2", "subjectName": "Candidate 2", "faceId": "f2", "photoRelPath": "p2.jpg", "similarity": 0.42 },
+        { "rank": 3, "subjectId": "s3", "subjectName": "Candidate 3", "faceId": "f3", "photoRelPath": "p3.jpg", "similarity": 0.39 },
+        { "rank": 4, "subjectId": "s4", "subjectName": "Candidate 4", "faceId": "f4", "photoRelPath": "p4.jpg", "similarity": 0.35 },
+        { "rank": 5, "subjectId": "s5", "subjectName": "Candidate 5", "faceId": "f5", "photoRelPath": "p5.jpg", "similarity": 0.30 },
+    ]);
+    let rec = RecognitionActiveModel {
+        id: sea_orm::NotSet,
+        recognition_id: Set("rec_top5_query_test".to_string()),
+        camera_id: Set("CAM-TOPK".to_string()),
+        gallery_id: Set("default".to_string()),
+        subject_id: Set("s1".to_string()),
+        subject_name: Set("Candidate 1".to_string()),
+        similarity: Set(0.48),
+        field_crop_path: Set("captures/crop_top5.jpg".to_string()),
+        field_image_path: Set("captures/full_top5.jpg".to_string()),
+        field_bbox_json: Set(r#"{"face":{"bbox":[0.1,0.2,0.3,0.4]}}"#.to_string()),
+        registered_photo_path: Set("recognitions/rec_top5_gallery.jpg".to_string()),
+        status: Set("rejected".to_string()),
+        candidates_json: Set(Some(candidates.to_string())),
+        reviewer_id: Set(None),
+        reviewed_at: Set(None),
+        recognized_at: Set(chrono::Utc::now()),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    RecognitionRepo::insert(&state.db, rec).await.unwrap();
+
+    // 2. 查询该识别记录详情: GET /api/v1/evidence/recognitions/rec_top5_query_test
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/recognitions/rec_top5_query_test")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res_bytes = axum::body::to_bytes(res.into_body(), 1024 * 16)
+        .await
+        .unwrap();
+    let json_val: serde_json::Value = serde_json::from_slice(&res_bytes).unwrap();
+    assert_eq!(json_val["code"], 0);
+    let data = &json_val["data"];
+    assert_eq!(data["recognitionId"], "rec_top5_query_test");
+    assert_eq!(data["status"], "rejected");
+    assert_eq!(data["similarity"], 0.48);
+
+    // 验证 Top-5 候选人完整返回
+    let cands = data["candidates"].as_array().expect("candidates array");
+    assert_eq!(cands.len(), 5);
+    assert_eq!(cands[0]["rank"], 1);
+    assert_eq!(cands[0]["subjectId"], "s1");
+    assert_eq!(cands[0]["similarity"], 0.48);
+    assert_eq!(cands[4]["rank"], 5);
+    assert_eq!(cands[4]["subjectId"], "s5");
+    assert_eq!(cands[4]["similarity"], 0.30);
+
+    // 3. 查询不存在的识别记录: 404
+    let req_404 = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/recognitions/non_existent_rec_id")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res_404 = app.oneshot(req_404).await.unwrap();
+    assert_eq!(res_404.status(), StatusCode::NOT_FOUND);
+}

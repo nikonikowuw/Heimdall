@@ -355,15 +355,25 @@ struct TrackTemplate {
 | `pool.len() ≥ KMAX` && 无提升 | 停止提取 |
 | 提取失败 / 防漂移拒绝 | 软失败退避（6→12→24→48 帧，保留现实现） |
 
-### 5.3 防漂移（保留并参数化）
+### 5.3 防漂移与优胜重播种（保留并参数化）
 
-`cos(新帧, 当前模板) ≥ DRIFT_MIN(0.55)`，拒绝帧不进模板、计软失败。`DRIFT_MIN` 列为实机标定项（见 §10.2）。
+- **常规防漂移校验**：`cos(新帧, 当前模板) ≥ DRIFT_MIN(0.55)`，达标则允许入池；未达标则触发拒绝并计软失败退避。`DRIFT_MIN` 列为实机标定项（见 §10.2）。
+- **高质优胜重播种 (Superior Quality Re-seeding)**：
+  在监控场景中，早期建立的初始种子可能由于人脸偏远或大角度侧脸导致特征基准受限。若后续到达的新帧满足以下条件：
+  1. `quality.score ≥ RESEED_MIN_QUALITY(0.70)`（具备绝对高质）；
+  2. `quality.score > best_pool_quality + RESEED_QUALITY_DELTA(0.18)`（显著超越历史池峰值质量）；
+  3. `cos(新帧, 当前模板) ≥ RESEED_MIN_SIMILARITY(0.40)`（处于同人极限流形区间，杜绝串人脸污染）；
+  则触发优胜重播种：清空历史低质样本池，以新高质正脸帧重置模板基准。
+  
+  **INV-4 契约与单调性保护**：
+  - 重播种属于完全替换基准种子，而非将漂移特征混入既有池；模板始终 100% 由单轨有效同人高质特征构成。
+  - **成熟状态单调性**：重播种严禁将 `template_mature` 或 `mature_emitted` 向 `false` 倒退，杜绝与宿主 `CaptureSettle` 的一次性成熟握手信号失步。
 
 ### 5.4 融合重算（每次入池后执行，CPU 标量运算，512D×≤8）
 
 ```
 1. 池按 quality.score 降序
-2. 贪心选样：与已选任一帧 cos ≥ REDUNDANCY_SIM(0.85) 视为冗余跳过；取 Top-K(4)
+2. 贪心选样：与已选任一帧 cos ≥ REDUNDANCY_SIM(0.95，实机标定：允许微小姿态角差异的高质正脸参与加权增强) 视为冗余跳过；取 Top-K(4)
 3. 加权平均：w = q_c²，q_c = clamp(q, 0.1, 1.0)
 4. L2 归一化 → 新模板；template_quality = Σ(q_i·w_i)/Σw_i（参与帧）
 ```
@@ -417,7 +427,9 @@ mature = pooled_count ≥ 3
 
 | 文件 | 改动 |
 | --- | --- |
-| `face_recognition/src/best_shot.rs` | 帧池/重算/成熟 FSM 重写 + 单测 |
+| `face_recognition/src/best_shot.rs` | 帧池/重算/成熟 FSM 重写 + 优胜重播种 + 单测 |
+| `face_recognition/src/quality.rs` | 5 点关键点 2D 拓扑几何门禁（支持自然侧倾 Roll，拦截倒置/畸变假人脸） |
+| `face_recognition/src/align.rs` | 112×112 对齐人脸轻量自适应光照补偿 (Gamma LUT)，多平台对齐 |
 | `face_recognition/src/plugin.rs` | 采样触发与发射逻辑接入；首帧门控 |
 | `face_recognition/src/postprocess.rs` | `FaceDetailObject` 扩展字段 |
 | `crates/pipeline/src/capture_settle.rs` | 消费 `template_mature` 成熟握手，优先以 `SettleReason::TemplateMature` 结算 |

@@ -56,8 +56,8 @@ pub mod prelude {
     pub use crate::error::AlgoError;
     pub use crate::export_algo;
     pub use crate::face::{
-        self, align, compute_quality, estimate_pitch, estimate_yaw,
-        is_landmark_geometry_plausible, quality, FaceQuality, QualityConfig,
+        self, align, compute_quality, estimate_pitch, estimate_yaw, is_landmark_geometry_plausible,
+        quality, FaceQuality, QualityConfig,
     };
     pub use crate::frame::{FrameHandleView, SafeFrame};
     pub use crate::math::{

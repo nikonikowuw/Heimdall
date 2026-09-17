@@ -20,6 +20,8 @@ import {
   type CaptureRecord,
   type FaceCandidateItem,
   type RecognitionRecord,
+  type RecognitionStatus,
+  type RecognitionStatusChangedPayload,
   WS_TOPICS,
 } from '../../types'
 import { AlarmLightboxModal } from './components/AlarmLightboxModal'
@@ -346,9 +348,64 @@ export function AlarmsPage(): React.ReactElement {
       })
     })
 
+    const unsubRecognition = wsClient.subscribe<RecognitionRecord>(
+      WS_TOPICS.RECOGNITION_MATCHED,
+      (p) => {
+        if (!p) return
+
+        if (activeTab !== 'recognition') {
+          setTabCounts((prev) => ({ ...prev, recognition: prev.recognition + 1 }))
+          return
+        }
+
+        const matchesCamera = !selectedCameraId || selectedCameraId === p.cameraId
+        const matchesStatus = selectedStatus === 'all' || selectedStatus === p.status
+        const isLiveTime = matchesTimeRange(timeRange, p.recognizedAt)
+
+        if (page === 1 && matchesCamera && matchesStatus && isLiveTime) {
+          setRecognitions((prev) => {
+            if (prev.some((r) => r.recognitionId === p.recognitionId)) return prev
+            return [p, ...prev.slice(0, pageSize - 1)]
+          })
+          setTotalCount((c) => c + 1)
+          setTabCounts((prev) => ({ ...prev, recognition: prev.recognition + 1 }))
+        } else {
+          setUnreadRealtimeCount((c) => c + 1)
+          setTabCounts((prev) => ({ ...prev, recognition: prev.recognition + 1 }))
+        }
+      },
+    )
+
+    const unsubRecStatus = wsClient.subscribe<RecognitionStatusChangedPayload>(
+      WS_TOPICS.RECOGNITION_STATUS_CHANGED,
+      (p) => {
+        if (!p || !p.recognitionId || !p.status) return
+
+        const applyStatusUpdate = <T extends RecognitionRecord>(r: T): T => ({
+          ...r,
+          status: p.status as RecognitionStatus,
+          reviewerId: p.reviewerId ?? r.reviewerId,
+          reviewedAt: p.reviewedAt ?? r.reviewedAt,
+          subjectId: p.subjectId ?? r.subjectId,
+          subjectName: p.subjectName ?? r.subjectName,
+          similarity: p.similarity ?? r.similarity,
+          registeredPhotoPath: p.registeredPhotoPath ?? r.registeredPhotoPath,
+        })
+
+        setRecognitions((prev) =>
+          prev.map((r) => (r.recognitionId === p.recognitionId ? applyStatusUpdate(r) : r)),
+        )
+        setReviewModalRec((prev) =>
+          prev && prev.recognitionId === p.recognitionId ? applyStatusUpdate(prev) : prev,
+        )
+      },
+    )
+
     return () => {
       unsubAlarm()
       unsubStatus()
+      unsubRecognition()
+      unsubRecStatus()
     }
   }, [
     activeTab,

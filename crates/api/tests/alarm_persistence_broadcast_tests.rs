@@ -677,3 +677,141 @@ async fn test_count_and_batch_update_alarm_status_api() {
     let evt2 = ws_rx.recv().await.unwrap();
     assert_eq!(evt2.topic, TOPIC_ALARM_STATUS_CHANGED);
 }
+
+#[tokio::test]
+async fn test_face_recognition_below_review_threshold_persists_top5_rejected() {
+    let (_app, state, _token) = setup_test_app().await;
+
+    // 1. 底库注册 5 名人员，每个人的向量与待测人脸向量保持较低相似度 (0.20 ~ 0.45，均低于默认 review 阈值 0.60)
+    let mut faces = Vec::new();
+    for i in 1..=5 {
+        let mut vec = [0.0f32; 512];
+        // 设第 0 维和第 i 维，产生可控的点积分数
+        vec[0] = 0.50 - (i as f32) * 0.05; // 0.45, 0.40, 0.35, 0.30, 0.25
+        vec[i] = (1.0 - vec[0] * vec[0]).sqrt(); // 保持单位模长
+        faces.push(api::RegisteredFace {
+            subject_id: format!("sub_mock_{i}"),
+            subject_name: format!("Mock Person {i}"),
+            face_id: format!("face_mock_{i}"),
+            photo_rel_path: format!("galleries/sub_mock_{i}/photo.jpg"),
+            vector: vec,
+        });
+    }
+    state.gallery_index.upsert_faces(faces).await;
+    assert_eq!(state.gallery_index.count().await, 5);
+
+    // 2. 构造查询向量: 单位向量 [1.0, 0.0, 0.0, ...]
+    // 与候选人的余弦相似度正好等于候选人 vec[0] (0.45, 0.40, 0.35, 0.30, 0.25)，全部低于 review 阈值 0.60
+    let mut query_embedding = Box::new([0.0f32; 512]);
+    query_embedding[0] = 1.0;
+
+    let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
+    let _capture_worker = capture_svc.clone().start_worker();
+
+    let mut ws_rx = state.event_broadcaster.subscribe();
+
+    // 3. 发布携带该 embedding 的人脸通行抓拍事件
+    let capture_id = uuid::Uuid::now_v7().to_string();
+    let mock_capture = PipelineCaptureEvent {
+        capture_id: capture_id.clone(),
+        camera_id: "CAM-REC-01".to_string(),
+        algorithm_id: "face_recognition".to_string(),
+        tracked_object: TrackedObject {
+            track_id: 888,
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.95,
+            quality_score: Some(0.50), // 动态微调量为 0
+            embedding: Some(query_embedding),
+            bbox: BoundingBox::new(0.2, 0.2, 0.4, 0.4),
+            face: None,
+            trajectory: vec![(0.3, 0.3)],
+        },
+        snapshot: Some(SnapshotResult {
+            image_id: "snap_full_888".to_string(),
+            image_rel_path: "2026/03/04/CAM-REC-01/full_888.jpg".to_string(),
+            crop_image_id: "snap_crop_888".to_string(),
+            crop_image_rel_path: "2026/03/04/CAM-REC-01/crop_888.jpg".to_string(),
+            file_size_bytes: 10240,
+            width: 1920,
+            height: 1080,
+            frame_pts_ms: 1741100088000,
+            image_source: EvidenceImageSource::PeakCandidate,
+            image_stream: EvidenceImageStream::Sub,
+        }),
+        timestamp: 1741100088000,
+    };
+
+    state
+        .pipeline
+        .publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(mock_capture)));
+
+    // 等待异步识别队列与落库完成
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    // 4. 验证行迹抓拍已落库
+    let captures = CaptureRepo::list_recent(&state.db, Some("CAM-REC-01"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(captures.len(), 1);
+
+    // 5. 核心断言：未达 review 阈值的人脸必须落库识别对账记录，且状态为 rejected
+    let recognitions = db::RecognitionRepo::list_recent(&state.db, Some("CAM-REC-01"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        recognitions.len(),
+        1,
+        "未过 review 阈值的人脸只要提取过特征也必须展示与落库"
+    );
+    let rec = &recognitions[0];
+    assert_eq!(
+        rec.status, "rejected",
+        "未达 review 阈值应判定为 rejected 陌生人"
+    );
+    assert_eq!(
+        rec.subject_id, "sub_mock_1",
+        "最高相似度候选人为 sub_mock_1"
+    );
+    assert!((rec.similarity - 0.45).abs() < 1e-4);
+
+    // 6. 核心断言：必须返回完整的 Top-5 候选人列表 (而非被 review 阈值截断为空或个位数)
+    let candidates_json = rec
+        .candidates_json
+        .as_deref()
+        .expect("candidates_json must exist");
+    let cands: Vec<types::FaceCandidateItem> = serde_json::from_str(candidates_json).unwrap();
+    assert_eq!(cands.len(), 5, "必须返回完整的 Top-5 候选人");
+    assert_eq!(cands[0].rank, 1);
+    assert_eq!(cands[0].subject_id, "sub_mock_1");
+    assert!((cands[0].similarity - 0.45).abs() < 1e-4);
+    assert_eq!(cands[4].rank, 5);
+    assert_eq!(cands[4].subject_id, "sub_mock_5");
+    assert!((cands[4].similarity - 0.25).abs() < 1e-4);
+
+    // 7. 验证 WebSocket 广播了 TOPIC_RECOGNITION_MATCHED 事件且包含完整的 5 个候选人
+    let mut found_ws_match = false;
+    while let Ok(msg) = ws_rx.try_recv() {
+        if msg.topic == types::TOPIC_RECOGNITION_MATCHED {
+            found_ws_match = true;
+            assert_eq!(msg.payload["status"], "rejected");
+            let ws_cands = msg.payload["candidates"]
+                .as_array()
+                .expect("ws candidates array");
+            assert_eq!(ws_cands.len(), 5);
+            assert!(
+                msg.payload["id"].as_i64().is_some(),
+                "WS payload 必须包含标准主键 id 供前端 React 渲染 key 复用"
+            );
+            assert!(
+                msg.payload["createdAt"].as_i64().is_some(),
+                "WS payload 必须包含标准创建时标 createdAt"
+            );
+            break;
+        }
+    }
+    assert!(
+        found_ws_match,
+        "必须通过 WebSocket 广播 TOPIC_RECOGNITION_MATCHED 事件"
+    );
+}

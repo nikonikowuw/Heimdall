@@ -42,6 +42,8 @@ export const WS_TOPICS = {
   ALARM_STATUS_CHANGED: 'alarm.status_changed',
   CAMERA_TRACKS: 'camera.tracks',
   CAMERA_TELEMETRY: 'camera.telemetry',
+  RECOGNITION_MATCHED: 'recognition.matched',
+  RECOGNITION_STATUS_CHANGED: 'recognition.status_changed',
 } as const
 
 export type WsTopic = (typeof WS_TOPICS)[keyof typeof WS_TOPICS]
@@ -348,6 +350,17 @@ export interface RecognitionRecord {
   reviewedAt?: number | null
   recognizedAt: number
   createdAt: number
+}
+
+export interface RecognitionStatusChangedPayload {
+  recognitionId?: string
+  status?: RecognitionStatus
+  reviewerId?: string | null
+  reviewedAt?: number | null
+  subjectId?: string
+  subjectName?: string
+  similarity?: number
+  registeredPhotoPath?: string
 }
 
 export interface PersonnelItem {

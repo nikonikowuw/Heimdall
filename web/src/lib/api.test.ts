@@ -391,4 +391,82 @@ describe('API Client', () => {
       expect.objectContaining({ method: 'GET' }),
     )
   })
+
+  it('evidenceApi.getRecognition should fetch single recognition by ID with Top-5 candidates', async () => {
+    const mockRecognition = {
+      id: 1,
+      recognitionId: 'rec_100',
+      cameraId: 'cam_01',
+      galleryId: 'default',
+      subjectId: 'sub_01',
+      subjectName: 'Test Candidate',
+      similarity: 0.45,
+      fieldCropPath: 'crop.jpg',
+      registeredPhotoPath: 'gallery.jpg',
+      status: 'rejected',
+      candidates: [
+        {
+          rank: 1,
+          subjectId: 's1',
+          subjectName: 'C1',
+          faceId: 'f1',
+          photoRelPath: 'p1.jpg',
+          similarity: 0.45,
+        },
+        {
+          rank: 2,
+          subjectId: 's2',
+          subjectName: 'C2',
+          faceId: 'f2',
+          photoRelPath: 'p2.jpg',
+          similarity: 0.4,
+        },
+        {
+          rank: 3,
+          subjectId: 's3',
+          subjectName: 'C3',
+          faceId: 'f3',
+          photoRelPath: 'p3.jpg',
+          similarity: 0.35,
+        },
+        {
+          rank: 4,
+          subjectId: 's4',
+          subjectName: 'C4',
+          faceId: 'f4',
+          photoRelPath: 'p4.jpg',
+          similarity: 0.3,
+        },
+        {
+          rank: 5,
+          subjectId: 's5',
+          subjectName: 'C5',
+          faceId: 'f5',
+          photoRelPath: 'p5.jpg',
+          similarity: 0.25,
+        },
+      ],
+      recognizedAt: 1747584000000,
+      createdAt: 1747584000000,
+    }
+
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: mockRecognition,
+        timestamp: 1747584000000,
+      }),
+    })
+
+    const res = await evidenceApi.getRecognition('rec_100')
+    expect(res.recognitionId).toBe('rec_100')
+    expect(res.candidates).toHaveLength(5)
+    expect(res.candidates?.[0].similarity).toBe(0.45)
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/evidence/recognitions/rec_100',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
 })
