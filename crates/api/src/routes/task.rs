@@ -464,6 +464,40 @@ async fn set_task_enabled(
     )))
 }
 
+/// 判定请求是否携带「单实例旧字段」形式的算法意图。
+///
+/// `analysisFps` / `algoParams` 的 serde 缺省值（`0` / `{}`）与显式提交等值无法区分，
+/// 因此与缺省等值的取值一律视为「本次未表达算法意图」。
+fn carries_legacy_single_instance_intent(dto: &TaskConfigDto) -> bool {
+    if !dto.algorithm_id.trim().is_empty() {
+        return true;
+    }
+    if dto.analysis_fps != 0 {
+        return true;
+    }
+    match &dto.algo_params {
+        serde_json::Value::Null => false,
+        serde_json::Value::Object(map) => !map.is_empty(),
+        // 非对象取值会由旧字段路径显式拒绝（400），这里按「有意图」放行以保留既有报错行为。
+        _ => true,
+    }
+}
+
+/// 把既有持久化实例原样映射为保存参数（参数 / 帧率 / 逐算法启停均不变）。
+fn preserve_existing_instances(
+    existing: Vec<db::entity::algorithm_instance::Model>,
+) -> Vec<db::SaveTaskAlgorithmInstanceParams> {
+    existing
+        .into_iter()
+        .map(|inst| db::SaveTaskAlgorithmInstanceParams {
+            algorithm_id: inst.algorithm_id,
+            analysis_fps: inst.analysis_fps,
+            params_json: inst.params_json,
+            enabled: Some(inst.enabled),
+        })
+        .collect()
+}
+
 async fn resolve_task_instances_for_save(
     state: &AppState,
     camera_id: &str,
@@ -556,17 +590,21 @@ async fn resolve_task_instances_for_save(
         }]);
     }
 
-    if !dto.desired_enabled {
+    // 未携带实例集合、也未表达单实例旧字段意图的任务级保存（改名称 / 防区 / 门控 / 布防开关），
+    // 一律原样保留既有实例：参数、帧率与逐算法启停同属「本次未提交」的字段，
+    // 只有显式 `algorithmInstances: []` 才表示清空。
+    // 该分支防止历史缺陷回归——单实例旧字段兜底分支会用缺省空参数覆盖实例，
+    // 把用户配置的阈值静默清空为算法包默认值（实机数据：仅改防区的保存把
+    // `detection_confidence_threshold: 0.5` 覆盖成 `{}`，实例静默回落到默认 0.25）。
+    // 若当前为撤防（!dto.desired_enabled），即便未表达算法意图也原样保留既有实例。
+    let should_preserve_instances = (dto.algorithm_instances.is_none()
+        && !carries_legacy_single_instance_intent(dto))
+        || !dto.desired_enabled;
+    if should_preserve_instances {
         let existing = AlgorithmInstanceRepo::list_by_camera_id(&state.db, camera_id).await?;
-        return Ok(existing
-            .into_iter()
-            .map(|inst| db::SaveTaskAlgorithmInstanceParams {
-                algorithm_id: inst.algorithm_id,
-                analysis_fps: inst.analysis_fps,
-                params_json: inst.params_json,
-                enabled: Some(inst.enabled),
-            })
-            .collect());
+        if !existing.is_empty() || !dto.desired_enabled {
+            return Ok(preserve_existing_instances(existing));
+        }
     }
 
     let target_algo_id =
@@ -2864,6 +2902,99 @@ mod tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// 回归：仅改防区/门控的任务级保存不得改写算法实例参数。
+    ///
+    /// 实机缺陷（RK3568，2026-09-16）：一次省略 `algorithmInstances` 的保存被单实例
+    /// 旧字段兜底分支接管，实例参数被覆盖为缺省 `{}`，用户配置的
+    /// `detection_confidence_threshold: 0.5` 静默回落到算法包默认 0.25，
+    /// 现场表现为「低于阈值却仍有检测结果」。
+    #[tokio::test]
+    async fn test_partial_save_without_instances_preserves_instance_params() {
+        let (app, state, token, _mock_coord) = setup_test_app().await;
+
+        let camera_model = test_camera_model("CAM-KEEP-01", "rtsp://127.0.0.1:8554/live");
+        db::CameraRepo::insert(&state.db, camera_model)
+            .await
+            .unwrap();
+
+        db::AlgorithmRepo::upsert_algorithm(
+            &state.db,
+            db::UpsertAlgorithmParams {
+                algorithm_id: "keep_algo".into(),
+                name: "参数保留算法".into(),
+                algorithm_type: "recognition".into(),
+                alarm_type_id: "intrusion".into(),
+                active_version: "1.0.0".into(),
+                description: "test".into(),
+                is_builtin: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        // 1. 整体下发：实例携带用户阈值参数
+        let full_body = serde_json::json!({
+            "cameraId": "CAM-KEEP-01",
+            "name": "参数保留任务",
+            "desiredEnabled": true,
+            "rules": [],
+            "algorithmInstances": [
+                {
+                    "algorithmId": "keep_algo",
+                    "analysisFps": 10,
+                    "algoParams": { "detection_confidence_threshold": 0.5, "similarity_threshold": 0.75 }
+                }
+            ]
+        });
+        let (status, _) = put_task_config(&app, &token, "CAM-KEEP-01", &full_body).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let before = db::AlgorithmInstanceRepo::list_by_camera_id(&state.db, "CAM-KEEP-01")
+            .await
+            .unwrap();
+        assert_eq!(before.len(), 1);
+
+        // 2. 仅改防区与门控：刻意省略 algorithmInstances / algorithmId / analysisFps / algoParams
+        let partial_body = serde_json::json!({
+            "cameraId": "CAM-KEEP-01",
+            "name": "参数保留任务",
+            "desiredEnabled": true,
+            "rules": [{ "role": "line", "points": [{ "x": 0.1, "y": 0.5 }, { "x": 0.9, "y": 0.5 }] }],
+            "motionGate": {
+                "enabled": true, "threshold": 25, "contourArea": 100,
+                "keepaliveIntervalMs": 2000, "motionHoldFrames": 10
+            }
+        });
+        let (status, json) = put_task_config(&app, &token, "CAM-KEEP-01", &partial_body).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 3. 实例参数 / 帧率必须原样保留，且未触发代际推进与逐算法启停改写
+        let instance = &json["data"]["algorithmInstances"][0];
+        assert_eq!(
+            instance["algoParams"]["detection_confidence_threshold"],
+            0.5
+        );
+        assert_eq!(instance["algoParams"]["similarity_threshold"], 0.75);
+        assert_eq!(instance["analysisFps"], 10);
+
+        let after = db::AlgorithmInstanceRepo::list_by_camera_id(&state.db, "CAM-KEEP-01")
+            .await
+            .unwrap();
+        assert_eq!(after.len(), 1, "部分字段保存不得增删实例");
+        assert_eq!(after[0].params_json, before[0].params_json);
+        assert_eq!(after[0].analysis_fps, before[0].analysis_fps);
+        assert_eq!(
+            after[0].desired_revision, before[0].desired_revision,
+            "未提交算法变更的保存不得推进实例配置代际"
+        );
+        assert_eq!(
+            after[0].enabled, before[0].enabled,
+            "总闸保存不得连坐改写逐算法分闸"
+        );
+        // 防区作为任务级镜像仍同步到实例行
+        assert!(after[0].rules_json.contains("line"));
     }
 
     #[tokio::test]

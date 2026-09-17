@@ -613,15 +613,20 @@ export function LivePlayer({
             ctx.setLineDash([3, 2])
             ctx.strokeRect(fx, fy, fboxW, fboxH)
 
-            // 人脸框上方绘制人脸微型标识与质量评分
-            const qScore = item.face.qualityScore ?? item.qualityScore
-            const qText = qScore !== undefined ? `Face ${(qScore * 100).toFixed(0)}%` : 'Face'
+            // 人脸框上方绘制人脸微型标识与人脸检测置信度。
+            // 这里是受 `detection_confidence_threshold` 门控的量；质量分只在主胶囊以 `Q:` 前缀展示，
+            // 两者语义不同，不能互相顶替（历史上人脸框上的 `Face xx%` 曾是质量分，导致阈值被误判为未生效）。
+            const faceConfidence = item.face.confidence
+            const faceText =
+              typeof faceConfidence === 'number' && Number.isFinite(faceConfidence)
+                ? `Face ${(faceConfidence * 100).toFixed(0)}%`
+                : 'Face'
             ctx.font = '600 8px monospace'
-            const qWidth = ctx.measureText(qText).width
+            const faceWidth = ctx.measureText(faceText).width
             ctx.fillStyle = 'rgba(168, 85, 247, 0.9)'
-            ctx.fillRect(fx, Math.max(0, fy - 11), qWidth + 6, 10)
+            ctx.fillRect(fx, Math.max(0, fy - 11), faceWidth + 6, 10)
             ctx.fillStyle = '#ffffff'
-            ctx.fillText(qText, fx + 3, Math.max(8, fy - 3))
+            ctx.fillText(faceText, fx + 3, Math.max(8, fy - 3))
             ctx.restore()
           }
 

@@ -5,6 +5,7 @@ import { evidenceApi } from '../../../lib/api'
 import type { AlarmRecord } from '../../../types'
 import {
   calculateFittedImageRect,
+  formatFaceBBoxLabel,
   getBBoxStyle,
   type FittedImageRect,
   formatTimestamp,
@@ -51,7 +52,7 @@ export function AlarmLightboxModal({
   const targetBBoxes = parseTargetBBoxes(alarm.bboxJson)
   const bodyBBox = targetBBoxes?.body ?? null
   const faceBBox = targetBBoxes?.face?.bbox ?? null
-  const faceQuality = targetBBoxes?.face?.qualityScore
+  const faceConfidence = targetBBoxes?.face?.confidence
 
   useEffect(() => {
     if (previousFullImageUrl.current === fullImageUrl) return
@@ -221,9 +222,7 @@ export function AlarmLightboxModal({
                     style={getBBoxStyle(faceBBox, imgRect)}
                   >
                     <span className="absolute -top-4.5 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-xs">
-                      {faceQuality !== undefined
-                        ? `Face ${(faceQuality * 100).toFixed(0)}%`
-                        : 'Face'}
+                      {formatFaceBBoxLabel(targetBBoxes?.face)}
                     </span>
                   </div>
                 )}
@@ -276,6 +275,11 @@ export function AlarmLightboxModal({
             </div>
 
             <div className="flex items-center gap-3">
+              {faceConfidence !== undefined && (
+                <span className="rounded-xl border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 font-mono text-xs font-semibold text-purple-400">
+                  {t('modal.faceConfidence')}: {faceConfidence.toFixed(2)}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={onToggleStatus}

@@ -105,6 +105,22 @@ function asOptionalNumber(value: unknown): number | undefined {
 }
 
 /**
+ * 人脸框标签：`Face` 后为人脸检测置信度（受 `detection_confidence_threshold` 门控），
+ * `Q` 为质量分（仅门控特征提取）。两者语义不同，必须显式区分，
+ * 否则低质量分会被误读为「检测阈值未生效」。
+ */
+export function formatFaceBBoxLabel(face: ParsedTargetBBoxes['face'] | undefined): string {
+  const tokens = ['Face']
+  if (face?.confidence !== undefined) {
+    tokens.push(`${(face.confidence * 100).toFixed(0)}%`)
+  }
+  if (face?.qualityScore !== undefined) {
+    tokens.push(`· Q ${(face.qualityScore * 100).toFixed(0)}%`)
+  }
+  return tokens.join(' ')
+}
+
+/**
  * 解析目标及其挂载人脸检测框坐标与质量分
  * 支持：
  * 1. 数组形式：[x1, y1, x2, y2]

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   calculateFittedImageRect,
   deriveEvidenceOriginBadges,
+  formatFaceBBoxLabel,
   formatTimestamp,
   getRuleTypeLabel,
   parseBBoxCoords,
@@ -100,6 +101,29 @@ describe('alarms utils', () => {
           qualityScore: 0.91,
         },
       })
+    })
+  })
+
+  describe('formatFaceBBoxLabel', () => {
+    it('renders detection confidence and quality score with distinct prefixes', () => {
+      expect(
+        formatFaceBBoxLabel({
+          bbox: { x1: 0.1, y1: 0.2, x2: 0.3, y2: 0.4 },
+          confidence: 0.93,
+          qualityScore: 0.42,
+        }),
+      ).toBe('Face 93% · Q 42%')
+    })
+
+    it('omits missing fields instead of reusing one value for the other', () => {
+      expect(formatFaceBBoxLabel({ bbox: { x1: 0, y1: 0, x2: 1, y2: 1 } })).toBe('Face')
+      expect(
+        formatFaceBBoxLabel({
+          bbox: { x1: 0, y1: 0, x2: 1, y2: 1 },
+          qualityScore: 0.5,
+        }),
+      ).toBe('Face · Q 50%')
+      expect(formatFaceBBoxLabel(undefined)).toBe('Face')
     })
   })
 

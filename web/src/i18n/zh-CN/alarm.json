@@ -152,6 +152,7 @@
     "trackId": "Track ID",
     "channel": "通道",
     "qualityScore": "质量评分",
+    "faceConfidence": "人脸检测置信度",
     "time": "时间",
     "download": "下载图片",
     "openOriginal": "在新标签页中打开原图",

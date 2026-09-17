@@ -152,6 +152,7 @@
     "trackId": "Track ID",
     "channel": "Channel",
     "qualityScore": "Quality",
+    "faceConfidence": "Face Detection Confidence",
     "time": "Time",
     "download": "Download Image",
     "openOriginal": "Open in New Tab",
