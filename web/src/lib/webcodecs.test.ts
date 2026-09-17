@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  findSupportedCodecProfile,
+  isWebCodecsSupported,
   parseWebCodecsFrame,
   WEBCODECS_FLAG_DISCONTINUITY,
   WEBCODECS_HEADER_LEN,
@@ -72,5 +74,49 @@ describe('WebCodecs Framing Parser', () => {
     const badVerBuffer = new ArrayBuffer(16)
     new DataView(badVerBuffer).setUint8(0, 0x02)
     expect(parseWebCodecsFrame(badVerBuffer)).toBeNull()
+  })
+})
+
+describe('WebCodecs Profile Capability Detection', () => {
+  const scope = typeof window !== 'undefined' ? window : globalThis
+  const originalVideoDecoder = (scope as unknown as { VideoDecoder?: unknown }).VideoDecoder
+
+  afterEach(() => {
+    if (originalVideoDecoder !== undefined) {
+      ;(scope as unknown as { VideoDecoder: unknown }).VideoDecoder = originalVideoDecoder
+    } else {
+      delete (scope as unknown as { VideoDecoder?: unknown }).VideoDecoder
+    }
+    vi.restoreAllMocks()
+  })
+
+  it('should return highest supported candidate profile', async () => {
+    const isConfigSupported = vi.fn().mockImplementation(async ({ codec }: { codec: string }) => {
+      return { supported: codec === 'avc1.64002A' }
+    })
+    ;(scope as unknown as { VideoDecoder: unknown }).VideoDecoder = { isConfigSupported }
+
+    const profile = await findSupportedCodecProfile('h264')
+    expect(profile).toBe('avc1.64002A')
+    expect(await isWebCodecsSupported('h264')).toBe(true)
+  })
+
+  it('should fallback to second candidate profile when first is unsupported', async () => {
+    const isConfigSupported = vi.fn().mockImplementation(async ({ codec }: { codec: string }) => {
+      if (codec === 'avc1.64002A') return { supported: false }
+      if (codec === 'avc1.4D401F') return { supported: true }
+      return { supported: false }
+    })
+    ;(scope as unknown as { VideoDecoder: unknown }).VideoDecoder = { isConfigSupported }
+
+    const profile = await findSupportedCodecProfile('h264')
+    expect(profile).toBe('avc1.4D401F')
+    expect(await isWebCodecsSupported('h264')).toBe(true)
+  })
+
+  it('should return null when all candidate profiles fail or VideoDecoder is unavailable', async () => {
+    delete (scope as unknown as { VideoDecoder?: unknown }).VideoDecoder
+    expect(await findSupportedCodecProfile('h264')).toBeNull()
+    expect(await isWebCodecsSupported('h264')).toBe(false)
   })
 })

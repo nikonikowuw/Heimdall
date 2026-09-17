@@ -34,13 +34,16 @@ class TrackStore {
    * @param pts 13 位源帧 UTC Unix 毫秒时间戳 (可选)
    */
   setTracks(cameraId: string, tracks: TrackedBBox[], pts?: number): void {
+    const hasValidPts = pts != null && Number.isFinite(pts) && pts > 0
+    const currentPts = hasValidPts ? pts : this.tracksByCamera.get(cameraId)?.pts
+
     this.tracksByCamera.set(cameraId, {
       tracks,
       updatedAt: Date.now(),
-      pts,
+      pts: currentPts,
     })
 
-    if (pts && Number.isFinite(pts) && pts > 0) {
+    if (hasValidPts) {
       let ring = this.ringBuffersByCamera.get(cameraId)
       if (!ring) {
         ring = new TrackRingBuffer()
@@ -89,6 +92,20 @@ class TrackStore {
       return []
     }
     return snapshot.tracks
+  }
+
+  /**
+   * 获取某路摄像头当前最新收到的源帧 PTS 时间戳
+   *
+   * 用于 FLV / MSE 播放器基于当前渲染帧与最新流缓冲滞后量 (lag) 逆向推导画面呈现 PTS。
+   * 严格受 TRACK_SNAPSHOT_TTL_MS 有效期防护，流中断或停推超时后自动返回 null，杜绝幽灵框死循环。
+   */
+  getLatestTrackPts(cameraId: string): number | null {
+    const snapshot = this.tracksByCamera.get(cameraId)
+    if (!snapshot || Date.now() - snapshot.updatedAt > TRACK_SNAPSHOT_TTL_MS) {
+      return null
+    }
+    return snapshot.pts ?? null
   }
 
   /**

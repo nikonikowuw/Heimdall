@@ -20,7 +20,7 @@ import { useTranslation } from 'react-i18next'
 import { cameraApi } from '@/lib/api'
 import { telemetryStore } from '@/lib/telemetryStore'
 import { trackStore } from '@/lib/trackStore'
-import { isWebCodecsSupported, WebCodecsPlayer } from '@/lib/webcodecs'
+import { findSupportedCodecProfile, WebCodecsPlayer } from '@/lib/webcodecs'
 import { useAuthStore } from '@/stores/auth'
 import type { CameraTelemetry, TrackedBBox } from '@/types'
 
@@ -72,6 +72,86 @@ const VIDEO_MEDIA_EVENTS = [
   'playing',
   'timeupdate',
 ] as const
+
+/**
+ * 工业级抗抖动平滑 mpegts.js 播放器配置
+ *
+ * 核心设计原则：
+ * 1. 禁用暴力追帧 (liveBufferLatencyChasing: false) 与过浅缓冲区，绝不在网络抖动时反复修改播放倍速导致画面卡顿；
+ * 2. 维持 1.0s 稳定抗抖动 JitterBuffer 与 2.5s 弹性窗口，保证在 1~2s 安防长 GOP 下画面丝滑流畅、零卡顿；
+ * 3. 画面呈现与检测框的时空同步通过 Canvas 离屏时间戳逆向对齐解决，不再依赖破坏性追帧。
+ */
+const SMOOTH_MPEGTS_CONFIG: mpegts.Config = {
+  enableWorker: false,
+  lazyLoad: false,
+  enableStashBuffer: false,
+  stashInitialSize: 64,
+  liveBufferLatencyChasing: false,
+  liveSync: true,
+  liveSyncMaxLatency: 2.5,
+  liveSyncTargetLatency: 1.0,
+  autoCleanupSourceBuffer: true,
+  autoCleanupMaxBackwardDuration: 10,
+  autoCleanupMinBackwardDuration: 5,
+}
+
+/** FLV/MSE 播放模式下视频画面呈现与 AI 航迹的匹配容差时间 (毫秒) */
+const FLV_TRACK_PTS_TOLERANCE_MS = 350
+
+/** FLV 画面缓冲滞后低通滤波的一阶时间常数 (毫秒) */
+const LAG_SMOOTHING_TIME_CONSTANT_MS = 300
+
+/** FLV 画面平滑缓冲滞后初始默认值 (毫秒，对齐 liveSyncTargetLatency: 1.0s) */
+const DEFAULT_SMOOTH_LAG_MS = 1000
+
+interface EstimateVideoPtsParams {
+  protocol: 'webcodecs' | 'flv'
+  wcPlayer: WebCodecsPlayer | null
+  videoEl: HTMLVideoElement | null
+  cameraId: string
+  smoothLagMsRef: { current: number }
+  lastLagSampleTimeRef: { current: number }
+}
+
+/**
+ * 动态推导当前画面呈现时刻的源帧绝对 PTS (毫秒)
+ *
+ * 1. WebCodecs 模式：直接读取逐帧硬件解码的源帧绝对 PTS (延时天然 < 100ms)
+ * 2. FLV/MSE 模式：播放器维持 1.0s 稳定抗抖动平滑缓冲 (丝滑不卡顿)，
+ *    基于时间步长自适应 EMA 平滑跟踪画面实际播放落后量 (lag)，精准从历史环形队列提取同一时刻的检测框
+ */
+function estimateVideoPts({
+  protocol,
+  wcPlayer,
+  videoEl,
+  cameraId,
+  smoothLagMsRef,
+  lastLagSampleTimeRef,
+}: EstimateVideoPtsParams): number | null {
+  if (protocol === 'webcodecs') {
+    return wcPlayer?.getCurrentPts() ?? null
+  }
+
+  if (!videoEl || videoEl.paused || videoEl.readyState < 2 || videoEl.buffered.length === 0) {
+    return null
+  }
+
+  const bufferedEnd = videoEl.buffered.end(videoEl.buffered.length - 1)
+  const instantLagMs = Math.max(0, (bufferedEnd - videoEl.currentTime) * 1000)
+
+  // 基于时间步长的自适应一阶低通滤波 (EMA)：消除 60Hz/120Hz 高刷屏收敛速率差异与分包阶梯抖动
+  const now = performance.now()
+  const lastSample = lastLagSampleTimeRef.current
+  const dt = lastSample > 0 ? Math.min(100, Math.max(1, now - lastSample)) : 16.6
+  lastLagSampleTimeRef.current = now
+
+  const alpha = 1 - Math.exp(-dt / LAG_SMOOTHING_TIME_CONSTANT_MS)
+  const smoothLag = smoothLagMsRef.current * (1 - alpha) + instantLagMs * alpha
+  smoothLagMsRef.current = smoothLag
+
+  const latestPts = trackStore.getLatestTrackPts(cameraId)
+  return latestPts != null && latestPts > 0 ? Math.round(latestPts - smoothLag) : null
+}
 
 export function LivePlayer({
   cameraId,
@@ -127,6 +207,8 @@ export function LivePlayer({
   const wcPlayerRef = useRef<WebCodecsPlayer | null>(null)
   const activeProtocolRef = useRef<'webcodecs' | 'flv'>('flv')
   const externalTracksRef = useRef<TrackedBBox[] | undefined>(trackedObjects)
+  const smoothLagMsRef = useRef<number>(DEFAULT_SMOOTH_LAG_MS)
+  const lastLagSampleTimeRef = useRef<number>(0)
 
   // 外部显式传入目标检测框时同步至 ref，零 React 重排与零 RAF 重启开销
   useEffect(() => {
@@ -194,19 +276,7 @@ export function LivePlayer({
           hasVideo: false,
           cors: true,
         },
-        {
-          enableWorker: false,
-          lazyLoad: false,
-          enableStashBuffer: false,
-          stashInitialSize: 64,
-          liveBufferLatencyChasing: false,
-          liveSync: true,
-          liveSyncMaxLatency: 2.5,
-          liveSyncTargetLatency: 1.0,
-          autoCleanupSourceBuffer: true,
-          autoCleanupMaxBackwardDuration: 10,
-          autoCleanupMinBackwardDuration: 5,
-        },
+        SMOOTH_MPEGTS_CONFIG,
       )
       audioPlayerRef.current = audioPlayer
       audioPlayer.attachMediaElement(audioEl)
@@ -304,6 +374,8 @@ export function LivePlayer({
           const bufferedEnd = videoEl.buffered.end(videoEl.buffered.length - 1)
           const latency = Math.max(0, Math.round((bufferedEnd - videoEl.currentTime) * 1000))
           setLatencyMs(latency)
+          smoothLagMsRef.current = latency
+          lastLagSampleTimeRef.current = performance.now()
         }
         // 持续稳定播放 5 秒后才重置重试计数，避免偶发短暂连通将退避阶段过早清零
         if (!stableTimerRef.current) {
@@ -341,19 +413,7 @@ export function LivePlayer({
             hasVideo: true,
             cors: true,
           },
-          {
-            enableWorker: false,
-            lazyLoad: false,
-            enableStashBuffer: false,
-            stashInitialSize: 64,
-            liveBufferLatencyChasing: false,
-            liveSync: true,
-            liveSyncMaxLatency: 2.5,
-            liveSyncTargetLatency: 1.0,
-            autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 10,
-            autoCleanupMinBackwardDuration: 5,
-          },
+          SMOOTH_MPEGTS_CONFIG,
         )
 
         flvPlayer.attachMediaElement(videoEl)
@@ -408,7 +468,7 @@ export function LivePlayer({
       }
     }
 
-    async function startWebCodecsPlayer() {
+    async function startWebCodecsPlayer(preferredCodecMime?: string) {
       if (!videoCanvas || isCancelled) return false
 
       try {
@@ -416,6 +476,8 @@ export function LivePlayer({
         wcPlayer = new WebCodecsPlayer({
           wsUrl,
           canvas: videoCanvas,
+          preferredCodec: preferredVideoCodec,
+          preferredCodecMime,
           onPlaying: (lat) => {
             if (isCancelled) return
             setActiveProtocol('webcodecs')
@@ -452,13 +514,13 @@ export function LivePlayer({
       if (!cameraId) return
       setConnectionStatus('connecting')
 
-      // 精确探测当前目标码流编码的 WebCodecs 支持度，杜绝跨编码短路
-      const canWebCodecs = await isWebCodecsSupported(preferredVideoCodec)
+      // 精确探测当前目标码流编码的 WebCodecs 支持度与首选 Profile MIME，杜绝盲目配置与跨编码短路
+      const supportedMime = await findSupportedCodecProfile(preferredVideoCodec)
 
       // 优先嗅探 WebCodecs 支持，保持超低延迟；音频由独立的 companion audioPlayer 处理
-      if (canWebCodecs && !isCancelled) {
+      if (supportedMime && !isCancelled) {
         try {
-          const selected = await startWebCodecsPlayer()
+          const selected = await startWebCodecsPlayer(supportedMime)
           if (selected) {
             if (isAudioActiveRef.current) {
               startAudioOnlyPlayer()
@@ -529,6 +591,8 @@ export function LivePlayer({
           // ignore cleanup errors
         }
       }
+      smoothLagMsRef.current = DEFAULT_SMOOTH_LAG_MS
+      lastLagSampleTimeRef.current = 0
     }
   }, [
     cameraId,
@@ -561,10 +625,20 @@ export function LivePlayer({
         const h = canvas.height
         ctx.clearRect(0, 0, w, h)
 
-        // 基于源帧 PTS 环形队列实现毫秒级时空对齐 (消除解码渲染缓冲与推理耗时漂移)
-        // 若外部显式传入目标框 (如录像回放/规则标注模式) 则优先使用外部 ref，否则自适应按视频 PTS 对齐
-        const currentVideoPts = wcPlayerRef.current?.getCurrentPts() ?? null
-        const tracks = externalTracksRef.current ?? trackStore.getTracks(cameraId, currentVideoPts)
+        // 动态推导当前画面呈现时刻的源帧绝对 PTS (毫秒)
+        const currentVideoPts = estimateVideoPts({
+          protocol: activeProtocolRef.current,
+          wcPlayer: wcPlayerRef.current,
+          videoEl: videoRef.current,
+          cameraId,
+          smoothLagMsRef,
+          lastLagSampleTimeRef,
+        })
+
+        // 基于容差窗口二分查找最匹配的源帧检测框；若无 PTS 则降级读取最新有效快照；若时钟失步超差则返回空防幽灵框
+        const tracks =
+          externalTracksRef.current ??
+          trackStore.getTracks(cameraId, currentVideoPts, FLV_TRACK_PTS_TOLERANCE_MS)
 
         for (const item of tracks) {
           const [nx1, ny1, nx2, ny2] = item.bbox

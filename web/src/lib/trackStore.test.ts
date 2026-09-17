@@ -116,8 +116,19 @@ describe('trackStore', () => {
     // 3. 不带 PTS 查询时回退到最新快照
     expect(trackStore.getTracks('CAM-PTS')).toEqual(trackT2)
 
-    // 4. 清除后查询为空
+    // 4. 获取最新接收到的源帧 PTS
+    expect(trackStore.getLatestTrackPts('CAM-PTS')).toBe(1040)
+    expect(trackStore.getLatestTrackPts('CAM-UNKNOWN')).toBeNull()
+
+    // 5. 超过 TTL 后 PTS 自动过期失效
+    vi.useFakeTimers()
+    vi.advanceTimersByTime(2000)
+    expect(trackStore.getLatestTrackPts('CAM-PTS')).toBeNull()
+    vi.useRealTimers()
+
+    // 6. 清除后查询为空
     trackStore.clear('CAM-PTS')
     expect(trackStore.getTracks('CAM-PTS', 1040)).toEqual([])
+    expect(trackStore.getLatestTrackPts('CAM-PTS')).toBeNull()
   })
 })

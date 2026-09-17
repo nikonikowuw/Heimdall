@@ -24,6 +24,12 @@ export const CODEC_MIME_STRINGS = {
   h265: 'hev1.1.6.L93.B0',
 } as const
 
+/** 针对安防监控常见编码的候选 MIME 列表 (按推荐优先级降序排列：High -> Main -> Baseline) */
+export const CODEC_PROFILE_CANDIDATES: Record<'h264' | 'h265', readonly string[]> = {
+  h264: ['avc1.64002A', 'avc1.4D401F', 'avc1.42E01E'],
+  h265: ['hev1.1.6.L93.B0', 'hvc1.1.6.L93.B0'],
+}
+
 /**
  * 解析服务端下发的 12 字节二进制帧头与 NALU 载荷
  */
@@ -55,30 +61,57 @@ export function parseWebCodecsFrame(data: ArrayBuffer): ParsedVideoChunk | null 
   }
 }
 
+function getVideoDecoderConstructor(): typeof VideoDecoder | null {
+  if (typeof VideoDecoder !== 'undefined') {
+    return VideoDecoder
+  }
+  if (typeof window !== 'undefined' && 'VideoDecoder' in window) {
+    return (window as unknown as { VideoDecoder: typeof VideoDecoder }).VideoDecoder
+  }
+  return null
+}
+
+/**
+ * 探测并返回当前环境支持的首选 WebCodecs 解码 Profile MIME 字符串
+ * 若均不支持或当前环境无 WebCodecs 则返回 null
+ */
+export async function findSupportedCodecProfile(
+  codec: 'h264' | 'h265' = 'h265',
+): Promise<string | null> {
+  const decoderCtor = getVideoDecoderConstructor()
+  if (!decoderCtor || typeof decoderCtor.isConfigSupported !== 'function') {
+    return null
+  }
+
+  const candidates = CODEC_PROFILE_CANDIDATES[codec]
+  for (const candidate of candidates) {
+    try {
+      const res = await decoderCtor.isConfigSupported({
+        codec: candidate,
+      })
+      if (res.supported) {
+        return candidate
+      }
+    } catch {
+      // 容忍特定 Profile 检测异常，继续探测候选列表
+    }
+  }
+  return null
+}
+
 /**
  * 探测当前浏览器是否支持特定编码格式的 WebCodecs 硬件解码
  */
 export async function isWebCodecsSupported(codec: 'h264' | 'h265' = 'h265'): Promise<boolean> {
-  if (
-    typeof window === 'undefined' ||
-    typeof (window as unknown as { VideoDecoder?: unknown }).VideoDecoder === 'undefined'
-  ) {
-    return false
-  }
-
-  try {
-    const res = await VideoDecoder.isConfigSupported({
-      codec: CODEC_MIME_STRINGS[codec],
-    })
-    return !!res.supported
-  } catch {
-    return false
-  }
+  const profile = await findSupportedCodecProfile(codec)
+  return profile !== null
 }
 
 export interface WebCodecsPlayerOptions {
   wsUrl: string
   canvas: HTMLCanvasElement
+  preferredCodec?: 'h264' | 'h265'
+  preferredCodecMime?: string
   onPlaying?: (latencyMs: number) => void
   onError?: (err: Error) => void
   onClose?: () => void
@@ -94,6 +127,7 @@ export class WebCodecsPlayer {
   private ctx: CanvasRenderingContext2D | null = null
   private isDestroyed = false
   private currentCodec: 'h264' | 'h265' | null = null
+  private activeCodecMime: string | null = null
   private options: WebCodecsPlayerOptions
   private hasRenderedFirstFrame = false
   private currentPtsMs: number | null = null
@@ -133,6 +167,38 @@ export class WebCodecsPlayer {
     }
   }
 
+  private resolveCodecCandidates(codec: 'h264' | 'h265'): readonly string[] {
+    const list = CODEC_PROFILE_CANDIDATES[codec]
+    const prefMime = this.options.preferredCodecMime
+    const prefCodec = this.options.preferredCodec
+    if (prefMime && (!prefCodec || prefCodec === codec)) {
+      return [prefMime, ...list.filter((m) => m !== prefMime)]
+    }
+    return list
+  }
+
+  private createDecoderInstance(mime: string): VideoDecoder {
+    const decoder = new VideoDecoder({
+      output: (frame: VideoFrame) => {
+        if (this.isDestroyed) {
+          frame.close()
+          return
+        }
+        this.renderFrame(frame)
+      },
+      error: (e: DOMException) => {
+        this.options.onError?.(e)
+      },
+    })
+
+    decoder.configure({
+      codec: mime,
+      optimizeForLatency: true,
+    })
+
+    return decoder
+  }
+
   private initDecoder(codec: 'h264' | 'h265') {
     if (this.decoder && this.currentCodec === codec && this.decoder.state !== 'closed') {
       return
@@ -148,23 +214,26 @@ export class WebCodecsPlayer {
     }
 
     try {
-      this.decoder = new VideoDecoder({
-        output: (frame: VideoFrame) => {
-          if (this.isDestroyed) {
-            frame.close()
-            return
-          }
-          this.renderFrame(frame)
-        },
-        error: (e: DOMException) => {
-          this.options.onError?.(e)
-        },
-      })
+      const candidates = this.resolveCodecCandidates(codec)
+      let activeDecoder: VideoDecoder | null = null
+      let activeMime: string | null = null
 
-      this.decoder.configure({
-        codec: CODEC_MIME_STRINGS[codec],
-        optimizeForLatency: true,
-      })
+      for (const mime of candidates) {
+        try {
+          activeDecoder = this.createDecoderInstance(mime)
+          activeMime = mime
+          break
+        } catch {
+          // 当前 candidate profile 配置失败，尝试下一个候选
+        }
+      }
+
+      if (!activeDecoder || !activeMime) {
+        throw new Error(`WebCodecs 硬件解码器无法配置任何可用的 ${codec} Profile`)
+      }
+
+      this.decoder = activeDecoder
+      this.activeCodecMime = activeMime
       this.currentCodec = codec
       this.hasRenderedFirstFrame = false
       this.currentPtsMs = null
@@ -179,7 +248,7 @@ export class WebCodecsPlayer {
         if (this.decoder.state !== 'closed') {
           this.decoder.reset()
           this.decoder.configure({
-            codec: CODEC_MIME_STRINGS[codec],
+            codec: this.activeCodecMime || CODEC_PROFILE_CANDIDATES[codec][0],
             optimizeForLatency: true,
           })
           this.hasRenderedFirstFrame = false
