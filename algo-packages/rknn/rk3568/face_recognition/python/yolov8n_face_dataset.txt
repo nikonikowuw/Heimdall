@@ -1,1 +1,0 @@
-../../../datasets/COCO/coco_subset_20.txt

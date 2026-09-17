@@ -28,7 +28,7 @@ use {
     crate::align::align_face,
     crate::coreml::CoreMlFaceModels,
     crate::detect::{decode_face_detections, nms, unmap_letterbox},
-    crate::quality::compute_quality,
+    crate::quality::{compute_quality, FaceQualityExt},
     algo_sdk::c_abi::{AV_ALGO_API_VERSION, AV_ERR_INTERNAL, AV_ERR_INVALID_ARG, AV_OK},
     algo_sdk::cv::types::{LetterboxLayout, PreprocessMode},
     algo_sdk::macros::{validate_abi_header, LibraryContext},

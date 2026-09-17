@@ -1,0 +1,375 @@
+//! 单图人脸特征提取 C ABI 实现 (`av_algo_extract_face`)。
+//!
+//! 专用于人脸底库注册、证件照建档或独立抓拍图提取 512 维特征向量，
+//! 与常驻视频流推理管道解耦。
+
+use std::ffi::c_int;
+use std::io::Cursor;
+
+use algo_sdk::c_abi::{AvAlgoLibrary, AvFaceExtractInput, AvFaceExtractOutput};
+use algo_sdk::c_abi::{
+    AV_ALGO_API_VERSION, AV_ERR_INFERENCE_FAILED, AV_ERR_INTERNAL, AV_ERR_INVALID_ARG, AV_OK,
+};
+use algo_sdk::error::AlgoError;
+use algo_sdk::macros::{validate_abi_header, LibraryContext};
+use image::{ExtendedColorType, ImageReader, Limits, RgbImage};
+
+use crate::quality::FaceQualityExt as _;
+use crate::{align, config, prepare_detector_input_for, quality, shared_models};
+
+const MAX_DECODED_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
+
+struct ExtractCache {
+    embedding: [f32; 512],
+    aligned_jpeg: Vec<u8>,
+}
+
+thread_local! {
+    static EXTRACT_CACHE: std::cell::RefCell<ExtractCache> = const {
+        std::cell::RefCell::new(ExtractCache {
+            embedding: [0.0; 512],
+            aligned_jpeg: Vec::new(),
+        })
+    };
+}
+
+fn write_output_error(output: &mut AvFaceExtractOutput, status: c_int) {
+    output.status_code = status.unsigned_abs();
+    output.embedding = std::ptr::null();
+    output.embedding_dim = 0;
+    output.aligned_jpeg = std::ptr::null();
+    output.aligned_jpeg_len = 0;
+}
+
+fn write_output_success(
+    output: &mut AvFaceExtractOutput,
+    embedding: [f32; 512],
+    quality_score: f32,
+    detection_score: f32,
+    jpeg: Vec<u8>,
+) {
+    output.status_code = 0;
+    output.embedding_dim = 512;
+    output.quality_score = quality_score;
+    output.detection_score = detection_score;
+
+    EXTRACT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.embedding = embedding;
+        cache.aligned_jpeg = jpeg;
+        output.embedding = cache.embedding.as_ptr();
+        output.aligned_jpeg = cache.aligned_jpeg.as_ptr();
+        output.aligned_jpeg_len = cache.aligned_jpeg.len() as u32;
+    });
+}
+
+fn encode_aligned_jpeg(rgb: &[u8]) -> Result<Vec<u8>, AlgoError> {
+    if rgb.len() != 112 * 112 * 3 {
+        return Err(AlgoError::Preprocess {
+            reason: "对齐人脸尺寸不是 112×112 RGB".to_string(),
+        });
+    }
+    let mut jpeg = Vec::with_capacity(16 * 1024);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90);
+    encoder
+        .encode(rgb, 112, 112, ExtendedColorType::Rgb8)
+        .map_err(|error| AlgoError::Preprocess {
+            reason: format!("对齐人脸 JPEG 编码失败: {error}"),
+        })?;
+    if jpeg.len() > 65_536 {
+        return Err(AlgoError::OutOfMemory);
+    }
+    Ok(jpeg)
+}
+
+fn decode_input_image(bytes: &[u8]) -> Result<RgbImage, AlgoError> {
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| AlgoError::Preprocess {
+            reason: format!("无法识别输入图像格式: {error}"),
+        })?;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_DECODED_IMAGE_BYTES);
+    reader.limits(limits);
+    let decoded = reader.decode().map_err(|error| AlgoError::Preprocess {
+        reason: format!("图像解码失败或超过资源上限: {error}"),
+    })?;
+    let decoded_bytes = u64::from(decoded.width())
+        .checked_mul(u64::from(decoded.height()))
+        .and_then(|pixels| pixels.checked_mul(3))
+        .ok_or(AlgoError::OutOfMemory)?;
+    if decoded_bytes > MAX_DECODED_IMAGE_BYTES {
+        return Err(AlgoError::OutOfMemory);
+    }
+    Ok(decoded.to_rgb8())
+}
+
+#[inline]
+fn reflect_coord(coord: u32, pad: u32, dim: u32) -> usize {
+    if coord < pad {
+        pad - coord
+    } else if coord >= dim + pad {
+        let diff = coord - (dim + pad) + 1;
+        dim.saturating_sub(diff)
+    } else {
+        coord - pad
+    }
+    .min(dim.saturating_sub(1)) as usize
+}
+
+fn reflect_pad_image(raw: &[u8], orig_w: u32, orig_h: u32, pad_x: u32, pad_y: u32) -> Vec<u8> {
+    let padded_w = orig_w + pad_x * 2;
+    let padded_h = orig_h + pad_y * 2;
+    let mut padded = vec![0u8; (padded_w * padded_h * 3) as usize];
+    let orig_w_usize = orig_w as usize;
+    let padded_w_usize = padded_w as usize;
+
+    for y in 0..padded_h {
+        let src_y = reflect_coord(y, pad_y, orig_h);
+        let src_row = src_y * orig_w_usize;
+        let dst_row = y as usize * padded_w_usize;
+        for x in 0..padded_w {
+            let src_x = reflect_coord(x, pad_x, orig_w);
+            let src_idx = (src_row + src_x) * 3;
+            let dst_idx = (dst_row + x as usize) * 3;
+            padded[dst_idx..dst_idx + 3].copy_from_slice(&raw[src_idx..src_idx + 3]);
+        }
+    }
+    padded
+}
+
+unsafe fn extract_face_impl(
+    lib: AvAlgoLibrary,
+    input: *const AvFaceExtractInput,
+    output: *mut AvFaceExtractOutput,
+) -> c_int {
+    if lib.is_null() || input.is_null() || output.is_null() {
+        return AV_ERR_INVALID_ARG;
+    }
+    // SAFETY: validate_abi_header 只读取 input 指向的 ABI 头；非空和对齐由该函数校验。
+    if let Err(error) = unsafe { validate_abi_header(input, "AvFaceExtractInput") } {
+        return error.to_c_status();
+    }
+    // SAFETY: validate_abi_header 只读取 output 指向的 ABI 头；非空和对齐由该函数校验。
+    if let Err(error) = unsafe { validate_abi_header(output, "AvFaceExtractOutput") } {
+        return error.to_c_status();
+    }
+    // SAFETY: validate_abi_header 校验通过保证 input 指针非空、内存对齐且布局合法。
+    let input_ref = unsafe { &*input };
+    // SAFETY: output 指针非空且指向满足 AvFaceExtractOutput 尺寸的合法可写内存。
+    unsafe {
+        std::ptr::write_bytes(
+            output.cast::<u8>(),
+            0,
+            std::mem::size_of::<AvFaceExtractOutput>(),
+        );
+    }
+    // SAFETY: output_ref 在写入零字节后初始化，且 validate_abi_header 已验证对齐与尺寸。
+    let output_ref = unsafe { &mut *output };
+    output_ref.size = std::mem::size_of::<AvFaceExtractOutput>() as u32;
+    output_ref.api_version = AV_ALGO_API_VERSION;
+
+    if input_ref.image_bytes.is_null() || input_ref.image_bytes_len == 0 {
+        algo_sdk::macros::set_last_error("image_bytes 为空");
+        write_output_error(output_ref, AV_ERR_INVALID_ARG);
+        return AV_ERR_INVALID_ARG;
+    }
+    let image_len = input_ref.image_bytes_len as usize;
+    if image_len > 32 * 1024 * 1024 {
+        algo_sdk::macros::set_last_error("压缩图像输入超过 32 MiB 限制");
+        write_output_error(output_ref, AV_ERR_INVALID_ARG);
+        return AV_ERR_INVALID_ARG;
+    }
+    // SAFETY: input 结构体中的 image_bytes 指向至少 image_len 字节的有效图像字节流。
+    let image_bytes = unsafe { std::slice::from_raw_parts(input_ref.image_bytes, image_len) };
+    let image = match decode_input_image(image_bytes) {
+        Ok(image) => image,
+        Err(error) => {
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, error.to_c_status());
+            return error.to_c_status();
+        }
+    };
+
+    // SAFETY: lib 必须为库导出接口所生成的非空 LibraryContext 不透明句柄。
+    let library = unsafe { &*(lib as *const LibraryContext) };
+    let models = match shared_models(&library.package_root) {
+        Ok(models) => models,
+        Err(error) => {
+            let status = error.to_c_status();
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, status);
+            return status;
+        }
+    };
+
+    let (orig_w, orig_h) = (image.width(), image.height());
+
+    // 快捷路径：输入为 112x112 标准对齐人脸时直通 EdgeFace
+    if orig_w == 112 && orig_h == 112 {
+        let mut aligned = image.as_raw().to_vec();
+        align::normalize_illumination_inplace(&mut aligned);
+        align::enhance_face_details_inplace(&mut aligned);
+        align::dump_debug_aligned_face("extract_direct112", &aligned, 1.0);
+        let embedding = match models.worker.embed_host(aligned.clone()) {
+            Ok(embedding) => embedding,
+            Err(error) => {
+                let status = error.to_c_status();
+                algo_sdk::macros::set_last_error(format!("EMBED_INFERENCE_FAILED: {error}"));
+                write_output_error(output_ref, status);
+                return status;
+            }
+        };
+        let jpeg = match encode_aligned_jpeg(&aligned) {
+            Ok(jpeg) => jpeg,
+            Err(error) => {
+                algo_sdk::macros::set_last_error(error.to_string());
+                write_output_error(output_ref, error.to_c_status());
+                return error.to_c_status();
+            }
+        };
+        write_output_success(output_ref, embedding, 1.0, 1.0, jpeg);
+        return AV_OK;
+    }
+
+    let (det_w, det_h) = if models.has_registration_detector {
+        (
+            models.registration_detector_width,
+            models.registration_detector_height,
+        )
+    } else {
+        (models.detector_width, models.detector_height)
+    };
+
+    let (detector_rgb, layout) = match prepare_detector_input_for(&image, det_w, det_h) {
+        Ok(input) => input,
+        Err(error) => {
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, error.to_c_status());
+            return error.to_c_status();
+        }
+    };
+
+    let min_score = 0.30;
+    let raw_faces = match models
+        .worker
+        .detect_registration_host(detector_rgb, layout, min_score)
+    {
+        Ok(res) => res,
+        Err(error) => {
+            let status = error.to_c_status();
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, status);
+            return status;
+        }
+    };
+
+    let min_face_size = 30u32;
+    let thresholds = config::QualityThresholds {
+        min_score: 0.30,
+        ..config::QualityThresholds::default()
+    };
+    let Some((best_face, quality)) = raw_faces
+        .into_iter()
+        .filter_map(|face| {
+            let face_width = face.width() * orig_w as f32;
+            let face_height = face.height() * orig_h as f32;
+            let q = quality::compute_quality(
+                &face.landmarks,
+                &face.landmark_scores,
+                face_width.min(face_height),
+                &thresholds,
+            );
+            q.accepted(&thresholds, min_face_size).then_some((face, q))
+        })
+        .max_by(|left, right| left.0.score.total_cmp(&right.0.score))
+    else {
+        algo_sdk::macros::set_last_error(
+            "NO_FACE_DETECTED: 输入图像未检出满足置信度与质量阈值的人脸",
+        );
+        write_output_error(output_ref, AV_ERR_INFERENCE_FAILED);
+        return AV_ERR_INFERENCE_FAILED;
+    };
+
+    let is_compact_crop =
+        (orig_w < 320 || orig_h < 320) && (best_face.width() * orig_w as f32 > 0.6 * orig_w as f32);
+
+    let align_result = if is_compact_crop {
+        let pad_x = (orig_w as f32 * 0.25).round() as u32;
+        let pad_y = (orig_h as f32 * 0.25).round() as u32;
+        let padded_w = orig_w + pad_x * 2;
+        let padded_h = orig_h + pad_y * 2;
+        let padded_image = reflect_pad_image(image.as_raw(), orig_w, orig_h, pad_x, pad_y);
+
+        let mut padded_landmarks = [[0.0f32; 2]; 5];
+        for (dst, src) in padded_landmarks.iter_mut().zip(&best_face.landmarks) {
+            dst[0] = src[0] * orig_w as f32 + pad_x as f32;
+            dst[1] = src[1] * orig_h as f32 + pad_y as f32;
+        }
+        align::align_face(&padded_image, padded_w, padded_h, &padded_landmarks)
+    } else {
+        align::align_face(image.as_raw(), orig_w, orig_h, &best_face.landmarks)
+    };
+
+    let aligned = match align_result {
+        Ok(aligned) => aligned,
+        Err(error) => {
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, error.to_c_status());
+            return error.to_c_status();
+        }
+    };
+
+    align::dump_debug_aligned_face("extract_face", &aligned, quality.score);
+    let embedding = match models.worker.embed_host(aligned.clone()) {
+        Ok(embedding) => embedding,
+        Err(error) => {
+            let status = error.to_c_status();
+            algo_sdk::macros::set_last_error(format!("EMBED_INFERENCE_FAILED: {error}"));
+            write_output_error(output_ref, status);
+            return status;
+        }
+    };
+    let jpeg = match encode_aligned_jpeg(&aligned) {
+        Ok(jpeg) => jpeg,
+        Err(error) => {
+            algo_sdk::macros::set_last_error(error.to_string());
+            write_output_error(output_ref, error.to_c_status());
+            return error.to_c_status();
+        }
+    };
+    write_output_success(output_ref, embedding, quality.score, best_face.score, jpeg);
+    AV_OK
+}
+
+/// 独立的人脸特征提取 C ABI 符号。
+///
+/// # Safety
+/// `lib` 必须来自本动态库导出的 `library_open`，`input`/`output` 必须分别指向
+/// 满足 ABI 版本和尺寸约束的有效内存。
+#[no_mangle]
+pub unsafe extern "C" fn av_algo_extract_face(
+    lib: AvAlgoLibrary,
+    input: *const AvFaceExtractInput,
+    output: *mut AvFaceExtractOutput,
+) -> c_int {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: extract_face_impl 在进入业务逻辑前验证 ABI，内部不让 panic 穿越 C 栈。
+        unsafe { extract_face_impl(lib, input, output) }
+    }));
+    result.unwrap_or(AV_ERR_INTERNAL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_face_rejects_null_abi_pointers() {
+        // SAFETY: 测试传入空指针验证 C ABI 防御性参数检查与错误返回码。
+        let status = unsafe {
+            av_algo_extract_face(std::ptr::null_mut(), std::ptr::null(), std::ptr::null_mut())
+        };
+        assert_eq!(status, AV_ERR_INVALID_ARG);
+    }
+}

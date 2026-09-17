@@ -18,7 +18,9 @@
 | 插件 trait / 导出宏 | [plugin.rs](../../../crates/algo-sdk/src/plugin.rs)、[macros.rs](../../../crates/algo-sdk/src/macros.rs)                                                      |
 | 帧 / 预处理 / 模型会话 | [frame.rs](../../../crates/algo-sdk/src/frame.rs)、[cv](../../../crates/algo-sdk/src/cv/mod.rs)、[model.rs](../../../crates/algo-sdk/src/model.rs)             |
 | 后处理工具库 | [cv::postprocess](../../../crates/algo-sdk/src/cv/postprocess/mod.rs)（quantize / dfl / yolov8_rknn）                                                  |
-| 结果 / 坐标反算      | [emitter.rs](../../../crates/algo-sdk/src/emitter.rs)、[math.rs](../../../crates/algo-sdk/src/math.rs)                                                        |
+| 目标跟踪算法库 | [track::bytetrack](../../../crates/algo-sdk/src/track/bytetrack.rs)（纯 Rust ByteTrack、卡尔曼滤波与匈牙利最优二分图匹配）                                     |
+| 人脸视觉几何库 | [face](../../../crates/algo-sdk/src/face/mod.rs)（Umeyama 相似变换、ArcFace 模板对齐、五点质量姿态拓扑几何）                     |
+| 结果 / 向量数学库   | [emitter.rs](../../../crates/algo-sdk/src/emitter.rs)、[math.rs](../../../crates/algo-sdk/src/math.rs)（IoU、NMS、余弦相似度、L2 归一化、Base64 编码）          |
 | 加载 / 沙箱 / 注册表  | [loader.rs](../../../crates/infer/src/c_abi/loader.rs)、[sandbox.rs](../../../crates/infer/src/sandbox.rs)、[package.rs](../../../crates/infer/src/package.rs) |
 
 完整声明以双侧源码和布局测试为准；以下保留调用约束，不复制结构体实现。
@@ -140,6 +142,8 @@ unsafe extern "C" fn(
 - `compute_letterbox_layout` 提供 scale、padding 和缩放尺寸，`unmap_box` 复用同一布局完成逆变换。
 - RGA 输出池在初始化时 import handle 并复用；输入 handle 由 `RgaHandleGuard` 单帧管理，禁止每帧重复 import/release 输出池。
 - 单 `RgaCvEngine` 最多缓存 **16** 个输出规格，超限拒绝；优先 system-dma32/system，只有显式 Rga2 强制 DMA32，Auto/Rga3 可使用 64 位物理地址堆。
+- 规格预算按**进程**共享且**不淘汰**：所有算法包、所有实例、所有分辨率都从同一 16 个槽位分配。因此算法包请求的 RGA 输出几何必须收敛到固定集合，**禁止**把随帧变化的 ROI 尺寸直接作为裁剪尺寸（典型翻车：best-shot 按人脸位置逐帧精确裁切，十几条航迹即耗尽预算，此后该引擎全部 `letterbox/resize` 永久失败）；超出档位集合时必须显式退化为固定尺寸（如整帧该轴尺寸），不得静默新增规格。几何种数应与源分辨率无关，参考 RK3568 人脸包 `SNAPSHOT_ROI_TIERS` 及其档位有界性回归测试。
+- 单个规格的池 `max_size` 默认 4（`min_idle=2`、`acquire_timeout_ms=50`）：第 5 个并发租约会阻塞至多 50 ms 后失败，调用方不得假设 `acquire` 永不阻塞。
 - `SharedWeights<W>` 用 `Arc<W>` 共享权重，`session()` 用 `AtomicUsize` Round-Robin 分配，`session_on(Core)` 显式绑定。
 - `Core` 支持 Auto、Id、All、Mask；各实例 session 独占。逻辑共享不代替具体 SDK 的物理内存验证。
 

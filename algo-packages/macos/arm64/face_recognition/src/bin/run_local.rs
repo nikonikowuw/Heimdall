@@ -32,7 +32,7 @@ mod macos {
     };
     use face_recognition_coreml::normalize_embedding;
     use face_recognition_coreml::postprocess::{encode_embedding, normalized_xywh_to_xyxy};
-    use face_recognition_coreml::quality::compute_quality;
+    use face_recognition_coreml::quality::{compute_quality, FaceQualityExt};
 
     #[derive(Debug, Clone)]
     struct FaceAnalyzed {

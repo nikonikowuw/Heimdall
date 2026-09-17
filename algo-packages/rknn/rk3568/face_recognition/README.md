@@ -26,7 +26,41 @@
   2. **超球面加权聚合**：按质量平方对 512 维单位特征向量增量加权累加，并重新 L2 归一化投影至单位超球面；
   3. **防漂移校验 (Anti-Drift Outlier Defense)**：新提取特征与当前融合特征的余弦相似度必须 $\ge 0.55$，拦截遮挡误检或跟踪漂移对特征池的污染；
   4. **低频抓拍侧载**：best-shot 目标在 `face.embedding` 携带 512 维 Float32 的 Base64 sidecar，仅供后端识别对账消费。
-- `av_algo_extract_face()`：C ABI 独立特征提取符号，供宿主低频抓拍证据路径传入单帧 JPEG，执行检测、五点仿射对齐和 EdgeFace-xs 提取，返回 L2 归一化 512D embedding 与 112×112 JPEG。
+- `av_algo_extract_face()`：C ABI 独立特征提取符号，供宿主低频抓拍证据路径传入单帧 JPEG，执行检测、五点仿射对齐和 EdgeFace-S 提取，返回 L2 归一化 512D embedding 与 112×112 JPEG。
+
+## 资源与并发契约
+
+单进程内同一算法包目录只创建一个 RKNN worker（`heimdall-rk3568-face-npu` 线程），其内常驻
+detector / embedder 两组 context；**所有通道实例共享该 worker**（RK3568 CMA 紧张下的强制约束，
+见 `docs/nuwa/backend/algo-sdk-guidelines.md`）。由此产生三条硬约束：
+
+- **聚合吞吐即 NPU 上限**：一次 `instance_process()` 对应一个请求，内含 yolov8n 与 SCRFD 两次
+  前向（量级数十毫秒，以板端实测为准）。多路相机帧率之和不得超过该上限，否则超出的请求会被
+  有界邮箱（容量 6）按「丢最旧」淘汰，被淘汰方以 `AV_ERR_TIMEOUT` 上报——该邮箱是同一算法包内
+  所有通道共享的，被淘汰者往往是其它通道的帧，因此饱和时会打印带 `shed_total` 的 WARN。
+  看到该 WARN 应下调路数或帧率，而不是排查网络。
+- **像素阈值以分析帧为基准**：`min_face_size` 按分析帧像素判定，默认分析低分辨率子码流，
+  切换到主码流后同一数值对应的实际人脸更小；`quality_min_score` / `max_yaw` / `max_pitch` /
+  `max_blur` 由关键点几何与置信度导出，与分辨率无关。
+- **RGA 输出几何预算**：SDK 的 `RgaCvEngine` 按 `(width, height)` 缓存输出池，全进程上限 16 种
+  且**不淘汰**，超限后 `cv::crop_rgb` 永久失败。best-shot ROI 因此收敛到固定档位集合
+  （`SNAPSHOT_ROI_TIERS` = 128/192/256/384，超出最高档位时退化为整帧该轴尺寸），几何种数与
+  分辨率无关。新增任何 RGA 路径时必须遵守同一预算，否则会静默拖垮整包特征提取。
+  同一引擎输出池 `max_size` 为 4，即最多 4 路并发 letterbox 缓冲，超出的调用方阻塞等待池回收。
+
+## 现场诊断
+
+```bash
+# 包内诊断日志（含启动时的一次性 cls 激活模式判定与降级会话集告警）
+RUST_LOG=face_recognition_rk3568=debug,algo_sdk=info <进程>
+```
+
+- `YOLOv8n 人体检测 cls 分支激活模式判定`：`probability_mode=true` 表示模型输出已是概率
+  （直通 + 钳位），`false` 表示 raw logits（sigmoid 激活）。该判定按整张量做一次，不逐格切换。
+- `RK3568 人脸算法包以降级会话集启动`：模型文件存在但 `RknnSession` 加载失败（版本不匹配 /
+  权重损坏）。此时注册检测会自动回退到与视频流一致的 640×384 输入尺寸。
+- `RKNN 邮箱饱和，已淘汰最旧请求`：按上文聚合吞吐核算路数。
+- `exceeded maximum cached RGA buffer pools`：有 RGA 路径绕过了档位约束。
 
 ## C ABI 输出规范
 

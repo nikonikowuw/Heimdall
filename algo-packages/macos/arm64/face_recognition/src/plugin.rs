@@ -19,7 +19,7 @@ use crate::detect::{decode_face_detections, nms, unmap_letterbox};
 #[cfg(target_os = "macos")]
 use crate::normalize_embedding;
 #[cfg(target_os = "macos")]
-use crate::quality::compute_quality;
+use crate::quality::{compute_quality, FaceQualityExt};
 #[cfg(target_os = "macos")]
 use algo_sdk::cv::platforms::apple::AppleCvEngine;
 #[cfg(target_os = "macos")]

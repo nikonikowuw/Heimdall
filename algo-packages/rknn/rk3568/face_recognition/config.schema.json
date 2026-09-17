@@ -24,7 +24,7 @@
     "min_face_size": {
       "type": "integer",
       "title": "最小人脸尺寸",
-      "description": "人脸框最小边长像素限制；低于该尺寸的人脸不参与特征提取与识别比对（检测框仍会输出）",
+      "description": "人脸框最小边长像素限制，以分析帧像素为基准（analysis_mode 决定分析帧是低分辨率子码流还是主码流；切换到主码流后同一数值对应的实际人脸更小）；低于该尺寸的人脸不参与特征提取与识别比对（检测框仍会输出）",
       "minimum": 1,
       "default": 60
     },
@@ -63,7 +63,7 @@
     "similarity_threshold": {
       "type": "number",
       "title": "识别确认阈值",
-      "description": "1:N 底库比对确认放行阈值，高于此相似度直接判定为命中",
+      "description": "1:N 底库比对确认放行阈值（宿主侧对账逻辑消费，算法包不读取），高于此相似度直接判定为命中",
       "minimum": 0.0,
       "maximum": 1.0,
       "default": 0.75
@@ -71,7 +71,7 @@
     "review_threshold": {
       "type": "number",
       "title": "疑似核验阈值",
-      "description": "1:N 疑似人工复核区间下限阈值，介于此值与确认阈值之间将保存并等待人工核验",
+      "description": "1:N 疑似人工复核区间下限阈值（宿主侧对账逻辑消费，算法包不读取），介于此值与确认阈值之间将保存并等待人工核验",
       "minimum": 0.0,
       "maximum": 1.0,
       "default": 0.60

@@ -205,13 +205,11 @@ pub fn match_tracks_to_associated(
     // 优先匹配重合度最高的对
     pairs.sort_unstable_by(|x, y| y.0.total_cmp(&x.0));
 
-    let mut track_matched = vec![false; active_tracks.len()];
     let mut assoc_matched = vec![false; associated.len()];
     let mut results = vec![None; active_tracks.len()];
 
     for (_iou, t_idx, a_idx) in pairs {
-        if !track_matched[t_idx] && !assoc_matched[a_idx] {
-            track_matched[t_idx] = true;
+        if results[t_idx].is_none() && !assoc_matched[a_idx] {
             assoc_matched[a_idx] = true;
             results[t_idx] = Some(associated[a_idx].clone());
         }

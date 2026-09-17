@@ -33,9 +33,10 @@ use image::{ExtendedColorType, ImageReader, Limits, RgbImage};
 
 use manifest::LoadedPackage;
 use plugin::FaceRecognizer;
+use quality::FaceQualityExt;
 use rknn::{RknnInferenceOutput, RknnModelContract, RknnRuntime, RknnSession};
 
-const WORKER_QUEUE_CAPACITY: usize = 2;
+const WORKER_QUEUE_CAPACITY: usize = 6;
 const WORKER_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_DECODED_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_PREPROCESS_BYTES: usize = 128 * 1024 * 1024;
@@ -848,8 +849,6 @@ mod tests {
     fn worker_queue_drops_oldest_request() {
         let queue = WorkerQueue::new();
         let (old_reply, old_response) = sync_channel(1);
-        let (middle_reply, _middle_response) = sync_channel(1);
-        let (new_reply, _new_response) = sync_channel(1);
         let layout = compute_letterbox_layout(1, 1, 640, 384);
 
         queue
@@ -860,17 +859,23 @@ mod tests {
                 reply: old_reply,
             })
             .expect("first request should be queued");
+
+        for i in 2..=WORKER_QUEUE_CAPACITY {
+            let (reply, _rx) = sync_channel(1);
+            queue
+                .push(InferenceRequest::DetectHost {
+                    data: vec![i as u8],
+                    layout,
+                    min_score: 0.5,
+                    reply,
+                })
+                .expect("request within capacity should be queued");
+        }
+
+        let (new_reply, _new_rx) = sync_channel(1);
         queue
             .push(InferenceRequest::DetectHost {
-                data: vec![2],
-                layout,
-                min_score: 0.5,
-                reply: middle_reply,
-            })
-            .expect("second request should be queued");
-        queue
-            .push(InferenceRequest::DetectHost {
-                data: vec![3],
+                data: vec![(WORKER_QUEUE_CAPACITY + 1) as u8],
                 layout,
                 min_score: 0.5,
                 reply: new_reply,
@@ -883,7 +888,7 @@ mod tests {
                 .expect("dropped request should receive a response"),
             Err(AlgoError::Timeout)
         ));
-        let first = queue.pop().expect("middle request should remain queued");
+        let first = queue.pop().expect("second request should remain queued");
         assert!(matches!(first, InferenceRequest::DetectHost { data, .. } if data == vec![2]));
         let second = queue.pop().expect("newest request should remain queued");
         assert!(matches!(second, InferenceRequest::DetectHost { data, .. } if data == vec![3]));

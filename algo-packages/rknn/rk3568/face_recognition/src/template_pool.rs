@@ -272,7 +272,7 @@ impl BestShotRecord {
             }
             let candidate = &self.pool[candidate_index];
             let redundant = selected[..selected_count].iter().any(|selected_index| {
-                crate::cosine_similarity(
+                algo_sdk::math::cosine_similarity(
                     &candidate.embedding,
                     &self.pool[*selected_index].embedding,
                 ) >= REDUNDANCY_SIMILARITY

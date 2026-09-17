@@ -100,54 +100,29 @@ impl<'de> Deserialize<'de> for InstanceConfig {
             config.min_face_size = v;
         }
 
-        if let Some(nested) = raw.quality_thresholds {
-            set_f32(
-                &mut explicit,
-                FIELD_QUALITY_MIN_SCORE,
-                nested.min_score,
-                &mut config.quality_thresholds.min_score,
-            );
-            set_f32(
-                &mut explicit,
-                FIELD_QUALITY_MAX_YAW,
-                nested.max_yaw,
-                &mut config.quality_thresholds.max_yaw,
-            );
-            set_f32(
-                &mut explicit,
-                FIELD_QUALITY_MAX_PITCH,
-                nested.max_pitch,
-                &mut config.quality_thresholds.max_pitch,
-            );
-            set_f32(
-                &mut explicit,
-                FIELD_QUALITY_MAX_BLUR,
-                nested.max_blur,
-                &mut config.quality_thresholds.max_blur,
-            );
-        }
+        let nested = raw.quality_thresholds.unwrap_or_default();
         set_f32(
             &mut explicit,
             FIELD_QUALITY_MIN_SCORE,
-            raw.quality_min_score,
+            raw.quality_min_score.or(nested.min_score),
             &mut config.quality_thresholds.min_score,
         );
         set_f32(
             &mut explicit,
             FIELD_QUALITY_MAX_YAW,
-            raw.quality_max_yaw,
+            raw.quality_max_yaw.or(nested.max_yaw),
             &mut config.quality_thresholds.max_yaw,
         );
         set_f32(
             &mut explicit,
             FIELD_QUALITY_MAX_PITCH,
-            raw.quality_max_pitch,
+            raw.quality_max_pitch.or(nested.max_pitch),
             &mut config.quality_thresholds.max_pitch,
         );
         set_f32(
             &mut explicit,
             FIELD_QUALITY_MAX_BLUR,
-            raw.quality_max_blur,
+            raw.quality_max_blur.or(nested.max_blur),
             &mut config.quality_thresholds.max_blur,
         );
 
@@ -413,6 +388,20 @@ mod tests {
         );
         assert_eq!(from_schema.min_face_size, runtime.min_face_size);
         assert_eq!(from_schema.quality_thresholds, runtime.quality_thresholds);
+    }
+
+    #[test]
+    fn host_only_thresholds_are_ignored_by_instance_config() {
+        // `similarity_threshold` / `review_threshold` 由宿主对账逻辑（capture_service）消费，
+        // 它们出现在本包 schema 里只是因为控制台按算法实例表单统一渲染。
+        // 若算法包擅自消费，就会与宿主判定形成双重门控（包内通过、宿主不落库）。
+        let config: InstanceConfig = serde_json::from_str(
+            r#"{"similarity_threshold": 0.99, "review_threshold": 0.98, "min_face_size": 48}"#,
+        )
+        .expect("宿主配置应当可解析");
+        assert_eq!(config.min_face_size, 48);
+        assert_eq!(config.quality_thresholds, QualityThresholds::default());
+        assert_eq!(config.detection_confidence_threshold, 0.25);
     }
 
     #[test]

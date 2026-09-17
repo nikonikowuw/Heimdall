@@ -1,8 +1,8 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 
 use algo_sdk::emitter::ResultEmitter;
 use algo_sdk::error::AlgoError;
+use algo_sdk::math::{box_xywh_to_xyxy, encode_embedding_base64_le};
 
 /// 挂载在主体人员目标上的精细人脸详情对象。
 #[derive(Debug, Clone, Serialize)]
@@ -50,26 +50,19 @@ pub const RECOGNITION_SCHEMA_VERSION: u32 = 1;
 /// 将归一化 `xywh` 转为宿主契约要求的归一化 `xyxy`。
 #[inline]
 pub fn normalized_xywh_to_xyxy(bbox: [f32; 4]) -> [f32; 4] {
-    let x1 = bbox[0].clamp(0.0, 1.0);
-    let y1 = bbox[1].clamp(0.0, 1.0);
-    let x2 = (bbox[0] + bbox[2]).clamp(x1, 1.0);
-    let y2 = (bbox[1] + bbox[3]).clamp(y1, 1.0);
-    [x1, y1, x2, y2]
+    box_xywh_to_xyxy(bbox)
 }
 
 pub fn encode_embedding(embedding: &[f32]) -> Result<String, AlgoError> {
-    if embedding.len() != 512 || embedding.iter().any(|value| !value.is_finite()) {
+    if embedding.len() != 512 {
         return Err(AlgoError::Inference {
-            reason: format!("embedding 维度或数值非法: {}", embedding.len()),
+            reason: format!("embedding 维度非法: 期望 512，实际 {}", embedding.len()),
         });
     }
 
-    // 显式小端序编码：与宿主 `f32::from_le_bytes` 解码严格对应，不依赖本机端序。
-    let mut bytes = Vec::with_capacity(std::mem::size_of_val(embedding));
-    for value in embedding {
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
-    Ok(STANDARD.encode(bytes))
+    encode_embedding_base64_le(embedding).map_err(|e| AlgoError::Inference {
+        reason: format!("特征向量编码失败: {e}"),
+    })
 }
 
 /// 序列化并发射符合女娲标准规范的人脸识别结果。

@@ -1,23 +1,37 @@
-//! YOLOv8n-face 12 张量解码器
+//! 检测后处理：SCRFD 人脸解码与 YOLOv8n 人体解码
 //!
-//! 输入：RKNN 模型输出的 12 个 float32 张量（3 尺度 × 4 分支：box, score_sum, cls, kpt）
-//! 输出：`Vec<RawFace>`，bbox 和 landmarks 归一化到 [0, 1]
+//! - `decode_scrfd_face`：9 个 float32 张量（3 尺度 × score/bbox/kps）→ `Vec<RawFace>`；
+//! - `decode_yolov8_person_multi_int8`：9 个 INT8 张量（3 尺度 × box/cls/score），
+//!   仅取 COCO class 0 → `Vec<PersonCandidate>`。
+//!
+//! bbox 与 landmarks 统一归一化到 [0, 1]。
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use algo_sdk::cv::LetterboxLayout;
 use algo_sdk::error::AlgoError;
 
 pub use crate::association::PersonCandidate;
 
-/// 每个尺度的输出分支数
-const BRANCHES_PER_SCALE: usize = 4;
 /// box DFL 的 bin 数量（每条边 16 个分布）
 const DFL_LEN: usize = 16;
-/// 每个关键点的通道数 (x_offset, y_offset, visibility_conf)
-const KPT_CHANNELS_PER_POINT: usize = 3;
 /// 人脸关键点数量
 pub const NUM_LANDMARKS: usize = 5;
+/// 判定 cls 分支为「概率输出」时的取值窗口，必须开得远宽于 [0, 1]。
+///
+/// 两个方向的误判代价**不对称**，窗口要为最坏情况留余量：
+/// - 概率被误判为 logits：会对概率再做一次 sigmoid，背景格 0 被抬到 0.5，
+///   在 0.4 的人物门限下就是全屏假阳性，且现场难以归因；
+/// - logits 被误判为概率：背景负值仍被门控过滤，仅强检出的置信度偏高，可逆。
+///
+/// 因此窗口取 ±2.0：概率（含校准外扩）不可能接近 2.0，而真实人像的 logits 通常远超 2，
+/// 背景 logits 远低于 -2。
+const PROBABILITY_MIN_SCORE: f32 = -2.0;
+const PROBABILITY_MAX_SCORE: f32 = 2.0;
+/// 激活模式只上报一次：现场需要知道上报分数是概率还是 sigmoid(logit)。
+static CLS_MODE_LOGGED: AtomicBool = AtomicBool::new(false);
 
-/// YOLOv8n-face 单候选框
+/// 人脸单候选框
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RawFace {
     /// `[x, y, width, height]` 坐标格式，左上角原点，归一化到 [0, 1]
@@ -47,26 +61,7 @@ impl RawFace {
     }
 
     pub fn iou(&self, other: &Self) -> f32 {
-        let ax2 = self.bbox[0] + self.bbox[2];
-        let ay2 = self.bbox[1] + self.bbox[3];
-        let bx2 = other.bbox[0] + other.bbox[2];
-        let by2 = other.bbox[1] + other.bbox[3];
-        let ix1 = self.bbox[0].max(other.bbox[0]);
-        let iy1 = self.bbox[1].max(other.bbox[1]);
-        let ix2 = ax2.min(bx2);
-        let iy2 = ay2.min(by2);
-        if ix2 <= ix1 || iy2 <= iy1 {
-            return 0.0;
-        }
-        let iw = ix2 - ix1;
-        let ih = iy2 - iy1;
-        let intersection = iw * ih;
-        let union = self.area() + other.area() - intersection;
-        if union > 0.0 {
-            intersection / union
-        } else {
-            0.0
-        }
+        crate::bytetrack::box_iou(&self.bbox, &other.bbox)
     }
 }
 
@@ -74,180 +69,43 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-/// DFL 解码：16-bin softmax 加权求和 → 单个偏移值
-///
-/// 输入 16 个 logits，输出一个浮点偏移量；非有限 logits 或 softmax 分母退化时返回 `None`，
-/// 由调用方按候选丢弃，不中断同帧其余候选的解码。
-fn compute_dfl(logits: &[f32; DFL_LEN]) -> Option<f32> {
-    if logits.iter().any(|value| !value.is_finite()) {
-        return None;
-    }
-    let max_val = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let mut exp_sum = 0.0f32;
-    let mut weighted_sum = 0.0f32;
-    for (i, &v) in logits.iter().enumerate() {
-        let e = (v - max_val).exp();
-        exp_sum += e;
-        weighted_sum += e * i as f32;
-    }
-    if !exp_sum.is_finite() || exp_sum <= f32::EPSILON {
-        return None;
-    }
-    Some(weighted_sum / exp_sum)
-}
-
-/// 解码单个 grid 单元的 4 条边 DFL 偏移
-///
-/// 任一条边出现非有限 logits 或 softmax 退化时返回 `None`，调用方丢弃该候选即可。
-/// 调用方须先校验 `box_tensor` 长度覆盖该单元（见 `decode_scale` 前置检查）。
-fn decode_box_offsets(box_tensor: &[f32], grid_len: usize, offset: usize) -> Option<[f32; 4]> {
-    let mut box_offset = [0.0f32; 4];
-    for (edge, value) in box_offset.iter_mut().enumerate() {
-        let base = edge * DFL_LEN * grid_len + offset;
-        let mut logits = [0.0f32; DFL_LEN];
-        for (k, logit) in logits.iter_mut().enumerate() {
-            *logit = box_tensor[base + k * grid_len];
-        }
-        *value = compute_dfl(&logits)?;
-    }
-    Some(box_offset)
-}
-
-/// 单尺度解码：遍历 grid，解码 box + cls + kpt
-///
-/// `box_tensor`: `[64, H, W]` 展平为一维，NCHW 布局
-/// `score_sum`: `[1, H, W]` 展平
-/// `cls_tensor`: `[1, H, W]` 展平
-/// `kpt_tensor`: `[15, H, W]` 展平
-#[allow(clippy::too_many_arguments)]
-fn decode_scale(
-    box_tensor: &[f32],
-    score_sum: &[f32],
-    cls_tensor: &[f32],
-    kpt_tensor: &[f32],
-    grid_h: usize,
-    grid_w: usize,
-    stride: usize,
-    conf_threshold: f32,
-) -> Result<Vec<RawFace>, AlgoError> {
-    let grid_len = grid_h.checked_mul(grid_w).ok_or(AlgoError::OutOfMemory)?;
-    let required_box = DFL_LEN
-        .checked_mul(4)
-        .and_then(|channels| channels.checked_mul(grid_len))
-        .ok_or(AlgoError::OutOfMemory)?;
-    let required_kpt = KPT_CHANNELS_PER_POINT
-        .checked_mul(NUM_LANDMARKS)
-        .and_then(|channels| channels.checked_mul(grid_len))
-        .ok_or(AlgoError::OutOfMemory)?;
-    if score_sum.len() < grid_len
-        || cls_tensor.len() < grid_len
-        || box_tensor.len() < required_box
-        || kpt_tensor.len() < required_kpt
-    {
-        return Err(AlgoError::Inference {
-            reason: format!(
-                "YOLOv8-face 输出缓冲区不足: grid={grid_h}x{grid_w}, box={}, score={}, cls={}, kpt={}",
-                box_tensor.len(),
-                score_sum.len(),
-                cls_tensor.len(),
-                kpt_tensor.len()
-            ),
-        });
-    }
-    let mut faces = Vec::new();
-
-    for gy in 0..grid_h {
-        for gx in 0..grid_w {
-            let offset = gy * grid_w + gx;
-
-            let objectness = score_sum[offset];
-            let cls_score = cls_tensor[offset];
-            // Runtime 的 want_float 输出若出现 NaN/Inf，丢弃该候选而不是把非法值带入 NMS/JSON。
-            if !objectness.is_finite() || !cls_score.is_finite() {
-                continue;
-            }
-
-            // 快速过滤：低于阈值直接跳过
-            if objectness < conf_threshold || cls_score < conf_threshold {
-                continue;
-            }
-
-            // DFL 解码 bbox：单个候选出现非有限 logits 时按候选丢弃，不拖垮整帧
-            let Some(box_offset) = decode_box_offsets(box_tensor, grid_len, offset) else {
-                continue;
-            };
-
-            // 还原为原图像素坐标 (x1, y1, x2, y2)
-            let cx = gx as f32 + 0.5;
-            let cy = gy as f32 + 0.5;
-            let stride_f = stride as f32;
-            let x1 = (cx - box_offset[0]) * stride_f;
-            let y1 = (cy - box_offset[1]) * stride_f;
-            let x2 = (cx + box_offset[2]) * stride_f;
-            let y2 = (cy + box_offset[3]) * stride_f;
-
-            if x2 <= x1 || y2 <= y1 {
-                continue;
-            }
-
-            // 解码 5 个关键点
-            let mut landmarks = [[0.0f32; 2]; NUM_LANDMARKS];
-            let mut landmark_scores = [0.0f32; NUM_LANDMARKS];
-            for p in 0..NUM_LANDMARKS {
-                let kx_idx = p * KPT_CHANNELS_PER_POINT * grid_len + offset;
-                let ky_idx = (p * KPT_CHANNELS_PER_POINT + 1) * grid_len + offset;
-                let kc_idx = (p * KPT_CHANNELS_PER_POINT + 2) * grid_len + offset;
-
-                let raw_x = kpt_tensor[kx_idx];
-                let raw_y = kpt_tensor[ky_idx];
-                let raw_conf = kpt_tensor[kc_idx];
-                if !raw_x.is_finite() || !raw_y.is_finite() || !raw_conf.is_finite() {
-                    landmarks = [[f32::NAN; 2]; NUM_LANDMARKS];
-                    break;
-                }
-
-                // 关键点坐标映射：(grid + offset * 2.0 - 0.5) * stride
-                landmarks[p][0] = (gx as f32 + raw_x * 2.0 - 0.5) * stride as f32;
-                landmarks[p][1] = (gy as f32 + raw_y * 2.0 - 0.5) * stride as f32;
-                landmark_scores[p] = sigmoid(raw_conf);
-            }
-
-            if landmarks
-                .iter()
-                .any(|point| point.iter().any(|value| !value.is_finite()))
-            {
-                continue;
-            }
-            faces.push(RawFace {
-                bbox: [x1, y1, x2 - x1, y2 - y1],
-                landmarks,
-                landmark_scores,
-                score: cls_score,
-            });
-        }
-    }
-
-    Ok(faces)
+/// 通用原地 NMS 贪婪抑制算法
+#[inline]
+fn run_nms<T>(
+    items: &mut Vec<T>,
+    iou_threshold: f32,
+    score_fn: impl FnMut(&T) -> f32,
+    iou_fn: impl FnMut(&T, &T) -> f32,
+) {
+    algo_sdk::math::run_nms_by(items, iou_threshold, score_fn, iou_fn);
 }
 
 /// 对人脸候选执行类别无关 NMS（零额外堆内存分配原地抑制）
 pub fn nms(faces: &mut Vec<RawFace>, iou_threshold: f32) {
-    if faces.len() <= 1 {
-        return;
-    }
-    faces.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-    let mut kept_len = 0;
-    for i in 0..faces.len() {
-        let overlaps = (0..kept_len).any(|j| faces[j].iou(&faces[i]) >= iou_threshold);
-        if !overlaps {
-            faces.swap(kept_len, i);
-            kept_len += 1;
-        }
-    }
-    faces.truncate(kept_len);
+    run_nms(faces, iou_threshold, |f| f.score, |a, b| a.iou(b));
+}
+
+/// 人体检测候选 NMS 抑制
+pub fn nms_persons(persons: &mut Vec<PersonCandidate>, iou_threshold: f32) {
+    run_nms(
+        persons,
+        iou_threshold,
+        |p| p.score,
+        |a, b| crate::bytetrack::box_iou(&a.bbox, &b.bbox),
+    );
 }
 
 pub const COCO_PERSON_CLASS_ID: usize = 0;
+
+fn matches_channel_count(attr: &crate::rknn::RknnTensorAttr, expected: u32) -> bool {
+    match attr.fmt {
+        crate::rknn::RknnTensorFormat::Nchw | crate::rknn::RknnTensorFormat::Undefined => {
+            attr.dims[1] == expected
+        }
+        crate::rknn::RknnTensorFormat::Nc1hwc2 => attr.dims[1] * 16 >= expected,
+        crate::rknn::RknnTensorFormat::Nhwc => false,
+    }
+}
 
 /// 解码标准 YOLOv8n 640x384 多张量 INT8 输出，算法与参考 C++ 后处理保持一致。
 ///
@@ -278,27 +136,15 @@ pub fn decode_yolov8_person_multi_int8(
     let pad_top = layout.pad_top as f32;
 
     for (cls_idx, cls_attr) in output_attrs.iter().enumerate() {
-        let cls_channels = cls_attr.dims[1];
-        let is_cls = match cls_attr.fmt {
-            crate::rknn::RknnTensorFormat::Nchw | crate::rknn::RknnTensorFormat::Undefined => {
-                cls_channels == 80
-            }
-            crate::rknn::RknnTensorFormat::Nc1hwc2 => cls_channels * 16 >= 80,
-            crate::rknn::RknnTensorFormat::Nhwc => false,
-        };
-        if !is_cls || cls_idx == 0 {
+        if cls_idx == 0 || !matches_channel_count(cls_attr, 80) {
             continue;
         }
         let box_idx = cls_idx - 1;
         let box_attr = &output_attrs[box_idx];
-        let is_box = match box_attr.fmt {
-            crate::rknn::RknnTensorFormat::Nchw | crate::rknn::RknnTensorFormat::Undefined => {
-                box_attr.dims[1] == 64
-            }
-            crate::rknn::RknnTensorFormat::Nc1hwc2 => box_attr.dims[1] * 16 >= 64,
-            crate::rknn::RknnTensorFormat::Nhwc => false,
-        };
-        if !is_box || box_idx >= int8_outputs.len() || cls_idx >= int8_outputs.len() {
+        if !matches_channel_count(box_attr, 64)
+            || box_idx >= int8_outputs.len()
+            || cls_idx >= int8_outputs.len()
+        {
             continue;
         }
 
@@ -313,6 +159,18 @@ pub fn decode_yolov8_person_multi_int8(
         };
         let cls_data = int8_outputs[cls_idx];
         let box_data = int8_outputs[box_idx];
+        // 激活模式按整张量判定一次：逐格猜会让同一张量内的分数在「直通」与「sigmoid」之间
+        // 跳变（logit 1.0 直通为 1.0，logit 1.2 却被压成 0.77），同帧分数失去单调性，
+        // NMS 排序与人工阈值都不可信。
+        let cls_probability_mode = cls_scores_are_probabilities(cls_data, cls_attr, grid_h, grid_w);
+        if !CLS_MODE_LOGGED.swap(true, Ordering::Relaxed) {
+            tracing::info!(
+                probability_mode = cls_probability_mode,
+                grid_w,
+                grid_h,
+                "YOLOv8n 人体检测 cls 分支激活模式判定"
+            );
+        }
 
         for gy in 0..grid_h {
             for gx in 0..grid_w {
@@ -329,7 +187,7 @@ pub fn decode_yolov8_person_multi_int8(
                     continue;
                 };
                 let cls_float = dequant_i8(person_value, cls_attr.zp, cls_attr.scale);
-                let score = activate_yolov8_score(cls_float);
+                let score = activate_person_score(cls_float, cls_probability_mode);
                 if !score.is_finite() || score < threshold {
                     continue;
                 }
@@ -394,11 +252,49 @@ fn dequant_i8(value: i8, zero_point: i32, scale: f32) -> f32 {
     (value as f32 - zero_point as f32) * scale
 }
 
-fn activate_yolov8_score(value: f32) -> f32 {
-    if !(-0.1..=1.0).contains(&value) {
-        1.0 / (1.0 + (-value).exp())
+/// 判定 cls 分支的输出是否已经是概率而非 raw logits。
+///
+/// 依据是模型量化后的实际取值：概率输出被校准时落在 [0, 1] 内；raw logits 无界，
+/// 且 BCE 训练下背景格的 logit 是强负值。两个方向都必须查：
+/// - 只看上界：背景 logit 强负的张量在满幅人像场景下其最大值可能仍 ≤ 1，
+///   会被误判为概率而整张直通；
+/// - 只看下界：校准区间略宽于 [0, 1] 的概率张量会被误判为 logits，
+///   等于给概率又做一次 sigmoid（背景 0 会被抬到 0.5，直接制造假阳性）。
+///
+/// 窗口宽度按「误判代价不对称」定，见 `PROBABILITY_MIN_SCORE`。
+fn cls_scores_are_probabilities(
+    cls_data: &[i8],
+    cls_attr: &crate::rknn::RknnTensorAttr,
+    grid_h: usize,
+    grid_w: usize,
+) -> bool {
+    for gy in 0..grid_h {
+        for gx in 0..grid_w {
+            let Some(value) = tensor_i8_value(
+                cls_data,
+                cls_attr.fmt,
+                COCO_PERSON_CLASS_ID,
+                grid_h,
+                grid_w,
+                gy,
+                gx,
+            ) else {
+                return false;
+            };
+            let score = dequant_i8(value, cls_attr.zp, cls_attr.scale);
+            if !(PROBABILITY_MIN_SCORE..=PROBABILITY_MAX_SCORE).contains(&score) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn activate_person_score(value: f32, probability_mode: bool) -> f32 {
+    if probability_mode {
+        value.clamp(0.0, 1.0)
     } else {
-        value
+        sigmoid(value)
     }
 }
 
@@ -426,36 +322,19 @@ fn decode_dfl_i8(
         *logit = dequant_i8(value, attr.zp, attr.scale);
         max_logit = max_logit.max(*logit);
     }
-    let mut exp_sum = 0.0f32;
-    let mut weighted_sum = 0.0f32;
-    for (bin, logit) in logits.into_iter().enumerate() {
-        let exp_value = (logit - max_logit).exp();
-        exp_sum += exp_value;
-        weighted_sum += exp_value * bin as f32;
-    }
+    let (exp_sum, weighted_sum) =
+        logits
+            .into_iter()
+            .enumerate()
+            .fold((0.0f32, 0.0f32), |(e_acc, w_acc), (bin, logit)| {
+                let exp = (logit - max_logit).exp();
+                (e_acc + exp, w_acc + exp * bin as f32)
+            });
     if exp_sum > 0.0 {
         weighted_sum / exp_sum
     } else {
         0.0
     }
-}
-/// 人体检测候选 NMS 抑制
-pub fn nms_persons(persons: &mut Vec<PersonCandidate>, iou_threshold: f32) {
-    if persons.len() <= 1 {
-        return;
-    }
-    persons.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-    let mut kept_len = 0;
-    for i in 0..persons.len() {
-        let overlaps = (0..kept_len).any(|j| {
-            crate::bytetrack::box_iou(&persons[j].bbox, &persons[i].bbox) >= iou_threshold
-        });
-        if !overlaps {
-            persons.swap(kept_len, i);
-            kept_len += 1;
-        }
-    }
-    persons.truncate(kept_len);
 }
 
 /// 将 bbox 和 landmarks 从模型输入画布像素坐标根据 Letterbox 布局反算并归一化到原图 [0, 1]
@@ -610,107 +489,6 @@ pub fn decode_scrfd_face(
     Ok(all_faces)
 }
 
-/// 三尺度合并解码 YOLOv8n-face 输出
-///
-/// `float_outputs`: 来自 RKNN 的 12 个 float32 张量切片
-/// `output_attrs`: 张量形状属性（NCHW: dims[2]=H, dims[3]=W）
-/// `layout`: 预处理 Letterbox 几何布局（用于坐标反算与归一化）
-/// `conf_threshold`: 置信度阈值
-/// `nms_threshold`: NMS IoU 阈值
-pub fn decode_yolov8_face(
-    float_outputs: &[&[f32]],
-    output_attrs: &[[u32; 4]],
-    layout: &LetterboxLayout,
-    conf_threshold: f32,
-    nms_threshold: f32,
-) -> Result<Vec<RawFace>, AlgoError> {
-    if !conf_threshold.is_finite()
-        || !(0.0..=1.0).contains(&conf_threshold)
-        || !nms_threshold.is_finite()
-        || !(0.0..=1.0).contains(&nms_threshold)
-    {
-        return Err(AlgoError::Inference {
-            reason: "YOLOv8n-face 阈值必须是 [0, 1] 范围内的有限数".to_string(),
-        });
-    }
-    if float_outputs.len() != 12 || output_attrs.len() != 12 {
-        return Err(AlgoError::Inference {
-            reason: format!(
-                "YOLOv8n-face 输出数量必须为 12: tensors={}, attrs={}",
-                float_outputs.len(),
-                output_attrs.len()
-            ),
-        });
-    }
-
-    let expected_channels = [64usize, 1, 1, 15];
-    // 诊断开关只在每次解码入口读取一次，避免热路径重复访问进程环境。
-    let debug_branches = std::env::var_os("HEIMDALL_DEBUG_FACE_BRANCHES").is_some();
-    let mut all_faces = Vec::new();
-    for scale in 0..3 {
-        let base = scale * BRANCHES_PER_SCALE;
-        let grid_h = usize::try_from(output_attrs[base][2]).map_err(|_| AlgoError::OutOfMemory)?;
-        let grid_w = usize::try_from(output_attrs[base][3]).map_err(|_| AlgoError::OutOfMemory)?;
-        if grid_h == 0 || grid_w == 0 {
-            return Err(AlgoError::Inference {
-                reason: format!("YOLOv8n-face 输出 {base} 网格尺寸为 0"),
-            });
-        }
-        for branch in 0..BRANCHES_PER_SCALE {
-            let attr = output_attrs[base + branch];
-            if attr[0] != 1
-                || attr[1] as usize != expected_channels[branch]
-                || attr[2] as usize != grid_h
-                || attr[3] as usize != grid_w
-            {
-                return Err(AlgoError::Inference {
-                    reason: format!("YOLOv8n-face 输出 {} 形状非法: {:?}", base + branch, attr),
-                });
-            }
-        }
-        let stride = 8 * (1 << scale);
-
-        // 阈值标定诊断：仅在显式开启时统计各分支的取值范围，不参与任何判定。
-        if debug_branches {
-            for (branch, name) in ["box", "score_sum", "cls", "kpt"].iter().enumerate() {
-                let tensor = float_outputs[base + branch];
-                let (min, max) = tensor
-                    .iter()
-                    .copied()
-                    .filter(|value| value.is_finite())
-                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), value| {
-                        (low.min(value), high.max(value))
-                    });
-                tracing::info!(
-                    scale,
-                    branch = *name,
-                    len = tensor.len(),
-                    min,
-                    max,
-                    above_half = tensor.iter().filter(|value| **value > 0.5).count(),
-                    "YOLOv8n-face 分支值域"
-                );
-            }
-        }
-
-        let faces = decode_scale(
-            float_outputs[base],
-            float_outputs[base + 1],
-            float_outputs[base + 2],
-            float_outputs[base + 3],
-            grid_h,
-            grid_w,
-            stride,
-            conf_threshold,
-        )?;
-        all_faces.extend(faces);
-    }
-
-    nms(&mut all_faces, nms_threshold);
-    normalize_to_relative(&mut all_faces, layout);
-    Ok(all_faces)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,38 +500,101 @@ mod tests {
         assert!((sigmoid(-100.0) - 0.0).abs() < 1e-6);
     }
 
+    /// cls 分支的激活模式必须按整张量统一判定。
+    ///
+    /// 旧实现对每个 grid 单元按数值猜激活函数（值落在 [-0.1, 1.0] 就直通），同一张量内
+    /// 会出现 logit 1.0 上报 1.0、logit 1.2 上报 0.77 的分数倒挂，NMS 排序随之翻转。
     #[test]
-    fn test_compute_dfl_uniform() {
-        // 均匀分布 → 加权平均 = 7.5
-        let logits = [0.0; DFL_LEN];
-        let result = compute_dfl(&logits).expect("均匀 logits 应可解码");
-        assert!((result - 7.5).abs() < 1e-5);
+    fn person_cls_activation_is_monotonic_per_tensor() {
+        // 概率张量：直通并钳位到 [0, 1]
+        assert!((activate_person_score(0.42, true) - 0.42).abs() < 1e-6);
+        assert!((activate_person_score(1.4, true) - 1.0).abs() < 1e-6);
+        // logits 张量：sigmoid 激活且严格单调
+        assert!((activate_person_score(0.0, false) - 0.5).abs() < 1e-6);
+        assert!(activate_person_score(1.2, false) > activate_person_score(1.0, false));
+        assert!(activate_person_score(1.0, false) < 1.0);
     }
 
+    /// 激活模式判定只看量化上界：概率张量不得因校准区间略宽而被二次激活。
     #[test]
-    fn test_compute_dfl_peaked() {
-        // 峰值在 index 3 → 结果接近 3.0
-        let mut logits = [-10.0; DFL_LEN];
-        logits[3] = 10.0;
-        let result = compute_dfl(&logits).expect("尖峰 logits 应可解码");
-        assert!((result - 3.0).abs() < 0.01);
+    fn cls_activation_mode_follows_quantized_value_range() {
+        let make_attr = |scale: f32, zp: i32| crate::rknn::RknnTensorAttr {
+            index: 1,
+            n_dims: 4,
+            dims: [1, 80, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            n_elems: 160,
+            fmt: crate::rknn::RknnTensorFormat::Nchw,
+            qnt_type: crate::rknn::RknnTensorQntType::AsymmetricChar,
+            scale,
+            zp,
+            ..Default::default()
+        };
+        // 概率输出：反量化区间恰好钳在 [0, 1]
+        let probability = make_attr(1.0 / 255.0, -128);
+        let saturated = vec![i8::MAX; 160];
+        assert!(cls_scores_are_probabilities(&saturated, &probability, 1, 2));
+        // 概率输出：背景为 0 也不得判成 logits（否则 sigmoid(0)=0.5 制造假阳性）
+        let mut probability_background = vec![0i8; 160];
+        probability_background[0] = i8::MAX;
+        assert!(cls_scores_are_probabilities(
+            &probability_background,
+            &probability,
+            1,
+            2
+        ));
+        // raw logits：取值远高于概率窗口
+        let logits = make_attr(0.05, -20);
+        assert!(!cls_scores_are_probabilities(&saturated, &logits, 1, 2));
+        // raw logits：最大值仍落在概率窗口内，靠强负背景识别（满幅人像场景）
+        let narrow_logits = make_attr(0.02, 0);
+        let mut logits_background = vec![i8::MIN; 160];
+        // 75 * 0.02 = 1.5，落在概率窗口内
+        logits_background[0] = 75;
+        assert!(!cls_scores_are_probabilities(
+            &logits_background,
+            &narrow_logits,
+            1,
+            2
+        ));
     }
 
-    /// 单个候选的非有限 DFL logits 只丢弃该候选，不能让整帧解码返回错误。
+    /// NC1HWC2 物理通道布局的索引契约（组内通道数固定 16）。
+    ///
+    /// 该分支在 RKNN 报告 NC1HWC2 时启用（当前交付模型是 NCHW，属保底路径）：
+    /// `group = channel / 16`、组内偏移 `= channel % 16`、`(y, x)` 通道步长为 16。
+    /// 越界必须返回 `None`，不得回绕到同组其它通道。
     #[test]
-    fn decode_scale_skips_candidates_with_non_finite_dfl_logits() {
-        let (grid_h, grid_w) = (1usize, 2usize);
-        let grid_len = grid_h * grid_w;
-        let mut box_tensor = vec![0.0f32; DFL_LEN * 4 * grid_len];
-        // 候选 1（offset = 1）的 DFL 首个 logit（b = 0, k = 0）置为 NaN，候选 0 保持全部有限。
-        box_tensor[1] = f32::NAN;
-        let score_sum = vec![0.9f32; grid_len];
-        let cls = vec![0.9f32; grid_len];
-        let kpt = vec![0.0f32; KPT_CHANNELS_PER_POINT * NUM_LANDMARKS * grid_len];
-
-        let faces = decode_scale(&box_tensor, &score_sum, &cls, &kpt, grid_h, grid_w, 8, 0.5)
-            .expect("单个候选的非法 DFL logits 不应让整帧解码返回错误");
-        assert_eq!(faces.len(), 1, "非法候选必须按候选丢弃，合法候选保留");
+    fn nc1hwc2_channel_indexing_matches_rknn_layout() {
+        let (grid_h, grid_w, channels) = (2usize, 3usize, 32usize);
+        let mut data = vec![0i8; channels * grid_h * grid_w];
+        let index = |channel: usize, y: usize, x: usize| {
+            (channel / 16) * grid_h * grid_w * 16 + y * grid_w * 16 + x * 16 + channel % 16
+        };
+        data[index(17, 1, 2)] = 42;
+        assert_eq!(
+            tensor_i8_value(
+                &data,
+                crate::rknn::RknnTensorFormat::Nc1hwc2,
+                17,
+                grid_h,
+                grid_w,
+                1,
+                2
+            ),
+            Some(42)
+        );
+        assert_eq!(
+            tensor_i8_value(
+                &data,
+                crate::rknn::RknnTensorFormat::Nc1hwc2,
+                channels,
+                grid_h,
+                grid_w,
+                1,
+                2
+            ),
+            None
+        );
     }
 
     #[test]
@@ -788,11 +629,6 @@ mod tests {
             scaled_w: 640,
             scaled_h: 384,
         };
-        let attrs = [[1, 64, 48, 80]; 12];
-        let outputs: Vec<&[f32]> = vec![&[]; 12];
-        assert!(decode_yolov8_face(&outputs, &attrs, &layout, 0.25, 0.45).is_err());
-        assert!(decode_yolov8_face(&outputs, &attrs, &layout, f32::NAN, 0.45).is_err());
-
         let scrfd_attrs = [[7680, 1, 1, 1]; 9];
         let scrfd_outputs: Vec<&[f32]> = vec![&[]; 9];
         assert!(decode_scrfd_face(&scrfd_outputs, &scrfd_attrs, &layout, 0.25, 0.45).is_err());
@@ -860,16 +696,18 @@ mod tests {
         let grid_w = 80usize;
         let grid_len = grid_h * grid_w;
         let anchor = 10 * grid_w + 10;
+        // cls / score 张量填充强负背景：模型输出的是 raw logits，
+        // logit 0 经 sigmoid 即为 50% 置信度，不能当作「无目标」。
         let mut output_storage = [
             vec![-10i8; 64 * grid_len],
-            vec![0i8; 80 * grid_len],
-            vec![0i8; grid_len],
+            vec![-10i8; 80 * grid_len],
+            vec![-10i8; grid_len],
             vec![-10i8; 64 * (24 * 40)],
-            vec![0i8; 80 * (24 * 40)],
-            vec![0i8; 24 * 40],
+            vec![-10i8; 80 * (24 * 40)],
+            vec![-10i8; 24 * 40],
             vec![-10i8; 64 * (12 * 20)],
-            vec![0i8; 80 * (12 * 20)],
-            vec![0i8; 12 * 20],
+            vec![-10i8; 80 * (12 * 20)],
+            vec![-10i8; 12 * 20],
         ];
         for (side, bin) in [1usize, 2, 3, 4].into_iter().enumerate() {
             output_storage[0][(side * DFL_LEN + bin) * grid_len + anchor] = 10;
@@ -919,7 +757,7 @@ mod tests {
         assert!((persons[0].bbox[1] - 68.0 / 384.0).abs() < 0.01);
         assert!((persons[0].bbox[2] - 32.0 / 640.0).abs() < 0.01);
         assert!((persons[0].bbox[3] - 48.0 / 384.0).abs() < 0.01);
-        let mut non_person_class_data = vec![0i8; 80 * grid_len];
+        let mut non_person_class_data = vec![-10i8; 80 * grid_len];
         non_person_class_data[grid_len + anchor] = 10;
         let non_person_outputs = [
             &output_storage[0][..],

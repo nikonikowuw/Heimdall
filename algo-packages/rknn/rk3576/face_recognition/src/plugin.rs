@@ -10,7 +10,7 @@ use algo_sdk::plugin::{AlgoPlugin, InitContext};
 
 use crate::config::InstanceConfig;
 use crate::postprocess::{emit_face_detections, FaceDetection};
-use crate::quality::compute_quality;
+use crate::quality::{compute_quality, FaceQualityExt};
 use crate::SharedModels;
 
 pub struct FaceRecognizer {

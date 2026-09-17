@@ -17,21 +17,35 @@ pub mod cv;
 pub mod emitter;
 pub mod env;
 pub mod error;
+pub mod face;
 pub mod frame;
 pub mod macros;
 pub mod math;
 pub mod model;
 pub mod plugin;
 pub mod testing;
+pub mod track;
 
 pub use emitter::ResultEmitter;
 pub use env::PackageEnv;
 pub use error::AlgoError;
+pub use face::{
+    align, compute_quality, estimate_pitch, estimate_yaw, is_landmark_geometry_plausible, quality,
+    FaceQuality, QualityConfig,
+};
 pub use frame::{FrameHandleView, SafeFrame};
-pub use math::NormBox;
+pub use math::{
+    box_xywh_to_xyxy, box_xyxy_to_xywh, calculate_iou, clamp_bbox, cosine_similarity,
+    encode_embedding_base64_le, fast_nms, fast_nms_agnostic, l2_normalize, run_nms_by, unmap_box,
+    NormBox,
+};
 pub use model::{Core, InferenceSession, ModelWeights, SharedWeights};
 pub use plugin::{AlgoPlugin, InitContext};
 pub use testing::{MockEmitter, MockFrame, MockFrameBuilder, MockSession, MockWeights};
+pub use track::{
+    box_iou, ByteTrackConfig, ByteTracker, KalmanBoxTracker, Rect, STrack, TrackDetection,
+    TrackState,
+};
 
 /// SDK 统一 Prelude，便于算法开发者一键导入核心类型
 pub mod prelude {
@@ -41,9 +55,21 @@ pub mod prelude {
     pub use crate::env::PackageEnv;
     pub use crate::error::AlgoError;
     pub use crate::export_algo;
+    pub use crate::face::{
+        self, align, compute_quality, estimate_pitch, estimate_yaw,
+        is_landmark_geometry_plausible, quality, FaceQuality, QualityConfig,
+    };
     pub use crate::frame::{FrameHandleView, SafeFrame};
-    pub use crate::math::{self, NormBox};
+    pub use crate::math::{
+        self, box_xywh_to_xyxy, box_xyxy_to_xywh, calculate_iou, clamp_bbox, cosine_similarity,
+        encode_embedding_base64_le, fast_nms, fast_nms_agnostic, l2_normalize, run_nms_by,
+        unmap_box, NormBox,
+    };
     pub use crate::model::{Core, InferenceSession, ModelWeights, SharedWeights};
     pub use crate::plugin::{AlgoPlugin, InitContext};
     pub use crate::testing::{MockEmitter, MockFrame, MockFrameBuilder, MockSession, MockWeights};
+    pub use crate::track::{
+        box_iou, ByteTrackConfig, ByteTracker, KalmanBoxTracker, Rect, STrack, TrackDetection,
+        TrackState,
+    };
 }

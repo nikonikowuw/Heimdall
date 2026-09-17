@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use crate::quality::FaceQuality;
-use crate::template_pool::{BestShotRecord, FrameSample, MaturityFlip};
+use crate::template_pool::{BestShotRecord, FrameSample};
 
 /// 池内最多保留的高质量 embedding 帧数（KMAX）。
 pub const MAX_FUSED_FRAMES: usize = 8;
@@ -32,25 +32,32 @@ pub const REDUNDANCY_SIMILARITY: f32 = 0.85;
 pub const MIN_MATURE_POOL_SIZE: usize = 3;
 /// 连续无质量提升达到该帧数后允许模板成熟。
 pub const PLATEAU_FRAMES: usize = 10;
-/// 峰值样本人脸短边达到该像素数后允许模板成熟。
+/// 人脸尺寸达到该阈值时允许提前成熟（免受连续无提升帧数限制）。
 pub const SIZE_TARGET_PIXELS: u32 = 140;
 
-/// 一次特征更新后对插件发射层可见的状态。
-#[derive(Debug, Clone, PartialEq)]
+/// 模板重播种触发门限：当新样本质量比池内最佳高出该值时，允许清空旧弱池。
+pub const RESEED_QUALITY_DELTA: f32 = 0.20;
+/// 重播种时的余弦相似度下限，防止彻底异人漂移引发误重置。
+pub const RESEED_SIMILARITY_FLOOR: f32 = 0.35;
+
+/// 融合更新结果
+#[derive(Debug, Clone)]
 pub struct FusionUpdate {
-    /// 当前融合模板；只有 `template_changed` 时才需要编码发射。
     pub template: [f32; 512],
-    /// 实际参与 Top-K 融合的非冗余样本数。
-    pub fused_count: usize,
-    /// 参与融合样本的质量加权均值。
     pub template_quality: f32,
-    /// 本次更新是否改变了融合模板。
-    pub template_changed: bool,
-    /// 本次是否首次翻转为成熟。
+    pub fused_count: usize,
     pub template_mature: bool,
+    pub template_changed: bool,
 }
 
-/// 航迹最佳人脸帧池状态机。
+/// 航迹状态更新
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackUpdateStatus {
+    Updated,
+    Removed,
+}
+
+/// 基于 ByteTrack 航迹生命周期维护最佳帧与融合特征
 #[derive(Debug, Default)]
 pub struct BestShotManager {
     records: HashMap<u64, BestShotRecord>,
@@ -58,140 +65,56 @@ pub struct BestShotManager {
 
 impl BestShotManager {
     pub fn new() -> Self {
-        Self {
-            records: HashMap::new(),
-        }
+        Self::default()
     }
 
-    /// 查询某条航迹当前的最佳抓拍记录。
-    pub fn get(&self, track_id: u64) -> Option<&BestShotRecord> {
-        self.records.get(&track_id)
-    }
-
-    /// 判定当前帧人脸是否应该触发特征提取与融合。
-    ///
-    /// 池为空时先执行 `SEED_MIN(0.50)` 门控；已有样本时，质量提升、补采样间隔、
-    /// 失败退避和成熟状态共同决定是否进入 NPU。模板成熟后停止继续提取，保证单轨发射
-    /// 次数与池上限有界。
+    /// 判定是否应为当前帧触发 NPU 人脸特征提取。
     pub fn should_update_best_shot(
         &self,
         track_id: u64,
-        new_quality: &FaceQuality,
-        current_frame_id: usize,
+        quality: &FaceQuality,
+        frame_id: usize,
     ) -> bool {
         self.should_update_best_shot_with_delta(
             track_id,
-            new_quality,
+            quality,
             DEFAULT_QUALITY_UPGRADE_DELTA,
-            current_frame_id,
+            frame_id,
         )
     }
 
-    /// 带自定义质量增量阈值的采样判定。
+    /// 判定是否应为当前帧触发 NPU 特征提取（带显式提升增量）。
     pub fn should_update_best_shot_with_delta(
         &self,
         track_id: u64,
-        new_quality: &FaceQuality,
-        delta: f32,
-        current_frame_id: usize,
+        quality: &FaceQuality,
+        upgrade_delta: f32,
+        frame_id: usize,
     ) -> bool {
-        let Some(previous) = self.records.get(&track_id) else {
-            return new_quality.score >= MIN_FUSION_QUALITY_SCORE;
+        let Some(record) = self.records.get(&track_id) else {
+            return quality.score >= MIN_FUSION_QUALITY_SCORE;
         };
 
-        if previous.template_mature || current_frame_id < previous.retry_after_frame_id {
+        if record.template_mature || frame_id < record.retry_after_frame_id {
             return false;
         }
 
-        if previous.pool_is_empty() {
-            return new_quality.score >= MIN_FUSION_QUALITY_SCORE;
+        if record.pool_is_empty() {
+            return quality.score >= MIN_FUSION_QUALITY_SCORE;
         }
 
-        new_quality.score > previous.best_pool_quality() + delta
-            || (previous.pool_len() < MAX_FUSED_FRAMES
-                && current_frame_id.saturating_sub(previous.last_extract_frame_id)
-                    >= MIN_FUSION_FRAME_INTERVAL
-                && new_quality.score >= MIN_FUSION_QUALITY_SCORE)
-    }
+        let quality_improved = quality.score >= record.best_pool_quality() + upgrade_delta;
+        let interval_elapsed =
+            frame_id.saturating_sub(record.last_extract_frame_id) >= MIN_FUSION_FRAME_INTERVAL;
 
-    /// 更新某条航迹并返回模板变化/成熟翻转元数据。
-    ///
-    /// 采样失败时返回未变化的快照，调用方据此跳过发射。
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_with_fusion_result(
-        &mut self,
-        track_id: u64,
-        bbox: [f32; 4],
-        landmarks: [[f32; 2]; 5],
-        score: f32,
-        quality: FaceQuality,
-        new_embedding: &[f32; 512],
-        frame_id: usize,
-    ) -> FusionUpdate {
-        let record = self.records.entry(track_id).or_insert_with(|| {
-            BestShotRecord::uninitialized(bbox, landmarks, score, quality, frame_id)
-        });
-
-        if new_embedding.iter().any(|value| !value.is_finite()) {
-            record.mark_extraction_failure(frame_id);
-            return unchanged_update(record, MaturityFlip::None);
-        }
-        let norm_sq: f32 = new_embedding.iter().map(|value| value * value).sum();
-        if !norm_sq.is_finite() || norm_sq <= 1e-12 {
-            record.mark_extraction_failure(frame_id);
-            return unchanged_update(record, MaturityFlip::None);
-        }
-
-        // 只有已有有效模板时才做防漂移判定；首个样本负责建立模板基准。
-        if !record.pool_is_empty() {
-            let similarity = crate::cosine_similarity(new_embedding, record.template());
-            if similarity < DRIFT_REJECTION_SIMILARITY {
-                tracing::warn!(
-                    track_id,
-                    similarity,
-                    threshold = DRIFT_REJECTION_SIMILARITY,
-                    "特征融合防漂移校验拦截：新特征与当前模板余弦相似度过低，拒绝进入帧池"
-                );
-                record.mark_extraction_failure(frame_id);
-                return unchanged_update(record, MaturityFlip::None);
-            }
-        }
-
-        let sample = FrameSample {
-            embedding: *new_embedding,
-            quality,
-            score,
-            bbox,
-            landmarks,
-            frame_id,
-        };
-        // 顺序固定：先吸收样本（内含失败/成功状态机），再判定成熟，最后组装快照。
-        let template_changed = record.absorb_sample(sample, frame_id);
-        let maturity = record.refresh_maturity(frame_id);
-        FusionUpdate {
-            template: *record.template(),
-            fused_count: record.fused_count,
-            template_quality: record.template_quality,
-            template_changed,
-            template_mature: maturity.flipped(),
+        if record.pool_len() < MAX_FUSED_FRAMES {
+            interval_elapsed && (quality_improved || quality.score >= record.best_pool_quality())
+        } else {
+            interval_elapsed && quality_improved
         }
     }
 
-    /// 在没有新 embedding 的帧上推进成熟 FSM；成熟首次翻转时返回一次握手信号。
-    pub fn maturity_signal(&mut self, track_id: u64, frame_id: usize) -> Option<FusionUpdate> {
-        let record = self.records.get_mut(&track_id)?;
-        if record.pool_is_empty() || record.template_mature {
-            return None;
-        }
-        match record.refresh_maturity(frame_id) {
-            MaturityFlip::FirstTime => Some(unchanged_update(record, MaturityFlip::FirstTime)),
-            MaturityFlip::None => None,
-        }
-    }
-
-    /// 记录一次没有得到新 embedding 的 best-shot 尝试。
-    ///
-    /// 保留已有帧池与模板，避免暂时性的读回或模型错误导致每帧重复执行重型路径。
+    /// 记录一次未获得特征向量的提取尝试。
     pub fn record_attempt_without_embedding(
         &mut self,
         track_id: u64,
@@ -201,49 +124,106 @@ impl BestShotManager {
         quality: FaceQuality,
         frame_id: usize,
     ) {
-        self.records
-            .entry(track_id)
-            .and_modify(|record| {
-                record.mark_extraction_failure(frame_id);
-                if record.pool_is_empty() && quality.score > record.quality.score {
-                    record.bbox = bbox;
-                    record.landmarks = landmarks;
-                    record.score = score;
-                    record.quality = quality;
-                }
-            })
-            .or_insert_with(|| {
-                let mut record =
-                    BestShotRecord::uninitialized(bbox, landmarks, score, quality, frame_id);
-                record.mark_extraction_failure(frame_id);
-                record
-            });
+        let record = self.records.entry(track_id).or_insert_with(|| {
+            BestShotRecord::uninitialized(bbox, landmarks, score, quality, frame_id)
+        });
+        record.mark_extraction_failure(frame_id);
     }
 
-    /// 删除已经进入 `Removed` 状态的航迹对应记录；`Lost` 航迹必须保留。
-    pub fn remove_tracks(&mut self, removed_track_ids: &[u64]) {
-        for track_id in removed_track_ids {
+    /// 接收新的特征向量，推进帧池并更新模板。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_with_fusion_result(
+        &mut self,
+        track_id: u64,
+        bbox: [f32; 4],
+        landmarks: [[f32; 2]; 5],
+        score: f32,
+        quality: FaceQuality,
+        embedding: &[f32; 512],
+        frame_id: usize,
+    ) -> FusionUpdate {
+        let sample = FrameSample {
+            embedding: *embedding,
+            quality,
+            score,
+            bbox,
+            landmarks,
+            frame_id,
+        };
+
+        let record = self.records.entry(track_id).or_insert_with(|| {
+            BestShotRecord::uninitialized(bbox, landmarks, score, quality, frame_id)
+        });
+
+        if !record.pool_is_empty() {
+            let similarity = algo_sdk::math::cosine_similarity(record.template(), embedding);
+
+            let can_reseed = quality.score >= record.best_pool_quality() + RESEED_QUALITY_DELTA
+                && similarity >= RESEED_SIMILARITY_FLOOR;
+
+            if similarity < DRIFT_REJECTION_SIMILARITY && !can_reseed {
+                record.mark_extraction_failure(frame_id);
+                return FusionUpdate {
+                    template: *record.template(),
+                    template_quality: record.template_quality,
+                    fused_count: record.fused_count,
+                    template_mature: false,
+                    template_changed: false,
+                };
+            }
+
+            if can_reseed && similarity < DRIFT_REJECTION_SIMILARITY {
+                let previously_mature = record.template_mature;
+                *record = BestShotRecord::uninitialized(bbox, landmarks, score, quality, frame_id);
+                record.template_mature = previously_mature;
+            }
+        }
+
+        let template_changed = record.absorb_sample(sample, frame_id);
+        let mature_flipped = record.refresh_maturity(frame_id).flipped();
+
+        FusionUpdate {
+            template: *record.template(),
+            template_quality: record.template_quality,
+            fused_count: record.fused_count,
+            template_mature: mature_flipped,
+            template_changed,
+        }
+    }
+
+    /// 轮询航迹是否在当前帧达到平台期成熟。
+    pub fn maturity_signal(&mut self, track_id: u64, frame_id: usize) -> Option<FusionUpdate> {
+        let record = self.records.get_mut(&track_id)?;
+        if !record.refresh_maturity(frame_id).flipped() {
+            return None;
+        }
+
+        Some(FusionUpdate {
+            template: *record.template(),
+            template_quality: record.template_quality,
+            fused_count: record.fused_count,
+            template_mature: true,
+            template_changed: false,
+        })
+    }
+
+    pub fn get(&self, track_id: u64) -> Option<&BestShotRecord> {
+        self.records.get(&track_id)
+    }
+
+    pub fn remove_tracks(&mut self, track_ids: &[u64]) {
+        for track_id in track_ids {
             self.records.remove(track_id);
         }
     }
 
-    /// 清空所有状态。
     pub fn clear(&mut self) {
         self.records.clear();
     }
-}
 
-/// 构造“模板未变化”的状态快照。
-///
-/// 入参是 [`MaturityFlip`] 而不是 `bool`：调用点写 `MaturityFlip::None` / `FirstTime`
-/// 自解释，避免出现 `unchanged_update(record, true)` 这种读不出含义的布尔实参。
-fn unchanged_update(record: &BestShotRecord, maturity: MaturityFlip) -> FusionUpdate {
-    FusionUpdate {
-        template: *record.template(),
-        fused_count: record.fused_count,
-        template_quality: record.template_quality,
-        template_changed: false,
-        template_mature: maturity.flipped(),
+    pub fn retain_active_tracks(&mut self, active_track_ids: &[u64]) {
+        self.records
+            .retain(|track_id, _| active_track_ids.contains(track_id));
     }
 }
 
@@ -375,8 +355,8 @@ mod tests {
         add(&mut manager, 3, 0.50, 80, &first, 1);
         let update = add(&mut manager, 3, 1.0, 100, &second, 7);
 
-        let similarity_to_first = crate::cosine_similarity(&update.template, &first);
-        let similarity_to_second = crate::cosine_similarity(&update.template, &second);
+        let similarity_to_first = algo_sdk::math::cosine_similarity(&update.template, &first);
+        let similarity_to_second = algo_sdk::math::cosine_similarity(&update.template, &second);
         assert!(similarity_to_second > similarity_to_first);
         assert!(
             (update
@@ -450,30 +430,61 @@ mod tests {
         assert!(!update.template_changed);
         let record = manager.get(7).expect("record should exist");
         assert_eq!(record.pool_len(), 1);
-        assert!(!manager.should_update_best_shot(7, &quality(0.95, 120), 8));
-        assert!(!manager.should_update_best_shot(7, &quality(0.95, 120), 12));
-        assert!(manager.should_update_best_shot(7, &quality(0.95, 120), 13));
+        assert_eq!(record.quality.score, 0.60);
+        assert_eq!(record.retry_after_frame_id, 13);
     }
 
     #[test]
-    fn non_finite_and_degenerate_embeddings_are_rejected() {
+    fn superior_quality_frame_reseeds_weak_pool() {
         let mut manager = BestShotManager::new();
-        let mut nan_vector = embedding(0);
-        nan_vector[3] = f32::NAN;
-        let update = add(&mut manager, 8, 0.80, 80, &nan_vector, 1);
-        assert!(!update.template_changed);
-        assert_eq!(
-            manager.get(8).expect("record should exist").pool_len(),
-            0,
-            "非有限向量不得污染帧池"
-        );
+        let weak_seed = embedding(0);
 
-        let update = add(&mut manager, 8, 0.80, 80, &[0.0f32; 512], 5);
-        assert!(!update.template_changed);
-        assert_eq!(manager.get(8).expect("record should exist").pool_len(), 0);
+        let mut superior = [0.0f32; 512];
+        superior[0] = 0.48;
+        superior[1] = (1.0 - 0.48f32 * 0.48).sqrt();
 
-        let update = add(&mut manager, 8, 0.80, 80, &embedding(0), 9);
+        add(&mut manager, 99, 0.52, 60, &weak_seed, 1);
+        let record_before = manager.get(99).expect("record should exist");
+        assert_eq!(record_before.best_pool_quality(), 0.52);
+
+        let update = add(&mut manager, 99, 0.88, 140, &superior, 7);
         assert!(update.template_changed);
-        assert_eq!(manager.get(8).expect("record should exist").fused_count, 1);
+
+        let record_after = manager.get(99).expect("record should exist");
+        assert_eq!(record_after.best_pool_quality(), 0.88);
+        assert_eq!(record_after.pool_len(), 1, "历史弱池应被清空重播种");
+
+        let sim_to_superior = algo_sdk::math::cosine_similarity(&update.template, &superior);
+        assert!((sim_to_superior - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn reseed_preserves_mature_monotonicity() {
+        let mut manager = BestShotManager::new();
+        let first = embedding(0);
+        let second = similar_embedding(1);
+        let third = similar_embedding(2);
+        add(&mut manager, 100, 0.60, 80, &first, 1);
+        add(&mut manager, 100, 0.65, 100, &second, 7);
+        let update_mature = add(&mut manager, 100, 0.66, SIZE_TARGET_PIXELS, &third, 13);
+        assert!(
+            update_mature.template_mature,
+            "达到 140px 应当首次翻转为成熟"
+        );
+        assert!(manager.get(100).expect("record exists").template_mature);
+
+        let mut superior = [0.0f32; 512];
+        superior[0] = 0.48;
+        superior[1] = (1.0 - 0.48f32 * 0.48).sqrt();
+        let update_reseed = add(&mut manager, 100, 0.90, 160, &superior, 19);
+        assert!(update_reseed.template_changed);
+        assert!(
+            !update_reseed.template_mature,
+            "已成熟轨道重播种不应重复发射成熟握手信号"
+        );
+        assert!(
+            manager.get(100).expect("record exists").template_mature,
+            "成熟标记必须保持单调为 true"
+        );
     }
 }

@@ -171,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("================================================================");
     println!("  RK3568 人脸识别算法包全硬件流转本地测试");
-    println!("  模型: YOLOv8n-face (检测) + EdgeFace-xs (嵌入)");
+    println!("  模型: SCRFD (人脸检测) + EdgeFace (特征嵌入)");
     println!("  图片: {}", image_path.display());
     println!("================================================================");
 
