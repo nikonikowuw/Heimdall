@@ -2,6 +2,9 @@
 # RK3568 EdgeFace 人脸识别算法包构建与打包
 # ==============================================================================
 
+# 优先确保 rustup 管理的工具链目录生效
+export PATH := $(HOME)/.cargo/bin:$(PATH)
+
 PACKAGE        := face-recognition-rk3568-rknn
 TARGET_TRIPLE  := aarch64-unknown-linux-gnu
 WORKSPACE_ROOT := ../../../..
@@ -54,11 +57,19 @@ build:
 	@mkdir -p lib
 	cp $(ALGO_WORKSPACE_ROOT)/target/$(TARGET_TRIPLE)/release/libface_recognition_rk3568.so lib/libface_recognition.so
 
-# 目标板原生编译 release
+# 目标板原生或本地调试编译 release
 host:
 	cd $(WORKSPACE_ROOT) && $(CARGO) build --manifest-path $(ALGO_MANIFEST) -p $(PACKAGE) --release
 	@mkdir -p lib
-	cp $(ALGO_WORKSPACE_ROOT)/target/release/libface_recognition_rk3568.so lib/libface_recognition.so
+	@if [ -f $(ALGO_WORKSPACE_ROOT)/target/release/libface_recognition_rk3568.so ]; then \
+		cp $(ALGO_WORKSPACE_ROOT)/target/release/libface_recognition_rk3568.so lib/libface_recognition.so; \
+	elif [ -f $(ALGO_WORKSPACE_ROOT)/target/release/libface_recognition_rk3568.dylib ]; then \
+		cp $(ALGO_WORKSPACE_ROOT)/target/release/libface_recognition_rk3568.dylib lib/libface_recognition.dylib; \
+		echo "提示: 当前在 macOS 本地编译，已生成 lib/libface_recognition.dylib；若需打包 RK3568 Linux 固件制品请使用 'make' 或 'make package'"; \
+	else \
+		echo "错误: 未找到 release 编译产物"; \
+		exit 1; \
+	fi
 
 # 打包为标准算法包 (.tar.gz)
 package: build
