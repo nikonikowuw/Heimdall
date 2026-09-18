@@ -31,7 +31,7 @@
     "quality_min_score": {
       "type": "number",
       "title": "最小人脸质量分数",
-      "description": "人脸综合质量门控得分，低于此阈值的人脸不参与识别比对",
+      "description": "人脸综合质量门控得分，低于此阈值的人脸不参与识别比对；单帧是否真正触发特征提取还受 fusion_min_quality_score 约束（实际提取门限取两者较大值）",
       "minimum": 0.0,
       "maximum": 1.0,
       "default": 0.3
@@ -55,10 +55,18 @@
     "quality_max_blur": {
       "type": "number",
       "title": "最大模糊度分数",
-      "description": "模糊度代理评分上限；超过此阈值的模糊人脸不参与特征提取与识别比对（检测框仍会输出）",
+      "description": "模糊度代理评分上限（当前代理量为 1 - 检测置信度：SCRFD 交付模型不输出关键点分数）；超过此阈值的模糊人脸不参与特征提取与识别比对（检测框仍会输出）",
       "minimum": 0.0,
       "maximum": 1.0,
       "default": 0.7
+    },
+    "fusion_min_quality_score": {
+      "type": "number",
+      "title": "特征提取触发门限",
+      "description": "触发 EdgeFace 特征提取（NPU 前向）的最低人脸质量分；低于该分的人脸只输出检测框与质量分，不产生特征向量，也就无法参与识别比对。默认为 0.5；现场为提升比对成功率而放宽 quality_min_score 时，须同步下调本项",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.5
     },
     "similarity_threshold": {
       "type": "number",

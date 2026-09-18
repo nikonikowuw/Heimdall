@@ -20,6 +20,8 @@ pub const MAX_FUSED_FRAMES: usize = 8;
 pub const TOP_K_FUSED_FRAMES: usize = 4;
 /// 首次提取与补采样的最低质量门限。
 pub const MIN_FUSION_QUALITY_SCORE: f32 = 0.50;
+/// 实例配置 `fusion_min_quality_score` 的缺省值（见 [`MIN_FUSION_QUALITY_SCORE`]）。
+pub const DEFAULT_FUSION_MIN_QUALITY_SCORE: f32 = MIN_FUSION_QUALITY_SCORE;
 /// 新质量超过当前池内峰值该幅度时允许追质量提取。
 pub const DEFAULT_QUALITY_UPGRADE_DELTA: f32 = 0.08;
 /// 两次特征提取之间的最小帧间隔。
@@ -69,16 +71,23 @@ impl BestShotManager {
     }
 
     /// 判定是否应为当前帧触发 NPU 人脸特征提取。
+    ///
+    /// `min_extract_quality` 是「值得花一次 EdgeFace 前向」的质量下限，由实例配置
+    /// `fusion_min_quality_score` 提供（默认 [`MIN_FUSION_QUALITY_SCORE`]）。
+    /// 现场放宽 `quality_min_score` 必须同步放宽该门限，否则落入两者之间的人脸会
+    /// 通过检测与准入审核、却永远拿不到特征向量。
     pub fn should_update_best_shot(
         &self,
         track_id: u64,
         quality: &FaceQuality,
+        min_extract_quality: f32,
         frame_id: usize,
     ) -> bool {
         self.should_update_best_shot_with_delta(
             track_id,
             quality,
             DEFAULT_QUALITY_UPGRADE_DELTA,
+            min_extract_quality,
             frame_id,
         )
     }
@@ -89,10 +98,11 @@ impl BestShotManager {
         track_id: u64,
         quality: &FaceQuality,
         upgrade_delta: f32,
+        min_extract_quality: f32,
         frame_id: usize,
     ) -> bool {
         let Some(record) = self.records.get(&track_id) else {
-            return quality.score >= MIN_FUSION_QUALITY_SCORE;
+            return quality.score >= min_extract_quality;
         };
 
         if record.template_mature || frame_id < record.retry_after_frame_id {
@@ -100,7 +110,7 @@ impl BestShotManager {
         }
 
         if record.pool_is_empty() {
-            return quality.score >= MIN_FUSION_QUALITY_SCORE;
+            return quality.score >= min_extract_quality;
         }
 
         let quality_improved = quality.score >= record.best_pool_quality() + upgrade_delta;
@@ -273,11 +283,37 @@ mod tests {
         )
     }
 
+    /// 默认融合门限下的采样判定（测试助手）。
+    fn should_sample(
+        manager: &BestShotManager,
+        track_id: u64,
+        quality: &FaceQuality,
+        frame_id: usize,
+    ) -> bool {
+        manager.should_update_best_shot(
+            track_id,
+            quality,
+            DEFAULT_FUSION_MIN_QUALITY_SCORE,
+            frame_id,
+        )
+    }
+
     #[test]
     fn seed_gate_rejects_weak_frame_before_npu_extraction() {
         let manager = BestShotManager::new();
-        assert!(!manager.should_update_best_shot(7, &quality(0.49, 80), 1));
-        assert!(manager.should_update_best_shot(7, &quality(0.50, 80), 1));
+        assert!(!should_sample(&manager, 7, &quality(0.49, 80), 1));
+        assert!(should_sample(&manager, 7, &quality(0.50, 80), 1));
+    }
+
+    #[test]
+    fn extraction_gate_follows_configured_min_quality() {
+        let manager = BestShotManager::new();
+        // 放宽到 0.25 后，0.30 的人脸必须能触发提取。
+        // 历史缺陷：门限被硬编码常量 0.50 静默覆盖，`.env` 放宽建议完全失效。
+        assert!(manager.should_update_best_shot(9, &quality(0.30, 80), 0.25, 1));
+        assert!(!manager.should_update_best_shot(9, &quality(0.20, 80), 0.25, 1));
+        // 收紧到 0.80 后，0.60 的人脸不再消耗 EdgeFace 前向。
+        assert!(!manager.should_update_best_shot(9, &quality(0.60, 80), 0.80, 1));
     }
 
     #[test]
@@ -285,21 +321,21 @@ mod tests {
         let mut manager = BestShotManager::new();
         let q = quality(0.60, 80);
         manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, 1);
-        assert!(!manager.should_update_best_shot(7, &q, 1));
-        assert!(!manager.should_update_best_shot(7, &q, 6));
-        assert!(manager.should_update_best_shot(7, &q, 7));
+        assert!(!should_sample(&manager, 7, &q, 1));
+        assert!(!should_sample(&manager, 7, &q, 6));
+        assert!(should_sample(&manager, 7, &q, 7));
 
         manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, 7);
-        assert!(!manager.should_update_best_shot(7, &q, 18));
-        assert!(manager.should_update_best_shot(7, &q, 19));
+        assert!(!should_sample(&manager, 7, &q, 18));
+        assert!(should_sample(&manager, 7, &q, 19));
 
         manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, 19);
-        assert!(!manager.should_update_best_shot(7, &q, 42));
-        assert!(manager.should_update_best_shot(7, &q, 43));
+        assert!(!should_sample(&manager, 7, &q, 42));
+        assert!(should_sample(&manager, 7, &q, 43));
 
         manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, 43);
-        assert!(!manager.should_update_best_shot(7, &q, 90));
-        assert!(manager.should_update_best_shot(7, &q, 91));
+        assert!(!should_sample(&manager, 7, &q, 90));
+        assert!(should_sample(&manager, 7, &q, 91));
     }
 
     #[test]
@@ -320,7 +356,7 @@ mod tests {
         assert_eq!(record.pool_len(), MAX_FUSED_FRAMES);
         assert_eq!(record.quality.score, 0.71);
         assert!(record.template_mature, "池满后必须翻转成熟状态");
-        assert!(!manager.should_update_best_shot(1, &quality(0.99, 120), 20));
+        assert!(!should_sample(&manager, 1, &quality(0.99, 120), 20));
 
         let update = add(&mut manager, 1, 0.99, 120, &vector, 20);
         let record = manager.get(1).expect("record should exist");
@@ -412,7 +448,7 @@ mod tests {
         let third = similar_embedding(2);
         add(&mut manager, 6, 0.50, 60, &first, 1);
         add(&mut manager, 6, 0.60, 80, &second, 7);
-        assert!(manager.should_update_best_shot(6, &quality(0.90, 160), 13));
+        assert!(should_sample(&manager, 6, &quality(0.90, 160), 13));
         add(&mut manager, 6, 0.90, 160, &third, 13);
         let record = manager.get(6).expect("record should exist");
         assert_eq!(record.quality.score, 0.90);
@@ -425,7 +461,7 @@ mod tests {
         let stable = embedding(0);
         let drift = embedding(100);
         add(&mut manager, 7, 0.60, 80, &stable, 1);
-        assert!(manager.should_update_best_shot(7, &quality(0.95, 120), 7));
+        assert!(should_sample(&manager, 7, &quality(0.95, 120), 7));
         let update = add(&mut manager, 7, 0.95, 120, &drift, 7);
         assert!(!update.template_changed);
         let record = manager.get(7).expect("record should exist");

@@ -14,10 +14,17 @@ use algo_sdk::error::AlgoError;
 use algo_sdk::macros::{validate_abi_header, LibraryContext};
 use image::{ExtendedColorType, ImageReader, Limits, RgbImage};
 
-use crate::quality::FaceQualityExt as _;
-use crate::{align, config, prepare_detector_input_for, quality, shared_models};
+use crate::detect::RawFace;
+use crate::quality::{FaceQuality, FaceQualityExt as _};
+use crate::{align, config, prepare_detector_input_for, quality, shared_models, SharedModels};
 
 const MAX_DECODED_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
+/// 注册/离线提取的检测置信度下限。
+const REGISTRATION_MIN_SCORE: f32 = 0.30;
+/// 注册/离线提取的最小人脸边长（输入图像像素）。
+const REGISTRATION_MIN_FACE_SIZE: u32 = 30;
+/// 判定输入本身已是「对齐人脸切片」时，人脸高度至少需占图像高度的比例。
+const ALIGNED_CHIP_MIN_FACE_RATIO: f32 = 0.6;
 
 struct ExtractCache {
     embedding: [f32; 512],
@@ -266,62 +273,18 @@ unsafe fn extract_face_impl(
 
     let (orig_w, orig_h) = (image.width(), image.height());
 
-    // 快捷路径：输入为 112x112 标准对齐人脸时直通 EdgeFace
-    if orig_w == 112 && orig_h == 112 {
-        let mut aligned = image.as_raw().to_vec();
-        align::normalize_illumination_inplace(&mut aligned);
-        align::enhance_face_details_inplace(&mut aligned);
-        align::dump_debug_aligned_face("extract_direct112", &aligned, 1.0);
-        let embedding = match extract_embedding_with_registration_tta(
-            &models.worker,
-            &aligned,
-            "extract_direct112",
-            1.0,
-        ) {
-            Ok(embedding) => embedding,
-            Err(error) => {
-                let status = error.to_c_status();
-                algo_sdk::macros::set_last_error(format!("EMBED_INFERENCE_FAILED: {error}"));
-                write_output_error(output_ref, status);
-                return status;
-            }
-        };
-        let jpeg = match encode_aligned_jpeg(&aligned) {
-            Ok(jpeg) => jpeg,
-            Err(error) => {
-                algo_sdk::macros::set_last_error(error.to_string());
-                write_output_error(output_ref, error.to_c_status());
-                return error.to_c_status();
-            }
-        };
-        write_output_success(output_ref, embedding, 1.0, 1.0, jpeg);
-        return AV_OK;
-    }
-
-    let (det_w, det_h) = if models.has_registration_detector {
-        (
-            models.registration_detector_width,
-            models.registration_detector_height,
-        )
-    } else {
-        (models.detector_width, models.detector_height)
-    };
-
-    let (detector_rgb, layout) = match prepare_detector_input_for(&image, det_w, det_h) {
-        Ok(input) => input,
-        Err(error) => {
-            algo_sdk::macros::set_last_error(error.to_string());
-            write_output_error(output_ref, error.to_c_status());
-            return error.to_c_status();
+    // 检测与质量门禁先于任何分支：112×112 直通同样必须经过真实检测。
+    // 历史缺陷：直通分支不做检测却上报 quality/detection = 1.0，使宿主侧唯一的质量门禁
+    // （capture/注册链路 `quality_score >= 0.50`）被无条件穿透，任意 112×112 图片即可注册为模板。
+    let (best_face, face_quality) = match detect_best_face(&image, &models) {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            algo_sdk::macros::set_last_error(
+                "NO_FACE_DETECTED: 输入图像未检出满足置信度与质量阈值的人脸",
+            );
+            write_output_error(output_ref, AV_ERR_INFERENCE_FAILED);
+            return AV_ERR_INFERENCE_FAILED;
         }
-    };
-
-    let min_score = 0.30;
-    let raw_faces = match models
-        .worker
-        .detect_registration_host(detector_rgb, layout, min_score)
-    {
-        Ok(res) => res,
         Err(error) => {
             let status = error.to_c_status();
             algo_sdk::macros::set_last_error(error.to_string());
@@ -330,68 +293,52 @@ unsafe fn extract_face_impl(
         }
     };
 
-    let min_face_size = 30u32;
-    let thresholds = config::QualityThresholds {
-        min_score: 0.30,
-        ..config::QualityThresholds::default()
-    };
-    let Some((best_face, quality)) = raw_faces
-        .into_iter()
-        .filter_map(|face| {
-            let face_width = face.width() * orig_w as f32;
-            let face_height = face.height() * orig_h as f32;
-            let q = quality::compute_quality(
-                &face.landmarks,
-                &face.landmark_scores,
-                face_width.min(face_height),
-                &thresholds,
-            );
-            q.accepted(&thresholds, min_face_size).then_some((face, q))
-        })
-        .max_by(|left, right| left.0.score.total_cmp(&right.0.score))
-    else {
-        algo_sdk::macros::set_last_error(
-            "NO_FACE_DETECTED: 输入图像未检出满足置信度与质量阈值的人脸",
-        );
-        write_output_error(output_ref, AV_ERR_INFERENCE_FAILED);
-        return AV_ERR_INFERENCE_FAILED;
-    };
-
-    let is_compact_crop =
-        (orig_w < 320 || orig_h < 320) && (best_face.width() * orig_w as f32 > 0.6 * orig_w as f32);
-
-    let align_result = if is_compact_crop {
-        let pad_x = (orig_w as f32 * 0.25).round() as u32;
-        let pad_y = (orig_h as f32 * 0.25).round() as u32;
-        let padded_w = orig_w + pad_x * 2;
-        let padded_h = orig_h + pad_y * 2;
-        let padded_image = reflect_pad_image(image.as_raw(), orig_w, orig_h, pad_x, pad_y);
-
-        let mut padded_landmarks = [[0.0f32; 2]; 5];
-        for (dst, src) in padded_landmarks.iter_mut().zip(&best_face.landmarks) {
-            dst[0] = src[0] * orig_w as f32 + pad_x as f32;
-            dst[1] = src[1] * orig_h as f32 + pad_y as f32;
-        }
-        align::align_face(&padded_image, padded_w, padded_h, &padded_landmarks)
+    let aligned = if is_aligned_face_chip(orig_w, orig_h, &best_face) {
+        // 输入本身就是一张紧凑对齐人脸：直通以保留原始像素，不做二次仿射重采样。
+        // 对齐图与正常路径的预处理必须一致（对齐函数内部同样执行这两步）。
+        let mut chip = image.as_raw().to_vec();
+        align::normalize_illumination_inplace(&mut chip);
+        align::enhance_face_details_inplace(&mut chip);
+        align::dump_debug_aligned_face("extract_chip112", &chip, face_quality.score);
+        chip
     } else {
-        align::align_face(image.as_raw(), orig_w, orig_h, &best_face.landmarks)
-    };
+        let is_compact_crop = (orig_w < 320 || orig_h < 320)
+            && (best_face.width() * orig_w as f32 > 0.6 * orig_w as f32);
 
-    let aligned = match align_result {
-        Ok(aligned) => aligned,
-        Err(error) => {
-            algo_sdk::macros::set_last_error(error.to_string());
-            write_output_error(output_ref, error.to_c_status());
-            return error.to_c_status();
+        let align_result = if is_compact_crop {
+            let pad_x = (orig_w as f32 * 0.25).round() as u32;
+            let pad_y = (orig_h as f32 * 0.25).round() as u32;
+            let padded_w = orig_w + pad_x * 2;
+            let padded_h = orig_h + pad_y * 2;
+            let padded_image = reflect_pad_image(image.as_raw(), orig_w, orig_h, pad_x, pad_y);
+
+            let mut padded_landmarks = [[0.0f32; 2]; 5];
+            for (dst, src) in padded_landmarks.iter_mut().zip(&best_face.landmarks) {
+                dst[0] = src[0] * orig_w as f32 + pad_x as f32;
+                dst[1] = src[1] * orig_h as f32 + pad_y as f32;
+            }
+            align::align_face(&padded_image, padded_w, padded_h, &padded_landmarks)
+        } else {
+            align::align_face(image.as_raw(), orig_w, orig_h, &best_face.landmarks)
+        };
+
+        match align_result {
+            Ok(aligned) => {
+                align::dump_debug_aligned_face("extract_face", &aligned, face_quality.score);
+                aligned
+            }
+            Err(error) => {
+                algo_sdk::macros::set_last_error(error.to_string());
+                write_output_error(output_ref, error.to_c_status());
+                return error.to_c_status();
+            }
         }
     };
-
-    align::dump_debug_aligned_face("extract_face", &aligned, quality.score);
     let embedding = match extract_embedding_with_registration_tta(
         &models.worker,
         &aligned,
         "extract_face",
-        quality.score,
+        face_quality.score,
     ) {
         Ok(embedding) => embedding,
         Err(error) => {
@@ -409,8 +356,70 @@ unsafe fn extract_face_impl(
             return error.to_c_status();
         }
     };
-    write_output_success(output_ref, embedding, quality.score, best_face.score, jpeg);
+    write_output_success(
+        output_ref,
+        embedding,
+        face_quality.score,
+        best_face.score,
+        jpeg,
+    );
     AV_OK
+}
+
+/// 在单图上执行人脸检测并返回通过置信度与质量门控的最佳人脸。
+///
+/// 注册检测优先使用清单解析出的 640×640 专用会话，缺失时回退视频流检测器。
+/// 返回 `Ok(None)` 表示「检测成功但无合格人脸」，与检测链路错误严格区分。
+fn detect_best_face(
+    image: &RgbImage,
+    models: &SharedModels,
+) -> Result<Option<(RawFace, FaceQuality)>, AlgoError> {
+    let (det_w, det_h) = if models.has_registration_detector {
+        (
+            models.registration_detector_width,
+            models.registration_detector_height,
+        )
+    } else {
+        (models.detector_width, models.detector_height)
+    };
+    let (detector_rgb, layout) = prepare_detector_input_for(image, det_w, det_h)?;
+    let raw_faces =
+        models
+            .worker
+            .detect_registration_host(detector_rgb, layout, REGISTRATION_MIN_SCORE)?;
+
+    let (orig_w, orig_h) = (image.width(), image.height());
+    let thresholds = config::QualityThresholds {
+        min_score: REGISTRATION_MIN_SCORE,
+        ..config::QualityThresholds::default()
+    };
+    Ok(raw_faces
+        .into_iter()
+        .filter_map(|face| {
+            let face_width = face.width() * orig_w as f32;
+            let face_height = face.height() * orig_h as f32;
+            let quality = quality::compute_quality(
+                &face.landmarks,
+                &face.landmark_scores,
+                face_width.min(face_height),
+                &thresholds,
+            );
+            quality
+                .accepted(&thresholds, REGISTRATION_MIN_FACE_SIZE)
+                .then_some((face, quality))
+        })
+        .max_by(|left, right| left.0.score.total_cmp(&right.0.score)))
+}
+
+/// 输入本身是否已是一张标准对齐人脸切片（可直接直通 EdgeFace）。
+///
+/// 判定必须依赖**真实检测结果**：仅凭「输入尺寸 = 112×112」就直通等价于跳过检测，
+/// 任意同尺寸图片都会拿到一个看似合理却无意义的模板。这里额外要求检出人脸
+/// 高度占图像高度至少 `ALIGNED_CHIP_MIN_FACE_RATIO`，即画面确实被人脸充满。
+fn is_aligned_face_chip(width: u32, height: u32, face: &RawFace) -> bool {
+    width == align::ALIGNED_SIZE
+        && height == align::ALIGNED_SIZE
+        && face.height() >= ALIGNED_CHIP_MIN_FACE_RATIO
 }
 
 /// 独立的人脸特征提取 C ABI 符号。
@@ -434,6 +443,30 @@ pub unsafe extern "C" fn av_algo_extract_face(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn face_with_height(height: f32) -> RawFace {
+        RawFace {
+            bbox: [0.05, 0.05, 0.90, height],
+            landmarks: [[0.0; 2]; 5],
+            landmark_scores: [0.9; 5],
+            score: 0.9,
+        }
+    }
+
+    /// 112×112 直通必须同时满足「尺寸相符」与「检出的人脸确实充满画面」。
+    ///
+    /// 回归缺陷：早期实现只看输入尺寸就直通并上报 1.0 分，使任意 112×112 图片
+    /// 都能绕过检测与质量门禁入库。
+    #[test]
+    fn aligned_face_chip_requires_detected_large_face() {
+        assert!(is_aligned_face_chip(112, 112, &face_with_height(0.90)));
+        assert!(is_aligned_face_chip(112, 112, &face_with_height(0.60)));
+        // 人脸占比不足：不是对齐切片，必须回到「检测框 + 五点仿射对齐」路径。
+        assert!(!is_aligned_face_chip(112, 112, &face_with_height(0.59)));
+        // 尺寸不符：EdgeFace 只接受 112×112×3，永远不直通。
+        assert!(!is_aligned_face_chip(224, 224, &face_with_height(0.90)));
+        assert!(!is_aligned_face_chip(112, 108, &face_with_height(0.90)));
+    }
 
     #[test]
     fn extract_face_rejects_null_abi_pointers() {

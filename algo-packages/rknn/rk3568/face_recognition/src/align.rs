@@ -14,9 +14,21 @@ const ARC_FACE_BENCHMARK_PTS: [(u32, u32); 5] = [
     (71, 92), // right mouth
 ];
 
+/// 调试落盘是否开启（`HEIMDALL_DUMP_ALIGNED=1`）。
+///
+/// 常驻采样路径应先判该开关再拼装 `tag`，避免在生产链路上做无条件字符串分配。
+#[inline]
+pub fn debug_dump_enabled() -> bool {
+    std::env::var("HEIMDALL_DUMP_ALIGNED").is_ok_and(|value| value == "1")
+}
+
 /// 调试辅助工具：将 112×112 对齐人脸图像落盘到 `/tmp/heimdall_aligned/`
+///
+/// 文件名为固定的 `{tag}_raw.png` / `{tag}_overlay.png`：调试设施不得无界累积
+/// （原生采样路径每帧都会调用本函数，若按时间戳命名会在现场误开时持续写盘），
+/// 同一 tag 的后续采样直接覆盖。`tag` 由调用方按「来源 + 航迹」收敛，文件数有界。
 pub fn dump_debug_aligned_face(tag: &str, rgb_112: &[u8], quality_score: f32) {
-    if std::env::var("HEIMDALL_DUMP_ALIGNED").unwrap_or_default() != "1" {
+    if !debug_dump_enabled() {
         return;
     }
 
@@ -30,13 +42,7 @@ pub fn dump_debug_aligned_face(tag: &str, rgb_112: &[u8], quality_score: f32) {
         return;
     }
 
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let q = (quality_score.clamp(0.0, 1.0) * 100.0) as u32;
-
-    let raw_name = format!("{tag}_q{q}_{ts}_raw.png");
+    let raw_name = format!("{tag}_raw.png");
     let raw_path = std::path::Path::new(&dump_dir).join(raw_name);
     let _ = image::save_buffer(
         &raw_path,
@@ -59,7 +65,7 @@ pub fn dump_debug_aligned_face(tag: &str, rgb_112: &[u8], quality_score: f32) {
         }
     }
 
-    let overlay_name = format!("{tag}_q{q}_{ts}_overlay.png");
+    let overlay_name = format!("{tag}_overlay.png");
     let overlay_path = std::path::Path::new(&dump_dir).join(overlay_name);
     let _ = image::save_buffer(
         &overlay_path,
@@ -102,11 +108,10 @@ pub fn flip_horizontal_rgb(rgb: &[u8], width: u32, height: u32) -> Result<Vec<u8
         .chunks_exact(row_len)
         .zip(flipped.chunks_exact_mut(row_len))
     {
-        for (src_px, dst_px) in src_row
-            .chunks_exact(3)
-            .rev()
-            .zip(dst_row.chunks_exact_mut(3))
-        {
+        // row_len 恒为 3 的整数倍（w * 3），因此不会丢余数。
+        let (src_pixels, _) = src_row.as_chunks::<3>();
+        let (dst_pixels, _) = dst_row.as_chunks_mut::<3>();
+        for (src_px, dst_px) in src_pixels.iter().rev().zip(dst_pixels.iter_mut()) {
             dst_px.copy_from_slice(src_px);
         }
     }
@@ -147,8 +152,19 @@ mod tests {
         let files: Vec<_> = std::fs::read_dir(&temp_dir)
             .expect("读取目录")
             .filter_map(|e| e.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(files.len(), 2, "应生成 raw 和 overlay 两张图片");
+        assert!(files.iter().any(|name| name == "test_valid_raw.png"));
+        assert!(files.iter().any(|name| name == "test_valid_overlay.png"));
+
+        // 落盘必须封顶：同一 tag 反复采样只能覆盖，不得新增文件（现场误开调试开关时
+        // 否则会按采样频率无界写盘）。
+        for quality in [0.10f32, 0.55, 0.99] {
+            dump_debug_aligned_face("test_valid", &valid_rgb, quality);
+        }
+        let file_count = std::fs::read_dir(&temp_dir).expect("读取目录").count();
+        assert_eq!(file_count, 2, "重复采样应覆盖同名文件而非累积");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::env::remove_var("HEIMDALL_DUMP_ALIGNED");

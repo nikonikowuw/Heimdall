@@ -30,8 +30,11 @@ from rknn.api import RKNN
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MODEL_DIR = SCRIPT_DIR.parent / "model"
-DEFAULT_RKNN_PATH = str(MODEL_DIR / "edgeface_xs_gamma_06.rknn")
-DEFAULT_DATASET_PATH = str(MODEL_DIR / "dataset.txt")
+# 默认输出指向当前交付模型（见 model/CONVERSION.md）；历史版本 xs_gamma_06 已退役，
+# 默认值若仍指向它，一次不带输出参数的导出就会静默置回旧模型。
+DEFAULT_RKNN_PATH = str(MODEL_DIR / "edgeface_s_gamma_05_rk3568_fp16.rknn")
+# 量化校准集与脚本同目录（历史默认值 model/dataset.txt 不存在）。
+DEFAULT_DATASET_PATH = str(SCRIPT_DIR / "edgeface_dataset.txt")
 
 # EdgeFace expects normalized inputs: (x/255.0 - 0.5) / 0.5 = (x - 127.5) / 127.5
 MEAN_VALUES = [[127.5, 127.5, 127.5]]

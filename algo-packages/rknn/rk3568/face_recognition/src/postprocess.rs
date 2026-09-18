@@ -22,6 +22,13 @@ pub struct FaceDetailObject {
     /// 仅在模板首次成熟的帧上发射 `true`，作为宿主结算握手。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template_mature: Option<bool>,
+    /// 承载人脸的人体框是由人脸几何推导的虚拟躯干（画面中未检出对应人体）时为 `true`。
+    ///
+    /// 合成躯干底部常被钉在画面下沿，宿主若直接拿它做空间规则判定（ROI 侵入、
+    /// 折线越界）会产生与真实人体无关的告警，因此需要把这个事实透出到 ABI JSON。
+    /// 只在该帧置位（`Some(true)`），普通人体框不上报，避免无意义字节。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pseudo_body: Option<bool>,
 }
 
 /// 宿主检测解析器消费的稳定目标对象。
@@ -140,6 +147,7 @@ mod tests {
                 fused_count: None,
                 template_quality: None,
                 template_mature: None,
+                pseudo_body: None,
             }),
         }];
 
@@ -154,6 +162,8 @@ mod tests {
         assert!(!captured.contains("tracks"));
         assert!(!captured.contains("track_id"));
         assert!(!captured.contains("is_pseudo_body"));
+        // 普通人体框不得携带 pseudo_body 标记（只在该帧置位，避免噪声字节）。
+        assert!(!captured.contains("pseudo_body"));
         assert!(!captured.contains("embedding"));
     }
 
@@ -175,6 +185,7 @@ mod tests {
                 fused_count: Some(2),
                 template_quality: Some(0.86),
                 template_mature: Some(true),
+                pseudo_body: Some(true),
             }),
         };
         let json = serde_json::to_string(&object).expect("目标序列化应成功");
@@ -183,6 +194,7 @@ mod tests {
         assert!(json.contains("\"fused_count\":2"));
         assert!(json.contains("\"template_quality\":0.86"));
         assert!(json.contains("\"template_mature\":true"));
+        assert!(json.contains("\"pseudo_body\":true"));
     }
 
     #[test]

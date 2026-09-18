@@ -38,7 +38,13 @@ pub struct RawFace {
     pub bbox: [f32; 4],
     /// 5 个关键点坐标，归一化到 [0, 1]
     pub landmarks: [[f32; 2]; NUM_LANDMARKS],
-    /// 5 个关键点置信度（sigmoid 后）
+    /// 关键点位置的置信度代理量。
+    ///
+    /// 交付的 SCRFD 模型只输出 10 通道关键点偏移、没有关键点分数分支，因此解码时
+    /// 填的是**检测置信度**（见 [`decode_scrfd_face`]）。后果：下游质量模块的
+    /// `blur = 1 - 关键点置信度均值` 实际退化为 `1 - 检测置信度`，`quality_max_blur`
+    /// 等价于一条检测分下限（与 `min_score` 权重叠加，检测分在综合分里被计两次）。
+    /// 若后续改用真实清晰度度量（如图像梯度），需同步重新标定现场阈值。
     pub landmark_scores: [f32; NUM_LANDMARKS],
     /// 检测置信度
     pub score: f32,
@@ -476,6 +482,7 @@ pub fn decode_scrfd_face(
                     all_faces.push(RawFace {
                         bbox: [x1, y1, w, h],
                         landmarks,
+                        // SCRFD 无关键点分数分支：用检测置信度作代理，语义见字段文档。
                         landmark_scores: [score; NUM_LANDMARKS],
                         score,
                     });

@@ -1,6 +1,8 @@
 use algo_sdk::env::PackageEnv;
 use serde::Deserialize;
 
+use crate::best_shot::DEFAULT_FUSION_MIN_QUALITY_SCORE;
+
 const FIELD_DETECTION_CONF: u8 = 1 << 0;
 const FIELD_PERSON_CONF: u8 = 1 << 1;
 const FIELD_MIN_FACE_SIZE: u8 = 1 << 2;
@@ -8,6 +10,7 @@ const FIELD_QUALITY_MIN_SCORE: u8 = 1 << 3;
 const FIELD_QUALITY_MAX_YAW: u8 = 1 << 4;
 const FIELD_QUALITY_MAX_PITCH: u8 = 1 << 5;
 const FIELD_QUALITY_MAX_BLUR: u8 = 1 << 6;
+const FIELD_FUSION_MIN_QUALITY: u8 = 1 << 7;
 
 #[derive(Deserialize, Default)]
 struct RawQualityThresholds {
@@ -40,6 +43,8 @@ struct RawInstanceConfig {
     quality_max_pitch: Option<f32>,
     #[serde(default)]
     quality_max_blur: Option<f32>,
+    #[serde(default)]
+    fusion_min_quality_score: Option<f32>,
 }
 
 /// 人脸识别算法实例配置。
@@ -49,6 +54,14 @@ pub struct InstanceConfig {
     pub person_confidence_threshold: f32,
     pub min_face_size: u32,
     pub quality_thresholds: QualityThresholds,
+
+    /// 触发人脸特征提取（EdgeFace 前向）的最低质量分。
+    ///
+    /// 与 [`QualityThresholds::min_score`]（人脸是否进入身份链路的准入线）相互独立：
+    /// 两者之间的人脸会输出检测框与质量分，但不消耗 NPU 提取特征。现场若为了
+    /// 得到更多比对结果而放宽 `quality_min_score`，必须同步下调本项，否则两类
+    /// 阈值的差集会被静默丢弃（只有检测结果，没有特征向量）。
+    pub fusion_min_quality_score: f32,
 
     /// 记录宿主任务配置显式下发的参数位掩码（用于执行三级优先级隔离）
     explicit_fields: u8,
@@ -63,6 +76,7 @@ impl Default for InstanceConfig {
             person_confidence_threshold: 0.4,
             min_face_size: 60,
             quality_thresholds: QualityThresholds::default(),
+            fusion_min_quality_score: DEFAULT_FUSION_MIN_QUALITY_SCORE,
             explicit_fields: 0,
         }
     }
@@ -125,6 +139,12 @@ impl<'de> Deserialize<'de> for InstanceConfig {
             raw.quality_max_blur.or(nested.max_blur),
             &mut config.quality_thresholds.max_blur,
         );
+        set_f32(
+            &mut explicit,
+            FIELD_FUSION_MIN_QUALITY,
+            raw.fusion_min_quality_score,
+            &mut config.fusion_min_quality_score,
+        );
 
         config.explicit_fields = explicit;
         Ok(config)
@@ -182,6 +202,11 @@ impl InstanceConfig {
             "quality_max_blur",
             &mut self.quality_thresholds.max_blur,
         );
+        apply_f32(
+            FIELD_FUSION_MIN_QUALITY,
+            "fusion_min_quality_score",
+            &mut self.fusion_min_quality_score,
+        );
     }
 
     /// 校验来自 ABI 配置 JSON 的数值范围。
@@ -198,6 +223,11 @@ impl InstanceConfig {
         }
         if self.min_face_size == 0 {
             return Err("min_face_size 必须大于 0".to_string());
+        }
+        if !self.fusion_min_quality_score.is_finite()
+            || !(0.0..=1.0).contains(&self.fusion_min_quality_score)
+        {
+            return Err("fusion_min_quality_score 必须位于 [0, 1]".to_string());
         }
         self.quality_thresholds.validate()
     }
@@ -272,6 +302,7 @@ mod tests {
         assert_eq!(config.quality_thresholds.max_yaw, 25.0);
         assert_eq!(config.quality_thresholds.max_pitch, 30.0);
         assert_eq!(config.quality_thresholds.max_blur, 0.7);
+        assert_eq!(config.fusion_min_quality_score, 0.50);
         assert!(config.validate().is_ok());
     }
 
@@ -284,7 +315,8 @@ mod tests {
             "quality_min_score": 0.55,
             "quality_max_yaw": 30.0,
             "quality_max_pitch": 20.0,
-            "quality_max_blur": 0.6
+            "quality_max_blur": 0.6,
+            "fusion_min_quality_score": 0.25
         }"#;
 
         let config: InstanceConfig = serde_json::from_str(json).expect("解析扁平配置应当成功");
@@ -295,7 +327,22 @@ mod tests {
         assert_eq!(config.quality_thresholds.max_yaw, 30.0);
         assert_eq!(config.quality_thresholds.max_pitch, 20.0);
         assert_eq!(config.quality_thresholds.max_blur, 0.6);
+        assert_eq!(config.fusion_min_quality_score, 0.25);
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_out_of_range_fusion_min_quality() {
+        let too_large = InstanceConfig {
+            fusion_min_quality_score: 1.5,
+            ..InstanceConfig::default()
+        };
+        assert!(too_large.validate().is_err());
+        let not_a_number = InstanceConfig {
+            fusion_min_quality_score: f32::NAN,
+            ..InstanceConfig::default()
+        };
+        assert!(not_a_number.validate().is_err());
     }
 
     #[test]
@@ -348,6 +395,7 @@ mod tests {
             "quality_max_yaw",
             "quality_max_pitch",
             "quality_max_blur",
+            "fusion_min_quality_score",
         ] {
             let prop = properties
                 .get(key)
@@ -388,6 +436,10 @@ mod tests {
         );
         assert_eq!(from_schema.min_face_size, runtime.min_face_size);
         assert_eq!(from_schema.quality_thresholds, runtime.quality_thresholds);
+        assert_eq!(
+            from_schema.fusion_min_quality_score,
+            runtime.fusion_min_quality_score
+        );
     }
 
     #[test]
@@ -419,6 +471,7 @@ mod tests {
             PERSON_CONFIDENCE_THRESHOLD = 0.20
             MIN_FACE_SIZE = 50
             QUALITY_MIN_SCORE = 0.60
+            FUSION_MIN_QUALITY_SCORE = 0.22
             "#,
         );
 
@@ -429,5 +482,22 @@ mod tests {
         assert_eq!(config.min_face_size, 50);
         assert_eq!(config.quality_thresholds.min_score, 0.60);
         assert_eq!(config.quality_thresholds.max_yaw, 25.0);
+        assert_eq!(config.fusion_min_quality_score, 0.22);
+    }
+
+    /// `.env` 可放宽融合门限（现场调参路径），但不得覆盖宿主显式下发值。
+    #[test]
+    fn env_relaxes_fusion_gate_but_never_shadows_host_value() {
+        let env = PackageEnv::parse_str("FUSION_MIN_QUALITY_SCORE = 0.2");
+
+        let mut from_default = InstanceConfig::default();
+        from_default.apply_env(&env);
+        assert_eq!(from_default.fusion_min_quality_score, 0.2);
+
+        let mut host_configured: InstanceConfig =
+            serde_json::from_str(r#"{"fusion_min_quality_score": 0.75}"#)
+                .expect("解析宿主配置应当成功");
+        host_configured.apply_env(&env);
+        assert_eq!(host_configured.fusion_min_quality_score, 0.75);
     }
 }

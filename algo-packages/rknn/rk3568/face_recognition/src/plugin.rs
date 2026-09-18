@@ -160,6 +160,8 @@ impl AlgoPlugin for FaceRecognizer {
                     template_mature: embedding_sidecar
                         .as_ref()
                         .and_then(|sidecar| sidecar.template_mature),
+                    // 合成躯干底部会贴到画面下沿，宿主空间规则需能区分它与真实人体框。
+                    pseudo_body: candidate.is_pseudo_body.then_some(true),
                 })
             } else {
                 None
@@ -197,6 +199,8 @@ impl AlgoPlugin for FaceRecognizer {
 impl FaceRecognizer {
     /// 低频 best-shot 链路：质量门控 → 帧池采样 → 时域融合 → sidecar 编码。
     ///
+    /// 两道独立门控：`quality_thresholds.min_score` 决定人脸是否进入身份链路；
+    /// `fusion_min_quality_score` 决定本帧是否值得花一次 EdgeFace 前向（默认更高）。
     /// 质量不足或尚未到重试窗口时返回 `None`，不触碰特征提取；模板成熟但本帧没有
     /// 新 embedding 时，也可以只发射一次 `template_mature` 握手。
     fn best_shot_sidecar(
@@ -210,18 +214,23 @@ impl FaceRecognizer {
             return Ok(None);
         }
         let frame_id = frame.frame_id() as usize;
-        if self
-            .best_shots
-            .should_update_best_shot(track_id, quality, frame_id)
-        {
+        if self.best_shots.should_update_best_shot(
+            track_id,
+            quality,
+            self.config.fusion_min_quality_score,
+            frame_id,
+        ) {
             // ROI 裁切失败与设备侧推理失败共用同一退避重试路径。
             let extract = || -> Result<[f32; 512], AlgoError> {
                 let aligned = extract_aligned_face(frame, face)?;
-                crate::align::dump_debug_aligned_face(
-                    &format!("live_track{track_id}"),
-                    &aligned,
-                    quality.score,
-                );
+                // 先判开关再拼装 tag：落盘关闭时不得在常驻采样路径上做字符串分配。
+                if crate::align::debug_dump_enabled() {
+                    crate::align::dump_debug_aligned_face(
+                        &format!("live_track{track_id}"),
+                        &aligned,
+                        quality.score,
+                    );
+                }
                 self.models.worker.embed_host(aligned)
             };
             match extract() {
@@ -730,5 +739,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ROI 几何预算必须按**进程共享池**核算，而不是按单个分辨率核算。
+    ///
+    /// `RgaCvEngine` 全进程仅缓存 16 种输出规格且永不淘汰。单个分辨率贡献 4 个共享档位
+    /// 加 1 个整帧退化档位，而退化档与帧尺寸绑定，因此并集随部署分辨率种类线性增长。
+    /// 本测试把典型多分辨率部署的并集钉在上限内，防止新增档位或改动退化策略时静默击穿
+    /// 预算（击穿后 `cv::crop_rgb` 永久失败，整包特征提取链路失效）。
+    #[test]
+    fn snapshot_roi_geometry_union_stays_within_process_budget() {
+        /// 并集上限：进程 16 槽需为 letterbox（640×384）与其它算法包预留余量。
+        /// 本测试四种分辨率的实测并集为 9 种几何。
+        const ROI_GEOMETRY_BUDGET: usize = 10;
+        let resolutions = [(640u32, 360u32), (704, 576), (1280, 720), (1920, 1080)];
+        let mut union = std::collections::BTreeSet::new();
+        for (width, height) in resolutions {
+            // 几何在像素访问之前就已决定（仅依赖帧尺寸与采样域），RGB24 足以枚举；
+            // YUV 的偶数对齐在外层逐分辨率档位测试中已覆盖。
+            let frame = MockFrameBuilder::new()
+                .dimensions(width, height)
+                .host_data(synthetic_rgb(width, height))
+                .build();
+            let safe = frame.as_safe_frame();
+            let mut own = std::collections::BTreeSet::new();
+            // 横扫采样域尺度（从极小脸到远超最高档位）与两个画面位置，遍历可达几何。
+            for step in 0..96 {
+                let eye_span = 8.0 + (2.0 * width.max(height) as f32 - 8.0) * step as f32 / 95.0;
+                for anchor in [0.2f32, 0.75] {
+                    let landmarks = landmarks_with_eye_span(
+                        width as f32 * anchor,
+                        height as f32 * anchor,
+                        eye_span,
+                    );
+                    let rect = face_snapshot_rect(&safe, &landmarks).expect("ROI 计算失败");
+                    own.insert((rect.width, rect.height));
+                }
+            }
+            // 饱和校验：扫描必须真的走到「采样域超出最高档位」的退化分支，否则并集
+            // 只是被扫少了，预算断言会失去意义。
+            assert!(
+                own.contains(&(width, height)),
+                "{width}x{height} 帧的扫描未能覆盖整帧退化档位：{own:?}"
+            );
+            union.extend(own);
+        }
+        for tier in SNAPSHOT_ROI_TIERS {
+            assert!(union.contains(&(tier, tier)), "并集必须包含共享档位 {tier}");
+        }
+        assert!(
+            union.len() <= ROI_GEOMETRY_BUDGET,
+            "多分辨率部署的 ROI 几何并集 {} 种超过预算 {}：{union:?}；\
+             预算被击穿后 cv::crop_rgb 会永久失败，需改用与分辨率解耦的退化策略",
+            union.len(),
+            ROI_GEOMETRY_BUDGET
+        );
     }
 }
