@@ -289,7 +289,8 @@ pub fn normalize_illumination_inplace(rgb: &mut [u8]) {
     }
 
     let mut luma_sum = 0u64;
-    for px in rgb.chunks_exact(3) {
+    let (pixels, _) = rgb.as_chunks::<3>();
+    for px in pixels {
         let y = 77 * px[0] as u32 + 150 * px[1] as u32 + 29 * px[2] as u32;
         luma_sum += (y >> 8) as u64;
     }
@@ -476,7 +477,8 @@ mod tests {
         let width = 4u32;
         let height = 4u32;
         let mut image = vec![0u8; (width * height * 3) as usize];
-        for (i, px) in image.chunks_exact_mut(3).enumerate() {
+        let (pixels, _) = image.as_chunks_mut::<3>();
+        for (i, px) in pixels.iter_mut().enumerate() {
             let val = (i * 15).min(255) as u8;
             px[0] = val;
             px[1] = val;
