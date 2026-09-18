@@ -35,6 +35,8 @@
     "refresh": "刷新",
     "filter": "筛选",
     "search": "搜索",
+    "clear": "清空",
+    "clearSearch": "清空搜索",
     "save": "保存",
     "add": "添加",
     "delete": "删除",

@@ -11,6 +11,7 @@
   "actions": {
     "register": "录入新人员",
     "searchPlaceholder": "输入姓名、工号或证件号搜索...",
+    "clearSearch": "清空搜索",
     "viewDetails": "查看档案 / 样本",
     "editInfo": "编辑档案",
     "delete": "删除人员",

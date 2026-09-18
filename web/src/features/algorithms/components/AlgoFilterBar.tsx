@@ -1,5 +1,5 @@
 import React from 'react'
-import { RefreshCw, Search, Upload } from 'lucide-react'
+import { RefreshCw, Search, Upload, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 export interface AlgoFilterBarProps {
@@ -31,19 +31,30 @@ export const AlgoFilterBar: React.FC<AlgoFilterBarProps> = ({
     <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border)] p-3">
       {/* 搜索与过滤 */}
       <div className="flex flex-1 flex-wrap items-center gap-2.5">
-        <div className="relative min-w-[240px] flex-1 sm:max-w-xs">
-          <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+        <div className="group/search relative min-w-[240px] flex-1 sm:max-w-xs">
+          <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]" />
           <input
             type="text"
             data-search-input="true"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder={t('filter.searchPlaceholder')}
-            className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-8 pl-9 text-xs text-[var(--text-primary)] transition-all placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-hidden"
+            className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-8 pl-9 text-xs text-[var(--text-primary)] backdrop-blur-md transition-all placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface)] focus:shadow-[0_0_16px_rgba(var(--accent-rgb),0.12)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-hidden"
           />
-          <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-muted)] sm:inline-block">
-            /
-          </kbd>
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => onSearchChange('')}
+              className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)]"
+              title={t('filter.clearSearch')}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
+              /
+            </kbd>
+          )}
         </div>
 
         {/* 算法类型筛选下拉框 */}

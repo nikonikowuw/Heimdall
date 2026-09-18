@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Download, ExternalLink, Maximize2, X } from 'lucide-react'
+import { motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '../../../hooks/use-dismiss-stack'
+import { motionTokens } from '@/lib/motionTokens'
+import { useImageZoomPan } from '../hooks/useImageZoomPan'
+import { ZoomControls } from './ZoomControls'
 import {
   calculateFittedImageRect,
   deriveDownloadFilename,
@@ -44,6 +48,7 @@ export function ImagePreviewModal({
   onClose,
 }: ImagePreviewModalProps): React.ReactElement | null {
   const { t } = useTranslation('alarm')
+  const shouldReduce = useReducedMotion()
 
   // 设定优先级 20，确保在复核弹窗等其他 Modal 之上优先响应 ESC 退出
   useDismissStack(true, onClose, { priority: 20 })
@@ -57,16 +62,23 @@ export function ImagePreviewModal({
   const [imgRect, setImgRect] = useState<FittedImageRect | null>(null)
   const targetBBoxes = parseTargetBBoxes(bboxJson ?? undefined)
 
+  // 缩放平移交互由统一 Hook 接管
+  const { zoom, zoomIn, zoomOut, resetZoom, dragProps, containerCursorClass, transformStyle } =
+    useImageZoomPan(imageContainerRef)
+
   const updateImageRect = useCallback(() => {
+    const img = imageRef.current
     const container = imageContainerRef.current
-    const image = imageRef.current
-    if (!container || !image || !image.naturalWidth || !image.naturalHeight) return
+    if (!img || !container) return
+    const naturalWidth = img.naturalWidth
+    const naturalHeight = img.naturalHeight
+    if (!naturalWidth || !naturalHeight) return
     setImgRect(
       calculateFittedImageRect(
         container.clientWidth,
         container.clientHeight,
-        image.naturalWidth,
-        image.naturalHeight,
+        naturalWidth,
+        naturalHeight,
       ),
     )
   }, [])
@@ -97,13 +109,27 @@ export function ImagePreviewModal({
   if (typeof document === 'undefined') return null
 
   return createPortal(
-    <div
-      className="animate-in fade-in fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/90 p-4 backdrop-blur-md duration-150"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{
+        duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
+        ease: motionTokens.easing.smooth,
+      }}
+      className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/90 p-4 backdrop-blur-md select-none"
       onClick={onClose}
     >
       {/* 浮动工具栏 */}
-      <div
-        className="absolute top-4 right-4 left-4 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/60 px-4 py-3 backdrop-blur-xl"
+      <motion.div
+        initial={{ y: shouldReduce ? 0 : -12, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: shouldReduce ? 0 : -12, opacity: 0 }}
+        transition={{
+          duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
+          ease: motionTokens.easing.smooth,
+        }}
+        className="absolute top-4 right-4 left-4 z-50 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/70 px-4 py-3 shadow-xl backdrop-blur-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex min-w-0 items-center gap-2.5">
@@ -117,11 +143,23 @@ export function ImagePreviewModal({
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {/* 缩放工具控制 */}
+          <div className="mr-2">
+            <ZoomControls
+              zoom={zoom}
+              onZoomIn={zoomIn}
+              onZoomOut={zoomOut}
+              onResetZoom={resetZoom}
+              t={t}
+            />
+          </div>
+
           <button
             type="button"
             onClick={handleDownload}
             className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-zinc-300 transition-all hover:bg-white/15 hover:text-white"
             title={`${t('modal.download')} (${downloadFilename})`}
+            aria-label={t('modal.download')}
           >
             <Download className="h-3.5 w-3.5" />
           </button>
@@ -131,6 +169,7 @@ export function ImagePreviewModal({
             rel="noreferrer"
             className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-zinc-300 transition-all hover:bg-white/15 hover:text-white"
             title={t('modal.openOriginal')}
+            aria-label={t('modal.openOriginal')}
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
@@ -139,50 +178,63 @@ export function ImagePreviewModal({
             onClick={onClose}
             className="rounded-xl border border-white/10 bg-white/5 p-1.5 text-zinc-400 transition-all hover:bg-rose-500/20 hover:text-rose-400"
             title={`${t('modal.close')} (Esc)`}
+            aria-label="Close"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
-      </div>
+      </motion.div>
 
-      {/* 居中大图 */}
+      {/* 居中大图与联动缩放区域 */}
       <div
         ref={imageContainerRef}
-        className="relative flex max-h-[82vh] max-w-[90vw] items-center justify-center overflow-hidden rounded-2xl shadow-2xl"
+        {...dragProps}
+        className={`relative flex max-h-[82vh] max-w-[90vw] items-center justify-center overflow-hidden rounded-2xl shadow-2xl ${containerCursorClass}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <img
-          ref={imageRef}
-          src={src}
-          alt={alt}
-          className="max-h-[82vh] max-w-[90vw] rounded-2xl border border-white/15 object-contain shadow-2xl transition-transform duration-200"
-          onLoad={updateImageRect}
-        />
-        {imgRect && targetBBoxes?.body && (
-          <div
-            className="pointer-events-none absolute border-2 border-cyan-400 bg-cyan-400/10 shadow-[0_0_12px_rgba(6,182,212,0.5)]"
-            style={getBBoxStyle(targetBBoxes.body, imgRect)}
+        <div
+          className="relative flex items-center justify-center will-change-transform"
+          style={transformStyle}
+        >
+          <img
+            ref={imageRef}
+            src={src}
+            alt={alt}
+            draggable={false}
+            className="max-h-[82vh] max-w-[90vw] rounded-2xl border border-white/15 object-contain shadow-2xl select-none"
+            onLoad={updateImageRect}
           />
-        )}
-        {imgRect && targetBBoxes?.face && (
-          <div
-            className="pointer-events-none absolute border-2 border-dashed border-purple-400 bg-purple-500/15 shadow-[0_0_12px_rgba(168,85,247,0.5)]"
-            style={getBBoxStyle(targetBBoxes.face.bbox, imgRect)}
-          >
-            <span className="absolute -top-4 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-xs">
-              {targetBBoxes.face.qualityScore !== undefined
-                ? `${t('card.face')} ${(targetBBoxes.face.qualityScore * 100).toFixed(0)}%`
-                : t('card.face')}
-            </span>
-          </div>
-        )}
+          {imgRect && targetBBoxes?.body && (
+            <div
+              className="pointer-events-none absolute border-2 border-cyan-400 bg-cyan-400/10 shadow-[0_0_12px_rgba(6,182,212,0.5)]"
+              style={getBBoxStyle(targetBBoxes.body, imgRect)}
+            >
+              <span className="py-0.2 absolute -top-4 left-0 rounded bg-cyan-500 px-1 font-mono text-[8px] font-bold text-white shadow-xs">
+                BODY
+              </span>
+            </div>
+          )}
+          {imgRect && targetBBoxes?.face?.bbox && (
+            <div
+              className="pointer-events-none absolute border-2 border-dashed border-purple-400 bg-purple-500/15 shadow-[0_0_12px_rgba(168,85,247,0.5)]"
+              style={getBBoxStyle(targetBBoxes.face.bbox, imgRect)}
+            >
+              <span className="absolute -top-4 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold text-white shadow-xs">
+                FACE{' '}
+                {targetBBoxes.face.confidence !== undefined
+                  ? `${(targetBBoxes.face.confidence * 100).toFixed(0)}%`
+                  : ''}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* 底部按键提示 */}
-      <div className="absolute bottom-3 text-center text-[10px] text-zinc-500 select-none">
-        {t('modal.escHint')}
+      {/* 底部轻量提示 */}
+      <div className="pointer-events-none absolute bottom-4 left-1/2 z-50 -translate-x-1/2 font-mono text-[11px] text-zinc-500">
+        {t('modal.escHint')} · {t('modal.zoomHint')}
       </div>
-    </div>,
+    </motion.div>,
     document.body,
   )
 }

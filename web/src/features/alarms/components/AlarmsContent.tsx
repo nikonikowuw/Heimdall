@@ -1,5 +1,5 @@
 import React from 'react'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, RotateCcw, Search } from 'lucide-react'
 import type { AlarmRecord } from '../../../types'
 import { AlarmCardItem } from './AlarmCardItem'
 import { AlarmTableRow } from './AlarmTableRow'
@@ -12,6 +12,10 @@ export interface AlarmsContentProps {
   viewMode: ViewMode
   cameraNameMap?: Record<string, string>
   selectedAlarmIds: Set<number>
+  hasActiveFilters?: boolean
+  searchQuery?: string
+  onResetFilters?: () => void
+  onClearSearch?: () => void
   onToggleSelectAlarm: (id: number, selected: boolean) => void
   onToggleSelectAll: (selected: boolean) => void
   onSelect: (alarm: AlarmRecord) => void
@@ -26,6 +30,10 @@ export function AlarmsContent({
   viewMode,
   cameraNameMap,
   selectedAlarmIds,
+  hasActiveFilters = false,
+  searchQuery,
+  onResetFilters,
+  onClearSearch,
   onToggleSelectAlarm,
   onToggleSelectAll,
   onSelect,
@@ -34,11 +42,42 @@ export function AlarmsContent({
   t,
 }: AlarmsContentProps): React.ReactElement {
   if (alarms.length === 0) {
+    if (searchQuery && searchQuery.trim()) {
+      return (
+        <div className="flex flex-col items-center justify-center py-20 text-center text-[var(--text-muted)]">
+          <Search className="mb-3 h-10 w-10 text-[var(--text-muted)] opacity-40" />
+          <p className="font-semibold text-[var(--text-secondary)]">
+            {t('search.noMatch', { query: searchQuery.trim() })}
+          </p>
+          {onClearSearch && (
+            <button
+              type="button"
+              onClick={onClearSearch}
+              className="mt-4 flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-1.5 text-xs font-medium text-[var(--accent)] shadow-xs transition-all hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/20"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>{t('search.clearQuery')}</span>
+            </button>
+          )}
+        </div>
+      )
+    }
+
     return (
-      <div className="py-24 text-center text-[var(--text-muted)]">
-        <AlertCircle className="mx-auto mb-2 h-8 w-8 opacity-40" />
-        <p className="font-medium text-[var(--text-secondary)]">{t('empty.alarms')}</p>
-        <p className="text-xs opacity-75">{t('empty.alarmsDesc')}</p>
+      <div className="flex flex-col items-center justify-center py-20 text-center text-[var(--text-muted)]">
+        <AlertCircle className="mb-3 h-10 w-10 text-[var(--text-muted)] opacity-40" />
+        <p className="font-semibold text-[var(--text-secondary)]">{t('empty.alarms')}</p>
+        <p className="mt-1 max-w-sm text-xs opacity-75">{t('empty.alarmsDesc')}</p>
+        {hasActiveFilters && onResetFilters && (
+          <button
+            type="button"
+            onClick={onResetFilters}
+            className="mt-4 flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-1.5 text-xs font-medium text-[var(--accent)] shadow-xs transition-all hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/20"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            <span>{t('empty.resetFilter')}</span>
+          </button>
+        )}
       </div>
     )
   }
@@ -76,10 +115,10 @@ export function AlarmsContent({
               alarm={alarm}
               cameraName={cameraNameMap?.[alarm.cameraId]}
               isSelected={selectedAlarmIds.has(alarm.id)}
-              onToggleSelect={(selected) => onToggleSelectAlarm(alarm.id, selected)}
-              onSelect={() => onSelect(alarm)}
-              onSelectCrop={() => onSelectCrop(alarm)}
-              onToggleStatus={() => onToggleStatus(alarm)}
+              onToggleSelect={onToggleSelectAlarm}
+              onSelect={onSelect}
+              onSelectCrop={onSelectCrop}
+              onToggleStatus={onToggleStatus}
               t={t}
             />
           ))}
@@ -89,9 +128,9 @@ export function AlarmsContent({
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+    <div className="w-full overflow-x-auto">
       <table className="w-full text-left text-xs text-[var(--text-secondary)]">
-        <thead className="border-b border-[var(--border)] bg-[var(--bg-secondary)] text-[11px] font-semibold text-[var(--text-muted)] uppercase">
+        <thead className="sticky top-0 z-10 border-b border-[var(--border)]/70 bg-[var(--bg-secondary)]/80 text-[11px] font-semibold tracking-wider text-[var(--text-muted)] uppercase backdrop-blur-md">
           <tr>
             <th className="w-8 px-3 py-2.5">
               <input
@@ -124,10 +163,10 @@ export function AlarmsContent({
               alarm={alarm}
               cameraName={cameraNameMap?.[alarm.cameraId]}
               isSelected={selectedAlarmIds.has(alarm.id)}
-              onToggleSelect={(selected) => onToggleSelectAlarm(alarm.id, selected)}
-              onSelect={() => onSelect(alarm)}
-              onSelectCrop={() => onSelectCrop(alarm)}
-              onToggleStatus={() => onToggleStatus(alarm)}
+              onToggleSelect={onToggleSelectAlarm}
+              onSelect={onSelect}
+              onSelectCrop={onSelectCrop}
+              onToggleStatus={onToggleStatus}
               t={t}
             />
           ))}

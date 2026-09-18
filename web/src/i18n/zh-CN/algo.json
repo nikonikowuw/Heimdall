@@ -10,6 +10,7 @@
   },
   "filter": {
     "searchPlaceholder": "按算法 ID 或名称搜索...",
+    "clearSearch": "清空搜索",
     "typeAll": "全部算法类型",
     "typeDetection": "目标检测",
     "typeFace": "人脸识别",

@@ -74,6 +74,7 @@
     "probeFailed": "探活失敗",
     "probeFailedDesc": "RTSP 連線超時或鑑權失敗，請檢查網路連通性與串流位址",
     "searchPlaceholder": "按設備名稱、ID 或 RTSP 位址搜尋...",
+    "clearSearch": "清空搜尋",
     "filterAll": "全部狀態",
     "aiTaskBound": "已配置布防任務",
     "aiTaskUnbound": "未分配 AI 任務",

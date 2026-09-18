@@ -10,6 +10,7 @@
   },
   "filter": {
     "searchPlaceholder": "Search by algorithm ID or name...",
+    "clearSearch": "Clear search",
     "typeAll": "All Types",
     "typeDetection": "Object Detection",
     "typeFace": "Face Recognition",

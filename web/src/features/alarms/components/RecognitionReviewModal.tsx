@@ -1,12 +1,30 @@
 import React, { useState } from 'react'
-import { Check, Users, X, ZoomIn } from 'lucide-react'
+import {
+  Award,
+  Camera,
+  Check,
+  CheckCircle2,
+  Clock,
+  ExternalLink,
+  Image as ImageIcon,
+  Sparkles,
+  User,
+  Users,
+  X,
+  ZoomIn,
+} from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useDismissStack } from '../../../hooks/use-dismiss-stack'
 import { evidenceApi } from '../../../lib/api'
+import { motionTokens } from '@/lib/motionTokens'
 import type { FaceCandidateItem, RecognitionRecord } from '../../../types'
-import { formatCosineSimilarityPercent } from '@/lib/similarity'
+import {
+  formatCosineSimilarityPercent,
+  getCosineSimilarityLevel,
+  normalizeCosineSimilarity,
+} from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
-import { RecognitionEvidencePreview } from './RecognitionEvidencePreview'
 
 export interface RecognitionReviewModalProps {
   recognition: RecognitionRecord
@@ -17,64 +35,92 @@ export interface RecognitionReviewModalProps {
     status: 'confirmed' | 'rejected',
     candidate?: FaceCandidateItem,
   ) => void
-  t: (key: string) => string
+  t: (key: string, options?: Record<string, unknown>) => string
 }
 
-interface ReviewPreviewThumbProps {
+interface MiniAvatarProps {
   src?: string | null
   alt: string
   label?: string
-  className: string
-  title?: string
+  className?: string
+  onZoom?: () => void
+  viewHdText: string
   noImageText: string
-  onPreview?: () => void
 }
 
-function ReviewPreviewThumb({
+function MiniAvatar({
   src,
   alt,
   label,
-  className,
-  title,
+  className = 'aspect-square w-full',
+  onZoom,
+  viewHdText,
   noImageText,
-  onPreview,
-}: ReviewPreviewThumbProps): React.ReactElement {
+}: MiniAvatarProps): React.ReactElement {
+  const [hasError, setHasError] = useState(false)
+  const isClickable = Boolean(src && !hasError && onZoom)
+
   return (
-    <div className="flex flex-col items-center gap-1">
+    <div className="flex w-full flex-col items-center gap-1.5">
+      {label && (
+        <span className="text-[10px] font-medium tracking-wider text-[var(--text-muted)]">
+          {label}
+        </span>
+      )}
       <div
-        onClick={src ? onPreview : undefined}
-        className={`group/img relative overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs ${className} ${
-          src ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md' : ''
+        onClick={isClickable ? onZoom : undefined}
+        className={`group/avatar relative overflow-hidden rounded-2xl border border-[var(--border)] bg-black/90 shadow-xs transition-all duration-200 ${className} ${
+          isClickable
+            ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md active:scale-98'
+            : ''
         }`}
-        title={src ? title : undefined}
+        title={isClickable ? viewHdText : undefined}
       >
-        {src ? (
+        {src && !hasError ? (
           <>
             <img
               src={evidenceApi.getImageUrl(src)}
               alt={alt}
-              className="h-full w-full object-cover transition-transform duration-200 group-hover/img:scale-105"
+              loading="lazy"
+              decoding="async"
+              onError={() => setHasError(true)}
+              className="h-full w-full object-cover transition-transform duration-300 group-hover/avatar:scale-105"
             />
-            <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/img:opacity-100">
-              <ZoomIn className="h-4 w-4 text-white" />
+            <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/avatar:opacity-100">
+              <span className="flex items-center gap-1 rounded-xl border border-white/20 bg-black/70 px-2 py-1 text-[10px] font-medium text-white shadow-lg backdrop-blur-md">
+                <ZoomIn className="h-3 w-3" />
+                <span>{viewHdText}</span>
+              </span>
             </div>
           </>
         ) : (
-          <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
-            {noImageText}
+          <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-slate-500">
+            <User className="h-6 w-6 opacity-30" />
+            <span className="text-[10px] opacity-60">{noImageText}</span>
           </div>
         )}
       </div>
-      {label && <span className="text-[10px] text-[var(--text-muted)]">{label}</span>}
     </div>
   )
 }
 
-const STATUS_LABEL_KEYS: Record<string, string> = {
-  confirmed: 'card.statusConfirmed',
-  rejected: 'card.statusRejected',
-  pending_review: 'card.statusPendingReview',
-}
+const STATUS_CONFIG = {
+  confirmed: {
+    chipClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500',
+    dotClass: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]',
+    labelKey: 'card.statusConfirmed',
+  },
+  pending_review: {
+    chipClass: 'border-amber-500/30 bg-amber-500/10 text-amber-500',
+    dotClass: 'bg-amber-500 animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.6)]',
+    labelKey: 'card.statusPendingReview',
+  },
+  rejected: {
+    chipClass: 'border-rose-500/30 bg-rose-500/10 text-rose-400',
+    dotClass: 'bg-rose-500/80',
+    labelKey: 'card.statusRejected',
+  },
+} as const
 
 export function RecognitionReviewModal({
   recognition,
@@ -83,10 +129,9 @@ export function RecognitionReviewModal({
   onReview,
   t,
 }: RecognitionReviewModalProps): React.ReactElement {
+  const shouldReduce = useReducedMotion()
   const candidates = recognition.candidates || []
-  const registeredPhotoRel = recognition.registeredPhotoPath || candidates[0]?.photoRelPath || ''
-  const fieldImagePath = recognition.fieldImagePath
-  const [compareCandidate, setCompareCandidate] = useState<FaceCandidateItem | null>(
+  const [selectedCandidate, setSelectedCandidate] = useState<FaceCandidateItem | null>(
     () => candidates[0] || null,
   )
   const [previewImage, setPreviewImage] = useState<{
@@ -99,54 +144,204 @@ export function RecognitionReviewModal({
   // 浮层按栈响应 ESC，杜绝穿透
   useDismissStack(true, onClose)
 
+  const activeCandidate = selectedCandidate || candidates[0]
+  const activeSimilarity = activeCandidate?.similarity ?? recognition.similarity
+  const simPct = formatCosineSimilarityPercent(activeSimilarity, 0)
+  const activeLevel = getCosineSimilarityLevel(activeSimilarity)
+  const fieldImagePath = recognition.fieldImagePath
+
+  const statusConfig =
+    STATUS_CONFIG[recognition.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.pending_review
+
+  // 动态高光色阶 (基于归一化百分比层级判定)
+  const activeSimClass =
+    activeLevel === 'high'
+      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
+      : activeLevel === 'medium'
+        ? 'border-amber-500/40 bg-amber-500/10 text-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
+        : 'border-rose-500/40 bg-rose-500/10 text-rose-400 shadow-[0_0_12px_rgba(244,63,94,0.15)]'
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{
+        duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
+        ease: motionTokens.easing.smooth,
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md select-none sm:p-6"
       onClick={onClose}
     >
-      <div
-        className="relative flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-2xl"
+      <motion.div
+        initial={{ opacity: 0, scale: shouldReduce ? 1 : 0.97, y: shouldReduce ? 0 : 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: shouldReduce ? 1 : 0.97, y: shouldReduce ? 0 : 8 }}
+        transition={{
+          duration: shouldReduce ? 0.1 : motionTokens.duration.normal,
+          ease: motionTokens.easing.smooth,
+        }}
+        className="frosted-glass relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-[var(--border)]/80 bg-[var(--bg-surface)]/90 shadow-2xl backdrop-blur-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <Users className="h-5 w-5 text-[var(--accent)]" />
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-              {t('card.reviewTitle')}
-            </h3>
-            <span className="font-mono text-xs text-[var(--text-muted)]">
-              {recognition.recognitionId}
-            </span>
+        {/* 顶部高光反射线 */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+
+        {/* 顶部综合 HUD 信息栏 */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)]/60 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs">
+              <Users className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
+                  {t('card.reviewTitle')}
+                </h3>
+                <span className="rounded-md border border-[var(--border)]/60 bg-[var(--bg-secondary)]/50 px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+                  ID: {recognition.recognitionId}
+                </span>
+              </div>
+              <p className="text-[11px] text-[var(--text-muted)]">{t('card.sortedBySimilarity')}</p>
+            </div>
           </div>
-          <button
-            onClick={onClose}
-            aria-label={t('card.cancel')}
-            className="rounded-xl p-1.5 text-[var(--text-muted)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
-          >
-            <X className="h-5 w-5" />
-          </button>
+
+          <div className="flex items-center gap-2.5">
+            {/* 状态指示 */}
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10px] font-semibold tracking-wide shadow-2xs backdrop-blur-xs ${statusConfig.chipClass}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${statusConfig.dotClass}`} />
+              {t(statusConfig.labelKey)}
+            </span>
+
+            {/* 通道点位胶囊 */}
+            <div
+              className="hidden items-center gap-1.5 rounded-full border border-[var(--border)]/60 bg-[var(--bg-secondary)]/40 px-2.5 py-1 text-xs text-[var(--text-secondary)] backdrop-blur-xs sm:flex"
+              title={cameraName || recognition.cameraId}
+            >
+              <Camera className="h-3 w-3 text-[var(--text-muted)]" />
+              <span className="max-w-[130px] truncate font-medium">
+                {cameraName || recognition.cameraId}
+              </span>
+            </div>
+
+            {/* 抓拍时间 */}
+            <div className="hidden items-center gap-1 font-mono text-[11px] text-[var(--text-muted)] tabular-nums md:flex">
+              <Clock className="h-3 w-3 opacity-60" />
+              <span>{formatTimestamp(recognition.recognizedAt)}</span>
+            </div>
+
+            {/* 关闭按钮 */}
+            <button
+              onClick={onClose}
+              aria-label={t('card.cancel')}
+              className="rounded-xl border border-[var(--border)]/80 bg-[var(--bg-surface)]/80 p-1.5 text-[var(--text-muted)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-auto p-6">
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-            {/* 左侧：现场全景、特写与底库样本 */}
-            <div className="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-base)] p-4">
-              <span className="text-xs font-semibold text-[var(--text-secondary)]">
-                {t('card.siteEvidence')}
-              </span>
+        {/* 内容区：左侧实时对比基准舱 VS 右侧 Top-5 候选池 */}
+        <div className="flex-1 overflow-y-auto p-5 sm:p-6">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            {/* 左侧：实时双头像镜面对比舱 (占 5 列) */}
+            <div className="flex flex-col justify-between gap-4 rounded-2xl border border-[var(--border)]/60 bg-[var(--bg-primary)]/40 p-4.5 shadow-inner backdrop-blur-md lg:col-span-5">
+              <div>
+                <div className="flex items-center justify-between pb-3">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold tracking-tight text-[var(--text-primary)]">
+                    <Sparkles className="h-3.5 w-3.5 text-[var(--accent)]" />
+                    <span>{t('card.compareBenchmark')}</span>
+                  </span>
+                  <span className="font-mono text-[11px] text-[var(--text-muted)]">
+                    1 : 1 Live Verify
+                  </span>
+                </div>
+
+                {/* 双头像对比舞台 */}
+                <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-2xl border border-[var(--border)]/40 bg-[var(--bg-surface)]/50 p-3.5 shadow-xs backdrop-blur-xs">
+                  {/* 左像：现场抓拍特写 */}
+                  <MiniAvatar
+                    src={recognition.fieldCropPath}
+                    alt={t('card.siteCrop')}
+                    label={t('card.fieldCapture')}
+                    viewHdText={t('card.viewHd')}
+                    noImageText={t('card.noImage')}
+                    onZoom={() => {
+                      if (recognition.fieldCropPath) {
+                        setPreviewImage({
+                          src: evidenceApi.getImageUrl(recognition.fieldCropPath),
+                          title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
+                          subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
+                        })
+                      }
+                    }}
+                  />
+
+                  {/* 中间：实时相似度指示仪表 */}
+                  <div className="flex flex-col items-center justify-center gap-1.5 px-0.5">
+                    <span className="font-mono text-[9px] font-bold tracking-widest text-[var(--text-muted)] uppercase">
+                      {t('card.match')}
+                    </span>
+                    <div
+                      className={`flex h-12 w-12 flex-col items-center justify-center rounded-2xl border font-mono backdrop-blur-md transition-transform duration-300 ${activeSimClass}`}
+                    >
+                      <span className="text-xs font-bold tracking-tight">{simPct}</span>
+                    </div>
+                    <span className="text-[9px] font-medium text-[var(--text-muted)]">
+                      {activeCandidate?.rank ? `#${activeCandidate.rank}` : '#1'}
+                    </span>
+                  </div>
+
+                  {/* 右像：当前比对候选人照片 */}
+                  <MiniAvatar
+                    src={activeCandidate?.photoRelPath || recognition.registeredPhotoPath}
+                    alt={activeCandidate?.subjectName || t('card.registeredPhoto')}
+                    label={t('card.archivePhoto')}
+                    viewHdText={t('card.viewHd')}
+                    noImageText={t('card.noImage')}
+                    onZoom={() => {
+                      const p = activeCandidate?.photoRelPath || recognition.registeredPhotoPath
+                      if (p) {
+                        setPreviewImage({
+                          src: evidenceApi.getImageUrl(p),
+                          title: `${t('card.registeredPhoto')}: ${activeCandidate?.subjectName || recognition.subjectName}`,
+                          subtitle: `ID: ${activeCandidate?.subjectId || recognition.subjectId || '-'}`,
+                        })
+                      }
+                    }}
+                  />
+                </div>
+
+                {/* 候选目标身份摘要卡 */}
+                <div className="mt-3.5 space-y-2 rounded-xl border border-[var(--border)]/40 bg-[var(--bg-surface)]/40 p-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">{t('columns.subject')}:</span>
+                    <span className="font-semibold text-[var(--text-primary)]">
+                      {activeCandidate?.subjectName ||
+                        recognition.subjectName ||
+                        t('card.unknownSubject')}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">ID:</span>
+                    <span className="font-mono text-[var(--text-secondary)]">
+                      {activeCandidate?.subjectId || recognition.subjectId || '-'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">{t('card.similarity')}:</span>
+                    <span className="font-mono font-bold text-emerald-500">{simPct}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 现场全景背景按需查看 (不占大面积，一键预览) */}
               {fieldImagePath && (
-                <RecognitionEvidencePreview
-                  src={evidenceApi.getImageUrl(fieldImagePath)}
-                  bboxJson={recognition.fieldBboxJson}
-                  alt={t('card.sitePanorama')}
-                  label={t('card.sitePanorama')}
-                  faceLabel={t('card.face')}
-                  className="aspect-video w-full"
-                  title={t('card.viewHd')}
-                  noImageText={t('card.noImage')}
-                  onPreview={() => {
+                <button
+                  type="button"
+                  onClick={() => {
                     setPreviewImage({
                       src: evidenceApi.getImageUrl(fieldImagePath),
                       bboxJson: recognition.fieldBboxJson,
@@ -154,161 +349,75 @@ export function RecognitionReviewModal({
                       subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
                     })
                   }}
-                />
+                  className="flex w-full items-center justify-between rounded-xl border border-[var(--border)]/70 bg-[var(--bg-surface)]/60 p-2.5 text-xs text-[var(--text-secondary)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/30 hover:text-[var(--accent)] active:scale-98"
+                >
+                  <span className="flex items-center gap-2">
+                    <ImageIcon className="h-4 w-4 text-[var(--accent)]" />
+                    <span className="font-medium text-[var(--text-primary)]">
+                      {t('card.sitePanorama')}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--accent)]">
+                    <span>{t('card.viewHd')}</span>
+                    <ExternalLink className="h-3 w-3" />
+                  </span>
+                </button>
               )}
-              <div className="grid grid-cols-2 gap-2">
-                <ReviewPreviewThumb
-                  src={recognition.fieldCropPath}
-                  alt={t('card.siteCrop')}
-                  label={t('card.siteCrop')}
-                  className="aspect-square w-full"
-                  title={t('card.viewHd')}
-                  noImageText={t('card.noImage')}
-                  onPreview={() => {
-                    if (recognition.fieldCropPath) {
-                      setPreviewImage({
-                        src: evidenceApi.getImageUrl(recognition.fieldCropPath),
-                        title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
-                        subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
-                      })
-                    }
-                  }}
-                />
-                <ReviewPreviewThumb
-                  src={registeredPhotoRel}
-                  alt={t('card.registeredPhoto')}
-                  label={t('card.registeredPhoto')}
-                  className="aspect-square w-full"
-                  title={t('card.viewHd')}
-                  noImageText={t('card.noImage')}
-                  onPreview={() => {
-                    if (registeredPhotoRel) {
-                      setPreviewImage({
-                        src: evidenceApi.getImageUrl(registeredPhotoRel),
-                        title: `${t('card.registeredPhoto')}: ${recognition.subjectName || '底库样本'}`,
-                        subtitle: `ID: ${recognition.subjectId || '-'}`,
-                      })
-                    }
-                  }}
-                />
-              </div>
-              <div className="space-y-1.5 pt-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-[var(--text-muted)]">{t('modal.channel')}:</span>
-                  <span
-                    className="max-w-[200px] truncate font-medium text-[var(--text-primary)]"
-                    title={cameraName || recognition.cameraId}
-                  >
-                    {cameraName || recognition.cameraId}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[var(--text-muted)]">{t('modal.time')}:</span>
-                  <span className="font-mono text-[var(--text-primary)]">
-                    {formatTimestamp(recognition.recognizedAt)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[var(--text-muted)]">{t('card.currentStatus')}:</span>
-                  <span className="font-semibold text-amber-500">
-                    {t(STATUS_LABEL_KEYS[recognition.status] || 'card.statusPendingReview')}
-                  </span>
-                </div>
-              </div>
             </div>
 
-            {/* 右侧：对比视图与 Top-5 候选人列表 */}
-            <div className="flex flex-col gap-3 md:col-span-2">
-              {/* 侧并侧对比视图 (点击候选人时展开) */}
-              {compareCandidate && (
-                <div className="flex flex-col gap-2 rounded-2xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-[var(--accent)]">
-                      {t('card.compareView')}
-                    </span>
-                    <button
-                      onClick={() => setCompareCandidate(null)}
-                      className="rounded-lg p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-center gap-6">
-                    <ReviewPreviewThumb
-                      src={recognition.fieldCropPath}
-                      alt={t('card.siteCrop')}
-                      label={t('card.siteCrop')}
-                      className="h-32 w-32"
-                      title={t('card.viewHd')}
-                      noImageText={t('card.noImage')}
-                      onPreview={() => {
-                        if (recognition.fieldCropPath) {
-                          setPreviewImage({
-                            src: evidenceApi.getImageUrl(recognition.fieldCropPath),
-                            title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
-                            subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
-                          })
-                        }
-                      }}
-                    />
-                    <div className="flex flex-col items-center gap-1.5">
-                      <ReviewPreviewThumb
-                        src={compareCandidate.photoRelPath}
-                        alt={compareCandidate.subjectName}
-                        label={compareCandidate.subjectName}
-                        className="h-32 w-32"
-                        title={t('card.viewHd')}
-                        noImageText={t('card.noImage')}
-                        onPreview={() => {
-                          if (compareCandidate.photoRelPath) {
-                            setPreviewImage({
-                              src: evidenceApi.getImageUrl(compareCandidate.photoRelPath),
-                              title: `${t('card.candidateList')}: ${compareCandidate.subjectName}`,
-                              subtitle: `ID: ${compareCandidate.subjectId} · ${t('card.similarity')}: ${formatCosineSimilarityPercent(compareCandidate.similarity)}`,
-                            })
-                          }
-                        }}
-                      />
-                      <span className="font-mono text-[10px] font-bold text-emerald-500">
-                        {formatCosineSimilarityPercent(compareCandidate.similarity)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
+            {/* 右侧：Top-5 相似度候选人池 (占 7 列) */}
+            <div className="flex flex-col gap-3 lg:col-span-7">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[var(--text-secondary)]">
-                  {t('card.candidateList')} ({candidates.length})
+                <span className="text-xs font-semibold tracking-tight text-[var(--text-secondary)]">
+                  {t('card.candidatePool')} ({candidates.length})
                 </span>
-                <span className="text-[10px] text-[var(--text-muted)]">
+                <span className="text-[11px] text-[var(--text-muted)]">
                   {t('card.sortedBySimilarity')}
                 </span>
               </div>
 
               {candidates.length === 0 ? (
-                <div className="flex h-48 flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--border)] text-xs text-[var(--text-muted)]">
-                  <Users className="mb-2 h-6 w-6 opacity-40" />
+                <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--border)] p-6 text-center text-xs text-[var(--text-muted)]">
+                  <Users className="mb-2 h-8 w-8 opacity-30" />
                   <span>{t('card.noCandidates')}</span>
                 </div>
               ) : (
                 <div className="space-y-2.5">
                   {candidates.map((cand, idx) => {
-                    const scorePct = formatCosineSimilarityPercent(cand.similarity)
-                    const isComparing = compareCandidate?.faceId === cand.faceId
+                    const scorePct = formatCosineSimilarityPercent(cand.similarity, 0)
+                    const isSelected = activeCandidate?.faceId === cand.faceId
+                    const isTop1 = idx === 0
+                    const candLevel = getCosineSimilarityLevel(cand.similarity)
+                    const simRatio = Math.max(
+                      0,
+                      Math.min(100, normalizeCosineSimilarity(cand.similarity ?? 0) * 100),
+                    )
+
                     return (
                       <div
                         key={cand.faceId || idx}
-                        onClick={() => setCompareCandidate(isComparing ? null : cand)}
-                        className={`flex cursor-pointer items-center justify-between gap-3 rounded-2xl border bg-[var(--bg-base)] p-3 transition-all ${
-                          isComparing
-                            ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]/20'
-                            : 'border-[var(--border)] hover:border-[var(--accent)]'
+                        onClick={() => setSelectedCandidate(cand)}
+                        className={`group/cand relative flex cursor-pointer items-center justify-between gap-3.5 rounded-2xl border p-3 shadow-xs backdrop-blur-md transition-all duration-200 ${
+                          isSelected
+                            ? 'border-[var(--accent)] bg-[var(--accent-soft)]/20 shadow-md ring-1 ring-[var(--accent)]/30'
+                            : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/50 hover:border-[var(--accent)]/50 hover:bg-[var(--bg-surface)]'
                         }`}
                       >
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] font-mono text-xs font-bold text-[var(--accent)]">
-                            #{cand.rank || idx + 1}
-                          </span>
+                        <div className="flex min-w-0 items-center gap-3">
+                          {/* 排名勋章 */}
+                          <div className="flex shrink-0 flex-col items-center justify-center">
+                            {isTop1 ? (
+                              <span className="flex h-7 w-7 items-center justify-center rounded-xl border border-amber-500/40 bg-gradient-to-br from-amber-500/20 to-emerald-500/20 font-mono text-xs font-bold text-amber-500 shadow-xs">
+                                <Award className="h-4 w-4" />
+                              </span>
+                            ) : (
+                              <span className="flex h-7 w-7 items-center justify-center rounded-xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/50 font-mono text-xs font-semibold text-[var(--text-muted)]">
+                                #{cand.rank || idx + 1}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* 候选人头像 */}
                           <div
                             onClick={(e) => {
                               e.stopPropagation()
@@ -320,10 +429,8 @@ export function RecognitionReviewModal({
                                 })
                               }
                             }}
-                            className={`group/cand relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-black ${
-                              cand.photoRelPath
-                                ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md'
-                                : ''
+                            className={`group/thumb relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs ${
+                              cand.photoRelPath ? 'cursor-pointer hover:border-[var(--accent)]' : ''
                             }`}
                             title={cand.photoRelPath ? t('card.viewHd') : undefined}
                           >
@@ -332,9 +439,11 @@ export function RecognitionReviewModal({
                                 <img
                                   src={evidenceApi.getImageUrl(cand.photoRelPath)}
                                   alt={cand.subjectName}
-                                  className="h-full w-full object-cover transition-transform duration-200 group-hover/cand:scale-105"
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="h-full w-full object-cover transition-transform duration-200 group-hover/thumb:scale-105"
                                 />
-                                <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/cand:opacity-100">
+                                <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
                                   <ZoomIn className="h-3 w-3 text-white" />
                                 </div>
                               </>
@@ -344,38 +453,65 @@ export function RecognitionReviewModal({
                               </div>
                             )}
                           </div>
-                          <div>
-                            <div className="text-xs font-semibold text-[var(--text-primary)]">
-                              {cand.subjectName}
+
+                          {/* 身份与置信度进度条 */}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-xs font-semibold text-[var(--text-primary)]">
+                                {cand.subjectName}
+                              </span>
+                              {isTop1 && (
+                                <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-500">
+                                  {t('card.topMatchBadge')}
+                                </span>
+                              )}
                             </div>
-                            <div className="font-mono text-[10px] text-[var(--text-muted)]">
+                            <div className="mt-0.5 font-mono text-[10px] text-[var(--text-muted)]">
                               ID: {cand.subjectId}
+                            </div>
+                            {/* 置信度条 */}
+                            <div className="mt-1.5 flex items-center gap-2">
+                              <div className="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--bg-secondary)] sm:w-28">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-300 ${
+                                    candLevel === 'high'
+                                      ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                                      : candLevel === 'medium'
+                                        ? 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                                        : 'bg-gradient-to-r from-rose-500 to-orange-400'
+                                  }`}
+                                  style={{ width: `${simRatio}%` }}
+                                />
+                              </div>
+                              <span
+                                className={`font-mono text-[10px] font-bold ${
+                                  candLevel === 'high'
+                                    ? 'text-emerald-500'
+                                    : candLevel === 'medium'
+                                      ? 'text-amber-500'
+                                      : 'text-rose-400'
+                                }`}
+                              >
+                                {scorePct}
+                              </span>
                             </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center gap-3">
-                            <div className="flex flex-col items-end">
-                              <span className="font-mono text-xs font-bold text-emerald-500">
-                                {scorePct}
-                              </span>
-                              <span className="text-[9px] text-[var(--text-muted)]">
-                                {t('card.similarity')}
-                              </span>
-                            </div>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                onReview(recognition, 'confirmed', cand)
-                              }}
-                              className="flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-500 transition-colors hover:bg-emerald-500 hover:text-white"
-                              title={t('card.confirmCandidate')}
-                            >
-                              <Check className="h-3.5 w-3.5" />
-                              <span>{t('card.confirmCandidate')}</span>
-                            </button>
-                          </div>
+                        {/* 确认为此人操作按钮 */}
+                        <div className="shrink-0 pl-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onReview(recognition, 'confirmed', cand)
+                            }}
+                            className="flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-500 shadow-2xs backdrop-blur-xs transition-all hover:border-emerald-500 hover:bg-emerald-500 hover:text-white hover:shadow-emerald-500/20 active:scale-95"
+                            title={t('card.confirmCandidate')}
+                          >
+                            <Check className="h-3.5 w-3.5 stroke-[2.5]" />
+                            <span className="hidden sm:inline">{t('card.adoptCandidate')}</span>
+                          </button>
                         </div>
                       </div>
                     )
@@ -386,47 +522,56 @@ export function RecognitionReviewModal({
           </div>
         </div>
 
-        {/* Footer Actions */}
-        <div className="flex items-center justify-between border-t border-[var(--border)] bg-[var(--bg-secondary)]/50 px-6 py-4">
-          <button
+        {/* 底部决策控制坞 (Decision Dock) */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)]/60 bg-[var(--bg-secondary)]/40 px-6 py-4 backdrop-blur-xl">
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.96 }}
             onClick={() => onReview(recognition, 'rejected')}
-            className="flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs font-medium text-rose-500 transition-colors hover:bg-rose-500 hover:text-white"
+            className="flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs font-semibold text-rose-500 shadow-2xs backdrop-blur-xs transition-all hover:border-rose-500 hover:bg-rose-500 hover:text-white hover:shadow-rose-500/20"
           >
-            <X className="h-4 w-4" />
+            <X className="h-4 w-4 stroke-[2.5]" />
             <span>{t('card.rejectMatch')}</span>
-          </button>
-          <div className="flex items-center gap-2">
+          </motion.button>
+
+          <div className="flex items-center gap-2.5">
             <button
+              type="button"
               onClick={onClose}
-              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
+              className="rounded-xl border border-[var(--border)]/80 bg-[var(--bg-surface)]/80 px-4 py-2 text-xs font-medium text-[var(--text-secondary)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--accent)] hover:text-[var(--accent)] active:scale-95"
             >
               {t('card.cancel')}
             </button>
-            {candidates[0] && (
-              <button
-                onClick={() => onReview(recognition, 'confirmed', candidates[0])}
-                className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-medium text-white shadow-sm transition-colors hover:bg-emerald-500"
+
+            {activeCandidate && (
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.96 }}
+                onClick={() => onReview(recognition, 'confirmed', activeCandidate)}
+                className="flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-600 px-4.5 py-2 text-xs font-semibold text-white shadow-md shadow-emerald-600/20 transition-all hover:bg-emerald-500"
               >
-                <Check className="h-4 w-4" />
+                <CheckCircle2 className="h-4 w-4 stroke-[2.5]" />
                 <span>
-                  {t('card.passTop1')} ({candidates[0].subjectName})
+                  {t('card.confirmCandidate')} ({activeCandidate.subjectName})
                 </span>
-              </button>
+              </motion.button>
             )}
           </div>
         </div>
-      </div>
+      </motion.div>
 
       {/* 高清图片大图全屏预览灯箱 */}
-      {previewImage && (
-        <ImagePreviewModal
-          src={previewImage.src}
-          title={previewImage.title}
-          subtitle={previewImage.subtitle}
-          bboxJson={previewImage.bboxJson}
-          onClose={() => setPreviewImage(null)}
-        />
-      )}
-    </div>
+      <AnimatePresence>
+        {previewImage && (
+          <ImagePreviewModal
+            src={previewImage.src}
+            title={previewImage.title}
+            subtitle={previewImage.subtitle}
+            bboxJson={previewImage.bboxJson}
+            onClose={() => setPreviewImage(null)}
+          />
+        )}
+      </AnimatePresence>
+    </motion.div>
   )
 }

@@ -35,6 +35,8 @@
     "refresh": "重新整理",
     "filter": "篩選",
     "search": "搜尋",
+    "clear": "清空",
+    "clearSearch": "清空搜尋",
     "save": "儲存",
     "add": "新增",
     "delete": "刪除",

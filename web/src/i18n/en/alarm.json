@@ -1,7 +1,15 @@
 {
   "title": "Real-time & Historical Alarm Center",
   "subtitleSuffix": "1080P/4K End-to-End Atomic Evidence Pipeline",
-  "searchPlaceholder": "Search event ID / target class...",
+  "search": {
+    "placeholderRecognition": "Search by name, ID, or camera... (/ to focus)",
+    "placeholderAlarms": "Search by event ID, class, or camera... (/ to focus)",
+    "placeholderCaptures": "Search by capture ID, class, or camera... (/ to focus)",
+    "clear": "Clear search",
+    "noMatch": "No records found matching \"{{query}}\"",
+    "clearQuery": "Clear search",
+    "pageFiltered": "Matched {{count}} on this page"
+  },
   "columns": {
     "thumbnail": "Evidence",
     "eventId": "Event ID",
@@ -14,7 +22,14 @@
     "status": "Status",
     "occurredAt": "Triggered At",
     "evidence": "Evidence Snapshot",
-    "actions": "Actions"
+    "actions": "Actions",
+    "dualAvatars": "Comparison",
+    "fieldCapture": "Field Face",
+    "archivePhoto": "Gallery Face",
+    "subject": "Identity",
+    "similarity": "Similarity",
+    "sitePanorama": "Panorama",
+    "review": "Review"
   },
   "types": {
     "lineCrossing": "Tripwire Crossing (Line)",
@@ -22,9 +37,9 @@
   },
   "viewImage": "View Image",
   "tabs": {
+    "recognition": "Face/Plate Match",
     "alarms": "Violations (Alarms)",
-    "captures": "Track Captures",
-    "recognition": "Face/Plate Match"
+    "captures": "Track Captures"
   },
   "views": {
     "cards": "Card View",
@@ -83,10 +98,19 @@
     "allSeverities": "All Severities",
     "severityWarning": "Warning",
     "severityCritical": "Critical",
+    "allRuleTypes": "All Rules",
+    "ruleRoi": "Region Intrusion (ROI)",
+    "ruleLine": "Line Crossing (Line)",
+    "reset": "Reset Filters",
     "quickAll": "All Time",
     "past1Hour": "Past 1h",
     "past24Hours": "Past 24h",
     "past7Days": "Past 7d"
+  },
+  "sound": {
+    "toggleAlert": "Audible Alert",
+    "enabled": "Sound alert enabled",
+    "disabled": "Sound alert muted"
   },
   "batch": {
     "selected": "{{count}} item(s) selected",
@@ -103,18 +127,24 @@
   "empty": {
     "alarms": "No alarm records found",
     "alarmsDesc": "Channel rules are active and normal; no violations detected",
+    "resetFilter": "Clear All Filters",
     "captures": "No capture records",
     "recognitions": "No recognition records",
     "recognitionsDesc": "Gallery matching results will appear here"
   },
   "card": {
     "noImage": "No Image",
+    "selectAlarm": "Select alarm {{id}}",
     "target": "Target",
     "confidence": "Confidence",
     "viewHd": "View HD",
     "siteCrop": "Site Crop",
     "sitePanorama": "Site Panorama",
     "siteEvidence": "Site Evidence",
+    "viewPanorama": "Site Scene",
+    "fieldCapture": "Field Crop",
+    "archivePhoto": "Archive",
+    "unknownSubject": "Unknown Target",
     "face": "Face",
     "match": "MATCH",
     "similarity": "Similarity",
@@ -131,6 +161,10 @@
     "candidateList": "Candidate List",
     "confirmCandidate": "Confirm Selection",
     "rejectMatch": "Mark as Stranger",
+    "topMatchBadge": "Top Match",
+    "adoptCandidate": "Adopt Identity",
+    "compareBenchmark": "Ground Truth",
+    "candidatePool": "Gallery Candidates",
     "currentStatus": "Current Status",
     "sortedBySimilarity": "Sorted by Similarity (High to Low)",
     "compareView": "Side-by-Side Comparison",
@@ -156,6 +190,18 @@
     "time": "Time",
     "download": "Download Image",
     "openOriginal": "Open in New Tab",
+    "enterFullscreen": "Fullscreen (F)",
+    "exitFullscreen": "Exit Fullscreen (F)",
+    "fullscreenShort": "Fullscreen (F)",
+    "toggleStatusShort": "Toggle Status (Space)",
+    "clickToZoom": "Click to zoom",
+    "zoomHint": "Wheel or double click to zoom & pan",
+    "zoomIn": "Zoom In",
+    "zoomOut": "Zoom Out",
+    "zoomReset": "Reset Zoom (100%)",
+    "pipTitle": "Site Target Crop",
+    "pipExpand": "Expand Crop",
+    "pipCollapse": "Collapse Crop",
     "close": "Close",
     "escHint": "Press Esc or click outside to close"
   },

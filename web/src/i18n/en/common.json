@@ -35,6 +35,8 @@
     "refresh": "Refresh",
     "filter": "Filter",
     "search": "Search",
+    "clear": "Clear",
+    "clearSearch": "Clear search",
     "save": "Save",
     "add": "Add",
     "delete": "Delete",

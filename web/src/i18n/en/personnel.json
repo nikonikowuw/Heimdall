@@ -11,6 +11,7 @@
   "actions": {
     "register": "Register Person",
     "searchPlaceholder": "Search by name, ID or card number...",
+    "clearSearch": "Clear search",
     "viewDetails": "View Profile / Faces",
     "editInfo": "Edit Info",
     "delete": "Delete Person",

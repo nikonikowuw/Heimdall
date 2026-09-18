@@ -1,22 +1,21 @@
-import React from 'react'
-import { Clock, ExternalLink } from 'lucide-react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { Check, CheckCircle2, Clock, ExternalLink } from 'lucide-react'
 import { evidenceApi } from '../../../lib/api'
 import type { AlarmRecord } from '../../../types'
 import { formatTimestamp, getRuleTypeLabel, preloadImage } from '../utils'
-import { AlarmStatusButton } from './AlarmStatusButton'
 
 export interface AlarmCardItemProps {
   alarm: AlarmRecord
   cameraName?: string
   isSelected?: boolean
-  onToggleSelect?: (selected: boolean) => void
-  onSelect: () => void
-  onSelectCrop: () => void
-  onToggleStatus: () => void
-  t: (key: string) => string
+  onToggleSelect?: (id: number, selected: boolean) => void
+  onSelect: (alarm: AlarmRecord) => void
+  onSelectCrop: (alarm: AlarmRecord) => void
+  onToggleStatus: (alarm: AlarmRecord) => void
+  t: (key: string, options?: Record<string, unknown>) => string
 }
 
-export function AlarmCardItem({
+export const AlarmCardItem = React.memo(function AlarmCardItem({
   alarm,
   cameraName,
   isSelected = false,
@@ -27,69 +26,135 @@ export function AlarmCardItem({
   t,
 }: AlarmCardItemProps): React.ReactElement {
   const isProcessed = alarm.status === 'processed'
+  const isCritical = alarm.severity === 'critical'
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [imageLoaded, setImageLoaded] = useState(false)
+  const [imageError, setImageError] = useState(false)
+
+  // 悬停防抖：停顿 200ms 以上才判定为有查看意图，触发全景大图预加载，避免滑动时的网络请求风暴
+  const handlePointerEnter = useCallback(() => {
+    if (!alarm.imageRelPath) return
+    hoverTimerRef.current = setTimeout(() => {
+      preloadImage(evidenceApi.getImageUrl(alarm.imageRelPath))
+    }, 200)
+  }, [alarm.imageRelPath])
+
+  const handlePointerLeave = useCallback(() => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current)
+      hoverTimerRef.current = null
+    }
+  }, [])
+
+  // 组件卸载时确保定时器销毁，防范异步微任务泄露
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current)
+        hoverTimerRef.current = null
+      }
+    }
+  }, [])
+
+  // 键盘操作支持：Enter 打开大图，Space 切换核验状态（严格限制仅卡片自身聚焦响应，防止子控件冒泡冲突）
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget) return
+
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      onSelect(alarm)
+    } else if (e.key === ' ') {
+      e.preventDefault()
+      onToggleStatus(alarm)
+    }
+  }
+
+  const thumbUrl = alarm.cropImageRelPath || alarm.imageRelPath
 
   return (
     <div
-      onClick={onSelect}
-      onPointerEnter={() => preloadImage(evidenceApi.getImageUrl(alarm.imageRelPath))}
-      onTouchStart={() => preloadImage(evidenceApi.getImageUrl(alarm.imageRelPath))}
-      className={`group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-[var(--bg-surface)] shadow-xs transition-all duration-200 hover:shadow-md ${
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(alarm)}
+      onKeyDown={handleKeyDown}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+      className={`group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-[var(--bg-surface)] shadow-xs transition-all duration-200 hover:shadow-md focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none ${
         isSelected
           ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]/50'
           : isProcessed
-            ? 'border-[var(--border)] opacity-75'
-            : 'border-rose-500/30 hover:border-rose-500/70'
+            ? 'border-[var(--border)] opacity-75 hover:opacity-100'
+            : isCritical
+              ? 'border-rose-500/70 shadow-[0_0_12px_rgba(244,63,94,0.25)] hover:border-rose-500'
+              : 'border-amber-500/40 hover:border-amber-500/70'
       }`}
     >
       <div className="relative aspect-video w-full overflow-hidden bg-black/90">
         {/* 多选勾选复选框 */}
         {onToggleSelect && (
-          <div className="absolute top-2 right-2 z-20" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="absolute top-2 right-2 z-20"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
             <input
               type="checkbox"
               checked={isSelected}
-              onChange={(e) => onToggleSelect(e.target.checked)}
+              onChange={(e) => onToggleSelect(alarm.id, e.target.checked)}
               className="h-4 w-4 cursor-pointer rounded border-[var(--border)] bg-black/60 text-[var(--accent)] transition-transform hover:scale-110 focus:ring-1 focus:ring-[var(--accent)]"
-              aria-label={`Select alarm ${alarm.eventId}`}
+              aria-label={t('card.selectAlarm', { id: alarm.eventId })}
             />
           </div>
         )}
 
-        {alarm.cropImageRelPath || alarm.imageRelPath ? (
-          <img
-            src={evidenceApi.getImageUrl(alarm.cropImageRelPath || alarm.imageRelPath)}
-            alt={alarm.eventId}
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          />
+        {/* 缩略图渐进式加载与骨架占位 */}
+        {thumbUrl && !imageError ? (
+          <>
+            {!imageLoaded && (
+              <div className="absolute inset-0 flex animate-pulse items-center justify-center bg-slate-900/60 font-mono text-[10px] text-slate-500">
+                LOADING...
+              </div>
+            )}
+            <img
+              src={evidenceApi.getImageUrl(thumbUrl)}
+              alt={alarm.eventId}
+              loading="lazy"
+              decoding="async"
+              onLoad={() => setImageLoaded(true)}
+              onError={() => setImageError(true)}
+              className={`h-full w-full object-cover transition-all duration-300 group-hover:scale-105 ${
+                imageLoaded ? 'opacity-100' : 'opacity-0'
+              }`}
+            />
+          </>
         ) : (
           <div className="flex h-full w-full items-center justify-center font-mono text-xs text-slate-500">
             {t('card.noImage')}
           </div>
         )}
 
+        {/* 现场特写快速入口 */}
         {alarm.cropImageRelPath && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              onSelectCrop()
+              onSelectCrop(alarm)
             }}
-            className="absolute right-2 bottom-2 z-20 flex items-center gap-1 rounded-lg border border-white/40 bg-black/80 px-2 py-1 text-[10px] font-medium text-white shadow-md backdrop-blur-xs transition-all duration-200 hover:border-white/70 hover:shadow-lg hover:shadow-black/40"
+            className="absolute right-2 bottom-2 z-20 flex items-center gap-1 rounded-lg border border-white/40 bg-black/80 px-2 py-1 text-[10px] font-medium text-white shadow-md backdrop-blur-xs transition-all duration-200 hover:border-white/70 hover:shadow-lg hover:shadow-black/40 focus-visible:ring-1 focus-visible:ring-white"
             title={t('modal.cropImage')}
+            aria-label={t('modal.cropImage')}
           >
             <ExternalLink className="h-3 w-3" />
             <span>{t('card.siteCrop')}</span>
           </button>
         )}
 
+        {/* 左上角严重级别与规则徽章 */}
         <div className="absolute top-2 left-2 flex items-center gap-1.5">
           <span
             className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
-              alarm.severity === 'critical'
-                ? 'bg-rose-500/80 text-white'
-                : 'bg-amber-500/80 text-white'
+              isCritical ? 'animate-pulse bg-rose-500/90 text-white' : 'bg-amber-500/90 text-white'
             }`}
           >
             {alarm.severity || 'WARNING'}
@@ -118,34 +183,44 @@ export function AlarmCardItem({
             {cameraName || alarm.cameraId}
           </span>
           <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3 shrink-0" />
-            {formatTimestamp(alarm.occurredAt)}
+            <Clock className="h-3 w-3 opacity-60" />
+            <span>{formatTimestamp(alarm.occurredAt)}</span>
           </span>
         </div>
 
-        <div className="flex items-center justify-between border-t border-[var(--border)] pt-2">
-          <AlarmStatusButton
-            isProcessed={isProcessed}
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleStatus()
-            }}
-            t={t}
-          />
+        {/* 底部操作与核验状态流转按钮 */}
+        <div className="flex items-center justify-between border-t border-[var(--border)]/60 pt-2.5">
+          <div className="font-mono text-[10px] text-[var(--text-muted)]">
+            ID: {alarm.eventId.slice(0, 8)}
+          </div>
 
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              onSelect()
+              onToggleStatus(alarm)
             }}
-            className="flex items-center gap-1 text-[11px] text-[var(--text-muted)] transition-all hover:text-[var(--text-primary)]"
+            className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all duration-150 focus-visible:ring-1 focus-visible:ring-[var(--accent)] ${
+              isProcessed
+                ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                : 'border border-rose-500/30 bg-rose-500/10 text-rose-500 hover:bg-rose-500/20'
+            }`}
+            aria-label={isProcessed ? t('card.processed') : t('card.markProcessed')}
           >
-            <span>{t('card.viewHd')}</span>
-            <ExternalLink className="h-3 w-3" />
+            {isProcessed ? (
+              <>
+                <CheckCircle2 className="h-3 w-3" />
+                <span>{t('card.processed')}</span>
+              </>
+            ) : (
+              <>
+                <Check className="h-3 w-3" />
+                <span>{t('card.markProcessed')}</span>
+              </>
+            )}
           </button>
         </div>
       </div>
     </div>
   )
-}
+})

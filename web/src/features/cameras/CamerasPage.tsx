@@ -362,8 +362,8 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
       {/* 搜索与过滤筛选栏 */}
       {cameras.length > 0 && (
         <div className="frosted-glass flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 shadow-xs">
-          <div className="flex flex-1 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs">
-            <Search className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+          <div className="group/search relative flex flex-1 items-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/50 px-3 py-1.5 text-xs backdrop-blur-md transition-all focus-within:border-[var(--accent)] focus-within:bg-[var(--bg-surface)] focus-within:shadow-[0_0_16px_rgba(var(--accent-rgb),0.12)] focus-within:ring-2 focus-within:ring-[var(--accent)]/15 hover:border-[var(--border-strong)]">
+            <Search className="mr-2 h-3.5 w-3.5 shrink-0 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]" />
             <input
               type="text"
               data-search-input="true"
@@ -374,9 +374,20 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
               })}
               className="w-full bg-transparent text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
             />
-            <kbd className="hidden rounded border border-[var(--border)] bg-[var(--bg-secondary)] px-1 font-mono text-[10px] text-[var(--text-muted)] sm:inline-block">
-              /
-            </kbd>
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="shrink-0 rounded-md p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)]"
+                title={t('manage.clearSearch')}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <kbd className="hidden shrink-0 rounded border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
+                /
+              </kbd>
+            )}
           </div>
 
           <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">

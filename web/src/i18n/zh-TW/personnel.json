@@ -11,6 +11,7 @@
   "actions": {
     "register": "錄入新人員",
     "searchPlaceholder": "輸入姓名、工號或證件號搜尋...",
+    "clearSearch": "清空搜尋",
     "viewDetails": "查看檔案 / 樣本",
     "editInfo": "編輯檔案",
     "delete": "刪除人員",

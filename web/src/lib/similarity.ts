@@ -29,3 +29,25 @@ export function formatCosineSimilarityPercent(
 
   return `${(normalizeCosineSimilarity(similarity) * 100).toFixed(fractionDigits)}%`
 }
+
+export type SimilarityLevel = 'high' | 'medium' | 'low'
+
+/**
+ * 根据原始余弦相似度在展示层归一化后的分值确定置信度色彩阶:
+ * - high (>= 80%): 高置信度匹配 (翡翠绿)
+ * - medium (60% ~ 80%): 疑似待复核 (暖橙色)
+ * - low (< 60%): 低置信度/不匹配 (警示红)
+ */
+export function getCosineSimilarityLevel(similarity: number | null | undefined): SimilarityLevel {
+  if (similarity == null || !Number.isFinite(similarity)) {
+    return 'low'
+  }
+  const normalized = normalizeCosineSimilarity(similarity)
+  if (normalized >= 0.8) {
+    return 'high'
+  }
+  if (normalized >= 0.6) {
+    return 'medium'
+  }
+  return 'low'
+}

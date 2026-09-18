@@ -10,6 +10,7 @@
   },
   "filter": {
     "searchPlaceholder": "按演算法 ID 或名稱搜尋...",
+    "clearSearch": "清空搜尋",
     "typeAll": "全部演算法類型",
     "typeDetection": "目標檢測",
     "typeFace": "人臉識別",

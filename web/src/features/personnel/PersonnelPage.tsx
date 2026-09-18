@@ -328,8 +328,8 @@ export const PersonnelPage: React.FC = () => {
 
       {/* 搜索与快捷操作栏 */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative max-w-md flex-1">
-          <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+        <div className="group/search relative max-w-md flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within/search:text-emerald-500" />
           <input
             type="text"
             data-search-input="true"
@@ -339,11 +339,25 @@ export const PersonnelPage: React.FC = () => {
               setPage(1)
             }}
             placeholder={t('actions.searchPlaceholder')}
-            className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-9 pl-10 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] shadow-xs focus:border-emerald-500/60 focus:outline-none"
+            className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-9 pl-10 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] shadow-xs backdrop-blur-md transition-all hover:border-[var(--border-strong)] focus:border-emerald-500/80 focus:bg-[var(--bg-surface)] focus:shadow-[0_0_16px_rgba(16,185,129,0.15)] focus:ring-2 focus:ring-emerald-500/20 focus:outline-none"
           />
-          <kbd className="pointer-events-none absolute top-1/2 right-3 hidden -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-muted)] sm:inline-block">
-            /
-          </kbd>
+          {searchKeyword ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchKeyword('')
+                setPage(1)
+              }}
+              className="absolute top-1/2 right-3 -translate-y-1/2 rounded-md p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)]"
+              title={t('actions.clearSearch')}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <kbd className="pointer-events-none absolute top-1/2 right-3 hidden -translate-y-1/2 rounded border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
+              /
+            </kbd>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

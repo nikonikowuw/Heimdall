@@ -1,7 +1,15 @@
 {
   "title": "實時與歷史告警中心",
   "subtitleSuffix": "1080P/4K 全鏈路原子閉環",
-  "searchPlaceholder": "搜尋事件ID / 目標類別...",
+  "search": {
+    "placeholderRecognition": "依目標姓名、編號或通道搜尋... (/ 聚焦)",
+    "placeholderAlarms": "依事件 ID、類別或通道搜尋... (/ 聚焦)",
+    "placeholderCaptures": "依抓拍 ID、類別或通道搜尋... (/ 聚焦)",
+    "clear": "清除搜尋",
+    "noMatch": "未找到與 \"{{query}}\" 相關的記錄",
+    "clearQuery": "清除搜尋",
+    "pageFiltered": "當前頁匹配 {{count}} 條"
+  },
   "columns": {
     "thumbnail": "縮略證據",
     "eventId": "事件 ID",
@@ -14,7 +22,14 @@
     "status": "處理狀態",
     "occurredAt": "觸發時間",
     "evidence": "證據快照",
-    "actions": "操作"
+    "actions": "操作",
+    "dualAvatars": "對賬人像",
+    "fieldCapture": "現場抓拍",
+    "archivePhoto": "底庫樣本",
+    "subject": "目標身份",
+    "similarity": "相似度",
+    "sitePanorama": "現場全景",
+    "review": "核驗"
   },
   "types": {
     "lineCrossing": "絆線越界 (Line)",
@@ -22,9 +37,9 @@
   },
   "viewImage": "查看圖片",
   "tabs": {
+    "recognition": "識別對賬 (Recognition)",
     "alarms": "違規告警 (Alarms)",
-    "captures": "行跡抓拍 (Captures)",
-    "recognition": "識別對賬 (Recognition)"
+    "captures": "軌跡抓拍 (Captures)"
   },
   "views": {
     "cards": "卡片視圖",
@@ -83,10 +98,19 @@
     "allSeverities": "全部等級 (All Severities)",
     "severityWarning": "一般告警 (Warning)",
     "severityCritical": "嚴重告警 (Critical)",
+    "allRuleTypes": "全部規則 (All Rules)",
+    "ruleRoi": "區域入侵 (ROI)",
+    "ruleLine": "絆線越界 (Line)",
+    "reset": "重設篩選",
     "quickAll": "全部時間",
     "past1Hour": "近 1 小時",
     "past24Hours": "近 24 小時",
     "past7Days": "近 7 天"
+  },
+  "sound": {
+    "toggleAlert": "告警提示音",
+    "enabled": "提示音已開啟",
+    "disabled": "提示音已靜音"
   },
   "batch": {
     "selected": "已選擇 {{count}} 項",
@@ -103,18 +127,24 @@
   "empty": {
     "alarms": "暫無違規告警記錄",
     "alarmsDesc": "當前通道規則布防正常，未檢測到違規越界或入侵",
+    "resetFilter": "清空全部篩選條件",
     "captures": "暫無抓拍記錄",
     "recognitions": "暫無識別對賬記錄",
     "recognitionsDesc": "底庫特徵對賬比對結果將在此展示"
   },
   "card": {
     "noImage": "暫無原圖",
+    "selectAlarm": "選擇告警 {{id}}",
     "target": "目標",
     "confidence": "置信度",
     "viewHd": "查看高清",
     "siteCrop": "現場抓拍特寫",
     "sitePanorama": "現場全景",
     "siteEvidence": "現場證據",
+    "viewPanorama": "現場全景",
+    "fieldCapture": "現場抓拍",
+    "archivePhoto": "底庫檔案",
+    "unknownSubject": "未錄入目標",
     "face": "人臉",
     "match": "MATCH",
     "similarity": "特徵相似度",
@@ -131,6 +161,10 @@
     "candidateList": "相似度候選人列表",
     "confirmCandidate": "確認為此人",
     "rejectMatch": "標記為陌生人",
+    "topMatchBadge": "首選推薦",
+    "adoptCandidate": "採納身份",
+    "compareBenchmark": "核驗基準",
+    "candidatePool": "底庫候選匹配",
     "currentStatus": "當前狀態",
     "sortedBySimilarity": "相似度由高至低排列",
     "compareView": "並排對比",
@@ -156,6 +190,18 @@
     "time": "時間",
     "download": "下載圖片",
     "openOriginal": "在新分頁中打開原圖",
+    "enterFullscreen": "全螢幕研判 (F)",
+    "exitFullscreen": "退出全螢幕 (F)",
+    "fullscreenShort": "全螢幕 (F)",
+    "toggleStatusShort": "切換狀態 (Space)",
+    "clickToZoom": "點擊放大",
+    "zoomHint": "滾輪或按兩下縮放平移",
+    "zoomIn": "放大",
+    "zoomOut": "縮小",
+    "zoomReset": "重設縮放 (100%)",
+    "pipTitle": "現場抓拍特寫",
+    "pipExpand": "放大特寫",
+    "pipCollapse": "收起特寫",
     "close": "關閉",
     "escHint": "按 Esc 或點擊外部空白處即可關閉"
   },

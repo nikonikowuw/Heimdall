@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   denormalizeCosineSimilarity,
   formatCosineSimilarityPercent,
+  getCosineSimilarityLevel,
   isCosineThresholdKey,
   normalizeCosineSimilarity,
 } from './similarity'
@@ -28,6 +29,15 @@ describe('cosine similarity display conversion', () => {
     expect(formatCosineSimilarityPercent(0.47047037, 1)).toBe('73.5%')
     expect(formatCosineSimilarityPercent(undefined)).toBe('-')
     expect(formatCosineSimilarityPercent(Number.NaN)).toBe('-')
+  })
+
+  it('determines similarity level correctly based on normalized score', () => {
+    // 0.75 对应 88%，归一化分值 >= 0.8，判定为 high 翡翠绿
+    expect(getCosineSimilarityLevel(0.75)).toBe('high')
+    // 0.5 对应 75%，归一化分值 0.75，判定为 medium 暖橙色
+    expect(getCosineSimilarityLevel(0.5)).toBe('medium')
+    // 0.1 对应 55%，归一化分值 0.55，判定为 low 警示红
+    expect(getCosineSimilarityLevel(0.1)).toBe('low')
   })
 
   it('only treats recognition thresholds as cosine thresholds', () => {

@@ -1,14 +1,20 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Camera as CameraIcon,
-  Filter,
+  ChevronDown,
   LayoutGrid,
   List,
   RefreshCw,
+  RotateCcw,
+  Search,
   ShieldAlert,
   UserCheck,
+  Volume2,
+  VolumeX,
+  X,
 } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { alarmApi, cameraApi, evidenceApi } from '../../lib/api'
 import { wsClient } from '../../lib/wsClient'
@@ -34,9 +40,10 @@ import { DateTimeRangePicker, type DateTimeRangeValue } from './components/DateT
 import { RealtimeAlarmBanner } from './components/RealtimeAlarmBanner'
 import { RecognitionContent } from './components/RecognitionContent'
 import { RecognitionReviewModal } from './components/RecognitionReviewModal'
+import { isAlarmSoundEnabled, playAlarmAlertSound, setAlarmSoundEnabled } from './sound'
 import { resolveEffectiveTimeRange } from './utils'
 
-type EvidenceTab = 'alarms' | 'captures' | 'recognition'
+type EvidenceTab = 'recognition' | 'alarms' | 'captures'
 
 function getInitialTodayRange(): DateTimeRangeValue {
   const todayStart = new Date()
@@ -63,18 +70,23 @@ function matchesTimeRange(timeRange: DateTimeRangeValue, timestamp: number): boo
 
 export function AlarmsPage(): React.ReactElement {
   const { t } = useTranslation('alarm')
-  const [activeTab, setActiveTab] = useState<EvidenceTab>('alarms')
+  const [activeTab, setActiveTab] = useState<EvidenceTab>('recognition')
   const [viewMode, setViewMode] = useState<ViewMode>('cards')
 
   // 基础数据与通道
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selectedCameraId, setSelectedCameraId] = useState<string>('')
   const [selectedTargetLabel, setSelectedTargetLabel] = useState<string>('')
+  const [selectedRuleType, setSelectedRuleType] = useState<string>('all')
   const [selectedSeverity, setSelectedSeverity] = useState<string>('all')
   const [selectedStatus, setSelectedStatus] = useState<string>('all')
+  const [searchQuery, setSearchQuery] = useState<string>('')
 
   // 时间维度筛选 (默认查询当前最新记录 - 今天)
   const [timeRange, setTimeRange] = useState<DateTimeRangeValue>(getInitialTodayRange)
+
+  // 声音告警开关
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(isAlarmSoundEnabled)
 
   // 分页与总数 (支持动态选择每页条数)
   const [page, setPage] = useState<number>(1)
@@ -97,6 +109,10 @@ export function AlarmsPage(): React.ReactElement {
 
   // 实时未读告警通知
   const [unreadRealtimeCount, setUnreadRealtimeCount] = useState<number>(0)
+
+  // 实时事件微批次注入缓冲 (Micro-batch Ingestion Buffer)
+  const pendingAlarmsRef = useRef<AlarmRecord[]>([])
+  const pendingCountRef = useRef<number>(0)
 
   // 界面状态
   const [isLoading, setIsLoading] = useState(false)
@@ -148,9 +164,78 @@ export function AlarmsPage(): React.ReactElement {
     return map
   }, [cameras])
 
+  // 动态汇聚已出现的所有目标标签 (消除硬编码)
+  const distinctTargetLabels = useMemo(() => {
+    const set = new Set<string>()
+    set.add('person')
+    set.add('car')
+    set.add('bicycle')
+    for (const a of alarms) {
+      if (a.targetLabel && a.targetLabel.trim()) set.add(a.targetLabel.trim())
+    }
+    for (const c of captures) {
+      if (c.targetLabel && c.targetLabel.trim()) set.add(c.targetLabel.trim())
+    }
+    return Array.from(set)
+  }, [alarms, captures])
+
+  // 是否存在活跃的非默认过滤条件
+  const hasActiveFilters = Boolean(
+    searchQuery.trim() ||
+    selectedCameraId ||
+    selectedTargetLabel ||
+    (activeTab === 'alarms' && selectedRuleType !== 'all') ||
+    (activeTab === 'alarms' && selectedSeverity !== 'all') ||
+    selectedStatus !== 'all' ||
+    timeRange.quickPreset !== 'today',
+  )
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0
+    if (searchQuery.trim()) count++
+    if (selectedCameraId) count++
+    if (selectedTargetLabel) count++
+    if (activeTab === 'alarms' && selectedRuleType !== 'all') count++
+    if (activeTab === 'alarms' && selectedSeverity !== 'all') count++
+    if (selectedStatus !== 'all') count++
+    if (timeRange.quickPreset !== 'today') count++
+    return count
+  }, [
+    searchQuery,
+    selectedCameraId,
+    selectedTargetLabel,
+    activeTab,
+    selectedRuleType,
+    selectedSeverity,
+    selectedStatus,
+    timeRange.quickPreset,
+  ])
+
+  const handleResetFilters = useCallback(() => {
+    setSearchQuery('')
+    setSelectedCameraId('')
+    setSelectedTargetLabel('')
+    setSelectedRuleType('all')
+    setSelectedSeverity('all')
+    setSelectedStatus('all')
+    setTimeRange(getInitialTodayRange())
+    setPage(1)
+  }, [])
+
+  const handleToggleSound = useCallback(() => {
+    setSoundEnabled((prev) => {
+      const next = !prev
+      setAlarmSoundEnabled(next)
+      return next
+    })
+  }, [])
+
   const handleSwitchTab = (tab: EvidenceTab) => {
     setActiveTab(tab)
     setSelectedStatus('all')
+    setSelectedRuleType('all')
+    pendingAlarmsRef.current = []
+    pendingCountRef.current = 0
     setTotalCount(tabCounts[tab] || 0)
     setPage(1)
   }
@@ -162,6 +247,7 @@ export function AlarmsPage(): React.ReactElement {
     try {
       const camId = selectedCameraId || undefined
       const targetLbl = selectedTargetLabel || undefined
+      const ruleTypeParam = selectedRuleType === 'all' ? undefined : selectedRuleType
       const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
       const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
       const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
@@ -173,6 +259,7 @@ export function AlarmsPage(): React.ReactElement {
             cameraId: camId,
             status: statusParam,
             targetLabel: targetLbl,
+            ruleType: ruleTypeParam,
             severity: severityParam,
             startTime: startMs,
             endTime: endMs,
@@ -183,6 +270,7 @@ export function AlarmsPage(): React.ReactElement {
             cameraId: camId,
             status: statusParam,
             targetLabel: targetLbl,
+            ruleType: ruleTypeParam,
             severity: severityParam,
             startTime: startMs,
             endTime: endMs,
@@ -242,6 +330,7 @@ export function AlarmsPage(): React.ReactElement {
     activeTab,
     selectedCameraId,
     selectedTargetLabel,
+    selectedRuleType,
     selectedSeverity,
     selectedStatus,
     timeRange,
@@ -252,6 +341,29 @@ export function AlarmsPage(): React.ReactElement {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // 微批次推流消费周期 (每 200ms 合并刷入一次，抵御推流风暴)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (pendingAlarmsRef.current.length === 0) return
+      const batch = pendingAlarmsRef.current.splice(0)
+      const countInc = pendingCountRef.current
+      pendingCountRef.current = 0
+
+      if (activeTab === 'alarms') {
+        setAlarms((prev) => {
+          const existingIds = new Set(prev.map((a) => a.id))
+          const newItems = batch.filter((a) => !existingIds.has(a.id))
+          if (newItems.length === 0) return prev
+          return [...newItems, ...prev].slice(0, pageSize)
+        })
+        setTotalCount((c) => c + countInc)
+      }
+      setTabCounts((prev) => ({ ...prev, alarms: prev.alarms + countInc }))
+    }, 200)
+
+    return () => clearInterval(interval)
+  }, [pageSize, activeTab])
 
   // 实时 WebSocket 订阅：新告警触发 & 状态变更
   useEffect(() => {
@@ -271,11 +383,20 @@ export function AlarmsPage(): React.ReactElement {
     }>(WS_TOPICS.ALARM_TRIGGERED, (p) => {
       if (!p) return
 
-      if (activeTab !== 'alarms') return
+      // 发出告警提示音 (若开启)
+      if (soundEnabled) {
+        playAlarmAlertSound()
+      }
 
-      // 若当前在第 1 页且无冲突筛选，平滑 prepend 到列表顶部
+      if (activeTab !== 'alarms') {
+        setTabCounts((prev) => ({ ...prev, alarms: prev.alarms + 1 }))
+        return
+      }
+
+      // 若当前在第 1 页且无冲突筛选，入队批处理微缓冲池
       const matchesCamera = !selectedCameraId || selectedCameraId === p.cameraId
       const matchesTarget = !selectedTargetLabel || selectedTargetLabel === p.targetLabel
+      const matchesRule = selectedRuleType === 'all' || selectedRuleType === p.ruleType
       const matchesSeverity = selectedSeverity === 'all' || selectedSeverity === p.severity
       const matchesStatus = selectedStatus === 'all' || selectedStatus === 'unprocessed'
       const isLiveTime = matchesTimeRange(timeRange, p.occurredAt)
@@ -284,6 +405,7 @@ export function AlarmsPage(): React.ReactElement {
         page === 1 &&
         matchesCamera &&
         matchesTarget &&
+        matchesRule &&
         matchesSeverity &&
         matchesStatus &&
         isLiveTime
@@ -308,12 +430,8 @@ export function AlarmsPage(): React.ReactElement {
           handledAt: null,
           createdAt: Date.now(),
         }
-        setAlarms((prev) => {
-          if (prev.some((a) => a.id === p.id || a.eventId === p.eventId)) return prev
-          return [newRecord, ...prev.slice(0, pageSize - 1)]
-        })
-        setTotalCount((c) => c + 1)
-        setTabCounts((prev) => ({ ...prev, alarms: prev.alarms + 1 }))
+        pendingAlarmsRef.current.push(newRecord)
+        pendingCountRef.current += 1
       } else {
         setUnreadRealtimeCount((c) => c + 1)
         setTabCounts((prev) => ({ ...prev, alarms: prev.alarms + 1 }))
@@ -411,8 +529,10 @@ export function AlarmsPage(): React.ReactElement {
     activeTab,
     selectedCameraId,
     selectedTargetLabel,
+    selectedRuleType,
     selectedSeverity,
     selectedStatus,
+    soundEnabled,
     timeRange,
     page,
     pageSize,
@@ -423,13 +543,14 @@ export function AlarmsPage(): React.ReactElement {
     setPage(1)
   }
 
-  // 显式点击刷新处理：动态重新拉取当前 Tab 记录并全量同步 Tab 徽标统计
+  // 显式点击刷新处理
   const handleRefresh = useCallback(() => {
     void loadData()
 
     const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
     const camId = selectedCameraId || undefined
     const targetLbl = selectedTargetLabel || undefined
+    const ruleTypeParam = selectedRuleType === 'all' ? undefined : selectedRuleType
     const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
     const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
 
@@ -439,6 +560,7 @@ export function AlarmsPage(): React.ReactElement {
           cameraId: camId,
           status: statusParam,
           targetLabel: targetLbl,
+          ruleType: ruleTypeParam,
           severity: severityParam,
           startTime: startMs,
           endTime: endMs,
@@ -467,27 +589,36 @@ export function AlarmsPage(): React.ReactElement {
         recognition: recsCount !== null ? recsCount.total : prev.recognition,
       }))
     })
-  }, [loadData, timeRange, selectedCameraId, selectedTargetLabel, selectedSeverity, selectedStatus])
+  }, [
+    loadData,
+    timeRange,
+    selectedCameraId,
+    selectedTargetLabel,
+    selectedRuleType,
+    selectedSeverity,
+    selectedStatus,
+  ])
 
   // 单条告警状态切换
-  const handleToggleAlarmStatus = async (alarm: AlarmRecord): Promise<void> => {
-    const nextStatus: AlarmStatus = alarm.status === 'processed' ? 'unprocessed' : 'processed'
-    try {
-      const updated = await alarmApi.updateStatus(alarm.id, nextStatus)
-      setAlarms((prev) => prev.map((a) => (a.id === alarm.id ? updated : a)))
-      if (lightboxAlarm && lightboxAlarm.id === alarm.id) {
-        setLightboxAlarm(updated)
+  const handleToggleAlarmStatus = useCallback(
+    async (alarm: AlarmRecord): Promise<void> => {
+      const nextStatus: AlarmStatus = alarm.status === 'processed' ? 'unprocessed' : 'processed'
+      try {
+        const updated = await alarmApi.updateStatus(alarm.id, nextStatus)
+        setAlarms((prev) => prev.map((a) => (a.id === alarm.id ? updated : a)))
+        setLightboxAlarm((prev) => (prev && prev.id === alarm.id ? updated : prev))
+        if (selectedStatus !== 'all') {
+          void loadData()
+        }
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : String(err))
       }
-      if (selectedStatus !== 'all') {
-        loadData()
-      }
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err))
-    }
-  }
+    },
+    [selectedStatus, loadData],
+  )
 
-  // 批量操作处理
-  const handleToggleSelectAlarm = (id: number, selected: boolean): void => {
+  // 批量选择处理
+  const handleToggleSelectAlarm = useCallback((id: number, selected: boolean): void => {
     setSelectedAlarmIds((prev) => {
       const next = new Set(prev)
       if (selected) {
@@ -497,16 +628,18 @@ export function AlarmsPage(): React.ReactElement {
       }
       return next
     })
-  }
+  }, [])
 
-  const handleToggleSelectAll = (selected: boolean): void => {
-    if (selected) {
-      const allIds = new Set(alarms.map((a) => a.id))
-      setSelectedAlarmIds(allIds)
-    } else {
-      setSelectedAlarmIds(new Set())
-    }
-  }
+  const handleToggleSelectAll = useCallback(
+    (selected: boolean): void => {
+      if (selected) {
+        setSelectedAlarmIds(new Set(alarms.map((a) => a.id)))
+      } else {
+        setSelectedAlarmIds(new Set())
+      }
+    },
+    [alarms],
+  )
 
   const handleBatchStatus = async (status: AlarmStatus): Promise<void> => {
     if (selectedAlarmIds.size === 0) return
@@ -518,7 +651,7 @@ export function AlarmsPage(): React.ReactElement {
       setAlarms((prev) => prev.map((a) => updatedMap.get(a.id) || a))
       setSelectedAlarmIds(new Set())
       if (selectedStatus !== 'all') {
-        loadData()
+        void loadData()
       }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err))
@@ -526,6 +659,14 @@ export function AlarmsPage(): React.ReactElement {
       setIsBatchProcessing(false)
     }
   }
+
+  const handleSelectAlarm = useCallback((alarm: AlarmRecord) => {
+    setLightboxAlarm(alarm)
+  }, [])
+
+  const handleSelectCrop = useCallback((alarm: AlarmRecord) => {
+    setCropPreviewAlarm(alarm)
+  }, [])
 
   // 人脸识别复核处理
   const handleReviewRecognition = async (
@@ -553,7 +694,69 @@ export function AlarmsPage(): React.ReactElement {
     }
   }
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+  // 根据搜索关键词进行即时多字段模糊匹配
+  const filteredRecognitions = useMemo(() => {
+    if (!searchQuery.trim()) return recognitions
+    const q = searchQuery.trim().toLowerCase()
+    return recognitions.filter((r) => {
+      const name = (r.subjectName || '').toLowerCase()
+      const subjectId = (r.subjectId || '').toLowerCase()
+      const camId = (r.cameraId || '').toLowerCase()
+      const camName = (cameraNameMap[r.cameraId] || '').toLowerCase()
+      const recId = (r.recognitionId || '').toLowerCase()
+      return (
+        name.includes(q) ||
+        subjectId.includes(q) ||
+        camId.includes(q) ||
+        camName.includes(q) ||
+        recId.includes(q)
+      )
+    })
+  }, [recognitions, searchQuery, cameraNameMap])
+
+  const filteredAlarms = useMemo(() => {
+    if (!searchQuery.trim()) return alarms
+    const q = searchQuery.trim().toLowerCase()
+    return alarms.filter((a) => {
+      const evtId = (a.eventId || '').toLowerCase()
+      const camId = (a.cameraId || '').toLowerCase()
+      const camName = (cameraNameMap[a.cameraId] || '').toLowerCase()
+      const target = (a.targetLabel || '').toLowerCase()
+      const rule = (a.ruleType || '').toLowerCase()
+      const alarmType = (a.alarmTypeId || '').toLowerCase()
+      return (
+        evtId.includes(q) ||
+        camId.includes(q) ||
+        camName.includes(q) ||
+        target.includes(q) ||
+        rule.includes(q) ||
+        alarmType.includes(q)
+      )
+    })
+  }, [alarms, searchQuery, cameraNameMap])
+
+  const filteredCaptures = useMemo(() => {
+    if (!searchQuery.trim()) return captures
+    const q = searchQuery.trim().toLowerCase()
+    return captures.filter((c) => {
+      const capId = (c.captureId || '').toLowerCase()
+      const camId = (c.cameraId || '').toLowerCase()
+      const camName = (cameraNameMap[c.cameraId] || '').toLowerCase()
+      const target = (c.targetLabel || '').toLowerCase()
+      return capId.includes(q) || camId.includes(q) || camName.includes(q) || target.includes(q)
+    })
+  }, [captures, searchQuery, cameraNameMap])
+
+  const isSearching = Boolean(searchQuery.trim())
+  const currentFilteredCount =
+    activeTab === 'recognition'
+      ? filteredRecognitions.length
+      : activeTab === 'captures'
+        ? filteredCaptures.length
+        : filteredAlarms.length
+
+  const effectiveTotalCount = isSearching ? currentFilteredCount : totalCount
+  const totalPages = Math.max(1, Math.ceil(effectiveTotalCount / pageSize))
 
   return (
     <div className="flex h-full flex-col gap-3 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] select-none">
@@ -562,12 +765,7 @@ export function AlarmsPage(): React.ReactElement {
         count={unreadRealtimeCount}
         onViewNew={() => {
           setUnreadRealtimeCount(0)
-          setSelectedCameraId('')
-          setSelectedTargetLabel('')
-          setSelectedSeverity('all')
-          setSelectedStatus('all')
-          setTimeRange(getInitialTodayRange())
-          setPage(1)
+          handleResetFilters()
         }}
         onDismiss={() => setUnreadRealtimeCount(0)}
         t={t}
@@ -576,10 +774,24 @@ export function AlarmsPage(): React.ReactElement {
       {/* 顶部控制栏与三重视图切换 */}
       <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl p-3 shadow-xs">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-500/10 text-rose-500">
-            <ShieldAlert className="h-5 w-5" />
+          <div
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-xs transition-colors duration-200 ${
+              activeTab === 'recognition'
+                ? 'bg-emerald-500/10 text-emerald-500'
+                : activeTab === 'captures'
+                  ? 'bg-cyan-500/10 text-cyan-500'
+                  : 'bg-rose-500/10 text-rose-500'
+            }`}
+          >
+            {activeTab === 'recognition' ? (
+              <UserCheck className="h-5 w-5" />
+            ) : activeTab === 'captures' ? (
+              <CameraIcon className="h-5 w-5" />
+            ) : (
+              <ShieldAlert className="h-5 w-5" />
+            )}
           </div>
-          <div>
+          <div className="min-w-[170px]">
             <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('title')}</h2>
             <p className="text-xs text-[var(--text-muted)]">
               {t(`tabs.${activeTab}`)} · {t('subtitleSuffix')}
@@ -587,141 +799,360 @@ export function AlarmsPage(): React.ReactElement {
           </div>
         </div>
 
-        {/* 证据分类 Tab 切换器 */}
-        <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
-          {(
-            [
-              {
-                key: 'alarms' as const,
-                label: t('tabs.alarms'),
-                icon: AlertCircle,
-                activeClass: 'border border-rose-500/30 bg-rose-500/15 text-rose-500 shadow-xs',
-                iconColor: 'text-rose-500',
-                badgeBg: 'bg-rose-500/10 text-rose-500',
-                badgeCount: activeTab === 'alarms' ? totalCount : tabCounts.alarms,
-              },
-              {
-                key: 'captures' as const,
-                label: t('tabs.captures'),
-                icon: CameraIcon,
-                activeClass: 'border border-cyan-500/30 bg-cyan-500/15 text-cyan-500 shadow-xs',
-                iconColor: 'text-cyan-500',
-                badgeBg: 'bg-cyan-500/10 text-cyan-500',
-                badgeCount: activeTab === 'captures' ? totalCount : tabCounts.captures,
-              },
-              {
-                key: 'recognition' as const,
-                label: t('tabs.recognition'),
-                icon: UserCheck,
-                activeClass:
-                  'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500 shadow-xs',
-                iconColor: 'text-emerald-500',
-                badgeBg: 'bg-emerald-500/10 text-emerald-500',
-                badgeCount: activeTab === 'recognition' ? totalCount : tabCounts.recognition,
-              },
-            ] as const
-          ).map((tab) => {
-            const Icon = tab.icon
-            const isActive = activeTab === tab.key
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => handleSwitchTab(tab.key)}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-all ${
-                  isActive
-                    ? tab.activeClass
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <Icon className={`h-3.5 w-3.5 ${tab.iconColor}`} />
-                <span>{tab.label}</span>
-                {tab.badgeCount > 0 && (
-                  <span
-                    className={`py-0.2 ml-1 rounded-full px-1.5 font-mono text-[10px] font-bold ${
-                      isActive ? tab.badgeBg : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'
-                    }`}
-                  >
-                    {tab.badgeCount}
-                  </span>
-                )}
-              </button>
-            )
-          })}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* 声音告警开关 */}
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.96 }}
+            onClick={handleToggleSound}
+            className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-all ${
+              soundEnabled
+                ? 'border-rose-500/30 bg-rose-500/10 text-rose-500 shadow-xs'
+                : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title={soundEnabled ? t('sound.enabled') : t('sound.disabled')}
+            aria-label={t('sound.toggleAlert')}
+          >
+            {soundEnabled ? (
+              <Volume2 className="h-3.5 w-3.5 animate-pulse text-rose-500" />
+            ) : (
+              <VolumeX className="h-3.5 w-3.5" />
+            )}
+            <span className="hidden sm:inline">
+              {soundEnabled ? t('sound.enabled') : t('sound.disabled')}
+            </span>
+          </motion.button>
+
+          {/* 证据分类 Tab 切换器 (顺序: 识别对账 -> 违规告警 -> 轨迹抓拍) */}
+          <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
+            {(
+              [
+                {
+                  key: 'recognition' as const,
+                  label: t('tabs.recognition'),
+                  icon: UserCheck,
+                  activeClass: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-500 shadow-xs',
+                  iconColor: 'text-emerald-500',
+                  badgeBg: 'bg-emerald-500/10 text-emerald-500',
+                  badgeCount: activeTab === 'recognition' ? totalCount : tabCounts.recognition,
+                },
+                {
+                  key: 'alarms' as const,
+                  label: t('tabs.alarms'),
+                  icon: AlertCircle,
+                  activeClass: 'border-rose-500/30 bg-rose-500/15 text-rose-500 shadow-xs',
+                  iconColor: 'text-rose-500',
+                  badgeBg: 'bg-rose-500/10 text-rose-500',
+                  badgeCount: activeTab === 'alarms' ? totalCount : tabCounts.alarms,
+                },
+                {
+                  key: 'captures' as const,
+                  label: t('tabs.captures'),
+                  icon: CameraIcon,
+                  activeClass: 'border-cyan-500/30 bg-cyan-500/15 text-cyan-500 shadow-xs',
+                  iconColor: 'text-cyan-500',
+                  badgeBg: 'bg-cyan-500/10 text-cyan-500',
+                  badgeCount: activeTab === 'captures' ? totalCount : tabCounts.captures,
+                },
+              ] as const
+            ).map((tab) => {
+              const Icon = tab.icon
+              const isActive = activeTab === tab.key
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => handleSwitchTab(tab.key)}
+                  className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-medium transition-colors duration-150 ${
+                    isActive
+                      ? tab.activeClass
+                      : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <Icon className={`h-3.5 w-3.5 ${tab.iconColor}`} />
+                  <span>{tab.label}</span>
+                  {tab.badgeCount > 0 && (
+                    <span
+                      className={`py-0.2 ml-1 rounded-full px-1.5 font-mono text-[10px] font-bold tabular-nums ${
+                        isActive ? tab.badgeBg : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'
+                      }`}
+                    >
+                      {tab.badgeCount}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
 
-      {/* 筛选工具条与视图切换 */}
-      <div className="frosted-glass relative z-20 flex flex-wrap items-center justify-between gap-3 rounded-2xl p-3 shadow-xs">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Filter className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+      {/* 现代毛玻璃搜索与筛选控制工作台 (零抖动单行无缝排布) */}
+      <div className="frosted-glass relative z-20 flex min-h-[52px] items-center justify-between gap-3 rounded-2xl p-2.5 shadow-xs">
+        <div className="flex flex-1 [scrollbar-width:none] items-center gap-2 overflow-x-auto text-xs [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+          {/* 全能搜索框 (Omni-Search Bar) */}
+          <div className="group/search relative flex min-w-[220px] flex-1 items-center sm:max-w-xs">
+            <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]" />
+            <input
+              type="text"
+              data-search-input="true"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
+                setPage(1)
+              }}
+              placeholder={
+                activeTab === 'recognition'
+                  ? t('search.placeholderRecognition')
+                  : activeTab === 'alarms'
+                    ? t('search.placeholderAlarms')
+                    : t('search.placeholderCaptures')
+              }
+              className="w-full rounded-xl border border-[var(--border)]/80 bg-[var(--bg-secondary)]/50 py-1.5 pr-8 pl-9 text-xs text-[var(--text-primary)] backdrop-blur-md transition-all outline-none placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface)] focus:shadow-[0_0_16px_rgba(var(--accent-rgb),0.12)] focus:ring-2 focus:ring-[var(--accent)]/15"
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+                title={t('search.clear')}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            ) : (
+              <kbd className="py-0.2 pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded-md border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1.5 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
+                /
+              </kbd>
+            )}
+          </div>
 
+          <div className="hidden h-4 w-px bg-[var(--border)]/60 sm:block" />
+
+          {/* 定制现代下拉筛选胶囊 */}
           {/* 通道筛选 */}
-          <select
-            value={selectedCameraId}
-            onChange={(e) => handleFilterChange(setSelectedCameraId, e.target.value)}
-            className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-          >
-            <option value="">{t('filter.allCameras')}</option>
-            {cameras.map((c) => (
-              <option key={c.id} value={c.cameraId}>
-                {c.name || c.cameraId}
-              </option>
-            ))}
-          </select>
-
-          {/* 目标类别筛选 */}
-          {activeTab !== 'recognition' && (
+          <div className="group/sel relative inline-flex items-center">
             <select
-              value={selectedTargetLabel}
-              onChange={(e) => handleFilterChange(setSelectedTargetLabel, e.target.value)}
-              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+              value={selectedCameraId}
+              onChange={(e) => handleFilterChange(setSelectedCameraId, e.target.value)}
+              className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
+                selectedCameraId
+                  ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
+                  : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
+              }`}
             >
-              <option value="">{t('filter.allTargets')}</option>
-              <option value="person">{t('filter.person')}</option>
-              <option value="car">{t('filter.car')}</option>
-              <option value="bicycle">{t('filter.bicycle')}</option>
+              <option value="" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                {t('filter.allCameras')}
+              </option>
+              {cameras.map((c) => (
+                <option
+                  key={c.id}
+                  value={c.cameraId}
+                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                >
+                  {c.name || c.cameraId}
+                </option>
+              ))}
             </select>
+            <ChevronDown
+              className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
+                selectedCameraId
+                  ? 'text-[var(--accent)]'
+                  : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
+              }`}
+            />
+          </div>
+
+          {/* 动态目标类别筛选 */}
+          {activeTab !== 'recognition' && (
+            <div className="group/sel relative inline-flex items-center">
+              <select
+                value={selectedTargetLabel}
+                onChange={(e) => handleFilterChange(setSelectedTargetLabel, e.target.value)}
+                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
+                  selectedTargetLabel
+                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
+                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <option value="" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  {t('filter.allTargets')}
+                </option>
+                {distinctTargetLabels.map((lbl) => (
+                  <option
+                    key={lbl}
+                    value={lbl}
+                    className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                  >
+                    {lbl === 'person'
+                      ? t('filter.person')
+                      : lbl === 'car'
+                        ? t('filter.car')
+                        : lbl === 'bicycle'
+                          ? t('filter.bicycle')
+                          : lbl}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
+                  selectedTargetLabel
+                    ? 'text-[var(--accent)]'
+                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
+                }`}
+              />
+            </div>
+          )}
+
+          {/* 规则类型筛选 (仅违规告警生效) */}
+          {activeTab === 'alarms' && (
+            <div className="group/sel relative inline-flex items-center">
+              <select
+                value={selectedRuleType}
+                onChange={(e) => handleFilterChange(setSelectedRuleType, e.target.value)}
+                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
+                  selectedRuleType !== 'all'
+                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
+                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  {t('filter.allRuleTypes')}
+                </option>
+                <option value="roi" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  {t('filter.ruleRoi')}
+                </option>
+                <option value="line" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  {t('filter.ruleLine')}
+                </option>
+              </select>
+              <ChevronDown
+                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
+                  selectedRuleType !== 'all'
+                    ? 'text-[var(--accent)]'
+                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
+                }`}
+              />
+            </div>
           )}
 
           {/* 严重级别筛选 */}
           {activeTab === 'alarms' && (
-            <select
-              value={selectedSeverity}
-              onChange={(e) => handleFilterChange(setSelectedSeverity, e.target.value)}
-              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-            >
-              <option value="all">{t('filter.allSeverities')}</option>
-              <option value="warning">{t('filter.severityWarning')}</option>
-              <option value="critical">{t('filter.severityCritical')}</option>
-            </select>
+            <div className="group/sel relative inline-flex items-center">
+              <select
+                value={selectedSeverity}
+                onChange={(e) => handleFilterChange(setSelectedSeverity, e.target.value)}
+                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
+                  selectedSeverity !== 'all'
+                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
+                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  {t('filter.allSeverities')}
+                </option>
+                <option
+                  value="warning"
+                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                >
+                  {t('filter.severityWarning')}
+                </option>
+                <option
+                  value="critical"
+                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                >
+                  {t('filter.severityCritical')}
+                </option>
+              </select>
+              <ChevronDown
+                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
+                  selectedSeverity !== 'all'
+                    ? 'text-[var(--accent)]'
+                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
+                }`}
+              />
+            </div>
           )}
 
           {/* 告警状态筛选 */}
           {activeTab === 'alarms' && (
-            <select
-              value={selectedStatus}
-              onChange={(e) => handleFilterChange(setSelectedStatus, e.target.value)}
-              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-            >
-              <option value="all">{t('statusFilter.all')}</option>
-              <option value="unprocessed">{t('statusFilter.unprocessed')}</option>
-              <option value="processed">{t('statusFilter.processed')}</option>
-            </select>
+            <div className="group/sel relative inline-flex items-center">
+              <select
+                value={selectedStatus}
+                onChange={(e) => handleFilterChange(setSelectedStatus, e.target.value)}
+                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
+                  selectedStatus !== 'all'
+                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
+                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  {t('statusFilter.all')}
+                </option>
+                <option
+                  value="unprocessed"
+                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                >
+                  {t('statusFilter.unprocessed')}
+                </option>
+                <option
+                  value="processed"
+                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                >
+                  {t('statusFilter.processed')}
+                </option>
+              </select>
+              <ChevronDown
+                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
+                  selectedStatus !== 'all'
+                    ? 'text-[var(--accent)]'
+                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
+                }`}
+              />
+            </div>
           )}
 
           {/* 识别对账状态筛选 */}
           {activeTab === 'recognition' && (
-            <select
-              value={selectedStatus}
-              onChange={(e) => handleFilterChange(setSelectedStatus, e.target.value)}
-              className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-            >
-              <option value="all">{t('statusFilter.all')}</option>
-              <option value="confirmed">{t('statusFilter.confirmed')}</option>
-              <option value="pending_review">{t('statusFilter.pendingReview')}</option>
-              <option value="rejected">{t('statusFilter.rejected')}</option>
-            </select>
+            <div className="group/sel relative inline-flex items-center">
+              <select
+                value={selectedStatus}
+                onChange={(e) => handleFilterChange(setSelectedStatus, e.target.value)}
+                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
+                  selectedStatus !== 'all'
+                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
+                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
+                  {t('statusFilter.all')}
+                </option>
+                <option
+                  value="confirmed"
+                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                >
+                  {t('statusFilter.confirmed')}
+                </option>
+                <option
+                  value="pending_review"
+                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                >
+                  {t('statusFilter.pendingReview')}
+                </option>
+                <option
+                  value="rejected"
+                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                >
+                  {t('statusFilter.rejected')}
+                </option>
+              </select>
+              <ChevronDown
+                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
+                  selectedStatus !== 'all'
+                    ? 'text-[var(--accent)]'
+                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
+                }`}
+              />
+            </div>
           )}
 
           {/* 秒级精细时间选择器 */}
@@ -733,40 +1164,55 @@ export function AlarmsPage(): React.ReactElement {
             }}
             t={t}
           />
+
+          {/* 重置全部筛选与搜索徽章 */}
+          {hasActiveFilters && (
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.95 }}
+              onClick={handleResetFilters}
+              className="flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs font-semibold text-rose-500 shadow-2xs backdrop-blur-md transition-all hover:border-rose-500/60 hover:bg-rose-500/20"
+              title={t('filter.reset')}
+            >
+              <RotateCcw className="h-3 w-3" />
+              <span>{t('filter.reset')}</span>
+              <span className="py-0.2 rounded-full bg-rose-500/20 px-1.5 font-mono text-[10px] font-bold text-rose-400">
+                {activeFilterCount}
+              </span>
+            </motion.button>
+          )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* 卡片与表格视图切换 */}
-          {activeTab === 'alarms' && (
-            <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs">
-              <button
-                type="button"
-                onClick={() => setViewMode('cards')}
-                className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-all ${
-                  viewMode === 'cards'
-                    ? 'bg-[var(--accent)] text-white shadow-xs'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-                title={t('views.cards')}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-                <span className="text-[11px]">{t('views.cards')}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('table')}
-                className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-all ${
-                  viewMode === 'table'
-                    ? 'bg-[var(--accent)] text-white shadow-xs'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-                title={t('views.table')}
-              >
-                <List className="h-3.5 w-3.5" />
-                <span className="text-[11px]">{t('views.table')}</span>
-              </button>
-            </div>
-          )}
+        <div className="flex shrink-0 items-center gap-2">
+          {/* 卡片与表格视图切换 (三 Tab 全面统一支持，消除按钮跳跃) */}
+          <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode('cards')}
+              className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-all ${
+                viewMode === 'cards'
+                  ? 'bg-[var(--accent)] text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t('views.cards')}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              <span className="text-[11px]">{t('views.cards')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-all ${
+                viewMode === 'table'
+                  ? 'bg-[var(--accent)] text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t('views.table')}
+            >
+              <List className="h-3.5 w-3.5" />
+              <span className="text-[11px]">{t('views.table')}</span>
+            </button>
+          </div>
 
           <button
             type="button"
@@ -788,19 +1234,28 @@ export function AlarmsPage(): React.ReactElement {
         </div>
       )}
 
-      {/* 主视图内容区 */}
-      <div className="frosted-glass flex-1 overflow-auto rounded-2xl p-4 shadow-xs">
+      {/* 主视图内容区 (带平滑淡入微动效，表格模式下无冗余内边距与双重卡片嵌套) */}
+      <div
+        key={activeTab}
+        className={`frosted-glass animate-tab-fade flex-1 overflow-auto rounded-2xl shadow-xs ${
+          viewMode === 'table' ? 'p-0' : 'p-4'
+        }`}
+      >
         {activeTab === 'alarms' && (
           <AlarmsContent
-            alarms={alarms}
+            alarms={filteredAlarms}
             totalCount={totalCount}
             viewMode={viewMode}
             cameraNameMap={cameraNameMap}
             selectedAlarmIds={selectedAlarmIds}
+            hasActiveFilters={hasActiveFilters}
+            searchQuery={searchQuery}
+            onResetFilters={handleResetFilters}
+            onClearSearch={() => setSearchQuery('')}
             onToggleSelectAlarm={handleToggleSelectAlarm}
             onToggleSelectAll={handleToggleSelectAll}
-            onSelect={setLightboxAlarm}
-            onSelectCrop={setCropPreviewAlarm}
+            onSelect={handleSelectAlarm}
+            onSelectCrop={handleSelectCrop}
             onToggleStatus={handleToggleAlarmStatus}
             t={t}
           />
@@ -808,8 +1263,13 @@ export function AlarmsPage(): React.ReactElement {
 
         {activeTab === 'captures' && (
           <CapturesContent
-            captures={captures}
+            captures={filteredCaptures}
+            viewMode={viewMode}
             cameraNameMap={cameraNameMap}
+            hasActiveFilters={hasActiveFilters}
+            searchQuery={searchQuery}
+            onResetFilters={handleResetFilters}
+            onClearSearch={() => setSearchQuery('')}
             onSelect={setLightboxCapture}
             t={t}
           />
@@ -817,8 +1277,13 @@ export function AlarmsPage(): React.ReactElement {
 
         {activeTab === 'recognition' && (
           <RecognitionContent
-            recognitions={recognitions}
+            recognitions={filteredRecognitions}
+            viewMode={viewMode}
             cameraNameMap={cameraNameMap}
+            hasActiveFilters={hasActiveFilters}
+            searchQuery={searchQuery}
+            onResetFilters={handleResetFilters}
+            onClearSearch={() => setSearchQuery('')}
             onOpenReview={setReviewModalRec}
             onQuickReview={(recognition, status) => handleReviewRecognition(recognition, status)}
             t={t}
@@ -830,10 +1295,16 @@ export function AlarmsPage(): React.ReactElement {
       <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
         <div className="flex items-center gap-3">
           <span>{t('pagination.page', { current: page })}</span>
-          {totalCount > 0 && (
-            <span className="font-mono text-[var(--text-muted)]">
-              ({t('pagination.total', { total: totalCount })})
+          {isSearching ? (
+            <span className="font-mono font-semibold text-emerald-500">
+              ({t('search.pageFiltered', { count: currentFilteredCount })})
             </span>
+          ) : (
+            totalCount > 0 && (
+              <span className="font-mono text-[var(--text-muted)]">
+                ({t('pagination.total', { total: totalCount })})
+              </span>
+            )
           )}
 
           {/* 每页条数选择器 */}
@@ -890,47 +1361,55 @@ export function AlarmsPage(): React.ReactElement {
         t={t}
       />
 
-      {/* 告警大图灯箱 Modal (高精度 BBox 绘制 + Esc 快速退出) */}
-      {lightboxAlarm && (
-        <AlarmLightboxModal
-          alarm={lightboxAlarm}
-          cameraName={cameraNameMap[lightboxAlarm.cameraId]}
-          onClose={() => setLightboxAlarm(null)}
-          onToggleStatus={() => handleToggleAlarmStatus(lightboxAlarm)}
-          onSelectCrop={() => setCropPreviewAlarm(lightboxAlarm)}
-          t={t}
-        />
-      )}
+      {/* 告警大图灯箱 Modal (高精度 BBox + 滚轮平移缩放 + 特写画中画 + Esc 退出) */}
+      <AnimatePresence>
+        {lightboxAlarm && (
+          <AlarmLightboxModal
+            alarm={lightboxAlarm}
+            cameraName={cameraNameMap[lightboxAlarm.cameraId]}
+            onClose={() => setLightboxAlarm(null)}
+            onToggleStatus={() => handleToggleAlarmStatus(lightboxAlarm)}
+            onSelectCrop={() => setCropPreviewAlarm(lightboxAlarm)}
+            t={t}
+          />
+        )}
+      </AnimatePresence>
 
       {/* 抓拍大图灯箱 Modal */}
-      {lightboxCapture && (
-        <CaptureLightboxModal
-          capture={lightboxCapture}
-          cameraName={cameraNameMap[lightboxCapture.cameraId]}
-          onClose={() => setLightboxCapture(null)}
-          t={t}
-        />
-      )}
+      <AnimatePresence>
+        {lightboxCapture && (
+          <CaptureLightboxModal
+            capture={lightboxCapture}
+            cameraName={cameraNameMap[lightboxCapture.cameraId]}
+            onClose={() => setLightboxCapture(null)}
+            t={t}
+          />
+        )}
+      </AnimatePresence>
 
       {/* 识别对账 Top-5 候选人核验 Modal */}
-      {reviewModalRec && (
-        <RecognitionReviewModal
-          recognition={reviewModalRec}
-          cameraName={cameraNameMap[reviewModalRec.cameraId]}
-          onClose={() => setReviewModalRec(null)}
-          onReview={handleReviewRecognition}
-          t={t}
-        />
-      )}
+      <AnimatePresence>
+        {reviewModalRec && (
+          <RecognitionReviewModal
+            recognition={reviewModalRec}
+            cameraName={cameraNameMap[reviewModalRec.cameraId]}
+            onClose={() => setReviewModalRec(null)}
+            onReview={handleReviewRecognition}
+            t={t}
+          />
+        )}
+      </AnimatePresence>
 
       {/* 特写大图灯箱 Modal */}
-      {cropPreviewAlarm && (
-        <CropLightboxModal
-          alarm={cropPreviewAlarm}
-          onClose={() => setCropPreviewAlarm(null)}
-          t={t}
-        />
-      )}
+      <AnimatePresence>
+        {cropPreviewAlarm && (
+          <CropLightboxModal
+            alarm={cropPreviewAlarm}
+            onClose={() => setCropPreviewAlarm(null)}
+            t={t}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }
