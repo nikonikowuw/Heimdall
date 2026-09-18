@@ -26,7 +26,7 @@
   2. **超球面加权聚合**：按质量平方对 512 维单位特征向量增量加权累加，并重新 L2 归一化投影至单位超球面；
   3. **防漂移校验 (Anti-Drift Outlier Defense)**：新提取特征与当前融合特征的余弦相似度必须 $\ge 0.55$，拦截遮挡误检或跟踪漂移对特征池的污染；
   4. **低频抓拍侧载**：best-shot 目标在 `face.embedding` 携带 512 维 Float32 的 Base64 sidecar，仅供后端识别对账消费。
-- `av_algo_extract_face()`：C ABI 独立特征提取符号，供宿主低频抓拍证据路径传入单帧 JPEG，执行检测、五点仿射对齐和 EdgeFace-S 提取，返回 L2 归一化 512D embedding 与 112×112 JPEG。
+- `av_algo_extract_face()`：C ABI 独立特征提取符号，供宿主低频抓拍与人员底库注册建档路径传入单帧图像，执行检测、五点仿射对齐和 EdgeFace-S 提取，返回 L2 归一化 512D embedding 与 112×112 JPEG。**注册阶段专项引入 TTA (Test-Time Augmentation，水平镜像增强)**，分别对 112×112 对齐人脸与其水平翻转图像提取特征并执行加和超球面归一化，极大提升单照底库表征鲁棒性；常驻视频流 `instance_process()` 路径严格保持单次前向，杜绝 NPU 翻倍开销。可通过 `HEIMDALL_DISABLE_REGISTRATION_TTA=1` 环境变量显式关闭以作基线对照。
 
 ## 资源与并发契约
 

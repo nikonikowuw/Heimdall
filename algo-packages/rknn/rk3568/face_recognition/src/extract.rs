@@ -138,6 +138,67 @@ fn reflect_pad_image(raw: &[u8], orig_w: u32, orig_h: u32, pad_x: u32, pad_y: u3
     padded
 }
 
+/// 融合原始人脸特征向量与翻转人脸特征向量 (TTA 融合)。
+///
+/// 将两向量相加后重新执行 L2 归一化。若加和模长退化 (< 1e-6)，回退为原始特征向量。
+pub fn fuse_tta_embeddings(
+    original: &[f32; 512],
+    flipped: &[f32; 512],
+) -> Result<[f32; 512], AlgoError> {
+    let mut sum = [0.0f32; 512];
+    for i in 0..512 {
+        sum[i] = original[i] + flipped[i];
+    }
+    match crate::normalize_embedding(&sum) {
+        Ok(fused) => Ok(fused),
+        Err(err) => {
+            tracing::warn!(%err, "TTA 向量加和归一化失败，回退为原始特征");
+            Ok(*original)
+        }
+    }
+}
+
+/// 注册人脸特征提取：执行 TTA (Test-Time Augmentation) 水平翻转增强。
+///
+/// 1. 推理原图对齐人脸获得 `e_orig`；
+/// 2. 水平翻转 112×112 对齐人脸并推理获得 `e_flip`；
+/// 3. 将两者融合（加和并重新 L2 归一化）；若翻转提取或融合发生非致命错误，平滑降级使用 `e_orig`。
+fn extract_embedding_with_registration_tta(
+    worker: &crate::InferenceWorker,
+    aligned: &[u8],
+    debug_tag: &str,
+    quality_score: f32,
+) -> Result<[f32; 512], AlgoError> {
+    let orig_embedding = worker.embed_host(aligned.to_vec())?;
+
+    if std::env::var("HEIMDALL_DISABLE_REGISTRATION_TTA")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return Ok(orig_embedding);
+    }
+
+    let flipped = match align::flip_horizontal_112(aligned) {
+        Ok(flipped) => flipped,
+        Err(err) => {
+            tracing::warn!(%err, "TTA 水平翻转图像失败，降级使用原始特征");
+            return Ok(orig_embedding);
+        }
+    };
+
+    align::dump_debug_aligned_face(&format!("{debug_tag}_tta_flip"), &flipped, quality_score);
+
+    let flipped_embedding = match worker.embed_host(flipped) {
+        Ok(emb) => emb,
+        Err(err) => {
+            tracing::warn!(%err, "TTA 翻转特征提取推理失败，降级使用原始特征");
+            return Ok(orig_embedding);
+        }
+    };
+
+    fuse_tta_embeddings(&orig_embedding, &flipped_embedding)
+}
+
 unsafe fn extract_face_impl(
     lib: AvAlgoLibrary,
     input: *const AvFaceExtractInput,
@@ -211,7 +272,12 @@ unsafe fn extract_face_impl(
         align::normalize_illumination_inplace(&mut aligned);
         align::enhance_face_details_inplace(&mut aligned);
         align::dump_debug_aligned_face("extract_direct112", &aligned, 1.0);
-        let embedding = match models.worker.embed_host(aligned.clone()) {
+        let embedding = match extract_embedding_with_registration_tta(
+            &models.worker,
+            &aligned,
+            "extract_direct112",
+            1.0,
+        ) {
             Ok(embedding) => embedding,
             Err(error) => {
                 let status = error.to_c_status();
@@ -321,7 +387,12 @@ unsafe fn extract_face_impl(
     };
 
     align::dump_debug_aligned_face("extract_face", &aligned, quality.score);
-    let embedding = match models.worker.embed_host(aligned.clone()) {
+    let embedding = match extract_embedding_with_registration_tta(
+        &models.worker,
+        &aligned,
+        "extract_face",
+        quality.score,
+    ) {
         Ok(embedding) => embedding,
         Err(error) => {
             let status = error.to_c_status();
@@ -371,5 +442,44 @@ mod tests {
             av_algo_extract_face(std::ptr::null_mut(), std::ptr::null(), std::ptr::null_mut())
         };
         assert_eq!(status, AV_ERR_INVALID_ARG);
+    }
+
+    #[test]
+    fn test_fuse_tta_embeddings_identical() {
+        let mut original = [0.0f32; 512];
+        original[0] = 1.0;
+        let flipped = original;
+
+        let fused = fuse_tta_embeddings(&original, &flipped).expect("融合应成功");
+        assert!((fused[0] - 1.0).abs() < 1e-6);
+        let l2_sq: f32 = fused.iter().map(|v| v * v).sum();
+        assert!((l2_sq.sqrt() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_fuse_tta_embeddings_orthogonal() {
+        let mut v1 = [0.0f32; 512];
+        let mut v2 = [0.0f32; 512];
+        v1[0] = 1.0;
+        v2[1] = 1.0;
+
+        let fused = fuse_tta_embeddings(&v1, &v2).expect("正交融合应成功");
+        let expected = 1.0 / 2.0f32.sqrt();
+        assert!((fused[0] - expected).abs() < 1e-6);
+        assert!((fused[1] - expected).abs() < 1e-6);
+        let l2_sq: f32 = fused.iter().map(|v| v * v).sum();
+        assert!((l2_sq.sqrt() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_fuse_tta_embeddings_opposite_fallback() {
+        let mut v1 = [0.0f32; 512];
+        let mut v2 = [0.0f32; 512];
+        v1[0] = 1.0;
+        v2[0] = -1.0;
+
+        // 相反向量相加为零，应优雅回退至原始特征
+        let fused = fuse_tta_embeddings(&v1, &v2).expect("相反向量应回退");
+        assert_eq!(fused, v1);
     }
 }

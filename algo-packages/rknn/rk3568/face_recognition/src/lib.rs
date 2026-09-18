@@ -28,7 +28,7 @@ use algo_sdk::export_algo;
 use algo_sdk::plugin::AlgoPlugin;
 use image::RgbImage;
 
-pub use extract::av_algo_extract_face;
+pub use extract::{av_algo_extract_face, fuse_tta_embeddings};
 use manifest::LoadedPackage;
 use plugin::FaceRecognizer;
 pub use worker::{InferenceWorker, WorkerQueueStats, WorkerSessions};
