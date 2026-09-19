@@ -1,5 +1,5 @@
-use db::entity::{capture, gallery, recognition};
-use db::{init_test_db, CaptureRepo, GalleryRepo, RecognitionRepo, UpdateRecognitionReviewParams};
+use db::entity::{capture, recognition};
+use db::{init_test_db, CaptureRepo, RecognitionRepo, UpdateRecognitionReviewParams};
 use sea_orm::ActiveValue::Set;
 
 #[tokio::test]
@@ -114,28 +114,4 @@ async fn test_capture_and_recognition_repository_lifecycle() {
     assert_eq!(updated.status, "confirmed");
     assert_eq!(updated.subject_name, "Alice Cooper");
     assert_eq!(updated.reviewer_id, Some("admin".to_string()));
-
-    // 3. 插入底库名单
-    let new_gal = gallery::ActiveModel {
-        gallery_id: Set("gal_vip".to_string()),
-        subject_id: Set("sub_1001".to_string()),
-        subject_name: Set("Alice".to_string()),
-        subject_type: Set("person".to_string()),
-        id_card: Set("ID_12345".to_string()),
-        plate_number: Set("".to_string()),
-        feature_vector: Set(Some(vec![0u8; 512])),
-        photo_rel_path: Set("galleries/alice.jpg".to_string()),
-        ..Default::default()
-    };
-
-    let inserted_gal = GalleryRepo::insert(&db, new_gal)
-        .await
-        .expect("insert gallery");
-    assert_eq!(inserted_gal.subject_id, "sub_1001");
-
-    let found_gal = GalleryRepo::find_by_subject_id(&db, "sub_1001")
-        .await
-        .expect("find")
-        .expect("some");
-    assert_eq!(found_gal.subject_name, "Alice");
 }

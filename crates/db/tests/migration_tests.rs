@@ -408,3 +408,38 @@ fn test_v17_adds_indexes_backing_the_server_side_log_filters() {
     // 迁移器只按版本号跳过，SQL 自身仍需幂等
     conn.execute_batch(v17).expect("apply V17 twice");
 }
+
+#[test]
+fn test_v19_drops_legacy_galleries_table() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    let v1 = include_str!("../src/migration/migrations/V1__init_schema.sql");
+    let v2 = include_str!("../src/migration/migrations/V2__evidence_triad_and_galleries.sql");
+    let v19 = include_str!("../src/migration/migrations/V19__drop_legacy_galleries_table.sql");
+
+    conn.execute_batch(v1).expect("apply V1");
+    conn.execute_batch(v2).expect("apply V2");
+
+    let count_before: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'galleries';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query galleries table presence before");
+    assert_eq!(count_before, 1, "galleries table should exist after V2");
+
+    conn.execute_batch(v19).expect("apply V19");
+
+    let count_after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'galleries';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query galleries table presence after");
+    assert_eq!(count_after, 0, "galleries table should be dropped by V19");
+
+    // 幂等性测试
+    conn.execute_batch(v19).expect("apply V19 twice");
+}

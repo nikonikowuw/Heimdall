@@ -4,7 +4,6 @@ pub mod algorithm;
 pub mod algorithm_instance;
 pub mod camera;
 pub mod capture;
-pub mod gallery;
 pub mod gallery_face;
 pub mod gb28181_device;
 pub mod operational_log;
@@ -21,7 +20,6 @@ pub use algorithm::{AlgorithmRepo, AlgorithmStats, UpsertAlgorithmParams, Upsert
 pub use algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, UpdateInstanceParams};
 pub use camera::CameraRepo;
 pub use capture::{CaptureFilter, CaptureRepo};
-pub use gallery::GalleryRepo;
 pub use gallery_face::GalleryFaceRepo;
 pub use gb28181_device::Gb28181DeviceRepo;
 pub use operational_log::OperationalLogRepo;

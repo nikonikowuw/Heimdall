@@ -5,7 +5,6 @@ pub mod algorithm_instance;
 pub mod algorithm_version;
 pub mod camera;
 pub mod capture;
-pub mod gallery;
 pub mod gallery_face;
 pub mod gb28181_channel;
 pub mod gb28181_device;
