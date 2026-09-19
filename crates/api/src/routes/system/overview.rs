@@ -71,15 +71,15 @@ pub async fn get_overview(
     let (disk_overview, disk_usage_percent) = state
         .storage_cleaner
         .as_ref()
-        .and_then(|cleaner| cleaner.current_fs_stat().ok())
-        .map(|stat| {
+        .and_then(|cleaner| {
+            let stat = cleaner.current_fs_stat().ok()?;
             let used_bytes = stat.total_bytes.saturating_sub(stat.available_bytes);
             let raw_pct = if stat.total_bytes > 0 {
                 (used_bytes as f64 / stat.total_bytes as f64) * 100.0
             } else {
                 0.0
             };
-            (
+            Some((
                 types::DiskMetrics {
                     total_gb: round_1dp(stat.total_bytes as f64 / GIB),
                     used_gb: round_1dp(used_bytes as f64 / GIB),
@@ -87,9 +87,10 @@ pub async fn get_overview(
                     inode_total: stat.total_inodes,
                     inode_used: stat.total_inodes.saturating_sub(stat.available_inodes),
                     inode_available: stat.available_inodes,
+                    mount_info: Some(cleaner.mount_info()),
                 },
                 round_1dp(raw_pct),
-            )
+            ))
         })
         .unwrap_or_else(|| {
             let raw_pct = if disk_metrics.total_gb > 0.0 {

@@ -170,6 +170,7 @@ async fn main() -> Result<()> {
         max_burst_packets: cfg.pipeline.max_burst_packets,
         max_burst_timeout_ms: cfg.pipeline.max_burst_timeout_ms,
         capture_mode: cfg.pipeline.capture_mode,
+        db_path: Some(std::path::PathBuf::from(&cfg.database.path)),
         ..Default::default()
     };
 

@@ -125,6 +125,9 @@ pub struct SnapshotConfig {
     /// 设备侧裁剪边界扩展比例，默认 0.1 (10%)
     #[serde(default = "default_crop_padding_ratio")]
     pub crop_padding_ratio: f32,
+    /// SQLite 数据库文件路径（用于跨物理分区协同熔断探测）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_path: Option<PathBuf>,
 }
 
 fn default_main_panoramic_quality() -> u8 {
@@ -155,6 +158,7 @@ impl Default for SnapshotConfig {
             sub_stream_panoramic_quality: default_sub_panoramic_quality(),
             sub_stream_crop_quality: default_sub_crop_quality(),
             crop_padding_ratio: default_crop_padding_ratio(),
+            db_path: None,
         }
     }
 }
@@ -216,6 +220,7 @@ struct AtomicSnapshotConfig {
     sub_stream_panoramic_quality: AtomicU8,
     sub_stream_crop_quality: AtomicU8,
     crop_padding_ratio_bits: AtomicU32,
+    db_path: std::sync::RwLock<Option<PathBuf>>,
 }
 
 impl AtomicSnapshotConfig {
@@ -231,6 +236,7 @@ impl AtomicSnapshotConfig {
             sub_stream_panoramic_quality: AtomicU8::new(config.sub_stream_panoramic_quality),
             sub_stream_crop_quality: AtomicU8::new(config.sub_stream_crop_quality),
             crop_padding_ratio_bits: AtomicU32::new(config.crop_padding_ratio.to_bits()),
+            db_path: std::sync::RwLock::new(config.db_path),
         }
     }
 
@@ -258,6 +264,7 @@ impl AtomicSnapshotConfig {
                 crop_padding_ratio: f32::from_bits(
                     self.crop_padding_ratio_bits.load(Ordering::Relaxed),
                 ),
+                db_path: self.db_path.read().ok().and_then(|p| p.clone()),
             };
             if self.version.load(Ordering::Acquire) == version {
                 return config;
@@ -306,6 +313,9 @@ impl AtomicSnapshotConfig {
             .store(config.sub_stream_crop_quality, Ordering::Relaxed);
         self.crop_padding_ratio_bits
             .store(config.crop_padding_ratio.to_bits(), Ordering::Relaxed);
+        if let Ok(mut p) = self.db_path.write() {
+            *p = config.db_path;
+        }
         self.version
             .store(version.wrapping_add(2), Ordering::Release);
     }
@@ -494,6 +504,7 @@ impl SnapshotWorker {
                             &work.camera_id,
                             &evidence,
                             &work.base_evidence_dir,
+                            work.config.db_path.as_deref(),
                         )
                         .map(SnapshotPayload::Evidence),
                     };
@@ -1158,7 +1169,12 @@ pub(crate) fn encode_and_save_snapshot(
     config: &SnapshotConfig,
     encoder: &SnapEncoder,
 ) -> Result<SnapshotResult, PipelineError> {
-    check_storage_breaker(camera_id, base_evidence_dir, crops.face.or(crops.body))?;
+    check_storage_breaker(
+        camera_id,
+        base_evidence_dir,
+        crops.face.or(crops.body),
+        config.db_path.as_deref(),
+    )?;
 
     let encoded = encode_frame_set(&frame, crops, stream, config, encoder)?;
     let files = write_evidence_jpegs(
@@ -1356,6 +1372,7 @@ fn check_storage_breaker(
     camera_id: &str,
     base_evidence_dir: &std::path::Path,
     target_bbox: Option<BoundingBox>,
+    db_path: Option<&std::path::Path>,
 ) -> Result<(), PipelineError> {
     if let Ok(stat) = crate::storage_cleaner::stat_fs(base_evidence_dir) {
         let decision = crate::storage_cleaner::StorageCircuitBreaker::evaluate_with_defaults(&stat);
@@ -1389,7 +1406,67 @@ fn check_storage_breaker(
                 "存储紧急降级抑制: {reason}"
             )));
         }
+
+        // 跨分区协同熔断：若系统/数据库主分区与证据目录位于不同物理分区，
+        // 且系统盘触发了只读挂载或临界硬熔断，立即阻断写入，杜绝 SQLite WAL 崩溃与死文件孤儿产生。
+        if let Some(db_p) = db_path {
+            check_cross_partition_db_breaker(camera_id, base_evidence_dir, db_p)?;
+        }
     }
+    Ok(())
+}
+
+fn check_cross_partition_db_breaker(
+    camera_id: &str,
+    base_evidence_dir: &std::path::Path,
+    db_path: &std::path::Path,
+) -> Result<(), PipelineError> {
+    let db_dir = if db_path.is_dir() {
+        db_path
+    } else {
+        db_path.parent().unwrap_or(std::path::Path::new("."))
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let is_diff_dev = match (
+            std::fs::metadata(base_evidence_dir),
+            std::fs::metadata(db_dir),
+        ) {
+            (Ok(m1), Ok(m2)) => m1.dev() != m2.dev(),
+            _ => true,
+        };
+        if is_diff_dev {
+            if let Ok(sys_stat) = crate::storage_cleaner::stat_fs(db_dir) {
+                let sys_decision =
+                    crate::storage_cleaner::StorageCircuitBreaker::evaluate_with_defaults(
+                        &sys_stat,
+                    );
+                if sys_decision.is_circuit_broken {
+                    let reason = sys_decision
+                        .reason
+                        .as_deref()
+                        .unwrap_or("系统主分区资源严重匮乏触发熔断");
+                    tracing::error!(
+                        %camera_id,
+                        %reason,
+                        db_dir = %db_dir.display(),
+                        evidence_dir = %base_evidence_dir.display(),
+                        "系统主分区处于临界熔断状态，拒绝写入快照以保全数据库核心元数据"
+                    );
+                    return Err(PipelineError::Snapshot(format!(
+                        "系统主分区断路保护: {reason}"
+                    )));
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (camera_id, base_evidence_dir, db_dir);
+    }
+
     Ok(())
 }
 
@@ -1424,10 +1501,16 @@ fn write_candidate_evidence(
     camera_id: &str,
     evidence: &CandidateEvidence,
     base_evidence_dir: &std::path::Path,
+    db_path: Option<&std::path::Path>,
 ) -> Result<SnapshotResult, PipelineError> {
     // 候选恒带目标框，因此在紧急水位下与告警靶向凭据一样放行（沿用既有裁决：
     // 抓拍是淘汰阶梯的第一级，遇到磁盘压力时先于告警被清理，不在此处二次抑制）。
-    check_storage_breaker(camera_id, base_evidence_dir, Some(evidence.geometry.bbox))?;
+    check_storage_breaker(
+        camera_id,
+        base_evidence_dir,
+        Some(evidence.geometry.bbox),
+        db_path,
+    )?;
 
     let files = write_evidence_jpegs(
         camera_id,

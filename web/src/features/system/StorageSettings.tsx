@@ -5,6 +5,7 @@ import { systemApi } from '@/lib/system-api'
 import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { MountBadge } from './components/MountBadge'
 import type { StorageConfig, StorageStatus, SnapshotSystemConfig } from '@/types/system'
 
 export function StorageSettings(): React.ReactElement {
@@ -224,6 +225,9 @@ export function StorageSettings(): React.ReactElement {
               </div>
             </div>
 
+            {/* Partition details */}
+            {status.mountInfo && <MountBadge mount={status.mountInfo} />}
+
             {/* Stats grid */}
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <StatTile
@@ -246,9 +250,19 @@ export function StorageSettings(): React.ReactElement {
 
             {/* Evidence breakdown */}
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/50 p-4">
-              <p className="mb-3 text-[12px] font-medium tracking-wider text-[var(--text-muted)] uppercase">
-                {t('storage.evidenceBreakdown', { defaultValue: '证据存储分布' })}
-              </p>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-[12px] font-medium tracking-wider text-[var(--text-muted)] uppercase">
+                  {t('storage.evidenceBreakdown', { defaultValue: '证据存储分布' })}
+                </p>
+                {status.mountInfo?.mountPoint && (
+                  <span className="text-[11px] text-[var(--text-muted)]">
+                    {t('storage.partitionScoped', { defaultValue: '统计当前分区' })}:{' '}
+                    <span className="font-mono text-[var(--text-secondary)]">
+                      {status.mountInfo.mountPoint}
+                    </span>
+                  </span>
+                )}
+              </div>
               <div className="grid grid-cols-3 gap-3">
                 <EvidenceStat
                   label={t('storage.alarms', { defaultValue: '告警图' })}

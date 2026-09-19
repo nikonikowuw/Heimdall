@@ -7,6 +7,7 @@
 
 import { useTranslation } from 'react-i18next'
 import type { DiskMetrics } from '@/types/system'
+import { MountBadge } from './MountBadge'
 
 interface DiskDetailProps {
   disk: DiskMetrics
@@ -115,11 +116,14 @@ function InodeStats({ disk }: { disk: DiskMetrics }) {
   )
 }
 
-export function DiskDetail({ disk, className = '' }: DiskDetailProps) {
+export function DiskDetail({ disk, className = '' }: DiskDetailProps): React.ReactElement {
   const { t } = useTranslation('system')
 
   return (
     <div className={`space-y-4 ${className}`}>
+      {/* 挂载分区标签 */}
+      {disk.mountInfo && <MountBadge mount={disk.mountInfo} />}
+
       {/* 磁盘使用率条 */}
       <DiskBar disk={disk} />
 

@@ -118,6 +118,7 @@
     "available": "可用",
     "health": "健康等級",
     "diskUsage": "磁碟使用率",
+    "partitionScoped": "統計當前分區",
     "alarms": "告警圖",
     "recognitions": "辨識圖",
     "captures": "抓拍圖",
@@ -249,6 +250,11 @@
     "usage": "磁碟使用率",
     "used": "已用",
     "usedAmount": "{{amount}} 已用"
+  },
+  "mount": {
+    "mountPoint": "掛載點",
+    "device": "設備",
+    "fsType": "檔案系統"
   },
   "memoryMetrics": {
     "available": "可用記憶體",

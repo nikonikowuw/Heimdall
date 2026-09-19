@@ -33,7 +33,8 @@ use tokio::sync::RwLock;
 use crate::error::PipelineError;
 
 pub use fs_stat::{
-    detect_emmc_health, get_sqlite_wal_size, stat_fs, EmmcHealthInfo, FsStorageStat,
+    detect_emmc_health, detect_mount_info, get_sqlite_wal_size, stat_fs, EmmcHealthInfo,
+    FsStorageStat, MountInfo,
 };
 pub use guard::{
     StorageCircuitBreaker, StorageDecision, StorageHealthLevel, StorageWatermarkThresholds,
@@ -325,6 +326,12 @@ impl StorageCleaner {
     pub fn current_fs_stat(&self) -> Result<FsStorageStat, std::io::Error> {
         let config = self.try_config().unwrap_or_default();
         stat_fs(&config.evidence_dir)
+    }
+
+    /// 获取证据目录所在物理分区的挂载信息 (带缓存)
+    pub fn mount_info(&self) -> MountInfo {
+        let config = self.try_config().unwrap_or_default();
+        detect_mount_info(&config.evidence_dir)
     }
 
     /// 评估当前存储健康等级与写入放行决策
@@ -868,6 +875,8 @@ impl StorageCleaner {
             0.0
         };
 
+        let mount_info = self.mount_info();
+
         Ok(types::StorageStatus {
             total_gb: (total_gb * 10.0).round() / 10.0,
             used_gb: (used_gb * 10.0).round() / 10.0,
@@ -879,6 +888,7 @@ impl StorageCleaner {
                 StorageHealthLevel::Emergency => types::StorageHealthLevel::Emergency,
                 StorageHealthLevel::Critical => types::StorageHealthLevel::Critical,
             },
+            mount_info: Some(mount_info),
             alarm_count: 0,
             alarm_size_mb: 0.0,
             recognition_count: 0,

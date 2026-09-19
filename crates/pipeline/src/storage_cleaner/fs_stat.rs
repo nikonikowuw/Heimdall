@@ -7,9 +7,9 @@
 //! 4. 嵌入式 Linux eMMC 磨损寿命与预警检测 (/sys/block/mmcblk*/device)；
 //! 5. SQLite 数据库与 WAL 堆积监控。
 
-use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+pub use types::system::MountInfo;
 
 /// 物理文件系统状态快照
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -124,6 +124,140 @@ pub fn stat_fs(path: &Path) -> Result<FsStorageStat, std::io::Error> {
             inode_free_ratio: 0.5,
             is_read_only: false,
         })
+    }
+}
+
+static MOUNT_CACHE: std::sync::LazyLock<
+    std::sync::RwLock<std::collections::HashMap<PathBuf, MountInfo>>,
+> = std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+
+/// 探测指定路径所在的物理分区挂载点、设备名与文件系统类型 (带进程内缓存)
+pub fn detect_mount_info(path: &Path) -> MountInfo {
+    let probe_path = probe_existing_path(path);
+    if let Ok(cache) = MOUNT_CACHE.read() {
+        if let Some(info) = cache.get(&probe_path) {
+            return info.clone();
+        }
+    }
+
+    let detected = {
+        #[cfg(target_os = "linux")]
+        {
+            detect_mount_info_linux(&probe_path)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            detect_mount_info_macos(&probe_path)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = &probe_path;
+            MountInfo {
+                mount_point: "/".to_string(),
+                device: "rootfs".to_string(),
+                fs_type: "unknown".to_string(),
+            }
+        }
+    };
+
+    if let Ok(mut cache) = MOUNT_CACHE.write() {
+        cache.insert(probe_path, detected.clone());
+    }
+
+    detected
+}
+
+fn probe_existing_path(path: &Path) -> PathBuf {
+    let mut probe_path = path;
+    while !probe_path.exists() {
+        match probe_path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => probe_path = parent,
+            _ => {
+                probe_path = Path::new(".");
+                break;
+            }
+        }
+    }
+    probe_path
+        .canonicalize()
+        .unwrap_or_else(|_| probe_path.to_path_buf())
+}
+
+#[cfg(target_os = "linux")]
+fn detect_mount_info_linux(canonical: &Path) -> MountInfo {
+    if let Ok(content) = std::fs::read_to_string("/proc/mounts") {
+        let mut best_match: Option<(usize, MountInfo)> = None;
+        for line in content.lines() {
+            let mut parts = line.split_whitespace();
+            let dev = parts.next();
+            let mnt = parts.next();
+            let fstype = parts.next();
+            if let (Some(dev), Some(mnt), Some(fstype)) = (dev, mnt, fstype) {
+                let mnt_path = Path::new(mnt);
+                if canonical.starts_with(mnt_path) {
+                    let len = mnt.len();
+                    if best_match
+                        .as_ref()
+                        .map_or(true, |(best_len, _)| len > *best_len)
+                    {
+                        best_match = Some((
+                            len,
+                            MountInfo {
+                                mount_point: mnt.to_string(),
+                                device: dev.to_string(),
+                                fs_type: fstype.to_string(),
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some((_, info)) = best_match {
+            return info;
+        }
+    }
+
+    MountInfo {
+        mount_point: "/".to_string(),
+        device: "rootfs".to_string(),
+        fs_type: "ext4".to_string(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn detect_mount_info_macos(probe_path: &Path) -> MountInfo {
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt;
+
+    if let Ok(c_path) = CString::new(probe_path.as_os_str().as_bytes()) {
+        // SAFETY: statfs 结构体全零初始化为合法的安全内存
+        let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+        // SAFETY: c_path 是合法的以 null 结尾的 C 字符串，statfs 安全填充挂载信息
+        if unsafe { libc::statfs(c_path.as_ptr(), &mut stat) } == 0 {
+            // SAFETY: f_mntonname 由内核填充且包含有效的 null 终止符
+            let mount_point = unsafe { CStr::from_ptr(stat.f_mntonname.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            // SAFETY: f_mntfromname 由内核填充且包含有效的 null 终止符
+            let device = unsafe { CStr::from_ptr(stat.f_mntfromname.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            // SAFETY: f_fstypename 由内核填充且包含有效的 null 终止符
+            let fs_type = unsafe { CStr::from_ptr(stat.f_fstypename.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            return MountInfo {
+                mount_point,
+                device,
+                fs_type,
+            };
+        }
+    }
+
+    MountInfo {
+        mount_point: "/".to_string(),
+        device: "rootfs".to_string(),
+        fs_type: "apfs".to_string(),
     }
 }
 
@@ -242,6 +376,11 @@ mod tests {
         assert!(stat.free_ratio > 0.0 && stat.free_ratio <= 1.0);
         assert!(stat.inode_free_ratio > 0.0 && stat.inode_free_ratio <= 1.0);
         assert!(!stat.is_read_only); // 测试临时目录通常为读写
+
+        let mount = detect_mount_info(&temp_dir);
+        assert!(!mount.mount_point.is_empty());
+        assert!(!mount.device.is_empty());
+        assert!(!mount.fs_type.is_empty());
     }
 
     #[test]

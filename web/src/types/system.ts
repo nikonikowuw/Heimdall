@@ -118,6 +118,12 @@ export interface ThermalZone {
 
 // ─── 磁盘指标 ───
 
+export interface MountInfo {
+  mountPoint: string
+  device: string
+  fsType: string
+}
+
 export interface DiskMetrics {
   totalGb: number
   usedGb: number
@@ -125,6 +131,7 @@ export interface DiskMetrics {
   inodeTotal: number
   inodeUsed: number
   inodeAvailable: number
+  mountInfo?: MountInfo
 }
 
 // ─── 存储配置 ───
@@ -151,6 +158,7 @@ export interface StorageStatus {
   availableGb: number
   usagePercent: number
   healthLevel: 'normal' | 'evicting' | 'emergency' | 'critical'
+  mountInfo?: MountInfo
   alarmCount: number
   alarmSizeMb: number
   recognitionCount: number

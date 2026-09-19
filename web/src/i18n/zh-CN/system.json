@@ -72,6 +72,11 @@
     "inodeUsed": "{{count}} 已用",
     "inodeFree": "{{count}} 剩余"
   },
+  "mount": {
+    "mountPoint": "挂载点",
+    "device": "设备",
+    "fsType": "文件系统"
+  },
   "memoryMetrics": {
     "usage": "内存使用率",
     "total": "总内存",
@@ -187,6 +192,7 @@
     "available": "可用",
     "health": "健康等级",
     "diskUsage": "磁盘使用率",
+    "partitionScoped": "统计当前分区",
     "alarms": "告警图",
     "recognitions": "识别图",
     "captures": "抓拍图",

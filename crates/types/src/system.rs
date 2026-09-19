@@ -153,6 +153,18 @@ pub struct ThermalZone {
     pub type_label: String,
 }
 
+/// 物理分区挂载信息
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MountInfo {
+    /// 挂载点路径 (如 "/" 或 "/var/data")
+    pub mount_point: String,
+    /// 底层物理设备名 (如 "/dev/nvme0n1p1")
+    pub device: String,
+    /// 文件系统类型 (如 "ext4", "xfs", "apfs")
+    pub fs_type: String,
+}
+
 // ─── 磁盘指标 ───
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -164,6 +176,8 @@ pub struct DiskMetrics {
     pub inode_total: u64,
     pub inode_used: u64,
     pub inode_available: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_info: Option<MountInfo>,
 }
 
 // ─── 存储配置 ───
@@ -249,6 +263,8 @@ pub struct StorageStatus {
     pub available_gb: f64,
     pub usage_percent: f64,
     pub health_level: StorageHealthLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_info: Option<MountInfo>,
     pub alarm_count: u32,
     pub alarm_size_mb: f64,
     pub recognition_count: u32,

@@ -72,6 +72,11 @@
     "inodeUsed": "{{count}} used",
     "inodeFree": "{{count}} free"
   },
+  "mount": {
+    "mountPoint": "Mount Point",
+    "device": "Device",
+    "fsType": "File System"
+  },
   "memoryMetrics": {
     "usage": "Memory Usage",
     "total": "Total",
@@ -187,6 +192,7 @@
     "available": "Available",
     "health": "Health",
     "diskUsage": "Disk Usage",
+    "partitionScoped": "Scoped to Partition",
     "alarms": "Alarms",
     "recognitions": "Recognitions",
     "captures": "Captures",
