@@ -19,6 +19,7 @@ import {
   parseNumericDraft,
 } from '../numericParam'
 import { EnumArrayField } from './EnumArrayField'
+import { getLocalizedClassName } from './rulesStudioTypes'
 
 export interface AlgoParamDrawerProps {
   isOpen: boolean
@@ -31,7 +32,32 @@ export interface AlgoParamDrawerProps {
 }
 
 /** 算力调度档位（宿主级设置，不属于算法包 schema） */
-const FPS_PRESETS = [5, 10, 15, 25] as const
+const FPS_PRESETS: Array<{ fps: number; hint: string }> = [
+  { fps: 5, hint: '极低能耗' },
+  { fps: 10, hint: '平衡推荐' },
+  { fps: 15, hint: '高速捕获' },
+  { fps: 25, hint: '满血实时' },
+]
+
+function getNumericParamBounds(
+  isCosineThreshold: boolean,
+  config: { minimum?: number; maximum?: number; type: 'integer' | 'number' },
+): { inputMin?: number; inputMax?: number; stepVal: number } {
+  if (isCosineThreshold) {
+    return {
+      inputMin:
+        config.minimum === undefined ? undefined : normalizeCosineSimilarity(config.minimum) * 100,
+      inputMax:
+        config.maximum === undefined ? undefined : normalizeCosineSimilarity(config.maximum) * 100,
+      stepVal: 0.5,
+    }
+  }
+  return {
+    inputMin: config.minimum,
+    inputMax: config.maximum,
+    stepVal: config.type === 'integer' ? 1 : 0.05,
+  }
+}
 
 export function AlgoParamDrawer({
   isOpen,
@@ -81,7 +107,7 @@ export function AlgoParamDrawer({
   const schemaParams = useMemo(() => Object.entries(propertiesObj), [propertiesObj])
 
   // 恢复官方推荐默认值
-  const handleResetDefaults = () => {
+  function handleResetDefaults(): void {
     setLocalFps(10)
     const reset: Record<string, unknown> = {}
     for (const [key, prop] of Object.entries(propertiesObj)) {
@@ -98,18 +124,22 @@ export function AlgoParamDrawer({
     setLocalParams(reset)
   }
 
-  const getDisplayNumericValue = (key: string, rawValue: number): number =>
-    isCosineThresholdKey(key) ? normalizeCosineSimilarity(rawValue) * 100 : rawValue
+  function getDisplayNumericValue(key: string, rawValue: number): number {
+    return isCosineThresholdKey(key) ? normalizeCosineSimilarity(rawValue) * 100 : rawValue
+  }
 
-  const getRawNumericValue = (key: string, displayValue: number): number =>
-    isCosineThresholdKey(key) ? denormalizeCosineSimilarity(displayValue / 100) : displayValue
+  function getRawNumericValue(key: string, displayValue: number): number {
+    return isCosineThresholdKey(key)
+      ? denormalizeCosineSimilarity(displayValue / 100)
+      : displayValue
+  }
 
-  const commitNumericDraft = (
+  function commitNumericDraft(
     key: string,
     prop: Record<string, unknown>,
     draft: string,
     fallbackRawValue: number,
-  ) => {
+  ): void {
     const config = getNumericParamConfig(prop)
     if (!config) return
 
@@ -125,7 +155,7 @@ export function AlgoParamDrawer({
     }))
   }
 
-  const getFinalParams = (): Record<string, unknown> => {
+  function getFinalParams(): Record<string, unknown> {
     // 先剥掉 schema 未声明的历史注入键，再按 schema 收敛数值参数
     const finalParams = stripLegacyInjectedParams(localParams, propertiesObj)
 
@@ -152,7 +182,7 @@ export function AlgoParamDrawer({
     return finalParams
   }
 
-  const handleApply = () => {
+  function handleApply(): void {
     onFpsChange(localFps)
     onSaveParams(getFinalParams())
     onClose()
@@ -181,7 +211,7 @@ export function AlgoParamDrawer({
             className="fixed inset-0 bg-[var(--overlay-scrim)] backdrop-blur-xs"
           />
 
-          {/* 右侧滑出抽屉主体 */}
+          {/* 右侧滑出抽屉主体：现代 SaaS 半透明玻璃磨砂风格 */}
           <div className="fixed inset-y-0 right-0 flex max-w-full pl-10">
             <motion.div
               key="algo-param-drawer-panel"
@@ -192,25 +222,34 @@ export function AlgoParamDrawer({
                 duration: reduceMotion ? 0 : motionTokens.duration.normal,
                 ease: motionTokens.easing.smooth,
               }}
-              className="lens-glass flex w-screen max-w-md flex-col border-l border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-2xl"
+              className="flex w-screen max-w-md flex-col border-l border-white/10 bg-white/80 shadow-[-24px_0_80px_rgba(0,0,0,0.55)] backdrop-blur-2xl dark:bg-[#07090e]/80"
+              style={{
+                boxShadow:
+                  'inset 0 1px 0 0 rgba(255, 255, 255, 0.12), -24px 0 80px rgba(0, 0, 0, 0.55)',
+              }}
             >
-              {/* 抽屉头部 */}
-              <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border)] px-5">
-                <div className="flex items-center gap-2.5">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--accent-soft)] text-[var(--accent)]">
+              {/* 抽屉头部：毛玻璃微光 */}
+              <div className="flex h-16 shrink-0 items-center justify-between border-b border-black/5 bg-white/40 px-5 backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.02]">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-blue-500/25 bg-gradient-to-br from-blue-500/15 to-indigo-500/15 text-[var(--accent)] shadow-sm">
                     <Sliders className="h-4 w-4" />
                   </div>
                   <div>
-                    <h3
-                      id="algo-param-drawer-title"
-                      className="text-xs font-bold text-[var(--text-primary)]"
-                    >
-                      {algo.name}
-                    </h3>
-                    <div className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-muted)]">
+                    <div className="flex items-center gap-2">
+                      <h3
+                        id="algo-param-drawer-title"
+                        className="text-sm font-bold tracking-tight text-[var(--text-primary)]"
+                      >
+                        {algo.name}
+                      </h3>
+                      <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 font-mono text-[9px] font-bold text-[var(--accent)]">
+                        {algo.category?.toUpperCase() || 'ALGO'}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-muted)]">
                       <span>v{algo.version}</span>
                       <span>·</span>
-                      <span>{algo.algorithmId}</span>
+                      <span className="max-w-[12rem] truncate">{algo.algorithmId}</span>
                     </div>
                   </div>
                 </div>
@@ -220,41 +259,50 @@ export function AlgoParamDrawer({
                   onClick={onClose}
                   aria-label={t('studio.closeDrawerHint', { defaultValue: '关闭参数面板' })}
                   title={t('studio.closeDrawerHint', { defaultValue: '关闭参数面板' })}
-                  className="flex h-8 w-8 items-center justify-center rounded-[6px] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-black/5 bg-black/5 text-[var(--text-muted)] transition-all hover:bg-black/10 hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/15"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              {/* 抽屉正文表单（独立滚动视窗） */}
-              <div className="flex-1 space-y-4 overflow-y-auto bg-[var(--bg-primary)]/30 p-4 text-xs sm:p-5">
+              {/* 抽屉正文表单（半透明独立滚动视窗） */}
+              <div className="flex-1 space-y-4 overflow-y-auto p-4 text-xs sm:p-5">
                 {/* 1. 算力开销 FPS 调度 */}
-                <div className="space-y-2 rounded-[8px] border border-[var(--border)] bg-[var(--bg-surface)] p-3">
+                <div className="space-y-3 rounded-xl border border-black/[0.06] bg-white/50 p-3.5 shadow-sm backdrop-blur-xl transition-all dark:border-white/[0.08] dark:bg-white/[0.025]">
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-[var(--text-primary)]">
+                    <span className="text-xs font-bold tracking-tight text-[var(--text-primary)]">
                       {t('analysisFps', { defaultValue: '推理算力调度 (FPS)' })}
                     </span>
-                    <span className="font-mono text-[11px] font-bold text-[var(--accent)]">
+                    <span className="rounded-lg border border-[var(--accent)]/30 bg-[var(--accent)]/10 px-2 py-0.5 font-mono text-xs font-bold text-[var(--accent)] shadow-2xs">
                       {localFps} FPS
                     </span>
                   </div>
-                  <div className="grid grid-cols-4 gap-1.5 pt-1 font-mono text-[11px]">
-                    {FPS_PRESETS.map((f) => (
-                      <button
-                        key={f}
-                        type="button"
-                        onClick={() => setLocalFps(f)}
-                        className={`rounded-lg border py-1.5 font-semibold transition-all ${
-                          localFps === f
-                            ? 'border-[var(--border-strong)] bg-[var(--accent-soft)] text-[var(--accent)] shadow-2xs'
-                            : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]'
-                        }`}
-                      >
-                        {f} FPS
-                      </button>
-                    ))}
+
+                  {/* 分段跑道式调度选择器 */}
+                  <div className="grid grid-cols-4 gap-1.5 rounded-xl border border-black/5 bg-black/[0.03] p-1 font-mono text-[11px] dark:border-white/[0.06] dark:bg-black/40">
+                    {FPS_PRESETS.map((item) => {
+                      const isActive = localFps === item.fps
+                      return (
+                        <button
+                          key={item.fps}
+                          type="button"
+                          onClick={() => setLocalFps(item.fps)}
+                          className={`flex flex-col items-center justify-center rounded-lg py-2 transition-all ${
+                            isActive
+                              ? 'border border-black/5 bg-white font-bold text-[var(--text-primary)] shadow-sm dark:border-white/20 dark:bg-white/15'
+                              : 'text-[var(--text-muted)] hover:bg-black/[0.02] hover:text-[var(--text-secondary)] dark:hover:bg-white/[0.04]'
+                          }`}
+                        >
+                          <span className="text-xs">{item.fps} FPS</span>
+                          <span className="mt-0.5 font-sans text-[9px] opacity-75">
+                            {item.hint}
+                          </span>
+                        </button>
+                      )
+                    })}
                   </div>
-                  <p className="text-[10px] text-[var(--text-muted)]">
+
+                  <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
                     {t('fpsHint', {
                       defaultValue:
                         '较高帧率提供更及时的越界判断，较低帧率可有效节省边缘芯片 NPU 能耗。',
@@ -264,15 +312,15 @@ export function AlgoParamDrawer({
 
                 {/* 2. 模型自定义专属参数 */}
                 {schemaParams.length > 0 && (
-                  <div className="space-y-2.5 rounded-[8px] border border-[var(--border)] bg-[var(--bg-surface)] p-3">
-                    <div className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
+                  <div className="space-y-3 rounded-xl border border-black/[0.06] bg-white/50 p-3.5 shadow-sm backdrop-blur-xl transition-all dark:border-white/[0.08] dark:bg-white/[0.025]">
+                    <div className="flex items-center gap-1.5 font-bold text-[var(--text-primary)]">
                       <Cpu className="h-3.5 w-3.5 text-[var(--accent)]" />
-                      <span>
+                      <span className="text-xs">
                         {t('studio.advancedParams', { defaultValue: '模型自定义专属参数' })}
                       </span>
                     </div>
 
-                    <div className="space-y-2.5 pt-1">
+                    <div className="space-y-3 pt-1">
                       {schemaParams.map(([key, prop]) => {
                         const val = localParams[key]
                         const title = String(prop.title || key)
@@ -285,20 +333,36 @@ export function AlgoParamDrawer({
                           return (
                             <div
                               key={key}
-                              className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1.5"
+                              className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-white/40 px-3.5 py-2.5 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
                             >
-                              <span className="font-medium text-[var(--text-primary)]">
-                                {title}
-                              </span>
-                              <input
-                                type="checkbox"
+                              <div className="pr-2">
+                                <span className="block text-xs font-semibold text-[var(--text-primary)]">
+                                  {title}
+                                </span>
+                                {desc && (
+                                  <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">
+                                    {desc}
+                                  </p>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={checked}
                                 aria-label={title}
-                                checked={checked}
-                                onChange={(e) =>
-                                  setLocalParams((p) => ({ ...p, [key]: e.target.checked }))
-                                }
-                                className="h-4 w-4 cursor-pointer rounded accent-[var(--accent)]"
-                              />
+                                onClick={() => setLocalParams((p) => ({ ...p, [key]: !checked }))}
+                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
+                                  checked
+                                    ? 'bg-[var(--accent-green)] shadow-[0_0_10px_rgba(16,185,129,0.35)]'
+                                    : 'border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
+                                    checked ? 'translate-x-4' : 'translate-x-0.5'
+                                  }`}
+                                />
+                              </button>
                             </div>
                           )
                         }
@@ -314,66 +378,112 @@ export function AlgoParamDrawer({
                             config.minimum,
                             config.maximum,
                           )
-                          const inputMin =
-                            config.minimum === undefined
-                              ? undefined
-                              : isCosineThreshold
-                                ? normalizeCosineSimilarity(config.minimum) * 100
-                                : config.minimum
-                          const inputMax =
-                            config.maximum === undefined
-                              ? undefined
-                              : isCosineThreshold
-                                ? normalizeCosineSimilarity(config.maximum) * 100
-                                : config.maximum
+                          const { inputMin, inputMax, stepVal } = getNumericParamBounds(
+                            isCosineThreshold,
+                            config,
+                          )
                           const displayValue = getDisplayNumericValue(key, boundedRawValue)
                           const inputValue =
                             numberDrafts[key] ?? formatNumericDraft(displayValue, config.type)
+                          const hasRangeBounds = inputMin !== undefined && inputMax !== undefined
 
                           return (
-                            <div key={key} className="space-y-1">
+                            <div
+                              key={key}
+                              className="space-y-2.5 rounded-xl border border-black/[0.06] bg-white/40 p-3 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                            >
                               <div className="flex items-center justify-between">
-                                <span className="font-medium text-[var(--text-secondary)]">
+                                <span className="text-xs font-semibold text-[var(--text-primary)]">
                                   {title}
                                 </span>
-                                <span className="font-mono text-[11px] font-bold text-[var(--accent)]">
+                                <span className="rounded-md border border-[var(--accent)]/30 bg-[var(--accent)]/10 px-2 py-0.5 font-mono text-xs font-bold text-[var(--accent)] shadow-2xs">
                                   {isCosineThreshold
                                     ? `${displayValue.toFixed(1)}%`
                                     : String(displayValue)}
                                 </span>
                               </div>
-                              <input
-                                type="number"
-                                inputMode={config.type === 'integer' ? 'numeric' : 'decimal'}
-                                aria-label={title}
-                                min={inputMin}
-                                max={inputMax}
-                                step={
-                                  isCosineThreshold ? 0.5 : config.type === 'integer' ? 1 : 0.05
-                                }
-                                value={inputValue}
-                                onChange={(e) => {
-                                  const draft = e.target.value
-                                  setNumberDrafts((prev) => ({ ...prev, [key]: draft }))
 
-                                  const parsedDisplayValue = parseNumericDraft(draft, config.type)
-                                  if (parsedDisplayValue === null) return
+                              {/* 滑块与数值输入双模联动 */}
+                              <div className="space-y-2">
+                                {hasRangeBounds && (
+                                  <div className="space-y-1">
+                                    <input
+                                      type="range"
+                                      min={inputMin}
+                                      max={inputMax}
+                                      step={stepVal}
+                                      value={displayValue}
+                                      aria-label={title}
+                                      onChange={(e) => {
+                                        const parsedDisplayValue = Number(e.target.value)
+                                        const nextRawValue = getRawNumericValue(
+                                          key,
+                                          parsedDisplayValue,
+                                        )
+                                        setLocalParams((prev) => ({ ...prev, [key]: nextRawValue }))
+                                        setNumberDrafts((prev) => ({
+                                          ...prev,
+                                          [key]: formatNumericDraft(
+                                            parsedDisplayValue,
+                                            config.type,
+                                          ),
+                                        }))
+                                      }}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-black/10 accent-[var(--accent)] dark:bg-white/10"
+                                    />
+                                    <div className="flex items-center justify-between font-mono text-[9px] text-[var(--text-muted)]">
+                                      <span>
+                                        {isCosineThreshold ? `${inputMin?.toFixed(0)}%` : inputMin}
+                                      </span>
+                                      <span>
+                                        {isCosineThreshold ? `${inputMax?.toFixed(0)}%` : inputMax}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
 
-                                  const nextRawValue = getRawNumericValue(key, parsedDisplayValue)
-                                  setLocalParams((prev) => ({ ...prev, [key]: nextRawValue }))
-                                }}
-                                onBlur={(e) =>
-                                  commitNumericDraft(
-                                    key,
-                                    prop,
-                                    e.currentTarget.value,
-                                    boundedRawValue,
-                                  )
-                                }
-                                className="w-full rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 text-xs text-[var(--text-primary)] transition-colors outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--ring)]"
-                              />
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    inputMode={config.type === 'integer' ? 'numeric' : 'decimal'}
+                                    aria-label={title}
+                                    min={inputMin}
+                                    max={inputMax}
+                                    step={stepVal}
+                                    value={inputValue}
+                                    onChange={(e) => {
+                                      const draft = e.target.value
+                                      setNumberDrafts((prev) => ({ ...prev, [key]: draft }))
+
+                                      const parsedDisplayValue = parseNumericDraft(
+                                        draft,
+                                        config.type,
+                                      )
+                                      if (parsedDisplayValue === null) return
+
+                                      const nextRawValue = getRawNumericValue(
+                                        key,
+                                        parsedDisplayValue,
+                                      )
+                                      setLocalParams((prev) => ({ ...prev, [key]: nextRawValue }))
+                                    }}
+                                    onBlur={(e) =>
+                                      commitNumericDraft(
+                                        key,
+                                        prop,
+                                        e.currentTarget.value,
+                                        boundedRawValue,
+                                      )
+                                    }
+                                    className="w-full rounded-lg border border-black/10 bg-white/60 px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-white focus:ring-2 focus:ring-[var(--accent)]/20 dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-black/60"
+                                  />
+                                </div>
+                              </div>
+
                               {desc && (
-                                <p className="text-[10px] text-[var(--text-muted)]">{desc}</p>
+                                <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                                  {desc}
+                                </p>
                               )}
                             </div>
                           )
@@ -400,12 +510,90 @@ export function AlgoParamDrawer({
                           )
                         }
 
+                        const stringEnumOptions = Array.isArray(prop.enum)
+                          ? (prop.enum as unknown[]).filter(
+                              (x): x is string => typeof x === 'string',
+                            )
+                          : undefined
+
                         if (prop.type === 'string') {
                           const textValue =
                             typeof val === 'string' ? val : String(prop.default ?? '')
+
+                          if (stringEnumOptions && stringEnumOptions.length > 0) {
+                            if (stringEnumOptions.length <= 4) {
+                              return (
+                                <div
+                                  key={key}
+                                  className="space-y-2 rounded-xl border border-black/[0.06] bg-white/40 p-3 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                                >
+                                  <span className="text-xs font-semibold text-[var(--text-primary)]">
+                                    {title}
+                                  </span>
+                                  <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+                                    {stringEnumOptions.map((opt) => (
+                                      <button
+                                        key={opt}
+                                        type="button"
+                                        onClick={() =>
+                                          setLocalParams((prev) => ({ ...prev, [key]: opt }))
+                                        }
+                                        className={`rounded-lg border px-2 py-1.5 text-center text-xs font-semibold transition-all ${
+                                          textValue === opt
+                                            ? 'border-blue-500/30 bg-[var(--accent)] text-white shadow-sm'
+                                            : 'border-black/5 bg-white/50 text-[var(--text-secondary)] hover:border-black/15 dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-white/20'
+                                        }`}
+                                      >
+                                        {getLocalizedClassName(opt, i18n.language)}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {desc && (
+                                    <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                                      {desc}
+                                    </p>
+                                  )}
+                                </div>
+                              )
+                            }
+
+                            return (
+                              <div
+                                key={key}
+                                className="space-y-2 rounded-xl border border-black/[0.06] bg-white/40 p-3 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                              >
+                                <span className="text-xs font-semibold text-[var(--text-primary)]">
+                                  {title}
+                                </span>
+                                <select
+                                  aria-label={title}
+                                  value={textValue}
+                                  onChange={(e) =>
+                                    setLocalParams((prev) => ({ ...prev, [key]: e.target.value }))
+                                  }
+                                  className="w-full rounded-lg border border-black/10 bg-white/60 px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-white focus:ring-2 focus:ring-[var(--accent)]/20 dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-black/60"
+                                >
+                                  {stringEnumOptions.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                      {getLocalizedClassName(opt, i18n.language)}
+                                    </option>
+                                  ))}
+                                </select>
+                                {desc && (
+                                  <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                                    {desc}
+                                  </p>
+                                )}
+                              </div>
+                            )
+                          }
+
                           return (
-                            <div key={key} className="space-y-1">
-                              <span className="font-medium text-[var(--text-secondary)]">
+                            <div
+                              key={key}
+                              className="space-y-2 rounded-xl border border-black/[0.06] bg-white/40 p-3 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                            >
+                              <span className="text-xs font-semibold text-[var(--text-primary)]">
                                 {title}
                               </span>
                               <input
@@ -415,10 +603,12 @@ export function AlgoParamDrawer({
                                 onChange={(e) =>
                                   setLocalParams((prev) => ({ ...prev, [key]: e.target.value }))
                                 }
-                                className="w-full rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 text-xs text-[var(--text-primary)] transition-colors outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--ring)]"
+                                className="w-full rounded-lg border border-black/10 bg-white/60 px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-white focus:ring-2 focus:ring-[var(--accent)]/20 dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-black/60"
                               />
                               {desc && (
-                                <p className="text-[10px] text-[var(--text-muted)]">{desc}</p>
+                                <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                                  {desc}
+                                </p>
                               )}
                             </div>
                           )
@@ -432,32 +622,32 @@ export function AlgoParamDrawer({
                 )}
               </div>
 
-              {/* 抽屉底部行动栏 */}
-              <div className="flex shrink-0 items-center justify-between border-t border-[var(--border)] bg-[var(--bg-surface-solid)] px-4 py-3.5 sm:px-5">
+              {/* 抽屉底部行动栏：磨砂高光 */}
+              <div className="flex shrink-0 items-center justify-between border-t border-black/5 bg-white/60 px-5 py-4 backdrop-blur-2xl dark:border-white/10 dark:bg-[#07090e]/80">
                 <button
                   type="button"
                   onClick={handleResetDefaults}
-                  className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+                  className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-[var(--text-muted)] transition-colors hover:bg-black/5 hover:text-[var(--text-primary)] dark:hover:bg-white/5"
                   title={t('resetDefaults', { defaultValue: '恢复芯片推荐默认工况' })}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   <span>{t('resetDefaults', { defaultValue: '恢复默认值' })}</span>
                 </button>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5">
                   <button
                     type="button"
                     onClick={onClose}
-                    className="rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)] px-3.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                    className="rounded-lg border border-black/10 bg-black/5 px-3.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-black/10 hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
                   >
                     {t('cancel', { defaultValue: '取消' })}
                   </button>
                   <button
                     type="button"
                     onClick={handleApply}
-                    className="flex items-center gap-1.5 rounded-[6px] bg-[var(--accent)] px-4 py-1.5 text-xs font-semibold text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95"
+                    className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 px-4 py-1.5 text-xs font-semibold text-white shadow-[0_2px_12px_rgba(59,130,246,0.4)] transition-all hover:opacity-95 hover:shadow-[0_4px_16px_rgba(59,130,246,0.55)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95"
                   >
-                    <Check className="h-3.5 w-3.5" />
+                    <Check className="h-3.5 w-3.5 stroke-[2.5]" />
                     <span>{t('applyParams', { defaultValue: '应用参数' })}</span>
                   </button>
                 </div>

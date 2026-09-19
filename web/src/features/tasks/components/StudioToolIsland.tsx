@@ -10,7 +10,9 @@ import {
   Undo2,
   X,
 } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { motionTokens } from '@/lib/motionTokens'
 import type { ToolMode } from './rulesStudioTypes'
 
 export interface StudioToolIslandProps {
@@ -77,7 +79,7 @@ const TOOLS: ToolDefinition[] = [
 
 /**
  * 画板左侧垂直工具岛：常驻显示，进入工作台即可直接绘制，
- * 不再需要先进入“标定模式”，消除模式切换带来的操作阻断。
+ * 采用 VisionOS 极客深色磨砂与按键微光设计。
  */
 export function StudioToolIsland({
   tool,
@@ -92,10 +94,17 @@ export function StudioToolIsland({
   onCancelDrawing,
 }: StudioToolIslandProps): React.ReactElement {
   const { t } = useTranslation('task')
+  const reduceMotion = useReducedMotion()
 
   return (
-    <div
-      className="absolute top-1/2 left-3 z-30 flex -translate-y-1/2 flex-col items-center gap-1 rounded-[8px] border border-white/15 bg-[var(--video-surface)]/95 p-1.5 shadow-2xl backdrop-blur-md"
+    <motion.div
+      initial={{ opacity: 0, x: reduceMotion ? 0 : -motionTokens.distance.md }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{
+        duration: reduceMotion ? 0 : motionTokens.duration.normal,
+        ease: motionTokens.easing.smooth,
+      }}
+      className="absolute top-1/2 left-3 z-30 flex -translate-y-1/2 flex-col items-center gap-1.5 rounded-xl border border-white/15 bg-black/65 p-1.5 shadow-[0_16px_48px_rgba(0,0,0,0.7)] backdrop-blur-2xl"
       onMouseDown={(event) => event.stopPropagation()}
       onMouseMove={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
@@ -108,78 +117,119 @@ export function StudioToolIsland({
         const isActive = tool === item.id
         const label = t(item.labelKey, { defaultValue: item.id })
         return (
-          <button
+          <motion.button
             key={item.id}
             type="button"
             onClick={() => onToolChange(item.id)}
+            whileHover={reduceMotion ? undefined : { scale: 1.05 }}
+            whileTap={reduceMotion ? undefined : { scale: 0.94 }}
             aria-pressed={isActive}
             aria-label={`${label} (${item.shortcut})`}
             title={`${label} (${item.shortcut})`}
-            className={`flex h-9 w-9 items-center justify-center rounded-[6px] transition-all ${
-              isActive
-                ? `${item.activeClass} shadow-xs`
-                : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]'
+            className={`group relative flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-150 ${
+              isActive ? 'text-white' : 'text-white/70 hover:bg-white/10 hover:text-white'
             }`}
           >
-            {item.icon}
-          </button>
+            {isActive && (
+              <motion.span
+                layoutId="activeToolBubble"
+                transition={{
+                  duration: reduceMotion ? 0 : motionTokens.duration.fast,
+                  ease: motionTokens.easing.smooth,
+                }}
+                className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-[0_0_14px_rgba(59,130,246,0.55)] ring-1 ring-white/30"
+              />
+            )}
+            <span className="relative z-10">{item.icon}</span>
+            <span className="pointer-events-none absolute right-0.5 bottom-0.5 z-10 font-mono text-[8px] font-bold opacity-60 select-none group-hover:opacity-90">
+              {item.shortcut}
+            </span>
+          </motion.button>
         )
       })}
 
-      <span className="my-0.5 h-px w-5 bg-[var(--border)]" />
+      <span className="my-0.5 h-px w-5 bg-white/15" />
 
-      <button
+      {/* 顶点自动磁吸 */}
+      <motion.button
         type="button"
         onClick={onToggleSnap}
+        whileHover={reduceMotion ? undefined : { scale: 1.05 }}
+        whileTap={reduceMotion ? undefined : { scale: 0.94 }}
         aria-pressed={snapEnabled}
         aria-label={t('tools.snap', { defaultValue: '顶点自动磁吸' })}
-        title={t('studio.snapMagnet', { defaultValue: '顶点自动磁吸' })}
-        className={`flex h-9 w-9 items-center justify-center rounded-[6px] transition-all ${
+        title={t('studio.snapMagnet', { defaultValue: '顶点自动磁吸 (S)' })}
+        className={`group relative flex h-9 w-9 items-center justify-center rounded-lg transition-all duration-150 ${
           snapEnabled
-            ? 'text-[var(--accent)] hover:bg-[var(--accent-soft)]'
-            : 'text-[var(--text-muted)] opacity-60 hover:bg-[var(--accent-soft)]'
+            ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/40 hover:bg-emerald-500/25'
+            : 'text-white/40 hover:bg-white/10 hover:text-white/70'
         }`}
       >
         <Magnet className="h-4 w-4" />
-      </button>
+        {snapEnabled && (
+          <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
+        )}
+        <span className="pointer-events-none absolute right-0.5 bottom-0.5 font-mono text-[8px] font-bold opacity-60 select-none group-hover:opacity-90">
+          S
+        </span>
+      </motion.button>
 
-      <span className="my-0.5 h-px w-5 bg-[var(--border)]" />
+      <span className="my-0.5 h-px w-5 bg-white/15" />
 
-      <button
+      {/* 撤销 / 重做 */}
+      <motion.button
         type="button"
         onClick={onUndo}
         disabled={!canUndo}
+        whileHover={reduceMotion || !canUndo ? undefined : { scale: 1.05 }}
+        whileTap={reduceMotion || !canUndo ? undefined : { scale: 0.94 }}
         aria-label={t('studio.undo', { defaultValue: '撤销' })}
         title={t('studio.undoHint', { defaultValue: '撤销 (Ctrl+Z)' })}
-        className="flex h-9 w-9 items-center justify-center rounded-[6px] text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+        className="flex h-9 w-9 items-center justify-center rounded-lg text-white/70 transition-all hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
       >
         <Undo2 className="h-4 w-4" />
-      </button>
-      <button
+      </motion.button>
+      <motion.button
         type="button"
         onClick={onRedo}
         disabled={!canRedo}
+        whileHover={reduceMotion || !canRedo ? undefined : { scale: 1.05 }}
+        whileTap={reduceMotion || !canRedo ? undefined : { scale: 0.94 }}
         aria-label={t('studio.redo', { defaultValue: '重做' })}
         title={t('studio.redoHint', { defaultValue: '重做 (Ctrl+Shift+Z)' })}
-        className="flex h-9 w-9 items-center justify-center rounded-[6px] text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+        className="flex h-9 w-9 items-center justify-center rounded-lg text-white/70 transition-all hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
       >
         <Redo2 className="h-4 w-4" />
-      </button>
+      </motion.button>
 
-      {isDrawing && (
-        <>
-          <span className="my-0.5 h-px w-5 bg-[var(--border)]" />
-          <button
-            type="button"
-            onClick={onCancelDrawing}
-            aria-label={t('studio.cancelDrawing', { defaultValue: '取消当前绘制' })}
-            title={t('studio.cancelDrawing', { defaultValue: '取消当前绘制' })}
-            className="flex h-9 w-9 items-center justify-center rounded-[6px] text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10"
+      <AnimatePresence mode="popLayout">
+        {isDrawing && (
+          <motion.div
+            key="cancel-drawing-button"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            transition={{
+              duration: reduceMotion ? 0 : motionTokens.duration.fast,
+              ease: motionTokens.easing.smooth,
+            }}
+            className="flex flex-col items-center gap-1.5"
           >
-            <X className="h-4 w-4" />
-          </button>
-        </>
-      )}
-    </div>
+            <span className="my-0.5 h-px w-5 bg-white/15" />
+            <motion.button
+              type="button"
+              onClick={onCancelDrawing}
+              whileHover={reduceMotion ? undefined : { scale: 1.08 }}
+              whileTap={reduceMotion ? undefined : { scale: 0.92 }}
+              aria-label={t('studio.cancelDrawing', { defaultValue: '取消当前绘制' })}
+              title={t('studio.cancelDrawing', { defaultValue: '取消当前绘制 (Esc)' })}
+              className="flex h-9 w-9 animate-pulse items-center justify-center rounded-lg bg-[var(--destructive)]/20 text-[var(--destructive)] ring-1 ring-[var(--destructive)]/40 transition-colors hover:bg-[var(--destructive)]/30"
+            >
+              <X className="h-4 w-4" />
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   )
 }

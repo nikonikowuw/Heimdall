@@ -255,8 +255,32 @@ export function getLineMarkerEnd(direction?: DetectionLineDirection): string | u
   return undefined
 }
 
+/**
+ * 采用鞋带公式 (Shoelace Formula) 计算归一化多边形在画幅中的面积百分比 [0..100]
+ */
+export function calculatePolygonAreaPercent(points: DetectionPoint[]): number {
+  if (points.length < 3) return 0
+  let area = 0
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    area += (points[j].x + points[i].x) * (points[j].y - points[i].y)
+  }
+  return Math.max(0, Math.min(100, Math.abs(area / 2) * 100))
+}
+
 export function getDirectionLabel(dir: string, t: (key: string) => string): string {
   if (dir === 'both') return t('inspector.dirBoth')
   if (dir === 'a_to_b') return t('inspector.dirAtoB')
   return t('inspector.dirBtoA')
+}
+
+export const DIRECTION_SYMBOLS: Record<DetectionLineDirection, string> = {
+  both: '⇄',
+  a_to_b: 'A→B',
+  b_to_a: 'B→A',
+}
+
+export function cycleLineDirection(current?: DetectionLineDirection): DetectionLineDirection {
+  if (current === 'both') return 'a_to_b'
+  if (current === 'a_to_b') return 'b_to_a'
+  return 'both'
 }

@@ -166,6 +166,9 @@
     "zonesSectionTitle": "空間活動防區 (Activity Zones)",
     "activeZonesCount": "項防區",
     "zoneTypeTools": "防區類型",
+    "pickTypeToDraw": "選擇類型並在畫面上繪製",
+    "precropReplaceHint": "重新框定取景（將自動替換現有取景框）",
+    "precropConfigured": "已配置物理取景框",
     "noZonesHint": "當前畫面尚未劃定局部防區，已啟用的演算法將在全畫幅範圍內生效並判定告警。",
     "zonesArmedHint": "畫板已就緒，直接在畫面上單擊落點即可開始繪製。",
     "zonesPickTypeHint": "請先在上方選擇防區類型，再於畫面上繪製。",
@@ -174,6 +177,7 @@
     "snapMagnet": "磁吸吸附",
     "motionGateTitle": "運動檢測門控 (Motion Gating)",
     "motionGateSensitivity": "靈敏度閾值:",
+    "motionLiveDelta": "畫面變動 / 喚醒游標",
     "polygonVertices": "{{count}} 頂點多邊形",
     "toolbarLabel": "防區繪製工具",
     "undo": "復原",
@@ -189,7 +193,9 @@
     "telemetryTracks": "活躍航跡",
     "telemetryMotion": "畫面變動",
     "telemetryGated": "門控待機",
-    "telemetryInferring": "推理中"
+    "telemetryInferring": "推理中",
+    "invert": "反選",
+    "invertSelection": "反選已選項"
   },
   "tools": {
     "select": "選擇與位移",
@@ -256,6 +262,7 @@
     "copySuffix": "副本",
     "endpointCount": "端點",
     "vertexCount": "頂點數",
+    "coveragePercent": "畫幅佔比",
     "visibility": "畫面可見性",
     "visible": "顯示",
     "hidden": "隱藏",

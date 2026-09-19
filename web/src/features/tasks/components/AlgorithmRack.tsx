@@ -98,12 +98,17 @@ export function AlgorithmRack({
                   duration: motionTokens.duration.normal,
                   ease: motionTokens.easing.smooth,
                 }}
-                className={`group flex min-h-[104px] min-w-0 flex-col rounded-[8px] border bg-[var(--bg-surface)] p-2.5 transition-[border-color,background-color] select-none ${
+                className={`group relative flex min-h-[108px] min-w-0 flex-col rounded-[8px] border bg-[var(--bg-surface)] py-2.5 pr-2.5 pl-3.5 transition-[border-color,background-color,box-shadow] select-none ${
                   isEnabled
-                    ? 'border-[var(--accent-green)]/50 bg-[var(--accent-green)]/10'
+                    ? 'border-[var(--accent-green)]/50 bg-[var(--accent-green)]/10 shadow-[0_0_12px_rgba(16,185,129,0.08)]'
                     : 'border-[var(--border)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-secondary)]'
                 }`}
               >
+                {/* 启用态左侧垂直光纤指示条 (Light-pipe LED) */}
+                {isEnabled && (
+                  <span className="absolute top-0 bottom-0 left-0 w-1 rounded-l-[7px] bg-[var(--accent-green)] shadow-[0_0_8px_var(--accent-green)]" />
+                )}
+
                 <div className="flex min-w-0 items-start gap-2">
                   <button
                     type="button"
@@ -117,9 +122,9 @@ export function AlgorithmRack({
                     className="flex min-w-0 flex-1 items-start gap-2 text-left focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none focus-visible:ring-inset"
                   >
                     <span
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border ${
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border transition-colors ${
                         isEnabled
-                          ? 'border-[var(--accent-green)]/25 bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
+                          ? 'border-[var(--accent-green)]/30 bg-[var(--accent-green)]/15 text-[var(--accent-green)]'
                           : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]'
                       }`}
                     >
@@ -127,7 +132,7 @@ export function AlgorithmRack({
                     </span>
                     <span className="min-w-0 flex-1 pt-0.5">
                       <span
-                        className={`block truncate text-[11px] font-semibold ${
+                        className={`block truncate text-[11px] font-bold ${
                           isEnabled ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
                         }`}
                         title={algo.name}
@@ -137,7 +142,9 @@ export function AlgorithmRack({
                       <span className="mt-1 flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">
                         <span
                           className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                            isEnabled ? 'bg-[var(--accent-green)]' : 'bg-[var(--text-muted)]/50'
+                            isEnabled
+                              ? 'bg-[var(--accent-green)] shadow-[0_0_4px_var(--accent-green)]'
+                              : 'bg-[var(--text-muted)]/50'
                           }`}
                         />
                         <span className="truncate">
@@ -155,17 +162,22 @@ export function AlgorithmRack({
                       onClick={() => onOpenParams(algo)}
                       title={t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}
                       aria-label={`${t('studio.tuneParams', { defaultValue: '微调该算法运行参数' })}: ${algo.name}`}
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--accent)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--accent)] shadow-2xs transition-all hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none active:scale-95"
                     >
                       <Settings2 className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
 
-                <div className="mt-auto flex min-w-0 items-center justify-between gap-2 pt-2 font-mono text-[10px] text-[var(--text-muted)]">
-                  <span className="min-w-0 truncate">{algo.algorithmId}</span>
+                <div className="mt-auto flex min-w-0 items-center justify-between gap-1.5 pt-2 font-mono text-[10px]">
+                  <span
+                    className="min-w-0 truncate text-[var(--text-muted)]"
+                    title={algo.algorithmId}
+                  >
+                    {algo.algorithmId}
+                  </span>
                   {isEnabled && (
-                    <span className="shrink-0 font-semibold text-[var(--accent-green)]">
+                    <span className="shrink-0 rounded-[4px] border border-[var(--accent-green)]/30 bg-[var(--accent-green)]/15 px-1.5 py-0.5 font-bold text-[var(--accent-green)] shadow-2xs">
                       {instance.analysisFps || 10} FPS
                     </span>
                   )}

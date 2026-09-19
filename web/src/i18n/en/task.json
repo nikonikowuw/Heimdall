@@ -166,6 +166,9 @@
     "zonesSectionTitle": "Activity Zones",
     "activeZonesCount": "zones",
     "zoneTypeTools": "Zone types",
+    "pickTypeToDraw": "Select type to draw on frame",
+    "precropReplaceHint": "Re-frame view (replaces existing crop frame)",
+    "precropConfigured": "Pre-crop frame configured",
     "noZonesHint": "No zones yet. Enabled algorithms use the full frame.",
     "zonesArmedHint": "Canvas is armed — click the frame to place the first vertex.",
     "zonesPickTypeHint": "Pick a zone type above, then draw on the frame.",
@@ -174,6 +177,7 @@
     "snapMagnet": "Snap to Grid/Vertices",
     "motionGateTitle": "Motion Gating",
     "motionGateSensitivity": "Sensitivity Threshold:",
+    "motionLiveDelta": "Live Motion / Wake Cursor",
     "polygonVertices": "{{count}}-point Polygon",
     "toolbarLabel": "Zone drawing tools",
     "undo": "Undo",
@@ -189,7 +193,9 @@
     "telemetryTracks": "Active tracks",
     "telemetryMotion": "Motion",
     "telemetryGated": "Gated (idle)",
-    "telemetryInferring": "Inferring"
+    "telemetryInferring": "Inferring",
+    "invert": "Invert",
+    "invertSelection": "Invert selection"
   },
   "tools": {
     "select": "Select & Move",
@@ -256,6 +262,7 @@
     "copySuffix": "copy",
     "endpointCount": "Endpoints",
     "vertexCount": "Vertices",
+    "coveragePercent": "Frame Coverage",
     "visibility": "Frame visibility",
     "visible": "Shown",
     "hidden": "Hidden",

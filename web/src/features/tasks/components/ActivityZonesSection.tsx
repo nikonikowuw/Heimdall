@@ -1,7 +1,15 @@
 import React from 'react'
-import { Eye, EyeOff, Hexagon, Slash, ShieldAlert, Trash2 } from 'lucide-react'
+import { Crop, Eye, EyeOff, Hexagon, Slash, ShieldAlert, Trash2 } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { ExtendedRule, ToolMode } from './rulesStudioTypes'
+import { motionTokens } from '@/lib/motionTokens'
+import type { DetectionRule } from '@/types'
+import {
+  calculatePolygonAreaPercent,
+  ExtendedRule,
+  getDirectionLabel,
+  ToolMode,
+} from './rulesStudioTypes'
 
 export interface ActivityZonesSectionProps {
   rules: ExtendedRule[]
@@ -19,7 +27,34 @@ const DRAW_ACTIONS: Array<{ tool: ToolMode; icon: React.ReactNode; labelKey: str
   { tool: 'roi', icon: <Hexagon className="h-3.5 w-3.5" />, labelKey: 'tools.roi' },
   { tool: 'line', icon: <Slash className="h-3.5 w-3.5" />, labelKey: 'tools.line' },
   { tool: 'mask', icon: <ShieldAlert className="h-3.5 w-3.5" />, labelKey: 'tools.mask' },
+  { tool: 'precrop', icon: <Crop className="h-3.5 w-3.5" />, labelKey: 'tools.precrop' },
 ]
+
+const ROLE_BADGES: Record<
+  DetectionRule['role'],
+  { label: string; badgeClass: string; labelKey: string }
+> = {
+  roi: {
+    label: 'ROI',
+    labelKey: 'tools.roi',
+    badgeClass: 'border border-blue-500/25 bg-blue-500/15 text-[var(--accent)]',
+  },
+  line: {
+    label: 'LINE',
+    labelKey: 'tools.line',
+    badgeClass: 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500',
+  },
+  mask: {
+    label: 'MASK',
+    labelKey: 'tools.mask',
+    badgeClass: 'border border-rose-500/30 bg-rose-500/15 text-rose-500',
+  },
+  precrop: {
+    label: 'CROP',
+    labelKey: 'tools.precrop',
+    badgeClass: 'border border-lime-400/30 bg-lime-500/15 text-lime-400',
+  },
+}
 
 export function ActivityZonesSection({
   rules,
@@ -32,14 +67,15 @@ export function ActivityZonesSection({
   activeAlgorithmNames,
 }: ActivityZonesSectionProps): React.ReactElement {
   const { t } = useTranslation('task')
+  const reduceMotion = useReducedMotion()
   // 画板是否已处于下笔状态：进入工作台时空防区任务会自动切到 roi 工具，
   // 此处据此给出"已就绪"或"先选类型"的差异化引导，避免与上方类型按钮重复出 CTA。
   const isDrawingArmed = activeTool !== 'select'
 
   return (
     <div className="space-y-2.5">
-      {/* 栏目标题与绘制入口 */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      {/* 栏目标题与快速说明 */}
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold tracking-wide text-[var(--text-primary)]">
             {t('studio.zonesSectionTitle', { defaultValue: '空间活动防区' })}
@@ -48,36 +84,56 @@ export function ActivityZonesSection({
             {rules.length}
           </span>
         </div>
+        <span className="font-mono text-[10px] text-[var(--text-muted)]">
+          {t('studio.pickTypeToDraw', { defaultValue: '选择类型并在画面上绘制' })}
+        </span>
+      </div>
 
-        {/* 一键下笔：直接把画板工具切到对应类型 */}
-        <div
-          className="flex shrink-0 items-center gap-2 rounded-[7px] border border-[var(--border)] bg-[var(--bg-surface)] p-1"
-          role="group"
-          aria-label={t('studio.zoneTypeTools', { defaultValue: '防区类型' })}
-        >
-          {DRAW_ACTIONS.map((action) => {
-            const label = t(action.labelKey, { defaultValue: action.tool })
-            const isActive = activeTool === action.tool
-            return (
-              <button
-                key={action.tool}
-                type="button"
-                onClick={() => onStartDrawing(action.tool)}
-                aria-pressed={isActive}
-                aria-label={label}
-                title={`${label} - ${t('studio.startDrawingHint', { defaultValue: '在画面上单击开始绘制' })}`}
-                className={`flex h-9 min-w-[4.5rem] items-center justify-center gap-1.5 rounded-[5px] px-2 text-[10px] font-semibold whitespace-nowrap transition-colors sm:text-[11px] ${
-                  isActive
-                    ? 'bg-[var(--accent)] text-white shadow-sm'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]'
-                }`}
-              >
-                {action.icon}
-                <span>{label}</span>
-              </button>
-            )
-          })}
-        </div>
+      {/* 一键下笔：4 类绘制工具并列 (ROI / 绊线 / 遮罩 / 特写取景) */}
+      <div
+        className="grid grid-cols-4 gap-1.5 rounded-xl border border-black/5 bg-black/[0.03] p-1 backdrop-blur-md dark:border-white/[0.08] dark:bg-black/40"
+        role="group"
+        aria-label={t('studio.zoneTypeTools', { defaultValue: '防区类型' })}
+      >
+        {DRAW_ACTIONS.map((action) => {
+          const label = t(action.labelKey, { defaultValue: action.tool })
+          const isActive = activeTool === action.tool
+          const isPrecrop = action.tool === 'precrop'
+          const hasPrecropRule = isPrecrop && rules.some((r) => r.role === 'precrop')
+
+          return (
+            <motion.button
+              key={action.tool}
+              type="button"
+              onClick={() => onStartDrawing(action.tool)}
+              whileHover={reduceMotion ? undefined : { scale: 1.02 }}
+              whileTap={reduceMotion ? undefined : { scale: 0.96 }}
+              aria-pressed={isActive}
+              aria-label={label}
+              title={`${label} - ${
+                isPrecrop && hasPrecropRule
+                  ? t('studio.precropReplaceHint', {
+                      defaultValue: '重新框定取景（将自动替换现有取景框）',
+                    })
+                  : t('studio.startDrawingHint', { defaultValue: '在画面上单击开始绘制' })
+              }`}
+              className={`group/action relative flex h-8 min-w-0 items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-semibold whitespace-nowrap transition-all ${
+                isActive
+                  ? 'border border-black/5 bg-white font-bold text-[var(--text-primary)] shadow-sm dark:border-white/20 dark:bg-white/15'
+                  : 'text-[var(--text-muted)] hover:bg-black/[0.02] hover:text-[var(--text-secondary)] dark:hover:bg-white/[0.04]'
+              }`}
+            >
+              {action.icon}
+              <span className="truncate">{label}</span>
+              {hasPrecropRule && !isActive && (
+                <span
+                  className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-lime-400 shadow-[0_0_6px_#a3e635]"
+                  title={t('studio.precropConfigured', { defaultValue: '已配置物理取景框' })}
+                />
+              )}
+            </motion.button>
+          )
+        })}
       </div>
 
       {/* 算力作用域提示：几何规则与算法的真实关系 */}
@@ -94,8 +150,8 @@ export function ActivityZonesSection({
 
       {/* 防区列表 / 空状态 */}
       {rules.length === 0 ? (
-        <div className="rounded-[8px] border border-dashed border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-3 text-[11px] text-[var(--text-muted)]">
-          <div className="flex items-start gap-2">
+        <div className="rounded-xl border border-dashed border-black/10 bg-white/40 px-4 py-3.5 text-[11px] text-[var(--text-muted)] backdrop-blur-md dark:border-white/10 dark:bg-white/[0.02]">
+          <div className="flex items-start gap-2.5">
             <Hexagon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)] opacity-50" />
             <div className="space-y-1">
               <span className="block">
@@ -117,106 +173,102 @@ export function ActivityZonesSection({
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          {rules.map((rule) => {
-            const isSelected = rule.id === selectedRuleId
-            const isRoi = rule.role === 'roi'
-            const isLine = rule.role === 'line'
-            const isPrecrop = rule.role === 'precrop'
+          <AnimatePresence mode="popLayout" initial={false}>
+            {rules.map((rule) => {
+              const isSelected = rule.id === selectedRuleId
+              const isLine = rule.role === 'line'
+              const roleInfo = ROLE_BADGES[rule.role]
+              const roleName = t(roleInfo.labelKey, { defaultValue: roleInfo.label })
 
-            return (
-              <div
-                key={rule.id}
-                className={`group flex items-center justify-between rounded-[7px] border p-2.5 text-xs transition-all ${
-                  isSelected
-                    ? 'border-[var(--border-strong)] bg-[var(--accent-soft)]/40 shadow-xs'
-                    : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]'
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => onSelectRule(rule.id)}
-                  aria-pressed={isSelected}
-                  aria-label={`${rule.name} - ${
-                    isRoi
-                      ? t('tools.roi', { defaultValue: '多边形防区' })
-                      : isLine
-                        ? t('tools.line', { defaultValue: '越界绊线' })
-                        : isPrecrop
-                          ? t('tools.precrop', { defaultValue: '特写取景' })
-                          : t('tools.mask', { defaultValue: '屏蔽遮罩' })
+              return (
+                <motion.div
+                  key={rule.id}
+                  layout={!reduceMotion}
+                  initial={{ opacity: 0, y: reduceMotion ? 0 : 8, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{
+                    opacity: 0,
+                    scale: 0.95,
+                    transition: { duration: reduceMotion ? 0 : motionTokens.duration.fast },
+                  }}
+                  transition={{
+                    duration: reduceMotion ? 0 : motionTokens.duration.fast,
+                    ease: motionTokens.easing.smooth,
+                  }}
+                  className={`group flex items-center justify-between rounded-xl border p-2.5 text-xs backdrop-blur-md transition-all duration-200 ${
+                    isSelected
+                      ? 'border-blue-500/40 bg-blue-500/10 shadow-sm ring-1 ring-blue-500/20 dark:bg-blue-500/15'
+                      : 'border-black/[0.06] bg-white/40 hover:border-black/15 hover:bg-white/70 dark:border-white/[0.07] dark:bg-white/[0.02] dark:hover:border-white/15 dark:hover:bg-white/[0.05]'
                   }`}
-                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none"
                 >
-                  <span
-                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[5px] font-mono text-[10px] font-bold ${
-                      isRoi
-                        ? 'border border-[var(--border-strong)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                        : isLine
-                          ? 'border border-[var(--accent-green)]/30 bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
-                          : isPrecrop
-                            ? 'border border-lime-400/30 bg-lime-500/10 text-lime-400'
-                            : 'border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 text-[var(--destructive)]'
-                    }`}
+                  <button
+                    type="button"
+                    onClick={() => onSelectRule(rule.id)}
+                    aria-pressed={isSelected}
+                    aria-label={`${rule.name} - ${roleName}`}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:outline-none"
                   >
-                    {isRoi ? 'ROI' : isLine ? 'LINE' : isPrecrop ? 'CROP' : 'MASK'}
-                  </span>
+                    <span
+                      className={`flex h-6 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-[9px] font-bold ${roleInfo.badgeClass}`}
+                    >
+                      {roleInfo.label}
+                    </span>
 
-                  <div className="min-w-0">
-                    <span className="block truncate font-medium text-[var(--text-primary)]">
-                      {rule.name}
-                    </span>
-                    <span className="font-mono text-[10px] text-[var(--text-muted)]">
-                      {isLine
-                        ? `${t('tools.line', { defaultValue: '绊线' })} · ${
-                            rule.lineDirection === 'both'
-                              ? t('inspector.dirBoth', { defaultValue: '双向' })
-                              : rule.lineDirection === 'a_to_b'
-                                ? t('inspector.dirAtoB', { defaultValue: 'A→B' })
-                                : t('inspector.dirBtoA', { defaultValue: 'B→A' })
-                          }`
-                        : t('studio.polygonVertices', {
-                            count: rule.points.length,
-                            defaultValue: `${rule.points.length} 顶点`,
-                          })}
-                    </span>
+                    <div className="min-w-0">
+                      <span className="block truncate font-semibold text-[var(--text-primary)]">
+                        {rule.name}
+                      </span>
+                      <span className="font-mono text-[10px] text-[var(--text-muted)]">
+                        {isLine
+                          ? `${t('tools.line', { defaultValue: '绊线' })} · ${getDirectionLabel(rule.lineDirection || 'both', t)}`
+                          : `${t('studio.polygonVertices', {
+                              count: rule.points.length,
+                              defaultValue: `${rule.points.length} 顶点`,
+                            })}${
+                              rule.points.length >= 3
+                                ? ` · ${calculatePolygonAreaPercent(rule.points).toFixed(1)}%`
+                                : ''
+                            }`}
+                      </span>
+                    </div>
+                  </button>
+
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onToggleRuleVisible(rule.id)
+                      }}
+                      aria-label={
+                        rule.visible
+                          ? t('layers.hideRule', { defaultValue: '隐藏该规则' })
+                          : t('layers.showRule', { defaultValue: '显示该规则' })
+                      }
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-black/5 hover:text-[var(--text-primary)] dark:hover:bg-white/10"
+                    >
+                      {rule.visible ? (
+                        <Eye className="h-3.5 w-3.5" />
+                      ) : (
+                        <EyeOff className="h-3.5 w-3.5 opacity-50" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onDeleteRule(rule.id)
+                      }}
+                      aria-label={t('layers.deleteRule', { defaultValue: '删除该规则' })}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                </button>
-
-                <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onToggleRuleVisible(rule.id)
-                    }}
-                    aria-label={
-                      rule.visible
-                        ? t('layers.hideRule', { defaultValue: '隐藏该规则' })
-                        : t('layers.showRule', { defaultValue: '显示该规则' })
-                    }
-                    className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
-                  >
-                    {rule.visible ? (
-                      <Eye className="h-3.5 w-3.5" />
-                    ) : (
-                      <EyeOff className="h-3.5 w-3.5 opacity-50" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDeleteRule(rule.id)
-                    }}
-                    aria-label={t('layers.deleteRule', { defaultValue: '删除该规则' })}
-                    className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-            )
-          })}
+                </motion.div>
+              )
+            })}
+          </AnimatePresence>
         </div>
       )}
     </div>

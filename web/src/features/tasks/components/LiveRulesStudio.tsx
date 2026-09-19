@@ -17,15 +17,18 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { LivePlayer } from '@/features/live/components/LivePlayer'
 import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
+import { motionTokens } from '@/lib/motionTokens'
 import { telemetryStore } from '@/lib/telemetryStore'
 import type {
   AlgoManifest,
   Camera,
   DetectionLineDirection,
   DetectionPoint,
+  DetectionRule,
   StreamMode,
   TaskAlgorithmInstanceDto,
   TaskConfigDto,
@@ -44,7 +47,10 @@ import { extractTargetClasses } from '../algoMetadata'
 import { RulePropertiesPanel } from './RulePropertiesPanel'
 import { StudioToolIsland } from './StudioToolIsland'
 import {
+  calculatePolygonAreaPercent,
+  cycleLineDirection,
   DEFAULT_ALGO_PACKAGES,
+  DIRECTION_SYMBOLS,
   ExtendedRule,
   getDefaultRuleName,
   getInitialRuleColor,
@@ -109,11 +115,20 @@ function getRuleAnchor(rule: ExtendedRule): DetectionPoint | null {
   return { x: sum.x / rule.points.length, y: sum.y / rule.points.length }
 }
 
+function toolToRuleRole(tool: ToolMode): DetectionRule['role'] {
+  if (tool === 'line' || tool === 'mask' || tool === 'precrop') {
+    return tool
+  }
+  return 'roi'
+}
+
 interface MotionGateControlProps {
   enabled: boolean
   threshold: number
   onToggle: () => void
   onThresholdChange: (threshold: number) => void
+  currentMotionScore?: number
+  isGated?: boolean
 }
 
 function MotionGateControl({
@@ -121,6 +136,8 @@ function MotionGateControl({
   threshold,
   onToggle,
   onThresholdChange,
+  currentMotionScore,
+  isGated,
 }: MotionGateControlProps): React.ReactElement {
   const { t } = useTranslation('task')
 
@@ -160,12 +177,12 @@ function MotionGateControl({
       </div>
 
       {enabled && (
-        <div className="space-y-1.5 border-t border-[var(--border)] pt-2">
+        <div className="space-y-2.5 border-t border-[var(--border)] pt-2.5">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-[var(--text-secondary)]">
               {t('studio.motionGateSensitivity', { defaultValue: '灵敏度阈值' })}
             </span>
-            <span className="font-mono font-semibold text-[var(--accent)]">{threshold}%</span>
+            <span className="font-mono font-bold text-[var(--accent)]">{threshold}%</span>
           </div>
           <input
             type="range"
@@ -177,6 +194,55 @@ function MotionGateControl({
             onChange={(event) => onThresholdChange(Number(event.target.value))}
             className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent-green)]"
           />
+
+          {/* 实时变动量 vs 触发阈值对照仪表条 (Motion VU Meter) */}
+          <div className="rounded-[6px] border border-[var(--border)] bg-[var(--bg-secondary)]/70 p-2 text-[10px]">
+            <div className="flex items-center justify-between font-mono">
+              <span className="text-[var(--text-muted)]">
+                {t('studio.motionLiveDelta', { defaultValue: '画面变动 / 唤醒游标' })}:
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="font-bold text-[var(--text-primary)]">
+                  {currentMotionScore !== undefined
+                    ? `${Math.round(currentMotionScore * 100)}%`
+                    : '—'}
+                </span>
+                <span className="opacity-40">/</span>
+                <span className="font-semibold text-[var(--accent)]">{threshold}%</span>
+              </span>
+            </div>
+            {/* 刻度槽与游标 */}
+            <div className="relative mt-1.5 h-2 w-full overflow-hidden rounded-full bg-black/20">
+              {/* 当前实时变动光棒 */}
+              <div
+                className="h-full rounded-full bg-[var(--accent-green)] transition-all duration-150"
+                style={{
+                  width: `${Math.min(100, (currentMotionScore ?? 0) * 100)}%`,
+                }}
+              />
+              {/* 设定阈值垂直警戒标 */}
+              <div
+                className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-[var(--accent-amber)] shadow-[0_0_4px_var(--accent-amber)]"
+                style={{ left: `${threshold}%` }}
+                title={`${threshold}% 唤醒阈值`}
+              />
+            </div>
+            <div className="mt-1 flex items-center justify-between text-[9px] text-[var(--text-muted)]">
+              <span>0%</span>
+              <span
+                className={
+                  isGated
+                    ? 'font-semibold text-[var(--accent-amber)]'
+                    : 'font-semibold text-[var(--accent-green)]'
+                }
+              >
+                {isGated
+                  ? t('studio.telemetryGated', { defaultValue: '门控待机' })
+                  : t('studio.telemetryInferring', { defaultValue: '推理中' })}
+              </span>
+              <span>100%</span>
+            </div>
+          </div>
         </div>
       )}
     </section>
@@ -196,6 +262,7 @@ export function LiveRulesStudio({
   onNavigateToAlgorithms,
 }: LiveRulesStudioProps): React.ReactElement {
   const { t } = useTranslation('task')
+  const reduceMotion = useReducedMotion()
 
   const [taskName, setTaskName] = useState<string>('')
   const [streamMode, setStreamMode] = useState<StreamMode>(camera.streamMode || 'auto')
@@ -444,8 +511,9 @@ export function LiveRulesStudio({
         }
       })
       resetRules(extRules)
-      setSelectedRuleId(extRules.length > 0 ? extRules[0].id : null)
-      // 新建任务尚无任何防区时，直接切到绘制工具，进入工作台即可下笔
+      // 进入配置工作台时默认处于全局控制中枢模式（通道门控 + 算法引擎机架 + 防区纵览），不预选特定防区
+      setSelectedRuleId(null)
+      // 新建任务尚无任何防区时，切到绘制工具引导落点；已有防区时默认为常规选择工具
       setTool(extRules.length === 0 ? 'roi' : 'select')
     },
     [camera.cameraId, camera.name, t, resetRules],
@@ -616,14 +684,7 @@ export function LiveRulesStudio({
         return
       }
 
-      const role =
-        activeTool === 'line'
-          ? 'line'
-          : activeTool === 'mask'
-            ? 'mask'
-            : activeTool === 'precrop'
-              ? 'precrop'
-              : 'roi'
+      const role = toolToRuleRole(activeTool)
       const existingRoiCount = rules.filter((r) => r.role === 'roi').length
 
       const newRule: ExtendedRule = {
@@ -1379,7 +1440,7 @@ export function LiveRulesStudio({
               onMouseMove={handleStageMouseMove}
               onClick={handleStageClick}
               onDoubleClick={handleStageDoubleClick}
-              className={`relative touch-none overflow-hidden rounded-[6px] border border-white/15 bg-[var(--video-surface)] shadow-2xl ${
+              className={`relative touch-none overflow-hidden rounded-[7px] border border-white/15 bg-[var(--video-surface)] shadow-2xl ${
                 DRAW_TOOLS.has(tool) ? 'cursor-crosshair' : ''
               }`}
               style={
@@ -1395,6 +1456,12 @@ export function LiveRulesStudio({
                     }
               }
             >
+              {/* 四角工业 HUD 取景标 */}
+              <div className="pointer-events-none absolute top-2 left-2 z-10 h-3 w-3 border-t-2 border-l-2 border-[var(--accent)]/80" />
+              <div className="pointer-events-none absolute top-2 right-2 z-10 h-3 w-3 border-t-2 border-r-2 border-[var(--accent)]/80" />
+              <div className="pointer-events-none absolute bottom-2 left-2 z-10 h-3 w-3 border-b-2 border-l-2 border-[var(--accent)]/80" />
+              <div className="pointer-events-none absolute right-2 bottom-2 z-10 h-3 w-3 border-r-2 border-b-2 border-[var(--accent)]/80" />
+
               {/* 实时分析源预览播放器 (主码流或子码流)，使用 contain 保证几何标定不失真 */}
               <LivePlayer
                 cameraId={camera.cameraId}
@@ -1432,6 +1499,22 @@ export function LiveRulesStudio({
                   >
                     <path d="M 1 1 L 7 4 L 1 7 Z" fill={LINE_COLOR_THEME.stroke} />
                   </marker>
+                  <pattern
+                    id="stage-mask-hatch"
+                    width="8"
+                    height="8"
+                    patternTransform="rotate(45 0 0)"
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <line
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="8"
+                      stroke="rgba(244, 63, 94, 0.45)"
+                      strokeWidth="1.8"
+                    />
+                  </pattern>
                 </defs>
 
                 {/* 既有防区规则绘制 */}
@@ -1471,7 +1554,7 @@ export function LiveRulesStudio({
                           x2={`${p2.x * 100}%`}
                           y2={`${p2.y * 100}%`}
                           stroke={isSelected ? theme.selectedStroke : theme.stroke}
-                          strokeWidth={isSelected ? '2.5' : '1.5'}
+                          strokeWidth={isSelected ? '2.5' : '1.8'}
                           vectorEffect="non-scaling-stroke"
                           markerEnd={getLineMarkerEnd(rule.lineDirection)}
                           className={tool === 'select' ? 'cursor-move' : 'cursor-pointer'}
@@ -1481,6 +1564,7 @@ export function LiveRulesStudio({
                   }
 
                   const pointsAttr = rule.points.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')
+                  const isMask = rule.role === 'mask'
                   return (
                     <g
                       key={rule.id}
@@ -1495,9 +1579,16 @@ export function LiveRulesStudio({
                     >
                       <polygon
                         points={pointsAttr}
-                        fill={theme.fill}
-                        stroke={isSelected ? theme.selectedStroke : theme.stroke}
-                        strokeWidth={isSelected ? '2.5' : '1.5'}
+                        fill={isMask ? 'url(#stage-mask-hatch)' : theme.fill}
+                        stroke={
+                          isSelected
+                            ? theme.selectedStroke
+                            : isMask
+                              ? 'rgba(244, 63, 94, 0.9)'
+                              : theme.stroke
+                        }
+                        strokeWidth={isSelected ? '2.5' : '1.6'}
+                        strokeDasharray={isMask ? '4 3' : undefined}
                         vectorEffect="non-scaling-stroke"
                         className={tool === 'select' ? 'cursor-move' : 'cursor-pointer'}
                       />
@@ -1566,13 +1657,15 @@ export function LiveRulesStudio({
                     <div
                       key={`${rule.id}-${pointIndex}`}
                       onMouseDown={(e) => handleVertexMouseDown(e, rule.id, pointIndex)}
-                      className="absolute z-20 h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-black/70 shadow-xs transition-transform hover:scale-125 active:cursor-grabbing"
+                      className="group/vertex absolute z-20 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-black/80 shadow-md transition-transform hover:scale-135 active:cursor-grabbing"
                       style={{
                         left: `${p.x * 100}%`,
                         top: `${p.y * 100}%`,
                         backgroundColor: theme.selectedStroke,
                       }}
-                    />
+                    >
+                      <span className="pointer-events-none absolute -inset-1 rounded-full border border-white/50 opacity-0 transition-opacity group-hover/vertex:opacity-100" />
+                    </div>
                   ))
                 })}
 
@@ -1586,7 +1679,7 @@ export function LiveRulesStudio({
               ))}
               {draftCursor.snapped && (
                 <div
-                  className="pointer-events-none absolute z-20 h-5 w-5 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full border-2 border-[var(--accent)]"
+                  className="pointer-events-none absolute z-20 h-5 w-5 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full border-2 border-[var(--accent)] shadow-[0_0_8px_var(--accent)]"
                   style={{
                     left: `${draftCursor.snapped.x * 100}%`,
                     top: `${draftCursor.snapped.y * 100}%`,
@@ -1601,64 +1694,72 @@ export function LiveRulesStudio({
                 if (!anchor) return null
                 const isSelected = rule.id === selectedRuleId
                 const isInteractive = isSelected && tool === 'select'
+                const theme = getRuleTheme(rule, ruleIdx)
+                const isPolygon = rule.role !== 'line'
+                const areaPct =
+                  isPolygon && rule.points.length >= 3
+                    ? calculatePolygonAreaPercent(rule.points)
+                    : null
 
                 return (
                   <div
                     key={`label-${rule.id}`}
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
-                    className={`absolute z-20 -translate-x-1/2 -translate-y-[calc(100%+10px)] ${
+                    className={`absolute z-20 -translate-x-1/2 -translate-y-[calc(100%+12px)] ${
                       isInteractive ? '' : 'pointer-events-none'
                     }`}
                     style={{ left: `${anchor.x * 100}%`, top: `${anchor.y * 100}%` }}
                   >
-                    <div
-                      className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[11px] shadow-lg backdrop-blur-xs ${
-                        isSelected
-                          ? 'border-[var(--border-strong)] bg-[var(--video-surface)]/85 text-white'
-                          : 'border-white/15 bg-[var(--video-surface)]/65 text-white/75'
-                      }`}
-                    >
-                      <span
-                        className={`h-1.5 w-1.5 rounded-full ${getRuleTheme(rule, ruleIdx).handleBg}`}
-                      />
-                      <span className="max-w-[9rem] truncate font-medium">{rule.name}</span>
+                    <div className="relative">
+                      <div
+                        className={`flex items-center gap-1.5 rounded-[6px] border px-2 py-0.5 text-[11px] shadow-xl backdrop-blur-md transition-all ${
+                          isSelected
+                            ? 'border-[var(--border-strong)] bg-black/85 text-white'
+                            : 'border-white/15 bg-black/65 text-white/80'
+                        }`}
+                        style={{
+                          borderTopColor: theme.stroke,
+                          borderTopWidth: '2px',
+                        }}
+                      >
+                        <span className={`h-1.5 w-1.5 rounded-full ${theme.handleBg}`} />
+                        <span className="max-w-[8.5rem] truncate font-semibold">{rule.name}</span>
+                        {areaPct !== null && (
+                          <span className="font-mono text-[9px] text-white/60">
+                            ({areaPct.toFixed(1)}%)
+                          </span>
+                        )}
 
-                      {isSelected && rule.role === 'line' && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUpdateRule(rule.id, {
-                              lineDirection:
-                                rule.lineDirection === 'both'
-                                  ? 'a_to_b'
-                                  : rule.lineDirection === 'a_to_b'
-                                    ? 'b_to_a'
-                                    : 'both',
-                            })
-                          }
-                          title={t('inspector.lineDirection', { defaultValue: '跨线判定方向' })}
-                          className="rounded px-1 font-mono text-[10px] text-[var(--accent)] hover:bg-white/15"
-                        >
-                          {rule.lineDirection === 'both'
-                            ? '⇄'
-                            : rule.lineDirection === 'a_to_b'
-                              ? 'A→B'
-                              : 'B→A'}
-                        </button>
-                      )}
+                        {isSelected && rule.role === 'line' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUpdateRule(rule.id, {
+                                lineDirection: cycleLineDirection(rule.lineDirection),
+                              })
+                            }
+                            title={t('inspector.lineDirection', { defaultValue: '跨线判定方向' })}
+                            className="rounded px-1 font-mono text-[10px] text-[var(--accent)] hover:bg-white/15"
+                          >
+                            {DIRECTION_SYMBOLS[rule.lineDirection || 'both']}
+                          </button>
+                        )}
 
-                      {isSelected && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteRule(rule.id)}
-                          aria-label={t('inspector.delete', { defaultValue: '删除防区' })}
-                          title={t('inspector.delete', { defaultValue: '删除防区' })}
-                          className="rounded p-0.5 text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      )}
+                        {isSelected && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRule(rule.id)}
+                            aria-label={t('inspector.delete', { defaultValue: '删除防区' })}
+                            title={t('inspector.delete', { defaultValue: '删除防区' })}
+                            className="rounded p-0.5 text-[var(--destructive)] hover:bg-[var(--destructive)]/15"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                      {/* 下指向小三角尖端 */}
+                      <div className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-r border-b border-white/20 bg-black/85" />
                     </div>
                   </div>
                 )
@@ -1689,148 +1790,188 @@ export function LiveRulesStudio({
 
           {/* 真实遥测底栏：分辨率/编码来自探活，航迹与门控状态来自后端推送 */}
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-2 font-mono text-[11px] text-[var(--text-secondary)]">
-            <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-[var(--accent-green)]" />
-                <span>
+            <div className="flex items-center gap-2.5">
+              <span className="flex items-center gap-1.5 rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 shadow-2xs">
+                <span className="h-2 w-2 rounded-full bg-[var(--accent-green)] shadow-[0_0_5px_var(--accent-green)]" />
+                <span className="font-semibold text-[var(--text-primary)]">
                   {camera.lastWidth || 1920}×{camera.lastHeight || 1080}
                 </span>
               </span>
-              <span>·</span>
-              <span className="font-semibold text-[var(--accent)]">
+              <span className="rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 font-semibold text-[var(--accent)] shadow-2xs">
                 {camera.lastCodec?.toUpperCase() || 'H264'}
               </span>
-              <span>·</span>
-              <span>
-                {t('studio.telemetryPreviewStream', { defaultValue: '预览码流' })}:{' '}
-                {effectivePreviewStream === 'main'
-                  ? t('cardStream.main', { defaultValue: '主码流' })
-                  : t('cardStream.sub', { defaultValue: '子码流' })}
+              <span className="rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 text-[var(--text-secondary)] shadow-2xs">
+                {t('studio.telemetryPreviewStream', { defaultValue: '预览' })}:{' '}
+                <strong className="font-semibold text-[var(--text-primary)]">
+                  {effectivePreviewStream === 'main'
+                    ? t('cardStream.main', { defaultValue: '主码流' })
+                    : t('cardStream.sub', { defaultValue: '子码流' })}
+                </strong>
               </span>
             </div>
-            <div className="flex items-center gap-3">
-              <span>
+            <div className="flex items-center gap-2">
+              <span className="rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 shadow-2xs">
                 {t('studio.telemetryTracks', { defaultValue: '活跃航迹' })}:{' '}
-                <span className="font-semibold text-[var(--text-primary)]">
+                <span className="font-bold text-[var(--text-primary)]">
                   {telemetry?.activeTracks ?? 0}
                 </span>
               </span>
-              <span>·</span>
-              <span>
+              <span className="rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 shadow-2xs">
                 {t('studio.telemetryMotion', { defaultValue: '画面变动' })}:{' '}
-                <span className="font-semibold text-[var(--text-primary)]">
+                <span className="font-bold text-[var(--text-primary)]">
                   {telemetry ? `${Math.round(telemetry.motionScore * 100)}%` : '—'}
                 </span>
               </span>
-              <span>·</span>
               <span
-                className={
+                className={`flex items-center gap-1.5 rounded-[5px] border px-2 py-0.5 font-semibold shadow-2xs ${
                   telemetry?.isMotionGated
-                    ? 'text-[var(--accent-amber)]'
-                    : 'text-[var(--accent-green)]'
-                }
+                    ? 'border-[var(--accent-amber)]/40 bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]'
+                    : 'border-[var(--accent-green)]/40 bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
+                }`}
               >
-                {telemetry?.isMotionGated
-                  ? t('studio.telemetryGated', { defaultValue: '门控待机' })
-                  : t('studio.telemetryInferring', { defaultValue: '推理中' })}
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    telemetry?.isMotionGated
+                      ? 'bg-[var(--accent-amber)]'
+                      : 'animate-pulse bg-[var(--accent-green)] shadow-[0_0_6px_var(--accent-green)]'
+                  }`}
+                />
+                <span>
+                  {telemetry?.isMotionGated
+                    ? t('studio.telemetryGated', { defaultValue: '门控待机' })
+                    : t('studio.telemetryInferring', { defaultValue: '推理中' })}
+                </span>
               </span>
             </div>
           </div>
         </div>
 
         {/* 停靠式上下文配置面板：全局算力视角 / 单防区属性视角 */}
-        {isPanelOpen && (
-          <aside className="flex h-[44vh] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-[var(--border)] bg-[var(--bg-surface-solid)] lg:h-auto lg:max-h-none lg:w-[360px] lg:border-t-0 lg:border-l xl:w-[400px]">
-            <div className="flex h-11 shrink-0 items-center justify-between border-b border-[var(--border)] px-3.5">
-              <span className="flex min-w-0 items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
-                {selectedRule ? (
-                  <>
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--accent)]" />
-                    <span className="truncate">{selectedRule.name}</span>
-                    <span className="shrink-0 rounded-[5px] border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]">
-                      {selectedRule.role.toUpperCase()}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <Layers className="h-4 w-4 text-[var(--accent)]" />
-                    <span>{t('studio.panelGlobalMode', { defaultValue: '算力与防区配置' })}</span>
-                  </>
-                )}
-              </span>
-              <div className="flex shrink-0 items-center gap-1">
-                {selectedRule && (
+        <AnimatePresence mode="wait">
+          {isPanelOpen && (
+            <motion.aside
+              key="studio-sidebar-panel"
+              initial={{ opacity: 0, x: reduceMotion ? 0 : motionTokens.distance.md }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: reduceMotion ? 0 : motionTokens.distance.md }}
+              transition={{
+                duration: reduceMotion ? 0 : motionTokens.duration.fast,
+                ease: motionTokens.easing.smooth,
+              }}
+              className="flex h-[44vh] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-black/5 bg-white/75 shadow-[-12px_0_40px_rgba(0,0,0,0.2)] backdrop-blur-2xl lg:h-auto lg:max-h-none lg:w-[360px] lg:border-t-0 lg:border-l xl:w-[400px] dark:border-white/10 dark:bg-[#07090e]/80"
+            >
+              <div className="flex h-11 shrink-0 items-center justify-between border-b border-black/5 bg-white/40 px-3.5 backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.02]">
+                <span className="flex min-w-0 items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
+                  {selectedRule ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRuleId(null)}
+                        title={t('inspector.backToOverview', { defaultValue: '返回全局配置' })}
+                        aria-label={t('inspector.backToOverview', { defaultValue: '返回全局配置' })}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-black/5 bg-black/5 text-[var(--text-muted)] transition-all hover:bg-black/10 hover:text-[var(--text-primary)] dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+                      >
+                        <ArrowLeft className="h-3.5 w-3.5" />
+                      </button>
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_6px_var(--accent)]" />
+                      <span className="truncate">{selectedRule.name}</span>
+                      <span className="shrink-0 rounded-md border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-[var(--accent)]">
+                        {selectedRule.role.toUpperCase()}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Layers className="h-4 w-4 text-[var(--accent)]" />
+                      <span className="tracking-tight">
+                        {t('studio.panelGlobalMode', { defaultValue: '算力与防区配置' })}
+                      </span>
+                    </>
+                  )}
+                </span>
+                <div className="flex shrink-0 items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => setSelectedRuleId(null)}
-                    title={t('inspector.backToOverview', { defaultValue: '返回全局配置' })}
-                    aria-label={t('inspector.backToOverview', { defaultValue: '返回全局配置' })}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+                    onClick={() => setIsPanelOpen(false)}
+                    title={t('studio.collapsePanel', { defaultValue: '收起配置面板' })}
+                    aria-label={t('studio.collapsePanel', { defaultValue: '收起配置面板' })}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-black/5 bg-black/5 text-[var(--text-muted)] transition-colors hover:bg-black/10 hover:text-[var(--text-primary)] dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setIsPanelOpen(false)}
-                  title={t('studio.collapsePanel', { defaultValue: '收起配置面板' })}
-                  aria-label={t('studio.collapsePanel', { defaultValue: '收起配置面板' })}
-                  className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+                </div>
               </div>
-            </div>
 
-            <div className="flex-1 space-y-4 overflow-y-auto p-3.5">
-              {/* 单防区视角：属性编辑 */}
-              {selectedRule && (
-                <>
-                  <RulePropertiesPanel
-                    rule={selectedRule}
-                    onUpdateRule={handleUpdateRule}
-                    onCloneRule={handleCloneRule}
-                    onDeleteRule={handleDeleteRule}
-                    activeAlgorithmNames={activeAlgorithmNames}
-                  />
-                  <div className="h-px bg-[var(--border)]" />
-                </>
-              )}
+              <div className="flex-1 space-y-4 overflow-y-auto p-3.5">
+                {/* 视图切换平滑空间过渡 */}
+                <AnimatePresence mode="wait" initial={false}>
+                  {selectedRule ? (
+                    <motion.div
+                      key={`rule-properties-${selectedRule.id}`}
+                      initial={{ opacity: 0, x: reduceMotion ? 0 : motionTokens.distance.sm }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: reduceMotion ? 0 : -motionTokens.distance.sm }}
+                      transition={{
+                        duration: reduceMotion ? 0 : motionTokens.duration.fast,
+                        ease: motionTokens.easing.smooth,
+                      }}
+                      className="space-y-4"
+                    >
+                      <RulePropertiesPanel
+                        rule={selectedRule}
+                        onUpdateRule={handleUpdateRule}
+                        onCloneRule={handleCloneRule}
+                        onDeleteRule={handleDeleteRule}
+                        activeAlgorithmNames={activeAlgorithmNames}
+                      />
+                      <div className="h-px bg-black/5 dark:bg-white/10" />
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="global-settings"
+                      initial={{ opacity: 0, x: reduceMotion ? 0 : -motionTokens.distance.sm }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: reduceMotion ? 0 : motionTokens.distance.sm }}
+                      transition={{
+                        duration: reduceMotion ? 0 : motionTokens.duration.fast,
+                        ease: motionTokens.easing.smooth,
+                      }}
+                      className="space-y-4"
+                    >
+                      <MotionGateControl
+                        enabled={motionGateEnabled}
+                        threshold={motionGateThreshold}
+                        onToggle={() => setMotionGateEnabled((enabled) => !enabled)}
+                        onThresholdChange={setMotionGateThreshold}
+                        currentMotionScore={telemetry?.motionScore}
+                        isGated={telemetry?.isMotionGated}
+                      />
+                      <div className="h-px bg-black/5 dark:bg-white/10" />
+                      <AlgorithmRack
+                        availableAlgos={availableAlgos}
+                        activeInstances={activeInstances}
+                        onToggleAlgo={handleToggleAlgo}
+                        onOpenParams={handleOpenParams}
+                      />
+                      <div className="h-px bg-black/5 dark:bg-white/10" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-              {/* 全局视角：先配置通道级门控，再选择算法引擎 */}
-              {!selectedRule && (
-                <>
-                  <MotionGateControl
-                    enabled={motionGateEnabled}
-                    threshold={motionGateThreshold}
-                    onToggle={() => setMotionGateEnabled((enabled) => !enabled)}
-                    onThresholdChange={setMotionGateThreshold}
-                  />
-                  <div className="h-px bg-[var(--border)]" />
-                  <AlgorithmRack
-                    availableAlgos={availableAlgos}
-                    activeInstances={activeInstances}
-                    onToggleAlgo={handleToggleAlgo}
-                    onOpenParams={handleOpenParams}
-                  />
-                  <div className="h-px bg-[var(--border)]" />
-                </>
-              )}
-
-              {/* 空间活动防区列表（两种视角下均可用，便于快速切换） */}
-              <ActivityZonesSection
-                rules={rules}
-                selectedRuleId={selectedRuleId}
-                onSelectRule={setSelectedRuleId}
-                onToggleRuleVisible={handleToggleRuleVisible}
-                onDeleteRule={handleDeleteRule}
-                onStartDrawing={handleSelectTool}
-                activeTool={tool}
-                activeAlgorithmNames={activeAlgorithmNames}
-              />
-            </div>
-          </aside>
-        )}
+                {/* 空间活动防区列表（两种视角下均可用，便于快速切换） */}
+                <ActivityZonesSection
+                  rules={rules}
+                  selectedRuleId={selectedRuleId}
+                  onSelectRule={setSelectedRuleId}
+                  onToggleRuleVisible={handleToggleRuleVisible}
+                  onDeleteRule={handleDeleteRule}
+                  onStartDrawing={handleSelectTool}
+                  activeTool={tool}
+                  activeAlgorithmNames={activeAlgorithmNames}
+                />
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* 算法参数独立调优抽屉 */}

@@ -3,7 +3,7 @@ import { Copy, Eye, EyeOff, Layers, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { DetectionLineDirection } from '@/types'
 import type { ExtendedRule } from './rulesStudioTypes'
-import { getDirectionLabel } from './rulesStudioTypes'
+import { calculatePolygonAreaPercent, getDirectionLabel } from './rulesStudioTypes'
 
 export interface RulePropertiesPanelProps {
   rule: ExtendedRule
@@ -31,9 +31,9 @@ export function RulePropertiesPanel({
   const isPolygon = rule.role !== 'line'
 
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-3">
       {/* 规则名称是编辑态识别标签；当前后端 DetectionRule 契约不持久化名称 */}
-      <div className="flex items-center justify-between rounded-[7px] border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2">
+      <div className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-white/40 px-3.5 py-2.5 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]">
         <span className="text-[11px] text-[var(--text-muted)]">
           {t('inspector.ruleName', { defaultValue: '规则名称' })}
         </span>
@@ -43,15 +43,27 @@ export function RulePropertiesPanel({
       </div>
 
       {/* 几何参数（只读摘要） */}
-      <div className="flex items-center justify-between rounded-[7px] border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-[11px]">
-        <span className="text-[var(--text-muted)]">
-          {isPolygon
-            ? t('inspector.vertexCount', { defaultValue: '顶点数' })
-            : t('inspector.endpointCount', { defaultValue: '端点' })}
-        </span>
-        <span className="font-mono font-semibold text-[var(--text-primary)]">
-          {rule.points.length}
-        </span>
+      <div className={`grid ${isPolygon ? 'grid-cols-2' : 'grid-cols-1'} gap-2 text-[11px]`}>
+        <div className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-white/40 px-3 py-2 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]">
+          <span className="text-[var(--text-muted)]">
+            {isPolygon
+              ? t('inspector.vertexCount', { defaultValue: '顶点数' })
+              : t('inspector.endpointCount', { defaultValue: '端点' })}
+          </span>
+          <span className="font-mono font-bold text-[var(--text-primary)]">
+            {rule.points.length}
+          </span>
+        </div>
+        {isPolygon && (
+          <div className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-white/40 px-3 py-2 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]">
+            <span className="text-[var(--text-muted)]">
+              {t('inspector.coveragePercent', { defaultValue: '画幅占比' })}
+            </span>
+            <span className="font-mono font-bold text-[var(--accent)]">
+              {calculatePolygonAreaPercent(rule.points).toFixed(1)}%
+            </span>
+          </div>
+        )}
       </div>
 
       {/* 绊线方向（唯一持久化的规则属性） */}
@@ -60,27 +72,30 @@ export function RulePropertiesPanel({
           <label className="mb-1.5 block font-mono text-[10px] tracking-wider text-[var(--text-muted)] uppercase">
             {t('inspector.lineDirection', { defaultValue: '跨线判定方向' })}
           </label>
-          <div className="grid grid-cols-3 gap-1 rounded-[7px] border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-center text-xs">
-            {(['both', 'a_to_b', 'b_to_a'] as DetectionLineDirection[]).map((dir) => (
-              <button
-                key={dir}
-                type="button"
-                onClick={() => onUpdateRule(rule.id, { lineDirection: dir })}
-                className={`rounded-[5px] py-1.5 font-medium transition-all ${
-                  rule.lineDirection === dir
-                    ? 'bg-[var(--accent)] font-semibold text-white shadow-xs'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                {getDirectionLabel(dir, t)}
-              </button>
-            ))}
+          <div className="grid grid-cols-3 gap-1 rounded-xl border border-black/5 bg-black/[0.03] p-1 text-center text-xs backdrop-blur-md dark:border-white/[0.08] dark:bg-black/40">
+            {(['both', 'a_to_b', 'b_to_a'] as DetectionLineDirection[]).map((dir) => {
+              const isActive = rule.lineDirection === dir
+              return (
+                <button
+                  key={dir}
+                  type="button"
+                  onClick={() => onUpdateRule(rule.id, { lineDirection: dir })}
+                  className={`rounded-lg py-1.5 font-medium transition-all ${
+                    isActive
+                      ? 'border border-black/5 bg-white font-bold text-[var(--text-primary)] shadow-sm dark:border-white/20 dark:bg-white/15'
+                      : 'text-[var(--text-muted)] hover:bg-black/[0.02] hover:text-[var(--text-secondary)] dark:hover:bg-white/[0.04]'
+                  }`}
+                >
+                  {getDirectionLabel(dir, t)}
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
 
       {/* 可见性：仅影响当前编辑会话，不改变后端规则契约 */}
-      <div className="flex items-center justify-between rounded-[7px] border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2">
+      <div className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-white/40 px-3.5 py-2.5 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]">
         <span className="text-[11px] font-medium text-[var(--text-secondary)]">
           {t('inspector.visibility', { defaultValue: '画面可见性' })}
         </span>
@@ -89,10 +104,10 @@ export function RulePropertiesPanel({
           aria-pressed={rule.visible}
           aria-label={t('inspector.visibility', { defaultValue: '画面可见性' })}
           onClick={() => onUpdateRule(rule.id, { visible: !rule.visible })}
-          className={`flex items-center gap-1.5 rounded-[5px] px-2 py-1 text-[11px] font-semibold transition-colors ${
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all ${
             rule.visible
-              ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
-              : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'
+              ? 'border border-blue-500/30 bg-blue-500/10 text-[var(--accent)]'
+              : 'border border-black/10 bg-black/5 text-[var(--text-muted)] dark:border-white/10 dark:bg-white/5'
           }`}
         >
           {rule.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
@@ -105,7 +120,7 @@ export function RulePropertiesPanel({
       </div>
 
       {/* 算力作用域：说明几何规则与算法的真实关系 */}
-      <div className="space-y-1.5 rounded-[8px] border border-[var(--border)] bg-[var(--bg-secondary)]/60 p-3">
+      <div className="space-y-2 rounded-xl border border-black/[0.06] bg-white/40 p-3.5 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--text-primary)]">
           <Layers className="h-3.5 w-3.5 text-[var(--accent)]" />
           <span>{t('inspector.scopeTitle', { defaultValue: '算力作用域' })}</span>
@@ -120,7 +135,7 @@ export function RulePropertiesPanel({
               {activeAlgorithmNames.map((name) => (
                 <span
                   key={name}
-                  className="rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]"
+                  className="rounded-md border border-black/10 bg-white/60 px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--text-secondary)] dark:border-white/10 dark:bg-white/[0.04]"
                 >
                   {name}
                 </span>
@@ -140,7 +155,7 @@ export function RulePropertiesPanel({
         <button
           type="button"
           onClick={() => onCloneRule(rule.id)}
-          className="flex items-center justify-center gap-1.5 rounded-[7px] border border-[var(--border)] bg-[var(--bg-surface)] py-2 text-xs font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]"
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-blue-500/30 bg-blue-500/10 py-2 text-xs font-semibold text-[var(--accent)] transition-all hover:bg-blue-500/15 active:scale-98"
         >
           <Copy className="h-3.5 w-3.5" />
           <span>{t('inspector.clone', { defaultValue: '克隆防区' })}</span>
@@ -148,7 +163,7 @@ export function RulePropertiesPanel({
         <button
           type="button"
           onClick={() => onDeleteRule(rule.id)}
-          className="flex items-center justify-center gap-1.5 rounded-[7px] border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 py-2 text-xs font-semibold text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/15"
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 py-2 text-xs font-semibold text-rose-500 transition-all hover:bg-rose-500/15 active:scale-98"
         >
           <Trash2 className="h-3.5 w-3.5" />
           <span>{t('inspector.delete', { defaultValue: '删除防区' })}</span>
