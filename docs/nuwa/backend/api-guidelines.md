@@ -78,7 +78,9 @@
 | 摄像头、任务等配置资源   | `page` 默认 1，`pageSize` 默认 20、上限 100                            |
 
 具体端点的已发布返回形状和更小上限以其 DTO/校验为准，不能推断所有列表都有 `items/total`。
-现有 [操作日志接口](../../../crates/api/src/routes/oplog.rs) 仍使用 `offset` 且上限 100，这是与游标约定的差异；后续迁移需同步前端契约。
+现有 [操作日志接口](../../../crates/api/src/routes/oplog.rs) 仍使用 `offset`（默认 20、上限 100），这是与游标约定的差异；后续迁移需同步前端契约。该端点支持 `module`、`status`、`q` 与 `fromMs`/`toMs`：`status` 只接受 `success`（2xx）与 `failed`（4xx/5xx），未知取值返回 400；`q` 限 64 字符，在 `username`/`module`/`action`/`path`/`ip` 上做字面量匹配，但 `%`/`_`/`\` 会被转义，不得解释为通配符。
+[运维事件接口](../../../crates/api/src/routes/operational_log.rs) 使用 `before` 毫秒游标，支持 `level`/`event`/`target`/`cameraId`/`fromMs`/`toMs`，并同时接受 camelCase 与 snake_case 别名。
+列表筛选一律下推服务端：筛选参数与分页同源，客户端不得对已取回的一页再做二次过滤，否则会出现「本页无命中但后续页有命中」的空表误判，且页内计数与真实命中数不一致。
 
 ## 初始化与审计
 

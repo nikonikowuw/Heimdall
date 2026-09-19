@@ -528,9 +528,16 @@ mod tests {
         // 审计写入在 middleware 中异步执行，只等待有限时间避免测试依赖调度时序。
         let mut logs = Vec::new();
         for _ in 0..100 {
-            logs = db::OplogRepo::list_recent(&state.db, Some("camera"), 10, 0)
-                .await
-                .unwrap();
+            logs = db::OplogRepo::list_recent(
+                &state.db,
+                &db::repository::oplog::ListParams {
+                    module: Some("camera"),
+                    limit: 10,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
             let has_create = logs
                 .iter()
                 .any(|log| log.action == "create" && log.module == "camera");

@@ -619,3 +619,48 @@ export interface OperationLog {
   userAgent: string
   createdAt: number
 }
+
+/** 审计日志状态码分类，与 GET /logs/operations 的 status 参数取值一一对应 */
+export type OperationLogStatusFilter = 'success' | 'failed'
+
+export type OperationLogQuery = {
+  module?: string
+  status?: OperationLogStatusFilter
+  /** 关键字，命中操作人、路径、模块、动作与客户端 IP */
+  q?: string
+  fromMs?: number
+  toMs?: number
+  limit?: number
+  offset?: number
+}
+
+export type OperationalLogLevel = 'info' | 'warn' | 'error'
+
+export interface OperationalLog {
+  id: number
+  tsMs: number
+  /** 服务端契约只产生 info/warn/error，网络边界由 hooks/helpers 归一化后收窄 */
+  level: OperationalLogLevel
+  event: string
+  target: string
+  message: string
+  cameraId: string | null
+  extraJson: string | null
+}
+
+export interface OperationalLogPage {
+  items: OperationalLog[]
+  hasMore: boolean
+  nextBefore: number | null
+}
+
+export type OperationalLogQuery = {
+  level?: OperationalLogLevel
+  event?: string
+  target?: string
+  cameraId?: string
+  fromMs?: number
+  toMs?: number
+  limit?: number
+  before?: number
+}

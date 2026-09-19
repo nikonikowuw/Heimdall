@@ -25,7 +25,7 @@
 
 - Hook 不条件调用，条件写在 effect 内；依赖数组完整，不关闭 `exhaustive-deps`。
 - 用稳定回调或 ref 解决引用/闭包问题，不能靠遗漏依赖减少重跑。
-- 请求取消、代次检查和分页合并参考 [useOplogs](../../../web/src/features/oplog/hooks/useOplogs.ts)；其现有命名与分页协议以返回类型为准。
+- 请求取消与代次检查参考 [useOplogs](../../../web/src/features/oplog/hooks/useOplogs.ts)；其现有命名与分页协议以返回类型为准。日志中心两个查询 hook 均为「按页替换」而非追加合并：筛选下推服务端，前端不对已取回的一页做二次过滤。
 - 使用 WS 的 hook 订阅全局连接，不能每个组件各建一条业务事件连接。
 
 验证取消、迟到响应、依赖变化、错误暴露和清理后不再收到回调；测试要求见 [质量规范](./quality-guidelines.md)。

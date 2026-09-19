@@ -11,11 +11,16 @@ const DEFAULT_LIMIT: u64 = 50;
 const MAX_LIMIT: u64 = 200;
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationalLogQuery {
     pub level: Option<String>,
     pub event: Option<String>,
+    pub target: Option<String>,
+    #[serde(alias = "camera_id")]
     pub camera_id: Option<String>,
+    #[serde(alias = "from_ms")]
     pub from_ms: Option<i64>,
+    #[serde(alias = "to_ms")]
     pub to_ms: Option<i64>,
     #[serde(default = "default_limit")]
     pub limit: u64,
@@ -79,6 +84,7 @@ async fn list_operational_logs(
         &db::repository::operational_log::ListParams {
             level: params.level.as_deref(),
             event: params.event.as_deref(),
+            target: params.target.as_deref(),
             camera_id: params.camera_id.as_deref(),
             from_ms: params.from_ms,
             to_ms: params.to_ms,
@@ -157,5 +163,24 @@ mod tests {
         let json2 = r#"{"before": 1705312999999}"#;
         let query2: OperationalLogQuery = serde_json::from_str(json2).unwrap();
         assert_eq!(query2.before, Some(1705312999999));
+    }
+
+    #[test]
+    fn operational_log_query_supports_camel_case_and_snake_case() {
+        let json_camel = r#"{"cameraId": "cam-1", "fromMs": 1000, "toMs": 2000, "level": "info", "target": "system"}"#;
+        let q1: OperationalLogQuery = serde_json::from_str(json_camel).unwrap();
+        assert_eq!(q1.camera_id.as_deref(), Some("cam-1"));
+        assert_eq!(q1.from_ms, Some(1000));
+        assert_eq!(q1.to_ms, Some(2000));
+        assert_eq!(q1.level.as_deref(), Some("info"));
+        assert_eq!(q1.target.as_deref(), Some("system"));
+
+        let json_snake =
+            r#"{"camera_id": "cam-2", "from_ms": 3000, "to_ms": 4000, "target": "media"}"#;
+        let q2: OperationalLogQuery = serde_json::from_str(json_snake).unwrap();
+        assert_eq!(q2.camera_id.as_deref(), Some("cam-2"));
+        assert_eq!(q2.from_ms, Some(3000));
+        assert_eq!(q2.to_ms, Some(4000));
+        assert_eq!(q2.target.as_deref(), Some("media"));
     }
 }

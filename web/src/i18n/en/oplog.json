@@ -1,7 +1,98 @@
 {
   "title": "System Write Operation Security Audit Logs",
   "subtitle": "Protected interface activity",
-  "refreshStream": "Refresh audit log",
+  "refreshStream": "Refresh logs",
+  "logCenter": {
+    "title": "System Log Center",
+    "subtitle": "Unified tracking for operation audit and system runtime state",
+    "liveStatus": "Live Stream"
+  },
+  "tabs": {
+    "operations": "Audit Logs",
+    "operational": "Operational Events"
+  },
+  "stats": {
+    "fast": "Fast",
+    "normal": "Normal",
+    "slow": "Slow",
+    "viewErrorsOnly": "Click to filter errors",
+    "pageRequests": "Requests (page)",
+    "pageRequestsDesc": "Captured API write operations on this page",
+    "pageSuccessRate": "Success Rate (page)",
+    "pageErrors": "Errors (page)",
+    "pageErrorsDesc": "HTTP 4xx and 5xx records on this page",
+    "pageAvgLatency": "Avg Latency (page)",
+    "pageEvents": "Events (page)",
+    "pageEventsDesc": "State transitions and hardware events on this page",
+    "pageWarnings": "Warnings (page)",
+    "pageWarningsDesc": "Degradation and warning events on this page",
+    "pageInfoEvents": "Informational (page)",
+    "pageInfoEventsDesc": "Routine orchestration and pipeline heartbeats on this page"
+  },
+  "toolbar": {
+    "searchOperations": "Search operator, path, action, or IP...",
+    "searchOperational": "Search event, camera, or message...",
+    "searchCamera": "Enter camera ID...",
+    "filterAllStatuses": "All Statuses",
+    "filterSuccess": "Success (2xx)",
+    "filterClientError": "Client Error (4xx)",
+    "filterServerError": "Server Error (5xx)",
+    "filterFailedOnly": "Errors (4xx/5xx)",
+    "autoRefresh": "Auto Refresh",
+    "autoRefreshLabel": "Auto Refresh",
+    "autoRefreshOff": "Off",
+    "autoRefreshStateOff": "Auto: Off",
+    "autoRefreshStateOn": "Auto: {{seconds}}s",
+    "autoRefreshInterval": "Every {{seconds}}s",
+    "density": "Density",
+    "densityComfortable": "Comfortable",
+    "densityCompact": "Compact",
+    "resetFilters": "Reset Filters",
+    "viewDetails": "Inspect",
+    "filterLevel": "Level",
+    "filterTarget": "Architecture Layer",
+    "filterModule": "Business Module",
+    "pageCount": "{{count}} on this page",
+    "clearInput": "Clear input",
+    "filterStatus": "Status code filter"
+  },
+  "inspector": {
+    "title": "Log Record Inspector",
+    "subtitle": "Comprehensive metadata and payload inspection",
+    "operationAudit": "Operation Audit Log",
+    "operationalEvent": "Operational Event Log",
+    "copyAll": "Copy Full JSON",
+    "copiedAll": "Copied Full JSON",
+    "generalInfo": "General Metadata",
+    "requestEndpoint": "Request Endpoint & Method",
+    "queryParams": "Query Parameters",
+    "requestPayload": "Request Body Payload",
+    "userAgent": "Client Environment (User Agent)",
+    "eventDetails": "Event Details",
+    "extraJson": "Metadata Payload (Extra JSON)",
+    "noPayload": "No request payload provided",
+    "noQueryParams": "No query parameters",
+    "noExtra": "No extra metadata",
+    "close": "Close Inspector",
+    "copiedField": "Copied {{field}}",
+    "key": "Key",
+    "value": "Value",
+    "paramCount": "{{count}} params",
+    "copyEvent": "Copy event tag",
+    "copyEndpoint": "Copy request endpoint"
+  },
+  "emptyState": {
+    "noResultsTitle": "No Matching Logs Found",
+    "noResultsDesc": "No log records match your current filters or search query. Try relaxing your filters.",
+    "clearAll": "Clear All Filters"
+  },
+  "pagination": {
+    "page": "Page {{current}}",
+    "prev": "Previous",
+    "next": "Next",
+    "pageSize": "{{size}} / page",
+    "currentCount": "{{count}} records"
+  },
   "filterModule": "Module",
   "modules": {
     "all": "All modules",
@@ -39,6 +130,54 @@
     "ip": "Client IP",
     "status": "Status Code",
     "duration": "Latency",
-    "time": "Timestamp"
+    "time": "Timestamp",
+    "actions": "Actions"
+  },
+  "operational": {
+    "title": "System Runtime Operational Event Logs",
+    "subtitle": "State transitions and hardware event tracking",
+    "filterLevel": "Level",
+    "filterTarget": "Target",
+    "filterCamera": "Camera",
+    "cameraPlaceholder": "Enter camera ID...",
+    "levels": {
+      "all": "All levels",
+      "info": "Info",
+      "warn": "Warn",
+      "error": "Error"
+    },
+    "targets": {
+      "all": "All targets",
+      "system": "System",
+      "media": "Media",
+      "pipeline": "Pipeline",
+      "rule": "Rules",
+      "infer": "Inference",
+      "hardware": "Hardware",
+      "storage": "Storage"
+    },
+    "columns": {
+      "level": "Level",
+      "target": "Target",
+      "event": "Event",
+      "camera": "Camera",
+      "message": "Message",
+      "time": "Timestamp",
+      "extra": "Metadata",
+      "actions": "Actions"
+    },
+    "loading": "Loading operational logs",
+    "empty": "No operational events match the current filter",
+    "loadError": "Failed to load operational logs: {{error}}",
+    "details": "Expand",
+    "collapse": "Collapse",
+    "copyJson": "Copy",
+    "copied": "Copied",
+    "filterEvent": "Event tag",
+    "filterByCamera": "Filter by this camera",
+    "hasPayload": "Contains metadata payload",
+    "events": {
+      "all": "All events"
+    }
   }
 }

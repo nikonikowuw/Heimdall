@@ -415,9 +415,16 @@ mod tests {
         assert_eq!(response_body.len(), payload.len());
 
         for _ in 0..100 {
-            let logs = db::OplogRepo::list_recent(&db, Some("camera"), 10, 0)
-                .await
-                .unwrap();
+            let logs = db::OplogRepo::list_recent(
+                &db,
+                &db::repository::oplog::ListParams {
+                    module: Some("camera"),
+                    limit: 10,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
             if let Some(log) = logs.first() {
                 assert_eq!(log.username, "tester");
                 assert_eq!(log.path, "/api/v1/cameras");

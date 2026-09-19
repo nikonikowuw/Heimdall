@@ -1,7 +1,98 @@
 {
   "title": "系统写操作安全审计日志",
   "subtitle": "受保护接口活动",
-  "refreshStream": "刷新审计流",
+  "refreshStream": "刷新日志",
+  "logCenter": {
+    "title": "系统日志中心",
+    "subtitle": "操作安全审计与系统运行状态统一追踪",
+    "liveStatus": "实时日志流"
+  },
+  "tabs": {
+    "operations": "操作审计",
+    "operational": "运维事件"
+  },
+  "stats": {
+    "fast": "极速",
+    "normal": "正常",
+    "slow": "较慢",
+    "viewErrorsOnly": "点击仅看异常",
+    "pageRequests": "本页请求量",
+    "pageRequestsDesc": "当前页已捕获的 API 写操作与审计记录",
+    "pageSuccessRate": "本页成功率",
+    "pageErrors": "本页异常请求",
+    "pageErrorsDesc": "当前页 4xx 与 5xx 异常响应记录",
+    "pageAvgLatency": "本页平均耗时",
+    "pageEvents": "本页事件数",
+    "pageEventsDesc": "当前页系统状态变迁与硬件事件数",
+    "pageWarnings": "本页告警",
+    "pageWarningsDesc": "当前页降级与提醒事件",
+    "pageInfoEvents": "本页常规状态",
+    "pageInfoEventsDesc": "当前页常规调度与管线心跳"
+  },
+  "toolbar": {
+    "searchOperations": "搜索操作人、路径、动作或 IP...",
+    "searchOperational": "搜索事件标识、关联摄像头或消息...",
+    "searchCamera": "输入摄像头 ID...",
+    "filterAllStatuses": "全部状态",
+    "filterSuccess": "仅成功 (2xx)",
+    "filterClientError": "客户端错误 (4xx)",
+    "filterServerError": "服务端错误 (5xx)",
+    "filterFailedOnly": "异常请求 (4xx/5xx)",
+    "autoRefresh": "自动刷新",
+    "autoRefreshLabel": "自动刷新",
+    "autoRefreshOff": "关闭",
+    "autoRefreshStateOff": "自动刷新: 关",
+    "autoRefreshStateOn": "自动刷新: {{seconds}}秒",
+    "autoRefreshInterval": "每 {{seconds}} 秒",
+    "density": "显示密度",
+    "densityComfortable": "舒适",
+    "densityCompact": "紧凑",
+    "resetFilters": "重置筛选",
+    "viewDetails": "详情",
+    "filterLevel": "事件级别",
+    "filterTarget": "系统架构层",
+    "filterModule": "业务模块",
+    "pageCount": "本页 {{count}} 条",
+    "clearInput": "清空输入",
+    "filterStatus": "状态码筛选"
+  },
+  "inspector": {
+    "title": "日志详情检查器",
+    "subtitle": "全量元数据与上下文载荷解析",
+    "operationAudit": "操作审计日志",
+    "operationalEvent": "系统运维事件",
+    "copyAll": "复制完整 JSON",
+    "copiedAll": "已复制完整 JSON",
+    "generalInfo": "概览元数据",
+    "requestEndpoint": "请求端点与方法",
+    "queryParams": "URL 查询参数",
+    "requestPayload": "请求体载荷 (Body)",
+    "userAgent": "客户端环境 (User Agent)",
+    "eventDetails": "事件详细信息",
+    "extraJson": "元数据载荷 (Extra JSON)",
+    "noPayload": "无请求体载荷",
+    "noQueryParams": "无查询参数",
+    "noExtra": "无附加元数据",
+    "close": "关闭检查器",
+    "copiedField": "已复制 {{field}}",
+    "key": "参数名",
+    "value": "参数值",
+    "paramCount": "{{count}} 个参数",
+    "copyEvent": "复制事件标识",
+    "copyEndpoint": "复制请求端点"
+  },
+  "emptyState": {
+    "noResultsTitle": "未找到匹配的日志记录",
+    "noResultsDesc": "当前筛选条件或搜索关键词未匹配到任何日志，您可以尝试重置筛选或放宽条件。",
+    "clearAll": "清除所有筛选条件"
+  },
+  "pagination": {
+    "page": "第 {{current}} 页",
+    "prev": "上一页",
+    "next": "下一页",
+    "pageSize": "{{size}} 条 / 页",
+    "currentCount": "本页 {{count}} 条"
+  },
   "filterModule": "模块",
   "modules": {
     "all": "全部模块",
@@ -39,6 +130,54 @@
     "ip": "客户端 IP",
     "status": "状态码",
     "duration": "耗时",
-    "time": "时间"
+    "time": "时间",
+    "actions": "操作"
+  },
+  "operational": {
+    "title": "系统运行时运维事件日志",
+    "subtitle": "状态变迁与硬件事件追踪",
+    "filterLevel": "级别",
+    "filterTarget": "模块",
+    "filterCamera": "摄像头",
+    "cameraPlaceholder": "输入摄像头 ID...",
+    "levels": {
+      "all": "全部级别",
+      "info": "信息",
+      "warn": "警告",
+      "error": "错误"
+    },
+    "targets": {
+      "all": "全部模块",
+      "system": "系统服务",
+      "media": "媒体接入",
+      "pipeline": "AI 管线",
+      "rule": "规则引擎",
+      "infer": "模型推理",
+      "hardware": "底层硬件",
+      "storage": "存储管理"
+    },
+    "columns": {
+      "level": "级别",
+      "target": "模块",
+      "event": "事件标识",
+      "camera": "关联摄像头",
+      "message": "事件详情",
+      "time": "发生时间",
+      "extra": "元数据",
+      "actions": "操作"
+    },
+    "loading": "正在加载运维事件日志",
+    "empty": "暂无符合条件的运维事件记录",
+    "loadError": "加载运维事件日志失败：{{error}}",
+    "details": "展开",
+    "collapse": "收起",
+    "copyJson": "复制",
+    "copied": "已复制",
+    "filterEvent": "事件标识",
+    "filterByCamera": "按此摄像头筛选",
+    "hasPayload": "包含元数据载荷",
+    "events": {
+      "all": "全部事件"
+    }
   }
 }

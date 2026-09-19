@@ -381,3 +381,30 @@ fn test_v14_migration_backfills_evidence_origin_without_guessing_unknowns() {
     assert_eq!(recognition.3, None);
     assert_eq!(recognition.4, None);
 }
+
+#[test]
+fn test_v17_adds_indexes_backing_the_server_side_log_filters() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    let v1 = include_str!("../src/migration/migrations/V1__init_schema.sql");
+    let v9 = include_str!("../src/migration/migrations/V9__operational_logs.sql");
+    let v17 = include_str!("../src/migration/migrations/V17__log_filter_indexes.sql");
+
+    conn.execute_batch(v1).expect("apply V1");
+    conn.execute_batch(v9).expect("apply V9");
+    conn.execute_batch(v17).expect("apply V17");
+
+    for index in ["idx_operation_logs_status_time", "idx_oplog_target_ts"] {
+        let found: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1;",
+                [index],
+                |row| row.get(0),
+            )
+            .expect("query index presence");
+        assert_eq!(found, 1, "missing index {index}");
+    }
+
+    // 迁移器只按版本号跳过，SQL 自身仍需幂等
+    conn.execute_batch(v17).expect("apply V17 twice");
+}

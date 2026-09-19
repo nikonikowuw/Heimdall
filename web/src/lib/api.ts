@@ -22,6 +22,9 @@ import type {
   LoginRequest,
   LoginResponse,
   OperationLog,
+  OperationLogQuery,
+  OperationalLogPage,
+  OperationalLogQuery,
   PaginatedAlgorithms,
   PersonnelDetail,
   PersonnelItem,
@@ -235,12 +238,16 @@ function toQueryString(params?: Record<string, string | number | boolean | undef
 }
 
 export const oplogApi = {
-  list(
-    params?: { module?: string; limit?: number; offset?: number },
-    signal?: AbortSignal,
-  ): Promise<OperationLog[]> {
+  list(params?: OperationLogQuery, signal?: AbortSignal): Promise<OperationLog[]> {
     const qs = toQueryString(params)
     return request<OperationLog[]>(`/logs/operations${qs}`, { method: 'GET', signal })
+  },
+}
+
+export const operationalLogApi = {
+  list(params?: OperationalLogQuery, signal?: AbortSignal): Promise<OperationalLogPage> {
+    const qs = toQueryString(params)
+    return request<OperationalLogPage>(`/logs/operational${qs}`, { method: 'GET', signal })
   },
 }
 export const taskApi = {

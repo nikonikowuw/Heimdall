@@ -11,6 +11,7 @@ use crate::error::DbError;
 pub struct ListParams<'a> {
     pub level: Option<&'a str>,
     pub event: Option<&'a str>,
+    pub target: Option<&'a str>,
     pub camera_id: Option<&'a str>,
     pub from_ms: Option<i64>,
     pub to_ms: Option<i64>,
@@ -63,6 +64,9 @@ impl OperationalLogRepo {
         }
         if let Some(ev) = params.event {
             query = query.filter(Column::Event.eq(ev));
+        }
+        if let Some(tgt) = params.target {
+            query = query.filter(Column::Target.eq(tgt));
         }
         if let Some(cam) = params.camera_id {
             query = query.filter(Column::CameraId.eq(cam));
@@ -195,7 +199,7 @@ mod tests {
         assert_eq!(list[0].ts_ms, 4000);
         assert_eq!(list[3].ts_ms, 1000);
 
-        // 3. 条件过滤：按级别与摄像头
+        // 3. 条件过滤：按级别与摄像头及模块
         let warn_logs = OperationalLogRepo::list(
             &db,
             &ListParams {
@@ -208,6 +212,20 @@ mod tests {
         .unwrap();
         assert_eq!(warn_logs.len(), 1);
         assert_eq!(warn_logs[0].event, "camera_offline");
+
+        let media_logs = OperationalLogRepo::list(
+            &db,
+            &ListParams {
+                target: Some("media"),
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(media_logs.len(), 2);
+        assert_eq!(media_logs[0].event, "camera_offline");
+        assert_eq!(media_logs[1].event, "camera_online");
 
         // 4. before 游标分页
         let page1 = OperationalLogRepo::list(

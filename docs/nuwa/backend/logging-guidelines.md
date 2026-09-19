@@ -38,6 +38,8 @@ if frame_id % 100 == 0 {
 - dev 输出 pretty 终端、不写文件；prod 输出 compact，文件关闭 ANSI，后台 IO 不阻塞业务线程。
 - `data/logs/heimdall.log` 单文件 10 MB，最多 5 个历史文件；保留 30 天，目录总量封顶 100 MB，超限删最旧文件。
 - 应用日志从文件按时间索引查询，不写 SQLite；分页/导出与 [操作审计接口](../../../crates/api/src/routes/oplog.rs) 区分。
-- 日志 UI 虚拟滚动，最多保留 1000 条，实时推送不超过 10 条/秒；未来端点在实现任务中定义，避免沿用未实现的接口草案。
+- 应用日志 UI（尚未实现）虚拟滚动，最多保留 1000 条，实时推送不超过 10 条/秒；未来端点在实现任务中定义，避免沿用未实现的接口草案。
+- 已落地的 [日志中心](../../../web/src/features/oplog/OplogPage.tsx) 只读 `operation_logs` 与 `operational_logs`：列表按页替换（单页上限 100 条，远低于 1000 条），因此不做虚拟滚动；指标卡口径固定为「当前页」，全量聚合需另开端点。
+- 两张日志表的筛选列由 `V17__log_filter_indexes.sql` 兜底（`status_code`+`created_at`、`target`+`ts_ms`）；关键字 `q` 是 `LIKE '%...%'`，无法走索引，靠保留期与 64 字符上限约束代价，不得扩展到 `body`/`query` 等大字段。
 
 验证采样、脱敏、原因链、轮转限额及 IO 不反压业务。

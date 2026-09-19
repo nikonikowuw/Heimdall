@@ -596,9 +596,16 @@ mod tests {
         assert_eq!(val_tw["message"], "使用者名稱或密碼錯誤");
 
         // 15. 验证操作审计日志落库且敏感密码已被完全脱敏
-        let logs = db::OplogRepo::list_recent(&state.db, Some("auth"), 50, 0)
-            .await
-            .unwrap();
+        let logs = db::OplogRepo::list_recent(
+            &state.db,
+            &db::repository::oplog::ListParams {
+                module: Some("auth"),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(!logs.is_empty());
         for log in logs {
             assert!(!log.body.contains("myStrongPassword2026"));

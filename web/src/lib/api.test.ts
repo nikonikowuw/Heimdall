@@ -5,6 +5,7 @@ import {
   cameraApi,
   taskApi,
   oplogApi,
+  operationalLogApi,
   alarmApi,
   evidenceApi,
   ApiError,
@@ -160,6 +161,73 @@ describe('API Client', () => {
     ).resolves.toEqual([])
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/v1/logs/operations?module=camera&limit=50&offset=100',
+      expect.objectContaining({ method: 'GET', signal: controller.signal }),
+    )
+  })
+
+  it('oplogApi.list should pass server-side status and keyword filters', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: [],
+        timestamp: 1747584000000,
+      }),
+    })
+
+    await expect(
+      oplogApi.list({
+        module: 'camera',
+        status: 'failed',
+        q: 'cameras',
+        fromMs: 1000,
+        toMs: 2000,
+        limit: 20,
+        offset: 0,
+      }),
+    ).resolves.toEqual([])
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/logs/operations?module=camera&status=failed&q=cameras&fromMs=1000&toMs=2000&limit=20&offset=0',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('operationalLogApi.list should pass query filters and abort signal', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: {
+          items: [],
+          hasMore: false,
+          nextBefore: null,
+        },
+        timestamp: 1747584000000,
+      }),
+    })
+    const controller = new AbortController()
+
+    await expect(
+      operationalLogApi.list(
+        {
+          level: 'warn',
+          event: 'camera_offline',
+          target: 'media',
+          cameraId: 'cam-01',
+          before: 1747583900000,
+          limit: 30,
+        },
+        controller.signal,
+      ),
+    ).resolves.toEqual({
+      items: [],
+      hasMore: false,
+      nextBefore: null,
+    })
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/logs/operational?level=warn&event=camera_offline&target=media&cameraId=cam-01&before=1747583900000&limit=30',
       expect.objectContaining({ method: 'GET', signal: controller.signal }),
     )
   })

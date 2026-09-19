@@ -1,7 +1,98 @@
 {
   "title": "系統寫入操作安全審計日誌",
   "subtitle": "受保護介面活動",
-  "refreshStream": "重新整理審計流",
+  "refreshStream": "重新整理日誌",
+  "logCenter": {
+    "title": "系統日誌中心",
+    "subtitle": "操作安全審計與系統執行狀態統一追蹤",
+    "liveStatus": "即時日誌流"
+  },
+  "tabs": {
+    "operations": "操作審計",
+    "operational": "運維事件"
+  },
+  "stats": {
+    "fast": "極速",
+    "normal": "正常",
+    "slow": "較慢",
+    "viewErrorsOnly": "點擊僅看異常",
+    "pageRequests": "本頁請求量",
+    "pageRequestsDesc": "當前頁已捕獲的 API 寫操作與審計記錄",
+    "pageSuccessRate": "本頁成功率",
+    "pageErrors": "本頁異常請求",
+    "pageErrorsDesc": "當前頁 4xx 與 5xx 異常回應記錄",
+    "pageAvgLatency": "本頁平均耗時",
+    "pageEvents": "本頁事件數",
+    "pageEventsDesc": "當前頁系統狀態變遷與硬體事件數",
+    "pageWarnings": "本頁告警",
+    "pageWarningsDesc": "當前頁降級與提醒事件",
+    "pageInfoEvents": "本頁常規狀態",
+    "pageInfoEventsDesc": "當前頁常規調度與管線心跳"
+  },
+  "toolbar": {
+    "searchOperations": "搜尋操作人、路徑、動作或 IP...",
+    "searchOperational": "搜尋事件標識、關聯攝影機或訊息...",
+    "searchCamera": "輸入攝影機 ID...",
+    "filterAllStatuses": "全部狀態",
+    "filterSuccess": "僅成功 (2xx)",
+    "filterClientError": "用戶端錯誤 (4xx)",
+    "filterServerError": "伺服器錯誤 (5xx)",
+    "filterFailedOnly": "異常請求 (4xx/5xx)",
+    "autoRefresh": "自動重新整理",
+    "autoRefreshLabel": "自動重新整理",
+    "autoRefreshOff": "關閉",
+    "autoRefreshStateOff": "自動重新整理: 關",
+    "autoRefreshStateOn": "自動重新整理: {{seconds}}秒",
+    "autoRefreshInterval": "每 {{seconds}} 秒",
+    "density": "顯示密度",
+    "densityComfortable": "舒適",
+    "densityCompact": "緊湊",
+    "resetFilters": "重設篩選",
+    "viewDetails": "詳情",
+    "filterLevel": "事件級別",
+    "filterTarget": "系統架構層",
+    "filterModule": "業務模組",
+    "pageCount": "本頁 {{count}} 條",
+    "clearInput": "清空輸入",
+    "filterStatus": "狀態碼篩選"
+  },
+  "inspector": {
+    "title": "日誌詳情檢查器",
+    "subtitle": "全量元資料與上下文負載解析",
+    "operationAudit": "操作審計日誌",
+    "operationalEvent": "系統運維事件",
+    "copyAll": "複製完整 JSON",
+    "copiedAll": "已複製完整 JSON",
+    "generalInfo": "概覽元資料",
+    "requestEndpoint": "請求端點與方法",
+    "queryParams": "URL 查詢參數",
+    "requestPayload": "請求實體負載 (Body)",
+    "userAgent": "用戶端環境 (User Agent)",
+    "eventDetails": "事件詳細資訊",
+    "extraJson": "元資料負載 (Extra JSON)",
+    "noPayload": "無請求實體負載",
+    "noQueryParams": "無查詢參數",
+    "noExtra": "無附加元資料",
+    "close": "關閉檢查器",
+    "copiedField": "已複製 {{field}}",
+    "key": "參數名",
+    "value": "參數值",
+    "paramCount": "{{count}} 個參數",
+    "copyEvent": "複製事件標識",
+    "copyEndpoint": "複製請求端點"
+  },
+  "emptyState": {
+    "noResultsTitle": "未找到符合的日誌記錄",
+    "noResultsDesc": "目前篩選條件或搜尋關鍵字未匹配到任何日誌，您可以嘗試重設篩選或放寬條件。",
+    "clearAll": "清除所有篩選條件"
+  },
+  "pagination": {
+    "page": "第 {{current}} 頁",
+    "prev": "上一頁",
+    "next": "下一頁",
+    "pageSize": "{{size}} 筆 / 頁",
+    "currentCount": "本頁 {{count}} 筆"
+  },
   "filterModule": "模組",
   "modules": {
     "all": "全部模組",
@@ -39,6 +130,54 @@
     "ip": "客戶端 IP",
     "status": "狀態碼",
     "duration": "耗時",
-    "time": "時間"
+    "time": "時間",
+    "actions": "操作"
+  },
+  "operational": {
+    "title": "系統執行時運維事件日誌",
+    "subtitle": "狀態變遷與硬體事件追蹤",
+    "filterLevel": "級別",
+    "filterTarget": "模組",
+    "filterCamera": "攝影機",
+    "cameraPlaceholder": "輸入攝影機 ID...",
+    "levels": {
+      "all": "全部級別",
+      "info": "資訊",
+      "warn": "警告",
+      "error": "錯誤"
+    },
+    "targets": {
+      "all": "全部模組",
+      "system": "系統服務",
+      "media": "媒體接入",
+      "pipeline": "AI 管線",
+      "rule": "規則引擎",
+      "infer": "模型推理",
+      "hardware": "底層硬體",
+      "storage": "儲存管理"
+    },
+    "columns": {
+      "level": "級別",
+      "target": "模組",
+      "event": "事件標識",
+      "camera": "關聯攝影機",
+      "message": "事件詳情",
+      "time": "發生時間",
+      "extra": "元資料",
+      "actions": "操作"
+    },
+    "loading": "正在載入運維事件日誌",
+    "empty": "暫無符合條件的運維事件記錄",
+    "loadError": "載入運維事件日誌失敗：{{error}}",
+    "details": "展開",
+    "collapse": "收起",
+    "copyJson": "複製",
+    "copied": "已複製",
+    "filterEvent": "事件標識",
+    "filterByCamera": "依此攝影機篩選",
+    "hasPayload": "包含中繼資料載荷",
+    "events": {
+      "all": "全部事件"
+    }
   }
 }
