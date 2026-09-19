@@ -40,3 +40,16 @@
 SPA 由 Rust `rust-embed` 内嵌；检查 chunk 体积，播放器、图表/3D 等大依赖按需加载，不为小功能引入整库。
 字体自托管并 `font-display: swap`，翻译按语言/模块懒加载，首屏不打包全部语言。
 交付记录实际通过、失败及未运行的检查。
+
+### 路由级分包
+
+边界集中在 [lazy-pages.ts](../../../web/src/app/lazy-pages.ts)：
+
+- 8 个工作区页面按需加载；`LoginPage` 保持同步导入 —— 它是未鉴权用户的首次绘制内容，懒加载会在登录表单出现前多加一次 chunk 往返，属懒加载最不该出现的位置。
+- 鉴权通过后调用 `preloadDefaultTab()` 预取 `live`，在工作区入场动画（约 500ms）期间完成下载，抵消默认页的懒加载延迟。
+- 页面均为具名导出，`lazy()` 需经 `.then` 适配 `default`。
+- `Suspense` 占位复用 [RouteFallback.tsx](../../../web/src/components/ui/RouteFallback.tsx) 与 `.route-fallback`：其 200ms 延迟现身避免内网快速加载时的骨架闪烁，进度条样式自带 `prefers-reduced-motion` 降级。
+- 新增 chunk 无需改 Rust 侧：`crates/api/src/static_files.rs` 用 `Assets::get(&path)` 按路径取，`assets/` 走 immutable 缓存。
+- 跨 feature 直接引用会改变分包归属（例如 `tasks` 引用 `live/components/LivePlayer` 使 mpegts.js 进入 tasks 依赖链），因此「不深层导入其他 feature 私有组件」同时是一条分包约束。
+
+回归基线（首屏 gzip，随实现演进而更新）：登录页约 150KB；已鉴权 `live` 首屏约 231KB（含 mpegts.js）。

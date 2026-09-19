@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   Cpu,
@@ -21,15 +21,19 @@ import { ChangePasswordModal } from '@/components/ChangePasswordModal'
 import { LocaleDropdown } from '@/components/LocaleDropdown'
 import { ShortcutsModal } from '@/components/ShortcutsModal'
 import { Toaster } from '@/components/ui/Toast'
-import { AlarmsPage } from '@/features/alarms/AlarmsPage'
-import { AlgorithmsPage } from '@/features/algorithms/AlgorithmsPage'
+import { RouteFallback } from '@/components/ui/RouteFallback'
 import { LoginPage } from '@/features/auth/LoginPage'
-import { CamerasPage } from '@/features/cameras/CamerasPage'
-import { LivePage } from '@/features/live/LivePage'
-import { OplogPage } from '@/features/oplog/OplogPage'
-import { PersonnelPage } from '@/features/personnel/PersonnelPage'
-import { SettingsPage } from '@/features/system/SettingsPage'
-import { TasksPage } from '@/features/tasks/TasksPage'
+import {
+  AlarmsPage,
+  AlgorithmsPage,
+  CamerasPage,
+  LivePage,
+  OplogPage,
+  PersonnelPage,
+  SettingsPage,
+  TasksPage,
+  preloadDefaultTab,
+} from './lazy-pages'
 import { useGlobalShortcuts } from '@/hooks/use-global-shortcuts'
 import { useTheme } from '@/hooks/use-theme'
 import { authApi } from '@/lib/api'
@@ -106,6 +110,12 @@ export function Layout(): React.ReactElement {
       document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [userMenuOpen])
+
+  // 鉴权通过后预取默认落地页，让工作区入场动画期间完成 chunk 下载，
+  // 使用户感知不到懒加载带来的额外往返。
+  useEffect(() => {
+    if (isAuthenticated) preloadDefaultTab()
+  }, [isAuthenticated])
 
   useGlobalShortcuts({
     currentTab,
@@ -387,7 +397,7 @@ export function Layout(): React.ReactElement {
               className="content-ambient hud-viewport-frame relative z-10 flex flex-1 flex-col overflow-hidden p-4"
             >
               <div className="flex h-full w-full flex-1 flex-col overflow-hidden">
-                {renderTabContent()}
+                <Suspense fallback={<RouteFallback />}>{renderTabContent()}</Suspense>
               </div>
             </motion.main>
             {/* 修改密码模态框 */}

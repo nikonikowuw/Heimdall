@@ -477,6 +477,29 @@ h4 {
   border-right: 1.5px solid var(--text-muted);
 }
 
+/* ── 懒加载路由占位 (延迟现身，避免内网快速加载时骨架闪烁) ── */
+@keyframes routeFallbackReveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 前 200ms 保持透明：内网 chunk 通常数十毫秒到达，正常情况下用户看不到占位 */
+.route-fallback {
+  opacity: 0;
+  animation: routeFallbackReveal 0.18s cubic-bezier(0.16, 1, 0.3, 1) 0.2s forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 保留 200ms 延迟 (仍要防闪烁)，仅去除淡入过程 */
+  .route-fallback {
+    animation-duration: 1ms;
+  }
+}
+
 /* ── 不确定态进度条 (Indeterminate Progress) ── */
 /* 服务端六步沙箱自检不回流中间进度，因此只能表达「进行中」而不能假装确定百分比 */
 @keyframes indeterminateSlide {
