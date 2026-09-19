@@ -6,16 +6,15 @@ import { cameraApi, gb28181Api, taskApi } from '../../lib/api'
 import type { Camera, Gb28181Device, TaskSummaryDto } from '../../types'
 import { normalizeProbeStatus } from './cameraStatus'
 import { CameraModal } from './components/CameraModal'
-import { CameraCardItem } from './components/CameraCardItem'
+import { CameraDeviceTile } from './components/CameraDeviceTile'
+import { CameraDetailDrawer } from './components/CameraDetailDrawer'
 import { DeleteCameraModal } from './components/DeleteCameraModal'
 import { BatchImportGbModal } from './components/BatchImportGbModal'
-import { copyToClipboard } from '../../lib/utils'
+import type { CameraModelType } from './components/illustrations/types'
 
-export interface CamerasPageProps {
-  onNavigateToTasks?: (camera: Camera) => void
-}
+export type CamerasPageProps = Record<string, never>
 
-export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.ReactElement {
+export function CamerasPage(): React.ReactElement {
   const { t } = useTranslation('camera')
   const { t: tc } = useTranslation('common')
 
@@ -30,8 +29,9 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
   const [gbDevices, setGbDevices] = useState<Gb28181Device[]>([])
   const [isBatchImportOpen, setIsBatchImportOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [modelTypeOverrides, setModelTypeOverrides] = useState<Record<string, CameraModelType>>({})
   const [probingCameraId, setProbingCameraId] = useState<string | null>(null)
-  const [copiedCameraId, setCopiedCameraId] = useState<string | null>(null)
+  const [selectedCameraForDetail, setSelectedCameraForDetail] = useState<Camera | null>(null)
 
   // 模态框状态
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false)
@@ -56,14 +56,14 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
   const loadData = async (): Promise<void> => {
     setIsLoading(true)
     try {
-      const [cams, taskList, devs] = await Promise.all([
+      const [cams, devs, taskList] = await Promise.all([
         cameraApi.list(),
-        taskApi.list(),
         gb28181Api.listDevices().catch(() => [] as Gb28181Device[]),
+        taskApi.list().catch(() => [] as TaskSummaryDto[]),
       ])
       setCameras(cams)
-      setTasks(taskList)
       setGbDevices(devs)
+      setTasks(taskList)
     } catch {
       // 优雅降级
     } finally {
@@ -90,9 +90,23 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
                 lastWidth: res.width || c.lastWidth,
                 lastHeight: res.height || c.lastHeight,
                 lastFps: res.fps || c.lastFps,
+                lastProbeAt: Date.now(),
               }
             : c,
         ),
+      )
+      setSelectedCameraForDetail((curr) =>
+        curr?.cameraId === camera.cameraId
+          ? {
+              ...curr,
+              lastProbeStatus: 'healthy',
+              lastCodec: res.codec || curr.lastCodec,
+              lastWidth: res.width || curr.lastWidth,
+              lastHeight: res.height || curr.lastHeight,
+              lastFps: res.fps || curr.lastFps,
+              lastProbeAt: Date.now(),
+            }
+          : curr,
       )
       setProbeFeedback((prev) => ({ ...prev, [camera.cameraId]: 'success' }))
       setTimeout(() => {
@@ -116,11 +130,14 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
         t('manage.probeSuccess', { defaultValue: '探活成功' }),
         details
           ? `${camera.name} (${details})`
-          : `${camera.name} ${t('status.healthy', { defaultValue: '正常在线' })}`,
+          : `${camera.name} ${t('status.online', { defaultValue: '在线' })}`,
       )
     } catch {
       setCameras((prev) =>
         prev.map((c) => (c.cameraId === camera.cameraId ? { ...c, lastProbeStatus: 'failed' } : c)),
+      )
+      setSelectedCameraForDetail((curr) =>
+        curr?.cameraId === camera.cameraId ? { ...curr, lastProbeStatus: 'failed' } : curr,
       )
       setProbeFeedback((prev) => ({ ...prev, [camera.cameraId]: 'failed' }))
       setTimeout(() => {
@@ -141,15 +158,6 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
     }
   }
 
-  const handleCopyRtsp = async (cameraId: string, url: string) => {
-    if (!url) return
-    const success = await copyToClipboard(url)
-    if (success) {
-      setCopiedCameraId(cameraId)
-      setTimeout(() => setCopiedCameraId(null), 2000)
-    }
-  }
-
   const handleCameraSaved = (saved: Camera) => {
     setCameras((prev) => {
       const idx = prev.findIndex((c) => c.cameraId === saved.cameraId)
@@ -160,16 +168,29 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
       }
       return [...prev, saved]
     })
+    setSelectedCameraForDetail((curr) =>
+      curr?.cameraId === saved.cameraId ? { ...curr, ...saved } : curr,
+    )
     loadData()
   }
 
   const handleCameraDeleted = (deletedCameraId: string) => {
     setCameras((prev) => prev.filter((c) => c.cameraId !== deletedCameraId))
-    setTasks((prev) => prev.filter((t) => t.cameraId !== deletedCameraId))
+    setTasks((prev) => prev.filter((task) => task.cameraId !== deletedCameraId))
+    if (selectedCameraForDetail?.cameraId === deletedCameraId) {
+      setSelectedCameraForDetail(null)
+    }
   }
+
+  const taskMap = useMemo(() => {
+    const map = new Map<string, TaskSummaryDto>()
+    for (const task of tasks) map.set(task.cameraId, task)
+    return map
+  }, [tasks])
 
   // 统计数据
   const totalCount = cameras.length
+
   const onlineCount = useMemo(
     () => cameras.filter((c) => normalizeProbeStatus(c.lastProbeStatus) === 'healthy').length,
     [cameras],
@@ -221,15 +242,6 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
     const start = (page - 1) * pageSize
     return filteredCameras.slice(start, start + pageSize)
   }, [filteredCameras, page, pageSize])
-
-  // 检查摄像头是否已绑定任务
-  const taskMap = useMemo(() => {
-    const map = new Map<string, TaskSummaryDto>()
-    for (const item of tasks) {
-      map.set(item.cameraId, item)
-    }
-    return map
-  }, [tasks])
 
   // 聚合统计国标设备未纳管通道与全量纳管指标
   const { unmanagedChannels, totalChannelsCount, importedChannelsCount } = useMemo(() => {
@@ -476,6 +488,20 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             <button
               type="button"
               onClick={() => {
+                setStatusFilter('degraded')
+                setPage(1)
+              }}
+              className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
+                statusFilter === 'degraded'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-amber-500'
+              }`}
+            >
+              {t('manage.degradedDevices', { defaultValue: '抖动' })} ({degradedCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
                 setStatusFilter('offline')
                 setPage(1)
               }}
@@ -529,24 +555,24 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(270px,1fr))] gap-4 sm:gap-4.5">
             <AnimatePresence mode="popLayout">
               {paginatedCameras.map((camera) => (
-                <CameraCardItem
+                <CameraDeviceTile
                   key={camera.id}
                   camera={camera}
-                  boundTask={taskMap.get(camera.cameraId)}
+                  cameraType={modelTypeOverrides[camera.cameraId]}
+                  task={taskMap.get(camera.cameraId)}
                   isProbing={probingCameraId === camera.cameraId}
                   probeFeedback={probeFeedback[camera.cameraId]}
-                  isCopied={copiedCameraId === camera.cameraId}
-                  onCopyRtsp={(id, url) => void handleCopyRtsp(id, url)}
                   onManualProbe={handleManualProbe}
                   onEdit={(cam) => {
                     setCameraToEdit(cam)
                     setIsCameraModalOpen(true)
                   }}
+                  onDetail={(cam) => setSelectedCameraForDetail(cam)}
+                  onClick={(cam) => setSelectedCameraForDetail(cam)}
                   onDelete={(cam) => setCameraToDelete(cam)}
-                  onNavigateToTasks={onNavigateToTasks}
                 />
               ))}
             </AnimatePresence>
@@ -614,7 +640,27 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
         </div>
       </div>
 
-      {/* 摄像头添加/编辑模态框 */}
+      {/* 摄像头完整详情抽屉 (z-50 侧边抽屉) */}
+      <CameraDetailDrawer
+        camera={selectedCameraForDetail}
+        task={selectedCameraForDetail ? taskMap.get(selectedCameraForDetail.cameraId) : undefined}
+        onClose={() => setSelectedCameraForDetail(null)}
+        onManualProbe={handleManualProbe}
+        onModelTypeChange={(cameraId, type) => {
+          setModelTypeOverrides((prev) => ({ ...prev, [cameraId]: type }))
+        }}
+        onEdit={(cam) => {
+          setCameraToEdit(cam)
+          setIsCameraModalOpen(true)
+        }}
+        onDelete={(cam) => setCameraToDelete(cam)}
+        isProbing={probingCameraId === selectedCameraForDetail?.cameraId}
+        probeFeedback={
+          selectedCameraForDetail ? probeFeedback[selectedCameraForDetail.cameraId] : undefined
+        }
+      />
+
+      {/* 摄像头添加/编辑模态框 (z-[70] 模态层，严格层叠在详情抽屉之上) */}
       <CameraModal
         isOpen={isCameraModalOpen}
         camera={cameraToEdit}
@@ -625,7 +671,7 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
         onSuccess={handleCameraSaved}
       />
 
-      {/* 摄像头删除确认模态框 */}
+      {/* 摄像头删除确认模态框 (z-[70] 模态层) */}
       <DeleteCameraModal
         isOpen={Boolean(cameraToDelete)}
         camera={cameraToDelete}
@@ -650,7 +696,7 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.96 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed top-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-zinc-100 shadow-2xl ring-1 ring-white/10 dark:border-zinc-700 dark:bg-zinc-900"
+            className="fixed top-6 left-1/2 z-[80] flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-zinc-100 shadow-2xl ring-1 ring-white/10 dark:border-zinc-700 dark:bg-zinc-900"
           >
             {toast.type === 'success' ? (
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400">

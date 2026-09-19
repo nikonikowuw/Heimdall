@@ -1,15 +1,25 @@
 import React, { useEffect, useState } from 'react'
-import { AlertCircle, Check, Loader2, Radio, Sparkles, Video, X } from 'lucide-react'
+import {
+  AlertCircle,
+  Camera as CameraIcon,
+  Check,
+  ChevronDown,
+  Loader2,
+  Radio,
+  Sparkles,
+  X,
+} from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { StreamModeSelector } from '@/components/StreamModeSelector'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { cameraApi, gb28181Api } from '@/lib/api'
 import type {
   Camera,
-  SubStreamCandidate,
-  StreamMode,
-  Gb28181Device,
   DiscoveredDevice,
+  Gb28181Device,
+  StreamMode,
+  SubStreamCandidate,
 } from '@/types'
 import { LanDiscoveryModal } from './LanDiscoveryModal'
 
@@ -117,10 +127,8 @@ export function CameraModal({
     }
   }
 
-  // ESC 快捷键关闭
+  // ESC 快捷键由 dismiss stack 统一管理
   useDismissStack(isOpen, onClose, { disabled: isSubmitting })
-
-  if (!isOpen) return null
 
   const handleDeduce = async (url: string) => {
     const trimmed = url.trim()
@@ -232,300 +240,369 @@ export function CameraModal({
 
   return (
     <>
-      <div
-        onClick={(e) => {
-          if (e.target === e.currentTarget && !isSubmitting) {
-            onClose()
-          }
-        }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
-      >
-        <div className="frosted-glass relative w-full max-w-lg rounded-2xl border border-[var(--border)] p-6 shadow-2xl transition-all">
-          {/* 关闭按钮 */}
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSubmitting}
-            className="absolute top-5 right-5 rounded-lg p-1 text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] disabled:opacity-50"
+      <AnimatePresence>
+        {isOpen && (
+          <div
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !isSubmitting) {
+                onClose()
+              }
+            }}
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
           >
-            <X className="h-4 w-4" />
-          </button>
-
-          {/* 头部标题与描述 */}
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-              <Video className="h-5 w-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-[var(--text-primary)]">
-                {isEdit ? t('manage.editCameraTitle') : t('manage.addCameraTitle')}
-              </h3>
-              <p className="mt-1 text-xs text-[var(--text-muted)]">
-                {isEdit ? t('manage.editCameraDesc') : t('manage.addCameraDesc')}
-              </p>
-            </div>
-          </div>
-
-          {/* 协议切换 Pills */}
-          {!isEdit && (
-            <div className="mt-4 flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] p-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setProtocol('rtsp')
-                  setMainUrl('')
-                }}
-                className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-all ${
-                  protocol === 'rtsp'
-                    ? 'bg-[var(--accent)] text-white shadow-xs'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                {t('protocol.rtspAccess', { defaultValue: 'RTSP 协议接入' })}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setProtocol('gb28181')
-                  if (selectedGbDevice && selectedGbChannel) {
-                    setMainUrl(`gb28181://${selectedGbDevice}/${selectedGbChannel}`)
-                  }
-                }}
-                className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-all ${
-                  protocol === 'gb28181'
-                    ? 'bg-cyan-600 text-white shadow-xs'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                {t('protocol.gb28181Access', { defaultValue: '国标 GB28181 接入' })}
-              </button>
-            </div>
-          )}
-
-          {/* 错误提示条 */}
-          {errorMsg && (
-            <div className="mt-4 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="mt-4 flex flex-col gap-4">
-            {/* GB28181 设备树选择联动 */}
-            {protocol === 'gb28181' ? (
-              <div className="space-y-3 rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-3.5">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                    {t('protocol.selectGbDevice', { defaultValue: '选择注册的国标设备' })}
-                  </label>
-                  {gbDevices.length === 0 ? (
-                    <p className="text-xs text-[var(--text-muted)]">
-                      {t('protocol.noGbDevices', {
-                        defaultValue:
-                          '当前暂无注册上线的国标设备。请先让 IPC / NVR 对接到本机 SIP 服务器。',
-                      })}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="relative flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-white shadow-[0_24px_50px_-12px_rgba(0,0,0,0.28)] dark:bg-[var(--bg-surface-solid)]"
+            >
+              {/* ── 1. 现代化 SaaS 风格头部 ── */}
+              <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">
+                <div className="flex items-center gap-3.5">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 shadow-xs dark:text-emerald-400">
+                    <CameraIcon className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-bold tracking-tight text-[var(--text-primary)] sm:text-lg">
+                        {isEdit ? t('manage.editCameraTitle') : t('manage.addCameraTitle')}
+                      </h3>
+                      <span className="rounded-full border border-[var(--border)]/70 bg-[var(--bg-secondary)]/70 px-2 py-0.5 text-[10px] font-semibold text-[var(--text-muted)]">
+                        {isEdit ? 'CONFIG' : protocol.toUpperCase()}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                      {isEdit ? t('manage.editCameraDesc') : t('manage.addCameraDesc')}
                     </p>
-                  ) : (
-                    <select
-                      value={selectedGbDevice}
-                      onChange={(e) => handleGbDeviceChange(e.target.value)}
-                      className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
-                    >
-                      {gbDevices.map((d) => (
-                        <option key={d.deviceId} value={d.deviceId}>
-                          {d.name || d.deviceId} ({d.ipAddr})
-                        </option>
-                      ))}
-                    </select>
-                  )}
+                  </div>
                 </div>
 
-                {currentGbDev && currentGbDev.channels && (
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
-                      {t('protocol.selectGbChannel', { defaultValue: '选择视频通道' })}
-                    </label>
-                    <select
-                      value={selectedGbChannel}
-                      onChange={(e) => handleGbChannelChange(e.target.value)}
-                      className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
-                    >
-                      {currentGbDev.channels.map((ch) => (
-                        <option key={ch.channelId} value={ch.channelId}>
-                          {t('protocol.channelFormat', {
-                            name: ch.name || ch.channelId,
-                            status: ch.status,
-                            defaultValue: `${ch.name || ch.channelId} [${ch.status}]`,
-                          })}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                {/* 优雅右上角关闭按钮 */}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={isSubmitting}
+                  aria-label={t('live.close', { defaultValue: '关闭' })}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
-            ) : null}
 
-            {/* 设备名称 */}
-            <div>
-              <label className="text-xs font-medium text-[var(--text-secondary)]">
-                {t('manage.name')} <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t('manage.namePlaceholder')}
-                className="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-colors focus:border-[var(--accent)] focus:outline-hidden"
-              />
-            </div>
-
-            {/* 主码流地址 */}
-            <div>
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-[var(--text-secondary)]">
-                  {protocol === 'gb28181'
-                    ? t('protocol.gbUri', { defaultValue: '国标 URI 地址' })
-                    : t('manage.mainRtspUrl')}{' '}
-                  <span className="text-rose-500">*</span>
-                </label>
-                {protocol === 'rtsp' && (
-                  <div className="flex items-center gap-2">
+              {/* ── 2. 协议切换分段控制器 (仅新增时展示) ── */}
+              {!isEdit && (
+                <div className="shrink-0 border-b border-[var(--border)]/60 bg-[var(--bg-secondary)]/25 px-6 py-3">
+                  <div className="flex items-center gap-1.5 rounded-2xl border border-[var(--border)]/80 bg-[var(--bg-secondary)]/60 p-1">
                     <button
                       type="button"
-                      onClick={() => setIsLanScanOpen(true)}
-                      className="flex items-center gap-1 text-[11px] text-[var(--accent)] hover:underline"
+                      onClick={() => {
+                        setProtocol('rtsp')
+                        setMainUrl('')
+                      }}
+                      className={`flex-1 rounded-xl py-1.5 text-xs font-semibold transition-all ${
+                        protocol === 'rtsp'
+                          ? 'bg-white text-slate-900 shadow-xs dark:bg-[var(--bg-surface-solid)] dark:text-slate-100'
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                      }`}
                     >
-                      <Radio className="h-3 w-3" />
-                      <span>{t('discovery.scanLan', { defaultValue: '局域网嗅探' })}</span>
+                      {t('protocol.rtspAccess', { defaultValue: 'RTSP 协议接入' })}
                     </button>
-                    {isDeducing && (
-                      <span className="flex items-center gap-1 text-[10px] text-cyan-400">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>{t('discovery.deducing', { defaultValue: '推导中...' })}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProtocol('gb28181')
+                        if (selectedGbDevice && selectedGbChannel) {
+                          setMainUrl(`gb28181://${selectedGbDevice}/${selectedGbChannel}`)
+                        }
+                      }}
+                      className={`flex-1 rounded-xl py-1.5 text-xs font-semibold transition-all ${
+                        protocol === 'gb28181'
+                          ? 'bg-white text-slate-900 shadow-xs dark:bg-[var(--bg-surface-solid)] dark:text-slate-100'
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                      }`}
+                    >
+                      {t('protocol.gb28181Access', { defaultValue: '国标 GB/T 28181 接入' })}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── 3. 主体表单区 (卡片分组 + 滚动条) ── */}
+              <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
+                <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+                  {/* 错误警告提示条 */}
+                  {errorMsg && (
+                    <div className="flex items-center gap-2.5 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-500 dark:text-rose-400">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <span className="leading-relaxed">{errorMsg}</span>
+                    </div>
+                  )}
+
+                  {/* ── 分组 1: 基本设备身份 ── */}
+                  <div className="space-y-3.5 rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/25 p-4.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold tracking-tight text-[var(--text-primary)]">
+                        {t('drawer.deviceObject', { defaultValue: '设备基本信息' })}
                       </span>
+                      <span className="text-[11px] text-[var(--text-muted)]">ID & Location</span>
+                    </div>
+
+                    <div>
+                      <label className="flex items-center justify-between text-xs font-semibold text-[var(--text-secondary)]">
+                        <span>{t('manage.name')}</span>
+                        <span className="text-[10px] font-normal text-rose-500">
+                          {t('manage.requiredTag', { defaultValue: '* 必填' })}
+                        </span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder={t('manage.namePlaceholder')}
+                        className="mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="flex items-center justify-between text-xs font-semibold text-[var(--text-secondary)]">
+                        <span>{t('manage.remark')}</span>
+                        <span className="text-[10px] font-normal text-[var(--text-muted)]">
+                          {t('manage.optionalTag', { defaultValue: '可选' })}
+                        </span>
+                      </label>
+                      <input
+                        type="text"
+                        value={remark}
+                        onChange={(e) => setRemark(e.target.value)}
+                        placeholder={t('manage.remarkPlaceholder')}
+                        className="mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                      />
+                    </div>
+                  </div>
+
+                  {/* ── 分组 2: 视频流接入地址与网络 ── */}
+                  <div className="space-y-3.5 rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/25 p-4.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold tracking-tight text-[var(--text-primary)]">
+                        {t('drawer.streamConfiguration', { defaultValue: '视频流接入地址' })}
+                      </span>
+                      <span className="font-mono text-[11px] text-[var(--text-muted)]">
+                        {protocol.toUpperCase()}
+                      </span>
+                    </div>
+
+                    {/* GB28181 级联下拉 */}
+                    {protocol === 'gb28181' ? (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                            {t('protocol.selectGbDevice', { defaultValue: '选择注册的国标设备' })}
+                          </label>
+                          {gbDevices.length === 0 ? (
+                            <p className="rounded-xl border border-dashed border-[var(--border)] p-3 text-xs leading-relaxed text-[var(--text-muted)]">
+                              {t('protocol.noGbDevices', {
+                                defaultValue:
+                                  '当前暂无注册上线的国标设备。请先让 IPC / NVR 对接到本机 SIP 服务器。',
+                              })}
+                            </p>
+                          ) : (
+                            <div className="relative">
+                              <select
+                                value={selectedGbDevice}
+                                onChange={(e) => handleGbDeviceChange(e.target.value)}
+                                className="w-full appearance-none rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 pr-9 text-xs text-[var(--text-primary)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                              >
+                                {gbDevices.map((d) => (
+                                  <option key={d.deviceId} value={d.deviceId}>
+                                    {d.name || d.deviceId} ({d.ipAddr})
+                                  </option>
+                                ))}
+                              </select>
+                              <ChevronDown className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+                            </div>
+                          )}
+                        </div>
+
+                        {currentGbDev && currentGbDev.channels && (
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                              {t('protocol.selectGbChannel', { defaultValue: '选择视频通道' })}
+                            </label>
+                            <div className="relative">
+                              <select
+                                value={selectedGbChannel}
+                                onChange={(e) => handleGbChannelChange(e.target.value)}
+                                className="w-full appearance-none rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 pr-9 text-xs text-[var(--text-primary)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                              >
+                                {currentGbDev.channels.map((ch) => (
+                                  <option key={ch.channelId} value={ch.channelId}>
+                                    {t('protocol.channelFormat', {
+                                      name: ch.name || ch.channelId,
+                                      status: ch.status,
+                                      defaultValue: `${ch.name || ch.channelId} [${ch.status}]`,
+                                    })}
+                                  </option>
+                                ))}
+                              </select>
+                              <ChevronDown className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {/* 主码流地址 */}
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-secondary)]">
+                          <span>
+                            {protocol === 'gb28181'
+                              ? t('protocol.gbUri', { defaultValue: '国标 URI 地址' })
+                              : t('manage.mainRtspUrl')}
+                          </span>
+                          <span className="text-[10px] font-normal text-rose-500">
+                            {t('manage.requiredTag', { defaultValue: '* 必填' })}
+                          </span>
+                        </label>
+                        {protocol === 'rtsp' && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setIsLanScanOpen(true)}
+                              className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+                            >
+                              <Radio className="h-3 w-3" />
+                              <span>{t('discovery.scanLan', { defaultValue: '局域网嗅探' })}</span>
+                            </button>
+                            {isDeducing && (
+                              <span className="flex items-center gap-1 text-[10px] text-cyan-500">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                <span>
+                                  {t('discovery.deducing', { defaultValue: '推导中...' })}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        value={mainUrl}
+                        onChange={(e) => setMainUrl(e.target.value)}
+                        onBlur={() => handleDeduce(mainUrl)}
+                        readOnly={protocol === 'gb28181'}
+                        placeholder={
+                          protocol === 'gb28181'
+                            ? 'gb28181://{deviceId}/{channelId}'
+                            : t('manage.mainRtspPlaceholder')
+                        }
+                        className={`font-data mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)] ${
+                          protocol === 'gb28181' ? 'opacity-80' : ''
+                        }`}
+                      />
+                    </div>
+
+                    {/* 子码流 RTSP 地址 (仅 RTSP 模式支持) */}
+                    {protocol === 'rtsp' && (
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-secondary)]">
+                            <span>{t('manage.subRtspUrl')}</span>
+                            <span className="text-[10px] font-normal text-[var(--text-muted)]">
+                              {t('manage.optionalTag', { defaultValue: '可选' })}
+                            </span>
+                          </label>
+                          {subCandidates.length > 0 && (
+                            <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                              <Sparkles className="h-3 w-3" />
+                              <span>{t('manage.subCandidatesHint')}</span>
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={subUrl}
+                          onChange={(e) => setSubUrl(e.target.value)}
+                          placeholder={t('manage.subRtspPlaceholder')}
+                          className="font-data mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                        />
+                        <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
+                          {t('manage.subRtspHint')}
+                        </p>
+
+                        {/* 智能子码流候选芯片预设 */}
+                        {subCandidates.length > 0 && (
+                          <div className="mt-2.5 flex flex-wrap gap-1.5">
+                            {subCandidates.map((c, i) => {
+                              const isSelected = subUrl === c.subUrl
+                              return (
+                                <button
+                                  type="button"
+                                  key={i}
+                                  onClick={() => setSubUrl(c.subUrl)}
+                                  className={`font-data flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] transition-all ${
+                                    isSelected
+                                      ? 'border border-emerald-500/50 bg-emerald-500/15 font-semibold text-emerald-700 dark:text-emerald-300'
+                                      : 'border border-[var(--border)]/80 bg-white text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)] dark:bg-[var(--bg-surface-solid)]'
+                                  }`}
+                                  title={c.description}
+                                >
+                                  {isSelected && <Check className="h-3 w-3 text-emerald-500" />}
+                                  <span>
+                                    {c.brand}: {c.description}
+                                  </span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
-              <input
-                type="text"
-                required
-                value={mainUrl}
-                onChange={(e) => setMainUrl(e.target.value)}
-                onBlur={() => handleDeduce(mainUrl)}
-                readOnly={protocol === 'gb28181'}
-                placeholder={
-                  protocol === 'gb28181'
-                    ? 'gb28181://{deviceId}/{channelId}'
-                    : t('manage.mainRtspPlaceholder')
-                }
-                className={`mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-colors focus:border-[var(--accent)] focus:outline-hidden ${
-                  protocol === 'gb28181' ? 'opacity-80' : ''
-                }`}
-              />
-            </div>
 
-            {/* 子码流 RTSP 地址 (仅 RTSP 模式支持) */}
-            {protocol === 'rtsp' && (
-              <div>
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-[var(--text-secondary)]">
-                    {t('manage.subRtspUrl')}
-                  </label>
-                  {subCandidates.length > 0 && (
-                    <span className="flex items-center gap-1 text-[10px] font-medium text-cyan-400">
-                      <Sparkles className="h-3 w-3" />
-                      <span>{t('manage.subCandidatesHint')}</span>
-                    </span>
-                  )}
-                </div>
-                <input
-                  type="text"
-                  value={subUrl}
-                  onChange={(e) => setSubUrl(e.target.value)}
-                  placeholder={t('manage.subRtspPlaceholder')}
-                  className="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-colors focus:border-[var(--accent)] focus:outline-hidden"
-                />
-                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
-                  {t('manage.subRtspHint')}
-                </p>
-
-                {/* 子码流候选芯片预设 */}
-                {subCandidates.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {subCandidates.map((c, i) => {
-                      const isSelected = subUrl === c.subUrl
-                      return (
-                        <button
-                          type="button"
-                          key={i}
-                          onClick={() => setSubUrl(c.subUrl)}
-                          className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-mono text-[10px] transition-all ${
-                            isSelected
-                              ? 'border border-cyan-500/40 bg-cyan-500/20 font-semibold text-cyan-400'
-                              : 'border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
-                          }`}
-                          title={c.description}
-                        >
-                          {isSelected && <Check className="h-3 w-3 text-cyan-400" />}
-                          <span>
-                            {c.brand}: {c.description}
-                          </span>
-                        </button>
-                      )
-                    })}
+                  {/* ── 分组 3: AI 分析码流策略 ── */}
+                  <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/25 p-4.5">
+                    <StreamModeSelector value={streamMode} onChange={setStreamMode} />
                   </div>
-                )}
-              </div>
-            )}
+                </div>
 
-            {/* AI 分析码流选择 */}
-            <div>
-              <label className="text-xs font-medium text-[var(--text-secondary)]">
-                {t('manage.streamMode')}
-              </label>
-              <div className="mt-1">
-                <StreamModeSelector value={streamMode} onChange={setStreamMode} />
-              </div>
-            </div>
+                {/* ── 4. 现代化 SaaS 底部吸底操作栏 ── */}
+                <div className="flex shrink-0 items-center justify-between border-t border-[var(--border)]/70 bg-[var(--bg-secondary)]/20 px-6 py-4">
+                  <div className="hidden items-center gap-1 text-[11px] text-[var(--text-muted)] sm:flex">
+                    <span>{t('manage.pressKeyPrefix', { defaultValue: '按' })}</span>
+                    <kbd className="rounded border border-[var(--border)] bg-white px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] shadow-xs dark:bg-[var(--bg-surface-solid)]">
+                      ESC
+                    </kbd>
+                    <span>{t('manage.toClose', { defaultValue: '关闭窗口' })}</span>
+                  </div>
 
-            {/* 备注 */}
-            <div>
-              <label className="text-xs font-medium text-[var(--text-secondary)]">
-                {t('manage.remark')}
-              </label>
-              <input
-                type="text"
-                value={remark}
-                onChange={(e) => setRemark(e.target.value)}
-                placeholder={t('manage.remarkPlaceholder')}
-                className="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-colors focus:border-[var(--accent)] focus:outline-hidden"
-              />
-            </div>
-
-            {/* 底部操作按钮 */}
-            <div className="mt-2 flex items-center justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={isSubmitting}
-                className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] disabled:opacity-50"
-              >
-                {t('manage.cancel')}
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-5 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
-              >
-                {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                <span>{submitButtonText}</span>
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      disabled={isSubmitting}
+                      className="rounded-xl border border-[var(--border)]/80 bg-white px-4 py-2 text-xs font-medium text-[var(--text-secondary)] shadow-xs transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 dark:bg-[var(--bg-surface-solid)]"
+                    >
+                      {t('manage.cancel')}
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="flex min-h-9 items-center gap-2 rounded-xl bg-slate-900 px-5 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:bg-slate-800 active:scale-95 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                    >
+                      {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      <span>{submitButtonText}</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <LanDiscoveryModal
         isOpen={isLanScanOpen}
