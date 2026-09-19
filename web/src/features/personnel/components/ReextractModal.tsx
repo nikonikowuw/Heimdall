@@ -322,9 +322,9 @@ export function ReextractModal({
                       key={item.faceId}
                       className="rounded-xl border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 p-2 text-[11px]"
                     >
-                      <div className="flex items-center justify-between text-[var(--text-muted)]">
-                        <span className="font-data">Face: {item.faceId.slice(0, 12)}...</span>
-                        <span className="font-data">Subj: {item.subjectId}</span>
+                      <div className="flex flex-col gap-0.5 text-[var(--text-muted)]">
+                        <span className="font-data break-all">Face: {item.faceId}</span>
+                        <span className="font-data break-all">Subj: {item.subjectId}</span>
                       </div>
                       <p className="mt-1 text-amber-500/90">
                         {formatFailureReason(item.reason, t)}

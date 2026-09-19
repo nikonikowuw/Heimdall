@@ -189,9 +189,9 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
         </div>
 
         {/* 底部操作与核验状态流转按钮 */}
-        <div className="flex items-center justify-between border-t border-[var(--border)]/60 pt-2.5">
-          <div className="font-mono text-[10px] text-[var(--text-muted)]">
-            ID: {alarm.eventId.slice(0, 8)}
+        <div className="flex items-center justify-between gap-2 border-t border-[var(--border)]/60 pt-2.5">
+          <div className="min-w-0 flex-1 font-mono text-[10px] break-all text-[var(--text-muted)]">
+            ID: {alarm.eventId}
           </div>
 
           <button
@@ -200,7 +200,7 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
               e.stopPropagation()
               onToggleStatus(alarm)
             }}
-            className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all duration-150 focus-visible:ring-1 focus-visible:ring-[var(--accent)] ${
+            className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all duration-150 focus-visible:ring-1 focus-visible:ring-[var(--accent)] ${
               isProcessed
                 ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
                 : 'border border-rose-500/30 bg-rose-500/10 text-rose-500 hover:bg-rose-500/20'

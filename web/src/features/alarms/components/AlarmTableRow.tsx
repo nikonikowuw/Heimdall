@@ -96,8 +96,8 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
           </div>
         )}
       </td>
-      <td className="px-3 py-2 font-mono text-[11px] text-[var(--text-primary)]">
-        {alarm.eventId.slice(0, 12)}...
+      <td className="px-3 py-2 font-mono text-[11px] whitespace-nowrap text-[var(--text-primary)]">
+        {alarm.eventId}
       </td>
       <td className="px-3 py-2 font-medium text-[var(--text-primary)]">
         {cameraName || alarm.cameraId}
