@@ -158,14 +158,22 @@ verify-cross: ## 验证交叉编译工具链
 	@$(WORKSPACE_ROOT)/scripts/setup-cross-deps.sh --check
 
 # 确保 web/dist 存在且最新 (rust-embed 需要)
-WEB_SRCS := $(shell find $(WEB_DIR)/src $(WEB_DIR)/public -type f 2>/dev/null) $(WEB_DIR)/package.json $(WEB_DIR)/index.html
+#
+# 判据用 target/ 下的 stamp 文件，而不是 dist/index.html：后者会被任何触碰 dist
+# 的外部工具（典型是未忽略 dist 的 prettier --write .）把 mtime 往前推，使 make
+# 误判「已最新」而跳过前端构建，rust-embed 于是静默内嵌过期或未压缩的产物。
+# stamp 只由本规则写入，且位于 target/ 内，不会被打进二进制。
+WEB_SRCS := $(shell find $(WEB_DIR)/src $(WEB_DIR)/public -type f 2>/dev/null) $(WEB_DIR)/package.json $(WEB_DIR)/index.html $(WEB_DIR)/vite.config.ts $(WEB_DIR)/tsconfig.json $(WEB_DIR)/tsconfig.app.json $(WEB_DIR)/tsconfig.node.json $(WEB_DIR)/pnpm-lock.yaml
+WEB_STAMP := $(WORKSPACE_ROOT)/target/.web-build-stamp
 
-$(WEB_DIST)/index.html: $(WEB_SRCS)
+$(WEB_STAMP): $(WEB_SRCS)
 	@echo -e "$(CYAN)[web]$(RESET) 前端源码有变更，自动触发前端构建..."
 	cd $(WEB_DIR) && pnpm build
+	@mkdir -p $(dir $(WEB_STAMP))
+	@touch $(WEB_STAMP)
 
 .PHONY: ensure-web-dist
-ensure-web-dist: $(WEB_DIST)/index.html
+ensure-web-dist: $(WEB_STAMP)
 
 # ============================================================================
 #  SDK 库管理

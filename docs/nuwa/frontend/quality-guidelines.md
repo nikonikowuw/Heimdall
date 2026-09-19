@@ -41,6 +41,12 @@ SPA 由 Rust `rust-embed` 内嵌；检查 chunk 体积，播放器、图表/3D �
 字体自托管并 `font-display: swap`，翻译按语言/模块懒加载，首屏不打包全部语言。
 交付记录实际通过、失败及未运行的检查。
 
+`dist/` 必须留在 [.prettierignore](../../../web/.prettierignore) 里，不得让 `pnpm format` 碰它。
+
+- 格式化压缩产物会把 JS 体积撑到约 1.77 倍，Rust 侧 `static_files.rs` 的 `#[folder = "../../web/dist/"]` 是**编译期**内嵌，于是二进制直接变大，且压缩开关（`rust-embed` 未启用 `compression`）不会救它。
+- 更隐蔽的是 `Makefile` 的 `ensure-web-dist` 以 `target/.web-build-stamp` 而非 `dist/index.html` 为判据：以产物文件为判据时，任何外部工具碰一下 `dist/index.html` 就会把它 mtime 推到源码之后，导致 make 误判「已最新」而跳过前端构建 —— 内嵌的要么是未压缩产物，要么干脆缺了最新源码改动，两种都静默无告警。
+- 改动 `WEB_SRCS` 覆盖范围（如新增 `vite.config.ts`、`tsconfig*.json`、`pnpm-lock.yaml`）时保持 stamp 判据不变。
+
 ### 路由级分包
 
 边界集中在 [lazy-pages.ts](../../../web/src/app/lazy-pages.ts)：

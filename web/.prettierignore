@@ -1,0 +1,11 @@
+# 生成物，非手写源码。与根 .gitignore 对 web/ 生效的条目保持一致。
+#
+# dist/ 不能省：`pnpm format` 若格式化 dist/，会把压缩后的产物重新排版
+# （JS 体积约 1.77 倍），并刷新 dist/index.html 的 mtime。后者会让 Makefile
+# 的 ensure-web-dist 判定“前端已最新”而跳过 pnpm build，使 rust-embed 把
+# 未压缩的产物内嵌进二进制，同时 content hash 文件名与实际内容脱钩，
+# 而 static_files.rs 又对 assets/* 下发一年期 immutable 缓存。
+dist/
+node_modules/
+coverage/
+*.tsbuildinfo
