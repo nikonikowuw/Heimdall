@@ -1,24 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Camera as CameraIcon,
-  Car,
+  ChevronLeft,
+  ChevronRight,
   Compass,
+  CornerUpLeft,
   Eye,
   Grid,
   MonitorPlay,
   Pencil,
   Plus,
   Radio,
+  Search,
   ShieldAlert,
   Sparkles,
   Trash2,
-  User,
   X,
   Zap,
 } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { CameraModal, DeleteCameraModal, normalizeProbeStatus } from '@/features/cameras'
 import { cameraApi, evidenceApi } from '@/lib/api'
+import { motionTokens } from '@/lib/motionTokens'
+import { systemApi } from '@/lib/system-api'
 import { wsClient } from '@/lib/wsClient'
 import {
   type AlarmSeverity,
@@ -27,6 +32,8 @@ import {
   type ProbeStatus,
   WS_TOPICS,
 } from '@/types'
+import { AuxCameraCard } from './components/AuxCameraCard'
+import { BentoCameraCard } from './components/BentoCameraCard'
 import { LivePlayer } from './components/LivePlayer'
 
 function playAlarmChime() {
@@ -48,20 +55,20 @@ function playAlarmChime() {
     osc.start()
     osc.stop(ctx.currentTime + 0.3)
   } catch {
-    // 忽略未交互前的 AudioContext 限制
+    // 忽略未交互前的 AudioContext 自动播放限制
   }
 }
 
 function getCameraHealthRank(status?: string): number {
   switch (normalizeProbeStatus(status)) {
     case 'healthy':
-      return 1 // 在线健康
+      return 1
     case 'unprobed':
-      return 2 // 待探测
+      return 2
     case 'degraded':
-      return 3 // 网络波动
+      return 3
     case 'offline':
-      return 4 // 离线/故障
+      return 4
   }
 }
 
@@ -75,53 +82,6 @@ function sortCamerasByHealth(list: Camera[]): Camera[] {
     }
     return b.id - a.id
   })
-}
-
-function getStatusBadge(
-  t: (key: string, opts?: { defaultValue?: string }) => string,
-  status?: ProbeStatus | string,
-) {
-  switch (normalizeProbeStatus(status)) {
-    case 'healthy':
-      return {
-        text: t('status.online', { defaultValue: '在线' }),
-        badgeClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
-        dotClass: 'bg-emerald-400 animate-pulse',
-        statusColor: 'text-emerald-400',
-      }
-    case 'degraded':
-      return {
-        text: t('status.degraded', { defaultValue: '网络波动' }),
-        badgeClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
-        dotClass: 'bg-amber-400 animate-ping',
-        statusColor: 'text-amber-400',
-      }
-    case 'offline':
-      return {
-        text: t('status.offline', { defaultValue: '离线/故障' }),
-        badgeClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20',
-        dotClass: 'bg-rose-500',
-        statusColor: 'text-rose-400',
-      }
-    case 'unprobed':
-    default:
-      return {
-        text: t('status.unprobed', { defaultValue: '待探测' }),
-        badgeClass: 'bg-gray-500/10 text-gray-400 border border-gray-500/20',
-        dotClass: 'bg-gray-400',
-        statusColor: 'text-gray-400',
-      }
-  }
-}
-
-function getResolutionBadge(cam: Camera) {
-  if (cam.lastWidth > 0 && cam.lastHeight > 0) {
-    return `${cam.lastHeight}P`
-  }
-  if (normalizeProbeStatus(cam.lastProbeStatus) === 'healthy') {
-    return '1080P'
-  }
-  return '--'
 }
 
 interface LiveAlarmToast {
@@ -138,21 +98,35 @@ interface LiveAlarmToastItemProps {
   alarm: LiveAlarmToast
   cameraName?: string
   onClose: () => void
+  onFocusCamera?: (cameraId: string) => void
   onNavigateToAlarms?: () => void
+  reducedMotion?: boolean | null
 }
 
 function LiveAlarmToastItem({
   alarm,
   cameraName,
   onClose,
+  onFocusCamera,
   onNavigateToAlarms,
+  reducedMotion,
 }: LiveAlarmToastItemProps): React.ReactElement {
-  const { t } = useTranslation('alarm')
+  const { t } = useTranslation(['alarm', 'camera'])
   const ruleTypeLabel =
-    alarm.ruleType === 'line' ? t('types.lineCrossing') : t('types.regionIntrusion')
+    alarm.ruleType === 'line' ? t('alarm:types.lineCrossing') : t('alarm:types.regionIntrusion')
 
   return (
-    <div className="animate-in fade-in slide-in-from-top-4 fixed top-6 right-6 z-50 flex items-center gap-3 rounded-2xl border border-rose-500/50 bg-black/90 p-3.5 text-white shadow-2xl backdrop-blur-md duration-300">
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: reducedMotion ? 0 : -20, scale: reducedMotion ? 1 : 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: reducedMotion ? 0 : -14, scale: reducedMotion ? 1 : 0.95 }}
+      transition={{
+        duration: reducedMotion ? motionTokens.duration.fast : motionTokens.duration.normal,
+        ease: motionTokens.easing.smooth,
+      }}
+      className="fixed top-6 right-6 z-50 flex items-center gap-3 rounded-2xl border border-rose-500/50 bg-black/90 p-3.5 text-white shadow-2xl backdrop-blur-md"
+    >
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/20 text-rose-500">
         <ShieldAlert className="h-5 w-5" />
       </div>
@@ -171,28 +145,46 @@ function LiveAlarmToastItem({
           <span className="font-semibold text-slate-300">{cameraName || alarm.cameraId}</span>
         </div>
         <p className="font-medium text-slate-200">
-          {t('toast.ruleTriggered', { target: alarm.targetLabel })}
+          {t('alarm:toast.ruleTriggered', { target: alarm.targetLabel })}
         </p>
       </div>
       <div className="ml-2 flex items-center gap-1.5">
+        {onFocusCamera && (
+          <button
+            type="button"
+            onClick={() => {
+              onFocusCamera(alarm.cameraId)
+            }}
+            className="rounded-lg bg-cyan-500/20 px-2.5 py-1 text-xs font-semibold text-cyan-300 transition-all hover:bg-cyan-500/30"
+          >
+            {t('camera:live.focus')}
+          </button>
+        )}
         {onNavigateToAlarms && (
           <button
+            type="button"
             onClick={() => {
               onClose()
               onNavigateToAlarms()
             }}
             className="rounded-lg bg-rose-500 px-2.5 py-1 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90"
           >
-            {t('toast.viewEvidence')}
+            {t('alarm:toast.viewEvidence')}
           </button>
         )}
-        <button onClick={onClose} className="p-1 text-slate-400 transition-colors hover:text-white">
+        <button
+          type="button"
+          onClick={onClose}
+          className="p-1 text-slate-400 transition-colors hover:text-white"
+        >
           <X className="h-4 w-4" />
         </button>
       </div>
-    </div>
+    </motion.div>
   )
 }
+
+export type BentoGridSplit = 1 | 4 | 9 | 'all'
 
 export interface LivePageProps {
   onNavigateToAlarms?: () => void
@@ -200,6 +192,7 @@ export interface LivePageProps {
 
 export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.ReactElement {
   const { t } = useTranslation('camera')
+  const reducedMotion = useReducedMotion()
 
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selectedHeroId, setSelectedHeroId] = useState<string>('')
@@ -207,20 +200,66 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   const [heroAudioEnabled, setHeroAudioEnabled] = useState<boolean>(false)
   const [viewMode, setViewMode] = useState<'hero_rail' | 'bento_grid'>('hero_rail')
   const [autoSpotlight, setAutoSpotlight] = useState<boolean>(true)
+  const [spotlightBanner, setSpotlightBanner] = useState<{
+    cameraName: string
+    revertId: string | null
+  } | null>(null)
+  const [recentAlarms, setRecentAlarms] = useState<Record<string, number>>({})
+
+  // Bento 网格分屏与分页
+  const [gridSplit, setGridSplit] = useState<BentoGridSplit>(4)
+  const [gridPage, setGridPage] = useState<number>(1)
+
+  // 辅流轨道搜索与过滤
+  const [auxSearch, setAuxSearch] = useState<string>('')
+  const [auxFilter, setAuxFilter] = useState<'all' | 'healthy' | 'alarm'>('all')
+
+  // 硬件与系统信息
+  const [hwLabel, setHwLabel] = useState<string>('')
+  const [heroLatency, setHeroLatency] = useState<number>(128)
+
+  // 模态框
   const [isCameraModalOpen, setIsCameraModalOpen] = useState<boolean>(false)
   const [cameraToEdit, setCameraToEdit] = useState<Camera | null>(null)
   const [cameraToDelete, setCameraToDelete] = useState<Camera | null>(null)
   const [activeAlarm, setActiveAlarm] = useState<LiveAlarmToast | null>(null)
 
+  // 告警 Toast 自动超时关闭
   useEffect(() => {
     if (!activeAlarm) return
     const timer = setTimeout(() => setActiveAlarm(null), 6000)
     return () => clearTimeout(timer)
   }, [activeAlarm])
 
-  // 加载摄像头列表 (健康状态优先排序)
+  // 追焦提示条自动超时关闭
   useEffect(() => {
-    async function loadCameras() {
+    if (!spotlightBanner) return
+    const timer = setTimeout(() => setSpotlightBanner(null), 4500)
+    return () => clearTimeout(timer)
+  }, [spotlightBanner])
+
+  // 定期清理过期的近期告警状态 (8 秒后移除高亮发光)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now()
+      setRecentAlarms((prev) => {
+        let changed = false
+        const next = { ...prev }
+        for (const [id, exp] of Object.entries(next)) {
+          if (exp <= now) {
+            delete next[id]
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // 加载摄像头列表与系统硬件环境信息
+  useEffect(() => {
+    async function loadInitialData() {
       try {
         const list = await cameraApi.list()
         if (list && list.length > 0) {
@@ -233,12 +272,25 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       } catch {
         setCameras([])
       }
+
+      try {
+        const overview = await systemApi.getOverview()
+        if (overview) {
+          if (overview.deviceModel && overview.deviceModel.length > 0) {
+            setHwLabel(overview.deviceModel)
+          } else if (overview.npu) {
+            setHwLabel('NPU 加速')
+          }
+        }
+      } catch {
+        // 忽略非关键概览加载异常
+      }
     }
 
-    void loadCameras()
+    void loadInitialData()
   }, [])
 
-  // 监听全网 WebSocket 广播事件（复用全局长连接：实时刷新探活状态与健康度自动提权）
+  // 监听全网 WebSocket 广播事件（探活更新、告警触发、告警状态变更）
   useEffect(() => {
     const unProbe = wsClient.subscribe<{
       cameraId: string
@@ -282,15 +334,39 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
     }>(WS_TOPICS.ALARM_TRIGGERED, (p) => {
       if (!p) return
       playAlarmChime()
+
+      const targetCamId = p.cameraId || 'CAM-01'
+
       setActiveAlarm({
         id: p.eventId || String(p.id || Date.now()),
-        cameraId: p.cameraId || 'CAM-01',
+        cameraId: targetCamId,
         targetLabel: p.targetLabel || 'Target',
         ruleType: p.ruleType || 'intrusion',
         severity: p.severity || 'warning',
         cropImageRelPath: p.cropImageRelPath,
         imageRelPath: p.imageRelPath,
       })
+
+      // 记录近期告警机位 (激活呼吸发光框持续 8 秒)
+      setRecentAlarms((prev) => ({
+        ...prev,
+        [targetCamId]: Date.now() + 8000,
+      }))
+
+      // 智能追焦真正闭环联动
+      if (autoSpotlight && targetCamId) {
+        setSelectedHeroId((currentHero) => {
+          if (currentHero !== targetCamId) {
+            const targetCam = cameras.find((c) => c.cameraId === targetCamId)
+            setSpotlightBanner({
+              cameraName: targetCam?.name || targetCamId,
+              revertId: currentHero || null,
+            })
+            return targetCamId
+          }
+          return currentHero
+        })
+      }
     })
 
     const unAlarmStatus = wsClient.subscribe<{
@@ -314,21 +390,104 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       unAlarm()
       unAlarmStatus()
     }
-  }, [])
+  }, [autoSpotlight, cameras])
+
+  // 过滤后的辅流摄像头列表
+  const filteredAuxCameras = useMemo(() => {
+    let list = cameras
+    if (auxSearch.trim()) {
+      const q = auxSearch.trim().toLowerCase()
+      list = list.filter(
+        (c) => c.name.toLowerCase().includes(q) || c.cameraId.toLowerCase().includes(q),
+      )
+    }
+    if (auxFilter === 'healthy') {
+      list = list.filter((c) => normalizeProbeStatus(c.lastProbeStatus) === 'healthy')
+    } else if (auxFilter === 'alarm') {
+      const now = Date.now()
+      list = list.filter((c) => (recentAlarms[c.cameraId] ?? 0) > now)
+    }
+    return list
+  }, [cameras, auxSearch, auxFilter, recentAlarms])
+
+  // Bento 网格分页切片
+  const bentoPageSize = gridSplit === 'all' ? cameras.length : gridSplit
+  const totalBentoPages = Math.max(1, Math.ceil(cameras.length / (bentoPageSize || 1)))
+  const currentBentoPage = Math.min(gridPage, totalBentoPages)
+  const paginatedBentoCameras = useMemo(() => {
+    if (gridSplit === 'all') return cameras
+    const start = (currentBentoPage - 1) * gridSplit
+    return cameras.slice(start, start + gridSplit)
+  }, [cameras, gridSplit, currentBentoPage])
 
   const heroCamera = cameras.find((c) => c.cameraId === selectedHeroId)
 
+  // 切换追焦机位
+  const handleSelectHero = useCallback((cameraId: string) => {
+    setSelectedHeroId(cameraId)
+    setSpotlightBanner(null)
+  }, [])
+
   return (
     <div className="relative flex h-full flex-col gap-3">
-      {/* 实时告警低噪稀疏弹窗浮层 */}
-      {activeAlarm && (
-        <LiveAlarmToastItem
-          alarm={activeAlarm}
-          cameraName={cameras.find((c) => c.cameraId === activeAlarm.cameraId)?.name}
-          onClose={() => setActiveAlarm(null)}
-          onNavigateToAlarms={onNavigateToAlarms}
-        />
-      )}
+      {/* 实时告警低噪稀疏弹窗浮层 (AnimatePresence) */}
+      <AnimatePresence mode="popLayout">
+        {activeAlarm && (
+          <LiveAlarmToastItem
+            key={activeAlarm.id}
+            alarm={activeAlarm}
+            cameraName={cameras.find((c) => c.cameraId === activeAlarm.cameraId)?.name}
+            onClose={() => setActiveAlarm(null)}
+            onFocusCamera={(camId) => handleSelectHero(camId)}
+            onNavigateToAlarms={onNavigateToAlarms}
+            reducedMotion={reducedMotion}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* 智能追焦机位切换提示横幅 (AnimatePresence) */}
+      <AnimatePresence mode="wait">
+        {spotlightBanner && (
+          <motion.div
+            key={spotlightBanner.cameraName}
+            initial={{ opacity: 0, y: reducedMotion ? 0 : -16, scale: reducedMotion ? 1 : 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: reducedMotion ? 0 : -12, scale: reducedMotion ? 1 : 0.96 }}
+            transition={{
+              duration: reducedMotion ? motionTokens.duration.fast : motionTokens.duration.normal,
+              ease: motionTokens.easing.smooth,
+            }}
+            className="absolute top-14 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full border border-cyan-500/40 bg-black/85 px-4 py-1.5 text-xs text-white shadow-2xl backdrop-blur-md"
+          >
+            <div className="flex items-center gap-1.5 font-medium text-cyan-300">
+              <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+              <span>{t('live.spotlightSwitchHint', { name: spotlightBanner.cameraName })}</span>
+            </div>
+            {spotlightBanner.revertId && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (spotlightBanner.revertId) {
+                    setSelectedHeroId(spotlightBanner.revertId)
+                    setSpotlightBanner(null)
+                  }
+                }}
+                className="flex items-center gap-1 rounded bg-white/10 px-2 py-0.5 text-[11px] font-medium text-slate-200 transition-colors hover:bg-white/20 hover:text-white"
+              >
+                <CornerUpLeft className="h-3 w-3" />
+                <span>{t('live.revertSpotlight')}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setSpotlightBanner(null)}
+              className="text-slate-400 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* 顶部智能监控控制台 HUD 工具栏 */}
       <div className="frosted-glass flex items-center justify-between rounded-xl px-4 py-2.5">
@@ -341,13 +500,13 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               <span className="text-sm font-semibold text-[var(--text-primary)]">
                 {t('live.title')}
               </span>
-              <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
+              <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
                 <Radio className="h-2.5 w-2.5 animate-pulse" />
-                <span>{t('live.protocolBadge')}</span>
+                <span>{t('live.webcodecsBadge')}</span>
               </span>
-              <span className="flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-400">
+              <span className="flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-700 dark:text-cyan-400">
                 <Zap className="h-2.5 w-2.5" />
-                <span>{t('live.aneAccelerator')}</span>
+                <span>{hwLabel || t('live.hwAcceleratorReady')}</span>
               </span>
             </div>
           </div>
@@ -355,12 +514,13 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
 
         <div className="flex items-center gap-2">
           {/* 智能追焦开关 */}
-          <button
+          <motion.button
             type="button"
+            whileTap={{ scale: 0.96 }}
             onClick={() => setAutoSpotlight(!autoSpotlight)}
             className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all ${
               autoSpotlight
-                ? 'border border-cyan-500/30 bg-cyan-500/15 text-cyan-400'
+                ? 'border border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-400'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
             }`}
             title={t('live.autoSpotlightDesc')}
@@ -372,39 +532,71 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                 autoSpotlight ? 'animate-pulse bg-cyan-400' : 'bg-gray-500'
               }`}
             />
-          </button>
+          </motion.button>
 
-          {/* 视图布局模式切换 */}
+          {/* 视图布局模式切换 (Motion layoutId Pill) */}
           <div className="flex items-center rounded-lg border border-[var(--border)] p-0.5">
             <button
               type="button"
               onClick={() => setViewMode('hero_rail')}
-              className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                viewMode === 'hero_rail'
-                  ? 'bg-[var(--accent)] text-white shadow-xs'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
+              className="relative flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors"
             >
-              <Compass className="h-3.5 w-3.5" />
-              <span>{t('live.focusMode')}</span>
+              {viewMode === 'hero_rail' && (
+                <motion.div
+                  layoutId="live-view-mode-pill"
+                  className="absolute inset-0 rounded-md bg-[var(--accent)] shadow-xs"
+                  transition={{
+                    type: 'spring',
+                    stiffness: 480,
+                    damping: 36,
+                  }}
+                />
+              )}
+              <span
+                className={`relative z-10 flex items-center gap-1 ${
+                  viewMode === 'hero_rail'
+                    ? 'text-white'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Compass className="h-3.5 w-3.5" />
+                <span>{t('live.focusMode')}</span>
+              </span>
             </button>
             <button
               type="button"
               onClick={() => setViewMode('bento_grid')}
-              className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                viewMode === 'bento_grid'
-                  ? 'bg-[var(--accent)] text-white shadow-xs'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
+              className="relative flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors"
             >
-              <Grid className="h-3.5 w-3.5" />
-              <span>{t('live.bentoMode')}</span>
+              {viewMode === 'bento_grid' && (
+                <motion.div
+                  layoutId="live-view-mode-pill"
+                  className="absolute inset-0 rounded-md bg-[var(--accent)] shadow-xs"
+                  transition={{
+                    type: 'spring',
+                    stiffness: 480,
+                    damping: 36,
+                  }}
+                />
+              )}
+              <span
+                className={`relative z-10 flex items-center gap-1 ${
+                  viewMode === 'bento_grid'
+                    ? 'text-white'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Grid className="h-3.5 w-3.5" />
+                <span>{t('live.bentoMode')}</span>
+              </span>
             </button>
           </div>
 
           {/* 添加摄像头按钮 */}
-          <button
+          <motion.button
             type="button"
+            whileTap={{ scale: 0.96 }}
+            whileHover={{ scale: 1.02 }}
             onClick={() => {
               setCameraToEdit(null)
               setIsCameraModalOpen(true)
@@ -413,14 +605,14 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           >
             <Plus className="h-3.5 w-3.5" />
             <span>{t('live.addCamera')}</span>
-          </button>
+          </motion.button>
         </div>
       </div>
 
       {/* 主视口布局容器 */}
       {viewMode === 'hero_rail' ? (
         <div className="grid flex-1 grid-cols-12 gap-3 overflow-hidden">
-          {/* 左侧 72% 沉浸式 Hero Stage (占据 8.5 / 12 列) */}
+          {/* 左侧沉浸式 Hero Stage (占据 8.5 / 12 列) */}
           <div className="col-span-12 flex flex-col gap-2 overflow-hidden lg:col-span-8 xl:col-span-9">
             <div className="relative flex-1 overflow-hidden rounded-xl border border-[var(--border)] bg-black/40">
               {heroCamera ? (
@@ -435,6 +627,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   videoCodec={heroCamera.lastCodec}
                   audioEnabled={heroAudioEnabled}
                   onToggleAudio={() => setHeroAudioEnabled((prev) => !prev)}
+                  onLatencyChange={(lat) => setHeroLatency(lat)}
                   onClose={() => setSelectedHeroId('')}
                   onSwitchStream={(s) => setHeroStream(s)}
                 />
@@ -470,23 +663,26 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             {/* Hero 下方实时遥测事件滚动胶囊 */}
             <div className="frosted-glass flex items-center justify-between rounded-lg px-3 py-1.5 text-xs text-[var(--text-secondary)]">
               <div className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="flex h-2 w-2 animate-ping rounded-full bg-cyan-400" />
-                <span className="font-semibold text-cyan-400">{t('live.liveTelemetry')}:</span>
+                <span className="flex h-2 w-2 animate-ping rounded-full bg-cyan-500 dark:bg-cyan-400" />
+                <span className="font-semibold text-cyan-700 dark:text-cyan-400">
+                  {t('live.liveTelemetry')}:
+                </span>
                 <span className="text-[var(--text-primary)]">
                   {heroCamera
-                    ? `[${heroCamera.name}] ${heroCamera.lastCodec.toUpperCase()} ${heroCamera.lastWidth ? `${heroCamera.lastWidth}x${heroCamera.lastHeight}` : ''}`
+                    ? `[${heroCamera.name}] ${heroCamera.lastCodec ? heroCamera.lastCodec.toUpperCase() : 'H264'} ${heroCamera.lastWidth ? `${heroCamera.lastWidth}x${heroCamera.lastHeight}` : ''}`
                     : t('live.savingMode')}
                 </span>
               </div>
               <div className="flex items-center gap-3 text-[11px]">
                 <span>
                   {t('live.fps')}:{' '}
-                  <strong className="text-emerald-400">
+                  <strong className="text-emerald-600 dark:text-emerald-400">
                     {heroCamera?.lastFps ? heroCamera.lastFps.toFixed(1) : '25.0'} FPS
                   </strong>
                 </span>
                 <span>
-                  {t('live.latency')}: <strong className="text-cyan-400">128 ms</strong>
+                  {t('live.latency')}:{' '}
+                  <strong className="text-cyan-700 dark:text-cyan-400">{heroLatency} ms</strong>
                 </span>
                 {heroCamera && (
                   <div className="flex items-center gap-1.5 border-l border-[var(--border)] pl-2">
@@ -516,214 +712,233 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             </div>
           </div>
 
-          {/* 右侧 28% Bento Live Rail 活动流轨道 (占据 3.5 / 12 列) - 子码流持续播放 */}
-          <div className="col-span-12 flex flex-col gap-3 overflow-y-auto lg:col-span-4 xl:col-span-3">
-            <div className="flex items-center justify-between px-1 text-xs text-[var(--text-muted)]">
-              <span className="font-medium tracking-wide">
-                {t('live.auxStreams')} ({cameras.length})
-              </span>
-              <span className="text-[10px]">{t('live.switchMainHint')}</span>
-            </div>
+          {/* 右侧 Bento Live Rail 活动流轨道 (占据 3.5 / 12 列) */}
+          <div className="col-span-12 flex flex-col gap-2.5 overflow-hidden lg:col-span-4 xl:col-span-3">
+            {/* 辅流轨道头部状态与快速搜索 */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between px-1 text-xs text-[var(--text-muted)]">
+                <span className="font-medium tracking-wide">
+                  {t('live.auxStreams')} ({cameras.length})
+                </span>
+                <span className="text-[10px]">{t('live.switchMainHint')}</span>
+              </div>
 
-            <div className="flex flex-1 flex-col gap-3">
-              {cameras.map((cam) => {
-                const isFocused = cam.cameraId === selectedHeroId
-                return (
-                  <div
-                    key={cam.cameraId}
-                    onClick={() => setSelectedHeroId(cam.cameraId)}
-                    className={`group relative cursor-pointer overflow-hidden rounded-xl border bg-[var(--bg-secondary)] text-left transition-all duration-300 hover:shadow-lg ${
-                      isFocused
-                        ? 'border-cyan-500 ring-1 shadow-cyan-500/20 ring-cyan-500'
-                        : 'border-[var(--border)] hover:border-cyan-500/50 hover:shadow-cyan-500/10'
-                    }`}
-                  >
-                    {/* 微缩播放器视口 (当被选为主大屏展示时，子码流预览窗口停止播放以释放硬件解码与网络资源) */}
-                    <div className="relative aspect-video w-full">
-                      {/* 悬停快捷操作组 */}
-                      <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-0 backdrop-blur-xs transition-opacity group-hover:opacity-100">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setCameraToEdit(cam)
-                            setIsCameraModalOpen(true)
-                          }}
-                          className="rounded p-1 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
-                          title={t('manage.editCamera')}
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setCameraToDelete(cam)
-                          }}
-                          className="rounded p-1 text-rose-400 transition-colors hover:bg-rose-500/20 hover:text-rose-300"
-                          title={t('manage.deleteCamera')}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
-                      </div>
+              {/* 搜索与过滤工具栏 */}
+              <div className="flex items-center gap-1.5">
+                <div className="relative flex-1">
+                  <Search className="absolute top-1/2 left-2 h-3 w-3 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={auxSearch}
+                    onChange={(e) => setAuxSearch(e.target.value)}
+                    placeholder={t('live.searchPlaceholder')}
+                    className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] pr-2 pl-7 text-[11px] text-[var(--text-primary)] outline-none placeholder:text-slate-400 focus:border-cyan-500"
+                  />
+                  {auxSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setAuxSearch('')}
+                      className="absolute top-1/2 right-1.5 -translate-y-1/2 text-slate-400 hover:text-white"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
 
-                      {isFocused ? (
-                        <div className="flex h-full w-full flex-col items-center justify-center bg-black/80 p-2 text-center">
-                          <div className="flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-400">
-                            <Eye className="h-3 w-3 animate-pulse" />
-                            <span>主屏呈现中</span>
-                          </div>
-                          <span className="mt-1.5 text-[10px] text-[var(--text-muted)]">
-                            辅流已休眠，专注主屏渲染
-                          </span>
-                        </div>
-                      ) : (
-                        <LivePlayer
-                          cameraId={cam.cameraId}
-                          cameraName={cam.name}
-                          showHud={false}
-                          isHero={false}
-                          stream="sub"
-                          videoCodec={cam.lastCodec}
-                          className="pointer-events-none h-full w-full"
+                <div className="flex items-center rounded-md border border-[var(--border)] p-0.5 text-[10px]">
+                  {(['all', 'healthy', 'alarm'] as const).map((filter) => (
+                    <button
+                      key={filter}
+                      type="button"
+                      onClick={() => setAuxFilter(filter)}
+                      className="relative rounded px-1.5 py-0.5"
+                    >
+                      {auxFilter === filter && (
+                        <motion.div
+                          layoutId="aux-filter-pill"
+                          className={`absolute inset-0 rounded ${
+                            filter === 'all'
+                              ? 'bg-[var(--accent)] shadow-xs'
+                              : filter === 'healthy'
+                                ? 'bg-emerald-500/20'
+                                : 'bg-rose-500/20'
+                          }`}
+                          transition={{
+                            type: 'spring',
+                            stiffness: 480,
+                            damping: 36,
+                          }}
                         />
                       )}
-                    </div>
+                      <span
+                        className={`relative z-10 ${
+                          auxFilter === filter
+                            ? filter === 'all'
+                              ? 'font-medium text-white'
+                              : filter === 'healthy'
+                                ? 'font-medium text-emerald-700 dark:text-emerald-400'
+                                : 'font-medium text-rose-700 dark:text-rose-400'
+                            : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        {filter === 'all'
+                          ? t('live.filterAll')
+                          : filter === 'healthy'
+                            ? t('live.filterHealthy')
+                            : t('live.filterAlarm')}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
 
-                    {/* 卡片底部遥测状态条 */}
-                    <div className="p-2.5">
-                      <div className="flex items-center justify-between">
-                        <span
-                          className={`text-xs font-semibold transition-colors ${
-                            isFocused
-                              ? 'text-cyan-400'
-                              : 'text-[var(--text-primary)] group-hover:text-cyan-400'
-                          }`}
-                        >
-                          {cam.name}
-                        </span>
-                        <span
-                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                            normalizeProbeStatus(cam.lastProbeStatus) === 'healthy'
-                              ? 'bg-emerald-500/10 text-emerald-400'
-                              : 'bg-rose-500/10 text-rose-400'
-                          }`}
-                        >
-                          {getResolutionBadge(cam)}
-                        </span>
-                      </div>
+            {/* 辅路流卡片纵向滚动列表 */}
+            <div className="flex flex-1 flex-col gap-3 overflow-y-auto pr-0.5">
+              {filteredAuxCameras.map((cam) => {
+                const isFocused = cam.cameraId === selectedHeroId
+                const isAlarming = Boolean(
+                  recentAlarms[cam.cameraId] && recentAlarms[cam.cameraId] > Date.now(),
+                )
 
-                      <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--text-muted)]">
-                        <div className="flex items-center gap-2">
-                          <span className="flex items-center gap-0.5">
-                            <User className="h-3 w-3" /> 0
-                          </span>
-                          <span className="flex items-center gap-0.5">
-                            <Car className="h-3 w-3" /> 0
-                          </span>
-                        </div>
-                        {(() => {
-                          const badge = getStatusBadge(t, cam.lastProbeStatus)
-                          return (
-                            <span
-                              className={`flex items-center gap-1 font-mono text-[10px] ${badge.statusColor}`}
-                            >
-                              <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClass}`} />
-                              <span>{badge.text}</span>
-                            </span>
-                          )
-                        })()}
-                      </div>
-                    </div>
-                  </div>
+                return (
+                  <AuxCameraCard
+                    key={cam.cameraId}
+                    camera={cam}
+                    isFocused={isFocused}
+                    isAlarming={isAlarming}
+                    onSelectHero={handleSelectHero}
+                    onEditCamera={(c) => {
+                      setCameraToEdit(c)
+                      setIsCameraModalOpen(true)
+                    }}
+                    onDeleteCamera={(c) => setCameraToDelete(c)}
+                  />
                 )
               })}
 
-              {cameras.length === 0 && (
+              {filteredAuxCameras.length === 0 && (
                 <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-8 text-center text-xs text-[var(--text-muted)]">
-                  <span>{t('live.noAuxStreams')}</span>
+                  <span>{auxSearch ? '未搜索到匹配设备' : t('live.noAuxStreams')}</span>
                 </div>
               )}
             </div>
           </div>
         </div>
       ) : (
-        /* 全景自适应 Bento 网格视图 */
-        <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto md:grid-cols-2 lg:grid-cols-3">
-          {cameras.map((cam) => {
-            const statusBadge = getStatusBadge(t, cam.lastProbeStatus)
-            return (
-              <div
-                key={cam.cameraId}
-                className="group flex flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] shadow-xs transition-all hover:border-[var(--accent)]/40 hover:shadow-md"
-              >
-                {/* 顶部设备标识与操作栏 */}
-                <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${statusBadge.dotClass}`} />
-                    <span className="max-w-[140px] truncate font-semibold text-[var(--text-primary)]">
-                      {cam.name}
-                    </span>
-                    <span className="font-mono text-[10px] text-[var(--text-muted)]">
-                      {cam.lastCodec ? cam.lastCodec.toUpperCase() : 'H264'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedHeroId(cam.cameraId)
-                        setViewMode('hero_rail')
+        /* 全景 Bento 网格视图 (支持 1 / 4 / 9 宫格与分页) */
+        <div className="flex flex-1 flex-col gap-2 overflow-hidden">
+          {/* Bento 工具栏：分屏选择与分页控制 */}
+          <div className="flex items-center justify-between px-1">
+            <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs">
+              {([1, 4, 9, 'all'] as const).map((split) => (
+                <button
+                  key={split}
+                  type="button"
+                  onClick={() => {
+                    setGridSplit(split)
+                    setGridPage(1)
+                  }}
+                  className="relative rounded px-2.5 py-1 text-[11px] font-medium transition-colors"
+                >
+                  {gridSplit === split && (
+                    <motion.div
+                      layoutId="bento-split-pill"
+                      className="absolute inset-0 rounded bg-[var(--accent)] shadow-xs"
+                      transition={{
+                        type: 'spring',
+                        stiffness: 480,
+                        damping: 36,
                       }}
-                      className="flex h-6 items-center gap-1 rounded px-1.5 text-[10px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
-                      title={t('live.focusHero')}
-                    >
-                      <Eye className="h-3 w-3" />
-                      <span>{t('live.focus')}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCameraToEdit(cam)
-                        setIsCameraModalOpen(true)
-                      }}
-                      className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
-                      title={t('manage.editCamera')}
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCameraToDelete(cam)}
-                      className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-secondary)] transition-colors hover:bg-rose-500/10 hover:text-rose-500"
-                      title={t('manage.deleteCamera')}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
+                    />
+                  )}
+                  <span
+                    className={`relative z-10 ${
+                      gridSplit === split
+                        ? 'text-white'
+                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                    }`}
+                  >
+                    {t(`live.grid${split === 'all' ? 'All' : split}`)}
+                  </span>
+                </button>
+              ))}
+            </div>
 
-                <div className="relative aspect-video w-full">
-                  <LivePlayer
-                    cameraId={cam.cameraId}
-                    cameraName={cam.name}
-                    showHud={true}
-                    isHero={false}
-                    stream="sub"
-                    videoCodec={cam.lastCodec}
-                    className="h-full w-full"
-                  />
+            {/* 分页控制器 */}
+            {gridSplit !== 'all' && totalBentoPages > 1 && (
+              <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+                <span>
+                  {t('live.pageIndicator', {
+                    current: currentBentoPage,
+                    total: totalBentoPages,
+                  })}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={currentBentoPage <= 1}
+                    onClick={() => setGridPage((p) => Math.max(1, p - 1))}
+                    className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-30"
+                    title={t('live.prevPage')}
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={currentBentoPage >= totalBentoPages}
+                    onClick={() => setGridPage((p) => Math.min(totalBentoPages, p + 1))}
+                    className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-30"
+                    title={t('live.nextPage')}
+                  >
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
-            )
-          })}
+            )}
+          </div>
 
-          {cameras.length === 0 && (
-            <div className="col-span-full flex items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-12 text-center text-xs text-[var(--text-muted)]">
-              <span>{t('live.noCameras')}</span>
-            </div>
-          )}
+          {/* 响应式宫格容器 */}
+          <div
+            className={`grid flex-1 gap-3 overflow-y-auto ${
+              gridSplit === 1
+                ? 'grid-cols-1'
+                : gridSplit === 4
+                  ? 'grid-cols-1 md:grid-cols-2'
+                  : gridSplit === 9
+                    ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+                    : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+            }`}
+          >
+            {paginatedBentoCameras.map((cam) => {
+              const isAlarming = Boolean(
+                recentAlarms[cam.cameraId] && recentAlarms[cam.cameraId] > Date.now(),
+              )
+
+              return (
+                <BentoCameraCard
+                  key={cam.cameraId}
+                  camera={cam}
+                  isAlarming={isAlarming}
+                  onFocusHero={(id) => {
+                    setSelectedHeroId(id)
+                    setViewMode('hero_rail')
+                  }}
+                  onEditCamera={(c) => {
+                    setCameraToEdit(c)
+                    setIsCameraModalOpen(true)
+                  }}
+                  onDeleteCamera={(c) => setCameraToDelete(c)}
+                />
+              )
+            })}
+
+            {cameras.length === 0 && (
+              <div className="col-span-full flex items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-12 text-center text-xs text-[var(--text-muted)]">
+                <span>{t('live.noCameras')}</span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
