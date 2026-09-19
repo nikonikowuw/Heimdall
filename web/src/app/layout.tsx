@@ -38,9 +38,7 @@ import { useGlobalShortcuts } from '@/hooks/use-global-shortcuts'
 import { useTheme } from '@/hooks/use-theme'
 import { authApi } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
-
-export type NavTab =
-  'live' | 'cameras' | 'tasks' | 'algorithms' | 'personnel' | 'alarms' | 'oplog' | 'system'
+import { type NavTab } from '@/types'
 
 interface NavActiveIndicatorProps {
   reducedMotion: boolean | null

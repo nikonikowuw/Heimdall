@@ -683,3 +683,11 @@ export type OperationalLogQuery = {
   limit?: number
   before?: number
 }
+
+/**
+ * 应用外壳 (app shell) 的导航视图标识 —— 前端专属，非后端契约。
+ * 归入共享类型层而非 `app/layout.tsx`：`hooks/use-global-shortcuts` 需要它，
+ * 而 hooks 依赖 app 会构成环；`types/` 是零依赖的叶子层，可被两层安全引用。
+ */
+export type NavTab =
+  'live' | 'cameras' | 'tasks' | 'algorithms' | 'personnel' | 'alarms' | 'oplog' | 'system'
