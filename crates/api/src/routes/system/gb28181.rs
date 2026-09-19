@@ -42,7 +42,7 @@ pub async fn get_config(
         .map(|d| d.len())
         .unwrap_or(0);
     let total_devices_count = total_devices.max(online_devs);
-    let active_streams_count = state.stream_hub.gb28181_active_streams().await;
+    let active_streams_count = state.stream_hub.gb28181_active_streams();
 
     let health = Gb28181ServerHealth {
         running: true,

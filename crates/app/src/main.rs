@@ -215,13 +215,10 @@ async fn main() -> Result<()> {
         .with_storage_cleaner(evidence_dir)
         .with_gb28181_sip_server(sip_server.clone());
 
-    state
-        .stream_hub
-        .set_gb28181_context(media::Gb28181Context {
-            sip_server: sip_server.clone(),
-            port_pool,
-        })
-        .await;
+    state.stream_hub.set_gb28181_context(media::Gb28181Context {
+        sip_server: sip_server.clone(),
+        port_pool,
+    });
 
     // 启动 GB28181 后台持久化工作循环、超时巡检与 SIP UAS 监听
     let sip_shutdown_tx = spawn_gb28181_background_tasks(

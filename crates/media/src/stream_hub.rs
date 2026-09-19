@@ -16,6 +16,7 @@ use crate::retina_ingest::RetinaIngestor;
 use crate::rtsp::parse_and_clean_rtsp_url;
 
 pub use crate::dispatcher::KeyframeCache;
+
 #[cfg(test)]
 use bytes::Bytes;
 #[cfg(test)]
@@ -102,6 +103,13 @@ impl CameraStreamSession {
     /// 当前分析 pump 保活引用数。
     pub fn ai_task_ref_count(&self) -> usize {
         self.ai_task_refs.load(Ordering::SeqCst)
+    }
+
+    /// 检查当前会话是否存在活跃的消费需求（在线预览者或常驻 AI 分析任务）。
+    pub fn has_demand(&self) -> bool {
+        self.active_viewers.load(Ordering::SeqCst) > 0
+            || self.ai_task_enabled.load(Ordering::SeqCst)
+            || self.ai_task_ref_count() > 0
     }
 
     pub async fn cancel_cooldown(&self) {
@@ -198,11 +206,7 @@ impl Drop for StreamSubscription {
             decrement_saturating(&self.session.active_viewers);
         }
 
-        if self.counts_viewer
-            && self.session.active_viewers.load(Ordering::SeqCst) == 0
-            && !self.session.ai_task_enabled.load(Ordering::SeqCst)
-            && self.session.ai_task_ref_count() == 0
-        {
+        if self.counts_viewer && !self.session.has_demand() {
             let session = self.session.clone();
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(StreamHub::start_cooldown_timer(session));
@@ -232,8 +236,8 @@ pub struct StreamHub {
     /// 全局消费者准入计数。
     total_consumers: Arc<AtomicUsize>,
     distribution_config: PreviewDistributionConfig,
-    /// GB28181 信令与端口池上下文
-    gb28181_context: Arc<RwLock<Option<Gb28181Context>>>,
+    /// GB28181 信令与端口池上下文。读取/更新只持有短时同步锁，不跨 IO。
+    gb28181_context: Arc<parking_lot::RwLock<Option<Gb28181Context>>>,
 }
 
 impl Default for StreamHub {
@@ -255,22 +259,21 @@ impl StreamHub {
             probe_failures: Arc::new(RwLock::new(HashMap::new())),
             total_consumers: Arc::new(AtomicUsize::new(0)),
             distribution_config,
-            gb28181_context: Arc::new(RwLock::new(None)),
+            gb28181_context: Arc::new(parking_lot::RwLock::new(None)),
         }
     }
 
     /// 设置 GB28181 接入上下文
-    pub async fn set_gb28181_context(&self, ctx: Gb28181Context) {
-        *self.gb28181_context.write().await = Some(ctx);
+    pub fn set_gb28181_context(&self, ctx: Gb28181Context) {
+        *self.gb28181_context.write() = Some(ctx);
     }
 
     /// 获取当前正在推流的 GB28181 媒体路数
-    pub async fn gb28181_active_streams(&self) -> usize {
-        if let Some(ctx) = self.gb28181_context.read().await.as_ref() {
-            ctx.port_pool.active_port_pairs()
-        } else {
-            0
-        }
+    pub fn gb28181_active_streams(&self) -> usize {
+        self.gb28181_context
+            .read()
+            .as_ref()
+            .map_or(0, |ctx| ctx.port_pool.active_port_pairs())
     }
 
     /// 将业务 stream_key 或原始 URL 解析为底层的规范化 URL。
@@ -387,10 +390,7 @@ impl StreamHub {
             let still_bound = url_map.get(&url).map(|s| !s.is_empty()).unwrap_or(false);
             if !still_bound {
                 if let Some(session) = map.get(&url) {
-                    if session.active_viewers.load(Ordering::SeqCst) == 0
-                        && session.ai_task_ref_count() == 0
-                        && !session.ai_task_enabled.load(Ordering::SeqCst)
-                    {
+                    if !session.has_demand() {
                         if let Some(session) = map.remove(&url) {
                             session.cancel_signal.store(true, Ordering::SeqCst);
                             let _ = session.cancel_tx.send(true);
@@ -480,7 +480,7 @@ impl StreamHub {
         if counts_viewer {
             session.active_viewers.fetch_add(1, Ordering::SeqCst);
         }
-        self.ensure_ingestor_started(&session).await;
+        self.ensure_ingestor_started(&session);
 
         Ok(StreamSubscription {
             inner: media_subscription,
@@ -522,10 +522,7 @@ impl StreamHub {
         let map = self.sessions.read().await;
         if let Some(session) = map.get(&canonical) {
             let remaining = decrement_saturating(&session.active_viewers);
-            if remaining == 0
-                && !session.ai_task_enabled.load(Ordering::SeqCst)
-                && session.ai_task_ref_count() == 0
-            {
+            if remaining == 0 && !session.has_demand() {
                 Self::start_cooldown_timer(session.clone()).await;
             }
         }
@@ -546,13 +543,11 @@ impl StreamHub {
             session.manual_ai_enabled.store(true, Ordering::SeqCst);
             session.refresh_ai_task_enabled();
             session.cancel_cooldown().await;
-            self.ensure_ingestor_started(&session).await;
+            self.ensure_ingestor_started(&session);
         } else {
             session.manual_ai_enabled.store(false, Ordering::SeqCst);
             session.refresh_ai_task_enabled();
-            if session.active_viewers.load(Ordering::SeqCst) == 0
-                && session.ai_task_ref_count() == 0
-            {
+            if !session.has_demand() {
                 Self::start_cooldown_timer(session.clone()).await;
             }
         }
@@ -601,7 +596,7 @@ impl StreamHub {
             .sum()
     }
 
-    async fn create_ingestor(
+    fn create_ingestor(
         &self,
         session: &Arc<CameraStreamSession>,
     ) -> Option<Arc<dyn crate::media_ingestor::MediaIngestor>> {
@@ -610,7 +605,7 @@ impl StreamHub {
             if let Some((device_id, channel_id)) =
                 crate::gb28181::parse_gb28181_url(&session.rtsp_url)
             {
-                let gb_ctx = self.gb28181_context.read().await.clone();
+                let gb_ctx = self.gb28181_context.read().clone();
                 if let Some(ctx) = gb_ctx {
                     return Some(Arc::new(crate::gb28181::Gb28181Ingestor::new(
                         device_id,
@@ -639,16 +634,19 @@ impl StreamHub {
         ))
     }
 
-    async fn ensure_ingestor_started(&self, session: &Arc<CameraStreamSession>) {
+    fn ensure_ingestor_started(&self, session: &Arc<CameraStreamSession>) {
+        // 新订阅可能恰好落在待机取消已发出、旧 ingestor 正在退出的竞态窗口内。
+        // 1. 撤销取消信号，防止新建或复用中的拉流器被残留取消标志误杀；
+        // 2. 若旧任务已在退出途中导致 CAS 判定失败，旧任务退出后的回调会再次检查需求并重新拉起。
+        session.cancel_signal.store(false, Ordering::SeqCst);
+        let _ = session.cancel_tx.send(false);
+
         if session
             .ingestor_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            session.cancel_signal.store(false, Ordering::SeqCst);
-            let _ = session.cancel_tx.send(false);
-
-            let ingestor = match self.create_ingestor(session).await {
+            let ingestor = match self.create_ingestor(session) {
                 Some(ing) => ing,
                 None => {
                     session.ingestor_running.store(false, Ordering::SeqCst);
@@ -656,6 +654,7 @@ impl StreamHub {
                 }
             };
 
+            let hub = self.clone();
             let session_clone = session.clone();
             let cancel_signal = session.cancel_signal.clone();
             let cancel_rx = session.cancel_rx.clone();
@@ -664,11 +663,23 @@ impl StreamHub {
                 session_clone
                     .ingestor_running
                     .store(false, Ordering::SeqCst);
+
+                // 冷却定时器与新订阅并发时，新订阅已撤销取消信号（cancel_signal == false），
+                // 但在旧任务退出途中可能因 CAS 判定失败而跳过拉起。
+                // 仅在存在活跃需求且未被显式取消时，补齐生命周期重新拉起。
+                if session_clone.has_demand() && !session_clone.cancel_signal.load(Ordering::SeqCst)
+                {
+                    hub.ensure_ingestor_started(&session_clone);
+                }
             });
         }
     }
 
     async fn start_cooldown_timer(session: Arc<CameraStreamSession>) {
+        Self::start_cooldown_timer_with_delay(session, Duration::from_secs(5)).await;
+    }
+
+    async fn start_cooldown_timer_with_delay(session: Arc<CameraStreamSession>, delay: Duration) {
         let mut guard = session.cooldown_cancel.lock().await;
         if let Some(old_handle) = guard.take() {
             old_handle.abort();
@@ -676,14 +687,16 @@ impl StreamHub {
 
         let session_clone = session.clone();
         let handle = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            if session_clone.active_viewers.load(Ordering::SeqCst) == 0
-                && !session_clone.ai_task_enabled.load(Ordering::SeqCst)
-            {
+            tokio::time::sleep(delay).await;
+            if !session_clone.has_demand() {
                 tracing::info!(
                     camera_id = %session_clone.camera_id,
-                    "5秒无新订阅且无AI任务，进入低功耗待机，挂起RTSP拉流"
+                    cooldown_ms = delay.as_millis() as u64,
+                    "无新订阅且无AI任务，进入低功耗待机，挂起RTSP拉流"
                 );
+                // 待机意味着下一次 PLAY 属于新源 epoch，不能把上一次会话的 GOP
+                // 当作新客户端的首屏，否则客户端可能长期停在旧帧。
+                session_clone.dispatcher.source_reset();
                 session_clone.cancel_signal.store(true, Ordering::SeqCst);
                 let _ = session_clone.cancel_tx.send(true);
             }
@@ -751,6 +764,112 @@ mod tests {
         assert_eq!(session.active_viewers.load(Ordering::SeqCst), 1);
         drop(subscription);
         assert_eq!(session.active_viewers.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_new_demand_rearms_ingestor_during_shutdown_window() {
+        let hub = StreamHub::new();
+        let session = hub
+            .get_or_create_session(
+                "test-cam-rearm",
+                "rtsp://127.0.0.1:8554/rearm",
+                TransportPolicy::Tcp,
+            )
+            .await;
+
+        // 1. 模拟待机定时器已发出取消，但旧任务尚未退出（ingestor_running 仍为 true）
+        session.ingestor_running.store(true, Ordering::SeqCst);
+        session.cancel_signal.store(true, Ordering::SeqCst);
+        let _ = session.cancel_tx.send(true);
+
+        // 2. 模拟新消费者在旧任务退出窗口内进入
+        session.active_viewers.fetch_add(1, Ordering::SeqCst);
+        assert!(session.has_demand());
+        hub.ensure_ingestor_started(&session);
+
+        // 校验：取消标志已撤销，因旧任务占用暂未直接 CAS 重拉
+        assert!(!session.cancel_signal.load(Ordering::SeqCst));
+        assert!(!*session.cancel_rx.borrow());
+        assert!(session.ingestor_running.load(Ordering::SeqCst));
+
+        // 3. 模拟旧任务结束退出流程，执行退出钩子
+        session.ingestor_running.store(false, Ordering::SeqCst);
+        if session.has_demand() {
+            hub.ensure_ingestor_started(&session);
+        }
+
+        // 校验：退出钩子检测到活跃需求，成功将 ingestor_running 重新置为 true 并拉起新拉流器
+        assert!(session.ingestor_running.load(Ordering::SeqCst));
+        assert!(!session.cancel_signal.load(Ordering::SeqCst));
+
+        // 清理后台任务防止影响后续测试
+        session.cancel_signal.store(true, Ordering::SeqCst);
+        let _ = session.cancel_tx.send(true);
+    }
+
+    #[tokio::test]
+    async fn test_ingestor_exit_hook_automatically_rearms_on_demand() {
+        let hub = StreamHub::new();
+        let session = hub
+            .get_or_create_session(
+                "test-cam-auto-rearm",
+                "rtsp://127.0.0.1:8554/auto-rearm",
+                TransportPolicy::Tcp,
+            )
+            .await;
+
+        // 1. 存在活跃消费需求，启动拉流器
+        session.active_viewers.fetch_add(1, Ordering::SeqCst);
+        hub.ensure_ingestor_started(&session);
+        assert!(session.ingestor_running.load(Ordering::SeqCst));
+
+        // 2. 模拟待机取消触发，旧任务准备退出
+        session.cancel_signal.store(true, Ordering::SeqCst);
+        let _ = session.cancel_tx.send(true);
+
+        // 3. 模拟新消费者在此窗口内再次表达订阅需求（撤销取消信号）
+        hub.ensure_ingestor_started(&session);
+        assert!(!session.cancel_signal.load(Ordering::SeqCst));
+
+        // 4. 旧任务退出后，其内部退出回调应感知到活跃需求且未被取消，自动重新拉起
+        let mut rearmed = false;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if session.ingestor_running.load(Ordering::SeqCst)
+                && !session.cancel_signal.load(Ordering::SeqCst)
+                && !*session.cancel_rx.borrow()
+            {
+                rearmed = true;
+                break;
+            }
+        }
+        assert!(rearmed, "拉流器退出回调应当在感知到活跃需求时自动重新拉起");
+
+        // 清理
+        session.cancel_signal.store(true, Ordering::SeqCst);
+        let _ = session.cancel_tx.send(true);
+    }
+
+    #[tokio::test]
+    async fn test_idle_cooldown_invalidates_old_gop_before_shutdown() {
+        let hub = StreamHub::new();
+        let session = hub
+            .get_or_create_session(
+                "test-cam-idle-reset",
+                "rtsp://127.0.0.1:8554/idle-reset",
+                TransportPolicy::Tcp,
+            )
+            .await;
+        session.dispatcher.publish(h264_keyframe());
+        assert_eq!(session.keyframe_cache.snapshot_cache().gop_packets.len(), 1);
+
+        StreamHub::start_cooldown_timer_with_delay(session.clone(), Duration::from_millis(1)).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let cache = session.keyframe_cache.snapshot_cache();
+        assert!(cache.gop_packets.is_empty());
+        assert!(cache.epoch > 0);
+        assert!(session.cancel_signal.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
