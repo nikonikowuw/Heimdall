@@ -27,7 +27,8 @@ import { PersonnelDetailDrawer } from './components/PersonnelDetailDrawer'
 import { PersonnelModal } from './components/PersonnelModal'
 import { PersonnelStatsGrid } from './components/PersonnelStatsGrid'
 import { PersonnelTable, PersonnelTableSkeleton } from './components/PersonnelTable'
-import { PersonnelToast, type PersonnelNotice } from './components/PersonnelToast'
+import { toast } from '../../stores/toast'
+import type { PersonnelNotice } from './components/PersonnelToast'
 import { ReextractModal } from './components/ReextractModal'
 
 const PAGE_SIZE_OPTIONS = [12, 24, 48, 96]
@@ -105,10 +106,14 @@ export function PersonnelPage(): React.ReactElement {
   // 是否拿到过至少一次有效统计：决定数值卡显示真实值还是占位符
   const [hasStats, setHasStats] = useState(false)
 
-  const [notice, setNotice] = useState<PersonnelNotice | null>(null)
-
   const lastStatusRef = useRef<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  const handleOpenReport = useCallback(() => {
+    setReextractError(null)
+    setReextractModalMode('report')
+    setIsReextractModalOpen(true)
+  }, [])
 
   const pushNotice = useCallback(
     (
@@ -117,9 +122,23 @@ export function PersonnelPage(): React.ReactElement {
       message: string,
       action?: PersonnelNotice['action'],
     ) => {
-      setNotice({ id: Date.now(), type, title, message, action })
+      toast.show({
+        type,
+        category: t('common:nav.personnel', { defaultValue: '人员底库' }),
+        title,
+        message,
+        duration: 5000,
+        action:
+          action === 'report'
+            ? {
+                label: t('reextract.viewReport', { defaultValue: '查看报告' }),
+                onClick: handleOpenReport,
+                primary: true,
+              }
+            : undefined,
+      })
     },
-    [],
+    [handleOpenReport, t],
   )
 
   const handleSetViewMode = (mode: ViewMode) => {
@@ -254,15 +273,6 @@ export function PersonnelPage(): React.ReactElement {
 
     return () => clearInterval(timer)
   }, [isTaskRunning, loadData, pushNotice, buildReextractNotice])
-
-  // Toast 自动消退倒计时
-  useEffect(() => {
-    if (!notice) return
-    const timer = setTimeout(() => {
-      setNotice(null)
-    }, 6000)
-    return () => clearTimeout(timer)
-  }, [notice])
 
   const handleOpenRegister = () => {
     setEditTarget(null)
@@ -423,12 +433,6 @@ export function PersonnelPage(): React.ReactElement {
   const handleOpenReextract = () => {
     setReextractError(null)
     setReextractModalMode('confirm')
-    setIsReextractModalOpen(true)
-  }
-
-  const handleOpenReport = () => {
-    setReextractError(null)
-    setReextractModalMode('report')
     setIsReextractModalOpen(true)
   }
 
@@ -979,12 +983,6 @@ export function PersonnelPage(): React.ReactElement {
         error={reextractError}
         onClose={handleCloseReextractModal}
         onConfirm={handleConfirmReextract}
-      />
-
-      <PersonnelToast
-        notice={notice}
-        onDismiss={() => setNotice(null)}
-        onOpenReport={handleOpenReport}
       />
     </div>
   )

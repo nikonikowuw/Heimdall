@@ -516,6 +516,24 @@ h4 {
   .camera-svg-radar {
     animation: none !important;
   }
+
+  .toast-progress-bar {
+    animation: none !important;
+  }
+}
+
+/* ── 全局 HUD Toast 倒计时进度衰减动画 ── */
+@keyframes toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.hud-toast-card:hover .toast-progress-bar {
+  animation-play-state: paused;
 }
 
 .camera-svg-offline {

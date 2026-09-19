@@ -20,6 +20,7 @@ import { useDismissStack } from '../hooks/use-dismiss-stack'
 import { ChangePasswordModal } from '../components/ChangePasswordModal'
 import { LocaleDropdown } from '../components/LocaleDropdown'
 import { ShortcutsModal } from '../components/ShortcutsModal'
+import { Toaster } from '../components/ui/Toast'
 import { AlarmsPage } from '../features/alarms/AlarmsPage'
 import { AlgorithmsPage } from '../features/algorithms/AlgorithmsPage'
 import { LoginPage } from '../features/auth/LoginPage'
@@ -160,6 +161,7 @@ export function Layout(): React.ReactElement {
 
   return (
     <>
+      <Toaster />
       <AnimatePresence mode="wait">
         {!isAuthenticated ? (
           <motion.div

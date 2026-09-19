@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, Plus, Radio, RefreshCw, Search, Video, X } from 'lucide-react'
-import { AnimatePresence, motion } from 'motion/react'
+import { Plus, Radio, RefreshCw, Search, Video, X } from 'lucide-react'
+import { AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { cameraApi, gb28181Api, taskApi } from '../../lib/api'
+import { toast } from '../../stores/toast'
 import type { Camera, Gb28181Device, TaskSummaryDto } from '../../types'
 import { normalizeProbeStatus } from './cameraStatus'
 import { CameraModal } from './components/CameraModal'
@@ -38,20 +39,6 @@ export function CamerasPage(): React.ReactElement {
   const [cameraToEdit, setCameraToEdit] = useState<Camera | null>(null)
   const [cameraToDelete, setCameraToDelete] = useState<Camera | null>(null)
   const [probeFeedback, setProbeFeedback] = useState<Record<string, 'success' | 'failed'>>({})
-  const [toast, setToast] = useState<{
-    id: number
-    type: 'success' | 'error'
-    title: string
-    message: string
-  } | null>(null)
-
-  const showToast = (type: 'success' | 'error', title: string, message: string) => {
-    const id = Date.now()
-    setToast({ id, type, title, message })
-    setTimeout(() => {
-      setToast((curr) => (curr?.id === id ? null : curr))
-    }, 4000)
-  }
 
   const loadData = async (): Promise<void> => {
     setIsLoading(true)
@@ -125,12 +112,14 @@ export function CamerasPage(): React.ReactElement {
         .filter(Boolean)
         .join(' · ')
 
-      showToast(
-        'success',
-        t('manage.probeSuccess', { defaultValue: '探活成功' }),
+      toast.success(
         details
           ? `${camera.name} (${details})`
           : `${camera.name} ${t('status.online', { defaultValue: '在线' })}`,
+        {
+          title: t('manage.probeSuccess', { defaultValue: '探活成功' }),
+          category: t('manage.probeAction', { defaultValue: '探活' }),
+        },
       )
     } catch {
       setCameras((prev) =>
@@ -148,10 +137,12 @@ export function CamerasPage(): React.ReactElement {
         })
       }, 3000)
 
-      showToast(
-        'error',
-        t('manage.probeFailed', { defaultValue: '探活失败' }),
+      toast.error(
         `${camera.name}: ${t('manage.probeFailedDesc', { defaultValue: 'RTSP 连接超时或鉴权失败，请检查网络与流地址' })}`,
+        {
+          title: t('manage.probeFailed', { defaultValue: '探活失败' }),
+          category: t('manage.probeAction', { defaultValue: '探活' }),
+        },
       )
     } finally {
       setProbingCameraId(null)
@@ -686,40 +677,6 @@ export function CamerasPage(): React.ReactElement {
         onSuccess={loadData}
         devices={gbDevices}
       />
-
-      {/* 探活结果悬浮 Toast 提示 (顶部居中 + 100% 纯色不透光，杜绝右上角遮挡按钮与底色穿透) */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            key={toast.id}
-            initial={{ opacity: 0, y: -20, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.96 }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed top-6 left-1/2 z-[80] flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-zinc-100 shadow-2xl ring-1 ring-white/10 dark:border-zinc-700 dark:bg-zinc-900"
-          >
-            {toast.type === 'success' ? (
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400">
-                <CheckCircle2 className="h-4 w-4" />
-              </div>
-            ) : (
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-rose-500/20 text-rose-400">
-                <AlertCircle className="h-4 w-4" />
-              </div>
-            )}
-            <div className="flex flex-col">
-              <span className="text-xs font-bold tracking-tight text-white">{toast.title}</span>
-              <span className="font-mono text-xs text-zinc-400">{toast.message}</span>
-            </div>
-            <button
-              onClick={() => setToast(null)}
-              className="ml-2 rounded-lg p-1 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   )
 }
