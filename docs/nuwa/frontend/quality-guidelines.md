@@ -50,6 +50,6 @@ SPA 由 Rust `rust-embed` 内嵌；检查 chunk 体积，播放器、图表/3D �
 - 页面均为具名导出，`lazy()` 需经 `.then` 适配 `default`。
 - `Suspense` 占位复用 [RouteFallback.tsx](../../../web/src/components/ui/RouteFallback.tsx) 与 `.route-fallback`：其 200ms 延迟现身避免内网快速加载时的骨架闪烁，进度条样式自带 `prefers-reduced-motion` 降级。
 - 新增 chunk 无需改 Rust 侧：`crates/api/src/static_files.rs` 用 `Assets::get(&path)` 按路径取，`assets/` 走 immutable 缓存。
-- 跨 feature 直接引用会改变分包归属（例如 `tasks` 引用 `live/components/LivePlayer` 使 mpegts.js 进入 tasks 依赖链），因此「不深层导入其他 feature 私有组件」同时是一条分包约束。
+- 跨 feature 共用的大依赖上提到共享层：`LivePlayer`（含 mpegts.js）位于 `components/`，由 `live` 与 `tasks` 共用并作为共享 chunk 输出；若它留在某个 feature 内被另一个 feature 引用，分包归属将不再反映真实依赖关系。
 
 回归基线（首屏 gzip，随实现演进而更新）：登录页约 150KB；已鉴权 `live` 首屏约 231KB（含 mpegts.js）。

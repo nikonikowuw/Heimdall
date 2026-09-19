@@ -6,7 +6,7 @@ import { normalizeProbeStatus } from '@/features/cameras'
 import { motionTokens } from '@/lib/motionTokens'
 import type { Camera, ProbeStatus } from '@/types'
 import { useCameraTelemetry } from '../hooks/useCameraTelemetry'
-import { LivePlayer } from './LivePlayer'
+import { LivePlayer } from '@/components/LivePlayer'
 
 export interface AuxCameraCardProps {
   camera: Camera

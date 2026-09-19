@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { normalizeProbeStatus } from '@/features/cameras'
 import { motionTokens } from '@/lib/motionTokens'
 import type { Camera, ProbeStatus } from '@/types'
-import { LivePlayer } from './LivePlayer'
+import { LivePlayer } from '@/components/LivePlayer'
 
 export interface BentoCameraCardProps {
   camera: Camera

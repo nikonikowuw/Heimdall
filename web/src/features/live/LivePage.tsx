@@ -34,7 +34,7 @@ import {
 } from '@/types'
 import { AuxCameraCard } from './components/AuxCameraCard'
 import { BentoCameraCard } from './components/BentoCameraCard'
-import { LivePlayer } from './components/LivePlayer'
+import { LivePlayer } from '@/components/LivePlayer'
 
 function playAlarmChime() {
   try {

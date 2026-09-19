@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { LivePlayer } from '@/features/live/components/LivePlayer'
+import { LivePlayer } from '@/components/LivePlayer'
 import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import { telemetryStore } from '@/lib/telemetryStore'

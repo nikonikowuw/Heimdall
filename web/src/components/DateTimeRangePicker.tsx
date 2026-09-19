@@ -12,15 +12,11 @@ import {
   X,
 } from 'lucide-react'
 import { formatTimestamp } from '@/lib/time'
-
-export type QuickTimePreset =
-  'all' | '5m' | '15m' | '30m' | '1h' | '24h' | 'today' | '7d' | 'custom'
-
-export interface DateTimeRangeValue {
-  startTime?: number // 13位 UTC 毫秒时间戳
-  endTime?: number // 13位 UTC 毫秒时间戳
-  quickPreset: QuickTimePreset
-}
+import {
+  resolvePresetTimestamps,
+  type DateTimeRangeValue,
+  type QuickTimePreset,
+} from '@/lib/dateRange'
 
 export interface DateTimeRangePickerProps {
   value: DateTimeRangeValue
@@ -54,32 +50,6 @@ function wrapStep(val: string, delta: number, max: number): string {
   const current = parseInt(val, 10) || 0
   const next = (current + delta + (max + 1)) % (max + 1)
   return pad(next)
-}
-
-const PRESET_DURATIONS_MS: Partial<Record<QuickTimePreset, number>> = {
-  '5m': 5 * 60_000,
-  '15m': 15 * 60_000,
-  '30m': 30 * 60_000,
-  '1h': 3_600_000,
-  '24h': 86_400_000,
-  '7d': 7 * 86_400_000,
-}
-
-function calculatePresetTimestamps(preset: QuickTimePreset): {
-  startTime?: number
-  endTime?: number
-} {
-  const now = Date.now()
-  if (preset === 'today') {
-    const todayStart = new Date()
-    todayStart.setHours(0, 0, 0, 0)
-    return { startTime: todayStart.getTime(), endTime: undefined }
-  }
-  const duration = PRESET_DURATIONS_MS[preset]
-  if (duration) {
-    return { startTime: now - duration, endTime: now }
-  }
-  return { startTime: undefined, endTime: undefined }
 }
 
 function formatDuration(
@@ -345,7 +315,7 @@ export function DateTimeRangePicker({
       setIsOpen(false)
       return
     }
-    const timestamps = calculatePresetTimestamps(preset)
+    const timestamps = resolvePresetTimestamps(preset)
     if (timestamps.startTime !== undefined) {
       onChange({
         quickPreset: preset,

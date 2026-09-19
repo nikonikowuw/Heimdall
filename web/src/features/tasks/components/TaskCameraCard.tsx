@@ -14,7 +14,7 @@ import {
   Video,
 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
-import { getProbeBadge } from '@/features/cameras/cameraStatus'
+import { getProbeBadge } from '@/features/cameras'
 import { motionTokens } from '@/lib/motionTokens'
 import { copyToClipboard } from '@/lib/utils'
 import type { Camera, DetectionRule, StreamMode, TaskConfigDto } from '@/types'

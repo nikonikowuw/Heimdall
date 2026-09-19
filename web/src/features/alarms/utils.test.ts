@@ -8,7 +8,6 @@ import {
   getRuleTypeLabel,
   parseBBoxCoords,
   parseTargetBBoxes,
-  resolveEffectiveTimeRange,
 } from './utils'
 
 describe('alarms utils', () => {
@@ -178,43 +177,6 @@ describe('alarms utils', () => {
 
     it('is tolerant to unknown future values from a newer backend', () => {
       expect(deriveEvidenceOriginBadges('main_replay', 'main')).toEqual([])
-    })
-  })
-
-  describe('resolveEffectiveTimeRange', () => {
-    const fixedNow = new Date('2026-03-20T14:30:00.000Z').getTime()
-
-    it('resolves "all" preset to undefined boundaries', () => {
-      const res = resolveEffectiveTimeRange({ quickPreset: 'all' }, fixedNow)
-      expect(res.startTime).toBeUndefined()
-      expect(res.endTime).toBeUndefined()
-    })
-
-    it('preserves exact timestamps for "custom" preset', () => {
-      const res = resolveEffectiveTimeRange(
-        { quickPreset: 'custom', startTime: 1000, endTime: 2000 },
-        fixedNow,
-      )
-      expect(res.startTime).toBe(1000)
-      expect(res.endTime).toBe(2000)
-    })
-
-    it('resolves "today" preset starting at 00:00:00 and without upper bound limitation', () => {
-      const res = resolveEffectiveTimeRange({ quickPreset: 'today' }, fixedNow)
-      const expectedStart = new Date(fixedNow)
-      expectedStart.setHours(0, 0, 0, 0)
-      expect(res.startTime).toBe(expectedStart.getTime())
-      expect(res.endTime).toBeUndefined()
-    })
-
-    it('resolves relative duration presets dynamically based on now', () => {
-      const res5m = resolveEffectiveTimeRange({ quickPreset: '5m' }, fixedNow)
-      expect(res5m.startTime).toBe(fixedNow - 5 * 60_000)
-      expect(res5m.endTime).toBe(fixedNow)
-
-      const res1h = resolveEffectiveTimeRange({ quickPreset: '1h' }, fixedNow)
-      expect(res1h.startTime).toBe(fixedNow - 3600_000)
-      expect(res1h.endTime).toBe(fixedNow)
     })
   })
 })

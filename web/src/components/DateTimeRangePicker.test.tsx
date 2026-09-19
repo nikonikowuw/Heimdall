@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type DateTimeRangeValue, type QuickTimePreset } from './DateTimeRangePicker'
+import type { DateTimeRangeValue, QuickTimePreset } from '@/lib/dateRange'
 
 describe('DateTimeRangePicker logic', () => {
   it('identifies all time preset with undefined timestamps', () => {

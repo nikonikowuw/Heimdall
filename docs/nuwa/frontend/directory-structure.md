@@ -21,7 +21,9 @@
 ## 模块边界
 
 - feature 对外通过受控出口（如 `index.ts`）暴露页面/共享类型，不深层导入其他 feature 私有组件。
-- 单 feature 组件和 hook 留在本域；两个以上 feature 实际共用时再上提。
+- 单 feature 组件和 hook 留在本域；两个以上 feature 实际共用时再上提。当前已上提先例：`components/DateTimeRangePicker.tsx`（alarms + oplog）与 `components/LivePlayer.tsx`（live + tasks）。
+- 跨 feature 共用的**纯逻辑与其值类型**放 `lib/`，且不得反向依赖 `components/`：`lib/dateRange.ts` 同时持有 `DateTimeRangeValue` / `QuickTimePreset` 与 `resolveEffectiveTimeRange`，正因为选择器与解析逻辑都需要它们。
+- 其他 feature 需要某 feature 的能力时，优先走该 feature 的 `index.ts` 公开面（如 `live`、`tasks` 均经 `@/features/cameras` 取 `normalizeProbeStatus`、`getProbeBadge`）；只有“两 feature 真共用且与本域语义无关”才上提。
 - 组件文件与具名导出采用 PascalCase，hook 使用 `use` 前缀，普通工具用 camelCase；已有文件命名不为统一风格重命名。
 - 跨域引用一律使用 `@/`，包括单层形式（`@/types`、`@/lib/api`、`@/stores/auth`）；同域使用相对路径（`./` 或单层 `../`，如 `features/alarms/components/*` → `../utils`）。禁止 `../../` 及更深。
 - 上述 `../../` 禁令由 [eslint.config.js](../../../web/eslint.config.js) 强制：`@typescript-eslint/no-restricted-imports` 覆盖静态导入与 `import type`，`no-restricted-syntax` 补上动态 `import()` 与类型位置 `import().T`。
