@@ -114,6 +114,7 @@ pnpm format
 pnpm lint          # eslint --max-warnings=0
 pnpm typecheck     # tsc --noEmit
 pnpm test          # vitest run
+pnpm check:cycles  # 模块图不得有循环依赖（含 import type）
 pnpm build
 ```
 

@@ -2,13 +2,14 @@
 
 ## 门禁
 
-按 [AGENTS.md](../../../AGENTS.md) 执行 Web 门禁：先 `pnpm format`，再 lint、typecheck、test、build。
+按 [AGENTS.md](../../../AGENTS.md) 执行 Web 门禁：先 `pnpm format`，再 lint、typecheck、test、`check:cycles`、build。
 命令以 [package.json](../../../web/package.json) 为准，lint 必须零警告；不能只验证开发服务器。
 文档改动检查格式、链接与契约引用，不运行无关产品构建。
 
 - Prettier 配合 `prettier-plugin-tailwindcss` 排序类名；ESLint 保留 hooks/exhaustive-deps、any、非空断言与 console 约束。
 - 不提交 `console.log`、`@ts-ignore` 或通过关闭 lint 绕过错误。
 - TypeScript 基线见 [类型规范](./type-safety.md#编译与边界)。
+- 模块图不得有循环依赖，由 `pnpm check:cycles`（[scripts/check-import-cycles.mjs](../../../web/scripts/check-import-cycles.mjs)）强制；判据与 [目录结构](./directory-structure.md#模块边界) 的层间方向一致。类型层的 `import type` 环同样要清 —— TS 会擦除它，所以 build/lint/test 都发现不了，只有这个检查能抓。
 
 ## 测试选择
 

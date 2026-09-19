@@ -10,7 +10,8 @@
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "typecheck": "tsc -b",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:cycles": "node scripts/check-import-cycles.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
