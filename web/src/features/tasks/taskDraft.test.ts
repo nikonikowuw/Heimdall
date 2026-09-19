@@ -34,6 +34,8 @@ function version(overrides: Partial<AlgorithmVersionItem> = {}): AlgorithmVersio
     algorithmId: 'general_detection',
     version: '1.0.0',
     platformId: 'rk3588',
+    normalizedPlatformId: 'rk3588',
+    compatibleWithHost: true,
     minAdapterVersion: '0.1.0',
     packageRoot: '/opt/algo',
     fpsTiers: [{ fps: 15, units: 100 }],

@@ -5,10 +5,13 @@
 
 /* ── Tailwind v4 Theme 扩展 ── */
 @theme {
-  --font-display: 'Unbounded', 'Space Grotesk', sans-serif;
-  --font-tech: 'Space Grotesk', sans-serif;
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-data: 'Space Mono', monospace;
+  --font-display: 'Unbounded', 'Space Grotesk', 'Inter', -apple-system, sans-serif;
+  --font-tech: 'Space Grotesk', 'Inter', -apple-system, sans-serif;
+  --font-sans:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
+  --font-data:
+    'JetBrains Mono', 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 /* ── 亮色主题（默认 Clean-Room Minimal Industrial） ── */
@@ -191,6 +194,31 @@
     var(--shadow-sm);
 }
 
+/*
+ * 可交互磨砂材质：与 .frosted-glass 同一套材质参数，但声明在 components 层。
+ *
+ * .frosted-glass 是 unlayered 规则，按级联层规则会压过 @layer utilities，
+ * 使卡片上的 hover:border-* / hover:shadow-* 变成静默失效的死代码；
+ * 需要悬停反馈的可点击面板（卡片、瓦片）用它来保留覆盖能力。
+ */
+@layer components {
+  .frosted-glass-interactive {
+    background: var(--bg-surface);
+    backdrop-filter: blur(20px) saturate(170%);
+    -webkit-backdrop-filter: blur(20px) saturate(170%);
+    border: 1px solid var(--border);
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
+      var(--shadow-sm);
+  }
+
+  .dark .frosted-glass-interactive {
+    box-shadow:
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.07),
+      var(--shadow-sm);
+  }
+}
+
 /* ── 高奢镜头级磨砂玻璃材质 ── */
 .lens-glass {
   background: var(--bg-surface);
@@ -229,9 +257,33 @@
   background-size: 32px 32px;
 }
 
-/* 等宽纯平数字，解决实时数值微抖 */
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
+/* ── 现代高精排印与字体平滑 ── */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans);
+  /* 针对 Inter 现代几何无衬线字体，开启微字形与歧义区分特性 (cv02: 4, cv03: 6/9, cv04: l, cv11: a) */
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* 针对标题应用紧凑跟踪 (Tight Tracking)，呈现现代 SaaS 精致高级感 */
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: -0.018em;
+}
+
+/* 等宽纯平数字与遥测数据，开启等宽对齐与斜杠 0，解决实时数值微抖 */
+.tabular-nums,
+.font-data,
+.font-mono {
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-feature-settings: 'tnum', 'zero';
 }
 
 /* ── 侧边栏导航按钮 ── */
@@ -423,4 +475,50 @@
   right: 10px;
   border-bottom: 1.5px solid var(--text-muted);
   border-right: 1.5px solid var(--text-muted);
+}
+
+/* ── 不确定态进度条 (Indeterminate Progress) ── */
+/* 服务端六步沙箱自检不回流中间进度，因此只能表达「进行中」而不能假装确定百分比 */
+@keyframes indeterminateSlide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.indeterminate-track {
+  position: relative;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--bg-secondary);
+}
+
+.indeterminate-bar {
+  height: 100%;
+  width: 25%;
+  border-radius: 9999px;
+  background: var(--accent);
+  animation: indeterminateSlide 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .indeterminate-bar {
+    animation: none;
+    width: 100%;
+    opacity: 0.6;
+  }
+
+  .camera-svg-pulse,
+  .camera-svg-scan,
+  .camera-svg-spin,
+  .camera-svg-radar {
+    animation: none !important;
+  }
+}
+
+.camera-svg-offline {
+  opacity: 0.62;
+  filter: grayscale(0.8);
 }

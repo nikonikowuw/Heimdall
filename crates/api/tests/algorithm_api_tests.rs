@@ -393,3 +393,159 @@ async fn test_upload_package_exceeds_configured_custom_limit() {
         "超限时应返回包含配置指南的友好提示: {msg}"
     );
 }
+
+/// 宿主平台契约：版本可用性由后端按归一化平台判定，前端不做平台嗅探。
+///
+/// 覆盖两点事实：
+/// 1. `/algorithms/host` 返回的归一化代号与 `infer` 内部口径一致；
+/// 2. 版本 DTO 的 `compatibleWithHost` 能穿透历史别名（如 `macos-arm64-coreml`、`rknn`）。
+#[tokio::test]
+async fn test_host_platform_and_version_compatibility() {
+    let (app, state, token) = setup_test_app().await;
+
+    let host = infer::normalize_platform_id(infer::current_platform_id());
+    let foreign = ["macos-arm64", "linux-rknn", "linux-ascend", "linux-x64"]
+        .into_iter()
+        .find(|candidate| *candidate != host)
+        .expect("候选平台表中必然存在非当前宿主的平台");
+    let host_alias = match host {
+        "macos-arm64" => "macos-arm64-coreml",
+        "linux-rknn" => "rknn",
+        "linux-ascend" => "ascend",
+        "linux-x64" => "generic-x86_64-cpu",
+        other => other,
+    };
+
+    // 1. 宿主平台查询
+    let req = Request::builder()
+        .uri("/api/v1/algorithms/host")
+        .method("GET")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        val["data"]["platformId"].as_str(),
+        Some(infer::current_platform_id())
+    );
+    assert_eq!(val["data"]["normalizedPlatformId"].as_str(), Some(host));
+
+    // 2. 插入宿主别名版本与异平台版本
+    AlgorithmRepo::upsert_algorithm(
+        &state.db,
+        UpsertAlgorithmParams {
+            algorithm_id: "host_probe".to_string(),
+            name: "Host Probe".to_string(),
+            algorithm_type: "object_detection".to_string(),
+            alarm_type_id: "object_detect".to_string(),
+            active_version: "1.0.0".to_string(),
+            description: "host compatibility probe".to_string(),
+            is_builtin: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    for (version, platform) in [("1.0.0", host_alias), ("2.0.0", foreign)] {
+        AlgorithmRepo::upsert_version(
+            &state.db,
+            UpsertVersionParams {
+                algorithm_id: "host_probe".to_string(),
+                version: version.to_string(),
+                platform_id: platform.to_string(),
+                min_adapter_version: "1.0.0".to_string(),
+                package_root: format!("var/packages/host_probe/{version}"),
+                fps_tiers: r#"[{"fps":15,"units":100}]"#.to_string(),
+                config_schema: "{}".to_string(),
+                manifest_raw: "{}".to_string(),
+                package_size_bytes: 2048,
+                is_active: version == "1.0.0",
+                is_builtin: false,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    // 3. 列表接口返回归一化代号与兼容性标记
+    let req = Request::builder()
+        .uri("/api/v1/algorithms/host_probe")
+        .method("GET")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let versions = val["data"]["versions"]
+        .as_array()
+        .expect("算法详情必须包含版本数组");
+    assert_eq!(versions.len(), 2, "两个平台版本都应返回");
+
+    for item in versions {
+        let version = item["version"].as_str().unwrap_or_default();
+        let normalized = item["normalizedPlatformId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let compatible = item["compatibleWithHost"].as_bool().unwrap_or_default();
+        let expected_platform = if version == "1.0.0" {
+            host_alias
+        } else {
+            foreign
+        };
+
+        assert_eq!(
+            normalized,
+            infer::normalize_platform_id(expected_platform),
+            "版本 {version} 必须返回归一化平台代号"
+        );
+        assert_eq!(
+            compatible,
+            version == "1.0.0",
+            "版本 {version} 兼容性判定应穿透明差别名，仅宿主别名版本为 true"
+        );
+        assert_eq!(
+            item["platformId"].as_str(),
+            Some(expected_platform),
+            "原始平台代号必须原样保留，便于运维核对 manifest"
+        );
+    }
+
+    // 4. 显式指定 platformId 卸载异平台版本，不伤及当前宿主版本
+    let req = Request::builder()
+        .uri(format!(
+            "/api/v1/algorithms/host_probe/versions/2.0.0?platformId={foreign}"
+        ))
+        .method("DELETE")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 验证仅宿主别名版本存留
+    let req = Request::builder()
+        .uri("/api/v1/algorithms/host_probe")
+        .method("GET")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let remaining = val["data"]["versions"].as_array().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0]["version"].as_str(), Some("1.0.0"));
+    assert_eq!(remaining[0]["platformId"].as_str(), Some(host_alias));
+}

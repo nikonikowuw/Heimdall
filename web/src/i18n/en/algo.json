@@ -1,24 +1,56 @@
 {
-  "title": "Algorithm Warehouse",
+  "title": "Algorithm Repository",
   "subtitle": "Edge Heterogeneous Compute & Deep Learning Model Asset Hub",
   "stats": {
     "totalAlgorithms": "Total Algorithms",
     "activeVersions": "Active Versions",
     "builtinModels": "Built-in Models",
     "customModels": "Custom Models",
-    "platformArch": "Host Runtime Architecture"
+    "platformArch": "Host Inference Platform",
+    "loadFailed": "Failed to load statistics, showing last available values"
   },
   "filter": {
     "searchPlaceholder": "Search by algorithm ID or name...",
     "clearSearch": "Clear search",
+    "clearAll": "Clear filters",
+    "typeLabel": "Algorithm type",
     "typeAll": "All Types",
-    "typeDetection": "Object Detection",
-    "typeFace": "Face Recognition",
-    "typePlate": "Plate Recognition",
+    "types": {
+      "object_detection": "Object Detection",
+      "face_recognition": "Face Recognition",
+      "license_plate_recognition": "Plate Recognition"
+    },
+    "originLabel": "Asset source",
     "originAll": "All Sources",
     "originBuiltin": "Built-in",
     "originCustom": "Custom",
-    "refresh": "Refresh"
+    "platformLabel": "Runtime platform",
+    "platformAll": "All Platforms",
+    "sortLabel": "Sort order",
+    "sort": {
+      "default": "Default order",
+      "name": "By name",
+      "updated": "By updated time",
+      "versions": "By version count"
+    },
+    "refresh": "Refresh list"
+  },
+  "list": {
+    "summary": "{{total}} total · {{visible}} shown",
+    "loadedOfTotal": "Loaded {{loaded}} / {{total}}",
+    "loadMore": "Load more",
+    "loadMoreError": "Loading more failed. Try again."
+  },
+  "empty": {
+    "errorTitle": "Failed to load algorithm list",
+    "errorDesc": "Algorithm assets could not be read from the device. Check the service status and retry.",
+    "retry": "Reload",
+    "emptyTitle": "No algorithm assets yet",
+    "emptyDesc": "Upload a .tar.gz, .tgz, .tar or .zip package; the 6-step sandbox self-test runs automatically before loading.",
+    "uploadAction": "Upload first package",
+    "noMatchTitle": "No matching algorithms",
+    "noMatchDesc": "The current search or filters matched nothing. Loosen the conditions or clear the filters.",
+    "clearFilters": "Clear filters"
   },
   "actions": {
     "uploadPackage": "Upload Package",
@@ -34,35 +66,50 @@
   "card": {
     "builtinTag": "Built-in",
     "customTag": "Custom",
-    "activeVersion": "Active Version",
     "noDescription": "No description available",
-    "supportedPlatforms": "Platforms",
-    "totalVersions": "versions available"
+    "versionCount": "{{count}} versions",
+    "versionUnknown": "unregistered",
+    "incompatible": "Not compatible with host",
+    "compatibleVersions": "{{compatible}}/{{total}} versions match this host",
+    "inUseBy": "Used by {{count}} channel(s)"
   },
   "drawer": {
     "title": "Version Management",
-    "description": "Manage multi-version binary model assets on the edge device with zero-downtime hot swapping and safe uninstallation.",
     "versionList": "Registered Versions",
     "versionCount": "{{count}} versions",
-    "platform": "Platform",
-    "size": "Package Size",
+    "compatibleHost": "Matches host",
+    "incompatibleHost": "Host mismatch",
+    "adapterVersion": "Adapter ≥ {{version}}",
     "fpsTiers": "FPS Profiles",
-    "emptyTiers": "Adaptive (no fixed tiers)",
+    "fpsTierValue": "{{fps}} FPS · {{units}} units",
     "builtinProtected": "Built-in packages are write-protected and cannot be uninstalled",
+    "activateBlocked": "This package targets another platform and cannot be loaded on the host",
+    "inUseTitle": "{{count}} enabled channel(s) are calling this algorithm",
+    "inUseError": "Enabled channel tasks are calling this algorithm; stop them before uninstalling",
+    "usageChecking": "Checking task usage; uninstall is temporarily locked",
+    "usageUnavailable": "Task usage could not be read; uninstall is locked",
+    "retryUsage": "Check again",
+    "gotoTask": "Resolve",
     "confirmUninstallTitle": "Confirm Uninstallation",
-    "confirmUninstallDesc": "Are you sure you want to uninstall version {{version}}? This will permanently delete binary model files from disk.",
-    "uninstallSuccess": "Algorithm version uninstalled successfully",
-    "activateSuccess": "Algorithm version activated successfully",
+    "confirmUninstallDesc": "Uninstall v{{version}} ({{platform}})? The model files are permanently deleted from disk and this algorithm cannot be rolled back afterwards.",
     "activateFailed": "Failed to activate version",
-    "uninstallFailed": "Failed to uninstall version",
-    "inUseError": "Algorithm is currently used by active camera tasks and cannot be uninstalled"
+    "uninstallFailed": "Failed to uninstall version"
   },
   "upload": {
     "title": "Upload Algorithm Package",
     "subtitle": "Supports .tar.gz (.tgz), .tar and .zip formats with 6-step physical sandbox validation",
-    "dragTip": "Drag algorithm archive here, or click to browse",
-    "fileHint": "Max recommended size 500MB, must contain manifest.json and C ABI shared library",
-    "testingTitle": "Running 6-Step Physical Sandbox Verification...",
+    "dragTip": "Drag an algorithm archive here, or click to browse",
+    "fileHint": "Supports {{formats}}, recommended under {{maxSize}}; must contain manifest.json and the C ABI shared library",
+    "rejection": {
+      "unsupportedFormat": "Only .tar.gz, .tgz, .tar and .zip archives are supported",
+      "emptyFile": "The file is empty, please choose another one",
+      "tooLarge": "File exceeds the recommended size limit and may be rejected by the server"
+    },
+    "multipleFilesHint": "Only one package can be uploaded at a time; the first file was selected",
+    "testingTitle": "Running 6-step sandbox self-test…",
+    "progressHint": "The self-test runs in an isolated subprocess on the device. Per-step results are returned once it finishes — keep this dialog open.",
+    "closingBlocked": "Self-test in progress, closing is disabled",
+    "startVerify": "Upload and Verify",
     "passedTitle": "All Sandbox Tests Passed",
     "failedTitle": "Sandbox Verification Failed, Package Intercepted",
     "step1": "1. Anti-traversal & Directory Structure Check",
@@ -78,11 +125,13 @@
     "title": "Parameter Configuration Schema",
     "subtitle": "Dynamic JSON Schema specification for model parameters",
     "noProperties": "No custom parameters specified for this model",
+    "noMatchedProperties": "No matching parameters",
+    "filterPlaceholder": "Filter by name or description...",
     "propertyName": "Property",
     "type": "Type",
     "default": "Default",
     "description": "Description",
-    "rawJson": "View Raw JSON Schema",
+    "rawJson": "JSON Schema",
     "tableView": "Table View",
     "copyJson": "Copy JSON",
     "copied": "Copied"

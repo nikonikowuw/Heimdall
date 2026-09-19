@@ -1,5 +1,13 @@
-use infer::AlgoManifest;
+use infer::{current_platform_id, normalize_platform_id, AlgoManifest};
 use serde::{Deserialize, Serialize};
+
+/// 当前推理宿主的归一化平台代号。
+///
+/// 历史算法包 manifest 中存在 `macos-arm64-coreml`、`rknn`、`ascend` 等冗长别名，
+/// 归一化后与 [`current_platform_id`] 同一口径比较，避免前端自行维护别名表。
+pub fn host_platform_id() -> &'static str {
+    normalize_platform_id(current_platform_id())
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -11,6 +19,13 @@ pub struct ListAlgorithmsQuery {
     pub is_builtin: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UninstallVersionQuery {
+    /// 目标平台代号；提供时严格按平台卸载，避免同版本号多平台行发生误删
+    pub platform_id: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlgorithmVersionItemDto {
@@ -18,6 +33,10 @@ pub struct AlgorithmVersionItemDto {
     pub algorithm_id: String,
     pub version: String,
     pub platform_id: String,
+    /// 归一化后的平台代号，供前端筛选与分组展示
+    pub normalized_platform_id: String,
+    /// 该版本是否适配当前推理宿主平台（后端归一化判定，前端不做平台嗅探）
+    pub compatible_with_host: bool,
     pub min_adapter_version: String,
     pub package_root: String,
     pub fps_tiers: serde_json::Value,
@@ -39,11 +58,16 @@ impl From<db::entity::algorithm_version::Model> for AlgorithmVersionItemDto {
         let manifest_raw =
             serde_json::from_str(&m.manifest_raw).unwrap_or_else(|_| serde_json::json!({}));
 
+        let normalized_platform_id = normalize_platform_id(&m.platform_id).to_string();
+        let compatible_with_host = normalized_platform_id == host_platform_id();
+
         Self {
             id: m.id,
             algorithm_id: m.algorithm_id,
             version: m.version,
             platform_id: m.platform_id,
+            normalized_platform_id,
+            compatible_with_host,
             min_adapter_version: m.min_adapter_version,
             package_root: m.package_root,
             fps_tiers,
@@ -91,6 +115,28 @@ impl AlgorithmItemDto {
             created_at: m.created_at.timestamp_millis(),
             updated_at: m.updated_at.timestamp_millis(),
             versions,
+        }
+    }
+}
+
+/// 宿主推理平台描述。
+///
+/// 算法仓库据此展示「当前宿主推理平台」并判定版本可用性，替代浏览器端平台嗅探
+/// （`navigator.platform` 描述的是浏览器所在机器，远程访问边缘设备时会给出错误答案）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostPlatformDto {
+    /// 原始平台代号（编译期平台 + 后端 feature 决定）
+    pub platform_id: String,
+    /// 归一化平台代号，与版本 DTO 的 `normalizedPlatformId` 同口径
+    pub normalized_platform_id: String,
+}
+
+impl HostPlatformDto {
+    pub fn current() -> Self {
+        Self {
+            platform_id: current_platform_id().to_string(),
+            normalized_platform_id: host_platform_id().to_string(),
         }
     }
 }

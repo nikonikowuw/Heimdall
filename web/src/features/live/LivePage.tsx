@@ -84,7 +84,7 @@ function getStatusBadge(
   switch (normalizeProbeStatus(status)) {
     case 'healthy':
       return {
-        text: t('status.healthy', { defaultValue: '在线' }),
+        text: t('status.online', { defaultValue: '在线' }),
         badgeClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
         dotClass: 'bg-emerald-400 animate-pulse',
         statusColor: 'text-emerald-400',

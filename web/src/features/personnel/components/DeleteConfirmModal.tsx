@@ -1,7 +1,10 @@
-import { useEffect } from 'react'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { useEffect, useId } from 'react'
+import { AlertTriangle, Loader2, Trash2, User, X } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '../../../hooks/use-dismiss-stack'
+import { evidenceApi } from '../../../lib/api'
+import { motionTokens } from '../../../lib/motionTokens'
 import type { PersonnelItem } from '../../../types'
 
 export interface DeleteConfirmModalProps {
@@ -12,6 +15,12 @@ export interface DeleteConfirmModalProps {
   onConfirm: () => void
 }
 
+/**
+ * 人员物理删除二次确认。
+ *
+ * 确认对象必须可被肉眼核对（头像 + 姓名 + 编号），因为删除会同时销毁数据库记录、
+ * 人脸特征向量与本地照片文件；仅靠一句「确定删除吗」不足以避免误删同名人。
+ */
 export function DeleteConfirmModal({
   isOpen,
   target,
@@ -20,6 +29,8 @@ export function DeleteConfirmModal({
   onConfirm,
 }: DeleteConfirmModalProps) {
   const { t } = useTranslation(['personnel', 'common'])
+  const reduceMotion = useReducedMotion()
+  const titleId = useId()
 
   // ESC 浮层栈支持
   useDismissStack(isOpen && Boolean(target), onClose, { disabled: isDeleting })
@@ -37,47 +48,134 @@ export function DeleteConfirmModal({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isOpen, target, isDeleting, onConfirm])
 
-  if (!isOpen || !target) return null
+  const avatarUrl = target?.primaryPhotoPath ? evidenceApi.getImageUrl(target.primaryPhotoPath) : ''
 
   return (
-    <div className="animate-in fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs duration-200">
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-6 shadow-2xl">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-red-500/30 bg-red-500/10 text-red-400">
-            <AlertTriangle className="h-5 w-5" />
-          </div>
-          <h3 className="text-base font-semibold text-[var(--text-primary)]">
-            {t('delete.title')}
-          </h3>
-        </div>
-
-        <p className="mt-3 text-xs leading-relaxed text-[var(--text-secondary)]">
-          {t('delete.desc', {
-            name: target.name,
-            subjectId: target.subjectId,
-          })}
-        </p>
-
-        <div className="mt-6 flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isDeleting}
-            className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)]"
+    <AnimatePresence>
+      {isOpen && target && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeleting) onClose()
+          }}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-sm"
+        >
+          <motion.div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 12 }}
+            transition={{
+              duration: motionTokens.duration.normal,
+              ease: motionTokens.easing.smooth,
+            }}
+            className="relative w-full max-w-md overflow-hidden rounded-[26px] border border-[var(--border)] bg-[var(--bg-surface)] shadow-[0_28px_60px_-16px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
           >
-            {t('actions.cancel')}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isDeleting}
-            className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-red-600 disabled:opacity-50"
-          >
-            {isDeleting && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isDeleting ? t('actions.delete') : t('actions.confirm')}
-          </button>
+            {/* 头部 */}
+            <div className="flex items-start justify-between gap-3 border-b border-[var(--border)]/70 px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3.5">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-500/25 bg-rose-500/10 text-rose-500 shadow-xs">
+                  <Trash2 className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h3
+                    id={titleId}
+                    className="truncate text-base font-bold tracking-tight text-[var(--text-primary)]"
+                  >
+                    {t('delete.title')}
+                  </h3>
+                  <p className="mt-0.5 text-xs text-[var(--text-muted)]">{target.name}</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isDeleting}
+                aria-label={t('common:close')}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 px-5 py-5">
+              {/* 待删除对象核对区 */}
+              <div className="flex items-center gap-3 rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-3">
+                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)]/80 bg-[var(--bg-tertiary)]">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt={target.name} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-[var(--text-muted)]">
+                      <User className="h-5 w-5 opacity-50" aria-hidden="true" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                    {target.name}
+                  </p>
+                  <span className="font-data mt-1 inline-flex items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-400 tabular-nums select-text">
+                    <span className="text-[9px] font-medium text-emerald-400/70">ID</span>
+                    <span>{target.subjectId}</span>
+                  </span>
+                </div>
+
+                <span className="font-data shrink-0 rounded-lg border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-2 py-1 text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">
+                  {t('card.sampleCount')} {target.faceCount}/5
+                </span>
+              </div>
+
+              {/* 影响范围与不可逆提示 */}
+              <div className="flex items-start gap-2.5 rounded-2xl border border-rose-500/20 bg-rose-500/5 p-3.5">
+                <AlertTriangle
+                  className="mt-0.5 h-4 w-4 shrink-0 text-rose-500"
+                  aria-hidden="true"
+                />
+                <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
+                  {t('delete.desc', {
+                    name: target.name,
+                    subjectId: target.subjectId,
+                  })}
+                </p>
+              </div>
+            </div>
+
+            {/* 吸底操作栏 */}
+            <div className="flex items-center justify-between gap-3 border-t border-[var(--border)]/70 px-5 py-4">
+              <div className="hidden items-center gap-1 text-[11px] text-[var(--text-muted)] sm:flex">
+                <span>{t('modal.escHintPrefix')}</span>
+                <kbd className="rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] shadow-xs">
+                  ESC
+                </kbd>
+                <span>{t('modal.escHintSuffix')}</span>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={isDeleting}
+                  className="inline-flex h-9 items-center justify-center rounded-xl border border-[var(--border)] px-4 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
+                >
+                  {t('actions.cancel')}
+                </button>
+                <button
+                  type="button"
+                  onClick={onConfirm}
+                  disabled={isDeleting}
+                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-rose-500 px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-rose-600 focus-visible:ring-2 focus-visible:ring-rose-500/50 focus-visible:outline-none disabled:opacity-50"
+                >
+                  {isDeleting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {isDeleting ? t('actions.delete') : t('actions.confirm')}
+                </button>
+              </div>
+            </div>
+          </motion.div>
         </div>
-      </div>
-    </div>
+      )}
+    </AnimatePresence>
   )
 }

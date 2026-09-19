@@ -17,6 +17,7 @@ import type {
   DiscoveredDevice,
   Gb28181ConfigResponse,
   Gb28181Device,
+  HostPlatformInfo,
   InitStatusResponse,
   InitializeRequest,
   LoginRequest,
@@ -541,19 +542,33 @@ function uploadFormData<T>(endpoint: string, file: File): Promise<T> {
 }
 
 export const algorithmApi = {
-  list(params?: {
-    page?: number
-    pageSize?: number
-    keyword?: string
-    algorithmType?: string
-    isBuiltin?: boolean
-  }): Promise<PaginatedAlgorithms> {
+  /**
+   * 分页查询算法资产。
+   *
+   * `signal` 用于取消被后续输入作废的在途请求（与 oplog 相同约定），
+   * 避免快速输入时旧响应覆盖新结果。
+   */
+  list(
+    params?: {
+      page?: number
+      pageSize?: number
+      keyword?: string
+      algorithmType?: string
+      isBuiltin?: boolean
+    },
+    signal?: AbortSignal,
+  ): Promise<PaginatedAlgorithms> {
     const qs = toQueryString(params)
-    return api.get<PaginatedAlgorithms>(`/algorithms${qs}`)
+    return request<PaginatedAlgorithms>(`/algorithms${qs}`, { method: 'GET', signal })
   },
 
   getStats(): Promise<AlgorithmStats> {
     return api.get<AlgorithmStats>('/algorithms/stats')
+  },
+
+  /** 当前宿主推理平台（含历史别名归一） */
+  getHostPlatform(signal?: AbortSignal): Promise<HostPlatformInfo> {
+    return request<HostPlatformInfo>('/algorithms/host', { method: 'GET', signal })
   },
 
   getById(id: number | string): Promise<AlgorithmItem> {
@@ -575,9 +590,10 @@ export const algorithmApi = {
     )
   },
 
-  uninstallVersion(id: number | string, version: string): Promise<void> {
+  uninstallVersion(id: number | string, version: string, platformId?: string): Promise<void> {
+    const qs = platformId ? `?platformId=${encodeURIComponent(platformId)}` : ''
     return api.delete<void>(
-      `/algorithms/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}`,
+      `/algorithms/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}${qs}`,
     )
   },
 }

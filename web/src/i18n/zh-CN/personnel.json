@@ -6,7 +6,11 @@
     "totalFaces": "特征人脸样本",
     "algoStatus": "人脸算法状态",
     "algoReady": "算法引擎已就绪",
-    "algoNotReady": "算法未就绪 (请部署人脸包)"
+    "algoNotReady": "算法未就绪 (请部署人脸包)",
+    "avgSamples": "人均人脸样本",
+    "avgSamplesUnit": "张 / 人",
+    "loadFailed": "统计信息加载失败，请检查服务连通性",
+    "algoUnknown": "算法状态未知"
   },
   "actions": {
     "register": "录入新人员",
@@ -28,7 +32,9 @@
     "confirm": "确定",
     "retry": "重试",
     "saving": "保存中...",
-    "uploading": "上传提取特征中..."
+    "uploading": "上传提取特征中...",
+    "more": "更多操作",
+    "copied": "已复制"
   },
   "card": {
     "subjectId": "人员编号",
@@ -38,7 +44,58 @@
     "primary": "主头像",
     "isPrimary": "已是主头像",
     "registeredAt": "录入时间",
-    "noPhoto": "暂无照片"
+    "noPhoto": "暂无照片",
+    "noIdCard": "未登记证件号",
+    "noRemark": "未填写所属部门",
+    "sampleUnit": "样本",
+    "created": "录入",
+    "select": "选择人员",
+    "viewShort": "档案"
+  },
+  "viewMode": {
+    "grid": "卡片视图",
+    "table": "表格视图"
+  },
+  "filters": {
+    "all": "全部人员",
+    "saturated": "样本饱和 (5/5)",
+    "incomplete": "样本待补充 (1~4)",
+    "empty": "暂无照片 (0)",
+    "filterLabel": "样本状态",
+    "resetFilters": "重置筛选",
+    "noMatchTitle": "未找到符合条件的人员",
+    "noMatchDesc": "请尝试调整搜索词或样本状态筛选条件"
+  },
+  "sort": {
+    "label": "排序",
+    "createdDesc": "录入时间：由近到远",
+    "createdAsc": "录入时间：由远到近",
+    "nameAsc": "姓名：A 到 Z",
+    "faceCountDesc": "样本数：从多到少",
+    "faceCountAsc": "样本数：从少到多"
+  },
+  "table": {
+    "person": "人员档案",
+    "subjectId": "工号 / 编号",
+    "idCard": "证件号",
+    "remark": "部门 / 备注",
+    "sampleHealth": "人脸样本健康度",
+    "createdAt": "录入时间",
+    "actions": "操作",
+    "selectAll": "全选当页人员",
+    "selectRow": "选择人员 {{name}}",
+    "previewPhoto": "查看主头像"
+  },
+  "batch": {
+    "selectedCount": "已选 {{count}} 位在册人员",
+    "clearSelection": "取消勾选",
+    "batchDelete": "批量删除",
+    "batchReextract": "批量提取特征",
+    "batchDeleteSuccess": "已成功删除 {{count}} 位在册人员档案",
+    "batchDeletePartial": "批量删除完成: 成功 {{succeeded}} 位，失败 {{failed}} 位",
+    "deleteConfirmTitle": "批量删除确认",
+    "deleteConfirmDesc": "确定要彻底删除已勾选的 {{count}} 位在册人员吗？此操作将同步销毁其关联的所有人脸特征向量与本地照片文件，且不可撤销。",
+    "deleting": "正在批量删除 ({{current}}/{{total}})..."
   },
   "modal": {
     "registerTitle": "录入人员档案",
@@ -62,7 +119,12 @@
     "setAsPrimary": "点击设为主头像",
     "removePhoto": "移除照片",
     "qualityScore": "质量分",
-    "detectionScore": "置信度"
+    "detectionScore": "置信度",
+    "photoCounter": "{{current}} / {{max}} 张",
+    "dropzoneActive": "松开即可添加照片",
+    "dropzoneMore": "再加 {{remaining}} 张",
+    "escHintPrefix": "按",
+    "escHintSuffix": "关闭窗口"
   },
   "delete": {
     "title": "确认删除人员",
@@ -113,7 +175,8 @@
   "empty": {
     "title": "暂无人员底库记录",
     "desc": "点击上方「录入新人员」按钮添加首位在册人员及人脸特征",
-    "noSearchResult": "未找到匹配的人员记录"
+    "noSearchResult": "未找到匹配的人员记录",
+    "searchHint": "换个姓名、工号或证件号关键词再试"
   },
   "errors": {
     "nameRequired": "请输入人员姓名",
@@ -153,6 +216,7 @@
     "prev": "上一页",
     "next": "下一页",
     "perPage": "{{count}} 人/页",
-    "pageSize": "每页条数"
+    "pageSize": "每页条数",
+    "totalCount": "总人数"
   }
 }

@@ -550,6 +550,10 @@ export interface AlgorithmVersionItem {
   algorithmId: string
   version: string
   platformId: string
+  /** 归一化后的平台代号（后端按别名表收敛，如 macos-arm64-coreml → macos-arm64），供筛选与分组 */
+  normalizedPlatformId: string
+  /** 该版本是否适配当前推理宿主平台；由后端按归一化平台判定，前端不做平台嗅探 */
+  compatibleWithHost: boolean
   minAdapterVersion: string
   packageRoot: string
   fpsTiers: { fps: number; units: number }[]
@@ -581,6 +585,17 @@ export interface AlgorithmStats {
   totalActiveVersions: number
   builtinAlgorithms: number
   customAlgorithms: number
+}
+
+/**
+ * 宿主推理平台。
+ *
+ * 平台由推理后端编译期确定，与浏览器所在机器无关：通过局域网远程打开控制台时，
+ * 平台仍应显示设备实际后端，不能拿 `navigator.platform` 推断。
+ */
+export interface HostPlatformInfo {
+  platformId: string
+  normalizedPlatformId: string
 }
 
 export interface PaginatedAlgorithms {

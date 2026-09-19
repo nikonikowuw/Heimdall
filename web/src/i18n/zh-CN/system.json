@@ -176,6 +176,7 @@
     "createdAt": "创建时间",
     "updatedAt": "更新时间",
     "changePassword": "修改密码",
+    "activeSession": "在线会话活跃",
     "subtitle": "管理当前管理员账号"
   },
   "storage": {

@@ -55,6 +55,7 @@
     "createdAt": "建立時間",
     "updatedAt": "更新時間",
     "changePassword": "修改密碼",
+    "activeSession": "在線會話活躍",
     "subtitle": "管理目前管理員帳號"
   },
   "network": {

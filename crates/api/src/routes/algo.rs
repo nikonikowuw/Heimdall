@@ -13,10 +13,12 @@ use crate::error::ApiError;
 use crate::response::ApiResponse;
 use crate::state::AppState;
 
+const MAX_ALGO_PAGE_SIZE: u64 = 200;
 pub fn router(upload_limit_bytes: usize) -> Router<AppState> {
     Router::new()
         .route("/", get(list_algorithms))
         .route("/stats", get(get_stats))
+        .route("/host", get(get_host_platform))
         .route(
             "/upload",
             post(upload_package).layer(DefaultBodyLimit::max(upload_limit_bytes)),
@@ -33,7 +35,9 @@ async fn list_algorithms(
     Query(q): Query<ListAlgorithmsQuery>,
 ) -> Result<ApiResponse<PaginatedAlgorithmsDto>, ApiError> {
     let page = q.page.unwrap_or(1);
-    let page_size = q.page_size.unwrap_or(20);
+    // 防止客户端传入任意大的 pageSize 造成一次性加载过多版本树；前端通过 total + loadMore
+    // 显式表达截断，不把上限变成静默丢数据。
+    let page_size = q.page_size.unwrap_or(20).clamp(1, MAX_ALGO_PAGE_SIZE);
 
     let (algos, total) = AlgorithmRepo::list_algorithms(
         &state.db,
@@ -73,6 +77,13 @@ async fn list_algorithms(
 async fn get_stats(State(state): State<AppState>) -> Result<ApiResponse<AlgorithmStats>, ApiError> {
     let stats = AlgorithmRepo::stats(&state.db).await?;
     Ok(ApiResponse::success(stats))
+}
+
+/// 获取当前推理宿主平台（含历史别名归一）
+///
+/// 纯计算，不触碰数据库：平台代号由编译期目标平台与后端 feature 决定。
+async fn get_host_platform() -> ApiResponse<HostPlatformDto> {
+    ApiResponse::success(HostPlatformDto::current())
 }
 
 /// 查询单个算法详情
@@ -123,7 +134,8 @@ async fn activate_version(
 async fn uninstall_version(
     State(state): State<AppState>,
     AxumPath((id, version)): AxumPath<(String, String)>,
+    Query(q): Query<UninstallVersionQuery>,
 ) -> Result<ApiResponse<Option<()>>, ApiError> {
-    service_uninstall_version(&state, &id, &version).await?;
+    service_uninstall_version(&state, &id, &version, q.platform_id.as_deref()).await?;
     Ok(ApiResponse::success(None))
 }

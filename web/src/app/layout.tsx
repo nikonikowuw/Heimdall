@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   Cpu,
   FileText,
+  KeyRound,
   Keyboard,
   LogOut,
   Monitor,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { useDismissStack } from '../hooks/use-dismiss-stack'
 import { ChangePasswordModal } from '../components/ChangePasswordModal'
 import { LocaleDropdown } from '../components/LocaleDropdown'
 import { ShortcutsModal } from '../components/ShortcutsModal'
@@ -84,8 +86,25 @@ export function Layout(): React.ReactElement {
   const [targetTaskCameraId, setTargetTaskCameraId] = useState<string | null>(null)
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement | null>(null)
   const { isDark, toggleTheme } = useTheme()
   const reducedMotion = useReducedMotion()
+
+  useDismissStack(userMenuOpen, () => setUserMenuOpen(false), { priority: 5 })
+
+  useEffect(() => {
+    if (!userMenuOpen) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [userMenuOpen])
 
   useGlobalShortcuts({
     currentTab,
@@ -110,14 +129,7 @@ export function Layout(): React.ReactElement {
       case 'live':
         return <LivePage onNavigateToAlarms={() => setCurrentTab('alarms')} />
       case 'cameras':
-        return (
-          <CamerasPage
-            onNavigateToTasks={(camera) => {
-              setTargetTaskCameraId(camera.cameraId)
-              setCurrentTab('tasks')
-            }}
-          />
-        )
+        return <CamerasPage />
       case 'tasks':
         return (
           <TasksPage
@@ -127,7 +139,14 @@ export function Layout(): React.ReactElement {
           />
         )
       case 'algorithms':
-        return <AlgorithmsPage />
+        return (
+          <AlgorithmsPage
+            onNavigateToTask={(cameraId) => {
+              setTargetTaskCameraId(cameraId)
+              setCurrentTab('tasks')
+            }}
+          />
+        )
       case 'personnel':
         return <PersonnelPage />
       case 'alarms':
@@ -263,13 +282,96 @@ export function Layout(): React.ReactElement {
                   <Settings className="relative z-10 h-5 w-5" />
                 </button>
 
-                <button
-                  onClick={handleLogout}
-                  title={t('auth:logoutTooltip', { username: username || 'admin' })}
-                  className="nav-btn text-[var(--destructive)] hover:bg-rose-500/10 hover:text-[var(--destructive)]"
-                >
-                  <LogOut className="h-5 w-5" />
-                </button>
+                {/* 用户身份与快捷控制胶囊 */}
+                <div className="relative shrink-0" ref={userMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setUserMenuOpen((open) => !open)}
+                    aria-label={t('auth:logoutTooltip', { username: username || 'admin' })}
+                    title={username || 'admin'}
+                    className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--accent-soft)] to-[var(--bg-secondary)] font-mono text-xs font-bold text-[var(--text-primary)] shadow-2xs transition-all hover:border-[var(--accent)] hover:shadow-xs focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                  >
+                    <span>{username ? username.charAt(0).toUpperCase() : 'A'}</span>
+                    <span
+                      aria-hidden="true"
+                      className="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-surface-solid)] bg-emerald-500 shadow-xs"
+                    />
+                  </button>
+
+                  {userMenuOpen && (
+                    <div
+                      role="menu"
+                      className="lens-glass animate-in fade-in slide-in-from-left-2 absolute bottom-0 left-full z-50 ml-3 min-w-[210px] overflow-hidden rounded-2xl border border-[var(--border)] p-2 shadow-2xl duration-150"
+                    >
+                      {/* 用户档案信息标牌 */}
+                      <div className="flex items-center gap-3 p-2">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--accent-soft)] font-mono text-xs font-bold text-[var(--accent)]">
+                          {username ? username.charAt(0).toUpperCase() : 'A'}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-mono text-xs font-bold text-[var(--text-primary)]">
+                            {username || 'admin'}
+                          </p>
+                          <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                            <span>
+                              {t('auth:roleAdministrator', { defaultValue: 'Administrator' })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="my-1 border-t border-[var(--border)]" />
+
+                      {/* 快捷操作 */}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setUserMenuOpen(false)
+                          setIsPasswordModalOpen(true)
+                        }}
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                      >
+                        <KeyRound className="h-3.5 w-3.5 opacity-70" />
+                        <span>{t('auth:changePassword', { defaultValue: '修改密码' })}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setUserMenuOpen(false)
+                          setCurrentTab('system')
+                        }}
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                      >
+                        <Settings className="h-3.5 w-3.5 opacity-70" />
+                        <span>{t('nav.system', { defaultValue: '系统设置' })}</span>
+                      </button>
+
+                      <div className="my-1 border-t border-[var(--border)]" />
+
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setUserMenuOpen(false)
+                          handleLogout()
+                        }}
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-rose-500 transition-colors hover:bg-rose-500/10"
+                      >
+                        <LogOut className="h-3.5 w-3.5 opacity-80" />
+                        <span>
+                          {t('auth:logoutTooltip', {
+                            username: username || 'admin',
+                            defaultValue: '退出登录',
+                          })}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </motion.aside>
 

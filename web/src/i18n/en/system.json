@@ -124,6 +124,7 @@
     "createdAt": "Created At",
     "updatedAt": "Updated At",
     "changePassword": "Change Password",
+    "activeSession": "Active Session",
     "subtitle": "Manage the current administrator account"
   },
   "network": {

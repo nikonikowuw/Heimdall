@@ -6,7 +6,11 @@
     "totalFaces": "特徵人臉樣本",
     "algoStatus": "人臉演算法狀態",
     "algoReady": "演算法引擎已就緒",
-    "algoNotReady": "演算法未就緒 (請部署人臉包)"
+    "algoNotReady": "演算法未就緒 (請部署人臉包)",
+    "avgSamples": "人均人臉樣本",
+    "avgSamplesUnit": "張 / 人",
+    "loadFailed": "統計資訊載入失敗，請檢查服務連線",
+    "algoUnknown": "算法狀態未知"
   },
   "actions": {
     "register": "錄入新人員",
@@ -28,7 +32,9 @@
     "confirm": "確定",
     "retry": "重試",
     "saving": "儲存中...",
-    "uploading": "上傳擷取特徵中..."
+    "uploading": "上傳擷取特徵中...",
+    "more": "更多操作",
+    "copied": "已複製"
   },
   "card": {
     "subjectId": "人員編號",
@@ -38,7 +44,58 @@
     "primary": "主要頭像",
     "isPrimary": "已是主要頭像",
     "registeredAt": "錄入時間",
-    "noPhoto": "暫無照片"
+    "noPhoto": "暫無照片",
+    "noIdCard": "未登記證件號",
+    "noRemark": "未填寫所屬部門",
+    "sampleUnit": "樣本",
+    "created": "錄入",
+    "select": "選擇人員",
+    "viewShort": "檔案"
+  },
+  "viewMode": {
+    "grid": "卡片檢視",
+    "table": "表格檢視"
+  },
+  "filters": {
+    "all": "全部人員",
+    "saturated": "樣本飽和 (5/5)",
+    "incomplete": "樣本待補充 (1~4)",
+    "empty": "暫無照片 (0)",
+    "filterLabel": "樣本狀態",
+    "resetFilters": "重設篩選",
+    "noMatchTitle": "未找到符合條件的人員",
+    "noMatchDesc": "請嘗試調整搜尋詞或樣本狀態篩選條件"
+  },
+  "sort": {
+    "label": "排序",
+    "createdDesc": "錄入時間：由近到遠",
+    "createdAsc": "錄入時間：由遠到近",
+    "nameAsc": "姓名：A 到 Z",
+    "faceCountDesc": "樣本數：從多到少",
+    "faceCountAsc": "樣本數：從少到多"
+  },
+  "table": {
+    "person": "人員檔案",
+    "subjectId": "工號 / 編號",
+    "idCard": "證件號",
+    "remark": "部門 / 備註",
+    "sampleHealth": "人臉樣本健康度",
+    "createdAt": "錄入時間",
+    "actions": "操作",
+    "selectAll": "全選當頁人員",
+    "selectRow": "選擇人員 {{name}}",
+    "previewPhoto": "查看主要頭像"
+  },
+  "batch": {
+    "selectedCount": "已選 {{count}} 位在冊人員",
+    "clearSelection": "取消勾選",
+    "batchDelete": "批量刪除",
+    "batchReextract": "批量提取特徵",
+    "batchDeleteSuccess": "已成功刪除 {{count}} 位在冊人員檔案",
+    "batchDeletePartial": "批量刪除完成: 成功 {{succeeded}} 位，失敗 {{failed}} 位",
+    "deleteConfirmTitle": "批量刪除確認",
+    "deleteConfirmDesc": "確定要徹底刪除已勾選的 {{count}} 位在冊人員嗎？此操作將同步銷毀其關聯的所有人臉特徵向量與本地照片檔案，且不可撤銷。",
+    "deleting": "正在批量刪除 ({{current}}/{{total}})..."
   },
   "modal": {
     "registerTitle": "錄入人員檔案",
@@ -62,7 +119,12 @@
     "setAsPrimary": "點擊設為主要頭像",
     "removePhoto": "移除照片",
     "qualityScore": "品質分",
-    "detectionScore": "置信度"
+    "detectionScore": "置信度",
+    "photoCounter": "{{current}} / {{max}} 張",
+    "dropzoneActive": "放開即可新增照片",
+    "dropzoneMore": "再加 {{remaining}} 張",
+    "escHintPrefix": "按",
+    "escHintSuffix": "關閉視窗"
   },
   "delete": {
     "title": "確認刪除人員",
@@ -113,7 +175,8 @@
   "empty": {
     "title": "暫無人員底庫記錄",
     "desc": "點擊上方「錄入新人員」按鈕新增首位在冊人員及人臉特徵",
-    "noSearchResult": "未找到匹配的人員記錄"
+    "noSearchResult": "未找到匹配的人員記錄",
+    "searchHint": "換個姓名、工號或證件號關鍵字再試"
   },
   "errors": {
     "nameRequired": "請輸入人員姓名",
@@ -153,6 +216,7 @@
     "prev": "上一頁",
     "next": "下一頁",
     "perPage": "{{count}} 人/頁",
-    "pageSize": "每頁條數"
+    "pageSize": "每頁條數",
+    "totalCount": "總人數"
   }
 }

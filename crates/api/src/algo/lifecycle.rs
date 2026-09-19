@@ -67,19 +67,27 @@ pub async fn activate_version(state: &AppState, id: &str, version: &str) -> Resu
 }
 
 /// 安全卸载指定版本 (防孤儿文件与路径逃逸保护)
-pub async fn uninstall_version(state: &AppState, id: &str, version: &str) -> Result<(), ApiError> {
+pub async fn uninstall_version(
+    state: &AppState,
+    id: &str,
+    version: &str,
+    platform_id: Option<&str>,
+) -> Result<(), ApiError> {
     let aid = resolve_algorithm_id(&state.db, id).await?;
-    let cur_plat = current_platform_id();
 
     // 执行卸载，内置算法或使用中算法会自动阻断并返回对应错误
-    let package_root =
+    let package_root = if let Some(pid) = platform_id {
+        AlgorithmRepo::uninstall_version(&state.db, &aid, version, Some(pid)).await?
+    } else {
+        let cur_plat = current_platform_id();
         match AlgorithmRepo::uninstall_version(&state.db, &aid, version, Some(cur_plat)).await {
             Ok(r) => r,
             Err(db::DbError::NotFound { .. }) => {
                 AlgorithmRepo::uninstall_version(&state.db, &aid, version, None).await?
             }
             Err(e) => return Err(e.into()),
-        };
+        }
+    };
 
     // 清理物理磁盘目录（防孤儿死文件），强约束仅限 var/packages 目录树内
     let root_path = PathBuf::from(&package_root);

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Eye, EyeOff, KeyRound, Lock, ShieldCheck, X } from 'lucide-react'
+import { Eye, EyeOff, KeyRound, Loader2, Lock, ShieldCheck, X } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '../hooks/use-dismiss-stack'
 import { authApi } from '../lib/api'
@@ -73,128 +74,147 @@ export function ChangePasswordModal({ isOpen, onClose }: ChangePasswordModalProp
 
   useDismissStack(isOpen, handleClose, { disabled: loading })
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* 遮罩背景 */}
-      <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
-        onClick={handleClose}
-      />
-
-      {/* 模态框主体 */}
-      <div className="lens-glass relative z-10 w-full max-w-md overflow-hidden rounded-3xl border border-black/10 bg-white/80 p-6 shadow-2xl backdrop-blur-2xl sm:p-7 dark:border-white/10 dark:bg-slate-900/90">
-        {/* 顶部标题与关闭按钮 */}
-        <div className="flex items-center justify-between border-b border-black/5 pb-4 dark:border-white/5">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-500">
-              <KeyRound className="h-4 w-4" />
-            </div>
-            <div>
-              <h3 className="font-display text-base font-bold text-slate-900 dark:text-white">
-                {t('changePassword')}
-              </h3>
-              <p className="font-mono text-[10px] text-slate-400">USER // {username || 'admin'}</p>
-            </div>
-          </div>
-          <button
-            onClick={handleClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-black/5 hover:text-slate-700 dark:hover:bg-white/5 dark:hover:text-slate-200"
+    <AnimatePresence>
+      {isOpen && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !loading) {
+              handleClose()
+            }
+          }}
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 10 }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="relative flex w-full max-w-md flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-white shadow-[0_24px_50px_-12px_rgba(0,0,0,0.28)] dark:bg-[var(--bg-surface-solid)]"
           >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* 消息提示 */}
-        {errorMsg && (
-          <div className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-600 dark:text-rose-400">
-            {errorMsg}
-          </div>
-        )}
-        {successMsg && (
-          <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400">
-            {successMsg}
-          </div>
-        )}
-
-        {/* 表单 */}
-        <form onSubmit={handleSubmit} className="mt-4 space-y-3.5">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
-              {t('oldPassword')}
-            </label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={oldPassword}
-                onChange={(e) => setOldPassword(e.target.value)}
-                className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-10 pl-3.5 text-sm text-[var(--text-primary)] focus:border-cyan-400 focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
-                placeholder="••••••••"
-              />
+            {/* 顶部标题与关闭按钮 */}
+            <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">
+              <div className="flex items-center gap-3.5">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs">
+                  <KeyRound className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold tracking-tight text-[var(--text-primary)]">
+                    {t('changePassword')}
+                  </h3>
+                  <p className="font-data mt-0.5 text-[11px] text-[var(--text-muted)]">
+                    USER // {username || 'admin'}
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400"
+                onClick={handleClose}
+                disabled={loading}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
               >
-                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                <X className="h-4 w-4" />
               </button>
             </div>
-          </div>
 
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
-              {t('newPassword')}
-            </label>
-            <input
-              type={showPassword ? 'text' : 'password'}
-              required
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full rounded-xl border border-black/10 bg-black/[0.03] px-3.5 py-2.5 text-sm text-[var(--text-primary)] focus:border-pink-400 focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
-              placeholder="••••••••"
-            />
-          </div>
+            {/* 消息提示 */}
+            <div className="space-y-3.5 p-6">
+              {errorMsg && (
+                <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3.5 text-xs text-rose-500">
+                  {errorMsg}
+                </div>
+              )}
+              {successMsg && (
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-3.5 text-xs text-emerald-600 dark:text-emerald-400">
+                  {successMsg}
+                </div>
+              )}
 
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
-              {t('confirmPassword')}
-            </label>
-            <input
-              type={showPassword ? 'text' : 'password'}
-              required
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full rounded-xl border border-black/10 bg-black/[0.03] px-3.5 py-2.5 text-sm text-[var(--text-primary)] focus:border-indigo-400 focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
-              placeholder="••••••••"
-            />
-          </div>
+              {/* 表单 */}
+              <form onSubmit={handleSubmit} className="space-y-3.5">
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--text-secondary)]">
+                    {t('oldPassword')}
+                  </label>
+                  <div className="relative mt-1.5">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      value={oldPassword}
+                      onChange={(e) => setOldPassword(e.target.value)}
+                      className="font-data w-full rounded-xl border border-[var(--border)]/80 bg-white py-2 pr-10 pl-3.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                      placeholder="••••••••"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
 
-          <div className="flex items-center gap-2 pt-2">
-            <button
-              type="button"
-              onClick={handleClose}
-              className="w-1/2 rounded-xl border border-black/10 py-2.5 text-xs font-semibold text-slate-600 hover:bg-black/5 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="font-display flex w-1/2 items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-500 py-2.5 text-xs font-bold text-white shadow-md hover:opacity-95 disabled:opacity-50"
-            >
-              <ShieldCheck className="h-4 w-4" />
-              <span>{loading ? t('submittingChange') : t('confirmChange')}</span>
-            </button>
-          </div>
-        </form>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--text-secondary)]">
+                    {t('newPassword')}
+                  </label>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="font-data mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                    placeholder="••••••••"
+                  />
+                </div>
 
-        <div className="mt-4 flex items-center justify-center gap-1.5 font-mono text-[10px] text-slate-400">
-          <Lock className="h-3 w-3 text-emerald-500" />
-          <span>{t('revokeNotice')}</span>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--text-secondary)]">
+                    {t('confirmPassword')}
+                  </label>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="font-data mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                    placeholder="••••••••"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleClose}
+                    disabled={loading}
+                    className="w-1/2 rounded-xl border border-[var(--border)]/80 bg-white py-2 text-xs font-medium text-[var(--text-secondary)] shadow-xs transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 dark:bg-[var(--bg-surface-solid)]"
+                  >
+                    {t('cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="flex w-1/2 items-center justify-center gap-1.5 rounded-xl bg-slate-900 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:bg-slate-800 active:scale-95 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                  >
+                    {loading ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="h-4 w-4" />
+                    )}
+                    <span>{loading ? t('submittingChange') : t('confirmChange')}</span>
+                  </button>
+                </div>
+              </form>
+
+              <div className="flex items-center justify-center gap-1.5 pt-1 text-[11px] text-[var(--text-muted)]">
+                <Lock className="h-3 w-3 text-emerald-500" />
+                <span>{t('revokeNotice')}</span>
+              </div>
+            </div>
+          </motion.div>
         </div>
-      </div>
-    </div>
+      )}
+    </AnimatePresence>
   )
 }

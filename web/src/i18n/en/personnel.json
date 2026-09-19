@@ -6,7 +6,11 @@
     "totalFaces": "Face Feature Samples",
     "algoStatus": "Face Algo Status",
     "algoReady": "Engine Ready",
-    "algoNotReady": "Engine Not Ready (Deploy Face Package)"
+    "algoNotReady": "Engine Not Ready",
+    "avgSamples": "Avg Samples",
+    "avgSamplesUnit": "/ person",
+    "loadFailed": "Failed to load statistics, please check service connectivity",
+    "algoUnknown": "Algo status unknown"
   },
   "actions": {
     "register": "Register Person",
@@ -28,17 +32,70 @@
     "confirm": "Confirm",
     "retry": "Retry",
     "saving": "Saving...",
-    "uploading": "Extracting features..."
+    "uploading": "Extracting features...",
+    "more": "More actions",
+    "copied": "Copied"
   },
   "card": {
     "subjectId": "Subject ID",
     "idCard": "ID / Card",
     "remark": "Remark",
     "sampleCount": "Face Samples",
-    "primary": "Primary Avatar",
+    "primary": "Primary",
     "isPrimary": "Primary Avatar",
     "registeredAt": "Registered At",
-    "noPhoto": "No Photo"
+    "noPhoto": "No Photo",
+    "noIdCard": "No ID Card",
+    "noRemark": "No department/remark",
+    "sampleUnit": "samples",
+    "created": "Added",
+    "select": "Select person",
+    "viewShort": "Profile"
+  },
+  "viewMode": {
+    "grid": "Card Grid",
+    "table": "Data Table"
+  },
+  "filters": {
+    "all": "All",
+    "saturated": "Saturated (5/5)",
+    "incomplete": "Incomplete (1-4)",
+    "empty": "No Photos (0)",
+    "filterLabel": "Sample Health",
+    "resetFilters": "Reset Filters",
+    "noMatchTitle": "No matching personnel found",
+    "noMatchDesc": "Try adjusting your search keyword or sample filter criteria"
+  },
+  "sort": {
+    "label": "Sort",
+    "createdDesc": "Created: Newest first",
+    "createdAsc": "Created: Oldest first",
+    "nameAsc": "Name: A to Z",
+    "faceCountDesc": "Samples: Most first",
+    "faceCountAsc": "Samples: Least first"
+  },
+  "table": {
+    "person": "Personnel Info",
+    "subjectId": "Subject ID",
+    "idCard": "ID Card",
+    "remark": "Department / Remark",
+    "sampleHealth": "Sample Health",
+    "createdAt": "Created At",
+    "actions": "Actions",
+    "selectAll": "Select all on page",
+    "selectRow": "Select {{name}}",
+    "previewPhoto": "View primary photo"
+  },
+  "batch": {
+    "selectedCount": "{{count}} personnel selected",
+    "clearSelection": "Clear",
+    "batchDelete": "Batch Delete",
+    "batchReextract": "Batch Re-extract",
+    "batchDeleteSuccess": "Successfully deleted {{count}} personnel records",
+    "batchDeletePartial": "Batch deletion finished: {{succeeded}} succeeded, {{failed}} failed",
+    "deleteConfirmTitle": "Batch Delete Confirmation",
+    "deleteConfirmDesc": "Are you sure you want to permanently delete {{count}} selected personnel? This will permanently erase their face feature vectors and local photo files.",
+    "deleting": "Deleting ({{current}}/{{total}})..."
   },
   "modal": {
     "registerTitle": "Register Personnel",
@@ -62,7 +119,12 @@
     "setAsPrimary": "Click to set as primary",
     "removePhoto": "Remove photo",
     "qualityScore": "Quality",
-    "detectionScore": "Confidence"
+    "detectionScore": "Confidence",
+    "photoCounter": "{{current}} / {{max}} photos",
+    "dropzoneActive": "Drop to add photos",
+    "dropzoneMore": "+{{remaining}} more",
+    "escHintPrefix": "Press",
+    "escHintSuffix": "to close"
   },
   "delete": {
     "title": "Confirm Delete Person",
@@ -113,7 +175,8 @@
   "empty": {
     "title": "No Personnel Registered",
     "desc": "Click \"Register Person\" above to add the first profile and face features",
-    "noSearchResult": "No matching personnel found"
+    "noSearchResult": "No matching personnel found",
+    "searchHint": "Try another name, staff ID or card number keyword"
   },
   "errors": {
     "nameRequired": "Name is required",
@@ -153,6 +216,7 @@
     "prev": "Previous",
     "next": "Next",
     "perPage": "{{count}} / page",
-    "pageSize": "Page Size"
+    "pageSize": "Page Size",
+    "totalCount": "Total"
   }
 }

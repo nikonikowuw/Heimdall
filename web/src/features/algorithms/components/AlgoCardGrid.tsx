@@ -1,59 +1,77 @@
 import React from 'react'
-import { Cpu } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
-import { useTranslation } from 'react-i18next'
 import type { AlgorithmItem } from '@/types'
+import type { AlgoListState } from '../algoFilters'
+import type { AlgoUsageEntry } from '../algoUsage'
 import { AlgoCard } from './AlgoCard'
+import { AlgoEmptyState } from './AlgoEmptyState'
 
 export interface AlgoCardGridProps {
   algorithms: AlgorithmItem[]
-  isLoading?: boolean
+  state: AlgoListState
+  /** 服务端错误详情；为空串表示未知错误 */
+  errorMessage?: string | null
+  /** 算法 ID → 占用通道任务 */
+  usageByAlgorithm: ReadonlyMap<string, AlgoUsageEntry[]>
   onManageVersions: (algo: AlgorithmItem) => void
   onViewSchema: (algo: AlgorithmItem) => void
+  onRetry: () => void
+  onUpload: () => void
+  onClearFilters: () => void
 }
 
-export const AlgoCardGrid: React.FC<AlgoCardGridProps> = ({
+export function AlgoCardGrid({
   algorithms,
-  isLoading,
+  state,
+  errorMessage,
+  usageByAlgorithm,
   onManageVersions,
   onViewSchema,
-}) => {
-  const { t } = useTranslation('algo')
-
-  if (isLoading && algorithms.length === 0) {
+  onRetry,
+  onUpload,
+  onClearFilters,
+}: AlgoCardGridProps): React.ReactElement {
+  // 骨架仅在确实无内容可展示时出现（deriveAlgoListState 保证 loading 态下列表为空），
+  // 已有卡片时改由计数行与刷新按钮表达在途状态，不把卡片抹掉重画
+  if (state === 'loading') {
     return (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {[1, 2, 3].map((n) => (
+      <div
+        aria-busy="true"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+      >
+        {[1, 2, 3, 4].map((n) => (
           <div
             key={n}
-            className="frosted-glass h-48 animate-pulse rounded-2xl border border-[var(--border)] p-5"
+            className="frosted-glass h-44 animate-pulse rounded-2xl border border-[var(--border)] p-5"
           />
         ))}
       </div>
     )
   }
 
-  if (algorithms.length === 0) {
+  if (state !== 'ready') {
     return (
-      <div className="frosted-glass flex flex-col items-center justify-center rounded-2xl border border-[var(--border)] py-16 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
-          <Cpu className="h-6 w-6" />
-        </div>
-        <h3 className="mt-4 text-sm font-semibold text-[var(--text-primary)]">
-          {t('filter.searchPlaceholder')}
-        </h3>
-        <p className="mt-1 text-xs text-[var(--text-muted)]">{t('card.noDescription')}</p>
-      </div>
+      <AlgoEmptyState
+        state={state}
+        errorMessage={errorMessage}
+        onRetry={onRetry}
+        onUpload={onUpload}
+        onClearFilters={onClearFilters}
+      />
     )
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div
+      role="list"
+      className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+    >
       <AnimatePresence mode="popLayout">
         {algorithms.map((algo) => (
           <AlgoCard
             key={algo.algorithmId}
             algorithm={algo}
+            usage={usageByAlgorithm.get(algo.algorithmId) ?? []}
             onManageVersions={onManageVersions}
             onViewSchema={onViewSchema}
           />
