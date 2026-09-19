@@ -290,7 +290,11 @@ export interface CaptureRecord {
   imageId: string
   imageRelPath: string
   cropImageId: string
+  /** 人脸特写相对路径；空串 = 本次未产出（背身/低头）或迁移前遗留行 */
   cropImageRelPath: string
+  bodyCropImageId: string
+  /** 人体特写相对路径（人工复查看衣着的主体证据）；空串语义同上 */
+  bodyCropImageRelPath: string
   /** 证据图产生路径；历史记录未标注时为 null */
   imageSource?: EvidenceImageSource | null
   /** 证据图所属码流；历史记录未标注时为 null */

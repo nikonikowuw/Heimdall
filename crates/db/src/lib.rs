@@ -12,7 +12,7 @@ pub use repository::{
     algorithm::{AlgorithmRepo, AlgorithmStats, UpsertAlgorithmParams, UpsertVersionParams},
     algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, UpdateInstanceParams},
     camera::ProbeUpdateParams,
-    AdminUserRepo, AlarmRepo, CameraRepo, CaptureRepo, GalleryFaceRepo, GalleryRepo,
+    AdminUserRepo, AlarmRepo, CameraRepo, CaptureFilter, CaptureRepo, GalleryFaceRepo, GalleryRepo,
     Gb28181DeviceRepo, OperationalLogRepo, OplogRepo, PersonnelRepo, RecognitionRepo,
     SaveTaskAlgorithmInstanceParams, SaveTaskParams, SaveTaskWithInstancesParams,
     SysGb28181ConfigRepo, SystemConfigRepo, TaskInstanceStateUpdate, TaskRepo,

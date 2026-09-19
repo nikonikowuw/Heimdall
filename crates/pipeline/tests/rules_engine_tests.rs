@@ -23,13 +23,22 @@ impl EvictionStore for DbEvictionStore {
     async fn find_oldest_captures(
         &self,
         limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, pipeline::PipelineError> {
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
         let list = CaptureRepo::find_oldest_batch(&self.db, limit)
             .await
             .map_err(|e| pipeline::PipelineError::Snapshot(e.to_string()))?;
         Ok(list
             .into_iter()
-            .map(|c| (c.id, c.image_rel_path, c.crop_image_rel_path))
+            .map(|c| {
+                pipeline::EvidenceRecordFiles::new(
+                    c.id,
+                    [
+                        c.image_rel_path,
+                        c.crop_image_rel_path,
+                        c.body_crop_image_rel_path,
+                    ],
+                )
+            })
             .collect())
     }
 
@@ -42,13 +51,15 @@ impl EvictionStore for DbEvictionStore {
     async fn find_oldest_alarms(
         &self,
         limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, pipeline::PipelineError> {
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
         let list = AlarmRepo::find_oldest_batch(&self.db, limit)
             .await
             .map_err(|e| pipeline::PipelineError::Snapshot(e.to_string()))?;
         Ok(list
             .into_iter()
-            .map(|a| (a.id, a.image_rel_path, a.crop_image_rel_path))
+            .map(|a| {
+                pipeline::EvidenceRecordFiles::new(a.id, [a.image_rel_path, a.crop_image_rel_path])
+            })
             .collect())
     }
 

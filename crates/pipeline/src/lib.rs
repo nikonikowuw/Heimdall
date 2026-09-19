@@ -53,9 +53,9 @@ pub use snapshot::{
 };
 pub use storage_cleaner::{
     detect_emmc_health, get_disk_free_ratio, get_sqlite_wal_size, stat_fs, EmmcHealthInfo,
-    EvictionMetricsSnapshot, EvictionReport, EvictionStore, FsStorageStat, ReconciliationReport,
-    StorageCircuitBreaker, StorageCleaner, StorageCleanerConfig, StorageDecision,
-    StorageHealthLevel, StorageWatermarkThresholds,
+    EvictionMetricsSnapshot, EvictionReport, EvictionStore, EvidenceRecordFiles, FsStorageStat,
+    ReconciliationReport, StorageCircuitBreaker, StorageCleaner, StorageCleanerConfig,
+    StorageDecision, StorageHealthLevel, StorageWatermarkThresholds,
 };
 pub use thermal::{
     ThermalActionPlan, ThermalGuard, ThermalLevel, ThermalPolicyConfig, ThermalZoneInfo,

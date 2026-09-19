@@ -63,6 +63,15 @@
 抓拍行恒有图（**无图不成行**，见 [数据库规范](./database-guidelines.md)）：`imageRelPath` 为空只能来自迁移前遗留行，不是运行期状态，前端图片占位仅作防御性保留。
 `alarm_records` 尚未加同类列（告警不走峰值候选路径，`image_source` 无变化）；若需评估告警特写图的降级率，另立迁移。
 
+**抓拍特写列（人脸 / 人体）语义**：`cropImageRelPath` 是人脸特写（有脸时），`bodyCropImageRelPath` 是人体特写
+（抓拍记录恒产出）。两列都可能为空串——空串表示「本次未产出」，与 `imageSource` 的空串语义一致，
+**不是**「图丢了」；前端按回退链 `bodyCropImageRelPath → cropImageRelPath → imageRelPath` 选缩略图，
+不引入新的占位状态。告警证据不产出人体特写（`bodyCropImage*` 恒为空串），其特写目标由告警规则给出。
+
+**抓拍列表的轨道过滤**：`GET /api/v1/evidence/captures`（及 `/count`）接受可选 `trackId`。
+`track_id` 只在单机位追踪器内唯一，服务端按 `(camera_id, track_id)` 复合索引过滤；前端必须同时锁定机位，
+否则会把其他通道的同号轨道混进同一次"行迹"。轨道过滤走服务端而非客户端：列表分页 + 客户端过滤会把结果截断成空白页。
+
 ## 快照编码系统配置
 
 快照编码质量与裁剪参数统一由 `GET/PUT /api/v1/system/snapshot/config` 管理：

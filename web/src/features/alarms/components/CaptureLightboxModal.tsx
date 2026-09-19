@@ -17,6 +17,7 @@ import { useImageZoomPan } from '../hooks/useImageZoomPan'
 import { ZoomControls } from './ZoomControls'
 import {
   calculateFittedImageRect,
+  captureEvidencePath,
   formatFaceBBoxLabel,
   getBBoxStyle,
   type FittedImageRect,
@@ -43,6 +44,8 @@ export function CaptureLightboxModal({
   const rootRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const fullImageUrl = capture.imageRelPath ? evidenceApi.getImageUrl(capture.imageRelPath) : ''
+  // 回退链：人体特写 → 人脸特写 → 全景。背身/低头记录没有可用的人脸特写。
+  const previewPath = captureEvidencePath(capture)
   const previousFullImageUrl = useRef(fullImageUrl)
   const [fullImageStatus, setFullImageStatus] = useState<FullImageStatus>(
     fullImageUrl ? 'loading' : 'unavailable',
@@ -193,20 +196,28 @@ export function CaptureLightboxModal({
             />
           )}
 
-          {capture.imageRelPath && (
-            <a
-              href={evidenceApi.getImageUrl(capture.imageRelPath)}
-              download={`capture_${capture.captureId}.jpg`}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-zinc-200 transition-all hover:bg-white/15 hover:text-white"
-              title={t('modal.download')}
-              aria-label={t('modal.fullImage')}
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{t('modal.fullImage')}</span>
-            </a>
-          )}
+          {/* 人工复查为纯查看：下载是唯一可留存证据的动作，三种凭据都可单独下载 */}
+          {[
+            { path: capture.imageRelPath, label: t('modal.fullImage'), suffix: 'full' },
+            { path: capture.bodyCropImageRelPath, label: t('modal.bodyCrop'), suffix: 'body' },
+            { path: capture.cropImageRelPath, label: t('modal.faceCrop'), suffix: 'face' },
+          ]
+            .filter((item) => Boolean(item.path))
+            .map((item) => (
+              <a
+                key={item.suffix}
+                href={evidenceApi.getImageUrl(item.path)}
+                download={`capture_${capture.captureId}_${item.suffix}.jpg`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-zinc-200 transition-all hover:bg-white/15 hover:text-white"
+                title={`${t('modal.download')} - ${item.label}`}
+                aria-label={`${t('modal.download')} - ${item.label}`}
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{item.label}</span>
+              </a>
+            ))}
 
           {/* 原生浏览器全屏切换 */}
           <button
@@ -243,10 +254,10 @@ export function CaptureLightboxModal({
         className={`relative flex h-full w-full flex-1 items-center justify-center overflow-hidden ${containerCursorClass}`}
       >
         {/* 加载占位与特写兜底 */}
-        {fullImageStatus !== 'loaded' && capture.cropImageRelPath && (
+        {fullImageStatus !== 'loaded' && previewPath && (
           <div className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden bg-black/60 backdrop-blur-md">
             <img
-              src={evidenceApi.getImageUrl(capture.cropImageRelPath)}
+              src={evidenceApi.getImageUrl(previewPath)}
               alt="Preview Placeholder"
               className="max-h-[60%] max-w-[60%] rounded-2xl object-contain opacity-75 shadow-2xl transition-opacity duration-150"
             />
@@ -265,13 +276,13 @@ export function CaptureLightboxModal({
           </div>
         )}
 
-        {isFullLoading && !capture.cropImageRelPath && (
+        {isFullLoading && !previewPath && (
           <div className="absolute inset-0 flex items-center justify-center">
             <Loader2 className="h-10 w-10 animate-spin text-cyan-400 opacity-70" />
           </div>
         )}
 
-        {isFullError && !capture.cropImageRelPath && (
+        {isFullError && !previewPath && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-xs text-zinc-200">
             <span>{t('modal.fullImageLoadFailed')}</span>
             {retryButton}
@@ -279,7 +290,7 @@ export function CaptureLightboxModal({
         )}
 
         {/* 图片与 BBox 联动缩放平移层 */}
-        {capture.imageRelPath ? (
+        {capture.imageRelPath && (
           <div
             className="relative flex h-full w-full items-center justify-center will-change-transform"
             style={transformStyle}
@@ -322,11 +333,13 @@ export function CaptureLightboxModal({
               </div>
             )}
           </div>
-        ) : !capture.cropImageRelPath ? (
+        )}
+
+        {!capture.imageRelPath && !previewPath && (
           <div className="flex h-full w-full items-center justify-center font-mono text-sm text-zinc-500">
             {t('modal.noImage')}
           </div>
-        ) : null}
+        )}
       </div>
 
       {/* 底部悬浮智能信息胶囊坞 (Floating Bottom Dock) */}

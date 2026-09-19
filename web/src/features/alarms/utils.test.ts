@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   calculateFittedImageRect,
+  captureEvidencePath,
   deriveEvidenceOriginBadges,
   formatFaceBBoxLabel,
   formatTimestamp,
@@ -215,5 +216,35 @@ describe('alarms utils', () => {
       expect(res1h.startTime).toBe(fixedNow - 3600_000)
       expect(res1h.endTime).toBe(fixedNow)
     })
+  })
+})
+
+describe('captureEvidencePath 抓拍证据图回退链', () => {
+  it('prefers the body crop so a back-facing person is still identifiable by clothing', () => {
+    expect(
+      captureEvidencePath({
+        bodyCropImageRelPath: 'cam/body.jpg',
+        cropImageRelPath: 'cam/face.jpg',
+        imageRelPath: 'cam/full.jpg',
+      }),
+    ).toBe('cam/body.jpg')
+  })
+
+  it('falls back to the face crop when no body crop was produced', () => {
+    expect(
+      captureEvidencePath({
+        bodyCropImageRelPath: '',
+        cropImageRelPath: 'cam/face.jpg',
+        imageRelPath: 'cam/full.jpg',
+      }),
+    ).toBe('cam/face.jpg')
+  })
+
+  it('falls back to the panorama for legacy rows predating the body crop column', () => {
+    expect(captureEvidencePath({ imageRelPath: 'cam/full.jpg' })).toBe('cam/full.jpg')
+  })
+
+  it('returns an empty path when no evidence image is recorded', () => {
+    expect(captureEvidencePath({})).toBe('')
   })
 })

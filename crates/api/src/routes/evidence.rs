@@ -31,7 +31,11 @@ pub struct CaptureDto {
     pub image_id: String,
     pub image_rel_path: String,
     pub crop_image_id: String,
+    /// 人脸特写相对路径；空串 = 本次未产出（背身/低头）或迁移前遗留行。
     pub crop_image_rel_path: String,
+    pub body_crop_image_id: String,
+    /// 人体特写相对路径（人工复核看衣着的主体证据）；空串语义同上。
+    pub body_crop_image_rel_path: String,
     /// 证据图产生路径；历史记录未标注时为 `null`。
     pub image_source: Option<types::EvidenceImageSource>,
     /// 证据图所属码流；历史记录未标注时为 `null`。
@@ -63,6 +67,8 @@ impl From<db::entity::capture::Model> for CaptureDto {
             image_rel_path: m.image_rel_path,
             crop_image_id: m.crop_image_id,
             crop_image_rel_path: m.crop_image_rel_path,
+            body_crop_image_id: m.body_crop_image_id,
+            body_crop_image_rel_path: m.body_crop_image_rel_path,
             image_source,
             image_stream,
             image_pts_ms,
@@ -148,6 +154,8 @@ impl From<db::entity::recognition::Model> for RecognitionDto {
 pub struct EvidenceQuery {
     pub camera_id: Option<String>,
     pub target_label: Option<String>,
+    /// 轨道过滤：定位"同一个人的一次通行"的全部结算记录。仅抓拍列表支持。
+    pub track_id: Option<i64>,
     pub status: Option<String>,
     pub start_time: Option<i64>,
     pub end_time: Option<i64>,
@@ -163,6 +171,17 @@ impl EvidenceQuery {
             self.start_time.and_then(DateTime::from_timestamp_millis),
             self.end_time.and_then(DateTime::from_timestamp_millis),
         )
+    }
+
+    pub fn to_capture_filter(&self) -> db::CaptureFilter<'_> {
+        let (start_time, end_time) = self.time_range();
+        db::CaptureFilter {
+            camera_id: self.camera_id.as_deref(),
+            target_label: self.target_label.as_deref(),
+            track_id: self.track_id,
+            start_time,
+            end_time,
+        }
     }
 }
 
@@ -199,15 +218,7 @@ async fn count_captures(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<EvidenceCountDto>, ApiError> {
-    let (start_utc, end_utc) = params.time_range();
-    let total = CaptureRepo::count_filtered(
-        &state.db,
-        params.camera_id.as_deref(),
-        params.target_label.as_deref(),
-        start_utc,
-        end_utc,
-    )
-    .await?;
+    let total = CaptureRepo::count_filtered(&state.db, params.to_capture_filter()).await?;
     Ok(ApiResponse::success(EvidenceCountDto { total }))
 }
 
@@ -231,13 +242,9 @@ async fn list_captures(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<Vec<CaptureDto>>, ApiError> {
-    let (start_utc, end_utc) = params.time_range();
     let list = CaptureRepo::list_filtered(
         &state.db,
-        params.camera_id.as_deref(),
-        params.target_label.as_deref(),
-        start_utc,
-        end_utc,
+        params.to_capture_filter(),
         params.limit,
         params.offset,
     )

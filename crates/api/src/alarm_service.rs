@@ -11,10 +11,9 @@ use crate::state::{AppState, WsBroadcastEvent};
 /// 告警异步持久化与 WebSocket 实时广播服务
 ///
 /// 负责订阅管线分析引擎发出的规则告警事件，并以非阻塞方式：
-/// 1. 异步持久化违规告警记录至 `alarm_records`；
-/// 2. 同步写入行迹抓拍记录至 `capture_records`（构建安防证据三支柱）；
-/// 3. 向全网 WebSocket 广播 `alarm.triggered` 实时事件；
-/// 4. 在冷启动与通道滞后 (Lagged) 时通过 `drain_pending_alarm_events` 无损补偿。
+/// 1. 异步持久化违规告警记录至 `alarm_records`（业务三支柱独立隔离，不向 `capture_records` 重复写入）；
+/// 2. 向全网 WebSocket 广播 `alarm.triggered` 实时事件；
+/// 3. 在冷启动与通道滞后 (Lagged) 时通过 `drain_pending_alarm_events` 无损补偿。
 #[derive(Debug, Clone)]
 pub struct AlarmDispatchService {
     pub db: sea_orm::DatabaseConnection,
@@ -67,8 +66,6 @@ impl AlarmDispatchService {
             .unwrap_or_else(chrono::Utc::now);
 
         let bbox_json = crate::capture_service::serialize_field_bbox(&event.alarm.tracked_object);
-        let (fused_count, template_quality) =
-            crate::capture_service::template_metadata(&event.alarm.tracked_object);
 
         // 解析触发告警的算法业务告警类型 alarm_type_id（优先从算法库获取真实契约，如 "object_detect", "face_recognize", "intrusion"）
         let alarm_type_id = if event.algorithm_id.trim().is_empty() {
@@ -98,7 +95,7 @@ impl AlarmDispatchService {
             target_label: Set(event.alarm.tracked_object.label.clone()),
             confidence: Set(event.alarm.tracked_object.confidence),
             track_id: Set(event.alarm.tracked_object.track_id as i64),
-            bbox_json: Set(bbox_json.clone()),
+            bbox_json: Set(bbox_json),
             image_id: Set(image_id.to_string()),
             image_rel_path: Set(image_rel_path.to_string()),
             crop_image_id: Set(crop_image_id.to_string()),
@@ -110,44 +107,16 @@ impl AlarmDispatchService {
             created_at: Set(chrono::Utc::now()),
         };
 
-        // 3. 构建抓拍凭证 (capture_records，仅在快照成功生成时成对落库，快照失败不创建无图抓拍)
-        let active_capture = event
-            .snapshot
-            .as_ref()
-            .map(|snap| db::entity::capture::ActiveModel {
-                id: sea_orm::NotSet,
-                capture_id: Set(uuid::Uuid::now_v7().to_string()),
-                camera_id: Set(event.camera_id.clone()),
-                track_id: Set(event.alarm.tracked_object.track_id as i64),
-                target_label: Set(event.alarm.tracked_object.label.clone()),
-                confidence: Set(event.alarm.tracked_object.confidence),
-                quality_score: Set(1.0),
-                bbox_json: Set(bbox_json),
-                image_id: Set(snap.image_id.clone()),
-                image_rel_path: Set(snap.image_rel_path.clone()),
-                crop_image_id: Set(snap.crop_image_id.clone()),
-                crop_image_rel_path: Set(snap.crop_image_rel_path.clone()),
-                image_source: Set(snap.image_source.as_str().to_string()),
-                image_stream: Set(snap.image_stream.as_str().to_string()),
-                image_pts_ms: Set(snap.comparable_frame_pts_ms()),
-                fused_count: Set(fused_count),
-                template_quality: Set(template_quality),
-                captured_at: Set(occurred_at),
-                created_at: Set(chrono::Utc::now()),
-            });
+        // 3. 持久化告警事实（检测类告警仅写入 alarm_records，不重复落 capture_records）
+        let saved_alarm = AlarmRepo::insert(&self.db, active_alarm).await?;
 
-        // 4. 单一 SQLite 事务原子双写，杜绝产生孤儿记录或半更新状态
-        let saved_alarm =
-            AlarmRepo::insert_alarm_with_optional_capture(&self.db, active_alarm, active_capture)
-                .await?;
-
-        // 5. 解析摄像头展示名称
+        // 4. 解析摄像头展示名称
         let camera_name = match CameraRepo::find_by_camera_id(&self.db, &event.camera_id).await {
             Ok(Some(cam)) if !cam.name.trim().is_empty() => cam.name,
             _ => event.camera_id.clone(),
         };
 
-        // 6. 向 WebSocket 广播实时告警事件
+        // 5. 向 WebSocket 广播实时告警事件
         let ws_event = WsBroadcastEvent {
             topic: TOPIC_ALARM_TRIGGERED.to_string(),
             payload: serde_json::json!({

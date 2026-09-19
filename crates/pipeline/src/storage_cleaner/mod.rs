@@ -48,14 +48,36 @@ pub use tombstone::{
 /// 永久性人脸特征底库证据目录（免受瞬态抓拍淘汰与孤儿对账清理影响）
 pub const GALLERIES_DIR_NAME: &str = "galleries";
 
+/// 一条待淘汰证据记录所关联的物理文件集合。
+///
+/// `paths` 只承载**实际存在**的相对路径：空串是"本次未产出该图"的合法状态
+/// （例如背身/低头抓拍没有人脸特写），不是需要删除的文件名，因此由仓储层过滤后传入。
+/// 抓拍记录固定最多三图（全景 + 人脸特写 + 人体特写），任一漏删都会违反
+/// 「图在案在，图销案销」并留下永久孤儿文件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceRecordFiles {
+    pub id: i64,
+    pub paths: Vec<String>,
+}
+
+impl EvidenceRecordFiles {
+    /// 由 ID 与相对路径构造，自动剔除空串（未产出）路径。
+    pub fn new(id: i64, paths: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            id,
+            paths: paths.into_iter().filter(|p| !p.is_empty()).collect(),
+        }
+    }
+}
+
 /// 存储淘汰数据库抽象接口
 #[async_trait]
 pub trait EvictionStore: Send + Sync {
-    /// 查询最老的普通抓拍记录: (记录ID, 全景图相对路径, 特写图相对路径)
+    /// 查询最老的普通抓拍记录: (记录ID, 该记录全部物理文件相对路径)
     async fn find_oldest_captures(
         &self,
         limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, PipelineError>;
+    ) -> Result<Vec<EvidenceRecordFiles>, PipelineError>;
 
     /// 将抓拍记录预先标记为 deleting 状态 (两阶段提交第一阶段，可选实现)
     async fn mark_captures_deleting(&self, _ids: &[i64]) -> Result<u64, PipelineError> {
@@ -65,11 +87,11 @@ pub trait EvictionStore: Send + Sync {
     /// 按主键 ID 批量彻底删除普通抓拍记录 (两阶段提交第三阶段)
     async fn delete_captures(&self, ids: &[i64]) -> Result<u64, PipelineError>;
 
-    /// 查询最老的违规告警记录: (记录ID, 全景图相对路径, 特写图相对路径)
+    /// 查询最老的违规告警记录: (记录ID, 该记录全部物理文件相对路径)
     async fn find_oldest_alarms(
         &self,
         limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, PipelineError>;
+    ) -> Result<Vec<EvidenceRecordFiles>, PipelineError>;
 
     /// 将告警记录预先标记为 deleting 状态 (两阶段提交第一阶段，可选实现)
     async fn mark_alarms_deleting(&self, _ids: &[i64]) -> Result<u64, PipelineError> {
@@ -79,11 +101,11 @@ pub trait EvictionStore: Send + Sync {
     /// 按主键 ID 批量彻底删除违规告警记录 (两阶段提交第三阶段)
     async fn delete_alarms(&self, ids: &[i64]) -> Result<u64, PipelineError>;
 
-    /// 查询最老的识别图记录: (记录ID, 特写图相对路径)
+    /// 查询最老的识别图记录: (记录ID, 该记录全部物理文件相对路径)
     async fn find_oldest_recognitions(
         &self,
         _limit: u64,
-    ) -> Result<Vec<(i64, String)>, PipelineError> {
+    ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
         Ok(Vec::new())
     }
 
@@ -92,30 +114,30 @@ pub trait EvictionStore: Send + Sync {
         Ok(0)
     }
 
-    /// 查询早于指定时间戳的普通抓拍记录: (记录ID, 全景图相对路径, 特写图相对路径)
+    /// 查询早于指定时间戳的普通抓拍记录: (记录ID, 该记录全部物理文件相对路径)
     async fn find_captures_before(
         &self,
         _before: chrono::DateTime<chrono::Utc>,
         _limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, PipelineError> {
+    ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
         Ok(Vec::new())
     }
 
-    /// 查询早于指定时间戳的识别图记录: (记录ID, 特写图相对路径)
+    /// 查询早于指定时间戳的识别图记录: (记录ID, 该记录全部物理文件相对路径)
     async fn find_recognitions_before(
         &self,
         _before: chrono::DateTime<chrono::Utc>,
         _limit: u64,
-    ) -> Result<Vec<(i64, String)>, PipelineError> {
+    ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
         Ok(Vec::new())
     }
 
-    /// 查询早于指定时间戳的违规告警记录: (记录ID, 全景图相对路径, 特写图相对路径)
+    /// 查询早于指定时间戳的违规告警记录: (记录ID, 该记录全部物理文件相对路径)
     async fn find_alarms_before(
         &self,
         _before: chrono::DateTime<chrono::Utc>,
         _limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, PipelineError> {
+    ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
         Ok(Vec::new())
     }
 
@@ -393,7 +415,7 @@ impl StorageCleaner {
                 .await
             {
                 if !expired_caps.is_empty() {
-                    let cap_ids: Vec<i64> = expired_caps.iter().map(|(id, _, _)| *id).collect();
+                    let cap_ids: Vec<i64> = expired_caps.iter().map(|r| r.id).collect();
                     let (quarantined, missing) =
                         Self::quarantine_record_files(&config, &expired_caps, &self.metrics);
                     total_quarantined_files += quarantined.len() as u64;
@@ -412,9 +434,9 @@ impl StorageCleaner {
                 .await
             {
                 if !expired_recs.is_empty() {
-                    let rec_ids: Vec<i64> = expired_recs.iter().map(|(id, _)| *id).collect();
+                    let rec_ids: Vec<i64> = expired_recs.iter().map(|r| r.id).collect();
                     let (quarantined, missing) =
-                        Self::quarantine_single_file_records(&config, &expired_recs, &self.metrics);
+                        Self::quarantine_record_files(&config, &expired_recs, &self.metrics);
                     total_quarantined_files += quarantined.len() as u64;
                     total_missing_files += missing;
                     if let Ok(deleted) = store.delete_recognitions(&rec_ids).await {
@@ -431,7 +453,7 @@ impl StorageCleaner {
                 .await
             {
                 if !expired_alarms.is_empty() {
-                    let alarm_ids: Vec<i64> = expired_alarms.iter().map(|(id, _, _)| *id).collect();
+                    let alarm_ids: Vec<i64> = expired_alarms.iter().map(|r| r.id).collect();
                     let (quarantined, missing) =
                         Self::quarantine_record_files(&config, &expired_alarms, &self.metrics);
                     total_quarantined_files += quarantined.len() as u64;
@@ -483,7 +505,7 @@ impl StorageCleaner {
             let oldest_caps = store.find_oldest_captures(current_batch_size).await?;
 
             if !oldest_caps.is_empty() {
-                let cap_ids: Vec<i64> = oldest_caps.iter().map(|(id, _, _)| *id).collect();
+                let cap_ids: Vec<i64> = oldest_caps.iter().map(|r| r.id).collect();
 
                 // Phase 1: DB 预标记
                 let _ = store.mark_captures_deleting(&cap_ids).await?;
@@ -504,9 +526,9 @@ impl StorageCleaner {
                 // 2. 抓拍已空，淘汰识别记录 (Recognitions)
                 let oldest_recs = store.find_oldest_recognitions(current_batch_size).await?;
                 if !oldest_recs.is_empty() {
-                    let rec_ids: Vec<i64> = oldest_recs.iter().map(|(id, _)| *id).collect();
+                    let rec_ids: Vec<i64> = oldest_recs.iter().map(|r| r.id).collect();
                     let (quarantined_paths, missing) =
-                        Self::quarantine_single_file_records(&config, &oldest_recs, &self.metrics);
+                        Self::quarantine_record_files(&config, &oldest_recs, &self.metrics);
                     total_quarantined_files += quarantined_paths.len() as u64;
                     total_missing_files += missing;
                     let deleted = store.delete_recognitions(&rec_ids).await?;
@@ -524,8 +546,7 @@ impl StorageCleaner {
                     let oldest_alarms = store.find_oldest_alarms(current_batch_size).await?;
 
                     if !oldest_alarms.is_empty() {
-                        let alarm_ids: Vec<i64> =
-                            oldest_alarms.iter().map(|(id, _, _)| *id).collect();
+                        let alarm_ids: Vec<i64> = oldest_alarms.iter().map(|r| r.id).collect();
 
                         // Phase 1: DB 预标记
                         let _ = store.mark_alarms_deleting(&alarm_ids).await?;
@@ -615,7 +636,7 @@ impl StorageCleaner {
             return Ok(0);
         }
 
-        let cap_ids: Vec<i64> = oldest_caps.iter().map(|(id, _, _)| *id).collect();
+        let cap_ids: Vec<i64> = oldest_caps.iter().map(|r| r.id).collect();
         let _ = store.mark_captures_deleting(&cap_ids).await?;
         let config = self.config.read().await;
         let (quarantined_paths, _) =
@@ -666,30 +687,17 @@ impl StorageCleaner {
         (quarantined_paths, missing_count)
     }
 
-    /// 将记录集合关联的文件批量原子隔离至墓碑目录
+    /// 将记录集合关联的全部文件（抓拍最多三图，识别/告警各一图）批量原子隔离至墓碑目录
     fn quarantine_record_files(
         config: &StorageCleanerConfig,
-        records: &[(i64, String, String)],
+        records: &[EvidenceRecordFiles],
         metrics: &EvictionMetrics,
     ) -> (Vec<PathBuf>, u64) {
         Self::quarantine_paths(
             &config.evidence_dir,
             records
                 .iter()
-                .flat_map(|(_, full, crop)| [full.as_str(), crop.as_str()]),
-            metrics,
-        )
-    }
-
-    /// 将单文件路径记录集合（如人脸/目标识别抓拍切片）批量原子隔离至墓碑目录
-    fn quarantine_single_file_records(
-        config: &StorageCleanerConfig,
-        records: &[(i64, String)],
-        metrics: &EvictionMetrics,
-    ) -> (Vec<PathBuf>, u64) {
-        Self::quarantine_paths(
-            &config.evidence_dir,
-            records.iter().map(|(_, rel)| rel.as_str()),
+                .flat_map(|r| r.paths.iter().map(String::as_str)),
             metrics,
         )
     }
@@ -923,8 +931,8 @@ mod tests {
     use tokio::sync::RwLock;
 
     struct MockStore {
-        captures: Arc<RwLock<Vec<(i64, String, String)>>>,
-        alarms: Arc<RwLock<Vec<(i64, String, String)>>>,
+        captures: Arc<RwLock<Vec<EvidenceRecordFiles>>>,
+        alarms: Arc<RwLock<Vec<EvidenceRecordFiles>>>,
         deleted_caps_count: AtomicU64,
         deleted_alarms_count: AtomicU64,
         marked_deleting_count: AtomicU64,
@@ -935,7 +943,7 @@ mod tests {
         async fn find_oldest_captures(
             &self,
             limit: u64,
-        ) -> Result<Vec<(i64, String, String)>, PipelineError> {
+        ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
             let list = self.captures.read().await;
             Ok(list.iter().take(limit as usize).cloned().collect())
         }
@@ -949,7 +957,7 @@ mod tests {
         async fn delete_captures(&self, ids: &[i64]) -> Result<u64, PipelineError> {
             let mut list = self.captures.write().await;
             let initial = list.len();
-            list.retain(|(id, _, _)| !ids.contains(id));
+            list.retain(|r| !ids.contains(&r.id));
             let deleted = (initial - list.len()) as u64;
             self.deleted_caps_count
                 .fetch_add(deleted, Ordering::Relaxed);
@@ -959,7 +967,7 @@ mod tests {
         async fn find_oldest_alarms(
             &self,
             limit: u64,
-        ) -> Result<Vec<(i64, String, String)>, PipelineError> {
+        ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
             let list = self.alarms.read().await;
             Ok(list.iter().take(limit as usize).cloned().collect())
         }
@@ -973,7 +981,7 @@ mod tests {
         async fn delete_alarms(&self, ids: &[i64]) -> Result<u64, PipelineError> {
             let mut list = self.alarms.write().await;
             let initial = list.len();
-            list.retain(|(id, _, _)| !ids.contains(id));
+            list.retain(|r| !ids.contains(&r.id));
             let deleted = (initial - list.len()) as u64;
             self.deleted_alarms_count
                 .fetch_add(deleted, Ordering::Relaxed);
@@ -982,21 +990,11 @@ mod tests {
 
         async fn find_all_active_image_paths(&self) -> Result<HashSet<String>, PipelineError> {
             let mut set = HashSet::new();
-            for (_, f, c) in self.captures.read().await.iter() {
-                if !f.is_empty() {
-                    set.insert(f.clone());
-                }
-                if !c.is_empty() {
-                    set.insert(c.clone());
-                }
+            for record in self.captures.read().await.iter() {
+                set.extend(record.paths.iter().cloned());
             }
-            for (_, f, c) in self.alarms.read().await.iter() {
-                if !f.is_empty() {
-                    set.insert(f.clone());
-                }
-                if !c.is_empty() {
-                    set.insert(c.clone());
-                }
+            for record in self.alarms.read().await.iter() {
+                set.extend(record.paths.iter().cloned());
             }
             Ok(set)
         }
@@ -1017,10 +1015,12 @@ mod tests {
             let crop_p = cam_dir.join(format!("crop_{i}.jpg"));
             fs::write(&full_p, b"data").unwrap();
             fs::write(&crop_p, b"data").unwrap();
-            caps.push((
+            caps.push(EvidenceRecordFiles::new(
                 i as i64,
-                format!("cam_{i}/img_{i}.jpg"),
-                format!("cam_{i}/crop_{i}.jpg"),
+                [
+                    format!("cam_{i}/img_{i}.jpg"),
+                    format!("cam_{i}/crop_{i}.jpg"),
+                ],
             ));
         }
 
@@ -1078,10 +1078,12 @@ mod tests {
         fs::write(&crop_img, b"fake_crop_content").unwrap();
 
         let store = MockStore {
-            captures: Arc::new(RwLock::new(vec![(
+            captures: Arc::new(RwLock::new(vec![EvidenceRecordFiles::new(
                 1,
-                "cam_01/img_01.jpg".to_string(),
-                "cam_01/crop_01.jpg".to_string(),
+                [
+                    "cam_01/img_01.jpg".to_string(),
+                    "cam_01/crop_01.jpg".to_string(),
+                ],
             )])),
             alarms: Arc::new(RwLock::new(Vec::new())),
             deleted_caps_count: AtomicU64::new(0),
@@ -1112,6 +1114,68 @@ mod tests {
         let metrics = cleaner.metrics();
         assert_eq!(metrics.captures_evicted_total, 1);
         assert!(metrics.tombstone_reclaimed_total >= 2);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 抓拍记录最多三图（全景 + 人脸特写 + 人体特写），淘汰必须全部回收。
+    ///
+    /// 漏掉人体特写 = 每淘汰一条抓拍就留下一个永不回收的孤儿文件（违反「图在案在，图销案销」），
+    /// 且磁盘占用会随抓拍量单调增长。空串路径（未产出的人脸特写）不得被当成文件名去删。
+    #[tokio::test]
+    async fn test_capture_eviction_reclaims_all_three_evidence_files() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_capture_three_files_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let cam_dir = temp_dir.join("cam_07");
+        fs::create_dir_all(&cam_dir).unwrap();
+        let full_img = cam_dir.join("img.jpg");
+        let body_img = cam_dir.join("body.jpg");
+        fs::write(&full_img, b"full").unwrap();
+        fs::write(&body_img, b"body").unwrap();
+
+        let store = MockStore {
+            captures: Arc::new(RwLock::new(vec![EvidenceRecordFiles::new(
+                7,
+                [
+                    "cam_07/img.jpg".to_string(),
+                    // 背身/低头：本次没有人脸特写，空串必须被过滤而不是当成路径
+                    String::new(),
+                    "cam_07/body.jpg".to_string(),
+                ],
+            )])),
+            alarms: Arc::new(RwLock::new(Vec::new())),
+            deleted_caps_count: AtomicU64::new(0),
+            deleted_alarms_count: AtomicU64::new(0),
+            marked_deleting_count: AtomicU64::new(0),
+        };
+
+        let mut cfg = StorageCleanerConfig::default().with_min_free_ratio(1.0);
+        cfg.evidence_dir = temp_dir.clone();
+        let cleaner = StorageCleaner::new(cfg);
+
+        let report = cleaner
+            .clean_if_needed(&store)
+            .await
+            .unwrap()
+            .expect("应触发淘汰");
+
+        assert_eq!(report.captures_deleted, 1);
+        assert_eq!(report.quarantined_files, 2, "全景与人体特写都必须被隔离");
+        assert_eq!(report.missing_files, 0, "空串不是缺失文件");
+        assert!(!full_img.exists());
+        assert!(!body_img.exists());
+
+        // 淘汰后盘上不得留下任何非墓碑文件（孤儿）
+        cleaner.flush_pending_unlinks().await;
+        let recon = cleaner.reconcile_orphans(&store).await.unwrap();
+        assert_eq!(
+            recon.orphan_files_reclaimed, 0,
+            "三图全部登记后不应再有任何孤儿文件"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

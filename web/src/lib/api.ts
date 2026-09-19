@@ -341,6 +341,8 @@ export const evidenceApi = {
   listCaptures(params?: {
     cameraId?: string
     targetLabel?: string
+    /** 轨道过滤（服务端执行）：定位同一个人的一次通行的全部结算记录 */
+    trackId?: number
     startTime?: number
     endTime?: number
     limit?: number
@@ -349,6 +351,7 @@ export const evidenceApi = {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       target_label: params?.targetLabel,
+      track_id: params?.trackId,
       start_time: params?.startTime,
       end_time: params?.endTime,
       limit: params?.limit,
@@ -360,12 +363,14 @@ export const evidenceApi = {
   countCaptures(params?: {
     cameraId?: string
     targetLabel?: string
+    trackId?: number
     startTime?: number
     endTime?: number
   }): Promise<{ total: number }> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       target_label: params?.targetLabel,
+      track_id: params?.trackId,
       start_time: params?.startTime,
       end_time: params?.endTime,
     })

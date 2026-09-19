@@ -203,7 +203,9 @@
     "pipExpand": "Expand Crop",
     "pipCollapse": "Collapse Crop",
     "close": "Close",
-    "escHint": "Press Esc or click outside to close"
+    "escHint": "Press Esc or click outside to close",
+    "faceCrop": "Face Crop",
+    "bodyCrop": "Body Crop"
   },
   "toast": {
     "ruleTriggered": "Detected {{target}} triggering rule",
@@ -211,5 +213,10 @@
   },
   "common": {
     "cancel": "Cancel"
+  },
+  "trackFilter": {
+    "byTrack": "Filter by this track (one passage of one person)",
+    "active": "Track #{{trackId}}",
+    "clear": "Clear track filter"
   }
 }

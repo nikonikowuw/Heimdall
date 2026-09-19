@@ -1000,52 +1000,18 @@ async fn execute_capture_actions(
                 }
 
                 if snapshot.is_none() {
-                    let crop_bbox = settle
-                        .tracked_object
-                        .face_bbox()
-                        .unwrap_or(settle.tracked_object.bbox);
-                    let retro_result = if settle.target_in_current_frame
-                        && settle.last_seen_pts_ms == timestamp
-                    {
-                        None
-                    } else {
-                        // 先按「最后可见 PTS」向证据源回溯；未命中再退当帧快照。
-                        match pipeline_mgr
-                            .trigger_snapshot(camera_id, settle.last_seen_pts_ms, Some(crop_bbox))
-                            .await
-                        {
-                            Ok(result) => Some(Ok(result)),
-                            Err(retro_error) => {
-                                // 主码流分析模式没有压缩证据环，`decoded_ring` 只保 5 帧/300ms，
-                                // 而离场宽限自 400ms 起算，回溯必然未命中。此处若直接失败，api 层会因
-                                // `snapshot == None` 丢弃整条通行记录（含 1:N 对账），因此回退链必须有终点。
-                                tracing::warn!(
-                                    camera_id,
-                                    algorithm_id,
-                                    track_id = settle.track_id,
-                                    event_pts = settle.last_seen_pts_ms,
-                                    frame_pts = timestamp,
-                                    error = %retro_error,
-                                    "回索取证未命中，降级为当帧快照（图与事件几何可能不同刻，记录保留）"
-                                );
-                                None
-                            }
-                        }
-                    };
-
-                    let capture_result = match retro_result {
-                        Some(res) => res,
-                        None => {
-                            pipeline_mgr
-                                .trigger_snapshot_for_frame(
-                                    camera_id,
-                                    timestamp,
-                                    Some(crop_bbox),
-                                    analyzed_frame.clone(),
-                                )
-                                .await
-                        }
-                    };
+                    // 无候选（预算拒绝/编码失败）时的唯一回退：用当帧分析帧直出。
+                    // 不再尝试主码流回溯或按需 GOP 追帧：抓拍证据图码流恒等于该任务的分析码流，
+                    // 两条 PTS 轴不存在换算，也就不存在“图与检测框不同刻”的错配。
+                    let capture_result = pipeline_mgr
+                        .snapshot_from_analysis_frame(
+                            camera_id,
+                            timestamp,
+                            settle.tracked_object.face_crop_target(),
+                            settle.tracked_object.bbox,
+                            analyzed_frame.clone(),
+                        )
+                        .await;
                     match capture_result {
                         Ok(result) => snapshot = Some(result),
                         Err(error) => {
@@ -1062,12 +1028,11 @@ async fn execute_capture_actions(
                 }
 
                 if let Some(result) = &snapshot {
-                    // INV-3 审计：只有「无候选 → 回溯/回退取证」这条路径可能取到另一刻的帧。
-                    // 候选路径不能进这个比对：它的 `frame_pts_ms` 是**峰值帧**时标，与
-                    // `last_seen_pts_ms`（最后一次触发）本就不同，且事件几何已同步替换为峰值帧
-                    // 几何，属于设计预期而非不一致。
-                    // 子码流回退帧与检测帧同轴，可直接比对；主码流取证帧位于另一条 PTS 轴
-                    // （见 `EvidenceTarget`），跨轴比较无意义。
+                    // INV-3 审计：只有「无候选 → 当帧直出」这条回退路径可能取到与最后可见帧
+                    // 不同刻的帧（目标已离开 ROI 时，当帧已无目标）。候选路径不能进这个比对：
+                    // 它的 `frame_pts_ms` 是**峰值帧**时标，与 `last_seen_pts_ms`（最后一次触发）
+                    // 本就不同，且事件几何已同步替换为峰值帧几何，属于设计预期而非不一致。
+                    // 主码流分析模式下当帧即证据帧，两轴同一，故只对子码流回退帧比对。
                     if candidate_geometry.is_none()
                         && result.is_sub_stream()
                         && result.frame_pts_ms != settle.last_seen_pts_ms
@@ -2252,8 +2217,8 @@ mod tests {
         assert_eq!(infer_metrics.snapshots_saved.load(Ordering::Relaxed), 1);
         assert_eq!(
             dir_entry_count(&temp_dir.join(camera_id)),
-            2,
-            "结算只应写下全景与特写两份正式证据"
+            3,
+            "结算应写下全景、人脸特写与人体特写三份正式证据"
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);

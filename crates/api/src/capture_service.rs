@@ -222,8 +222,13 @@ impl CaptureDispatchService {
         DEFAULT_RECOGNITION_QUEUE_CAPACITY.saturating_sub(self.recognition_tx.capacity())
     }
 
-    /// 提取抓拍对象的有效质量评分（优先使用人脸质量分，回退至目标质量分或置信度）
-    fn resolve_quality_score(obj: &types::TrackedObject) -> f32 {
+    /// 提取识别比对质量分（人脸匹配用）：人脸质量 → 目标质量 → 置信度。
+    ///
+    /// 与抓拍落库的 `quality_score` 口径**不同，勿混用**：后者是
+    /// [`types::TrackedObject::evidence_quality_score`]（"这张图能不能看清外观"，
+    /// 无脸时回退归一化面积），而本函数服务于 1:N 比对的阈值自适应，无脸时用置信度
+    /// 比用面积更接近"这张脸有多可信"的量纲。
+    fn resolve_recognition_quality(obj: &types::TrackedObject) -> f32 {
         obj.face
             .as_ref()
             .and_then(|f| f.quality_score)
@@ -232,11 +237,14 @@ impl CaptureDispatchService {
             .clamp(0.0, 1.0)
     }
 
-    /// 判定抓拍事件是否关联人脸目标
-    fn is_face_event(event: &PipelineCaptureEvent) -> bool {
-        event.tracked_object.face.is_some()
-            || event.tracked_object.label.eq_ignore_ascii_case("face")
-            || event.algorithm_id.to_lowercase().contains("face")
+    /// 判定抓拍事件是否应当进入 1:N 识别比对队列。
+    ///
+    /// **这是人脸门控唯一合法的位置**：它管的是"要不要触发识别比对"，而不是"要不要落
+    /// 抓拍记录"（后者以人体为主体，背身/低头同样必须落库）。曾经存在的
+    /// `algorithm_id.contains("face")` 通配子句会把无脸记录一并投进识别队列，
+    /// 导致每个无脸目标白烧一次"读盘 + 人脸模型推理"，因此必须禁止。
+    fn is_face_event(obj: &types::TrackedObject) -> bool {
+        obj.face.is_some() || obj.label.eq_ignore_ascii_case("face")
     }
 
     /// 将单个 `PipelineCaptureEvent` 转换为数据库 `ActiveModel`
@@ -262,7 +270,8 @@ impl CaptureDispatchService {
 
         let bbox_json = serialize_field_bbox(&event.tracked_object);
 
-        let quality_score = Self::resolve_quality_score(&event.tracked_object);
+        // 抓拍落库的质量分与峰值选帧共用同一口径（无脸 ⇒ 归一化人体框面积）。
+        let quality_score = event.tracked_object.evidence_quality_score();
 
         let (image_source, image_stream, image_pts_ms) = evidence_origin(snap);
         let (fused_count, template_quality) = template_metadata(&event.tracked_object);
@@ -280,6 +289,8 @@ impl CaptureDispatchService {
             image_rel_path: Set(snap.image_rel_path.clone()),
             crop_image_id: Set(snap.crop_image_id.clone()),
             crop_image_rel_path: Set(snap.crop_image_rel_path.clone()),
+            body_crop_image_id: Set(snap.body_crop_image_id.clone()),
+            body_crop_image_rel_path: Set(snap.body_crop_image_rel_path.clone()),
             image_source: Set(image_source),
             image_stream: Set(image_stream),
             image_pts_ms: Set(image_pts_ms),
@@ -313,7 +324,7 @@ impl CaptureDispatchService {
         if let Some(gallery_index) = &self.gallery_index {
             if gallery_index.count().await > 0 {
                 for evt in events {
-                    if Self::is_face_event(evt) {
+                    if Self::is_face_event(&evt.tracked_object) {
                         match self.recognition_tx.try_send(evt.clone()) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(dropped)) => {
@@ -380,7 +391,7 @@ impl CaptureDispatchService {
             return;
         };
 
-        if !Self::is_face_event(event) {
+        if !Self::is_face_event(&event.tracked_object) {
             return;
         }
 
@@ -395,9 +406,12 @@ impl CaptureDispatchService {
         // 新版 face_recognition 包在 best-shot 帧直接把 embedding 通过 C ABI
         // sidecar 交给宿主；这里优先使用它，避免实时识别再次读盘、JPEG 解码和
         // 重复调用模型。旧包没有 sidecar 时保留一次性的证据 JPEG 回退路径。
+        //
+        // 回退路径消费的 `crop_image_rel_path` 是**人脸特写**（`face_crop_target()` 的产物）：
+        // 无脸事件在 `is_face_event` 已被挡在门外，不会为了"确认没有脸"而白读一次盘再跑人脸模型。
         let base_dir = self.pipeline.snapshot_engine().base_evidence_dir();
         let feature = if let Some(embedding) = event.tracked_object.embedding() {
-            let quality_score = Self::resolve_quality_score(&event.tracked_object);
+            let quality_score = Self::resolve_recognition_quality(&event.tracked_object);
             RecognitionFeature {
                 embedding: **embedding,
                 quality_score,
@@ -830,5 +844,46 @@ mod tests {
         // 消费 1 个后通道容量应恢复
         assert!(rx.try_recv().is_ok());
         assert_eq!(tx.capacity(), 1);
+    }
+
+    /// 人脸门控只允许存在于识别分发：无脸事件不得进入 1:N 比对队列。
+    ///
+    /// 曾经的 `algorithm_id.contains("face")` 通配子句会让「face_recognition 任务看到的
+    /// 背身/低头目标」一并投递进队列，于是每个无脸目标都要白烧一次读盘 + 人脸模型推理。
+    #[test]
+    fn faceless_events_never_enter_recognition_queue() {
+        let obj = |label: &str, face: Option<types::FaceDetail>| types::TrackedObject {
+            track_id: 1,
+            class_id: 0,
+            label: label.to_string(),
+            confidence: 0.9,
+            quality_score: Some(0.8),
+            embedding: None,
+            bbox: types::BoundingBox::new(0.1, 0.1, 0.2, 0.2),
+            face,
+            trajectory: vec![],
+        };
+        let face_detail = types::FaceDetail {
+            bbox: types::BoundingBox::new(0.12, 0.12, 0.18, 0.2),
+            confidence: 0.9,
+            quality_score: Some(0.8),
+            embedding: None,
+            template_mature: None,
+            fused_count: None,
+            template_quality: None,
+        };
+
+        assert!(
+            !CaptureDispatchService::is_face_event(&obj("person", None)),
+            "背身/低头的人不得进入识别比对队列"
+        );
+        assert!(CaptureDispatchService::is_face_event(&obj(
+            "person",
+            Some(face_detail.clone())
+        )));
+        assert!(
+            CaptureDispatchService::is_face_event(&obj("face", None)),
+            "纯人脸包的检测框本身即人脸框，必须参与比对"
+        );
     }
 }

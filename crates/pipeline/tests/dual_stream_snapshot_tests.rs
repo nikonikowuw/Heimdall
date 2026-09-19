@@ -804,3 +804,98 @@ async fn test_uncalibrated_cross_stream_evidence_refuses_main_stream() {
     );
     assert_eq!(frame.timestamp, 1080);
 }
+
+/// 抓拍记录的证据图码流恒等于该任务的分析码流：主码流证据环就绪也不允许提升。
+///
+/// 这条不变式替代了曾经的"按 PTS 回溯主码流"路径：跨流取证需要两条 PTS 轴换算，
+/// 一旦换算失配就会产出"图与检测框不同刻"的错配证据，而抓拍记录的价值恰恰在于
+/// 人工复核时能确认"这张图就是他"。
+#[tokio::test]
+async fn capture_evidence_never_promotes_to_main_stream() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_capture_stream_policy_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    let manager = PipelineManager::with_evidence_dir(&temp_dir);
+    let cam_id = "cam_capture_stream_policy";
+    install_aligned_stream_clocks(&manager, cam_id).await;
+    let ctx = manager.get_or_create_context(cam_id).await;
+
+    // 主码流通道完全就绪：1000(I)..1080(P) 且已挂上 1080P 解码器。
+    {
+        let mut decoder_guard = ctx.snapshot_decoder.lock().await;
+        *decoder_guard = Some(Box::new(MockDecoder::new(
+            cam_id,
+            CodecType::H264,
+            1920,
+            1080,
+        )));
+    }
+    for (pts, key) in [(1000, true), (1040, false), (1080, false)] {
+        manager
+            .push_main_packet(cam_id, make_packet(pts, key))
+            .await;
+    }
+
+    // 子码流分析帧（任务实际配置的分析流）
+    let analyzed_frame = FrameRef::new(
+        cam_id.to_string(),
+        1080,
+        640,
+        360,
+        StrideInfo::new(640, 360),
+        PixelFormat::Nv12,
+        FrameHandle::Host(vec![128u8; 640 * 360 * 3 / 2].into()),
+    );
+
+    // 1. 无脸目标（背身/低头）：无人脸特写，但必须有人体特写。
+    let body_bbox = BoundingBox::new(0.3, 0.25, 0.55, 0.85);
+    let faceless = manager
+        .snapshot_from_analysis_frame(cam_id, 1080, None, body_bbox, analyzed_frame.clone())
+        .await
+        .expect("抓拍取证应成功");
+    assert!(
+        faceless.is_sub_stream(),
+        "抓拍证据必须取自分析码流，不得提升到主码流"
+    );
+    assert_eq!(faceless.width, 640, "证据图分辨率必须等于分析码流分辨率");
+    assert_eq!(faceless.height, 360);
+    assert_eq!(
+        faceless.image_source,
+        types::EvidenceImageSource::Targeted,
+        "回退取证（无峰值候选）标记为 targeted，但码流仍为分析流"
+    );
+    assert!(
+        faceless.crop_image_rel_path.is_empty(),
+        "无脸记录不得产出人脸特写"
+    );
+    assert!(
+        !faceless.body_crop_image_rel_path.is_empty(),
+        "无脸记录必须产出人体特写（人工复查看衣着的主体证据）"
+    );
+    assert!(temp_dir.join(&faceless.image_rel_path).is_file());
+    assert!(temp_dir.join(&faceless.body_crop_image_rel_path).is_file());
+
+    // 2. 有脸目标：两张特写各司其职，人脸特写给识别复核、人体特写给外观复核。
+    let face_bbox = BoundingBox::new(0.4, 0.3, 0.48, 0.4);
+    let with_face = manager
+        .snapshot_from_analysis_frame(cam_id, 1080, Some(face_bbox), body_bbox, analyzed_frame)
+        .await
+        .expect("抓拍取证应成功");
+    assert!(
+        !with_face.crop_image_rel_path.is_empty(),
+        "人脸特写必须产出"
+    );
+    assert!(
+        !with_face.body_crop_image_rel_path.is_empty(),
+        "人体特写必须产出"
+    );
+    assert_ne!(
+        with_face.crop_image_rel_path, with_face.body_crop_image_rel_path,
+        "两张特写必须是独立文件"
+    );
+    assert!(temp_dir.join(&with_face.crop_image_rel_path).is_file());
+    assert!(temp_dir.join(&with_face.body_crop_image_rel_path).is_file());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

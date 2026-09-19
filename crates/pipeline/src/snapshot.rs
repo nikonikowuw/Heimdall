@@ -27,12 +27,22 @@ use crate::capture_settle::CandidateEvidence;
 use crate::error::PipelineError;
 
 /// 快照抓拍产物信息
+///
+/// 一次快照最多产出三份图：全景、人脸特写（`crop_*`，无脸时不产出）、人体特写
+/// （`body_crop_*`，抓拍记录恒产出，告警路径不产出）。两条特写列各自独立，
+/// 缺失时为空串，消费方按 `body → crop → 全景` 回退链展示。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SnapshotResult {
     pub image_id: String,
+    /// 人脸特写（有脸时才存在）；空串 = 本次未产出。
     pub crop_image_id: String,
     pub image_rel_path: String,
+    /// 人脸特写相对路径；空串 = 本次未产出（无脸记录）。
     pub crop_image_rel_path: String,
+    /// 人体特写（抓拍记录恒产出）；空串 = 本次未产出（告警路径）。
+    pub body_crop_image_id: String,
+    /// 人体特写相对路径；空串 = 本次未产出。
+    pub body_crop_image_rel_path: String,
     pub file_size_bytes: usize,
     pub width: u32,
     pub height: u32,
@@ -343,17 +353,37 @@ impl SnapshotLane {
 }
 
 /// 快照作业：一条作业要么直接产出正式证据，要么只编码峰值候选字节。
+/// 一次快照请求的裁剪目标。
+///
+/// 两条特写各自独立：`face` 为 `None` 表示本次不产出人脸特写（背身/低头），
+/// `body` 为 `None` 表示不产出人体特写（告警证据路径不需要）。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct EvidenceCrops {
+    pub face: Option<BoundingBox>,
+    pub body: Option<BoundingBox>,
+}
+
+impl EvidenceCrops {
+    /// 抓拍记录：人脸特写（有脸时）+ 人体特写（恒有）。
+    pub(crate) fn for_capture(face: Option<BoundingBox>, body: BoundingBox) -> Self {
+        Self {
+            face,
+            body: Some(body),
+        }
+    }
+}
+
 enum SnapshotTask {
     /// 正式证据：编码并直接落盘至 `{camera}/`。
     Evidence {
         frame: FrameRef,
-        target_bbox: Option<BoundingBox>,
+        crops: EvidenceCrops,
         stream: EvidenceImageStream,
     },
     /// 峰值候选：仅编码为内存字节，结算时再写盘（INV-5：无盘上中间态）。
     EncodeCandidate {
         frame: FrameRef,
-        target_bbox: Option<BoundingBox>,
+        crops: EvidenceCrops,
         stream: EvidenceImageStream,
     },
     /// 结算落盘：把已驻留内存的候选字节一次性写入正式证据目录。
@@ -368,8 +398,10 @@ enum SnapshotTask {
 pub(crate) struct EncodedCandidate {
     /// 全景 JPEG 字节
     pub full_jpeg: Vec<u8>,
-    /// 特写 JPEG 字节（无有效裁剪时与全景同源）
-    pub crop_jpeg: Vec<u8>,
+    /// 人脸特写 JPEG 字节；`None` = 未请求裁剪目标或裁剪不可得。
+    pub crop_jpeg: Option<Vec<u8>>,
+    /// 人体特写 JPEG 字节；`None` = 未请求或裁剪不可得。
+    pub body_crop_jpeg: Option<Vec<u8>>,
     pub width: u32,
     pub height: u32,
 }
@@ -440,12 +472,12 @@ impl SnapshotWorker {
                     let result = match work.task {
                         SnapshotTask::Evidence {
                             frame,
-                            target_bbox,
+                            crops,
                             stream,
                         } => encode_and_save_snapshot(
                             &work.camera_id,
                             frame,
-                            target_bbox,
+                            crops,
                             &work.base_evidence_dir,
                             stream,
                             &work.config,
@@ -454,9 +486,9 @@ impl SnapshotWorker {
                         .map(SnapshotPayload::Evidence),
                         SnapshotTask::EncodeCandidate {
                             frame,
-                            target_bbox,
+                            crops,
                             stream,
-                        } => encode_candidate(frame, target_bbox, stream, &work.config, &encoder)
+                        } => encode_candidate(frame, crops, stream, &work.config, &encoder)
                             .map(SnapshotPayload::Candidate),
                         SnapshotTask::WriteCandidate { evidence } => write_candidate_evidence(
                             &work.camera_id,
@@ -906,7 +938,7 @@ impl SnapshotEngine {
         .await
     }
 
-    /// 将快照作业提交至固定容量的专用编码线程。
+    /// 将快照作业提交至固定容量的专用编码线程（告警证据路径：只裁人脸/目标特写）。
     pub async fn save_snapshot_async(
         &self,
         camera_id: &str,
@@ -914,12 +946,52 @@ impl SnapshotEngine {
         target_bbox: Option<BoundingBox>,
         stream: EvidenceImageStream,
     ) -> Result<SnapshotResult, PipelineError> {
+        self.save_snapshot_with_crops_async(
+            camera_id,
+            frame,
+            EvidenceCrops {
+                face: target_bbox,
+                body: None,
+            },
+            stream,
+        )
+        .await
+    }
+
+    /// 抓拍记录证据路径：除人脸/目标特写外，额外出图**人体特写**。
+    ///
+    /// `face_bbox` 为 `None`（背身/低头）时无人脸特写，但人体特写照常产出：
+    /// 人工复核正是靠它认衣着。
+    pub async fn save_capture_snapshot_async(
+        &self,
+        camera_id: &str,
+        frame: FrameRef,
+        face_bbox: Option<BoundingBox>,
+        body_bbox: BoundingBox,
+        stream: EvidenceImageStream,
+    ) -> Result<SnapshotResult, PipelineError> {
+        self.save_snapshot_with_crops_async(
+            camera_id,
+            frame,
+            EvidenceCrops::for_capture(face_bbox, body_bbox),
+            stream,
+        )
+        .await
+    }
+
+    async fn save_snapshot_with_crops_async(
+        &self,
+        camera_id: &str,
+        frame: FrameRef,
+        crops: EvidenceCrops,
+        stream: EvidenceImageStream,
+    ) -> Result<SnapshotResult, PipelineError> {
         match self
             .dispatch(
                 camera_id,
                 SnapshotTask::Evidence {
                     frame,
-                    target_bbox,
+                    crops,
                     stream,
                 },
                 SnapshotLane::Evidence,
@@ -942,7 +1014,7 @@ impl SnapshotEngine {
         &self,
         camera_id: &str,
         frame: FrameRef,
-        target_bbox: Option<BoundingBox>,
+        crops: EvidenceCrops,
         stream: EvidenceImageStream,
     ) -> Result<EncodedCandidate, PipelineError> {
         match self
@@ -950,7 +1022,7 @@ impl SnapshotEngine {
                 camera_id,
                 SnapshotTask::EncodeCandidate {
                     frame,
-                    target_bbox,
+                    crops,
                     stream,
                 },
                 SnapshotLane::Candidate,
@@ -1066,72 +1138,45 @@ impl SnapshotEngine {
     }
 }
 
+/// 同一帧上并行编码全景与两张特写（人脸/人体）所需的字节组合。
+///
+/// 特写字节为 `None` 表示本次未请求或被编码器拒绝裁剪：调用方不得用全景字节冒充特写
+/// （历史上曾用全景克隆保底，结果库里出现两份内容相同的图且无法区分“未裁剪”与“裁剪失败”）。
+struct EncodedFrameSet {
+    full_jpeg: Vec<u8>,
+    crop_jpeg: Option<Vec<u8>>,
+    body_crop_jpeg: Option<Vec<u8>>,
+}
+
 /// 同步高效执行图像转换、抠图裁切、JPEG 压缩与原子文件落盘
 pub(crate) fn encode_and_save_snapshot(
     camera_id: &str,
     frame: FrameRef,
-    target_bbox: Option<BoundingBox>,
+    crops: EvidenceCrops,
     base_evidence_dir: &std::path::Path,
     stream: EvidenceImageStream,
     config: &SnapshotConfig,
     encoder: &SnapEncoder,
 ) -> Result<SnapshotResult, PipelineError> {
-    check_storage_breaker(camera_id, base_evidence_dir, target_bbox)?;
+    check_storage_breaker(camera_id, base_evidence_dir, crops.face.or(crops.body))?;
 
-    let (panoramic_q, crop_q) = config.quality_for_stream(stream.is_sub());
+    let encoded = encode_frame_set(&frame, crops, stream, config, encoder)?;
+    let files = write_evidence_jpegs(
+        camera_id,
+        base_evidence_dir,
+        EvidenceJpegSet {
+            full: &encoded.full_jpeg,
+            face_crop: encoded.crop_jpeg.as_deref(),
+            body_crop: encoded.body_crop_jpeg.as_deref(),
+        },
+    )?;
 
-    // 1. [snapshot_readback_path] 完成全景与特写编码后再写盘。
-    // CPU fallback 会复用同一次 D2H readback，硬件路径也保持单线程串行。
-    let (full_jpeg_bytes, crop_jpeg_bytes) = encoder
-        .encode_full_and_crop(
-            &frame,
-            target_bbox,
-            config.crop_padding_ratio,
-            panoramic_q,
-            crop_q,
-        )
-        .map_err(|e| PipelineError::Snapshot(format!("快照 JPEG 编码失败: {e}")))?;
-    let crop_jpeg_bytes = crop_jpeg_bytes.unwrap_or_else(|| full_jpeg_bytes.clone());
-
-    let width = frame.width;
-    let height = frame.height;
-
-    // 2. 生成唯一图片 ID 与落盘相对路径。只有两个 bitstream 都准备好后才创建产物。
-    let image_id = format!("img_{}_{}", now_compact_ts(), uuid::Uuid::now_v7().simple());
-    let crop_image_id = format!(
-        "crop_{}_{}",
-        now_compact_ts(),
-        uuid::Uuid::now_v7().simple()
-    );
-
-    let cam_dir = base_evidence_dir.join(camera_id);
-    fs::create_dir_all(&cam_dir)
-        .map_err(|e| PipelineError::Snapshot(format!("创建证据目录失败: {e}")))?;
-
-    let full_filename = format!("{image_id}.jpg");
-    let crop_filename = format!("{crop_image_id}.jpg");
-
-    let full_path = cam_dir.join(&full_filename);
-    let crop_path = cam_dir.join(&crop_filename);
-    let file_size_bytes = full_jpeg_bytes.len();
-
-    atomic_write_file(&full_path, &full_jpeg_bytes)
-        .map_err(|e| PipelineError::Snapshot(format!("写入全景抓拍图片失败: {e}")))?;
-    if let Err(error) = atomic_write_file(&crop_path, &crop_jpeg_bytes) {
-        // 数据库尚未记录任何文件；第二个文件失败时撤销第一个文件，避免孤儿证据。
-        let _ = fs::remove_file(&full_path);
-        return Err(PipelineError::Snapshot(format!(
-            "写入特写抠图图片失败: {error}"
-        )));
-    }
-
-    let image_rel_path = format!("{camera_id}/{full_filename}");
-    let crop_image_rel_path = format!("{camera_id}/{crop_filename}");
-
+    let file_size_bytes = encoded.full_jpeg.len();
     tracing::info!(
         camera_id = %camera_id,
-        image_id = %image_id,
-        crop_id = %crop_image_id,
+        image_id = %files.image_id,
+        crop_id = %files.crop_image_id,
+        body_crop_id = %files.body_crop_image_id,
         encoder = %encoder.name(),
         file_size_bytes,
         frame_pts = frame.timestamp,
@@ -1139,18 +1184,167 @@ pub(crate) fn encode_and_save_snapshot(
         "靶向证据高清抓拍完成 (dedicated snapshot worker)"
     );
 
-    Ok(SnapshotResult {
+    Ok(files.into_snapshot_result(
+        file_size_bytes,
+        frame.width,
+        frame.height,
+        // 该证据图与 `frame` 同帧；`stream` 只描述来源码流，与时序无关。
+        frame.timestamp,
+        EvidenceImageSource::Targeted,
+        stream,
+    ))
+}
+
+/// 同一帧一次编码出全景 + 人脸特写 + 人体特写。
+///
+/// 硬件编码器在全景成功、特写失败时会降级到 CPU 编码，因此三张图各自独立降级，
+/// 一张特写失败不会连坐整条证据。
+fn encode_frame_set(
+    frame: &FrameRef,
+    crops: EvidenceCrops,
+    stream: EvidenceImageStream,
+    config: &SnapshotConfig,
+    encoder: &SnapEncoder,
+) -> Result<EncodedFrameSet, PipelineError> {
+    let (panoramic_q, crop_q) = config.quality_for_stream(stream.is_sub());
+
+    // 1. [snapshot_readback_path] 完成全景编码；人脸特写复用同一次 readback（若请求）。
+    // CPU fallback 会复用同一次 D2H readback，硬件路径也保持单线程串行。
+    let (full_jpeg, face_crop_jpeg) = encoder
+        .encode_full_and_crop(
+            frame,
+            crops.face,
+            config.crop_padding_ratio,
+            panoramic_q,
+            crop_q,
+        )
+        .map_err(|e| PipelineError::Snapshot(format!("快照 JPEG 编码失败: {e}")))?;
+
+    // 2. 人体特写：抓拍记录的核心证据（人工复查看衣着），单独一次裁剪编码。
+    let body_crop_jpeg = match crops.body {
+        Some(bbox) if Some(bbox) != crops.face => Some(
+            encoder
+                .encode_crop(frame, bbox, config.crop_padding_ratio, crop_q)
+                .map_err(|e| PipelineError::Snapshot(format!("人体特写 JPEG 编码失败: {e}")))?,
+        ),
+        // 与目标框同一块区域时不重复编码：同一帧同一区域的两次裁剪必然同图。
+        _ => None,
+    };
+
+    Ok(EncodedFrameSet {
+        full_jpeg,
+        crop_jpeg: face_crop_jpeg,
+        body_crop_jpeg,
+    })
+}
+
+/// 证据文件落盘产物（三份图各自的 ID 与相对路径；未产出时为空串）。
+struct EvidenceSnapshotFiles {
+    image_id: String,
+    crop_image_id: String,
+    body_crop_image_id: String,
+    image_rel_path: String,
+    crop_image_rel_path: String,
+    body_crop_image_rel_path: String,
+}
+
+impl EvidenceSnapshotFiles {
+    fn into_snapshot_result(
+        self,
+        file_size_bytes: usize,
+        width: u32,
+        height: u32,
+        frame_pts_ms: i64,
+        image_source: EvidenceImageSource,
+        image_stream: EvidenceImageStream,
+    ) -> SnapshotResult {
+        SnapshotResult {
+            image_id: self.image_id,
+            crop_image_id: self.crop_image_id,
+            image_rel_path: self.image_rel_path,
+            crop_image_rel_path: self.crop_image_rel_path,
+            body_crop_image_id: self.body_crop_image_id,
+            body_crop_image_rel_path: self.body_crop_image_rel_path,
+            file_size_bytes,
+            width,
+            height,
+            frame_pts_ms,
+            image_source,
+            image_stream,
+        }
+    }
+}
+
+/// 一次快照待落盘的全部 JPEG 字节（全景 + 可选人脸特写 + 可选人体特写）。
+struct EvidenceJpegSet<'a> {
+    full: &'a [u8],
+    face_crop: Option<&'a [u8]>,
+    body_crop: Option<&'a [u8]>,
+}
+
+/// 原子写入一份快照的全部图片：任一失败立即回滚本次已写入的文件。
+///
+/// 数据库尚未记录任何文件，因此回滚必须彻底——留下半份证据就是“案在而图缺”的漏洞。
+fn write_evidence_jpegs(
+    camera_id: &str,
+    base_evidence_dir: &std::path::Path,
+    jpegs: EvidenceJpegSet<'_>,
+) -> Result<EvidenceSnapshotFiles, PipelineError> {
+    let cam_dir = base_evidence_dir.join(camera_id);
+    fs::create_dir_all(&cam_dir)
+        .map_err(|e| PipelineError::Snapshot(format!("创建证据目录失败: {e}")))?;
+
+    let stamp = now_compact_ts();
+    // ID 在写盘前一次性生成：失败回滚时不留下任何引用歧义。
+    let image_id = format!("img_{stamp}_{}", uuid::Uuid::now_v7().simple());
+    let crop_image_id = jpegs
+        .face_crop
+        .is_some()
+        .then(|| format!("crop_{stamp}_{}", uuid::Uuid::now_v7().simple()));
+    let body_crop_image_id = jpegs
+        .body_crop
+        .is_some()
+        .then(|| format!("body_{stamp}_{}", uuid::Uuid::now_v7().simple()));
+
+    let mut written: Vec<std::path::PathBuf> = Vec::with_capacity(3);
+    let mut write_one = |id: &str, bytes: &[u8], label: &str| -> Result<(), PipelineError> {
+        let path = cam_dir.join(format!("{id}.jpg"));
+        if let Err(error) = atomic_write_file(&path, bytes) {
+            for written_path in &written {
+                let _ = fs::remove_file(written_path);
+            }
+            return Err(PipelineError::Snapshot(format!(
+                "写入{label}图片失败: {error}"
+            )));
+        }
+        written.push(path);
+        Ok(())
+    };
+
+    write_one(&image_id, jpegs.full, "全景抓拍")?;
+    if let (Some(id), Some(bytes)) = (crop_image_id.as_deref(), jpegs.face_crop) {
+        write_one(id, bytes, "人脸特写")?;
+    }
+    if let (Some(id), Some(bytes)) = (body_crop_image_id.as_deref(), jpegs.body_crop) {
+        write_one(id, bytes, "人体特写")?;
+    }
+
+    let rel_path = |id: &str| {
+        if id.is_empty() {
+            String::new()
+        } else {
+            format!("{camera_id}/{id}.jpg")
+        }
+    };
+    let crop_image_id = crop_image_id.unwrap_or_default();
+    let body_crop_image_id = body_crop_image_id.unwrap_or_default();
+    Ok(EvidenceSnapshotFiles {
+        image_rel_path: format!("{camera_id}/{image_id}.jpg"),
+        crop_image_rel_path: rel_path(&crop_image_id),
+        body_crop_image_rel_path: rel_path(&body_crop_image_id),
         image_id,
         crop_image_id,
-        image_rel_path,
-        crop_image_rel_path,
-        file_size_bytes,
-        width,
-        height,
-        // 该证据图与 `frame` 同帧；`stream` 只描述来源码流，与时序无关。
-        frame_pts_ms: frame.timestamp,
-        image_source: EvidenceImageSource::Targeted,
-        image_stream: stream,
+        body_crop_image_id,
     })
 }
 
@@ -1202,90 +1396,70 @@ fn check_storage_breaker(
 /// 同步编码峰值候选（仅编码，不落盘；由专用编码线程串行执行）。
 pub(crate) fn encode_candidate(
     frame: FrameRef,
-    target_bbox: Option<BoundingBox>,
+    crops: EvidenceCrops,
     stream: EvidenceImageStream,
     config: &SnapshotConfig,
     encoder: &SnapEncoder,
 ) -> Result<EncodedCandidate, PipelineError> {
-    let (panoramic_q, crop_q) = config.quality_for_stream(stream.is_sub());
-
-    let (full_jpeg_bytes, crop_jpeg_bytes) = encoder
-        .encode_full_and_crop(
-            &frame,
-            target_bbox,
-            config.crop_padding_ratio,
-            panoramic_q,
-            crop_q,
-        )
-        .map_err(|e| PipelineError::Snapshot(format!("候选 JPEG 编码失败: {e}")))?;
-    let crop_jpeg_bytes = crop_jpeg_bytes.unwrap_or_else(|| full_jpeg_bytes.clone());
+    let EncodedFrameSet {
+        full_jpeg,
+        crop_jpeg,
+        body_crop_jpeg,
+    } = encode_frame_set(&frame, crops, stream, config, encoder)?;
 
     Ok(EncodedCandidate {
         width: frame.width,
         height: frame.height,
-        full_jpeg: full_jpeg_bytes,
-        crop_jpeg: crop_jpeg_bytes,
+        full_jpeg,
+        crop_jpeg,
+        body_crop_jpeg,
     })
 }
 
 /// 将内存候选一次性写入正式证据目录（结算路径；复用原子写与存储断路器）。
 ///
-/// 第二个文件写入失败时撤销第一个文件，避免半份证据进入 `capture_records`。
+/// 与"编码-落盘"证据路径共用同一个写入器：三张图任一失败都会回滚，绝不留下半份证据
+/// 或无人引用的孤儿文件。
 fn write_candidate_evidence(
     camera_id: &str,
     evidence: &CandidateEvidence,
     base_evidence_dir: &std::path::Path,
 ) -> Result<SnapshotResult, PipelineError> {
+    // 候选恒带目标框，因此在紧急水位下与告警靶向凭据一样放行（沿用既有裁决：
+    // 抓拍是淘汰阶梯的第一级，遇到磁盘压力时先于告警被清理，不在此处二次抑制）。
     check_storage_breaker(camera_id, base_evidence_dir, Some(evidence.geometry.bbox))?;
 
-    let cam_dir = base_evidence_dir.join(camera_id);
-    fs::create_dir_all(&cam_dir)
-        .map_err(|e| PipelineError::Snapshot(format!("创建证据目录失败: {e}")))?;
-
-    let image_id = format!("img_{}_{}", now_compact_ts(), uuid::Uuid::now_v7().simple());
-    let crop_image_id = format!(
-        "crop_{}_{}",
-        now_compact_ts(),
-        uuid::Uuid::now_v7().simple()
-    );
-    let full_path = cam_dir.join(format!("{image_id}.jpg"));
-    let crop_path = cam_dir.join(format!("{crop_image_id}.jpg"));
-    let image_rel_path = format!("{camera_id}/{image_id}.jpg");
-    let crop_image_rel_path = format!("{camera_id}/{crop_image_id}.jpg");
-
-    atomic_write_file(&full_path, &evidence.full_jpeg)
-        .map_err(|e| PipelineError::Snapshot(format!("写入候选全景图失败: {e}")))?;
-    if let Err(error) = atomic_write_file(&crop_path, &evidence.crop_jpeg) {
-        let _ = fs::remove_file(&full_path);
-        return Err(PipelineError::Snapshot(format!(
-            "写入候选特写图失败: {error}"
-        )));
-    }
+    let files = write_evidence_jpegs(
+        camera_id,
+        base_evidence_dir,
+        EvidenceJpegSet {
+            full: &evidence.full_jpeg,
+            face_crop: evidence.crop_jpeg.as_deref(),
+            body_crop: evidence.body_crop_jpeg.as_deref(),
+        },
+    )?;
 
     tracing::info!(
         camera_id = %camera_id,
-        image_id = %image_id,
-        crop_id = %crop_image_id,
+        image_id = %files.image_id,
+        crop_id = %files.crop_image_id,
+        body_crop_id = %files.body_crop_image_id,
         frame_pts = evidence.geometry.pts_ms,
         peak_quality = evidence.geometry.quality,
         file_size_bytes = evidence.full_jpeg.len(),
         "峰值候选已写入正式证据目录"
     );
 
-    Ok(SnapshotResult {
-        image_id,
-        crop_image_id,
-        image_rel_path,
-        crop_image_rel_path,
-        file_size_bytes: evidence.full_jpeg.len(),
-        width: evidence.width,
-        height: evidence.height,
-        frame_pts_ms: evidence.geometry.pts_ms,
-        image_source: EvidenceImageSource::PeakCandidate,
+    Ok(files.into_snapshot_result(
+        evidence.full_jpeg.len(),
+        evidence.width,
+        evidence.height,
+        evidence.geometry.pts_ms,
+        EvidenceImageSource::PeakCandidate,
         // 用编码时刻的码流来源，而不是结算时刻重新采样的模式：
         // 二者相差最多一个结算窗口，中途换流会让记录的来源描述失真。
-        image_stream: evidence.stream,
-    })
+        evidence.stream,
+    ))
 }
 
 /// 原子化文件写入：通过写入同目录临时文件后重命名保证写入原子性
@@ -1596,7 +1770,7 @@ mod tests {
                     .encode_candidate_async(
                         "cam_lane",
                         frame,
-                        Some(BoundingBox::new(0.1, 0.1, 0.5, 0.5)),
+                        EvidenceCrops::for_capture(None, BoundingBox::new(0.1, 0.1, 0.5, 0.5)),
                         EvidenceImageStream::Main,
                     )
                     .await
@@ -1673,7 +1847,10 @@ mod tests {
         let res = encode_and_save_snapshot(
             "cam_clean",
             frame,
-            Some(BoundingBox::new(0.2, 0.2, 0.6, 0.6)),
+            EvidenceCrops {
+                face: Some(BoundingBox::new(0.2, 0.2, 0.6, 0.6)),
+                body: None,
+            },
             &temp_dir,
             EvidenceImageStream::Main,
             &config,

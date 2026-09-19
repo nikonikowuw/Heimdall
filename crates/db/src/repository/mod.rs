@@ -20,7 +20,7 @@ pub use alarm::AlarmRepo;
 pub use algorithm::{AlgorithmRepo, AlgorithmStats, UpsertAlgorithmParams, UpsertVersionParams};
 pub use algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, UpdateInstanceParams};
 pub use camera::CameraRepo;
-pub use capture::CaptureRepo;
+pub use capture::{CaptureFilter, CaptureRepo};
 pub use gallery::GalleryRepo;
 pub use gallery_face::GalleryFaceRepo;
 pub use gb28181_device::Gb28181DeviceRepo;

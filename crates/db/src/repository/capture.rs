@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 
 use crate::entity::capture::{ActiveModel, Column, Entity, Model};
@@ -10,23 +12,37 @@ use crate::error::DbError;
 #[derive(Debug)]
 pub struct CaptureRepo;
 
-fn build_filter_query(
-    camera_id: Option<&str>,
-    target_label: Option<&str>,
-    start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
-    end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
-) -> sea_orm::Select<Entity> {
+/// 抓拍列表/计数的过滤条件（各字段为 `None` 或空串表示不限制）。
+///
+/// 收拢为结构体而不是继续加函数参数：过滤维度每加一个，调用点的位置参数就会错位一次，
+/// 而 `track_id` 与 `target_label` 都是 `Option`，类型系统无法帮忙发现传串了。
+#[derive(Debug, Clone, Default)]
+pub struct CaptureFilter<'a> {
+    pub camera_id: Option<&'a str>,
+    pub target_label: Option<&'a str>,
+    /// 轨道过滤：`track_id` 只在单机位追踪器内唯一，调用方必须同时限定 `camera_id`。
+    pub track_id: Option<i64>,
+    pub start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+    pub end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+}
+
+fn build_filter_query(filter: CaptureFilter<'_>) -> sea_orm::Select<Entity> {
     let mut query = Entity::find();
-    if let Some(cid) = camera_id.filter(|s| !s.trim().is_empty()) {
+    if let Some(cid) = filter.camera_id.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::CameraId.eq(cid));
     }
-    if let Some(lbl) = target_label.filter(|s| !s.trim().is_empty()) {
+    if let Some(lbl) = filter.target_label.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::TargetLabel.eq(lbl));
     }
-    if let Some(start) = start_time {
+    // 轨道过滤走 `idx_capture_records_track(camera_id, track_id)`：
+    // 「同一个人一次通行」的多次结算共用同一个 track_id，这是行迹回溯的唯一定位键。
+    if let Some(tid) = filter.track_id {
+        query = query.filter(Column::TrackId.eq(tid));
+    }
+    if let Some(start) = filter.start_time {
         query = query.filter(Column::CapturedAt.gte(start));
     }
-    if let Some(end) = end_time {
+    if let Some(end) = filter.end_time {
         query = query.filter(Column::CapturedAt.lte(end));
     }
     query
@@ -39,19 +55,25 @@ impl CaptureRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        Self::list_filtered(db, camera_id, None, None, None, limit, offset).await
+        Self::list_filtered(
+            db,
+            CaptureFilter {
+                camera_id,
+                ..CaptureFilter::default()
+            },
+            limit,
+            offset,
+        )
+        .await
     }
 
     pub async fn list_filtered(
         db: &DatabaseConnection,
-        camera_id: Option<&str>,
-        target_label: Option<&str>,
-        start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
-        end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        filter: CaptureFilter<'_>,
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        build_filter_query(camera_id, target_label, start_time, end_time)
+        build_filter_query(filter)
             .order_by_desc(Column::CapturedAt)
             .limit(limit)
             .offset(offset)
@@ -62,15 +84,45 @@ impl CaptureRepo {
 
     pub async fn count_filtered(
         db: &DatabaseConnection,
-        camera_id: Option<&str>,
-        target_label: Option<&str>,
-        start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
-        end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        filter: CaptureFilter<'_>,
     ) -> Result<u64, DbError> {
-        build_filter_query(camera_id, target_label, start_time, end_time)
+        build_filter_query(filter)
             .count(db)
             .await
             .map_err(DbError::from)
+    }
+
+    /// 查询全部活跃抓拍记录关联的文件相对路径（全景 + 人脸特写 + 人体特写）
+    pub async fn find_all_active_image_paths(
+        db: &DatabaseConnection,
+    ) -> Result<HashSet<String>, DbError> {
+        #[derive(FromQueryResult)]
+        struct PathRow {
+            image_rel_path: String,
+            crop_image_rel_path: String,
+            body_crop_image_rel_path: String,
+        }
+        let rows = Entity::find()
+            .select_only()
+            .column(Column::ImageRelPath)
+            .column(Column::CropImageRelPath)
+            .column(Column::BodyCropImageRelPath)
+            .into_model::<PathRow>()
+            .all(db)
+            .await?;
+        let mut set = HashSet::new();
+        for r in rows {
+            if !r.image_rel_path.is_empty() {
+                set.insert(r.image_rel_path);
+            }
+            if !r.crop_image_rel_path.is_empty() {
+                set.insert(r.crop_image_rel_path);
+            }
+            if !r.body_crop_image_rel_path.is_empty() {
+                set.insert(r.body_crop_image_rel_path);
+            }
+        }
+        Ok(set)
     }
 
     pub async fn insert(

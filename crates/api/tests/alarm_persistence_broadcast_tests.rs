@@ -57,6 +57,8 @@ fn create_mock_alarm_event(
             crop_image_id: format!("crop-{event_id}"),
             image_rel_path: format!("{camera_id}/full_{event_id}.jpg"),
             crop_image_rel_path: format!("{camera_id}/crop_{event_id}.jpg"),
+            body_crop_image_id: String::new(),
+            body_crop_image_rel_path: String::new(),
             file_size_bytes: 10240,
             width: 1920,
             height: 1080,
@@ -208,16 +210,11 @@ async fn test_alarm_persistence_and_ws_broadcast_flow() {
     assert!(alarm_record.image_rel_path.contains("full_"));
     assert!(alarm_record.crop_image_rel_path.contains("crop_"));
 
-    // 6. 断言 SQLite capture_records 表同步写入了行迹抓拍凭证
+    // 6. 断言 SQLite capture_records 表不应重复写入检测类告警记录（三支柱严格隔离：检测类只落 alarm_records）
     let captures = CaptureRepo::list_recent(&state.db, Some("CAM-01"), 10, 0)
         .await
         .unwrap();
-    assert_eq!(captures.len(), 1);
-    let cap = &captures[0];
-    assert_eq!(cap.camera_id, "CAM-01");
-    assert_eq!(cap.target_label, "person");
-    assert_eq!(cap.track_id, 101);
-    assert!(cap.crop_image_rel_path.contains("crop_"));
+    assert_eq!(captures.len(), 0, "检测类安全告警不得重复写入通行抓拍表");
 }
 
 #[tokio::test]
@@ -410,6 +407,8 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
             image_rel_path: "2026/03/04/CAM-01/full_301.jpg".to_string(),
             crop_image_id: "snap_crop_301".to_string(),
             crop_image_rel_path: "2026/03/04/CAM-01/crop_301.jpg".to_string(),
+            body_crop_image_id: "snap_body_301".to_string(),
+            body_crop_image_rel_path: "2026/03/04/CAM-01/body_301.jpg".to_string(),
             file_size_bytes: 10240,
             width: 1920,
             height: 1080,
@@ -441,6 +440,10 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
     assert_eq!(cap.track_id, 301);
     assert_eq!(cap.image_rel_path, "2026/03/04/CAM-01/full_301.jpg");
     assert_eq!(cap.crop_image_rel_path, "2026/03/04/CAM-01/crop_301.jpg");
+    assert_eq!(
+        cap.body_crop_image_rel_path, "2026/03/04/CAM-01/body_301.jpg",
+        "人体特写（人工复查看衣着的主体证据）必须与全景、人脸特写一同落库"
+    );
     // 目标 3 可追溯性：来源路径/码流/帧 PTS 与所用融合模板元数据必须全部落库
     assert_eq!(cap.image_source, "peak_candidate");
     assert_eq!(cap.image_stream, "sub");
@@ -457,6 +460,91 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
     // 3. 断言 WebSocket 未广播 alarm.triggered 报警
     let timeout_res = tokio::time::timeout(Duration::from_millis(100), ws_rx.recv()).await;
     assert!(timeout_res.is_err(), "通行抓拍绝对不能向客户端广播报警弹窗");
+}
+
+/// 背身/低头的人（有人体检测、无人脸）必须落抓拍记录，且带人体特写。
+///
+/// 这是抓拍语义从「人脸通行证据」收敛为「人体通行证据」的核心回归：曾经的准入判定
+/// 直接以人脸存在为前提，导致刻意回避镜头的目标彻底不留证据。此处同时锁定质量分口径
+/// ——无脸且算法未上报质量分时取归一化人体框面积，而不是置信度（置信度与"图清不清楚"无关）。
+#[tokio::test]
+async fn test_faceless_person_capture_persists_body_crop_and_area_quality() {
+    let (_app, state, _token) = setup_test_app().await;
+
+    let capture_svc = Arc::new(api::CaptureDispatchService::with_options(
+        state.db.clone(),
+        state.pipeline.clone(),
+        state.shutdown_tx.clone(),
+        1,
+        50,
+    ));
+    let _capture_worker = capture_svc.clone().start_worker();
+
+    let capture_id = uuid::Uuid::now_v7().to_string();
+    let bbox = BoundingBox::new(0.30, 0.30, 0.50, 0.60);
+    let mock_capture = PipelineCaptureEvent {
+        capture_id: capture_id.clone(),
+        camera_id: "CAM-09".to_string(),
+        algorithm_id: "face_recognition".to_string(),
+        tracked_object: TrackedObject {
+            track_id: 909,
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.93,
+            // 算法包未上报目标级质量分：必须回退到归一化面积，而不是置信度
+            quality_score: None,
+            embedding: None,
+            bbox,
+            face: None,
+            trajectory: vec![],
+        },
+        snapshot: Some(SnapshotResult {
+            image_id: "snap_full_909".to_string(),
+            image_rel_path: "2026/03/04/CAM-09/full_909.jpg".to_string(),
+            crop_image_id: String::new(),
+            crop_image_rel_path: String::new(),
+            body_crop_image_id: "snap_body_909".to_string(),
+            body_crop_image_rel_path: "2026/03/04/CAM-09/body_909.jpg".to_string(),
+            file_size_bytes: 8192,
+            width: 640,
+            height: 360,
+            frame_pts_ms: 1741100061000,
+            image_source: EvidenceImageSource::PeakCandidate,
+            image_stream: EvidenceImageStream::Sub,
+        }),
+        timestamp: 1741100061000,
+    };
+
+    state
+        .pipeline
+        .publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(mock_capture)));
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let captures = CaptureRepo::list_recent(&state.db, Some("CAM-09"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(captures.len(), 1, "背身/低头的通行抓拍必须落库");
+    let cap = &captures[0];
+    assert_eq!(cap.capture_id, capture_id);
+    assert_eq!(cap.target_label, "person");
+    assert!(cap.crop_image_rel_path.is_empty(), "无人脸 ⇒ 无人脸特写");
+    assert_eq!(
+        cap.body_crop_image_rel_path, "2026/03/04/CAM-09/body_909.jpg",
+        "无人脸时必须有人体特写，否则人工复核无图可看"
+    );
+    let expected_area = bbox.area();
+    assert!(
+        (cap.quality_score - expected_area).abs() < 1e-6,
+        "无脸且无目标质量分时质量分必须取归一化人体框面积 {expected_area}，实际 {}",
+        cap.quality_score
+    );
+
+    // 无脸事件不得产生虚假违规告警
+    let alarms = AlarmRepo::list_recent(&state.db, Some("CAM-09"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(alarms.len(), 0);
 }
 
 #[tokio::test]
@@ -488,6 +576,8 @@ async fn test_cold_start_pending_capture_drain_and_batch_persistence() {
                 image_rel_path: format!("2026/03/04/CAM-01/face_{i}.jpg"),
                 crop_image_id: format!("crop_{i}"),
                 crop_image_rel_path: format!("2026/03/04/CAM-01/crop_{i}.jpg"),
+                body_crop_image_id: String::new(),
+                body_crop_image_rel_path: String::new(),
                 file_size_bytes: 1024,
                 width: 1920,
                 height: 1080,
@@ -732,6 +822,8 @@ async fn test_face_recognition_below_review_threshold_persists_top5_rejected() {
             image_rel_path: "2026/03/04/CAM-REC-01/full_888.jpg".to_string(),
             crop_image_id: "snap_crop_888".to_string(),
             crop_image_rel_path: "2026/03/04/CAM-REC-01/crop_888.jpg".to_string(),
+            body_crop_image_id: String::new(),
+            body_crop_image_rel_path: String::new(),
             file_size_bytes: 10240,
             width: 1920,
             height: 1080,

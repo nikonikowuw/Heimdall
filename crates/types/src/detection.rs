@@ -20,6 +20,14 @@ impl BoundingBox {
         Self { x1, y1, x2, y2 }
     }
 
+    /// 归一化面积（画幅占比，[0, 1]）。
+    ///
+    /// 坐标已是全画幅归一化值，因此面积可直接当作"离镜头多远"的稳定代理量：
+    /// 面积越大，目标外观细节越可读。
+    pub fn area(&self) -> f32 {
+        ((self.x2 - self.x1).max(0.0) * (self.y2 - self.y1).max(0.0)).clamp(0.0, 1.0)
+    }
+
     /// 获取底部中心点（通常用于地面空间规则侵入判定）
     pub fn bottom_center(&self) -> (f64, f64) {
         let cx = ((self.x1 + self.x2) / 2.0) as f64;
@@ -144,9 +152,33 @@ impl TrackedObject {
         }
     }
 
+    /// 证据质量分（宿主统一口径）：人脸质量 → 目标级质量 → 归一化人体框面积。
+    ///
+    /// 抓拍峰值选帧与 `capture_records.quality_score` 落库必须共用此函数，禁止任何一层
+    /// 自行回退到 `confidence`：置信度描述"模型有多确信这是目标"，与"这张图能不能看清
+    /// 外观"无关，用它当质量分会把窗口首帧当成最佳帧。人脸质量本身随
+    /// `bboxJson.face.quality_score` 单独持久化，二者语义不同、互不覆盖。
+    pub fn evidence_quality_score(&self) -> f32 {
+        self.face
+            .as_ref()
+            .and_then(|face| face.quality_score)
+            .or(self.quality_score)
+            .unwrap_or_else(|| self.bbox.area())
+            .clamp(0.0, 1.0)
+    }
+
     /// 获取人脸检测框（若挂载人脸）
     pub fn face_bbox(&self) -> Option<BoundingBox> {
         self.face.as_ref().map(|f| f.bbox)
+    }
+
+    /// 人脸特写裁剪目标。
+    ///
+    /// 嵌套 `face` 详情优先；**纯人脸包**（标签即 `face`，不挂载嵌套详情）的检测框本身
+    /// 就是人脸框，不能当成"无人脸"——否则识别复核会失去人脸特写这一唯一凭据。
+    pub fn face_crop_target(&self) -> Option<BoundingBox> {
+        self.face_bbox()
+            .or_else(|| self.label.eq_ignore_ascii_case("face").then_some(self.bbox))
     }
 
     /// 获取人脸特征向量（优先从 face 读取，若无则从根字段读取）
@@ -423,5 +455,47 @@ mod tests {
         assert_eq!(AlgorithmKind::default(), AlgorithmKind::Detection);
         assert_eq!(AlgorithmKind::Recognition.to_string(), "recognition");
         assert_eq!(AlgorithmKind::Detection.to_string(), "detection");
+    }
+
+    #[test]
+    fn evidence_quality_prefers_face_then_target_then_area() {
+        let mut obj = TrackedObject {
+            track_id: 1,
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.99,
+            quality_score: None,
+            bbox: BoundingBox::new(0.40, 0.20, 0.60, 0.70),
+            face: None,
+            embedding: None,
+            trajectory: Vec::new(),
+        };
+
+        // 无脸目标：回退归一化面积（0.2 × 0.5 = 0.1），而不是 confidence。
+        assert!((obj.bbox.area() - 0.1).abs() < 1e-5);
+        assert!((obj.evidence_quality_score() - 0.1).abs() < 1e-5);
+
+        // 目标级质量优先于面积。
+        obj.quality_score = Some(0.6);
+        assert!((obj.evidence_quality_score() - 0.6).abs() < 1e-5);
+
+        // 人脸质量优先于目标级质量（与抓拍峰值选帧口径一致）。
+        obj.face = Some(FaceDetail {
+            bbox: BoundingBox::new(0.45, 0.20, 0.55, 0.30),
+            confidence: 0.9,
+            quality_score: Some(0.85),
+            fused_count: None,
+            template_quality: None,
+            template_mature: None,
+            embedding: None,
+        });
+        assert!((obj.evidence_quality_score() - 0.85).abs() < 1e-5);
+
+        // 退化框（倒置/零面积）不得产生 NaN 或负值。
+        obj.quality_score = None;
+        obj.face = None;
+        obj.bbox = BoundingBox::new(0.6, 0.7, 0.4, 0.2);
+        assert_eq!(obj.bbox.area(), 0.0);
+        assert_eq!(obj.evidence_quality_score(), 0.0);
     }
 }

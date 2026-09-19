@@ -4,6 +4,15 @@
 //! 「逐帧跟踪峰值 → 结算时刻一次性产出证据」。本模块只做纯同步状态推进，禁止任何 IO 与
 //! `.await`；候选编码（内存驻留字节）与结算写盘由 `pump.rs` 在分析循环中执行。
 //!
+//! 抓拍以**人体**为主体：人脸只作为可选附加证据，不参与准入判定（见 `rules.rs`）；
+//! 证据质量分统一走 [`TrackedObject::evidence_quality_score`]，无脸目标用归一化人体框面积
+//! 选峰值帧，而不是回退置信度。
+//!
+//! 同轨去重：以 `(algorithm_id, track_id)` 为键，窗口随已落库记录数**指数退避**
+//! （5s → 10s → 20s → 40s → 60s 封顶），并以 [`MAX_RECORDS_PER_TRACK`] 作为生命周期硬上限。
+//! 正常通行者按基础窗口出图（通常 1～3 条），滞留者逐步稀疏；否则一个站立 10 分钟的人会
+//! 刷出上百条几乎重复的记录。
+//!
 //! 结算触发（按优先级）：
 //! 1. `TemplateMature`：包内融合模板成熟（M2 的 `face.template_mature` 握手）；
 //! 2. `QualityPlateau`：峰值质量平台期（`last_improve + PLATEAU_MS` 且峰值达标）；
@@ -22,6 +31,10 @@ use crate::rules::is_capture_triggering;
 /// 结算兜底窗口（毫秒）：目标在 ROI 内停留超过该时长必然结算。
 pub const SETTLE_WINDOW_MS: i64 = 1500;
 /// 平台期结算的最低峰值质量。
+///
+/// 量纲为 [`TrackedObject::evidence_quality_score`]：人脸轨道沿用人脸质量（0.5 相当于中等
+/// 成像），无脸轨道是归一化面积（0.5 相当于占半幅画面，罕见），因此无脸轨道通常不走平台期
+/// 早结算，而是由窗口到期（[`SETTLE_WINDOW_MS`]）与离场结算产出记录。
 pub const SETTLE_MIN_QUALITY: f32 = 0.50;
 /// 峰值刷新门限：新帧质量需超过当前峰值该幅度才刷新。
 pub const PEAK_DELTA: f32 = 0.05;
@@ -29,8 +42,15 @@ pub const PEAK_DELTA: f32 = 0.05;
 pub const CANDIDATE_THROTTLE_MS: i64 = 200;
 /// 峰值平台判定窗口（毫秒，≈8 帧 @25fps）。
 pub const PLATEAU_MS: i64 = 320;
-/// 同一轨道两次结算之间的冷却（毫秒），与旧版抓拍防刷屏语义一致。
+/// 同一轨道两次结算之间的基础冷却（毫秒），也是去重窗口退避的起点。
 pub const CAPTURE_COOLDOWN_MS: i64 = 5000;
+/// 去重窗口退避的最大左移位数：每多落一条记录窗口翻倍（5s → 10s → 20s → 40s → 80s），
+/// 再由 [`DEDUP_WINDOW_MAX_MS`] 收敛到 60s 封顶。
+pub const DEDUP_BACKOFF_MAX_SHIFT: u32 = 4;
+/// 退避后的去重窗口上限（毫秒）：滞留者稳定在每分钟一条，不再继续稀疏。
+pub const DEDUP_WINDOW_MAX_MS: i64 = 60_000;
+/// 单条轨道生命周期内最多落库的记录数（硬上限，防止超长滞留者无界刷屏）。
+pub const MAX_RECORDS_PER_TRACK: u32 = 32;
 /// 离场宽限（毫秒）：轨道未再触发后需持续该时长才按离场结算。
 ///
 /// 瞬时丢脸（背身、低头、短暂遮挡）会让 `is_capture_triggering` 返回 false，但它既不是
@@ -80,7 +100,7 @@ impl Default for CaptureSettleConfig {
 pub struct FrameGeometry {
     /// 目标整体框（归一化 [0,1]）
     pub bbox: BoundingBox,
-    /// 人脸框（若该帧挂载人脸）
+    /// 人脸特写裁剪目标（嵌套人脸框；纯人脸包则为检测框本身），`None` = 无人脸特写
     pub face_bbox: Option<BoundingBox>,
     /// 该帧的检测流 PTS（毫秒）
     pub pts_ms: i64,
@@ -96,8 +116,10 @@ pub struct FrameGeometry {
 pub struct CandidateEvidence {
     /// 峰值帧全景 JPEG 字节
     pub full_jpeg: Arc<[u8]>,
-    /// 峰值帧特写 JPEG 字节（无有效裁剪时与全景同源）
-    pub crop_jpeg: Arc<[u8]>,
+    /// 峰值帧**人脸特写** JPEG 字节；`None` = 该帧未挂载人脸（背身/低头）。
+    pub crop_jpeg: Option<Arc<[u8]>>,
+    /// 峰值帧**人体特写** JPEG 字节（人工复查看衣着的主体证据）；`None` = 裁剪不可得。
+    pub body_crop_jpeg: Option<Arc<[u8]>>,
     /// 图像宽高（结算写盘时的 `SnapshotResult` 元数据；届时帧已不在）
     pub width: u32,
     pub height: u32,
@@ -110,7 +132,9 @@ pub struct CandidateEvidence {
 impl CandidateEvidence {
     /// 驻留字节数（预算核算口径）。
     pub fn resident_bytes(&self) -> usize {
-        self.full_jpeg.len() + self.crop_jpeg.len()
+        self.full_jpeg.len()
+            + self.crop_jpeg.as_ref().map_or(0, |b| b.len())
+            + self.body_crop_jpeg.as_ref().map_or(0, |b| b.len())
     }
 }
 
@@ -199,6 +223,8 @@ struct TrackEntry {
     last_seen_pts_ms: i64,
     /// 最近一次实际触发的帧时标；用于离场宽限判定。
     last_trigger_pts_ms: i64,
+    /// 本轨道生命周期内已落库的记录数；驱动去重窗口退避与硬上限。
+    records_written: u32,
 }
 
 /// 每路摄像头 × 每个算法的结算控制器（位于 `CameraPipelineContext`）。
@@ -283,14 +309,21 @@ impl CaptureSettleController {
             }
 
             let entry = tracks.entry(obj.track_id).or_default();
-            // 冷却未过的同轨重入：不重复挂起，也不刷新事件载体。
-            // 必须在 `obj.clone()` 之前判定，否则每帧都要为冷却内的轨道白付一次克隆。
-            if entry.pending.is_none()
-                && entry
-                    .settled_at_ms
-                    .is_some_and(|settled| now_ms - settled < config.cooldown_ms)
-            {
-                continue;
+            entry.last_seen_pts_ms = now_ms;
+
+            // 去重窗口随已落库记录数指数退避：正常通行者按基础窗口出图，滞留者逐步稀疏。
+            // 达到生命周期硬上限后不再登记新挂起。
+            // 必须在 `obj.clone()` 之前判定，否则每帧都要为窗口内的轨道白付一次克隆。
+            if entry.pending.is_none() {
+                if entry.records_written >= MAX_RECORDS_PER_TRACK {
+                    continue;
+                }
+                let in_dedup_window = entry.settled_at_ms.is_some_and(|settled| {
+                    now_ms - settled < dedup_window_ms(config.cooldown_ms, entry.records_written)
+                });
+                if in_dedup_window {
+                    continue;
+                }
             }
             seen.push(obj.track_id);
 
@@ -301,14 +334,13 @@ impl CaptureSettleController {
                 .is_some_and(|face| face.template_mature == Some(true));
             let geometry = FrameGeometry {
                 bbox: obj.bbox,
-                face_bbox: obj.face.as_ref().map(|face| face.bbox),
+                face_bbox: obj.face_crop_target(),
                 pts_ms: now_ms,
                 quality,
             };
 
             // 唯一无法避免的每触发帧克隆：结算发生在未来某帧，届时必须能拿到事件载体。
             entry.last_seen = Some(obj.clone());
-            entry.last_seen_pts_ms = now_ms;
             entry.last_trigger_pts_ms = now_ms;
 
             match entry.pending.as_mut() {
@@ -317,6 +349,8 @@ impl CaptureSettleController {
                     // 等价旧「首帧抓拍」语义（冷却仍然生效）。
                     if config.settle_window_ms <= 0 {
                         entry.settled_at_ms = Some(now_ms);
+                        // 退化模式同样计入已落库条数：否则退避窗口与生命周期上限会双双失效。
+                        entry.records_written = entry.records_written.saturating_add(1);
                         if let Some(tracked_object) = entry.last_seen.take() {
                             actions.push(CaptureAction::Settle(Box::new(SettleRequest {
                                 track_id: obj.track_id,
@@ -504,10 +538,13 @@ impl CaptureSettleController {
         self.entries.remove(algorithm_id);
     }
 
-    /// 修剪已出冷却且无 pending 的条目；**不**删除空的内层表。
+    /// 修剪已出去重窗口且无 pending 的条目；**不**删除空的内层表。
     ///
     /// 保留空桶是为了让稳态下的键路径零分配：`String` 键只在首次见到该算法时分配一次，
     /// 之后每帧都是 `get_mut(&str)` 命中；桶数上限为单路并发算法实例数，天然有界。
+    ///
+    /// 窗口判定必须与 `observe` 共用退避函数：若仍按基础冷却修剪，滞留者的条目会在退避
+    /// 窗口中途被丢弃，`records_written` 跟着归零，退避与上限就双双失效了。
     fn prune(&mut self, now_ms: i64) {
         let cooldown = self.config.cooldown_ms;
         for tracks in self.entries.values_mut() {
@@ -515,9 +552,15 @@ impl CaptureSettleController {
                 if entry.pending.is_some() {
                     return true;
                 }
-                entry
-                    .settled_at_ms
-                    .is_some_and(|settled| now_ms - settled < cooldown + ENTRY_GRACE_MS)
+                // 若目标仍在画面中（最近仍在被观测到），绝不能修剪，
+                // 否则会重置退避窗口与 records_written 上限。
+                if now_ms.saturating_sub(entry.last_seen_pts_ms) < ENTRY_GRACE_MS {
+                    return true;
+                }
+                entry.settled_at_ms.is_some_and(|settled| {
+                    now_ms - settled
+                        < dedup_window_ms(cooldown, entry.records_written) + ENTRY_GRACE_MS
+                })
             });
         }
     }
@@ -539,6 +582,8 @@ fn settle_pending(
     let pending = entry.pending.take();
     entry.settled_at_ms = Some(now_ms);
     let pending = pending?;
+    // 只统计真正产出的结算：退避窗口与生命周期上限都消费这个计数。
+    entry.records_written = entry.records_written.saturating_add(1);
     Some(SettleRequest {
         track_id,
         reason,
@@ -549,14 +594,17 @@ fn settle_pending(
     })
 }
 
-/// 帧质量：优先人脸质量分，回退目标级质量分。
+/// 同轨去重窗口（毫秒）：随已落库记录数指数退避，封顶 [`DEDUP_WINDOW_MAX_MS`]。
+///
+/// `observe` 与 `prune` 必须共用本函数，否则计数会在窗口中途被修剪重置。
+fn dedup_window_ms(cooldown_ms: i64, records_written: u32) -> i64 {
+    let shift = records_written.min(DEDUP_BACKOFF_MAX_SHIFT);
+    (cooldown_ms << shift).min(DEDUP_WINDOW_MAX_MS)
+}
+
+/// 帧质量：宿主统一证据质量分（人脸质量 → 目标级质量 → 归一化人体框面积）。
 fn frame_quality(obj: &TrackedObject) -> f32 {
-    obj.face
-        .as_ref()
-        .and_then(|face| face.quality_score)
-        .or(obj.quality_score)
-        .unwrap_or(0.0)
-        .clamp(0.0, 1.0)
+    obj.evidence_quality_score()
 }
 
 #[cfg(test)]
@@ -586,6 +634,21 @@ mod tests {
         }
     }
 
+    /// 无脸人体目标：`quality_score` / `face` 均为空，质量分只能来自归一化面积。
+    fn faceless_object(track_id: u64, bbox: BoundingBox) -> TrackedObject {
+        TrackedObject {
+            track_id,
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            quality_score: None,
+            bbox,
+            face: None,
+            embedding: None,
+            trajectory: vec![(f64::from(bbox.x1), f64::from(bbox.y2))],
+        }
+    }
+
     fn empty_rules() -> Vec<DetectionRule> {
         Vec::new()
     }
@@ -604,11 +667,12 @@ mod tests {
         }
     }
 
-    /// 构造驻留 80 字节（64 全景 + 16 特写）的候选证据。
+    /// 构造驻留 112 字节（64 全景 + 16 人脸特写 + 32 人体特写）的候选证据。
     fn candidate_evidence(pts_ms: i64, quality: f32) -> CandidateEvidence {
         CandidateEvidence {
             full_jpeg: Arc::from(vec![1_u8; 64]),
-            crop_jpeg: Arc::from(vec![2_u8; 16]),
+            crop_jpeg: Some(Arc::from(vec![2_u8; 16])),
+            body_crop_jpeg: Some(Arc::from(vec![3_u8; 32])),
             width: 640,
             height: 360,
             geometry: FrameGeometry {
@@ -664,13 +728,113 @@ mod tests {
     }
 
     #[test]
-    fn person_without_face_is_not_observed() {
+    fn person_without_face_is_observed_and_settles() {
+        // 抓拍以人体为主体：背身/低头（无 face）必须照样登记候选并在窗口到期时结算。
         let mut controller = CaptureSettleController::new();
-        let mut obj = face_object(1, 0.90);
-        obj.face = None;
-        let actions = controller.observe("algo", &[obj], &empty_rules(), 1000);
-        assert!(actions.is_empty());
+        let obj = faceless_object(1, BoundingBox::new(0.4, 0.3, 0.6, 0.6));
+
+        let actions = controller.observe("algo", std::slice::from_ref(&obj), &empty_rules(), 1000);
+        assert_eq!(actions.len(), 1, "无脸目标必须登记峰值候选");
+        let geometry = retain_request(&actions[0]).geometry;
+        assert_eq!(geometry.face_bbox, None);
+        assert!(
+            (geometry.quality - 0.06).abs() < 1e-5,
+            "无脸目标的质量分必须是归一化人体框面积"
+        );
+        assert_eq!(controller.pending_count(), 1);
+
+        // 平台期门槛按面积量纲（0.06 < 0.5）不成立，因此走窗口到期结算。
+        let actions = controller.observe("algo", &[obj], &empty_rules(), 2500);
+        assert_eq!(actions.len(), 1, "窗口到期必须结算");
+        match &actions[0] {
+            CaptureAction::Settle(request) => {
+                assert_eq!(request.reason, SettleReason::WindowExpired);
+                assert!(request.candidate.is_none(), "本用例未登记候选字节");
+            }
+            other => panic!("期望结算动作，实际为 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn faceless_person_peak_is_the_largest_body_box() {
+        // 面积即"离镜头多近"：朝镜头走来时更大的框必须刷新峰值（复审看外观要用最清楚那帧）。
+        let mut controller = CaptureSettleController::new();
+        let near = faceless_object(4, BoundingBox::new(0.3, 0.2, 0.7, 0.8));
+        let far = faceless_object(4, BoundingBox::new(0.45, 0.4, 0.55, 0.55));
+
+        let actions = controller.observe("algo", &[far], &empty_rules(), 1000);
+        assert!((retain_request(&actions[0]).geometry.quality - 0.015).abs() < 1e-5);
+
+        // 远景 → 近景：面积提升必须刷新峰值。
+        let actions = controller.observe("algo", &[near], &empty_rules(), 1200);
+        assert_eq!(actions.len(), 1, "面积提升必须刷新峰值候选");
+        assert!((retain_request(&actions[0]).geometry.quality - 0.24).abs() < 1e-5);
+    }
+
+    #[test]
+    fn dedup_window_backs_off_with_settled_records() {
+        // 滞留者封顶机制：每落一条记录，去重窗口翻倍（5s → 10s → 20s ...），
+        // 否则一个站立 10 分钟的人会刷出上百条几乎重复的记录。
+        assert_eq!(dedup_window_ms(CAPTURE_COOLDOWN_MS, 0), 5_000);
+        assert_eq!(dedup_window_ms(CAPTURE_COOLDOWN_MS, 1), 10_000);
+        assert_eq!(dedup_window_ms(CAPTURE_COOLDOWN_MS, 2), 20_000);
+        assert_eq!(dedup_window_ms(CAPTURE_COOLDOWN_MS, 3), 40_000);
+        assert_eq!(dedup_window_ms(CAPTURE_COOLDOWN_MS, 4), DEDUP_WINDOW_MAX_MS);
+        assert_eq!(
+            dedup_window_ms(CAPTURE_COOLDOWN_MS, 99),
+            DEDUP_WINDOW_MAX_MS
+        );
+
+        let mut controller = CaptureSettleController::new();
+        let obj = face_object(6, 0.80);
+        // 第一次结算后窗口翻倍到 10s：5s 处不得重新挂起，10s 处才放行。
+        controller.observe("algo", std::slice::from_ref(&obj), &empty_rules(), 1000);
+        controller.observe("algo", &[], &empty_rules(), 2500);
+        let actions = controller.observe("algo", std::slice::from_ref(&obj), &empty_rules(), 7500);
+        assert!(actions.is_empty(), "退避窗口内不得重新挂起");
         assert_eq!(controller.pending_count(), 0);
+        let actions = controller.observe("algo", &[obj], &empty_rules(), 12500);
+        assert!(
+            matches!(actions.first(), Some(CaptureAction::RetainCandidate(_))),
+            "退避窗口届满必须重新登记候选"
+        );
+    }
+
+    #[test]
+    fn track_record_cap_stops_further_settles() {
+        // 硬上限兜底：超过上限后即使退避窗口届满也不再产出新记录。
+        let mut controller = CaptureSettleController::new();
+        let obj = face_object(8, 0.80);
+        controller.observe("algo", std::slice::from_ref(&obj), &empty_rules(), 1000);
+        {
+            let entry = controller
+                .entries
+                .get_mut("algo")
+                .and_then(|tracks| tracks.get_mut(&8))
+                .expect("轨道条目已登记");
+            entry.records_written = MAX_RECORDS_PER_TRACK;
+        }
+        // 已挂起的结算照常收尾（本条即上限边界上的最后一条记录）。
+        let actions = controller.observe("algo", &[], &empty_rules(), 3000);
+        assert_eq!(actions.len(), 1, "已挂起的结算必须收尾，不得漏证据");
+        assert_eq!(
+            settle_request(&actions[0]).reason,
+            SettleReason::TrackExited
+        );
+
+        // 之后即使远超退避窗口上限，只要目标还在持续出现，条目绝不能被 prune 丢弃重置
+        let actions = controller.observe("algo", &[obj], &empty_rules(), 300_000);
+        assert!(actions.is_empty(), "达到生命周期上限后不得再登记新挂起");
+        assert_eq!(controller.pending_count(), 0);
+        assert_eq!(
+            controller
+                .entries
+                .get("algo")
+                .and_then(|tracks| tracks.get(&8))
+                .map(|e| e.records_written),
+            Some(MAX_RECORDS_PER_TRACK + 1),
+            "持续活跃的目标条目必须保留其 records_written 计数，不得被 prune 破坏重置为 0"
+        );
     }
 
     #[test]
@@ -764,7 +928,7 @@ mod tests {
         let candidate = settle.candidate.as_ref().expect("结算必须携带候选");
         assert_eq!(candidate.geometry.pts_ms, 1000);
         assert_eq!(candidate.geometry.quality, 0.85);
-        assert_eq!(candidate.resident_bytes(), 80);
+        assert_eq!(candidate.resident_bytes(), 112);
     }
 
     #[test]
@@ -783,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn exit_settle_uses_last_seen_and_rearms_after_cooldown() {
+    fn exit_settle_uses_last_seen_and_rearms_after_backoff_window() {
         let mut controller = CaptureSettleController::new();
         let rules = empty_rules();
 
@@ -799,14 +963,16 @@ mod tests {
         assert!(!settle.target_in_current_frame);
         assert_eq!(settle.tracked_object.track_id, 11);
 
-        // 冷却期内同轨重入：不重新挂起。
+        // 退避窗口内同轨重入：不重新挂起（本次结算已使窗口从 5s 翻倍到 10s）。
         let actions = controller.observe("algo", &[face_object(11, 0.70)], &rules, 3000);
         assert!(actions.is_empty());
         assert_eq!(controller.pending_count(), 0);
-
-        // 冷却期满重新挂起（结算在 1400，冷却至 6400）。
         let actions = controller.observe("algo", &[face_object(11, 0.70)], &rules, 7000);
-        assert_eq!(actions.len(), 1, "冷却期满重入必须重新留盘");
+        assert!(actions.is_empty(), "退避窗口内不得重新挂起");
+
+        // 退避窗口届满重新挂起（结算在 1400，窗口 10s 至 11400）。
+        let actions = controller.observe("algo", &[face_object(11, 0.70)], &rules, 11_400);
+        assert_eq!(actions.len(), 1, "退避窗口届满重入必须重新留盘");
     }
 
     #[test]
@@ -831,7 +997,7 @@ mod tests {
             assert!(actions.is_empty(), "瞬时丢脸不得结算 (pts={pts})");
         }
         assert_eq!(controller.pending_count(), 1);
-        assert_eq!(controller.pending_bytes(), 80, "候选不得因瞬时丢脸被释放");
+        assert_eq!(controller.pending_bytes(), 112, "候选不得因瞬时丢脸被释放");
 
         // 人脸恢复：轨道仍处 pending，平台期后结算仍携带峰值候选。
         let actions = controller.observe("algo", &[face_object(41, 0.78)], &rules, 1400);
@@ -903,7 +1069,7 @@ mod tests {
     #[test]
     fn budget_rejection_keeps_existing_candidate() {
         let mut controller = CaptureSettleController::with_config(CaptureSettleConfig {
-            candidate_budget_bytes: 100,
+            candidate_budget_bytes: 112,
             ..CaptureSettleConfig::default()
         });
         let rules = empty_rules();
@@ -913,7 +1079,7 @@ mod tests {
             controller.record_candidate("algo", 31, candidate_evidence(1000, 0.80)),
             RecordCandidateOutcome::Accepted
         );
-        assert_eq!(controller.pending_bytes(), 80);
+        assert_eq!(controller.pending_bytes(), 112);
 
         // 超预算新候选：拒绝登记，既有候选与峰值几何保持不变。
         let oversized = CandidateEvidence {
@@ -924,7 +1090,7 @@ mod tests {
             controller.record_candidate("algo", 31, oversized),
             RecordCandidateOutcome::RejectedBudget
         );
-        assert_eq!(controller.pending_bytes(), 80, "拒绝后既有候选保持不变");
+        assert_eq!(controller.pending_bytes(), 112, "拒绝后既有候选保持不变");
         assert_eq!(controller.budget_rejections(), 1);
 
         // 同轨替换按“扣旧 + 加新”核算，不因旧候选占额而误拒。
@@ -932,7 +1098,7 @@ mod tests {
             controller.record_candidate("algo", 31, candidate_evidence(1040, 0.85)),
             RecordCandidateOutcome::Accepted
         );
-        assert_eq!(controller.pending_bytes(), 80);
+        assert_eq!(controller.pending_bytes(), 112);
     }
 
     #[test]
@@ -968,12 +1134,16 @@ mod tests {
         assert!(settle.candidate.is_none());
         assert!(settle.target_in_current_frame);
 
-        // 冷却期内不重复结算
+        // 去重窗口内不重复结算
         let cooldown = controller.observe("algo", &[face_object(5, 0.90)], &rules, 1100);
         assert!(cooldown.is_empty());
 
-        // 冷却过后重入：再次立即结算
-        let after = controller.observe("algo", &[face_object(5, 0.90)], &rules, 7000);
+        // 首条记录使窗口退避到 10s：基础冷却（5s）过后仍然不得重复结算
+        let backed_off = controller.observe("algo", &[face_object(5, 0.90)], &rules, 7000);
+        assert!(backed_off.is_empty(), "退避窗口必须比基础冷却更宽");
+
+        // 退避窗口过后重入：再次立即结算
+        let after = controller.observe("algo", &[face_object(5, 0.90)], &rules, 11_000);
         assert_eq!(after.len(), 1);
         assert!(matches!(after[0], CaptureAction::Settle(_)));
     }

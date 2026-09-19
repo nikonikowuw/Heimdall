@@ -107,14 +107,12 @@ fn check_rule_triggered(
 /// 语义与告警一致：Mask 遮罩内静默过滤；配置了正向规则（ROI/Line）时仅命中时触发；
 /// 未配置正向规则时默认全屏感应布防。抓拍冷却与结算时机由
 /// `crate::capture_settle::CaptureSettleController` 统一管理，本函数保持纯几何语义。
+///
+/// **抓拍以人体为主体，人脸存在与否不得参与本判定**：背身、低头的目标同样要落行迹记录，
+/// 否则人工复核会因"刻意回避镜头"而彻底丢失证据。人脸门控唯一合法的位置在识别分发
+/// （`api::capture_service::is_face_event`），那里决定的是"要不要触发 1:N 比对"。
 #[inline]
 pub(crate) fn is_capture_triggering(rules: &[DetectionRule], obj: &TrackedObject) -> bool {
-    // 人脸识别类任务的人员目标：若当前帧未检测到人脸（如背身、低头），
-    // 暂不进行抓拍判定，等待其转正脸时再触发。
-    if obj.label == "person" && obj.face.is_none() {
-        return false;
-    }
-
     let bottom_center = obj.bbox.bottom_center();
     if is_object_masked(rules, bottom_center) {
         return false;
@@ -431,9 +429,10 @@ mod tests {
         let obj = capture_obj("face", 0.6, vec![(0.5, 0.6)]);
         assert!(is_capture_triggering(&[], &obj));
 
-        // 2. 人员目标当帧无脸：不触发（等待转正脸，避免无脸帧空转）。
+        // 2. 人员目标当帧无脸：照样触发——抓拍以人体为主体，人脸只作附加证据，
+        //    否则背身/低头的人会彻底丢失行迹记录。人脸门控只在识别分发处生效。
         let person = capture_obj("person", 0.6, vec![(0.5, 0.6)]);
-        assert!(!is_capture_triggering(&[], &person));
+        assert!(is_capture_triggering(&[], &person));
 
         // 3. Mask 遮罩内静默过滤（bottom_center 位于遮罩多边形内）。
         let mask = DetectionRule {

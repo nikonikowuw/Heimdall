@@ -301,3 +301,18 @@ export function deriveEvidenceOriginBadges(
   }
   return badges
 }
+
+/**
+ * 抓拍记录的证据图回退链：人体特写 → 人脸特写 → 全景。
+ *
+ * 抓拍以人体为主体：背身/低头目标没有人脸特写，只有人体特写能看清衣着；
+ * 而迁移前落库的历史行两列皆空，只能退回全景。返回空串表示三图全无（理论上不成立，
+ * 无图不成行），调用方按「无图」渲染。
+ */
+export function captureEvidencePath(capture: {
+  bodyCropImageRelPath?: string
+  cropImageRelPath?: string
+  imageRelPath?: string
+}): string {
+  return capture.bodyCropImageRelPath || capture.cropImageRelPath || capture.imageRelPath || ''
+}

@@ -3,12 +3,14 @@ import { Camera as CameraIcon, Clock, RotateCcw, Search } from 'lucide-react'
 import { evidenceApi } from '@/lib/api'
 import type { CaptureRecord } from '@/types'
 import type { ViewMode } from './AlarmsContent'
-import { formatTimestamp, preloadImage } from '../utils'
+import { captureEvidencePath, formatTimestamp, preloadImage } from '../utils'
 
 export interface CaptureCardItemProps {
   capture: CaptureRecord
   cameraName?: string
   onSelect: () => void
+  /** 点击轨道号按该轨道过滤（追踪同一个人的一次通行；轨道号仅在单机位内有意义） */
+  onSelectTrack?: (trackId: number, cameraId: string) => void
   t: (key: string) => string
 }
 
@@ -16,19 +18,22 @@ export function CaptureCardItem({
   capture,
   cameraName,
   onSelect,
+  onSelectTrack,
   t,
 }: CaptureCardItemProps): React.ReactElement {
+  const thumbPath = captureEvidencePath(capture)
+  const panoramaPath = capture.imageRelPath
   return (
     <div
       onClick={onSelect}
-      onPointerEnter={() => preloadImage(evidenceApi.getImageUrl(capture.imageRelPath))}
-      onTouchStart={() => preloadImage(evidenceApi.getImageUrl(capture.imageRelPath))}
+      onPointerEnter={() => preloadImage(evidenceApi.getImageUrl(panoramaPath))}
+      onTouchStart={() => preloadImage(evidenceApi.getImageUrl(panoramaPath))}
       className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] transition-all duration-200 hover:border-cyan-500/50 hover:shadow-md"
     >
       <div className="relative aspect-square w-full overflow-hidden bg-black/90">
-        {capture.cropImageRelPath || capture.imageRelPath ? (
+        {thumbPath ? (
           <img
-            src={evidenceApi.getImageUrl(capture.cropImageRelPath || capture.imageRelPath)}
+            src={evidenceApi.getImageUrl(thumbPath)}
             alt={capture.captureId}
             loading="lazy"
             decoding="async"
@@ -41,9 +46,20 @@ export function CaptureCardItem({
         )}
 
         <div className="absolute top-2 left-2 flex items-center gap-1.5">
-          <span className="rounded-md bg-cyan-500/80 px-2 py-0.5 font-mono text-[10px] font-bold text-white shadow-xs backdrop-blur-md">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSelectTrack?.(capture.trackId, capture.cameraId)
+            }}
+            disabled={!onSelectTrack}
+            title={t('trackFilter.byTrack')}
+            className={`rounded-md bg-cyan-500/80 px-2 py-0.5 font-mono text-[10px] font-bold text-white shadow-xs backdrop-blur-md transition-colors ${
+              onSelectTrack ? 'cursor-pointer hover:bg-cyan-400/90' : ''
+            }`}
+          >
             #{capture.trackId}
-          </span>
+          </button>
           <span className="rounded-md bg-black/60 px-1.5 py-0.5 font-mono text-[10px] text-white backdrop-blur-xs">
             {capture.targetLabel}
           </span>
@@ -80,6 +96,7 @@ export interface CapturesContentProps {
   onResetFilters?: () => void
   onClearSearch?: () => void
   onSelect: (capture: CaptureRecord) => void
+  onSelectTrack?: (trackId: number, cameraId: string) => void
   t: (key: string, options?: Record<string, unknown>) => string
 }
 
@@ -92,6 +109,7 @@ export function CapturesContent({
   onResetFilters,
   onClearSearch,
   onSelect,
+  onSelectTrack,
   t,
 }: CapturesContentProps): React.ReactElement {
   if (captures.length === 0) {
@@ -159,9 +177,7 @@ export function CapturesContent({
                 <td className="px-3.5 py-2.5">
                   <div className="h-10 w-10 overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs">
                     <img
-                      src={evidenceApi.getImageUrl(
-                        capture.cropImageRelPath || capture.imageRelPath,
-                      )}
+                      src={evidenceApi.getImageUrl(captureEvidencePath(capture))}
                       alt={capture.captureId}
                       loading="lazy"
                       decoding="async"
@@ -170,7 +186,20 @@ export function CapturesContent({
                   </div>
                 </td>
                 <td className="px-3.5 py-2.5 font-mono text-xs font-semibold text-cyan-500">
-                  #{capture.trackId}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSelectTrack?.(capture.trackId, capture.cameraId)
+                    }}
+                    disabled={!onSelectTrack}
+                    title={t('trackFilter.byTrack')}
+                    className={`transition-colors ${
+                      onSelectTrack ? 'cursor-pointer hover:text-cyan-300 hover:underline' : ''
+                    }`}
+                  >
+                    #{capture.trackId}
+                  </button>
                 </td>
                 <td className="px-3.5 py-2.5">
                   <span className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)]/60 px-2 py-0.5 font-mono text-[11px] text-[var(--text-primary)]">
@@ -207,6 +236,7 @@ export function CapturesContent({
           capture={capture}
           cameraName={cameraNameMap?.[capture.cameraId]}
           onSelect={() => onSelect(capture)}
+          onSelectTrack={onSelectTrack}
           t={t}
         />
       ))}

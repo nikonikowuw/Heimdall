@@ -402,6 +402,8 @@ async fn test_captures_list_exposes_evidence_origin_and_template_metadata() {
         image_rel_path: Set("captures/img_peak.jpg".to_string()),
         crop_image_id: Set("crop_peak".to_string()),
         crop_image_rel_path: Set("captures/crop_peak.jpg".to_string()),
+        body_crop_image_id: Set("body_peak".to_string()),
+        body_crop_image_rel_path: Set("captures/body_peak.jpg".to_string()),
         image_source: Set("peak_candidate".to_string()),
         image_stream: Set("sub".to_string()),
         image_pts_ms: Set(1_741_100_060_000),
@@ -421,8 +423,24 @@ async fn test_captures_list_exposes_evidence_origin_and_template_metadata() {
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     };
+    // 一条背身/低下头的记录：无人脸特写，但必须有人体特写（人工复核看衣着）
+    let faceless = CaptureActiveModel {
+        capture_id: Set("cap_faceless".to_string()),
+        camera_id: Set("CAM-01".to_string()),
+        track_id: Set(9),
+        target_label: Set("person".to_string()),
+        image_rel_path: Set("captures/img_faceless.jpg".to_string()),
+        crop_image_id: Set(String::new()),
+        crop_image_rel_path: Set(String::new()),
+        body_crop_image_id: Set("body_faceless".to_string()),
+        body_crop_image_rel_path: Set("captures/body_faceless.jpg".to_string()),
+        captured_at: Set(chrono::Utc::now()),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
     CaptureRepo::insert(&state.db, peak).await.unwrap();
     CaptureRepo::insert(&state.db, legacy).await.unwrap();
+    CaptureRepo::insert(&state.db, faceless).await.unwrap();
 
     let req = Request::builder()
         .method("GET")
@@ -430,14 +448,14 @@ async fn test_captures_list_exposes_evidence_origin_and_template_metadata() {
         .header("Authorization", format!("Bearer {token}"))
         .body(Body::empty())
         .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let items = json["data"].as_array().expect("列表响应必须为数组");
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 3);
 
     let by_id = |capture_id: &str| {
         items
@@ -453,6 +471,8 @@ async fn test_captures_list_exposes_evidence_origin_and_template_metadata() {
     assert_eq!(peak_json["imagePtsMs"], 1_741_100_060_000_i64);
     assert_eq!(peak_json["fusedCount"], 4);
     assert_eq!(peak_json["templateQuality"], 0.72);
+    assert_eq!(peak_json["cropImageRelPath"], "captures/crop_peak.jpg");
+    assert_eq!(peak_json["bodyCropImageRelPath"], "captures/body_peak.jpg");
 
     // 2. 历史记录未标注：必须为 null，不能把 0 当成 1970 年时标暴露给前端
     let legacy_json = by_id("cap_legacy");
@@ -461,6 +481,44 @@ async fn test_captures_list_exposes_evidence_origin_and_template_metadata() {
     assert!(legacy_json["imagePtsMs"].is_null());
     assert!(legacy_json["fusedCount"].is_null());
     assert!(legacy_json["templateQuality"].is_null());
+
+    // 3. 无脸记录：人脸特写为空串（"未产出"），人体特写必须存在
+    let faceless_json = by_id("cap_faceless");
+    assert_eq!(faceless_json["cropImageRelPath"], "");
+    assert_eq!(
+        faceless_json["bodyCropImageRelPath"],
+        "captures/body_faceless.jpg"
+    );
+
+    // 4. 轨道过滤必须走服务端（列表分页 + 客户端过滤会把结果截断成空白页）
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/captures?camera_id=CAM-01&track_id=9")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let filtered = json["data"].as_array().expect("列表响应必须为数组");
+    assert_eq!(filtered.len(), 1, "轨道过滤必须只返回该轨道记录");
+    assert_eq!(filtered[0]["captureId"], "cap_faceless");
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/evidence/captures/count?camera_id=CAM-01&track_id=9")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["data"]["total"], 1);
 }
 
 #[tokio::test]

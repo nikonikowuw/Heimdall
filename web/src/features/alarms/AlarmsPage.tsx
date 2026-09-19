@@ -80,6 +80,8 @@ export function AlarmsPage(): React.ReactElement {
   const [selectedRuleType, setSelectedRuleType] = useState<string>('all')
   const [selectedSeverity, setSelectedSeverity] = useState<string>('all')
   const [selectedStatus, setSelectedStatus] = useState<string>('all')
+  // 轨道过滤：与机位联合生效（track_id 仅在单机位追踪器内唯一），用于回看同一个人的一次通行
+  const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState<string>('')
 
   // 时间维度筛选 (默认查询当前最新记录 - 今天)
@@ -179,17 +181,6 @@ export function AlarmsPage(): React.ReactElement {
     return Array.from(set)
   }, [alarms, captures])
 
-  // 是否存在活跃的非默认过滤条件
-  const hasActiveFilters = Boolean(
-    searchQuery.trim() ||
-    selectedCameraId ||
-    selectedTargetLabel ||
-    (activeTab === 'alarms' && selectedRuleType !== 'all') ||
-    (activeTab === 'alarms' && selectedSeverity !== 'all') ||
-    selectedStatus !== 'all' ||
-    timeRange.quickPreset !== 'today',
-  )
-
   const activeFilterCount = useMemo(() => {
     let count = 0
     if (searchQuery.trim()) count++
@@ -198,6 +189,7 @@ export function AlarmsPage(): React.ReactElement {
     if (activeTab === 'alarms' && selectedRuleType !== 'all') count++
     if (activeTab === 'alarms' && selectedSeverity !== 'all') count++
     if (selectedStatus !== 'all') count++
+    if (selectedTrackId !== null) count++
     if (timeRange.quickPreset !== 'today') count++
     return count
   }, [
@@ -208,8 +200,12 @@ export function AlarmsPage(): React.ReactElement {
     selectedRuleType,
     selectedSeverity,
     selectedStatus,
+    selectedTrackId,
     timeRange.quickPreset,
   ])
+
+  // 是否存在活跃的非默认过滤条件
+  const hasActiveFilters = activeFilterCount > 0
 
   const handleResetFilters = useCallback(() => {
     setSearchQuery('')
@@ -218,7 +214,20 @@ export function AlarmsPage(): React.ReactElement {
     setSelectedRuleType('all')
     setSelectedSeverity('all')
     setSelectedStatus('all')
+    setSelectedTrackId(null)
     setTimeRange(getInitialTodayRange())
+    setPage(1)
+  }, [])
+
+  /**
+   * 点击轨道号：按「机位 + 轨道」回看同一个人的一次通行。
+   *
+   * 轨道号只在单机位追踪器内唯一，因此必须同时锁定机位，否则会把其他通道的
+   * 同号轨道混进同一次「行迹」里。筛选在服务端执行（列表分页 + 客户端过滤会截断结果）。
+   */
+  const handleSelectTrack = useCallback((trackId: number, cameraId: string) => {
+    setSelectedTrackId(trackId)
+    if (cameraId) setSelectedCameraId(cameraId)
     setPage(1)
   }, [])
 
@@ -233,6 +242,7 @@ export function AlarmsPage(): React.ReactElement {
   const handleSwitchTab = (tab: EvidenceTab) => {
     setActiveTab(tab)
     setSelectedStatus('all')
+    setSelectedTrackId(null)
     setSelectedRuleType('all')
     pendingAlarmsRef.current = []
     pendingCountRef.current = 0
@@ -284,6 +294,7 @@ export function AlarmsPage(): React.ReactElement {
           evidenceApi.listCaptures({
             cameraId: camId,
             targetLabel: targetLbl,
+            trackId: selectedTrackId ?? undefined,
             startTime: startMs,
             endTime: endMs,
             limit: pageSize,
@@ -292,6 +303,7 @@ export function AlarmsPage(): React.ReactElement {
           evidenceApi.countCaptures({
             cameraId: camId,
             targetLabel: targetLbl,
+            trackId: selectedTrackId ?? undefined,
             startTime: startMs,
             endTime: endMs,
           }),
@@ -333,6 +345,7 @@ export function AlarmsPage(): React.ReactElement {
     selectedRuleType,
     selectedSeverity,
     selectedStatus,
+    selectedTrackId,
     timeRange,
     page,
     pageSize,
@@ -933,7 +946,10 @@ export function AlarmsPage(): React.ReactElement {
           <div className="group/sel relative inline-flex items-center">
             <select
               value={selectedCameraId}
-              onChange={(e) => handleFilterChange(setSelectedCameraId, e.target.value)}
+              onChange={(e) => {
+                handleFilterChange(setSelectedCameraId, e.target.value)
+                setSelectedTrackId(null)
+              }}
               className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
                 selectedCameraId
                   ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
@@ -1155,6 +1171,22 @@ export function AlarmsPage(): React.ReactElement {
             </div>
           )}
 
+          {/* 轨道筛选徽标：仅抓拍 Tab 会出现取值 */}
+          {activeTab === 'captures' && selectedTrackId !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedTrackId(null)
+                setPage(1)
+              }}
+              className="flex items-center gap-1.5 rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1.5 font-mono text-xs font-semibold text-cyan-500 shadow-2xs backdrop-blur-md transition-all hover:border-cyan-500/70 hover:bg-cyan-500/20"
+              title={t('trackFilter.clear')}
+            >
+              <span>{t('trackFilter.active', { trackId: selectedTrackId })}</span>
+              <X className="h-3 w-3" />
+            </button>
+          )}
+
           {/* 秒级精细时间选择器 */}
           <DateTimeRangePicker
             value={timeRange}
@@ -1271,6 +1303,7 @@ export function AlarmsPage(): React.ReactElement {
             onResetFilters={handleResetFilters}
             onClearSearch={() => setSearchQuery('')}
             onSelect={setLightboxCapture}
+            onSelectTrack={handleSelectTrack}
             t={t}
           />
         )}

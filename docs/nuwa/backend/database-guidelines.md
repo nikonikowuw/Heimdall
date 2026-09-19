@@ -30,6 +30,14 @@
   否则会把两条不同时钟轴的时标混在一个列里。判定统一由
   [`SnapshotResult::comparable_frame_pts_ms`](../../../crates/pipeline/src/snapshot.rs) 给出，不在 API 层重算。
 - **抓拍行必须与证据图成对（无图不成行）**：`capture_records` 的行本身就是证据产物（人工复核、识别裁剪、存储统计的输入），快照生成失败时跳过落库并记 WARN，**不得**写入空 `image_rel_path` 的行——不可复核的行会污染证据表并掩盖证据缺失率。告警表相反：告警事实由规则引擎独立判定，证据失败时行必须保留并标注证据状态（`evidenceStatus`，待实现，见 [契约](./detection-alarm-contract.md)）。取证失败的可观测性由日志计数承担，不靠造无图行。
+- **抓拍特写列成对语义**：`capture_records.crop_image_rel_path` 是人脸特写（有脸时），
+  `capture_records.body_crop_image_rel_path` 是人体特写（抓拍记录恒产出，人工复查看衣着的主体证据）。
+  两列均 `NOT NULL DEFAULT ''`，空串表示「本次未产出」（背身/低头没有人脸特写）、迁移前遗留行同样为空串，
+  读取侧一律归一为「不可用」，不得用近似图或默认值充填（迁移 `V18`）。
+- **淘汰必须登记记录的全部物理文件**：`EvictionStore` 用
+  [`EvidenceRecordFiles`](../../../crates/pipeline/src/storage_cleaner/mod.rs) 承载一条记录的整套相对路径，
+  抓拍最多三图（全景 + 人脸特写 + 人体特写），由仓储层过滤空串后传入。漏登记任一图 = 留下永不回收的孤儿文件，
+  破坏「图在案在，图销案销」；`find_all_active_image_paths` 的孤儿对账同样以该集合为准。
 - 融合模板元数据（`fused_count` / `template_quality`）可空存储；一次性握手信号（如 `template_mature`）
   不落库：把「是否成熟」这种事件写成列，只会得到无法解释的 NULL。
 - **[规划设计] 录像切片实体 (RecordSegments)**：独立于抓拍单张图管理，表名为 `record_segments`。记录 `camera_id`、`stream_type`、`start_time_ms`、`end_time_ms`、`duration_ms`、`file_path`（必须为相对路径）、`has_motion`、`has_alarm`、`alarm_ids` 及 `status`。必须建立 `(camera_id, start_time_ms, end_time_ms)` 与 `(status, has_alarm, start_time_ms)` 复合索引，满足时间轴毫秒级范围检索与高效淘汰。详见 [视频录像与回放引擎设计](../designs/video-recording-and-playback-engine.md)。

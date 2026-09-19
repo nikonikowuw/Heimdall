@@ -203,7 +203,9 @@
     "pipExpand": "放大特寫",
     "pipCollapse": "收起特寫",
     "close": "關閉",
-    "escHint": "按 Esc 或點擊外部空白處即可關閉"
+    "escHint": "按 Esc 或點擊外部空白處即可關閉",
+    "faceCrop": "人臉特寫",
+    "bodyCrop": "人體特寫"
   },
   "toast": {
     "ruleTriggered": "偵測到 {{target}} 觸發規則",
@@ -211,5 +213,10 @@
   },
   "common": {
     "cancel": "取消"
+  },
+  "trackFilter": {
+    "byTrack": "按此軌道篩選（同一個人的一次通行）",
+    "active": "軌道 #{{trackId}}",
+    "clear": "取消軌道篩選"
   }
 }

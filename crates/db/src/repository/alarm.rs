@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 
 use crate::entity::alarm::{ActiveModel, Column, Entity, Model};
@@ -235,6 +237,34 @@ impl AlarmRepo {
 
     pub async fn count_all(db: &DatabaseConnection) -> Result<u64, DbError> {
         Entity::find().count(db).await.map_err(DbError::from)
+    }
+
+    /// 查询全部活跃告警记录关联的文件相对路径（全景 + 特写）
+    pub async fn find_all_active_image_paths(
+        db: &DatabaseConnection,
+    ) -> Result<HashSet<String>, DbError> {
+        #[derive(FromQueryResult)]
+        struct PathRow {
+            image_rel_path: String,
+            crop_image_rel_path: String,
+        }
+        let rows = Entity::find()
+            .select_only()
+            .column(Column::ImageRelPath)
+            .column(Column::CropImageRelPath)
+            .into_model::<PathRow>()
+            .all(db)
+            .await?;
+        let mut set = HashSet::new();
+        for r in rows {
+            if !r.image_rel_path.is_empty() {
+                set.insert(r.image_rel_path);
+            }
+            if !r.crop_image_rel_path.is_empty() {
+                set.insert(r.crop_image_rel_path);
+            }
+        }
+        Ok(set)
     }
 
     pub async fn find_before(

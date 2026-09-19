@@ -20,6 +20,12 @@ pub struct Model {
     pub image_rel_path: String,
     pub crop_image_id: String,
     pub crop_image_rel_path: String,
+    /// 人体特写（抓拍记录恒产出）；空串 = 未产出或迁移前遗留行。
+    #[sea_orm(column_type = "Text")]
+    pub body_crop_image_id: String,
+    /// 人体特写相对路径；空串 = 未产出或迁移前遗留行。
+    #[sea_orm(column_type = "Text")]
+    pub body_crop_image_rel_path: String,
     /// 证据图产生路径（`peak_candidate` / `targeted`）；空串 = 未标注。
     #[sea_orm(column_type = "Text")]
     pub image_source: String,

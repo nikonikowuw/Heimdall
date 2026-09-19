@@ -86,19 +86,37 @@ pub async fn trigger_storage_cleanup(
 #[derive(Debug)]
 pub struct DbEvictionStoreAdapter(pub sea_orm::DatabaseConnection);
 
+fn capture_to_eviction_files(m: db::entity::capture::Model) -> pipeline::EvidenceRecordFiles {
+    pipeline::EvidenceRecordFiles::new(
+        m.id,
+        [
+            m.image_rel_path,
+            m.crop_image_rel_path,
+            m.body_crop_image_rel_path,
+        ],
+    )
+}
+
+fn alarm_to_eviction_files(m: db::entity::alarm::Model) -> pipeline::EvidenceRecordFiles {
+    pipeline::EvidenceRecordFiles::new(m.id, [m.image_rel_path, m.crop_image_rel_path])
+}
+
+fn recognition_to_eviction_files(
+    m: db::entity::recognition::Model,
+) -> pipeline::EvidenceRecordFiles {
+    pipeline::EvidenceRecordFiles::new(m.id, [m.field_crop_path])
+}
+
 #[async_trait::async_trait]
 impl pipeline::storage_cleaner::EvictionStore for DbEvictionStoreAdapter {
     async fn find_oldest_captures(
         &self,
         limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, pipeline::PipelineError> {
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
         let models = db::CaptureRepo::find_oldest_batch(&self.0, limit)
             .await
             .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询最老抓拍失败: {e}")))?;
-        Ok(models
-            .into_iter()
-            .map(|m| (m.id, m.image_rel_path, m.crop_image_rel_path))
-            .collect())
+        Ok(models.into_iter().map(capture_to_eviction_files).collect())
     }
 
     async fn delete_captures(&self, ids: &[i64]) -> Result<u64, pipeline::PipelineError> {
@@ -110,14 +128,11 @@ impl pipeline::storage_cleaner::EvictionStore for DbEvictionStoreAdapter {
     async fn find_oldest_alarms(
         &self,
         limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, pipeline::PipelineError> {
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
         let models = db::AlarmRepo::find_oldest_batch(&self.0, limit)
             .await
             .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询最老告警失败: {e}")))?;
-        Ok(models
-            .into_iter()
-            .map(|m| (m.id, m.image_rel_path, m.crop_image_rel_path))
-            .collect())
+        Ok(models.into_iter().map(alarm_to_eviction_files).collect())
     }
 
     async fn delete_alarms(&self, ids: &[i64]) -> Result<u64, pipeline::PipelineError> {
@@ -129,13 +144,13 @@ impl pipeline::storage_cleaner::EvictionStore for DbEvictionStoreAdapter {
     async fn find_oldest_recognitions(
         &self,
         limit: u64,
-    ) -> Result<Vec<(i64, String)>, pipeline::PipelineError> {
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
         let models = db::RecognitionRepo::find_oldest_batch(&self.0, limit)
             .await
             .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询最老识别记录失败: {e}")))?;
         Ok(models
             .into_iter()
-            .map(|m| (m.id, m.field_crop_path))
+            .map(recognition_to_eviction_files)
             .collect())
     }
 
@@ -149,23 +164,20 @@ impl pipeline::storage_cleaner::EvictionStore for DbEvictionStoreAdapter {
         &self,
         before: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, pipeline::PipelineError> {
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
         let models = db::CaptureRepo::find_before(&self.0, before, limit)
             .await
             .map_err(|e| {
                 pipeline::PipelineError::Snapshot(format!("按保留天数查询抓拍失败: {e}"))
             })?;
-        Ok(models
-            .into_iter()
-            .map(|m| (m.id, m.image_rel_path, m.crop_image_rel_path))
-            .collect())
+        Ok(models.into_iter().map(capture_to_eviction_files).collect())
     }
 
     async fn find_recognitions_before(
         &self,
         before: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<(i64, String)>, pipeline::PipelineError> {
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
         let models = db::RecognitionRepo::find_before(&self.0, before, limit)
             .await
             .map_err(|e| {
@@ -173,7 +185,7 @@ impl pipeline::storage_cleaner::EvictionStore for DbEvictionStoreAdapter {
             })?;
         Ok(models
             .into_iter()
-            .map(|m| (m.id, m.field_crop_path))
+            .map(recognition_to_eviction_files)
             .collect())
     }
 
@@ -181,16 +193,30 @@ impl pipeline::storage_cleaner::EvictionStore for DbEvictionStoreAdapter {
         &self,
         before: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<(i64, String, String)>, pipeline::PipelineError> {
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
         let models = db::AlarmRepo::find_before(&self.0, before, limit)
             .await
             .map_err(|e| {
                 pipeline::PipelineError::Snapshot(format!("按保留天数查询告警失败: {e}"))
             })?;
-        Ok(models
-            .into_iter()
-            .map(|m| (m.id, m.image_rel_path, m.crop_image_rel_path))
-            .collect())
+        Ok(models.into_iter().map(alarm_to_eviction_files).collect())
+    }
+
+    async fn find_all_active_image_paths(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, pipeline::PipelineError> {
+        let mut set = db::CaptureRepo::find_all_active_image_paths(&self.0)
+            .await
+            .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询活跃抓拍路径失败: {e}")))?;
+        let alarm_paths = db::AlarmRepo::find_all_active_image_paths(&self.0)
+            .await
+            .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询活跃告警路径失败: {e}")))?;
+        set.extend(alarm_paths);
+        let rec_paths = db::RecognitionRepo::find_all_active_image_paths(&self.0)
+            .await
+            .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询活跃识别路径失败: {e}")))?;
+        set.extend(rec_paths);
+        Ok(set)
     }
 }
 

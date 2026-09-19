@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 
 use crate::entity::recognition::{ActiveModel, Column, Entity, Model};
@@ -144,6 +146,29 @@ impl RecognitionRepo {
 
     pub async fn count_all(db: &DatabaseConnection) -> Result<u64, DbError> {
         Entity::find().count(db).await.map_err(DbError::from)
+    }
+
+    /// 查询全部活跃识别记录关联的文件相对路径（现场特写）
+    pub async fn find_all_active_image_paths(
+        db: &DatabaseConnection,
+    ) -> Result<HashSet<String>, DbError> {
+        #[derive(FromQueryResult)]
+        struct PathRow {
+            field_crop_path: String,
+        }
+        let rows = Entity::find()
+            .select_only()
+            .column(Column::FieldCropPath)
+            .into_model::<PathRow>()
+            .all(db)
+            .await?;
+        let mut set = HashSet::new();
+        for r in rows {
+            if !r.field_crop_path.is_empty() {
+                set.insert(r.field_crop_path);
+            }
+        }
+        Ok(set)
     }
 
     pub async fn find_before(

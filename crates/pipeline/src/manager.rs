@@ -156,6 +156,15 @@ impl CameraPipelineContext {
         self.ai_active.load(Ordering::Relaxed) || self.preview_count.load(Ordering::Relaxed) > 0
     }
 
+    /// 当前 AI 分析消费的码流类型（冻结于编码/取证调用时刻）。
+    pub fn analysis_stream(&self) -> EvidenceImageStream {
+        if self.is_main_stream_analysis.load(Ordering::Acquire) {
+            EvidenceImageStream::Main
+        } else {
+            EvidenceImageStream::Sub
+        }
+    }
+
     /// 若无活跃预览与 AI 任务，按需释放解码器会话与显存
     pub async fn release_decoder_if_idle(&self) {
         if !self.is_decoder_needed() {
@@ -657,19 +666,22 @@ impl PipelineManager {
         };
         // 冻结编码时刻的码流来源：结算可能在一个结算窗口之后才发生，
         // 届时重新采样 `is_main_stream_analysis` 可能已换流，记录来源就会失真。
-        let stream = if ctx.is_main_stream_analysis.load(Ordering::Acquire) {
-            EvidenceImageStream::Main
-        } else {
-            EvidenceImageStream::Sub
-        };
-        let crop_bbox = geometry.face_bbox.unwrap_or(geometry.bbox);
+        let stream = ctx.analysis_stream();
+        // 两张特写各司其职：人脸特写（有脸时）给识别复核，人体特写给人工复查看衣着。
+        // 人体框永远裁剪，否则背身/低头的人就只能靠全景里的小小一个人影辨认。
         let encoded = self
             .snapshot_engine
-            .encode_candidate_async(camera_id, analyzed_frame, Some(crop_bbox), stream)
+            .encode_candidate_async(
+                camera_id,
+                analyzed_frame,
+                crate::snapshot::EvidenceCrops::for_capture(geometry.face_bbox, geometry.bbox),
+                stream,
+            )
             .await?;
         let evidence = CandidateEvidence {
             full_jpeg: encoded.full_jpeg.into(),
-            crop_jpeg: encoded.crop_jpeg.into(),
+            crop_jpeg: encoded.crop_jpeg.map(Into::into),
+            body_crop_jpeg: encoded.body_crop_jpeg.map(Into::into),
             width: encoded.width,
             height: encoded.height,
             geometry,
@@ -954,6 +966,34 @@ impl PipelineManager {
         analyzed_frame: FrameRef,
     ) -> Result<SnapshotResult, PipelineError> {
         self.trigger_snapshot_internal(camera_id, target_pts_ms, bbox, Some(analyzed_frame))
+            .await
+    }
+
+    /// 抓拍记录专用取证：只用推理实际消费的分析帧生成证据，**绝不提升到主码流**。
+    ///
+    /// 与 [`Self::trigger_snapshot_for_frame`] 的区别：那条路径在子码流分析时会尝试主码流
+    /// 环复用或按需 GOP 追帧，两路 PTS 轴经 `EvidenceTarget` 换算后才能对齐。抓拍记录不需要
+    /// 这种提升：证据图码流本就该等于该任务的分析码流（任务配主码流即得高清），
+    /// 代价则是从此不可能出现“图与检测框跨轴错配”。
+    pub async fn snapshot_from_analysis_frame(
+        &self,
+        camera_id: &str,
+        analysis_pts_ms: i64,
+        face_bbox: Option<BoundingBox>,
+        body_bbox: BoundingBox,
+        analyzed_frame: FrameRef,
+    ) -> Result<SnapshotResult, PipelineError> {
+        if analyzed_frame.camera_id != camera_id || analyzed_frame.timestamp != analysis_pts_ms {
+            return Err(PipelineError::Snapshot(format!(
+                "分析帧与抓拍目标不一致 (camera={}, framePts={}, targetPts={})",
+                analyzed_frame.camera_id, analyzed_frame.timestamp, analysis_pts_ms
+            )));
+        }
+        let ctx = self.get_or_create_context(camera_id).await;
+        // 冻结编码时刻的码流来源，与候选路径 (`retain_capture_candidate`) 保持同一口径。
+        let stream = ctx.analysis_stream();
+        self.snapshot_engine
+            .save_capture_snapshot_async(camera_id, analyzed_frame, face_bbox, body_bbox, stream)
             .await
     }
 
@@ -2854,10 +2894,17 @@ mod tests {
             "峰值候选帧与检测帧同轴，PTS 必须可直接比对"
         );
 
-        // 4. 冷却后重入并留存：清轨必须同步释放内存候选，且不产生额外盘上产物
-        let actions = {
+        // 4. 退避窗口届满后重入并留存：本次结算已使去重窗口从 5s 翻倍到 10s，
+        //    因此 7000 仍在窗口内、必须等到 11600 之后才允许重新挂起。
+        //    清轨必须同步释放内存候选，且不产生额外盘上产物。
+        let blocked = {
             let mut settle = lock_capture_settle(&ctx);
             settle.observe(algorithm_id, std::slice::from_ref(&object), &rules, 7000)
+        };
+        assert!(blocked.is_empty(), "退避窗口内不得重新挂起");
+        let actions = {
+            let mut settle = lock_capture_settle(&ctx);
+            settle.observe(algorithm_id, std::slice::from_ref(&object), &rules, 12_000)
         };
         assert!(matches!(
             actions[0],
@@ -2868,7 +2915,7 @@ mod tests {
             geometry: FrameGeometry {
                 bbox: object.bbox,
                 face_bbox: None,
-                pts_ms: 7000,
+                pts_ms: 12_000,
                 quality: 0.80,
             },
         };
@@ -2877,7 +2924,7 @@ mod tests {
                 camera_id,
                 algorithm_id,
                 &third,
-                test_nv12_frame(camera_id, 7000),
+                test_nv12_frame(camera_id, 12_000),
             )
             .await
             .expect("重入候选留存失败");
@@ -2888,8 +2935,8 @@ mod tests {
         }
         assert_eq!(
             dir_entry_count(&temp_dir.join(camera_id)),
-            2,
-            "盘上只应有结算写下的两份正式证据"
+            3,
+            "盘上只应有结算写下的三份正式证据（全景 + 人脸特写 + 人体特写）"
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
