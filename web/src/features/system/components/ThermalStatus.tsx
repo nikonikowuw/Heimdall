@@ -8,7 +8,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Thermometer, AlertTriangle } from 'lucide-react'
-import type { ThermalMetrics, ThermalZone } from '../../../types/system'
+import type { ThermalMetrics, ThermalZone } from '@/types/system'
 import { getTemperatureColor, getTemperatureBgColor } from './colors'
 
 interface ThermalStatusProps {

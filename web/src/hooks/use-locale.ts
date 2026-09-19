@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import i18n, { type Locale, LOCALE_STORAGE_KEY, SUPPORTED_LOCALES } from '../i18n'
+import i18n, { type Locale, LOCALE_STORAGE_KEY, SUPPORTED_LOCALES } from '@/i18n'
 
 function subscribe(callback: () => void) {
   i18n.on('languageChanged', callback)

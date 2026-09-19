@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Wifi, WifiOff, Shield, Pencil, Check, X, Cable, Network, Globe, Radio } from 'lucide-react'
-import { systemApi } from '../../lib/system-api'
-import { RefreshButton } from '../../components/RefreshButton'
+import { systemApi } from '@/lib/system-api'
+import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { NetworkTrialBanner } from './components/NetworkTrialBanner'
 import { NetworkConflictModal } from './components/NetworkConflictModal'
 import { useNetworkTrial } from './hooks/use-network-trial'
-import type { NetworkInterface, IpConfig } from '../../types/system'
+import type { NetworkInterface, IpConfig } from '@/types/system'
 
 const DEFAULT_IPV4_DRAFT: IpConfig = {
   method: 'dhcp',

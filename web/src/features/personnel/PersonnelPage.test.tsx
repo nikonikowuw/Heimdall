@@ -1,6 +1,6 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { PersonnelItem } from '../../types'
+import type { PersonnelItem } from '@/types'
 import { BatchDeleteModal } from './components/BatchDeleteModal'
 import { DeleteConfirmModal } from './components/DeleteConfirmModal'
 import { PersonnelBatchBar } from './components/PersonnelBatchBar'

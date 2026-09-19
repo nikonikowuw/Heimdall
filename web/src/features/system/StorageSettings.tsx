@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, Trash2, Check, RotateCcw } from 'lucide-react'
-import { systemApi } from '../../lib/system-api'
-import { RefreshButton } from '../../components/RefreshButton'
+import { systemApi } from '@/lib/system-api'
+import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from './components/ConfirmDialog'
-import type { StorageConfig, StorageStatus, SnapshotSystemConfig } from '../../types/system'
+import type { StorageConfig, StorageStatus, SnapshotSystemConfig } from '@/types/system'
 
 export function StorageSettings(): React.ReactElement {
   const { t } = useTranslation('system')

@@ -1,7 +1,7 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { ToastItemView, Toaster } from './Toast'
-import { toast, useToastStore } from '../../stores/toast'
+import { toast, useToastStore } from '@/stores/toast'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({

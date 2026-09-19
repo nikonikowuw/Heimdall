@@ -17,7 +17,7 @@ import type {
   ForceSyncResponse,
   SetTimeResponse,
   SnapshotSystemConfig,
-} from '../types/system'
+} from '@/types/system'
 
 async function get<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
   return request<T>(endpoint, { signal })

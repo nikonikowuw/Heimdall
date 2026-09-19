@@ -2,8 +2,8 @@ import React from 'react'
 import { AlertCircle, Gauge, Layers, Users } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { motionTokens } from '../../../lib/motionTokens'
-import type { PersonnelStats } from '../../../types'
+import { motionTokens } from '@/lib/motionTokens'
+import type { PersonnelStats } from '@/types'
 
 export interface PersonnelStatsGridProps {
   stats: PersonnelStats

@@ -13,9 +13,9 @@ import {
   CheckCircle2,
   X,
 } from 'lucide-react'
-import { useDismissStack } from '../../hooks/use-dismiss-stack'
-import { gb28181Api } from '../../lib/api'
-import type { Gb28181ConfigResponse } from '../../types'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { gb28181Api } from '@/lib/api'
+import type { Gb28181ConfigResponse } from '@/types'
 
 export function Gb28181Settings(): React.ReactElement {
   const { t } = useTranslation('system')

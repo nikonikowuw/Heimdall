@@ -6,7 +6,7 @@
  */
 
 import { useTranslation } from 'react-i18next'
-import type { MemoryMetrics } from '../../../types/system'
+import type { MemoryMetrics } from '@/types/system'
 
 interface MemoryDetailProps {
   memory: MemoryMetrics

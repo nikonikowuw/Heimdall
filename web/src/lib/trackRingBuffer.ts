@@ -1,4 +1,4 @@
-import type { TrackedBBox } from '../types'
+import type { TrackedBBox } from '@/types'
 
 export interface TimedTrackFrame {
   pts: number // 13 位 UTC Unix 毫秒时间戳

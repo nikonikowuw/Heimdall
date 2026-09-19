@@ -12,10 +12,10 @@ import {
   Wand2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { LocaleDropdown } from '../../components/LocaleDropdown'
-import { useTheme } from '../../hooks/use-theme'
-import { authApi } from '../../lib/api'
-import { getRememberedUser, useAuthStore } from '../../stores/auth'
+import { LocaleDropdown } from '@/components/LocaleDropdown'
+import { useTheme } from '@/hooks/use-theme'
+import { authApi } from '@/lib/api'
+import { getRememberedUser, useAuthStore } from '@/stores/auth'
 import { CursorRing } from './components/CursorRing'
 import { GargantuaCanvas } from './components/GargantuaCanvas'
 

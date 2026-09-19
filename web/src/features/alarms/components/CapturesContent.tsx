@@ -1,7 +1,7 @@
 import React from 'react'
 import { Camera as CameraIcon, Clock, RotateCcw, Search } from 'lucide-react'
-import { evidenceApi } from '../../../lib/api'
-import type { CaptureRecord } from '../../../types'
+import { evidenceApi } from '@/lib/api'
+import type { CaptureRecord } from '@/types'
 import type { ViewMode } from './AlarmsContent'
 import { formatTimestamp, preloadImage } from '../utils'
 

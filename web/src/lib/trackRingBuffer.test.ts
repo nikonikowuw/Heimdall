@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TrackedBBox } from '../types'
+import type { TrackedBBox } from '@/types'
 import { TrackRingBuffer } from './trackRingBuffer'
 
 describe('TrackRingBuffer', () => {

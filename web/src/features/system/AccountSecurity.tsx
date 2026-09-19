@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Calendar, Clock, KeyRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { authApi } from '../../lib/api'
-import { formatTimestampShort } from '../../lib/time'
-import { RefreshButton } from '../../components/RefreshButton'
+import { authApi } from '@/lib/api'
+import { formatTimestampShort } from '@/lib/time'
+import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
-import type { AdminUserDto } from '../../types'
+import type { AdminUserDto } from '@/types'
 
 interface AccountSecurityProps {
   onOpenPasswordModal?: () => void

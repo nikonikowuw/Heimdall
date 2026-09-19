@@ -12,10 +12,10 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '../../../hooks/use-dismiss-stack'
-import { motionTokens } from '../../../lib/motionTokens'
-import { formatTimestamp } from '../../../lib/time'
-import type { ReextractProgress, ReextractFaceFeaturesReport } from '../../../types'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { motionTokens } from '@/lib/motionTokens'
+import { formatTimestamp } from '@/lib/time'
+import type { ReextractProgress, ReextractFaceFeaturesReport } from '@/types'
 
 export interface ReextractModalProps {
   isOpen: boolean

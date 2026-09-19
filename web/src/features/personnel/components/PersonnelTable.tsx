@@ -1,9 +1,9 @@
 import React, { useState } from 'react'
 import { Check, Copy, Eye, ImagePlus, Pencil, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { evidenceApi } from '../../../lib/api'
-import { copyToClipboard } from '../../../lib/utils'
-import type { PersonnelItem } from '../../../types'
+import { evidenceApi } from '@/lib/api'
+import { copyToClipboard } from '@/lib/utils'
+import type { PersonnelItem } from '@/types'
 
 export interface PersonnelTableProps {
   items: PersonnelItem[]

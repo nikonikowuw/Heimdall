@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { Eye, EyeOff, KeyRound, Loader2, Lock, ShieldCheck, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '../hooks/use-dismiss-stack'
-import { authApi } from '../lib/api'
-import { useAuthStore } from '../stores/auth'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { authApi } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth'
 
 export interface ChangePasswordModalProps {
   isOpen: boolean

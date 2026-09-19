@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Globe } from 'lucide-react'
-import { useLocale } from '../hooks/use-locale'
-import { type Locale, SUPPORTED_LOCALES } from '../i18n'
+import { useLocale } from '@/hooks/use-locale'
+import { type Locale, SUPPORTED_LOCALES } from '@/i18n'
 
 const LOCALE_LABELS: Record<Locale, string> = {
   'zh-CN': '简体中文',

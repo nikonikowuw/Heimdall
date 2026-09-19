@@ -1,5 +1,5 @@
-import i18n from '../i18n'
-import { useAuthStore } from '../stores/auth'
+import i18n from '@/i18n'
+import { useAuthStore } from '@/stores/auth'
 import type {
   AdminUserDto,
   AlarmRecord,
@@ -39,7 +39,7 @@ import type {
   UpdateCameraRequest,
   UpdateGb28181ConfigRequest,
   UploadAlgorithmResponse,
-} from '../types'
+} from '@/types'
 
 export class ApiError extends Error {
   code: number
@@ -152,8 +152,8 @@ export const cameraApi = {
     )
   },
 
-  deduceSubStream(rtspUrl: string): Promise<import('../types').SubStreamCandidate[]> {
-    return api.post<import('../types').SubStreamCandidate[]>('/cameras/deduce-substream', {
+  deduceSubStream(rtspUrl: string): Promise<import('@/types').SubStreamCandidate[]> {
+    return api.post<import('@/types').SubStreamCandidate[]>('/cameras/deduce-substream', {
       rtspUrl,
     })
   },

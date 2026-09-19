@@ -2,9 +2,9 @@ import React, { useId } from 'react'
 import { AlertTriangle, Loader2, Trash2 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '../../../hooks/use-dismiss-stack'
-import { motionTokens } from '../../../lib/motionTokens'
-import type { PersonnelItem } from '../../../types'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { motionTokens } from '@/lib/motionTokens'
+import type { PersonnelItem } from '@/types'
 
 export interface BatchDeleteModalProps {
   isOpen: boolean

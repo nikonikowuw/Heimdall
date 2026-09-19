@@ -1,6 +1,6 @@
 import React from 'react'
 import { RotateCcw, Search, UserCheck } from 'lucide-react'
-import type { RecognitionRecord } from '../../../types'
+import type { RecognitionRecord } from '@/types'
 import type { ViewMode } from './AlarmsContent'
 import { RecognitionCardItem } from './RecognitionCardItem'
 import { RecognitionTableRow } from './RecognitionTableRow'

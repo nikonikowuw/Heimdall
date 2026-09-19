@@ -3,8 +3,8 @@ import { AlertCircle, AlertTriangle, CheckCircle2, ChevronRight, Info, X } from 
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import { motionTokens } from '../../lib/motionTokens'
-import { toast, type ToastItem, type ToastType, useToastStore } from '../../stores/toast'
+import { motionTokens } from '@/lib/motionTokens'
+import { toast, type ToastItem, type ToastType, useToastStore } from '@/stores/toast'
 
 interface ToneConfig {
   icon: typeof CheckCircle2

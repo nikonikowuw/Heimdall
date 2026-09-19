@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { TrackedBBox } from '../types'
+import type { TrackedBBox } from '@/types'
 import { trackStore } from './trackStore'
 
 describe('trackStore', () => {

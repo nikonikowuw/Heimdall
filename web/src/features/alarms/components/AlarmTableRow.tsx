@@ -1,6 +1,6 @@
 import React from 'react'
-import { evidenceApi } from '../../../lib/api'
-import type { AlarmRecord } from '../../../types'
+import { evidenceApi } from '@/lib/api'
+import type { AlarmRecord } from '@/types'
 import { formatTimestamp, getRuleTypeLabel } from '../utils'
 
 export interface AlarmTableRowProps {

@@ -1,8 +1,8 @@
 import React from 'react'
 import { AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { ToastItemView } from '../../../components/ui/Toast'
-import type { ToastItem, ToastType } from '../../../stores/toast'
+import { ToastItemView } from '@/components/ui/Toast'
+import type { ToastItem, ToastType } from '@/stores/toast'
 
 export type PersonnelNoticeType = ToastType
 

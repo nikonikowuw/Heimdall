@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import { RefreshCw, Clock, Globe, AlertTriangle, Check } from 'lucide-react'
-import { systemApi } from '../../lib/system-api'
-import { formatTimestamp } from '../../lib/time'
-import { RefreshButton } from '../../components/RefreshButton'
+import { systemApi } from '@/lib/system-api'
+import { formatTimestamp } from '@/lib/time'
+import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from './components/ConfirmDialog'
-import type { TimeStatus, TimeConfig } from '../../types/system'
+import type { TimeStatus, TimeConfig } from '@/types/system'
 
 const TIMEZONES = [
   'Asia/Shanghai',

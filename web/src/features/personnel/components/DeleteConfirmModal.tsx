@@ -2,10 +2,10 @@ import { useEffect, useId } from 'react'
 import { AlertTriangle, Loader2, Trash2, User, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '../../../hooks/use-dismiss-stack'
-import { evidenceApi } from '../../../lib/api'
-import { motionTokens } from '../../../lib/motionTokens'
-import type { PersonnelItem } from '../../../types'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { evidenceApi } from '@/lib/api'
+import { motionTokens } from '@/lib/motionTokens'
+import type { PersonnelItem } from '@/types'
 
 export interface DeleteConfirmModalProps {
   isOpen: boolean

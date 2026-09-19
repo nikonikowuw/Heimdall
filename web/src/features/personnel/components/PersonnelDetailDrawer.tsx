@@ -20,12 +20,12 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '../../../hooks/use-dismiss-stack'
-import { evidenceApi, personnelApi } from '../../../lib/api'
-import { motionTokens } from '../../../lib/motionTokens'
-import { formatTimestamp } from '../../../lib/time'
-import { copyToClipboard } from '../../../lib/utils'
-import type { PersonnelDetail, GalleryFace, ReextractFaceFeaturesReport } from '../../../types'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { evidenceApi, personnelApi } from '@/lib/api'
+import { motionTokens } from '@/lib/motionTokens'
+import { formatTimestamp } from '@/lib/time'
+import { copyToClipboard } from '@/lib/utils'
+import type { PersonnelDetail, GalleryFace, ReextractFaceFeaturesReport } from '@/types'
 import { ReextractModal } from './ReextractModal'
 
 export interface PersonnelDetailDrawerProps {

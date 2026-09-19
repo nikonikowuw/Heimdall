@@ -1,6 +1,6 @@
 import React from 'react'
 import { AlertCircle, RotateCcw, Search } from 'lucide-react'
-import type { AlarmRecord } from '../../../types'
+import type { AlarmRecord } from '@/types'
 import { AlarmCardItem } from './AlarmCardItem'
 import { AlarmTableRow } from './AlarmTableRow'
 

@@ -8,7 +8,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Cpu } from 'lucide-react'
-import type { NpuMetrics, NpuCoreMetrics } from '../../../types/system'
+import type { NpuMetrics, NpuCoreMetrics } from '@/types/system'
 import { getUsageColor } from './colors'
 
 interface NpuOverviewProps {

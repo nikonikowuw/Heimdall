@@ -12,7 +12,7 @@ import {
   API_CODE_CONFIG_CONFLICT,
   isConfigConflictError,
 } from './api'
-import { useAuthStore } from '../stores/auth'
+import { useAuthStore } from '@/stores/auth'
 
 describe('API Client', () => {
   it('ApiError should hold code and message', () => {

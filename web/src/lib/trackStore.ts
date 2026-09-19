@@ -1,4 +1,4 @@
-import type { TrackedBBox } from '../types'
+import type { TrackedBBox } from '@/types'
 import { TrackRingBuffer } from './trackRingBuffer'
 
 export type TrackListener = (tracks: TrackedBBox[], pts?: number) => void

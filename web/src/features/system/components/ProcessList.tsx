@@ -6,7 +6,7 @@
 
 import { useTranslation } from 'react-i18next'
 import { Terminal } from 'lucide-react'
-import type { ProcessMetrics } from '../../../types/system'
+import type { ProcessMetrics } from '@/types/system'
 import { getUsageColor } from './colors'
 
 interface ProcessListProps {

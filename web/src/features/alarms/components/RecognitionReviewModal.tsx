@@ -14,10 +14,10 @@ import {
   ZoomIn,
 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { useDismissStack } from '../../../hooks/use-dismiss-stack'
-import { evidenceApi } from '../../../lib/api'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { evidenceApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
-import type { FaceCandidateItem, RecognitionRecord } from '../../../types'
+import type { FaceCandidateItem, RecognitionRecord } from '@/types'
 import {
   formatCosineSimilarityPercent,
   getCosineSimilarityLevel,

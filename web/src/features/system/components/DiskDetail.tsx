@@ -6,7 +6,7 @@
  */
 
 import { useTranslation } from 'react-i18next'
-import type { DiskMetrics } from '../../../types/system'
+import type { DiskMetrics } from '@/types/system'
 
 interface DiskDetailProps {
   disk: DiskMetrics

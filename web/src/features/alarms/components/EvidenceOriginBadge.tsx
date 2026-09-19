@@ -1,6 +1,6 @@
 import React from 'react'
 import { Minimize2, Star } from 'lucide-react'
-import type { EvidenceImageSource, EvidenceImageStream } from '../../../types'
+import type { EvidenceImageSource, EvidenceImageStream } from '@/types'
 import { type EvidenceOriginBadgeKind, deriveEvidenceOriginBadges } from '../utils'
 
 export interface EvidenceOriginBadgeProps {

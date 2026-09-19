@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import type { NavTab } from '../app/layout'
+import type { NavTab } from '@/app/layout'
 import { isAnyModalOpen } from './use-dismiss-stack'
 
 export interface GlobalShortcutsOptions {

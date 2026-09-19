@@ -2,10 +2,10 @@ import React, { useState, useRef, useEffect, useCallback, useId } from 'react'
 import { AlertCircle, Image as ImageIcon, Loader2, Star, UploadCloud, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '../../../hooks/use-dismiss-stack'
-import { personnelApi } from '../../../lib/api'
-import { motionTokens } from '../../../lib/motionTokens'
-import type { PersonnelItem, PersonnelDetail } from '../../../types'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { personnelApi } from '@/lib/api'
+import { motionTokens } from '@/lib/motionTokens'
+import type { PersonnelItem, PersonnelDetail } from '@/types'
 
 export interface PersonnelModalProps {
   isOpen: boolean

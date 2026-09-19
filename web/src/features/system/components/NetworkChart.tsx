@@ -8,7 +8,7 @@
 import { useMemo, useRef, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Wifi, WifiOff, ArrowDown, ArrowUp, AlertTriangle, TrendingUp } from 'lucide-react'
-import type { NetworkInterfaceMetrics } from '../../../types/system'
+import type { NetworkInterfaceMetrics } from '@/types/system'
 
 interface NetworkChartProps {
   interfaces: NetworkInterfaceMetrics[]

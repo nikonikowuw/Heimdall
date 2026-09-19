@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { systemApi } from '../../../lib/system-api'
-import type { NetworkChangeOperation } from '../../../types/system'
+import { systemApi } from '@/lib/system-api'
+import type { NetworkChangeOperation } from '@/types/system'
 
 interface UseNetworkTrialProps {
   onReload: () => Promise<void>

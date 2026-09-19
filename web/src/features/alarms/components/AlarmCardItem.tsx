@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, CheckCircle2, Clock, ExternalLink } from 'lucide-react'
-import { evidenceApi } from '../../../lib/api'
-import type { AlarmRecord } from '../../../types'
+import { evidenceApi } from '@/lib/api'
+import type { AlarmRecord } from '@/types'
 import { formatTimestamp, getRuleTypeLabel, preloadImage } from '../utils'
 
 export interface AlarmCardItemProps {

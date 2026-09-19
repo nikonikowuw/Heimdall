@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { AlertOctagon, Network, ShieldAlert, X } from 'lucide-react'
-import { useDismissStack } from '../../../hooks/use-dismiss-stack'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 
 export interface NetworkConflictModalProps {
   open: boolean

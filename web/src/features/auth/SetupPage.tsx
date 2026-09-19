@@ -1,8 +1,8 @@
 import React, { useState } from 'react'
 import { ArrowRight, KeyRound, ShieldCheck, User, Wand2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { authApi } from '../../lib/api'
-import { useAuthStore } from '../../stores/auth'
+import { authApi } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth'
 
 interface SetupPageProps {
   onSuccess?: () => void

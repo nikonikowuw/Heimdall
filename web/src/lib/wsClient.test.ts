@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useAuthStore } from '../stores/auth'
-import { type CameraTelemetry, type CameraTracksPayload, WS_TOPICS } from '../types'
+import { useAuthStore } from '@/stores/auth'
+import { type CameraTelemetry, type CameraTracksPayload, WS_TOPICS } from '@/types'
 import { telemetryStore } from './telemetryStore'
 import { trackStore } from './trackStore'
 import { wsClient } from './wsClient'

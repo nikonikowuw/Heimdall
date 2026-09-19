@@ -13,8 +13,8 @@ import {
   ZoomIn,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { evidenceApi } from '../../../lib/api'
-import type { RecognitionRecord } from '../../../types'
+import { evidenceApi } from '@/lib/api'
+import type { RecognitionRecord } from '@/types'
 import { formatCosineSimilarityPercent, getCosineSimilarityLevel } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'

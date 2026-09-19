@@ -18,10 +18,10 @@ import {
   Clock,
   Network,
 } from 'lucide-react'
-import { systemApi } from '../../lib/system-api'
-import { RefreshButton } from '../../components/RefreshButton'
+import { systemApi } from '@/lib/system-api'
+import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
-import type { SystemOverview as SystemOverviewData } from '../../types/system'
+import type { SystemOverview as SystemOverviewData } from '@/types/system'
 
 // 导入新的组件
 import { CpuHeatmap } from './components/CpuHeatmap'

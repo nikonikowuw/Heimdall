@@ -16,8 +16,8 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { alarmApi, cameraApi, evidenceApi } from '../../lib/api'
-import { wsClient } from '../../lib/wsClient'
+import { alarmApi, cameraApi, evidenceApi } from '@/lib/api'
+import { wsClient } from '@/lib/wsClient'
 import {
   type AlarmRecord,
   type AlarmSeverity,
@@ -29,7 +29,7 @@ import {
   type RecognitionStatus,
   type RecognitionStatusChangedPayload,
   WS_TOPICS,
-} from '../../types'
+} from '@/types'
 import { AlarmLightboxModal } from './components/AlarmLightboxModal'
 import { AlarmsContent, type ViewMode } from './components/AlarmsContent'
 import { BatchActionBar } from './components/BatchActionBar'

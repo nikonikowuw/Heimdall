@@ -12,10 +12,10 @@ import {
   X,
 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
-import { useDismissStack } from '../../../hooks/use-dismiss-stack'
-import { evidenceApi } from '../../../lib/api'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { evidenceApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
-import type { AlarmRecord } from '../../../types'
+import type { AlarmRecord } from '@/types'
 import { useImageZoomPan } from '../hooks/useImageZoomPan'
 import { ZoomControls } from './ZoomControls'
 import {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CameraTelemetry } from '../types'
+import type { CameraTelemetry } from '@/types'
 import { telemetryStore } from './telemetryStore'
 
 describe('telemetryStore', () => {

@@ -1,4 +1,4 @@
-import type { CameraTelemetry } from '../types'
+import type { CameraTelemetry } from '@/types'
 
 /** 遥测快照过期时间，防止断流后 HUD 长时间显示旧热度。 */
 export const CAMERA_TELEMETRY_TTL_MS = 1500

@@ -11,7 +11,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import { formatTimestamp } from '../../../lib/time'
+import { formatTimestamp } from '@/lib/time'
 
 export type QuickTimePreset =
   'all' | '5m' | '15m' | '30m' | '1h' | '24h' | 'today' | '7d' | 'custom'

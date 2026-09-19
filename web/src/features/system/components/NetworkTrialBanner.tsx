@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, CheckCircle2, RotateCcw, ShieldAlert } from 'lucide-react'
-import type { NetworkChangeOperation } from '../../../types/system'
+import type { NetworkChangeOperation } from '@/types/system'
 
 interface NetworkTrialBannerProps {
   operation: NetworkChangeOperation

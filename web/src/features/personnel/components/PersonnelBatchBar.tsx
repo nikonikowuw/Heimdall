@@ -2,7 +2,7 @@ import React from 'react'
 import { RefreshCw, Trash2, X, Users } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { motionTokens } from '../../../lib/motionTokens'
+import { motionTokens } from '@/lib/motionTokens'
 
 export interface PersonnelBatchBarProps {
   selectedCount: number

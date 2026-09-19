@@ -1,6 +1,6 @@
-import { useAuthStore } from '../stores/auth'
+import { useAuthStore } from '@/stores/auth'
 import { isCameraTelemetry, telemetryStore } from './telemetryStore'
-import { type CameraTelemetry, type CameraTracksPayload, WS_TOPICS } from '../types'
+import { type CameraTelemetry, type CameraTracksPayload, WS_TOPICS } from '@/types'
 import { trackStore } from './trackStore'
 
 export type WsEventHandler<T = unknown> = (payload: T, timestamp: number) => void

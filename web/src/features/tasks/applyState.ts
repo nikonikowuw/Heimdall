@@ -1,4 +1,4 @@
-import type { InstanceApplyState } from '../../types'
+import type { InstanceApplyState } from '@/types'
 
 /**
  * 参与配置收敛判定的实例最小视图。

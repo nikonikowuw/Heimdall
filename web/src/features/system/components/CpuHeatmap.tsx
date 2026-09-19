@@ -7,7 +7,7 @@
 
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { CoreMetrics } from '../../../types/system'
+import type { CoreMetrics } from '@/types/system'
 import { getUsageColor, getUsageBgColor } from './colors'
 
 interface CpuHeatmapProps {
