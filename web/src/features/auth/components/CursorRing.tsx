@@ -1,38 +1,129 @@
 import React, { useEffect, useRef } from 'react'
 
-export const CursorRing: React.FC = () => {
+type CursorMode = 'default' | 'clickable' | 'input' | 'destructive'
+
+interface RingConfig {
+  width: string
+  height: string
+  borderRadius: string
+  borderColor: string
+  backgroundColor: string
+  boxShadow: string
+  dotOpacity: string
+  dotBg: string
+  dotShadow: string
+}
+
+const RING_CONFIGS: Record<CursorMode, RingConfig> = {
+  default: {
+    width: '30px',
+    height: '30px',
+    borderRadius: '9999px',
+    borderColor: 'rgba(var(--accent-rgb, 59, 130, 246), 0.45)',
+    backgroundColor: 'rgba(var(--accent-rgb, 59, 130, 246), 0.04)',
+    boxShadow: '0 0 12px rgba(var(--accent-rgb, 59, 130, 246), 0.18)',
+    dotOpacity: '1',
+    dotBg: 'var(--accent)',
+    dotShadow: '0 0 6px rgba(var(--accent-rgb, 59, 130, 246), 0.7)',
+  },
+  clickable: {
+    width: '44px',
+    height: '44px',
+    borderRadius: '9999px',
+    borderColor: 'var(--accent)',
+    backgroundColor: 'var(--accent-soft)',
+    boxShadow: '0 0 18px rgba(var(--accent-rgb, 59, 130, 246), 0.35)',
+    dotOpacity: '1',
+    dotBg: 'var(--accent)',
+    dotShadow: '0 0 8px rgba(var(--accent-rgb, 59, 130, 246), 0.8)',
+  },
+  input: {
+    width: '3px',
+    height: '20px',
+    borderRadius: '2px',
+    borderColor: 'var(--accent)',
+    backgroundColor: 'var(--accent)',
+    boxShadow: '0 0 10px rgba(var(--accent-rgb, 59, 130, 246), 0.5)',
+    dotOpacity: '0',
+    dotBg: 'var(--accent)',
+    dotShadow: '0 0 6px rgba(var(--accent-rgb, 59, 130, 246), 0.7)',
+  },
+  destructive: {
+    width: '42px',
+    height: '42px',
+    borderRadius: '9999px',
+    borderColor: 'var(--destructive)',
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    boxShadow: '0 0 18px rgba(239, 68, 68, 0.4)',
+    dotOpacity: '1',
+    dotBg: 'var(--destructive)',
+    dotShadow: '0 0 8px rgba(239, 68, 68, 0.9)',
+  },
+}
+
+export function CursorRing(): React.ReactElement | null {
+  const dotRef = useRef<HTMLDivElement | null>(null)
   const ringRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
+    // 触控设备或开启无障碍减少动态效果时直接禁用
+    if (
+      typeof window === 'undefined' ||
+      window.matchMedia('(pointer: coarse)').matches ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return
+    }
+
+    const dot = dotRef.current
     const ring = ringRef.current
-    if (!ring) return
+    if (!dot || !ring) return
 
-    let mouseX = window.innerWidth * 0.5
-    let mouseY = window.innerHeight * 0.5
-    let ringX = mouseX
-    let ringY = mouseY
+    let mouseX = -100
+    let mouseY = -100
+    let ringX = -100
+    let ringY = -100
+    let isVisible = false
     let isMouseDown = false
-    let isHovering = false
-    let isInputHover = false
-    let isActive = false
-    let isMoving = false
+    let currentMode: CursorMode = 'default'
     let animId = 0
+    let isMoving = false
 
-    // 唤醒并启动平滑追迹渲染循环
     const ensureRendering = () => {
-      if (!animId && !document.hidden) {
+      if (!animId && !document.hidden && isVisible) {
         animId = requestAnimationFrame(render)
       }
+    }
+
+    const updateRingStyle = () => {
+      const cfg = RING_CONFIGS[currentMode]
+      ring.style.width = cfg.width
+      ring.style.height = cfg.height
+      ring.style.borderRadius = cfg.borderRadius
+      ring.style.borderColor = cfg.borderColor
+      ring.style.backgroundColor = cfg.backgroundColor
+      ring.style.boxShadow = cfg.boxShadow
+      dot.style.opacity = cfg.dotOpacity
+      dot.style.backgroundColor = cfg.dotBg
+      dot.style.boxShadow = cfg.dotShadow
     }
 
     const onPointerMove = (e: PointerEvent) => {
       mouseX = e.clientX
       mouseY = e.clientY
-      isMoving = true
-      if (!isActive) {
-        isActive = true
+
+      // 核心激光点零延迟即时跟手
+      dot.style.transform = `translate3d(${mouseX}px, ${mouseY}px, 0) translate(-50%, -50%)`
+
+      if (!isVisible) {
+        isVisible = true
+        ringX = mouseX
+        ringY = mouseY
+        dot.style.opacity = currentMode === 'input' ? '0' : '1'
         ring.style.opacity = '1'
       }
+
+      isMoving = true
       ensureRendering()
     }
 
@@ -46,48 +137,53 @@ export const CursorRing: React.FC = () => {
       ensureRendering()
     }
 
-    // 事件委托：仅在 document 挂载单个委托监听，性能提升 10 倍以上
+    const onPointerLeave = () => {
+      isVisible = false
+      dot.style.opacity = '0'
+      ring.style.opacity = '0'
+      if (animId) {
+        cancelAnimationFrame(animId)
+        animId = 0
+      }
+    }
+
     const onPointerOver = (e: PointerEvent) => {
       const target = e.target as HTMLElement | null
       if (!target) return
 
-      const input = target.closest('input[type=text], input[type=password]')
+      const input = target.closest(
+        'input[type=text], input[type=password], input[type=search], textarea',
+      )
       if (input) {
-        isInputHover = true
-        isHovering = false
-        ring.style.width = '20px'
-        ring.style.height = '32px'
-        ring.style.borderRadius = '6px'
-        ring.style.borderColor = 'var(--cursor-border, rgba(129, 140, 248, 0.7))'
+        currentMode = 'input'
+        updateRingStyle()
         ensureRendering()
         return
       }
 
-      const clickable = target.closest('button, a, input[type=checkbox], label, [role="button"]')
+      const destructive = target.closest(
+        '[data-destructive="true"], .text-\\[var\\(--destructive\\)\\]',
+      )
+      if (destructive) {
+        currentMode = 'destructive'
+        updateRingStyle()
+        ensureRendering()
+        return
+      }
+
+      const clickable = target.closest(
+        'button, a, input[type=checkbox], input[type=radio], label, select, [role="button"], [role="tab"], .reticle-target, .nav-btn',
+      )
       if (clickable) {
-        isHovering = true
-        isInputHover = false
-        ring.style.width = '42px'
-        ring.style.height = '42px'
-        ring.style.borderRadius = '9999px'
-        ring.style.borderColor = 'var(--cursor-text, #818cf8)'
+        currentMode = 'clickable'
+        updateRingStyle()
         ensureRendering()
         return
       }
-    }
 
-    const onPointerOut = (e: PointerEvent) => {
-      const target = e.target as HTMLElement | null
-      if (!target) return
-
-      const interactive = target.closest('button, a, input, label, [role="button"]')
-      if (interactive) {
-        isHovering = false
-        isInputHover = false
-        ring.style.width = '32px'
-        ring.style.height = '32px'
-        ring.style.borderRadius = '9999px'
-        ring.style.borderColor = 'var(--cursor-border, rgba(129, 140, 248, 0.6))'
+      if (currentMode !== 'default') {
+        currentMode = 'default'
+        updateRingStyle()
         ensureRendering()
       }
     }
@@ -96,25 +192,25 @@ export const CursorRing: React.FC = () => {
     window.addEventListener('pointerdown', onPointerDown, { passive: true })
     window.addEventListener('pointerup', onPointerUp, { passive: true })
     document.addEventListener('pointerover', onPointerOver, { passive: true })
-    document.addEventListener('pointerout', onPointerOut, { passive: true })
+    document.documentElement.addEventListener('pointerleave', onPointerLeave, { passive: true })
 
     const render = () => {
-      if (isActive) {
+      if (isVisible) {
         const dx = mouseX - ringX
         const dy = mouseY - ringY
-        ringX += dx * 0.32
-        ringY += dy * 0.32
+        ringX += dx * 0.28
+        ringY += dy * 0.28
 
         let scaleStr = 'scale(1)'
         if (isMouseDown) {
-          scaleStr = 'scale(0.75)'
-        } else if (isHovering && !isInputHover) {
-          scaleStr = 'scale(1.18)'
+          scaleStr = 'scale(0.78)'
+        } else if (currentMode === 'clickable') {
+          scaleStr = 'scale(1.06)'
         }
+
         ring.style.transform = `translate3d(${ringX}px, ${ringY}px, 0) translate(-50%, -50%) ${scaleStr}`
 
-        // 当光标静止且已精确贴合当前位置时，休眠暂停 RAF，节省 CPU 能耗
-        if (Math.abs(dx) < 0.15 && Math.abs(dy) < 0.15 && !isMouseDown) {
+        if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1 && !isMouseDown) {
           isMoving = false
           animId = 0
           return
@@ -124,14 +220,13 @@ export const CursorRing: React.FC = () => {
       animId = requestAnimationFrame(render)
     }
 
-    // 后台页面休眠
     const onVisibilityChange = () => {
       if (document.hidden) {
         if (animId) {
           cancelAnimationFrame(animId)
           animId = 0
         }
-      } else if (isMoving) {
+      } else if (isMoving && isVisible) {
         ensureRendering()
       }
     }
@@ -145,16 +240,23 @@ export const CursorRing: React.FC = () => {
       window.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('pointerup', onPointerUp)
       document.removeEventListener('pointerover', onPointerOver)
-      document.removeEventListener('pointerout', onPointerOut)
+      document.documentElement.removeEventListener('pointerleave', onPointerLeave)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
 
   return (
-    <div
-      ref={ringRef}
-      id="cursor-ring"
-      className="pointer-events-none fixed top-0 left-0 z-50 h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full border-[1.5px] border-indigo-400/60 bg-indigo-500/5 opacity-0 backdrop-blur-[1px] transition-[width,height,border-radius,border-color,opacity] duration-200 ease-out will-change-transform max-md:hidden"
-    />
+    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden select-none max-md:hidden">
+      {/* 1. 外围环境物理跟随微光环 */}
+      <div
+        ref={ringRef}
+        className="pointer-events-none fixed top-0 left-0 h-7 w-7 rounded-full border-[1.5px] border-[var(--accent)]/45 bg-[var(--accent)]/5 opacity-0 backdrop-blur-[0.5px] transition-[width,height,border-radius,border-color,background-color,box-shadow,opacity] duration-200 ease-out will-change-transform"
+      />
+      {/* 2. 核心激光点 (0 延迟即时瞄准) */}
+      <div
+        ref={dotRef}
+        className="pointer-events-none fixed top-0 left-0 h-1 w-1 rounded-full bg-[var(--accent)] opacity-0 shadow-[0_0_6px_rgba(var(--accent-rgb),0.8)] transition-opacity duration-150 ease-out will-change-transform"
+      />
+    </div>
   )
 }

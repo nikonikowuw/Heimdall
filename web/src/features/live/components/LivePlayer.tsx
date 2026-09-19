@@ -747,7 +747,7 @@ export function LivePlayer({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-primary)] ${className}`}
+      className={`relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--video-surface)] ${className}`}
     >
       {/* 底层 WebCodecs 零拷贝低延迟渲染画布 */}
       <canvas

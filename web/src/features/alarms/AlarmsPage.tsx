@@ -759,7 +759,7 @@ export function AlarmsPage(): React.ReactElement {
   const totalPages = Math.max(1, Math.ceil(effectiveTotalCount / pageSize))
 
   return (
-    <div className="flex h-full flex-col gap-3 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] select-none">
+    <div className="flex h-full flex-col gap-3 text-[var(--text-primary)] select-none">
       {/* 实时新告警浮条 */}
       <RealtimeAlarmBanner
         count={unreadRealtimeCount}
@@ -1234,11 +1234,11 @@ export function AlarmsPage(): React.ReactElement {
         </div>
       )}
 
-      {/* 主视图内容区 (带平滑淡入微动效，表格模式下无冗余内边距与双重卡片嵌套) */}
+      {/* 主视图内容区 (带平滑淡入微动效，卡片模式纯通透呼吸感，表格模式紧凑包裹) */}
       <div
         key={activeTab}
-        className={`frosted-glass animate-tab-fade flex-1 overflow-auto rounded-2xl shadow-xs ${
-          viewMode === 'table' ? 'p-0' : 'p-4'
+        className={`animate-tab-fade flex-1 overflow-auto ${
+          viewMode === 'table' ? 'frosted-glass rounded-2xl p-0 shadow-xs' : 'pr-1'
         }`}
       >
         {activeTab === 'alarms' && (

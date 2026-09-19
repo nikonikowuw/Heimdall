@@ -1,27 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import {
-  AlertCircle,
-  Check,
-  CheckCircle2,
-  Copy,
-  Pencil,
-  Plus,
-  Radio,
-  RefreshCw,
-  Search,
-  ShieldAlert,
-  ShieldCheck,
-  Trash2,
-  Video,
-  X,
-} from 'lucide-react'
+import { AlertCircle, CheckCircle2, Plus, Radio, RefreshCw, Search, Video, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { motionTokens } from '@/lib/motionTokens'
 import { cameraApi, gb28181Api, taskApi } from '../../lib/api'
 import type { Camera, Gb28181Device, TaskSummaryDto } from '../../types'
-import { getProbeBadge, normalizeProbeStatus } from './cameraStatus'
+import { normalizeProbeStatus } from './cameraStatus'
 import { CameraModal } from './components/CameraModal'
+import { CameraCardItem } from './components/CameraCardItem'
 import { DeleteCameraModal } from './components/DeleteCameraModal'
 import { BatchImportGbModal } from './components/BatchImportGbModal'
 import { copyToClipboard } from '../../lib/utils'
@@ -40,6 +25,8 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [protocolFilter, setProtocolFilter] = useState<'all' | 'rtsp' | 'gb28181'>('all')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(12)
   const [gbDevices, setGbDevices] = useState<Gb28181Device[]>([])
   const [isBatchImportOpen, setIsBatchImportOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
@@ -219,6 +206,31 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
     })
   }, [cameras, searchQuery, statusFilter, protocolFilter])
 
+  // 分页切片计算
+  const totalPages = Math.max(1, Math.ceil(filteredCameras.length / pageSize))
+
+  // 安全页码截断（防止删除最后一条记录后停留在空白越界页）
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [page, totalPages])
+
+  const paginatedCameras = useMemo(() => {
+    if (pageSize >= 999) return filteredCameras
+    const start = (page - 1) * pageSize
+    return filteredCameras.slice(start, start + pageSize)
+  }, [filteredCameras, page, pageSize])
+
+  // 检查摄像头是否已绑定任务
+  const taskMap = useMemo(() => {
+    const map = new Map<string, TaskSummaryDto>()
+    for (const item of tasks) {
+      map.set(item.cameraId, item)
+    }
+    return map
+  }, [tasks])
+
   // 聚合统计国标设备未纳管通道与全量纳管指标
   const { unmanagedChannels, totalChannelsCount, importedChannelsCount } = useMemo(() => {
     const list: { device: Gb28181Device; channelId: string; name: string }[] = []
@@ -236,15 +248,6 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
     }
     return { unmanagedChannels: list, totalChannelsCount: total, importedChannelsCount: imported }
   }, [gbDevices])
-
-  // 检查摄像头是否已绑定任务
-  const taskMap = useMemo(() => {
-    const map = new Map<string, TaskSummaryDto>()
-    for (const item of tasks) {
-      map.set(item.cameraId, item)
-    }
-    return map
-  }, [tasks])
 
   return (
     <div className="flex h-full flex-col gap-4 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] select-none">
@@ -368,7 +371,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
               type="text"
               data-search-input="true"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
+                setPage(1)
+              }}
               placeholder={t('manage.searchPlaceholder', {
                 defaultValue: '按设备名称、ID 或 RTSP 地址搜索...',
               })}
@@ -377,7 +383,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             {searchQuery ? (
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
+                onClick={() => {
+                  setSearchQuery('')
+                  setPage(1)
+                }}
                 className="shrink-0 rounded-md p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)]"
                 title={t('manage.clearSearch')}
               >
@@ -393,7 +402,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
           <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
             <button
               type="button"
-              onClick={() => setProtocolFilter('all')}
+              onClick={() => {
+                setProtocolFilter('all')
+                setPage(1)
+              }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 protocolFilter === 'all'
                   ? 'bg-[var(--accent)] text-white shadow-xs'
@@ -404,7 +416,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             </button>
             <button
               type="button"
-              onClick={() => setProtocolFilter('rtsp')}
+              onClick={() => {
+                setProtocolFilter('rtsp')
+                setPage(1)
+              }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 protocolFilter === 'rtsp'
                   ? 'bg-[var(--accent)] text-white shadow-xs'
@@ -415,7 +430,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             </button>
             <button
               type="button"
-              onClick={() => setProtocolFilter('gb28181')}
+              onClick={() => {
+                setProtocolFilter('gb28181')
+                setPage(1)
+              }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 protocolFilter === 'gb28181'
                   ? 'bg-cyan-600 text-white shadow-xs'
@@ -429,7 +447,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
           <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
             <button
               type="button"
-              onClick={() => setStatusFilter('all')}
+              onClick={() => {
+                setStatusFilter('all')
+                setPage(1)
+              }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 statusFilter === 'all'
                   ? 'bg-[var(--accent)] text-white shadow-xs'
@@ -440,7 +461,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             </button>
             <button
               type="button"
-              onClick={() => setStatusFilter('online')}
+              onClick={() => {
+                setStatusFilter('online')
+                setPage(1)
+              }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 statusFilter === 'online'
                   ? 'bg-emerald-500 text-white shadow-xs'
@@ -451,7 +475,10 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             </button>
             <button
               type="button"
-              onClick={() => setStatusFilter('offline')}
+              onClick={() => {
+                setStatusFilter('offline')
+                setPage(1)
+              }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 statusFilter === 'offline'
                   ? 'bg-rose-500 text-white shadow-xs'
@@ -465,9 +492,9 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
       )}
 
       {/* 设备网格列表 */}
-      <div className="frosted-glass flex-1 overflow-auto rounded-2xl p-4 shadow-xs">
+      <div className="flex-1 overflow-auto pr-1">
         {cameras.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center text-[var(--text-muted)]">
+          <div className="frosted-glass flex flex-col items-center justify-center rounded-2xl border border-[var(--border)] py-24 text-center text-[var(--text-muted)]">
             <Video className="mb-3 h-10 w-10 opacity-40" />
             <h3 className="text-base font-bold text-[var(--text-secondary)]">
               {t('manage.emptyTitle', { defaultValue: '暂无接入的网络摄像头' })}
@@ -490,7 +517,7 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             </button>
           </div>
         ) : filteredCameras.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center text-[var(--text-muted)]">
+          <div className="frosted-glass flex flex-col items-center justify-center rounded-2xl border border-[var(--border)] py-20 text-center text-[var(--text-muted)]">
             <Search className="mb-2 h-8 w-8 opacity-40" />
             <p className="text-sm font-medium text-[var(--text-secondary)]">
               {t('manage.noMatchingCameras', { defaultValue: '未找到匹配的摄像头设备' })}
@@ -502,246 +529,89 @@ export function CamerasPage({ onNavigateToTasks }: CamerasPageProps): React.Reac
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
             <AnimatePresence mode="popLayout">
-              {filteredCameras.map((camera) => {
-                const probeBadge = getProbeBadge(camera.lastProbeStatus, t)
-                const boundTask = taskMap.get(camera.cameraId)
-                const isProbing = probingCameraId === camera.cameraId
-                const isCopied = copiedCameraId === camera.cameraId
-
-                return (
-                  <motion.div
-                    key={camera.id}
-                    layout
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{
-                      duration: motionTokens.duration.fast,
-                      ease: motionTokens.easing.smooth,
-                    }}
-                    className="flex flex-col justify-between rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-4 shadow-xs transition-all hover:border-[var(--accent)]/40 hover:shadow-md"
-                  >
-                    <div>
-                      {/* 卡片头部：状态徽标与标识 */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-xs font-semibold ${probeBadge.badgeBg}`}
-                            >
-                              <span className={`h-1.5 w-1.5 rounded-full ${probeBadge.dotClass}`} />
-                              <span>{probeBadge.text}</span>
-                            </span>
-                            <span
-                              className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase ${
-                                camera.protocol === 'gb28181'
-                                  ? 'border border-cyan-500/30 bg-cyan-500/10 text-cyan-400'
-                                  : 'border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]'
-                              }`}
-                            >
-                              {camera.protocol === 'gb28181' ? 'GB28181' : 'RTSP'}
-                            </span>
-                            <span className="rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-muted)]">
-                              {camera.cameraId}
-                            </span>
-                          </div>
-                          <h3
-                            className="mt-1.5 truncate text-base font-bold text-[var(--text-primary)]"
-                            title={camera.name || camera.cameraId}
-                          >
-                            {camera.name || camera.cameraId}
-                          </h3>
-                        </div>
-
-                        {/* 快捷操作按钮 */}
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCameraToEdit(camera)
-                              setIsCameraModalOpen(true)
-                            }}
-                            title={tc('actions.edit')}
-                            className="rounded-lg p-1.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setCameraToDelete(camera)}
-                            title={tc('actions.delete')}
-                            className="rounded-lg p-1.5 text-[var(--text-muted)] transition-colors hover:bg-rose-500/10 hover:text-rose-500"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* 规格参数胶囊 */}
-                      <div className="mt-3 flex flex-wrap items-center gap-1.5 font-mono text-xs">
-                        <span className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 font-bold text-[var(--accent)]">
-                          {camera.lastCodec?.toUpperCase() || 'H.264'}
-                        </span>
-                        <span className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[var(--text-secondary)]">
-                          {camera.lastWidth && camera.lastHeight
-                            ? `${camera.lastWidth}x${camera.lastHeight}`
-                            : '1080P'}
-                        </span>
-                        <span className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 text-emerald-500">
-                          {camera.lastFps ? camera.lastFps.toFixed(1) : '25.0'} FPS
-                        </span>
-                        <span
-                          className={`rounded-md border px-2 py-0.5 font-sans text-[11px] font-medium ${
-                            camera.streamMode === 'main'
-                              ? 'border-cyan-500/40 bg-cyan-500/10 font-semibold text-cyan-400'
-                              : camera.streamMode === 'sub'
-                                ? 'border-amber-500/40 bg-amber-500/10 font-semibold text-amber-400'
-                                : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]'
-                          }`}
-                        >
-                          {camera.streamMode === 'main'
-                            ? t('manage.streamModeMainBadge', { defaultValue: '主码流分析' })
-                            : camera.streamMode === 'sub'
-                              ? t('manage.streamModeSubBadge', { defaultValue: '子码流分析' })
-                              : t('manage.streamModeAutoBadge', { defaultValue: '自动码流' })}
-                        </span>
-                      </div>
-
-                      {/* RTSP 串流地址与复制 */}
-                      <div className="mt-3 space-y-1.5">
-                        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5">
-                          <div className="flex items-center justify-between text-[11px]">
-                            <span className="font-semibold text-[var(--text-muted)]">
-                              {t('manage.mainStreamLabel', { defaultValue: '主码流' })}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                void handleCopyRtsp(camera.cameraId, camera.rtspUrl)
-                              }}
-                              className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
-                            >
-                              {isCopied ? (
-                                <>
-                                  <Check className="h-3 w-3 text-emerald-500" />
-                                  <span className="text-emerald-500">
-                                    {t('manage.copied', { defaultValue: '已复制' })}
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  <Copy className="h-3 w-3" />
-                                  <span>{t('manage.copyUrl', { defaultValue: '复制' })}</span>
-                                </>
-                              )}
-                            </button>
-                          </div>
-                          <p
-                            className="mt-1 truncate font-mono text-xs text-[var(--text-secondary)]"
-                            title={camera.rtspUrl}
-                          >
-                            {camera.rtspUrl}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* AI 任务关联状态 */}
-                      <div className="mt-3 flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-2 text-xs">
-                        <div className="flex items-center gap-2">
-                          {boundTask ? (
-                            <>
-                              <ShieldCheck className="h-4 w-4 text-emerald-500" />
-                              <div className="flex flex-col">
-                                <span className="font-semibold text-[var(--text-primary)]">
-                                  {t('manage.aiTaskBound', { defaultValue: '已配置布防任务' })}
-                                </span>
-                                <span className="font-mono text-[10px] text-[var(--text-muted)]">
-                                  {t('manage.rulesSummary', {
-                                    count: boundTask.rulesCount,
-                                    defaultValue: `${boundTask.rulesCount} 项空间几何规则`,
-                                  })}{' '}
-                                  ·{' '}
-                                  {boundTask.desiredEnabled
-                                    ? t('manage.armedStatus', { defaultValue: '布防中' })
-                                    : t('manage.disarmedStatus', { defaultValue: '未布防' })}
-                                </span>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <ShieldAlert className="h-4 w-4 text-slate-400" />
-                              <span className="text-[var(--text-muted)]">
-                                {t('manage.aiTaskUnbound', { defaultValue: '未分配 AI 任务' })}
-                              </span>
-                            </>
-                          )}
-                        </div>
-
-                        {onNavigateToTasks && (
-                          <button
-                            type="button"
-                            onClick={() => onNavigateToTasks(camera)}
-                            className="text-xs font-semibold text-[var(--accent)] hover:underline"
-                          >
-                            {boundTask
-                              ? t('manage.goToTask', { defaultValue: '前往布防' })
-                              : t('manage.createTask', { defaultValue: '创建布防' })}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* 卡片底栏：单次探活与详情 */}
-                    <div className="mt-4 flex items-center justify-between border-t border-[var(--border)] pt-3 text-xs">
-                      <span className="font-mono text-[11px] text-[var(--text-muted)]">
-                        {camera.remark || camera.protocol?.toUpperCase() || 'RTSP'}
-                      </span>
-                      {(() => {
-                        const feedback = probeFeedback[camera.cameraId]
-                        return (
-                          <button
-                            type="button"
-                            onClick={() => handleManualProbe(camera)}
-                            disabled={isProbing}
-                            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-all ${
-                              feedback === 'success'
-                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                                : feedback === 'failed'
-                                  ? 'border-rose-500/30 bg-rose-500/10 text-rose-400'
-                                  : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]'
-                            } disabled:opacity-50`}
-                          >
-                            {isProbing ? (
-                              <RefreshCw className="h-3 w-3 animate-spin text-[var(--accent)]" />
-                            ) : feedback === 'success' ? (
-                              <Check className="h-3 w-3 text-emerald-400" />
-                            ) : feedback === 'failed' ? (
-                              <AlertCircle className="h-3 w-3 text-rose-400" />
-                            ) : (
-                              <Radio className="h-3 w-3" />
-                            )}
-                            <span>
-                              {isProbing
-                                ? t('manage.probing', { defaultValue: '探活中...' })
-                                : feedback === 'success'
-                                  ? t('manage.probeSuccess', { defaultValue: '探活成功' })
-                                  : feedback === 'failed'
-                                    ? t('manage.probeFailed', { defaultValue: '探活失败' })
-                                    : t('manage.probeAction', { defaultValue: '探活' })}
-                            </span>
-                          </button>
-                        )
-                      })()}
-                    </div>
-                  </motion.div>
-                )
-              })}
+              {paginatedCameras.map((camera) => (
+                <CameraCardItem
+                  key={camera.id}
+                  camera={camera}
+                  boundTask={taskMap.get(camera.cameraId)}
+                  isProbing={probingCameraId === camera.cameraId}
+                  probeFeedback={probeFeedback[camera.cameraId]}
+                  isCopied={copiedCameraId === camera.cameraId}
+                  onCopyRtsp={(id, url) => void handleCopyRtsp(id, url)}
+                  onManualProbe={handleManualProbe}
+                  onEdit={(cam) => {
+                    setCameraToEdit(cam)
+                    setIsCameraModalOpen(true)
+                  }}
+                  onDelete={(cam) => setCameraToDelete(cam)}
+                  onNavigateToTasks={onNavigateToTasks}
+                />
+              ))}
             </AnimatePresence>
           </div>
         )}
+      </div>
+
+      {/* 分页控制栏 (常驻吸底工规条，支持每页条数选择) */}
+      <div className="frosted-glass flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
+        <div className="flex items-center gap-3">
+          <span>{t('pagination.page', { current: page })}</span>
+          {searchQuery || statusFilter !== 'all' || protocolFilter !== 'all' ? (
+            <span className="font-mono font-semibold text-emerald-500">
+              ({t('pagination.pageFiltered', { count: filteredCameras.length })})
+            </span>
+          ) : totalCount > 0 ? (
+            <span className="font-mono text-[var(--text-muted)]">
+              ({t('pagination.total', { total: totalCount })})
+            </span>
+          ) : null}
+
+          {/* 每页条数选择器 */}
+          <div className="flex items-center gap-1.5 border-l border-[var(--border)] pl-3">
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                const next = Number(e.target.value)
+                setPageSize(next)
+                setPage(1)
+              }}
+              className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--text-primary)] transition-all outline-none hover:border-[var(--accent)] focus:border-[var(--accent)]"
+              title={t('pagination.pageSize')}
+            >
+              {[6, 12, 24, 48, 999].map((size) => (
+                <option key={size} value={size}>
+                  {size === 999
+                    ? t('pagination.all', { defaultValue: '全部显示' })
+                    : t('pagination.perPage', { count: size, defaultValue: `${size} 台/页` })}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={page <= 1 || isLoading}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
+          >
+            {t('pagination.prev')}
+          </button>
+          <span className="px-1 font-mono font-semibold text-[var(--text-primary)]">
+            {page} / {totalPages}
+          </span>
+          <button
+            type="button"
+            disabled={page >= totalPages || isLoading}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
+          >
+            {t('pagination.next')}
+          </button>
+        </div>
       </div>
 
       {/* 摄像头添加/编辑模态框 */}

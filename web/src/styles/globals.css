@@ -69,12 +69,126 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
 }
 
+/* ── 现代高奢 SaaS 复合环境底盘 ── */
+.saas-backdrop {
+  position: relative;
+  background-color: var(--bg-primary);
+  isolation: isolate;
+}
+
+/* 1. 微米工程标定点阵 (Dot Matrix) + 径向平滑衰减遮罩 */
+.saas-backdrop::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: radial-gradient(
+    circle at center,
+    var(--border-strong) 1.25px,
+    transparent 1.25px
+  );
+  background-size: 32px 32px;
+  mask-image: radial-gradient(ellipse 85% 85% at 50% 40%, #000 35%, transparent 85%);
+  -webkit-mask-image: radial-gradient(ellipse 85% 85% at 50% 40%, #000 35%, transparent 85%);
+  opacity: 0.8;
+}
+
+/* 2. 硬件加速多波段环境极光光晕 (Dual-Band Ambient Aura) */
+.saas-backdrop::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle 700px at 85% -5%,
+      rgba(var(--accent-rgb, 59, 130, 246), 0.085) 0%,
+      rgba(var(--accent-rgb, 59, 130, 246), 0.02) 50%,
+      transparent 75%
+    ),
+    radial-gradient(
+      circle 600px at 10% 95%,
+      rgba(16, 185, 129, 0.035) 0%,
+      rgba(99, 102, 241, 0.025) 45%,
+      transparent 70%
+    );
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+:root:not(.dark) .saas-backdrop::before {
+  opacity: 0.55;
+}
+
+:root:not(.dark) .saas-backdrop::after {
+  background:
+    radial-gradient(
+      circle 700px at 85% -5%,
+      rgba(0, 82, 255, 0.045) 0%,
+      rgba(0, 82, 255, 0.01) 50%,
+      transparent 75%
+    ),
+    radial-gradient(
+      circle 600px at 10% 95%,
+      rgba(16, 185, 129, 0.02) 0%,
+      rgba(99, 102, 241, 0.018) 45%,
+      transparent 65%
+    );
+}
+
+/* ── 微米物理噪点薄膜 (消除色阶断层，赋予实体质感) ── */
+.saas-noise-overlay {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.04'/%3E%3C/svg%3E");
+  opacity: 0.45;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+.dark .saas-noise-overlay {
+  opacity: 0.3;
+}
+
+/* ── 工业精密极细平滑滚动条 ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
 /* ── 磨砂玻璃通用类 ── */
 .frosted-glass {
   background: var(--bg-surface);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(20px) saturate(170%);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
   border: 1px solid var(--border);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
+    var(--shadow-sm);
+}
+
+.dark .frosted-glass {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.07),
+    var(--shadow-sm);
 }
 
 /* ── 高奢镜头级磨砂玻璃材质 ── */
@@ -130,27 +244,22 @@
   height: 2.5rem;
   border-radius: 0.75rem;
   color: var(--text-secondary);
-  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  transition:
+    transform 0.18s cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 .nav-btn:hover {
   color: var(--accent);
   background: var(--accent-soft);
 }
+.nav-btn:active {
+  transform: scale(0.94);
+}
 .nav-btn:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-.nav-btn.active {
-  color: #fff;
-  background: var(--accent);
-  box-shadow:
-    0 0 12px rgba(var(--accent-rgb, 59, 130, 246), 0.35),
-    0 2px 8px rgba(0, 0, 0, 0.2);
-}
-.dark .nav-btn.active {
-  box-shadow:
-    0 0 20px rgba(var(--accent-rgb, 59, 130, 246), 0.25),
-    0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 /* ── 设置分区卡片增强 ── */
@@ -286,4 +395,32 @@
 
 .animate-tab-fade {
   animation: contentFadeIn 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ── 工规控制台视口微角标 (HUD Viewport Reticles) ── */
+.hud-viewport-frame {
+  position: relative;
+}
+.hud-viewport-frame::before,
+.hud-viewport-frame::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  z-index: 20;
+  opacity: 0.35;
+  transition: opacity 0.2s ease;
+}
+.hud-viewport-frame::before {
+  top: 10px;
+  left: 10px;
+  border-top: 1.5px solid var(--text-muted);
+  border-left: 1.5px solid var(--text-muted);
+}
+.hud-viewport-frame::after {
+  bottom: 10px;
+  right: 10px;
+  border-bottom: 1.5px solid var(--text-muted);
+  border-right: 1.5px solid var(--text-muted);
 }

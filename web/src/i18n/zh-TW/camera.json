@@ -82,6 +82,14 @@
     "createTask": "建立布防",
     "copyUrl": "複製位址",
     "copied": "已複製",
+    "codec": "編碼",
+    "resolutionFps": "解析度/幀率",
+    "analysisStream": "分析碼流",
+    "vpuHwReady": "硬體解碼加速就緒",
+    "probedJustNow": "剛剛探活",
+    "probedMinutesAgo": "{{count}} 分鐘前探活",
+    "probedHoursAgo": "{{count}} 小時前探活",
+    "pendingProbeHint": "待首次探活",
     "emptyTitle": "暫無接入的網路攝影機",
     "emptyDesc": "錄入標準 RTSP 視訊串流，系統將自動發起非同步握手探活與 SPS 解析。",
     "addFirstCamera": "接入首路攝影機",
@@ -177,5 +185,15 @@
     "modelLabel": "型號: {{name}}",
     "applyDevice": "填入",
     "deducing": "推導中..."
+  },
+  "pagination": {
+    "page": "第 {{current}} 頁",
+    "total": "共 {{total}} 台設備",
+    "pageFiltered": "篩選命中 {{count}} 台",
+    "prev": "上一頁",
+    "next": "下一頁",
+    "perPage": "{{count}} 台/頁",
+    "all": "全部顯示",
+    "pageSize": "每頁條數"
   }
 }

@@ -148,8 +148,11 @@
     "detectionLabel": "置信度"
   },
   "pagination": {
+    "page": "第 {{current}} 頁",
     "total": "共 {{total}} 位人員",
     "prev": "上一頁",
-    "next": "下一頁"
+    "next": "下一頁",
+    "perPage": "{{count}} 人/頁",
+    "pageSize": "每頁條數"
   }
 }

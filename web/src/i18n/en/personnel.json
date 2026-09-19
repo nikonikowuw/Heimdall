@@ -148,8 +148,11 @@
     "detectionLabel": "Confidence"
   },
   "pagination": {
-    "total": "Total {{total}} personnel",
+    "page": "Page {{current}}",
+    "total": "{{total}} personnel in total",
     "prev": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "perPage": "{{count}} / page",
+    "pageSize": "Page Size"
   }
 }

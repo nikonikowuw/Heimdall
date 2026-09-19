@@ -82,6 +82,14 @@
     "createTask": "Deploy AI",
     "copyUrl": "Copy URL",
     "copied": "Copied",
+    "codec": "Codec",
+    "resolutionFps": "Resolution / FPS",
+    "analysisStream": "Analysis Stream",
+    "vpuHwReady": "Hardware Decode Accelerated",
+    "probedJustNow": "Probed just now",
+    "probedMinutesAgo": "Probed {{count}}m ago",
+    "probedHoursAgo": "Probed {{count}}h ago",
+    "pendingProbeHint": "Pending initial probe",
     "emptyTitle": "No Camera Devices Added",
     "emptyDesc": "Register standard RTSP video streams to enable automatic async probing and hardware-accelerated decode.",
     "addFirstCamera": "Add First Camera",
@@ -177,5 +185,15 @@
     "modelLabel": "Model: {{name}}",
     "applyDevice": "Use",
     "deducing": "Deducing..."
+  },
+  "pagination": {
+    "page": "Page {{current}}",
+    "total": "{{total}} devices in total",
+    "pageFiltered": "{{count}} matched",
+    "prev": "Previous",
+    "next": "Next",
+    "perPage": "{{count}} / page",
+    "all": "Show All",
+    "pageSize": "Page Size"
   }
 }

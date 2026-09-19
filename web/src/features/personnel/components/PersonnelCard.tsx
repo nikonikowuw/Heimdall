@@ -13,13 +13,13 @@ interface PersonnelCardProps {
   onAddFace?: (person: PersonnelItem) => void
 }
 
-export const PersonnelCard: React.FC<PersonnelCardProps> = ({
+export function PersonnelCard({
   person,
   onView,
   onEdit,
   onDelete,
   onAddFace,
-}) => {
+}: PersonnelCardProps): React.ReactElement {
   const { t } = useTranslation(['personnel', 'common'])
   const avatarUrl = person.primaryPhotoPath ? evidenceApi.getImageUrl(person.primaryPhotoPath) : ''
 
@@ -35,7 +35,7 @@ export const PersonnelCard: React.FC<PersonnelCardProps> = ({
   return (
     <div
       onClick={() => onView(person)}
-      className="group relative flex cursor-pointer flex-col justify-between overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4 shadow-sm transition-all duration-300 hover:border-emerald-500/50 hover:shadow-md"
+      className="frosted-glass group relative flex cursor-pointer flex-col justify-between overflow-hidden rounded-2xl p-4 shadow-sm transition-all duration-300 hover:border-emerald-500/50 hover:shadow-md"
     >
       {/* 顶部主头像与基础资料 */}
       <div className="flex items-start gap-3.5">

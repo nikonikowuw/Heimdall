@@ -1,5 +1,16 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowRight, Eye, EyeOff, KeyRound, Lock, Moon, Sun, User, Wand2 } from 'lucide-react'
+import {
+  ArrowRight,
+  Check,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Lock,
+  Moon,
+  Sun,
+  User,
+  Wand2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LocaleDropdown } from '../../components/LocaleDropdown'
 import { useTheme } from '../../hooks/use-theme'
@@ -15,7 +26,7 @@ interface ToastInfo {
   message: string
 }
 
-export const LoginPage: React.FC = () => {
+export function LoginPage(): React.ReactElement {
   const { t } = useTranslation('auth')
   const login = useAuthStore((state) => state.login)
 
@@ -27,8 +38,16 @@ export const LoginPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false)
   const [remember, setRemember] = useState(() => Boolean(getRememberedUser()))
   const [loading, setLoading] = useState(false)
+  const [isSuccess, setIsSuccess] = useState(false)
   const { isDark, toggleTheme } = useTheme()
   const [toasts, setToasts] = useState<ToastInfo[]>([])
+
+  const handleAuthSuccess = (accessToken: string, authUsername: string) => {
+    setIsSuccess(true)
+    setTimeout(() => {
+      login(accessToken, authUsername, remember)
+    }, 160)
+  }
 
   const handleFpsUpdate = React.useCallback((newFps: number) => {
     const el = document.getElementById('webgl-fps-badge')
@@ -107,9 +126,7 @@ export const LoginPage: React.FC = () => {
           password,
         })
         addToast('success', 'SYSTEM INITIALIZED', t('setupSuccess'))
-        setTimeout(() => {
-          login(res.accessToken, res.username, remember)
-        }, 600)
+        handleAuthSuccess(res.accessToken, res.username)
       } catch (err: unknown) {
         setLoading(false)
         const msg = err instanceof Error ? err.message : t('loginError')
@@ -125,15 +142,19 @@ export const LoginPage: React.FC = () => {
         username: trimmedUsername,
         password,
       })
-      addToast('success', 'SESSION GRANTED', t('loginSuccess'))
-      setTimeout(() => {
-        login(res.accessToken, res.username, remember)
-      }, 600)
+      handleAuthSuccess(res.accessToken, res.username)
     } catch (err: unknown) {
       setLoading(false)
       const msg = err instanceof Error ? err.message : t('loginError')
       addToast('error', 'ACCESS DENIED', msg)
     }
+  }
+
+  let submitLabel = t('submit')
+  if (loading) {
+    submitLabel = t('submitting')
+  } else if (isInitialized === false) {
+    submitLabel = t('setupSubmit')
   }
 
   return (
@@ -150,7 +171,7 @@ export const LoginPage: React.FC = () => {
       {/* 顶层标定微网格 */}
       <div className="calibration-grid pointer-events-none fixed inset-0 z-10 opacity-30" />
 
-      {/* 伴生物理柔光环 */}
+      {/* 伴生物理柔光环 (仅在登录/初始化科技网关启用，支持 prefers-reduced-motion) */}
       <CursorRing />
 
       {/* 全局 HUD Toast 浮层 */}
@@ -231,12 +252,14 @@ export const LoginPage: React.FC = () => {
         </div>
       </header>
 
-      {/* 核心双栏架构：左侧边缘管线状态 + 右侧先锋悬浮控制吊舱 */}
+      {/* 核心双栏架构：左侧边缘管线拓扑遥测 + 右侧先锋悬浮控制吊舱 */}
       <div className="pointer-events-none relative z-20 flex min-h-screen w-full flex-col items-center justify-between px-6 pt-20 pb-6 sm:px-10 sm:pb-8 lg:flex-row lg:px-12 lg:pt-24">
-        {/* 左侧：边缘媒体与 AI 管线底层状态 */}
+        {/* 左侧：完全通透，把视觉舞台全部还给 Gargantua 物理黑洞 */}
         <div className="flex min-h-[38vh] w-full flex-col justify-between select-none lg:min-h-[calc(100vh-8rem)] lg:flex-1">
           <div />
           <div className="flex flex-1 items-center justify-center" />
+
+          {/* 底栏运行参数状态 (极简极轻量，紧贴视口边缘) */}
           <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] tracking-widest text-slate-400/80 uppercase select-none dark:text-slate-500/80">
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
@@ -255,6 +278,21 @@ export const LoginPage: React.FC = () => {
             id="command-dock"
             className="lens-glass relative w-full overflow-hidden rounded-3xl p-6 shadow-2xl backdrop-blur-3xl transition-all duration-300 sm:p-7"
           >
+            {/* 工规微 Reticle 准星角标 */}
+            <div className="pointer-events-none absolute top-3 left-3 h-2 w-2 border-t border-l border-indigo-400/50" />
+            <div className="pointer-events-none absolute top-3 right-3 h-2 w-2 border-t border-r border-indigo-400/50" />
+            <div className="pointer-events-none absolute bottom-3 left-3 h-2 w-2 border-b border-l border-indigo-400/50" />
+            <div className="pointer-events-none absolute right-3 bottom-3 h-2 w-2 border-r border-b border-indigo-400/50" />
+
+            {/* 顶部激光微光条 */}
+            <div
+              className={`pointer-events-none absolute inset-x-0 top-0 h-[2px] transition-all duration-300 ${
+                isSuccess
+                  ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.8)]'
+                  : 'bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent'
+              }`}
+            />
+
             <div className="pointer-events-none absolute -top-20 left-1/2 h-32 w-64 -translate-x-1/2 rounded-full bg-gradient-to-b from-indigo-500/20 via-pink-500/10 to-transparent blur-2xl" />
 
             <div className="relative z-10 flex items-center justify-between border-b border-black/5 pb-4 dark:border-white/5">
@@ -312,10 +350,11 @@ export const LoginPage: React.FC = () => {
                       id="username"
                       name="username"
                       required
+                      disabled={loading || isSuccess}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       placeholder={isInitialized === false ? 'admin' : t('operatorId')}
-                      className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-4 pl-10 text-sm text-[var(--text-primary)] placeholder:text-slate-400 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
+                      className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-4 pl-10 text-sm text-[var(--text-primary)] transition-all placeholder:text-slate-400 focus:border-cyan-400 focus:bg-[var(--bg-surface)] focus:ring-1 focus:ring-cyan-400/50 focus:outline-none disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
                     />
                   </div>
                 </div>
@@ -337,16 +376,18 @@ export const LoginPage: React.FC = () => {
                       id="password"
                       name="password"
                       required
+                      disabled={loading || isSuccess}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••••••"
-                      className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-10 pl-10 text-sm text-[var(--text-primary)] placeholder:text-slate-400 focus:border-pink-400 focus:ring-1 focus:ring-pink-400/50 focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
+                      className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-10 pl-10 text-sm text-[var(--text-primary)] transition-all placeholder:text-slate-400 focus:border-pink-400 focus:bg-[var(--bg-surface)] focus:ring-1 focus:ring-pink-400/50 focus:outline-none disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
                     />
                     <button
                       type="button"
+                      disabled={loading || isSuccess}
                       onClick={() => setShowPassword(!showPassword)}
                       aria-label="Toggle password visibility"
-                      className="absolute inset-y-0 right-0 flex cursor-pointer items-center pr-3.5 text-slate-400 transition-colors hover:text-slate-600 dark:hover:text-slate-200"
+                      className="absolute inset-y-0 right-0 flex cursor-pointer items-center pr-3.5 text-slate-400 transition-colors hover:text-slate-600 disabled:opacity-50 dark:hover:text-slate-200"
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
@@ -371,10 +412,11 @@ export const LoginPage: React.FC = () => {
                         id="confirmPassword"
                         name="confirmPassword"
                         required
+                        disabled={loading || isSuccess}
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         placeholder="••••••••••••"
-                        className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-10 pl-10 text-sm text-[var(--text-primary)] placeholder:text-slate-400 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/50 focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
+                        className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-10 pl-10 text-sm text-[var(--text-primary)] transition-all placeholder:text-slate-400 focus:border-indigo-400 focus:bg-[var(--bg-surface)] focus:ring-1 focus:ring-indigo-400/50 focus:outline-none disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
                       />
                     </div>
                   </div>
@@ -386,9 +428,10 @@ export const LoginPage: React.FC = () => {
                     <label className="flex cursor-pointer items-center gap-2 select-none">
                       <input
                         type="checkbox"
+                        disabled={loading || isSuccess}
                         checked={remember}
                         onChange={(e) => setRemember(e.target.checked)}
-                        className="h-4 w-4 rounded border-slate-300 bg-slate-100 text-indigo-600 accent-indigo-500 dark:border-slate-700 dark:bg-slate-900"
+                        className="h-4 w-4 rounded border-slate-300 bg-slate-100 text-indigo-600 accent-indigo-500 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
                       />
                       <span className="text-xs text-slate-600 dark:text-slate-400">
                         {t('remember')}
@@ -400,21 +443,28 @@ export const LoginPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* 提交按钮 */}
+                {/* 提交按钮（干脆利落的物理触觉微反馈） */}
                 <div className="pt-2">
                   <button
                     type="submit"
-                    disabled={loading}
-                    className="font-display flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 px-4 py-3 text-xs font-bold tracking-wider text-white uppercase shadow-lg shadow-indigo-600/25 transition-all duration-200 hover:opacity-95 active:scale-[0.99] disabled:opacity-50"
+                    disabled={loading || isSuccess}
+                    className={`font-display relative flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-3 text-xs font-bold tracking-wider text-white uppercase shadow-lg transition-all duration-200 active:scale-[0.99] disabled:cursor-not-allowed ${
+                      isSuccess
+                        ? 'bg-emerald-500 shadow-emerald-500/30'
+                        : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 shadow-indigo-600/25 hover:opacity-95'
+                    } disabled:opacity-80`}
                   >
-                    <ArrowRight className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                    <span>
-                      {loading
-                        ? t('submitting')
-                        : isInitialized === false
-                          ? t('setupSubmit')
-                          : t('submit')}
-                    </span>
+                    {isSuccess ? (
+                      <>
+                        <Check className="h-4 w-4" />
+                        <span>{t('loginSuccess', { defaultValue: '验证成功' })}</span>
+                      </>
+                    ) : (
+                      <>
+                        <ArrowRight className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                        <span>{submitLabel}</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </form>

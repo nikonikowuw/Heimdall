@@ -156,7 +156,7 @@ export function TasksPage({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
-          className="calibration-grid flex h-full flex-col gap-4 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)]"
+          className="flex h-full flex-col gap-4 text-[var(--text-primary)]"
         >
           {/* 顶部状态与操作栏 */}
           <div className="frosted-glass flex shrink-0 flex-col gap-4 rounded-[8px] px-4 py-3.5 shadow-[var(--shadow-sm)] sm:flex-row sm:items-center sm:justify-between">

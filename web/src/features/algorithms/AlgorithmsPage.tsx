@@ -11,7 +11,7 @@ import { SchemaModal } from './components/SchemaModal'
 import { UploadModal } from './components/UploadModal'
 import { VersionsDrawer } from './components/VersionsDrawer'
 
-export const AlgorithmsPage: React.FC = () => {
+export function AlgorithmsPage(): React.ReactElement {
   const { t } = useTranslation('algo')
 
   const [stats, setStats] = useState<AlgorithmStats | null>(null)
@@ -41,6 +41,13 @@ export const AlgorithmsPage: React.FC = () => {
   const loadData = useCallback(async () => {
     setIsLoading(true)
     try {
+      let isBuiltin: boolean | undefined
+      if (originFilter === 'builtin') {
+        isBuiltin = true
+      } else if (originFilter === 'custom') {
+        isBuiltin = false
+      }
+
       const [statsData, listData] = await Promise.all([
         algorithmApi.getStats(),
         algorithmApi.list({
@@ -48,8 +55,7 @@ export const AlgorithmsPage: React.FC = () => {
           pageSize: 100,
           keyword: searchQuery.trim() || undefined,
           algorithmType: typeFilter !== 'all' ? typeFilter : undefined,
-          isBuiltin:
-            originFilter === 'builtin' ? true : originFilter === 'custom' ? false : undefined,
+          isBuiltin,
         }),
       ])
       setStats(statsData)
@@ -87,7 +93,7 @@ export const AlgorithmsPage: React.FC = () => {
   }, [algorithms, searchQuery, typeFilter, originFilter])
 
   return (
-    <div className="flex h-full w-full flex-col space-y-6 overflow-y-auto bg-[var(--bg-primary)] p-6">
+    <div className="flex h-full w-full flex-col space-y-6 overflow-y-auto pr-1 text-[var(--text-primary)]">
       {/* 顶部标题区 */}
       <div className="flex flex-col gap-1">
         <h1 className="text-xl font-bold tracking-tight text-[var(--text-primary)]">
