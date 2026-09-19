@@ -9,7 +9,6 @@ import {
   Layers,
   CheckCircle2,
   AlertCircle,
-  Loader2,
   FileText,
   X,
 } from 'lucide-react'
@@ -454,8 +453,13 @@ export function PersonnelPage(): React.ReactElement {
       {/* 主体卡片网格视口 (纯通透滚动容器) */}
       <div className="flex-1 overflow-y-auto pr-1">
         {isLoading && items.length === 0 ? (
-          <div className="flex h-64 items-center justify-center text-[var(--text-muted)]">
-            <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+              <div
+                key={i}
+                className="frosted-glass h-48 animate-pulse rounded-2xl border border-[var(--border)]"
+              />
+            ))}
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-[var(--border)] bg-[var(--bg-secondary)]/50 py-20 text-center">

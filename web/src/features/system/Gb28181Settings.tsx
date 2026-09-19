@@ -121,8 +121,9 @@ export function Gb28181Settings(): React.ReactElement {
 
   if (loading && !data) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <RefreshCw className="h-6 w-6 animate-spin text-[var(--accent)]" />
+      <div className="space-y-6">
+        <div className="frosted-glass h-24 animate-pulse rounded-2xl border border-[var(--border)]" />
+        <div className="frosted-glass h-48 animate-pulse rounded-2xl border border-[var(--border)]" />
       </div>
     )
   }

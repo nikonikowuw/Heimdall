@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { motion, AnimatePresence } from 'motion/react'
+import { motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import {
@@ -102,24 +102,12 @@ export function SettingsPage({ onOpenPasswordModal }: SettingsPageProps): React.
       {/* Content area */}
       <main className="flex-1 overflow-y-auto pr-1">
         <div className="pb-8">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-            >
-              {activeTab === 'overview' && <SystemOverview />}
-              {activeTab === 'account' && (
-                <AccountSecurity onOpenPasswordModal={onOpenPasswordModal} />
-              )}
-              {activeTab === 'network' && <NetworkSettings />}
-              {activeTab === 'storage' && <StorageSettings />}
-              {activeTab === 'time' && <TimeSettings />}
-              {activeTab === 'gb28181' && <Gb28181Settings />}
-            </motion.div>
-          </AnimatePresence>
+          {activeTab === 'overview' && <SystemOverview />}
+          {activeTab === 'account' && <AccountSecurity onOpenPasswordModal={onOpenPasswordModal} />}
+          {activeTab === 'network' && <NetworkSettings />}
+          {activeTab === 'storage' && <StorageSettings />}
+          {activeTab === 'time' && <TimeSettings />}
+          {activeTab === 'gb28181' && <Gb28181Settings />}
         </div>
       </main>
     </div>

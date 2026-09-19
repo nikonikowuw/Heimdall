@@ -1,10 +1,9 @@
-import { Suspense, lazy, useState } from 'react'
+import { useState } from 'react'
 import {
   AlertCircle,
   Cpu,
   FileText,
   Keyboard,
-  Loader2,
   LogOut,
   Monitor,
   Moon,
@@ -19,38 +18,19 @@ import { useTranslation } from 'react-i18next'
 import { ChangePasswordModal } from '../components/ChangePasswordModal'
 import { LocaleDropdown } from '../components/LocaleDropdown'
 import { ShortcutsModal } from '../components/ShortcutsModal'
+import { AlarmsPage } from '../features/alarms/AlarmsPage'
+import { AlgorithmsPage } from '../features/algorithms/AlgorithmsPage'
+import { LoginPage } from '../features/auth/LoginPage'
+import { CamerasPage } from '../features/cameras/CamerasPage'
+import { LivePage } from '../features/live/LivePage'
+import { OplogPage } from '../features/oplog/OplogPage'
+import { PersonnelPage } from '../features/personnel/PersonnelPage'
+import { SettingsPage } from '../features/system/SettingsPage'
+import { TasksPage } from '../features/tasks/TasksPage'
 import { useGlobalShortcuts } from '../hooks/use-global-shortcuts'
 import { useTheme } from '../hooks/use-theme'
 import { authApi } from '../lib/api'
 import { useAuthStore } from '../stores/auth'
-
-const LoginPage = lazy(() =>
-  import('../features/auth/LoginPage').then((m) => ({ default: m.LoginPage })),
-)
-const LivePage = lazy(() =>
-  import('../features/live/LivePage').then((m) => ({ default: m.LivePage })),
-)
-const CamerasPage = lazy(() =>
-  import('../features/cameras/CamerasPage').then((m) => ({ default: m.CamerasPage })),
-)
-const TasksPage = lazy(() =>
-  import('../features/tasks/TasksPage').then((m) => ({ default: m.TasksPage })),
-)
-const AlgorithmsPage = lazy(() =>
-  import('../features/algorithms/AlgorithmsPage').then((m) => ({ default: m.AlgorithmsPage })),
-)
-const PersonnelPage = lazy(() =>
-  import('../features/personnel/PersonnelPage').then((m) => ({ default: m.PersonnelPage })),
-)
-const AlarmsPage = lazy(() =>
-  import('../features/alarms/AlarmsPage').then((m) => ({ default: m.AlarmsPage })),
-)
-const OplogPage = lazy(() =>
-  import('../features/oplog/OplogPage').then((m) => ({ default: m.OplogPage })),
-)
-const SettingsPage = lazy(() =>
-  import('../features/system/SettingsPage').then((m) => ({ default: m.SettingsPage })),
-)
 
 export type NavTab =
   'live' | 'cameras' | 'tasks' | 'algorithms' | 'personnel' | 'alarms' | 'oplog' | 'system'
@@ -106,15 +86,6 @@ export function Layout(): React.ReactElement {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false)
   const { isDark, toggleTheme } = useTheme()
   const reducedMotion = useReducedMotion()
-  const loadingFallback = (
-    <div
-      className="flex h-screen w-screen items-center justify-center bg-[var(--bg-primary)]"
-      role="status"
-      aria-label={t('loading')}
-    >
-      <Loader2 className="h-6 w-6 animate-spin text-[var(--accent)]" aria-hidden="true" />
-    </div>
-  )
 
   useGlobalShortcuts({
     currentTab,
@@ -191,9 +162,7 @@ export function Layout(): React.ReactElement {
             }}
             className="fixed inset-0 z-50 overflow-hidden bg-[var(--bg-primary)]"
           >
-            <Suspense fallback={loadingFallback}>
-              <LoginPage />
-            </Suspense>
+            <LoginPage />
           </motion.div>
         ) : (
           <motion.div
@@ -304,7 +273,7 @@ export function Layout(): React.ReactElement {
               </div>
             </motion.aside>
 
-            {/* 主工作视口 (带镜头级物理对焦浮现) */}
+            {/* 主工作视口 */}
             <motion.main
               initial={
                 reducedMotion ? false : { y: 12, opacity: 0, scale: 0.992, filter: 'blur(6px)' }
@@ -313,23 +282,9 @@ export function Layout(): React.ReactElement {
               transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1], delay: 0.08 }}
               className="content-ambient hud-viewport-frame relative z-10 flex flex-1 flex-col overflow-hidden p-4"
             >
-              <Suspense fallback={loadingFallback}>
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.div
-                    key={currentTab}
-                    initial={reducedMotion ? { opacity: 1 } : { opacity: 0, y: 3 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={reducedMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
-                    transition={{
-                      duration: 0.15,
-                      ease: [0.22, 1, 0.36, 1],
-                    }}
-                    className="flex h-full w-full flex-1 flex-col overflow-hidden"
-                  >
-                    {renderTabContent()}
-                  </motion.div>
-                </AnimatePresence>
-              </Suspense>
+              <div className="flex h-full w-full flex-1 flex-col overflow-hidden">
+                {renderTabContent()}
+              </div>
             </motion.main>
             {/* 修改密码模态框 */}
             <ChangePasswordModal
