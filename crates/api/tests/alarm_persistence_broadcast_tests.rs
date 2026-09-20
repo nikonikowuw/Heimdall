@@ -398,6 +398,7 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
                 fused_count: Some(4),
                 template_quality: Some(0.72),
                 template_mature: Some(true),
+                pseudo_body: None,
                 embedding: None,
             }),
             trajectory: vec![(0.4, 0.4)],
@@ -460,6 +461,82 @@ async fn test_recognition_capture_event_persistence_without_alarm() {
     // 3. 断言 WebSocket 未广播 alarm.triggered 报警
     let timeout_res = tokio::time::timeout(Duration::from_millis(100), ws_rx.recv()).await;
     assert!(timeout_res.is_err(), "通行抓拍绝对不能向客户端广播报警弹窗");
+}
+
+#[tokio::test]
+async fn test_face_recognition_with_pseudo_body_purges_body_and_sets_face_label() {
+    let (_app, state, _token) = setup_test_app().await;
+
+    let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
+    let _capture_worker = capture_svc.clone().start_worker();
+
+    // 构造一个带有伪造人体框 (pseudo_body: true) 的人脸抓拍事件，原本 label 为 "person"
+    let capture_id = uuid::Uuid::now_v7().to_string();
+    let mock_capture = PipelineCaptureEvent {
+        capture_id: capture_id.clone(),
+        camera_id: "CAM-PSEUDO-01".to_string(),
+        algorithm_id: "face_recognition".to_string(),
+        tracked_object: TrackedObject {
+            track_id: 501,
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.96,
+            quality_score: Some(0.88),
+            embedding: None,
+            // 伪造的人体躯干框（贴到画面下沿）
+            bbox: BoundingBox::new(0.2, 0.2, 0.8, 1.0),
+            face: Some(FaceDetail {
+                bbox: BoundingBox::new(0.35, 0.22, 0.55, 0.42),
+                confidence: 0.98,
+                quality_score: Some(0.88),
+                fused_count: Some(2),
+                template_quality: Some(0.85),
+                template_mature: Some(true),
+                pseudo_body: Some(true),
+                embedding: None,
+            }),
+            trajectory: vec![(0.4, 0.4)],
+        },
+        snapshot: Some(SnapshotResult {
+            image_id: "snap_full_501".to_string(),
+            image_rel_path: "2026/03/04/CAM-01/full_501.jpg".to_string(),
+            crop_image_id: "snap_crop_501".to_string(),
+            crop_image_rel_path: "2026/03/04/CAM-01/crop_501.jpg".to_string(),
+            body_crop_image_id: "snap_body_501".to_string(),
+            body_crop_image_rel_path: "2026/03/04/CAM-01/body_501.jpg".to_string(),
+            file_size_bytes: 10240,
+            width: 1920,
+            height: 1080,
+            frame_pts_ms: 1741100070000,
+            image_source: EvidenceImageSource::PeakCandidate,
+            image_stream: EvidenceImageStream::Sub,
+        }),
+        timestamp: 1741100070000,
+    };
+
+    state
+        .pipeline
+        .publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(mock_capture)));
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let captures = CaptureRepo::list_recent(&state.db, Some("CAM-PSEUDO-01"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(captures.len(), 1);
+    let cap = &captures[0];
+
+    // 核心断言 1: target_label 必须自动修正为 "face"
+    assert_eq!(cap.target_label, "face");
+
+    // 核心断言 2: 伪造人体特写必须被清空剔除
+    assert_eq!(cap.body_crop_image_rel_path, "");
+    assert_eq!(cap.body_crop_image_id, "");
+    assert_eq!(cap.crop_image_rel_path, "2026/03/04/CAM-01/crop_501.jpg");
+
+    // 核心断言 3: bbox_json 中不得包含伪造的 "body"
+    assert!(!cap.bbox_json.contains("\"body\""));
+    assert!(cap.bbox_json.contains("\"face\""));
 }
 
 /// 背身/低头的人（有人体检测、无人脸）必须落抓拍记录，且带人体特写。
@@ -769,10 +846,10 @@ async fn test_count_and_batch_update_alarm_status_api() {
 }
 
 #[tokio::test]
-async fn test_face_recognition_below_review_threshold_persists_top5_rejected() {
+async fn test_face_recognition_below_threshold_does_not_persist_invalid_recognition() {
     let (_app, state, _token) = setup_test_app().await;
 
-    // 1. 底库注册 5 名人员，每个人的向量与待测人脸向量保持较低相似度 (0.20 ~ 0.45，均低于默认 review 阈值 0.60)
+    // 1. 底库注册 5 名人员，每个人的向量与待测人脸向量保持较低相似度 (0.20 ~ 0.45，均低于默认确认阈值 0.75)
     let mut faces = Vec::new();
     for i in 1..=5 {
         let mut vec = [0.0f32; 512];
@@ -791,7 +868,7 @@ async fn test_face_recognition_below_review_threshold_persists_top5_rejected() {
     assert_eq!(state.gallery_index.count().await, 5);
 
     // 2. 构造查询向量: 单位向量 [1.0, 0.0, 0.0, ...]
-    // 与候选人的余弦相似度正好等于候选人 vec[0] (0.45, 0.40, 0.35, 0.30, 0.25)，全部低于 review 阈值 0.60
+    // 与候选人的余弦相似度正好等于候选人 vec[0] (0.45, 0.40, 0.35, 0.30, 0.25)，全部低于确认阈值 0.75
     let mut query_embedding = Box::new([0.0f32; 512]);
     query_embedding[0] = 1.0;
 
@@ -841,69 +918,269 @@ async fn test_face_recognition_below_review_threshold_persists_top5_rejected() {
     // 等待异步识别队列与落库完成
     tokio::time::sleep(Duration::from_millis(250)).await;
 
-    // 4. 验证行迹抓拍已落库
+    // 4. 验证行迹抓拍已正常落库
     let captures = CaptureRepo::list_recent(&state.db, Some("CAM-REC-01"), 10, 0)
         .await
         .unwrap();
-    assert_eq!(captures.len(), 1);
+    assert_eq!(captures.len(), 1, "通行抓拍必须正常落库");
 
-    // 5. 核心断言：未达 review 阈值的人脸必须落库识别对账记录，且状态为 rejected
+    // 5. 核心断言：未达确认阈值的人脸绝对不落库识别对账记录 (不把无效记录写入识别对账)
     let recognitions = db::RecognitionRepo::list_recent(&state.db, Some("CAM-REC-01"), 10, 0)
         .await
         .unwrap();
     assert_eq!(
         recognitions.len(),
-        1,
-        "未过 review 阈值的人脸只要提取过特征也必须展示与落库"
+        0,
+        "未达确认阈值的人脸判定为无效比对，不得进入识别对账"
     );
-    let rec = &recognitions[0];
-    assert_eq!(
-        rec.status, "rejected",
-        "未达 review 阈值应判定为 rejected 陌生人"
-    );
-    assert_eq!(
-        rec.subject_id, "sub_mock_1",
-        "最高相似度候选人为 sub_mock_1"
-    );
-    assert!((rec.similarity - 0.45).abs() < 1e-4);
 
-    // 6. 核心断言：必须返回完整的 Top-5 候选人列表 (而非被 review 阈值截断为空或个位数)
+    // 6. 验证 WebSocket 不广播 TOPIC_RECOGNITION_MATCHED 事件
+    let mut found_ws_match = false;
+    while let Ok(msg) = ws_rx.try_recv() {
+        if msg.topic == types::TOPIC_RECOGNITION_MATCHED {
+            found_ws_match = true;
+            break;
+        }
+    }
+    assert!(
+        !found_ws_match,
+        "未达阈值的无效人脸不得通过 WebSocket 广播 TOPIC_RECOGNITION_MATCHED 事件"
+    );
+}
+
+#[tokio::test]
+async fn test_face_recognition_above_threshold_persists_unconditional_top5_confirmed() {
+    let (_app, state, _token) = setup_test_app().await;
+
+    // 1. 底库注册 5 名人员，首位候选人相似度 0.85 (高于阈值 0.75)，其余候选人分数较低 (0.40 ~ 0.25)
+    let mut faces = Vec::new();
+    // sub_mock_1: 相似度 0.85
+    let mut vec1 = [0.0f32; 512];
+    vec1[0] = 0.85;
+    vec1[1] = (1.0 - 0.85 * 0.85f32).sqrt();
+    faces.push(api::RegisteredFace {
+        subject_id: "sub_mock_1".to_string(),
+        subject_name: "Mock Person 1".to_string(),
+        face_id: "face_mock_1".to_string(),
+        photo_rel_path: "galleries/sub_mock_1/photo.jpg".to_string(),
+        vector: vec1,
+    });
+
+    for i in 2..=5 {
+        let mut vec = [0.0f32; 512];
+        vec[0] = 0.50 - (i as f32) * 0.05; // 0.40, 0.35, 0.30, 0.25
+        vec[i] = (1.0 - vec[0] * vec[0]).sqrt();
+        faces.push(api::RegisteredFace {
+            subject_id: format!("sub_mock_{i}"),
+            subject_name: format!("Mock Person {i}"),
+            face_id: format!("face_mock_{i}"),
+            photo_rel_path: format!("galleries/sub_mock_{i}/photo.jpg"),
+            vector: vec,
+        });
+    }
+    state.gallery_index.upsert_faces(faces).await;
+    assert_eq!(state.gallery_index.count().await, 5);
+
+    // 2. 构造查询向量: 单位向量 [1.0, 0.0, 0.0, ...]，与 sub_mock_1 相似度为 0.85
+    let mut query_embedding = Box::new([0.0f32; 512]);
+    query_embedding[0] = 1.0;
+
+    let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
+    let _capture_worker = capture_svc.clone().start_worker();
+
+    let mut ws_rx = state.event_broadcaster.subscribe();
+
+    // 3. 发布携带该 embedding 的人脸通行抓拍事件
+    let capture_id = uuid::Uuid::now_v7().to_string();
+    let mock_capture = PipelineCaptureEvent {
+        capture_id: capture_id.clone(),
+        camera_id: "CAM-REC-02".to_string(),
+        algorithm_id: "face_recognition".to_string(),
+        tracked_object: TrackedObject {
+            track_id: 999,
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.98,
+            quality_score: Some(0.50), // 动态微调量为 0
+            embedding: Some(query_embedding),
+            bbox: BoundingBox::new(0.2, 0.2, 0.4, 0.4),
+            face: None,
+            trajectory: vec![(0.3, 0.3)],
+        },
+        snapshot: Some(SnapshotResult {
+            image_id: "snap_full_999".to_string(),
+            image_rel_path: "2026/03/04/CAM-REC-02/full_999.jpg".to_string(),
+            crop_image_id: "snap_crop_999".to_string(),
+            crop_image_rel_path: "2026/03/04/CAM-REC-02/crop_999.jpg".to_string(),
+            body_crop_image_id: String::new(),
+            body_crop_image_rel_path: String::new(),
+            file_size_bytes: 10240,
+            width: 1920,
+            height: 1080,
+            frame_pts_ms: 1741100099000,
+            image_source: EvidenceImageSource::PeakCandidate,
+            image_stream: EvidenceImageStream::Sub,
+        }),
+        timestamp: 1741100099000,
+    };
+
+    state
+        .pipeline
+        .publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(mock_capture)));
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    // 4. 验证行迹抓拍已落库
+    let captures = CaptureRepo::list_recent(&state.db, Some("CAM-REC-02"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(captures.len(), 1);
+
+    // 5. 核心断言：Top-1 相似度 (0.85) 达到阈值 (0.75)，必须入识别对账且状态为 confirmed
+    let recognitions = db::RecognitionRepo::list_recent(&state.db, Some("CAM-REC-02"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(recognitions.len(), 1, "达标人脸必须落库识别对账记录");
+    let rec = &recognitions[0];
+    assert_eq!(rec.status, "confirmed", "达标人脸应直接判定为 confirmed");
+    assert_eq!(rec.subject_id, "sub_mock_1");
+    assert!((rec.similarity - 0.85).abs() < 1e-4);
+
+    // 6. 核心断言：必须保存无条件的完整 Top-5 候选人 (哪怕第 2~5 位分数低)
     let candidates_json = rec
         .candidates_json
         .as_deref()
         .expect("candidates_json must exist");
     let cands: Vec<types::FaceCandidateItem> = serde_json::from_str(candidates_json).unwrap();
-    assert_eq!(cands.len(), 5, "必须返回完整的 Top-5 候选人");
+    assert_eq!(cands.len(), 5, "topk5 必须是无条件的完整 top5");
     assert_eq!(cands[0].rank, 1);
     assert_eq!(cands[0].subject_id, "sub_mock_1");
-    assert!((cands[0].similarity - 0.45).abs() < 1e-4);
+    assert!((cands[0].similarity - 0.85).abs() < 1e-4);
     assert_eq!(cands[4].rank, 5);
     assert_eq!(cands[4].subject_id, "sub_mock_5");
     assert!((cands[4].similarity - 0.25).abs() < 1e-4);
 
-    // 7. 验证 WebSocket 广播了 TOPIC_RECOGNITION_MATCHED 事件且包含完整的 5 个候选人
+    // 7. 验证 WebSocket 成功广播 TOPIC_RECOGNITION_MATCHED 事件且包含完整的 5 个候选人
     let mut found_ws_match = false;
     while let Ok(msg) = ws_rx.try_recv() {
         if msg.topic == types::TOPIC_RECOGNITION_MATCHED {
             found_ws_match = true;
-            assert_eq!(msg.payload["status"], "rejected");
+            assert_eq!(msg.payload["status"], "confirmed");
             let ws_cands = msg.payload["candidates"]
                 .as_array()
                 .expect("ws candidates array");
-            assert_eq!(ws_cands.len(), 5);
-            assert!(
-                msg.payload["id"].as_i64().is_some(),
-                "WS payload 必须包含标准主键 id 供前端 React 渲染 key 复用"
-            );
-            assert!(
-                msg.payload["createdAt"].as_i64().is_some(),
-                "WS payload 必须包含标准创建时标 createdAt"
-            );
+            assert_eq!(ws_cands.len(), 5, "WS payload 候选人列表也必须为完整 5 人");
             break;
         }
     }
     assert!(
         found_ws_match,
-        "必须通过 WebSocket 广播 TOPIC_RECOGNITION_MATCHED 事件"
+        "达标记录必须通过 WebSocket 广播 TOPIC_RECOGNITION_MATCHED 事件"
     );
+}
+
+#[tokio::test]
+async fn test_face_recognition_tight_margin_persists_pending_review() {
+    let (_app, state, _token) = setup_test_app().await;
+
+    // 1. 底库注册 2 名相似人员：sub_mock_1 相似度 0.85，sub_mock_2 相似度 0.83 (差值 0.02 < MIN_CONFIRM_MARGIN 0.05)
+    let mut vec1 = [0.0f32; 512];
+    vec1[0] = 0.85;
+    vec1[1] = (1.0 - 0.85 * 0.85f32).sqrt();
+
+    let mut vec2 = [0.0f32; 512];
+    vec2[0] = 0.83;
+    vec2[1] = (1.0 - 0.83 * 0.83f32).sqrt();
+
+    state
+        .gallery_index
+        .upsert_faces(vec![
+            api::RegisteredFace {
+                subject_id: "sub_mock_1".to_string(),
+                subject_name: "Mock Person 1".to_string(),
+                face_id: "face_mock_1".to_string(),
+                photo_rel_path: "galleries/sub_mock_1/photo.jpg".to_string(),
+                vector: vec1,
+            },
+            api::RegisteredFace {
+                subject_id: "sub_mock_2".to_string(),
+                subject_name: "Mock Person 2".to_string(),
+                face_id: "face_mock_2".to_string(),
+                photo_rel_path: "galleries/sub_mock_2/photo.jpg".to_string(),
+                vector: vec2,
+            },
+        ])
+        .await;
+
+    // 2. 构造查询向量
+    let mut query_embedding = Box::new([0.0f32; 512]);
+    query_embedding[0] = 1.0;
+
+    let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
+    let _capture_worker = capture_svc.clone().start_worker();
+
+    let mut ws_rx = state.event_broadcaster.subscribe();
+
+    // 3. 发布携带该 embedding 的人脸抓拍事件
+    let capture_id = uuid::Uuid::now_v7().to_string();
+    let mock_capture = PipelineCaptureEvent {
+        capture_id: capture_id.clone(),
+        camera_id: "CAM-REC-MARGIN".to_string(),
+        algorithm_id: "face_recognition".to_string(),
+        tracked_object: TrackedObject {
+            track_id: 888,
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.98,
+            quality_score: Some(0.50),
+            embedding: Some(query_embedding),
+            bbox: BoundingBox::new(0.2, 0.2, 0.4, 0.4),
+            face: None,
+            trajectory: vec![(0.3, 0.3)],
+        },
+        snapshot: Some(SnapshotResult {
+            image_id: "snap_full_888".to_string(),
+            image_rel_path: "2026/03/04/CAM-REC-MARGIN/full_888.jpg".to_string(),
+            crop_image_id: "snap_crop_888".to_string(),
+            crop_image_rel_path: "2026/03/04/CAM-REC-MARGIN/crop_888.jpg".to_string(),
+            body_crop_image_id: String::new(),
+            body_crop_image_rel_path: String::new(),
+            file_size_bytes: 10240,
+            width: 1920,
+            height: 1080,
+            frame_pts_ms: 1741100088000,
+            image_source: EvidenceImageSource::PeakCandidate,
+            image_stream: EvidenceImageStream::Sub,
+        }),
+        timestamp: 1741100088000,
+    };
+
+    state
+        .pipeline
+        .publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(mock_capture)));
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    // 4. 验证识别记录已落库且状态因 Margin 混淆防控被降级为 pending_review
+    let recognitions = db::RecognitionRepo::list_recent(&state.db, Some("CAM-REC-MARGIN"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(recognitions.len(), 1, "混淆匹配记录必须入库供复核");
+    let rec = &recognitions[0];
+    assert_eq!(
+        rec.status, "pending_review",
+        "Top-1 与 Top-2 差值不足 0.05 必须降级为 pending_review"
+    );
+    assert_eq!(rec.subject_id, "sub_mock_1");
+
+    // 5. 验证广播了 status: "pending_review"
+    let mut found_ws_match = false;
+    while let Ok(msg) = ws_rx.try_recv() {
+        if msg.topic == types::TOPIC_RECOGNITION_MATCHED {
+            found_ws_match = true;
+            assert_eq!(msg.payload["status"], "pending_review");
+            break;
+        }
+    }
+    assert!(found_ws_match);
 }

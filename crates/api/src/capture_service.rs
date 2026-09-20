@@ -121,14 +121,36 @@ fn create_recognition_channel() -> (mpsc::Sender<PipelineCaptureEvent>, Recognit
 /// 序列化现场主体及挂载人脸的归一化检测框，供抓拍与识别证据共同复用。
 pub(crate) fn serialize_field_bbox(obj: &types::TrackedObject) -> String {
     if let Some(face) = &obj.face {
-        serde_json::json!({
-            "body": obj.bbox,
-            "face": face,
-        })
-        .to_string()
+        if obj.is_pseudo_body() {
+            // 伪造人体框已去除：仅保留人脸检测框，杜绝伪造人体框污染现场证据
+            serde_json::json!({
+                "face": face,
+            })
+            .to_string()
+        } else {
+            serde_json::json!({
+                "body": obj.bbox,
+                "face": face,
+            })
+            .to_string()
+        }
     } else {
         serde_json::to_string(&obj.bbox).unwrap_or_else(|_| "{}".to_string())
     }
+}
+
+/// 若目标为人脸识别推导的虚拟躯干，规范化现场目标：去除虚拟躯干，以真实人脸检测框为主体
+pub(crate) fn normalize_pseudo_body(obj: &types::TrackedObject) -> types::TrackedObject {
+    if !obj.is_pseudo_body() {
+        return obj.clone();
+    }
+    let mut normalized = obj.clone();
+    if let Some(face) = &mut normalized.face {
+        face.pseudo_body = Some(true);
+        normalized.bbox = face.bbox;
+    }
+    normalized.label = "face".to_string();
+    normalized
 }
 
 /// 证据图来源三元组（路径标识 / 码流 / 可比帧 PTS），抓拍与识别对账共用。
@@ -265,29 +287,40 @@ impl CaptureDispatchService {
         let captured_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
             .unwrap_or_else(chrono::Utc::now);
 
-        let bbox_json = serialize_field_bbox(&event.tracked_object);
+        let tracked_object = normalize_pseudo_body(&event.tracked_object);
+        let is_pseudo = tracked_object.is_pseudo_body();
+        let bbox_json = serialize_field_bbox(&tracked_object);
 
         // 抓拍落库的质量分与峰值选帧共用同一口径（无脸 ⇒ 归一化人体框面积）。
-        let quality_score = event.tracked_object.evidence_quality_score();
+        let quality_score = tracked_object.evidence_quality_score();
 
         let (image_source, image_stream, image_pts_ms) = evidence_origin(snap);
-        let (fused_count, template_quality) = template_metadata(&event.tracked_object);
+        let (fused_count, template_quality) = template_metadata(&tracked_object);
+
+        let (body_crop_id, body_crop_rel_path) = if is_pseudo {
+            (String::new(), String::new())
+        } else {
+            (
+                snap.body_crop_image_id.clone(),
+                snap.body_crop_image_rel_path.clone(),
+            )
+        };
 
         Some(db::entity::capture::ActiveModel {
             id: sea_orm::NotSet,
             capture_id: Set(event.capture_id.clone()),
             camera_id: Set(event.camera_id.clone()),
-            track_id: Set(event.tracked_object.track_id as i64),
-            target_label: Set(event.tracked_object.label.clone()),
-            confidence: Set(event.tracked_object.confidence),
+            track_id: Set(tracked_object.track_id as i64),
+            target_label: Set(tracked_object.label.clone()),
+            confidence: Set(tracked_object.confidence),
             quality_score: Set(quality_score),
             bbox_json: Set(bbox_json),
             image_id: Set(snap.image_id.clone()),
             image_rel_path: Set(snap.image_rel_path.clone()),
             crop_image_id: Set(snap.crop_image_id.clone()),
             crop_image_rel_path: Set(snap.crop_image_rel_path.clone()),
-            body_crop_image_id: Set(snap.body_crop_image_id.clone()),
-            body_crop_image_rel_path: Set(snap.body_crop_image_rel_path.clone()),
+            body_crop_image_id: Set(body_crop_id),
+            body_crop_image_rel_path: Set(body_crop_rel_path),
             image_source: Set(image_source),
             image_stream: Set(image_stream),
             image_pts_ms: Set(image_pts_ms),
@@ -344,17 +377,9 @@ impl CaptureDispatchService {
         Ok(inserted)
     }
 
-    /// 动态解析摄像头关联的算法实例阈值 (未显式配置时回退到安全默认值)
-    ///
-    /// 从数据库加载摄像头绑定的算法实例配置，提取 `similarity_threshold` 和
-    /// `review_threshold`；精确匹配优先，回退到名称含 `face` 的实例。
-    /// 保证 `review_threshold <= confirm_threshold`。
-    async fn resolve_recognition_thresholds(
-        &self,
-        camera_id: &str,
-        algorithm_id: &str,
-    ) -> (f32, f32) {
-        let (mut confirm_threshold, mut review_threshold) = (0.75f32, 0.60f32);
+    /// 动态解析摄像头关联的算法实例阈值 (未显式配置时回退到安全默认值 0.75)
+    async fn resolve_recognition_threshold(&self, camera_id: &str, algorithm_id: &str) -> f32 {
+        let mut confirm_threshold = 0.75f32;
         if let Ok(instances) =
             db::AlgorithmInstanceRepo::list_by_camera_id(&self.db, camera_id).await
         {
@@ -366,9 +391,6 @@ impl CaptureDispatchService {
                         if let Some(st) = val.get("similarity_threshold").and_then(|v| v.as_f64()) {
                             confirm_threshold = st as f32;
                         }
-                        if let Some(rt) = val.get("review_threshold").and_then(|v| v.as_f64()) {
-                            review_threshold = rt as f32;
-                        }
                     }
                     if is_exact {
                         break;
@@ -376,10 +398,7 @@ impl CaptureDispatchService {
                 }
             }
         }
-        if review_threshold > confirm_threshold {
-            review_threshold = (confirm_threshold - 0.15).max(0.1);
-        }
-        (confirm_threshold, review_threshold)
+        confirm_threshold
     }
 
     /// 针对人脸通行抓拍尝试触发 1:N 底库特征检索并落地识别对账记录
@@ -424,18 +443,17 @@ impl CaptureDispatchService {
 
         let base_dir = self.pipeline.snapshot_engine().base_evidence_dir();
 
-        // 动态解析摄像头关联的算法实例阈值 (未显式配置时回退到安全默认值)
-        let (confirm_threshold, review_threshold) = self
-            .resolve_recognition_thresholds(&event.camera_id, &event.algorithm_id)
+        // 动态解析摄像头关联的算法实例确认阈值 (未显式配置时回退到安全默认值 0.75)
+        let confirm_threshold = self
+            .resolve_recognition_threshold(&event.camera_id, &event.algorithm_id)
             .await;
 
         // 遵循 docs/algo/EdgeFace.md §4.4 约定的质量感知动态阈值微调（实机标定系数 0.15）：
         // 质量评分围绕 0.50 基准点浮动 ±0.075，对高质量多帧成熟融合模板放宽门槛对抗监控-寸照域偏移，对低质单帧提高门槛抑制误认
         let quality_adjustment = (feature.quality_score - 0.5) * 0.15;
         let adaptive_confirm = (confirm_threshold - quality_adjustment).clamp(0.40, 0.95);
-        let adaptive_review = (review_threshold - quality_adjustment).clamp(0.30, adaptive_confirm);
 
-        // 执行 1:N 余弦比对 Top-5，不设分数截断门槛 (-1.0)，保证返回完整的 Top-5 候选人以留存完整识别过程
+        // 执行 1:N 余弦比对 Top-5，不设分数截断门槛 (-1.0)，保证返回无条件的完整 Top-5 候选人以留存完整识别过程
         let candidates = gallery_index
             .search_top_k(&feature.embedding, 5, -1.0)
             .await;
@@ -445,27 +463,36 @@ impl CaptureDispatchService {
         }
 
         let best_match = &candidates[0];
-        let status = evaluate_recognition_status(&candidates, adaptive_confirm, adaptive_review);
+        let status = evaluate_recognition_status(&candidates, adaptive_confirm);
+
+        // 只有 Top-1 相似度达到确认门槛才进入识别对账，不把无效记录写入识别对账
+        if status == types::RecognitionStatus::Rejected {
+            tracing::debug!(
+                camera_id = %event.camera_id,
+                track_id = event.tracked_object.track_id,
+                top1_similarity = best_match.similarity,
+                adaptive_confirm,
+                "Top-1 相似度未达到确认阈值，判定为无效记录，跳过识别对账落库与广播"
+            );
+            return;
+        }
 
         let recognition_id = uuid::Uuid::now_v7().to_string();
         let recognized_at = chrono::DateTime::from_timestamp_millis(event.timestamp)
             .unwrap_or_else(chrono::Utc::now);
 
-        // 遵循证据隔离原则：若识别已确认或需复核，复制一份底库样本至 recognitions 目录；
-        // 若判定为 Rejected (陌生人/未达门槛)，仅保留引用，跳过物理磁盘复制以杜绝海量陌生人造成存储膨胀
-        let rec_gallery_rel = if status == types::RecognitionStatus::Rejected {
-            best_match.photo_rel_path.clone()
-        } else {
+        // 遵循证据隔离原则：识别确认后，复制一份底库样本至 recognitions 目录
+        let rec_gallery_rel =
             isolate_gallery_evidence_photo(base_dir, &best_match.photo_rel_path, &recognition_id)
                 .await
-                .unwrap_or_else(|| best_match.photo_rel_path.clone())
-        };
+                .unwrap_or_else(|| best_match.photo_rel_path.clone());
 
         let candidates_json =
             serde_json::to_string(&candidates).unwrap_or_else(|_| "[]".to_string());
 
         let (image_source, image_stream, image_pts_ms) = evidence_origin(snap);
-        let (fused_count, template_quality) = template_metadata(&event.tracked_object);
+        let rec_tracked_object = normalize_pseudo_body(&event.tracked_object);
+        let (fused_count, template_quality) = template_metadata(&rec_tracked_object);
 
         let active_rec = db::entity::recognition::ActiveModel {
             id: sea_orm::NotSet,
@@ -477,7 +504,7 @@ impl CaptureDispatchService {
             similarity: Set(best_match.similarity),
             field_crop_path: Set(snap.crop_image_rel_path.clone()),
             field_image_path: Set(snap.image_rel_path.clone()),
-            field_bbox_json: Set(serialize_field_bbox(&event.tracked_object)),
+            field_bbox_json: Set(serialize_field_bbox(&rec_tracked_object)),
             registered_photo_path: Set(rec_gallery_rel),
             image_source: Set(image_source),
             image_stream: Set(image_stream),
@@ -675,29 +702,23 @@ impl CaptureDispatchService {
 /// 业务决策层硬核校验的 Top-1 与 Top-2 最小排他优势差值 (Margin 防控)
 pub const MIN_CONFIRM_MARGIN: f32 = 0.05;
 
-/// 根据候选人列表与自适应确认/复核门槛判定最终识别状态。
+/// 根据候选人列表与自适应确认门槛判定最终识别状态。
 ///
 /// 遵循 docs/algo/face-best-shot-fusion-design.md 附录 C 的 Margin 误认防控机制：
-/// 1. 若 Top-1 相似度低于 adaptive_review，判定为 Rejected (未达核验门槛/陌生人)；
-/// 2. 若 Top-1 相似度低于 adaptive_confirm，判定为 PendingReview (疑似区间，待人工核验)；
-/// 3. 若 Top-1 达到 adaptive_confirm，硬核校验 Top-1 与 Top-2 排他优势差值 (Margin 防控)；
-///    若两名候选人相似度咬得太紧 (差值 < MIN_CONFIRM_MARGIN)，判定为混淆匹配，强制降级为 PendingReview 避免冒认；
-/// 4. 否则判定为 Confirmed。
+/// 1. 若 Top-1 相似度低于 adaptive_confirm，判定为 Rejected (未达确认门槛/无效比对)；
+/// 2. 若 Top-1 达到 adaptive_confirm，硬核校验 Top-1 与 Top-2 排他优势差值 (Margin 防控)；
+///    若两名候选人相似度咬得太紧 (差值 < MIN_CONFIRM_MARGIN)，判定为混淆匹配，降级为 PendingReview 供人工复核；
+/// 3. 否则判定为 Confirmed。
 pub fn evaluate_recognition_status(
     candidates: &[types::FaceCandidateItem],
     adaptive_confirm: f32,
-    adaptive_review: f32,
 ) -> types::RecognitionStatus {
     let Some(best_match) = candidates.first() else {
         return types::RecognitionStatus::Rejected;
     };
 
-    if best_match.similarity < adaptive_review {
-        return types::RecognitionStatus::Rejected;
-    }
-
     if best_match.similarity < adaptive_confirm {
-        return types::RecognitionStatus::PendingReview;
+        return types::RecognitionStatus::Rejected;
     }
 
     if let Some(second_match) = candidates.get(1) {
@@ -710,7 +731,7 @@ pub fn evaluate_recognition_status(
                 top2_similarity = second_match.similarity,
                 margin,
                 min_margin = MIN_CONFIRM_MARGIN,
-                "人脸识别命中候选优势差值不足，触发 Margin 防控，强制降级为 PendingReview"
+                "人脸识别命中候选优势差值不足，触发 Margin 防控，降级为 PendingReview"
             );
             return types::RecognitionStatus::PendingReview;
         }
@@ -738,38 +759,32 @@ mod tests {
     #[test]
     fn test_single_candidate_passes_threshold() {
         let candidates = vec![make_candidate("s1", "张三", 0.78)];
-        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
+        let status = evaluate_recognition_status(&candidates, 0.75);
         assert_eq!(status, RecognitionStatus::Confirmed);
     }
 
     #[test]
     fn test_single_candidate_below_threshold() {
         let candidates = vec![make_candidate("s1", "张三", 0.72)];
-        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
-        assert_eq!(status, RecognitionStatus::PendingReview);
-    }
-
-    #[test]
-    fn test_single_candidate_below_review_threshold_is_rejected() {
-        let candidates = vec![make_candidate("s1", "张三", 0.45)];
-        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
+        let status = evaluate_recognition_status(&candidates, 0.75);
         assert_eq!(status, RecognitionStatus::Rejected);
     }
 
     #[test]
     fn test_empty_candidates_is_rejected() {
         let candidates = vec![];
-        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
+        let status = evaluate_recognition_status(&candidates, 0.75);
         assert_eq!(status, RecognitionStatus::Rejected);
     }
 
     #[test]
-    fn test_dual_candidate_with_ample_margin_is_confirmed() {
+    fn test_top1_passes_with_unconditional_top5() {
         let candidates = vec![
             make_candidate("s1", "张三", 0.82),
-            make_candidate("s2", "李四", 0.75), // 差值 0.07 >= 0.05
+            make_candidate("s2", "李四", 0.35),
+            make_candidate("s3", "王五", 0.25),
         ];
-        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
+        let status = evaluate_recognition_status(&candidates, 0.75);
         assert_eq!(status, RecognitionStatus::Confirmed);
     }
 
@@ -779,7 +794,7 @@ mod tests {
             make_candidate("s1", "张三", 0.80),
             make_candidate("s2", "李四", 0.77), // 差值 0.03 < 0.05，触发混淆拦截
         ];
-        let status = evaluate_recognition_status(&candidates, 0.75, 0.60);
+        let status = evaluate_recognition_status(&candidates, 0.75);
         assert_eq!(status, RecognitionStatus::PendingReview);
     }
 
@@ -853,6 +868,7 @@ mod tests {
             template_mature: None,
             fused_count: None,
             template_quality: None,
+            pseudo_body: None,
         };
 
         assert!(
