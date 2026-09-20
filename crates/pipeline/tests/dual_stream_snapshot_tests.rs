@@ -851,7 +851,7 @@ async fn capture_evidence_never_promotes_to_main_stream() {
     // 1. 无脸目标（背身/低头）：无人脸特写，但必须有人体特写。
     let body_bbox = BoundingBox::new(0.3, 0.25, 0.55, 0.85);
     let faceless = manager
-        .snapshot_from_analysis_frame(cam_id, 1080, None, body_bbox, analyzed_frame.clone())
+        .snapshot_from_analysis_frame(cam_id, 1080, None, Some(body_bbox), analyzed_frame.clone())
         .await
         .expect("抓拍取证应成功");
     assert!(
@@ -879,7 +879,13 @@ async fn capture_evidence_never_promotes_to_main_stream() {
     // 2. 有脸目标：两张特写各司其职，人脸特写给识别复核、人体特写给外观复核。
     let face_bbox = BoundingBox::new(0.4, 0.3, 0.48, 0.4);
     let with_face = manager
-        .snapshot_from_analysis_frame(cam_id, 1080, Some(face_bbox), body_bbox, analyzed_frame)
+        .snapshot_from_analysis_frame(
+            cam_id,
+            1080,
+            Some(face_bbox),
+            Some(body_bbox),
+            analyzed_frame,
+        )
         .await
         .expect("抓拍取证应成功");
     assert!(

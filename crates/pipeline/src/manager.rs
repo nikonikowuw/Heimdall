@@ -667,14 +667,19 @@ impl PipelineManager {
         // 冻结编码时刻的码流来源：结算可能在一个结算窗口之后才发生，
         // 届时重新采样 `is_main_stream_analysis` 可能已换流，记录来源就会失真。
         let stream = ctx.analysis_stream();
-        // 两张特写各司其职：人脸特写（有脸时）给识别复核，人体特写给人工复查看衣着。
-        // 人体框永远裁剪，否则背身/低头的人就只能靠全景里的小小一个人影辨认。
+        // 两张特写各司其职：人脸特写（有脸时）给识别复核，人体特写（真实人体存在时）给人工复查看衣着。
+        // 若为近景/无真实人体推导的虚拟躯干 (pseudo_body)，去除伪造人体特写，仅留人脸与全景。
+        let body_bbox = if geometry.is_pseudo_body {
+            None
+        } else {
+            Some(geometry.bbox)
+        };
         let encoded = self
             .snapshot_engine
             .encode_candidate_async(
                 camera_id,
                 analyzed_frame,
-                crate::snapshot::EvidenceCrops::for_capture(geometry.face_bbox, geometry.bbox),
+                crate::snapshot::EvidenceCrops::for_capture(geometry.face_bbox, body_bbox),
                 stream,
             )
             .await?;
@@ -980,7 +985,7 @@ impl PipelineManager {
         camera_id: &str,
         analysis_pts_ms: i64,
         face_bbox: Option<BoundingBox>,
-        body_bbox: BoundingBox,
+        body_bbox: Option<BoundingBox>,
         analyzed_frame: FrameRef,
     ) -> Result<SnapshotResult, PipelineError> {
         if analyzed_frame.camera_id != camera_id || analyzed_frame.timestamp != analysis_pts_ms {
@@ -2799,6 +2804,7 @@ mod tests {
             geometry: FrameGeometry {
                 bbox: object.bbox,
                 face_bbox: None,
+                is_pseudo_body: false,
                 pts_ms: 1000,
                 quality: 0.80,
             },
@@ -2829,6 +2835,7 @@ mod tests {
             geometry: FrameGeometry {
                 bbox: BoundingBox::new(0.35, 0.25, 0.65, 0.65),
                 face_bbox: Some(BoundingBox::new(0.45, 0.35, 0.55, 0.5)),
+                is_pseudo_body: false,
                 pts_ms: 1200,
                 quality: 0.85,
             },
@@ -2915,6 +2922,7 @@ mod tests {
             geometry: FrameGeometry {
                 bbox: object.bbox,
                 face_bbox: None,
+                is_pseudo_body: false,
                 pts_ms: 12_000,
                 quality: 0.80,
             },
@@ -2966,6 +2974,7 @@ mod tests {
                 fused_count: None,
                 template_quality: None,
                 template_mature: None,
+                pseudo_body: None,
                 embedding: None,
             }),
         };
@@ -3072,6 +3081,7 @@ mod tests {
                         fused_count: None,
                         template_quality: None,
                         template_mature: None,
+                        pseudo_body: None,
                         embedding: None,
                     }),
                 }],

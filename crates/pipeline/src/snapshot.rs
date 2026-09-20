@@ -374,12 +374,9 @@ pub(crate) struct EvidenceCrops {
 }
 
 impl EvidenceCrops {
-    /// 抓拍记录：人脸特写（有脸时）+ 人体特写（恒有）。
-    pub(crate) fn for_capture(face: Option<BoundingBox>, body: BoundingBox) -> Self {
-        Self {
-            face,
-            body: Some(body),
-        }
+    /// 抓拍记录：人脸特写（有脸时）+ 人体特写（真实人体存在时）。
+    pub(crate) fn for_capture(face: Option<BoundingBox>, body: Option<BoundingBox>) -> Self {
+        Self { face, body }
     }
 }
 
@@ -978,7 +975,7 @@ impl SnapshotEngine {
         camera_id: &str,
         frame: FrameRef,
         face_bbox: Option<BoundingBox>,
-        body_bbox: BoundingBox,
+        body_bbox: Option<BoundingBox>,
         stream: EvidenceImageStream,
     ) -> Result<SnapshotResult, PipelineError> {
         self.save_snapshot_with_crops_async(
@@ -1853,7 +1850,10 @@ mod tests {
                     .encode_candidate_async(
                         "cam_lane",
                         frame,
-                        EvidenceCrops::for_capture(None, BoundingBox::new(0.1, 0.1, 0.5, 0.5)),
+                        EvidenceCrops::for_capture(
+                            None,
+                            Some(BoundingBox::new(0.1, 0.1, 0.5, 0.5)),
+                        ),
                         EvidenceImageStream::Main,
                     )
                     .await

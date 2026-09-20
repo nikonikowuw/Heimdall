@@ -1127,6 +1127,7 @@ mod tests {
                 fused_count: Some(4),
                 template_quality: Some(0.72),
                 template_mature: Some(true),
+                pseudo_body: None,
                 embedding: None,
             }),
         };
@@ -1151,6 +1152,7 @@ mod tests {
                 fused_count: None,
                 template_quality: None,
                 template_mature: None,
+                pseudo_body: None,
                 embedding: None,
             }),
         };
@@ -1182,6 +1184,7 @@ mod tests {
                 fused_count: Some(6),
                 template_quality: Some(0.83),
                 template_mature: None,
+                pseudo_body: None,
                 embedding: Some(Box::new([0.25; 512])),
             }),
         };
@@ -1204,6 +1207,7 @@ mod tests {
                     fused_count: None,
                     template_quality: None,
                     template_mature: None,
+                    pseudo_body: None,
                     embedding: None,
                 }),
             }],

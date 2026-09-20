@@ -999,16 +999,26 @@ async fn execute_capture_actions(
                     }
                 }
 
+                let is_pseudo = settle.tracked_object.is_pseudo_body()
+                    || settle
+                        .candidate
+                        .as_ref()
+                        .is_some_and(|c| c.geometry.is_pseudo_body);
+
                 if snapshot.is_none() {
                     // 无候选（预算拒绝/编码失败）时的唯一回退：用当帧分析帧直出。
-                    // 不再尝试主码流回溯或按需 GOP 追帧：抓拍证据图码流恒等于该任务的分析码流，
-                    // 两条 PTS 轴不存在换算，也就不存在“图与检测框不同刻”的错配。
+                    // 若为人脸识别且为伪造的人体框，去除伪造人体特写，仅留人脸特写与全景。
+                    let body_bbox = if is_pseudo {
+                        None
+                    } else {
+                        Some(settle.tracked_object.bbox)
+                    };
                     let capture_result = pipeline_mgr
                         .snapshot_from_analysis_frame(
                             camera_id,
                             timestamp,
                             settle.tracked_object.face_crop_target(),
-                            settle.tracked_object.bbox,
+                            body_bbox,
                             analyzed_frame.clone(),
                         )
                         .await;
@@ -1073,12 +1083,22 @@ async fn execute_capture_actions(
                 }
 
                 let mut event_object = settle.tracked_object;
+
                 if let Some(geometry) = candidate_geometry {
                     // INV-3：事件 bbox 必须与所存图像同帧（候选提升时替换为峰值帧几何）。
                     event_object.bbox = geometry.bbox;
                     if let Some(face) = event_object.face.as_mut() {
                         face.bbox = geometry.face_bbox.unwrap_or(geometry.bbox);
                     }
+                }
+
+                // 若为人脸识别且为伪造的人体框，去除伪造人体框、写回 pseudo_body 状态并将类别修正为 "face"
+                if is_pseudo {
+                    if let Some(face) = event_object.face.as_mut() {
+                        face.pseudo_body = Some(true);
+                        event_object.bbox = face.bbox;
+                    }
+                    event_object.label = "face".to_string();
                 }
 
                 pipeline_mgr.publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(
@@ -2108,6 +2128,7 @@ mod tests {
                 fused_count: None,
                 template_quality: None,
                 template_mature: None,
+                pseudo_body: None,
                 embedding: None,
             }),
             trajectory: vec![(0.5, 0.6)],
@@ -2155,6 +2176,7 @@ mod tests {
                     geometry: FrameGeometry {
                         bbox: peak_bbox,
                         face_bbox: Some(peak_face_bbox),
+                        is_pseudo_body: false,
                         pts_ms: 1000,
                         quality: 0.86,
                     },

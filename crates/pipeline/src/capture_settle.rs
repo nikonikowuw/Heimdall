@@ -102,6 +102,8 @@ pub struct FrameGeometry {
     pub bbox: BoundingBox,
     /// 人脸特写裁剪目标（嵌套人脸框；纯人脸包则为检测框本身），`None` = 无人脸特写
     pub face_bbox: Option<BoundingBox>,
+    /// 是否为按人脸推导的虚拟躯干
+    pub is_pseudo_body: bool,
     /// 该帧的检测流 PTS（毫秒）
     pub pts_ms: i64,
     /// 该帧的人脸质量分
@@ -335,6 +337,7 @@ impl CaptureSettleController {
             let geometry = FrameGeometry {
                 bbox: obj.bbox,
                 face_bbox: obj.face_crop_target(),
+                is_pseudo_body: obj.is_pseudo_body(),
                 pts_ms: now_ms,
                 quality,
             };
@@ -627,6 +630,7 @@ mod tests {
                 fused_count: None,
                 template_quality: None,
                 template_mature: None,
+                pseudo_body: None,
                 embedding: None,
             }),
             embedding: None,
@@ -678,6 +682,7 @@ mod tests {
             geometry: FrameGeometry {
                 bbox: BoundingBox::new(0.4, 0.3, 0.6, 0.6),
                 face_bbox: Some(BoundingBox::new(0.45, 0.35, 0.55, 0.5)),
+                is_pseudo_body: false,
                 pts_ms,
                 quality,
             },

@@ -701,6 +701,13 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
         template_quality: Option<f32>,
         #[serde(default, alias = "templateMature")]
         template_mature: Option<bool>,
+        #[serde(
+            default,
+            alias = "pseudoBody",
+            alias = "is_pseudo_body",
+            alias = "isPseudoBody"
+        )]
+        pseudo_body: Option<bool>,
     }
 
     #[derive(Deserialize)]
@@ -709,6 +716,14 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
         class_id: usize,
         label: String,
         confidence: f32,
+        #[serde(
+            default,
+            alias = "pseudo_body",
+            alias = "pseudoBody",
+            alias = "is_pseudo_body",
+            alias = "isPseudoBody"
+        )]
+        is_pseudo_body: Option<bool>,
         #[serde(default)]
         quality_score: Option<f32>,
         #[serde(default)]
@@ -877,6 +892,7 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
                     fused_count: f_fused_count,
                     template_quality: f_template_quality,
                     template_mature: raw_face.template_mature,
+                    pseudo_body: raw_face.pseudo_body.or(item.is_pseudo_body),
                     embedding: f_emb.clone(),
                 }),
                 f_emb,
@@ -897,6 +913,7 @@ fn parse_alarm_objects_with_metadata(json_str: &str) -> Result<Vec<ParsedDetecti
                     fused_count: None,
                     template_quality: None,
                     template_mature: None,
+                    pseudo_body: None,
                     embedding: f_emb.clone(),
                 }),
                 f_emb,

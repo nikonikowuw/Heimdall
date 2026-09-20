@@ -68,6 +68,9 @@ pub struct FaceDetail {
     /// 模板首次成熟握手；普通帧与成熟后的帧均为 `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template_mature: Option<bool>,
+    /// 承载人脸的人体框是否为按人脸几何推导的虚拟躯干（画面中未检测出对应真实人体）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pseudo_body: Option<bool>,
     /// 低频人脸识别 sidecar；绝不序列化到 TrackDto 或其它前端 DTO。
     #[serde(skip)]
     pub embedding: Option<FaceEmbedding>,
@@ -82,6 +85,7 @@ impl FaceDetail {
             fused_count: None,
             template_quality: None,
             template_mature: None,
+            pseudo_body: None,
             embedding: None,
         }
     }
@@ -94,8 +98,13 @@ impl FaceDetail {
             fused_count: self.fused_count,
             template_quality: self.template_quality,
             template_mature: self.template_mature,
+            pseudo_body: self.pseudo_body,
             embedding: None,
         }
+    }
+
+    pub fn is_pseudo_body(&self) -> bool {
+        self.pseudo_body.unwrap_or(false)
     }
 }
 
@@ -187,6 +196,11 @@ impl TrackedObject {
             .as_ref()
             .and_then(|f| f.embedding.as_ref())
             .or(self.embedding.as_ref())
+    }
+
+    /// 判断当前目标的人体框是否为虚拟推导的合成躯干 (画面中无真实人体检出)
+    pub fn is_pseudo_body(&self) -> bool {
+        self.face.as_ref().is_some_and(|f| f.is_pseudo_body())
     }
 }
 
@@ -333,6 +347,7 @@ mod tests {
                 fused_count: Some(3),
                 template_quality: Some(0.78),
                 template_mature: Some(true),
+                pseudo_body: None,
                 embedding: Some(Box::new([0.25; 512])),
             }),
             embedding: Some(Box::new([0.25; 512])),
@@ -368,6 +383,7 @@ mod tests {
                 fused_count: None,
                 template_quality: None,
                 template_mature: None,
+                pseudo_body: None,
                 embedding: None,
             }),
             embedding: None,
@@ -487,6 +503,7 @@ mod tests {
             fused_count: None,
             template_quality: None,
             template_mature: None,
+            pseudo_body: None,
             embedding: None,
         });
         assert!((obj.evidence_quality_score() - 0.85).abs() < 1e-5);
