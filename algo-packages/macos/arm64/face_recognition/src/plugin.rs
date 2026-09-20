@@ -230,6 +230,7 @@ impl AlgoPlugin for FaceRecognizer {
                     confidence: face.score.clamp(0.0, 1.0),
                     quality_score: Some(quality.score.clamp(0.0, 1.0)),
                     embedding: embedding_str,
+                    pseudo_body: candidate.is_pseudo_body.then_some(true),
                 })
             } else {
                 None

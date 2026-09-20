@@ -13,6 +13,8 @@ pub struct FaceDetailObject {
     pub quality_score: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pseudo_body: Option<bool>,
 }
 
 /// 宿主检测解析器消费的稳定目标对象。
@@ -131,6 +133,7 @@ mod tests {
                 bbox: [0.15, 0.22, 0.25, 0.35],
                 confidence: 0.92,
                 quality_score: Some(0.88),
+                pseudo_body: None,
                 embedding: None,
             }),
         }];
@@ -163,6 +166,7 @@ mod tests {
                 bbox: [0.15, 0.22, 0.25, 0.35],
                 confidence: 0.92,
                 quality_score: Some(0.9),
+                pseudo_body: None,
                 embedding: Some(encoded),
             }),
         };
