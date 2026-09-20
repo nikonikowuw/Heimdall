@@ -11,10 +11,10 @@
 
 ## 模型清单
 
-- `model/yolov8n-640x384-rk3568.rknn`: YOLOv8n COCO 人体检测模型（640×384，9 个 NCHW 输出，类别 0 为 person）
-- `model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn`: 视频流人脸检测与 5 点关键点模型（640×384 混合精度，SCRFD-2.5G BNKPS 骨干）
+- `model/yolov6n_384x640_i8.rknn`: YOLOv6n COCO 人体检测模型（640×384 INT8，类别 0 为 person，兼容 yolov8n-640x384-rk3568.rknn）
+- `model/scrfd_500m_384x640_mixed.rknn`: 视频流人脸检测与 5 点关键点模型（640×384 轻量混合精度，兼容 scrfd_2.5g_bnkps_640x384）
 - `model/scrfd_2.5g_bnkps_640x640_rk3568_mixed.rknn`: 底库注册人脸检测与 5 点定位模型（640×640 混合精度）
-- `model/edgeface_s_gamma_05_rk3568_fp16.rknn`: 512 维人脸特征提取模型（112×112 FP16，EdgeFace-S 骨干）
+- `model/edgeface_base_distill_fp16.rknn`: 512 维人脸特征提取模型（112×112 FP16 EdgeFace-Base 监控场景无头蒸馏微调版，兼容 edgeface_s 原版）
 
 ## 算法核心流水线
 

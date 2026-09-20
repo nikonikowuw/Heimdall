@@ -182,13 +182,20 @@ impl LoadedPackage {
             .resolve_model_path(
                 &root,
                 "EMBEDDER_MODEL_PATH",
-                "model/facelivtv2_m_realistic_final_super_fp16.rknn",
+                "model/edgeface_s_surv_distill_rk3568.rknn",
             )
             .or_else(|_| {
                 env.resolve_model_path(
                     &root,
                     "EMBEDDER_MODEL_PATH",
                     "model/edgeface_base_distill_fp16.rknn",
+                )
+            })
+            .or_else(|_| {
+                env.resolve_model_path(
+                    &root,
+                    "EMBEDDER_MODEL_PATH",
+                    "model/facelivtv2_m_realistic_final_super_fp16.rknn",
                 )
             })
             .or_else(|_| {

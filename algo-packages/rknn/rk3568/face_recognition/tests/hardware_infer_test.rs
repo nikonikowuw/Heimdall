@@ -17,9 +17,32 @@ fn test_rknn_hardware_face_detection_and_embedding() {
     } else {
         std::env::current_dir().expect("获取当前运行目录失败")
     };
-    let person_detector_model = pkg_root.join("model/yolov8n-640x384-rk3568.rknn");
-    let detector_model = pkg_root.join("model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn");
-    let embedder_model = pkg_root.join("model/edgeface_s_gamma_05_rk3568_fp16.rknn");
+    let person_detector_model = [
+        pkg_root.join("model/yolov6n_384x640_i8.rknn"),
+        pkg_root.join("model/yolov8n-640x384-rk3568.rknn"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+    .expect("未找到有效人体检测模型文件");
+
+    let detector_model = [
+        pkg_root.join("model/scrfd_500m_384x640_mixed.rknn"),
+        pkg_root.join("model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+    .expect("未找到有效人脸检测模型文件");
+
+    let embedder_model = [
+        pkg_root.join("model/edgeface_base_distill_fp16.rknn"),
+        pkg_root.join("model/edgeface_s_surv_distill_rk3568.rknn"),
+        pkg_root.join("model/facelivtv2_m_realistic_final_super_fp16.rknn"),
+        pkg_root.join("model/edgeface_s_gamma_05_rk3568_fp16.rknn"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+    .expect("未找到有效特征提取模型文件");
+
     let test_image_path = pkg_root.join("testimage.jpg");
 
     assert!(

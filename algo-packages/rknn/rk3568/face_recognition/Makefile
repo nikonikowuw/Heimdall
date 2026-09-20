@@ -77,8 +77,14 @@ package: build
 		echo "错误: lib/libface_recognition.so 构建未生成"; \
 		exit 1; \
 	fi
-	@if [ ! -f model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn ] || [ ! -f model/edgeface_s_gamma_05_rk3568_fp16.rknn ] || [ ! -f model/yolov8n-640x384-rk3568.rknn ]; then \
-		echo "错误: model/ 下缺少必需的 RKNN 模型权重 (yolov8n-640x384, scrfd_2.5g_bnkps, edgeface_s)"; \
+	@HAS_DETECTOR=0; \
+	{ [ -f model/scrfd_500m_384x640_mixed.rknn ] || [ -f model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn ]; } && HAS_DETECTOR=1; \
+	HAS_EMBEDDER=0; \
+	{ [ -f model/edgeface_base_distill_fp16.rknn ] || [ -f model/edgeface_s_surv_distill_rk3568.rknn ] || [ -f model/edgeface_s_gamma_05_rk3568_fp16.rknn ] || [ -f model/facelivtv2_m_realistic_final_super_fp16.rknn ]; } && HAS_EMBEDDER=1; \
+	HAS_PERSON=0; \
+	{ [ -f model/yolov6n_384x640_i8.rknn ] || [ -f model/yolov8n-640x384-rk3568.rknn ]; } && HAS_PERSON=1; \
+	if [ $$HAS_DETECTOR -eq 0 ] || [ $$HAS_EMBEDDER -eq 0 ] || [ $$HAS_PERSON -eq 0 ]; then \
+		echo "错误: model/ 下缺少必需的 RKNN 模型权重 (需包含人体检测、人脸检测及人脸特征提取模型)"; \
 		exit 1; \
 	fi
 	rm -f face_recognition.tar.gz
