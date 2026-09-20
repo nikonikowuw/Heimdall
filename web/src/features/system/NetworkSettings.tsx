@@ -125,12 +125,14 @@ export function NetworkSettings(): React.ReactElement {
     try {
       setSaving(true)
       setSaveError(null)
+      // IpConfig 的 prefix/metric 已是 `number | null`，无需再套 Number()；dns 恒为 string[]，
+      // 空数组与省略字段在服务端等价（均由 serde default 折成 []）。仅在发送前归一化空字符串。
       const res = await systemApi.updateNetworkInterface(name, {
         method: config.method,
-        address: config.address || undefined,
-        prefix: config.prefix || undefined,
-        gateway: config.gateway || undefined,
-        dns: config.dns.length > 0 ? config.dns : undefined,
+        address: config.address?.trim() || undefined,
+        prefix: config.prefix ?? undefined,
+        gateway: config.gateway?.trim() || undefined,
+        dns: config.dns,
         metric: config.metric ?? undefined,
       })
       cancelEditing()

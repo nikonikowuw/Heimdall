@@ -2,12 +2,12 @@
 
 use crate::error::ApiError;
 
-/// 执行外部命令，强制注入 `LC_ALL=C` 和 `LANG=C`，防止本地化语言破坏解析
+/// 执行外部命令，强制注入 `LC_ALL=C.UTF-8` 和 `LANG=C.UTF-8`，防止本地化语言破坏解析的同时保留 UTF-8 字符集
 pub async fn run_command_with_c_locale(cmd: &str, args: &[&str]) -> Result<String, ApiError> {
     let output = tokio::process::Command::new(cmd)
         .args(args)
-        .env("LC_ALL", "C")
-        .env("LANG", "C")
+        .env("LC_ALL", "C.UTF-8")
+        .env("LANG", "C.UTF-8")
         .output()
         .await
         .map_err(|e| ApiError::NetworkFailed(format!("执行 {cmd} 失败: {e}")))?;

@@ -388,21 +388,37 @@ pub enum NetworkManager {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IpConfig {
+    /// 省略时降级为 `IpMethod::None`，由 `validate_ip_config` 在边界拒绝，不直接下发
+    #[serde(default)]
     pub method: IpMethod,
     pub address: Option<String>,
     pub prefix: Option<u32>,
     pub gateway: Option<String>,
+    /// `Option` 语义上允许缺字段，但前端会把空 DNS 序列化为 `null`，需单独容忍
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub dns: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metric: Option<u32>,
+}
+
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum IpMethod {
+    #[serde(alias = "DHCP", alias = "Dhcp")]
     Dhcp,
+    #[serde(alias = "STATIC", alias = "Static")]
     Static,
     #[default]
+    #[serde(alias = "NONE", alias = "None")]
     None,
 }
 
@@ -536,5 +552,50 @@ impl SnapshotSystemConfig {
             return Err("cropPaddingRatio 必须在 0.0-0.5 范围内".into());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deserialize_ip_config_variants() {
+        // 1. DHCP 仅提供 method
+        let json_dhcp = r#"{"method":"dhcp"}"#;
+        let cfg: IpConfig = serde_json::from_str(json_dhcp).expect("反序列化 DHCP 失败");
+        assert_eq!(cfg.method, IpMethod::Dhcp);
+        assert_eq!(cfg.address, None);
+        assert!(cfg.dns.is_empty());
+
+        // 2. DHCP 携带 null dns
+        let json_null_dns = r#"{"method":"dhcp","dns":null}"#;
+        let cfg: IpConfig = serde_json::from_str(json_null_dns).expect("反序列化 null dns 失败");
+        assert_eq!(cfg.method, IpMethod::Dhcp);
+        assert!(cfg.dns.is_empty());
+
+        // 3. Static IP 缺少可选 dns 与 metric
+        let json_static = r#"{"method":"static","address":"192.168.17.140","prefix":24,"gateway":"192.168.17.1"}"#;
+        let cfg: IpConfig = serde_json::from_str(json_static).expect("反序列化 static 失败");
+        assert_eq!(cfg.method, IpMethod::Static);
+        assert_eq!(cfg.address.as_deref(), Some("192.168.17.140"));
+        assert_eq!(cfg.prefix, Some(24));
+        assert_eq!(cfg.gateway.as_deref(), Some("192.168.17.1"));
+        assert!(cfg.dns.is_empty());
+
+        // 4. 大小写与别名兼容（线上契约：dhcp/static 接受首字母大写与全大写别名）
+        let json_upper = r#"{"method":"DHCP"}"#;
+        let cfg: IpConfig = serde_json::from_str(json_upper).expect("反序列化大写 DHCP 失败");
+        assert_eq!(cfg.method, IpMethod::Dhcp);
+
+        let json_mixed = r#"{"method":"Static","address":"10.0.0.2"}"#;
+        let cfg: IpConfig =
+            serde_json::from_str(json_mixed).expect("反序列化混合大小写 static 失败");
+        assert_eq!(cfg.method, IpMethod::Static);
+
+        // 5. 整体省略 method 时 DTO 层降级为 None 而不报错，
+        //    防护在下发边界（NetworkService::validate_ip_config 拒绝 None，返回 400/51001）
+        let cfg: IpConfig = serde_json::from_str(r#"{}"#).expect("空对象反序列化失败");
+        assert_eq!(cfg.method, IpMethod::None);
     }
 }

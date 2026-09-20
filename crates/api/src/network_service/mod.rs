@@ -4,7 +4,7 @@
 //! 1. RFC 5227 地址冲突检测 (ACD)
 //! 2. Commit-Confirm 事务与 60s 独立看门狗防失联回滚
 //! 3. 物理载波检测与管理口动态推导
-//! 4. 掉电安全原子写入与 LC_ALL=C 国际化强隔离
+//! 4. 掉电安全原子写入与外部命令 C.UTF-8 强隔离（`LC_ALL`/`LANG` 由统一 helper 注入）
 
 pub mod arp;
 pub mod backend;
@@ -311,6 +311,14 @@ async fn apply_backend_config(
     name: &str,
     config: &IpConfig,
 ) -> Result<NetworkUpdateResult, ApiError> {
+    // 下发兜底：本漏斗同时服务 HTTP 写入口与回滚/看门狗快照（后者不过 validate_ip_config），
+    // 而 update_interface_nm 只区分 Dhcp 与其余分支，None 会被当成 Static 拼出 "/24" 写进系统
+    if config.method == IpMethod::None {
+        return Err(ApiError::NetworkInvalid(format!(
+            "网卡 {name} 的配置未指定 dhcp 或 static 模式"
+        )));
+    }
+
     let manager = detect_network_manager().await;
     let res = match manager {
         NetworkManager::Networkmanager => update_interface_nm(name, config).await,
@@ -404,38 +412,45 @@ fn validate_interface_name(name: &str) -> Result<(), ApiError> {
 
 /// 校验 IP 配置参数
 fn validate_ip_config(config: &IpConfig) -> Result<(), ApiError> {
-    if config.method == IpMethod::Static {
-        let addr_str = config
-            .address
-            .as_deref()
-            .ok_or_else(|| ApiError::NetworkInvalid("静态 IP 模式必须提供 IP 地址".to_string()))?;
-        addr_str
-            .parse::<std::net::Ipv4Addr>()
-            .map_err(|e| ApiError::NetworkInvalid(format!("IP 地址格式无效: {addr_str} ({e})")))?;
+    match config.method {
+        IpMethod::None => {
+            return Err(ApiError::NetworkInvalid(
+                "必须指定 dhcp 或 static 模式".to_string(),
+            ))
+        }
+        IpMethod::Static => {
+            let addr_str = config.address.as_deref().ok_or_else(|| {
+                ApiError::NetworkInvalid("静态 IP 模式必须提供 IP 地址".to_string())
+            })?;
+            addr_str.parse::<std::net::Ipv4Addr>().map_err(|e| {
+                ApiError::NetworkInvalid(format!("IP 地址格式无效: {addr_str} ({e})"))
+            })?;
 
-        if let Some(prefix) = config.prefix {
-            if !(1..=32).contains(&prefix) {
-                return Err(ApiError::NetworkInvalid(format!(
-                    "子网前缀必须在 1-32 之间: {prefix}"
-                )));
+            if let Some(prefix) = config.prefix {
+                if !(1..=32).contains(&prefix) {
+                    return Err(ApiError::NetworkInvalid(format!(
+                        "子网前缀必须在 1-32 之间: {prefix}"
+                    )));
+                }
+            }
+
+            if let Some(gw) = &config.gateway {
+                if !gw.is_empty() {
+                    gw.parse::<std::net::Ipv4Addr>().map_err(|e| {
+                        ApiError::NetworkInvalid(format!("网关地址格式无效: {gw} ({e})"))
+                    })?;
+                }
+            }
+
+            for dns_server in &config.dns {
+                if !dns_server.is_empty() {
+                    dns_server.parse::<std::net::Ipv4Addr>().map_err(|e| {
+                        ApiError::NetworkInvalid(format!("DNS 地址格式无效: {dns_server} ({e})"))
+                    })?;
+                }
             }
         }
-
-        if let Some(gw) = &config.gateway {
-            if !gw.is_empty() {
-                gw.parse::<std::net::Ipv4Addr>().map_err(|e| {
-                    ApiError::NetworkInvalid(format!("网关地址格式无效: {gw} ({e})"))
-                })?;
-            }
-        }
-
-        for dns_server in &config.dns {
-            if !dns_server.is_empty() {
-                dns_server.parse::<std::net::Ipv4Addr>().map_err(|e| {
-                    ApiError::NetworkInvalid(format!("DNS 地址格式无效: {dns_server} ({e})"))
-                })?;
-            }
-        }
+        IpMethod::Dhcp => {}
     }
     Ok(())
 }
@@ -461,6 +476,44 @@ mod tests {
         assert!(validate_interface_name("").is_err());
         assert!(validate_interface_name("eth0; rm -rf").is_err());
         assert!(validate_interface_name("eth..0").is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_config_rejects_none_method() {
+        // 缺 method 被 DTO 降级为 None、或客户端显式下发 "none"：都必须在边界被拒，
+        // 不能落到静态分支用空地址拼出 "/24"
+        assert!(validate_ip_config(&IpConfig::default()).is_err());
+        assert!(validate_ip_config(&IpConfig {
+            method: IpMethod::None,
+            ..IpConfig::default()
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn test_validate_ip_config_accepts_dhcp_without_optional_fields() {
+        // 省略 dns/address/prefix 的 DHCP 请求必须合法（不触发 422，也不被边界驳回）
+        let cfg = IpConfig {
+            method: IpMethod::Dhcp,
+            ..IpConfig::default()
+        };
+        assert!(validate_ip_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ip_config_static_bounds() {
+        let cfg = |prefix: Option<u32>, address: Option<&str>| IpConfig {
+            method: IpMethod::Static,
+            address: address.map(|a| a.to_string()),
+            prefix,
+            ..IpConfig::default()
+        };
+
+        assert!(validate_ip_config(&cfg(Some(24), Some("10.0.0.2"))).is_ok());
+        assert!(validate_ip_config(&cfg(Some(0), Some("10.0.0.2"))).is_err());
+        assert!(validate_ip_config(&cfg(Some(33), Some("10.0.0.2"))).is_err());
+        assert!(validate_ip_config(&cfg(Some(24), None)).is_err());
+        assert!(validate_ip_config(&cfg(Some(24), Some("10.0.0.999"))).is_err());
     }
 
     #[tokio::test]

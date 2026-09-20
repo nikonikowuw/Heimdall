@@ -41,6 +41,12 @@
 - C ABI 创建/销毁成对，RAII 保证错误路径释放。
 - `CString` 绑定具名变量覆盖 FFI 调用期；裸指针不逃逸到安全层。
 
+## 外部命令
+
+- 解析外部命令输出时强制 `LC_ALL=C.UTF-8` + `LANG=C.UTF-8`，统一经模块内的 `run_command_with_c_locale` helper 注入，不在调用点各写一套。
+- 仅 `LC_ALL=C` 不足够：`C` 语言环境会把非 ASCII 名称降级成占位字符（glib 的 `g_print` 走 locale 转换）；`C.UTF-8` 自 glibc 2.35 起内建，旧 BSP 缺失时 glibc 只往 stderr 打 warning 并回退到 `C`，修复会静默失效（板端以 `locale -a | grep -i 'c\.utf'` 确认）。
+- 解析一律取机器可读列（UUID、`ipv4.*`、`connection.interface-name`），不依赖人类可读文本、本地化连接名或 `DEVICE` 等与激活状态绑定的列。
+
 ## 防御性错误处理
 
 - `unwrap`/`expect` 仅用于启动、测试或有明确证明并注释的不变量；逐帧和可恢复故障路径禁止使用。

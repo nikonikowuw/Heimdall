@@ -16,7 +16,7 @@
 | ----------------------- | ---------------------------------------------------------------- |
 | NMS、几何、时间等纯计算 | 空值、极值、非等比缩放、贴边与微小框；正逆坐标共用参数并往返一致 |
 | Repository              | 独立临时 SQLite 文件，WAL、迁移、查询上限、事务与文件清理        |
-| API                     | `tower::ServiceExt::oneshot` 验证状态码/信封/鉴权，不开物理端口  |
+| API                     | `tower::ServiceExt::oneshot` 验证状态码/信封/鉴权，不开物理端口。跨平台 handler 测试用全路径引用（`super::router()`、`tower::ServiceExt::oneshot`），不依赖 `#[cfg(target_os = "macos")]` 门控的 `use super::*`，否则 Linux 门禁编译失败 |
 | FFI / C ABI             | 双侧尺寸、对齐、偏移、版本与错误释放                             |
 | Worker / 资源           | 满队列、断开、取消、超时隔离、重复启停                           |
 | 硬件后端                | 平台 feature + `#[ignore]`，记录设备/SDK 与误差范围              |
@@ -37,6 +37,7 @@
 | macOS CPU    | `host_processor_info(PROCESSOR_CPU_LOAD_INFO = 2)`，不能用 flavor 1；两次采样 delta，结果限制 `0..=100`                       |
 | macOS uptime | `kern.boottime` 使用完整 `libc::timeval`（64 位为 16 字节）；`uptimeSeconds` 是持续秒数，不是当前 Unix 时间戳                 |
 | macOS 网络   | 只读，`canModifyIp/canSetDhcp = false`；`ifconfig -a` 至少含 `lo0`，`networksetup` 补充信息，外部命令隔离到阻塞任务           |
+| Linux 网络   | NetworkManager 连接一律按 UUID 定位：活跃连接读 `DEVICE`，未激活连接读 `connection.interface-name`（`DEVICE` 列对未激活 profile 恒为 `--`）；`connection show` 失败必须上抛，不得吞成空映射 |
 
 实现位置：[AppState](../../../crates/api/src/state.rs)、[system_info.rs](../../../crates/api/src/system_info.rs)、[network_service/macos.rs](../../../crates/api/src/network_service/macos.rs)。
 这些既有路径不改变仓库的平台边界要求，新增功能不得继续向 Handler 扩散平台逻辑。

@@ -79,6 +79,14 @@
 - 配置变更由 SQLite 持久化并由 `SnapshotEngine` 执行无锁原子热更新，下次抓拍即刻生效；
 - 前端设置页面统一收敛在存储设置页的「图片编码」分区，不创建独立 Tab。
 
+## 网卡配置写入
+
+`PUT /api/v1/system/network/interfaces/{name}` 载荷为共享 DTO `IpConfig`（camelCase）：
+
+- `method` 只接受 `dhcp` / `static`，兼容 `DHCP`/`Dhcp`/`STATIC`/`Static` 别名；省略或 `none` 由 `validate_ip_config` 在边界拒绝为 `400` + `51001`，**不得**落成静态配置下发（`IpConfig::default()` 的 `method` 是 `None`，省略字段也走此判定）。
+- `address` / `prefix` / `gateway` / `dns` / `metric` 均可省略或为 `null`；`dns: null` 与 `dns: []` 等价（由 `deserialize_null_default` 归一）。
+- 客户端只提交期望配置；连接定位、profile 复用与失败回滚均由服务端决定，不接受连接名或 profile 标识入参。
+
 ## 分页
 
 | 数据                     | 约定                                                                   |
