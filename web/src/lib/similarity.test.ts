@@ -17,7 +17,7 @@ describe('cosine similarity display conversion', () => {
     // 负样本过渡区：宋柱良 0.25 -> 10%
     expect(normalizeCosineSimilarity(0.25)).toBeCloseTo(0.1)
 
-    // 疑似复核门限锚点 (review_threshold: 0.50 -> 60%)
+    // 疑似复核门限锚点 (余弦 0.50 -> 60%)
     expect(normalizeCosineSimilarity(0.5)).toBeCloseTo(0.6)
 
     // 确认放行门限锚点 (similarity_threshold: 0.60 -> 80%)
@@ -75,7 +75,7 @@ describe('cosine similarity display conversion', () => {
 
   it('only treats recognition thresholds as cosine thresholds', () => {
     expect(isCosineThresholdKey('similarity_threshold')).toBe(true)
-    expect(isCosineThresholdKey('review_threshold')).toBe(true)
+    expect(isCosineThresholdKey('review_threshold')).toBe(false)
     expect(isCosineThresholdKey('confidence_threshold')).toBe(false)
   })
 })

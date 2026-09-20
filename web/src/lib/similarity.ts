@@ -1,5 +1,5 @@
 export function isCosineThresholdKey(key: string): boolean {
-  return key === 'similarity_threshold' || key === 'review_threshold'
+  return key === 'similarity_threshold'
 }
 
 /**
@@ -10,7 +10,7 @@ export function isCosineThresholdKey(key: string): boolean {
  *     陌生人/负样本对的余弦相似度集中在 [0.0, 0.25]，把 <= 0.20 截断标定为 0 分，
  *     彻底消除 (raw+1)/2 导致陌生人平白获得 50~60 分的直觉认知失真。
  * - 疑似复核门限 (x1 = 0.50 -> y1 = 60%):
- *     将 review_threshold (0.50) 严格锚定为业务及格线 60 分（疑似复核区起点）。
+ *     将余弦相似度 0.50 严格锚定为业务及格线 60 分（疑似复核区起点）。
  * - 确认放行门限 (x2 = 0.60 -> y2 = 80%):
  *     将 similarity_threshold (0.60) 严格锚定为高置信放行线 80 分（高置信放行区起点）。
  * - 极高置信上限 (x3 = 1.00 -> y3 = 100%):

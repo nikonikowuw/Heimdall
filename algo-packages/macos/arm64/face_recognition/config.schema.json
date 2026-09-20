@@ -75,14 +75,6 @@
       "minimum": 0.0,
       "maximum": 1.0,
       "default": 0.75
-    },
-    "review_threshold": {
-      "type": "number",
-      "title": "疑似核验阈值",
-      "description": "1:N 疑似人工复核区间下限阈值，介于此值与确认阈值之间将保存并等待人工核验",
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "default": 0.60
     }
   }
 }
