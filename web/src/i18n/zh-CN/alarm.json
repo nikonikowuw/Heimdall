@@ -92,6 +92,7 @@
     "allCameras": "全部通道 (All Cameras)",
     "allTargets": "全部目标类别 (All Classes)",
     "person": "人员 (Person)",
+    "face": "人脸 (Face)",
     "car": "机动车 (Vehicle)",
     "bicycle": "非机动车 (Bicycle)",
     "refresh": "刷新",

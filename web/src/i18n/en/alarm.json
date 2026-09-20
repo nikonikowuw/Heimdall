@@ -92,6 +92,7 @@
     "allCameras": "All Channels",
     "allTargets": "All Target Classes",
     "person": "Person",
+    "face": "Face",
     "car": "Vehicle",
     "bicycle": "Bicycle",
     "refresh": "Refresh",

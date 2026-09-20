@@ -168,15 +168,12 @@ export function AlarmsPage(): React.ReactElement {
 
   // 动态汇聚已出现的所有目标标签 (消除硬编码)
   const distinctTargetLabels = useMemo(() => {
-    const set = new Set<string>()
-    set.add('person')
-    set.add('car')
-    set.add('bicycle')
+    const set = new Set<string>(['person', 'face', 'car', 'bicycle'])
     for (const a of alarms) {
-      if (a.targetLabel && a.targetLabel.trim()) set.add(a.targetLabel.trim())
+      if (a.targetLabel?.trim()) set.add(a.targetLabel.trim())
     }
     for (const c of captures) {
-      if (c.targetLabel && c.targetLabel.trim()) set.add(c.targetLabel.trim())
+      if (c.targetLabel?.trim()) set.add(c.targetLabel.trim())
     }
     return Array.from(set)
   }, [alarms, captures])
@@ -999,13 +996,7 @@ export function AlarmsPage(): React.ReactElement {
                     value={lbl}
                     className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
                   >
-                    {lbl === 'person'
-                      ? t('filter.person')
-                      : lbl === 'car'
-                        ? t('filter.car')
-                        : lbl === 'bicycle'
-                          ? t('filter.bicycle')
-                          : lbl}
+                    {t(`filter.${lbl}`, { defaultValue: lbl })}
                   </option>
                 ))}
               </select>
