@@ -6,7 +6,6 @@
 //! 3. 自动将音视频流解包为标准 Annex B NALU 序列 (`FrameFormat::SIMPLE`)；
 //! 4. 将网络数据流转化为系统统一的 `types::EncodedPacket`，交给 StreamHub 分发器的独立消费者 mailbox。
 
-use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -89,7 +88,7 @@ enum RtspFailureClass {
     Protocol,
 }
 
-const MAX_RTP_TIMESTAMP_JUMP_SECS: u32 = 10;
+const LOOP_REWIND_THRESHOLD_MS: i64 = 1_000;
 const TIMESTAMP_DISCONTINUITY_WARN_MS: i64 = 5_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +136,7 @@ impl RtpDiagnostics {
 struct TrackTimestampMapper {
     last_elapsed_ticks: Option<i64>,
     last_pts_ms: Option<i64>,
+    loop_offset_ms: i64,
 }
 
 impl TrackTimestampMapper {
@@ -144,12 +144,37 @@ impl TrackTimestampMapper {
         let source_elapsed_ticks = timestamp.elapsed();
         let clock_rate_hz = timestamp.clock_rate().get();
         let elapsed_ms = ticks_to_ms(source_elapsed_ticks, clock_rate_hz);
-        let calculated_pts_ms =
-            clamp_i128_to_i64(i128::from(base_timestamp_ms) + i128::from(elapsed_ms));
+
         let source_delta_ticks = self
             .last_elapsed_ticks
             .map(|last| source_elapsed_ticks.saturating_sub(last));
         let source_delta_ms = source_delta_ticks.map(|delta| ticks_to_ms(delta, clock_rate_hz));
+
+        // 循环播放 (Loop) / 时间戳重置检测：
+        // 若时间戳发生超过 1 秒的大幅负向倒退 (source_delta_ms <= -LOOP_REWIND_THRESHOLD_MS)，
+        // 说明该流为本地文件循环播放推流 (如 ffmpeg -stream_loop -1) 或源端时钟重置。
+        // 为防止输出 PTS 被后续的 .max(last) 锁死停滞，将前一轮末尾时间与新起点的落差补偿进 loop_offset_ms，
+        // 保障跨循环轮次时对外交付的 PTS 依然平滑单调递增。
+        if let (Some(delta_ms), Some(last_pts)) = (source_delta_ms, self.last_pts_ms) {
+            if delta_ms <= -LOOP_REWIND_THRESHOLD_MS {
+                let unadjusted_pts = clamp_i128_to_i64(
+                    i128::from(base_timestamp_ms)
+                        + i128::from(elapsed_ms)
+                        + i128::from(self.loop_offset_ms),
+                );
+                if last_pts >= unadjusted_pts {
+                    self.loop_offset_ms = clamp_i128_to_i64(
+                        i128::from(self.loop_offset_ms) + i128::from(last_pts - unadjusted_pts) + 1,
+                    );
+                }
+            }
+        }
+
+        let calculated_pts_ms = clamp_i128_to_i64(
+            i128::from(base_timestamp_ms)
+                + i128::from(elapsed_ms)
+                + i128::from(self.loop_offset_ms),
+        );
         let pts_ms = self
             .last_pts_ms
             .map_or(calculated_pts_ms, |last| calculated_pts_ms.max(last));
@@ -758,10 +783,8 @@ impl RetinaIngestor {
         let sdp_extradata = StreamProber::extract_sdp_extradata(&sdp_text);
 
         // 5. 执行 PLAY 握手并获取解复用流
-        let play_options = PlayOptions::default().enforce_timestamps_with_max_jump_secs(
-            NonZeroU32::new(MAX_RTP_TIMESTAMP_JUMP_SECS)
-                .expect("MAX_RTP_TIMESTAMP_JUMP_SECS must be non-zero"),
-        );
+        // 保持默认 PlayOptions，允许含 B 帧、时间戳轻微重排序或循环推流的 RTSP 码流正常通过；
+        // 时间戳单调性守护与大跨度循环回绕由 TrackTimestampMapper 统一补偿。
         let playing_session = tokio::select! {
             biased;
             _ = cancel_rx.wait_for(|&c| c) => {
@@ -769,7 +792,7 @@ impl RetinaIngestor {
             }
             res = tokio::time::timeout(
                 self.handshake_timeout,
-                session.play(play_options),
+                session.play(PlayOptions::default()),
             ) => {
                 res.map_err(|_| {
                     SessionFailure::new(
@@ -1105,6 +1128,7 @@ impl crate::media_ingestor::MediaIngestor for RetinaIngestor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::num::NonZeroU32;
 
     fn timestamp(value: i64, clock_rate_hz: u32) -> retina::Timestamp {
         retina::Timestamp::new(
@@ -1131,6 +1155,28 @@ mod tests {
         assert_eq!(reordered.calculated_pts_ms, base_timestamp_ms + 20);
         assert_eq!(reordered.pts_ms, next.pts_ms);
         assert!(reordered.was_clamped);
+    }
+
+    #[test]
+    fn test_track_timestamp_mapper_handles_stream_loop_rewind() {
+        let base_timestamp_ms = 1_700_000_000_000;
+        let mut mapper = TrackTimestampMapper::default();
+
+        // 模拟第 1 轮播放：5 秒视频 (0 -> 5000ms)
+        let t0 = mapper.map(timestamp(0, 90_000), base_timestamp_ms);
+        assert_eq!(t0.pts_ms, base_timestamp_ms);
+
+        let t_end = mapper.map(timestamp(450_000, 90_000), base_timestamp_ms);
+        assert_eq!(t_end.pts_ms, base_timestamp_ms + 5_000);
+
+        // 模拟循环播放回到开头 (timestamp 重置为 0，倒退 -5000ms)
+        let loop_t0 = mapper.map(timestamp(0, 90_000), base_timestamp_ms);
+        assert!(loop_t0.pts_ms > t_end.pts_ms);
+        assert_eq!(loop_t0.pts_ms, base_timestamp_ms + 5_001);
+
+        // 循环后继续前进 40ms
+        let loop_t1 = mapper.map(timestamp(3_600, 90_000), base_timestamp_ms);
+        assert_eq!(loop_t1.pts_ms, base_timestamp_ms + 5_041);
     }
 
     #[test]
