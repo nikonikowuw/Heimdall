@@ -327,6 +327,7 @@ pub struct MockFrameBuilder {
     opaque_kind: u32,
     hardware_storage: Option<MockStorage>,
     timestamp_ns: i64,
+    frame_id: u64,
 }
 
 impl Default for MockFrameBuilder {
@@ -348,6 +349,7 @@ impl MockFrameBuilder {
             opaque_kind: AV_OPAQUE_NONE,
             hardware_storage: None,
             timestamp_ns: 1_000_000,
+            frame_id: 1,
         }
     }
 
@@ -392,6 +394,17 @@ impl MockFrameBuilder {
 
     pub fn timestamp_ns(mut self, ts: i64) -> Self {
         self.timestamp_ns = ts;
+        self
+    }
+
+    /// 覆盖帧描述符中的 `frame_id`（默认 1）。
+    ///
+    /// 算法包的身份链路以 [`SafeFrame::frame_id`](crate::frame::SafeFrame::frame_id)
+    /// 作为唯一时间轴（best-shot 提取间隔、成熟平台期、失败退避全部按帧序号计数）。
+    /// 序列回放必须为每帧分配单调递增的序号，否则第二次特征提取永远不会触发，
+    /// 模板池无法填满也不会成熟。
+    pub fn frame_id(mut self, id: u64) -> Self {
+        self.frame_id = id;
         self
     }
 
@@ -620,6 +633,7 @@ impl MockFrameBuilder {
             opaque_kind,
             hardware_storage,
             timestamp_ns,
+            frame_id,
         } = self;
 
         let required_bytes = required_host_bytes(width, height, pixel_format, stride, offset);
@@ -641,6 +655,7 @@ impl MockFrameBuilder {
         } else {
             [offset[0], 0, 0, 0]
         };
+        desc.frame_id = frame_id;
 
         if let Some(storage) = hardware_storage {
             match &storage {

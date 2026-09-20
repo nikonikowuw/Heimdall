@@ -29,6 +29,26 @@ pub struct FaceDetailObject {
     /// 只在该帧置位（`Some(true)`），普通人体框不上报，避免无意义字节。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pseudo_body: Option<bool>,
+
+    /// **仅调试**：包内 ByteTrack 的人脸航迹编号（身份链路 `best_shots` 的唯一键）。
+    ///
+    /// 默认不发射（`HEIMDALL_DEBUG_TRACK_ID=1` 才置位）：航迹号是包内实现细节，
+    /// 不属于 ABI 契约，宿主不得消费。存在的理由只有一个：诊断「一条身份链路
+    /// 为什么只提取了一两次特征」时，必需区分「同一航迹被 6 帧间隔门拦住」
+    /// 与「航迹频繁重启导致每次都新建空池」。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_id: Option<u64>,
+}
+
+use std::sync::OnceLock;
+
+static DEBUG_TRACK_ID_ENABLED: OnceLock<bool> = OnceLock::new();
+
+/// 调试开关：是否在结果 JSON 中额外携带包内航迹号。
+#[inline]
+pub fn debug_track_id_enabled() -> bool {
+    *DEBUG_TRACK_ID_ENABLED
+        .get_or_init(|| std::env::var("HEIMDALL_DEBUG_TRACK_ID").is_ok_and(|value| value == "1"))
 }
 
 /// 宿主检测解析器消费的稳定目标对象。
@@ -148,6 +168,7 @@ mod tests {
                 template_quality: None,
                 template_mature: None,
                 pseudo_body: None,
+                track_id: None,
             }),
         }];
 
@@ -186,6 +207,7 @@ mod tests {
                 template_quality: Some(0.86),
                 template_mature: Some(true),
                 pseudo_body: Some(true),
+                track_id: Some(7),
             }),
         };
         let json = serde_json::to_string(&object).expect("目标序列化应成功");

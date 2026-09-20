@@ -69,7 +69,7 @@ The system does not assume that a sub-stream is suitable for face recognition. T
 | Cross-frame public `trackId` and trajectory | `pipeline::SimpleTracker` | one host track namespace per camera and algorithm instance |
 | Private best-shot gating key | plugin | internal only; never serialized |
 | Capture cooldown and rules | `pipeline::RuleEvaluator` | bounded state and source-frame timestamp |
-| Feature extraction | plugin best-shot sidecar; `av_algo_extract_face` for enrollment/legacy fallback | low-frequency path; complete 512D normalized vector stays in backend memory |
+| Feature extraction | plugin best-shot sidecar; `av_algo_extract_face` strictly reserved for offline gallery enrollment | low-frequency path; complete 512D normalized vector stays in backend memory |
 | 1:N search | `api::gallery_index` | backend-only; no frontend embedding exposure |
 | Evidence image and recognition record | `pipeline` / `api` / `db` | bounded async persistence and existing atomic storage rules |
 
@@ -121,7 +121,7 @@ The EdgeFace model is loaded in the shared CoreML model holder because the same 
 2. The private best-shot state and quality gate reduce repeated embedding work without exporting a duplicate public track ID.
 3. On the first best-shot frame of a private track, the package synchronously maps the face landmarks to a source-top-left -> 112x112 target-top-left affine matrix, lets Core Image render directly from the native `CVPixelBuffer` to a 112x112 BGRA surface, and passes that surface directly to EdgeFace. A single-frame local run treats every quality-gated face as a first best-shot. No full-frame D2H readback, CPU RGB repacking, or JPEG round trip occurs.
 4. The normalized `[f32; 512]` is serialized once as Base64 across the package/host C ABI JSON callback. The infer parser decodes it into a bounded in-memory sidecar; ordinary detections use `None`.
-5. The host `PipelineManager` transfers the sidecar to the capture event. `CaptureDispatchService` uses it directly for gallery search and falls back to `av_algo_extract_face(JPEG)` only for legacy packages that omit the sidecar.
+5. The host `PipelineManager` transfers the sidecar to the capture event. `CaptureDispatchService` uses it directly for gallery search. Real-time video stream recognition is fully decoupled from offline extraction: if the stream yields no embedding (e.g. poor quality/angle), the event is preserved strictly as an objective capture record in `capture_records` without falling back to disk-read `av_algo_extract_face`.
 6. The frontend receives only recognition business fields such as subject ID, subject name, similarity, status, and evidence references.
 
 ### 6.1 Temporal Spherical Feature Fusion & Anti-Drift Defense
@@ -158,7 +158,7 @@ The model call and device-side warp are synchronous inside the dedicated algorit
 2. A face/body candidate is converted from internal xywh to normalized xyxy before emission.
 3. Quality-gated face candidates become host `Detection` values with `quality_score`; empty eligible candidates emit a valid empty result.
 4. Host `SimpleTracker` is the only source of `trackId` in `PipelineTrackEvent`.
-5. `extract_face` still returns a complete normalized 512D vector for enrollment/legacy fallback, while ordinary per-frame results omit the vector and best-shot vectors remain backend-only.
+5. `extract_face` still returns a complete normalized 512D vector strictly for offline gallery enrollment (`personnel_service`), while ordinary per-frame results omit the vector and best-shot vectors remain backend-only.
 6. Model package integrity checks reject an `.mlpackage` whose `Manifest.json` references missing weights.
 7. macOS hardware tests stay `#[ignore]` on non-macOS hosts; pure parsing and geometry tests run in the normal workspace gate.
 

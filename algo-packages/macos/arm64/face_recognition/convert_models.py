@@ -117,6 +117,95 @@ def convert_edgeface():
             os.remove(slim_path)
 
 
+def convert_edgeface_base(onnx_path=None):
+    print("\n=== Converting EdgeFace-Base (Surveillance Distilled) ===")
+    if onnx_path is None:
+        env_path = os.environ.get("EDGEFACE_BASE_ONNX_PATH")
+        if env_path:
+            onnx_path = Path(env_path)
+        else:
+            candidates = [
+                WEIGHTS_DIR / "edgeface_base_surv_distill.onnx",
+                MODEL_DIR / "edgeface_base_surv_distill.onnx",
+                Path(os.path.expanduser("~/dev/FaceLiVT/deploy_models/edgeface_base/edgeface_base_surv_distill.onnx")),
+            ]
+            onnx_path = next((p for p in candidates if p.exists()), candidates[0])
+    if not onnx_path.exists():
+        print(f"EdgeFace-Base ONNX weights not found: {onnx_path}")
+        return False
+    output_path = MODEL_DIR / "edgeface_base.mlpackage"
+
+    import onnx
+    import onnxslim
+    import onnx2torch
+    import coremltools as ct
+
+    print("Step 1: Fixing ONNX Clip empty string inputs...")
+    onnx_model = onnx.load(str(onnx_path))
+    for node in onnx_model.graph.node:
+        if node.op_type == "Clip" and len(node.input) == 3 and node.input[2] == "":
+            del node.input[2]
+
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp_fixed:
+        fixed_path = tmp_fixed.name
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp_slim:
+        slim_path = tmp_slim.name
+
+    try:
+        onnx.save(onnx_model, fixed_path)
+
+        print("Step 2: Optimizing ONNX with onnxslim (static input shape [1, 3, 112, 112])...")
+        onnxslim.slim(
+            fixed_path,
+            slim_path,
+            input_shapes=["input:1,3,112,112"],
+            model_check=True,
+        )
+
+        print("Step 3: Loading ONNX into PyTorch GraphModule...")
+        torch_model = onnx2torch.convert(slim_path)
+        torch_model.eval()
+
+        print("Step 4: Tracing PyTorch model...")
+        dummy_input = torch.randn(1, 3, 112, 112)
+        traced = torch.jit.trace(torch_model, dummy_input)
+
+        print("Step 5: Converting to CoreML .mlpackage (ANE/GPU FLOAT16)...")
+        mlmodel = ct.convert(
+            traced,
+            inputs=[
+                ct.ImageType(
+                    name="input",
+                    shape=(1, 3, 112, 112),
+                    color_layout=ct.colorlayout.RGB,
+                    bias=[-1.0, -1.0, -1.0],
+                    scale=1.0 / 127.5,
+                )
+            ],
+            outputs=[ct.TensorType(name="embedding")],
+            compute_precision=ct.precision.FLOAT16,
+            compute_units=ct.ComputeUnit.ALL,
+            minimum_deployment_target=ct.target.macOS13,
+        )
+
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        mlmodel.save(str(output_path))
+        print(f"Successfully exported EdgeFace-Base CoreML model: {output_path}")
+
+        # Verification
+        test_img = Image.new("RGB", (112, 112), color=(128, 128, 128))
+        preds = mlmodel.predict({"input": test_img})
+        emb = preds["embedding"]
+        assert emb.shape == (1, 512), f"Unexpected embedding shape: {emb.shape}"
+        print(f"Verification passed: output embedding shape = {emb.shape}")
+        return True
+    finally:
+        if os.path.exists(fixed_path):
+            os.remove(fixed_path)
+        if os.path.exists(slim_path):
+            os.remove(slim_path)
+
+
 def convert_yolov8_face():
     print("\n=== [2/2] Converting YOLOv8-face (yolov8-lite-s) ===")
     pt_path = WEIGHTS_DIR / "yolov8-lite-s.pt"
@@ -284,6 +373,10 @@ def convert_yolov8_face():
 
 
 def main():
+    if "--base" in sys.argv:
+        convert_edgeface_base()
+        return
+
     convert_edgeface()
     if (WEIGHTS_DIR / "yolov8-lite-s.pt").exists():
         convert_yolov8_face()

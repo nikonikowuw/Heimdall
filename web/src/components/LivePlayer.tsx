@@ -277,6 +277,28 @@ export function LivePlayer({
   const isAudioActiveRef = useRef(isAudioActive)
   isAudioActiveRef.current = isAudioActive
 
+  // 保持外部回调引用最新，避免将其作为流重连依赖项导致重连风暴
+  const onLatencyChangeRef = useRef(onLatencyChange)
+  onLatencyChangeRef.current = onLatencyChange
+
+  // 当前会话中 WebCodecs 是否不可用或已降级（避免在 WebSocket 连接失败后进入重连死循环）
+  const webCodecsFailedRef = useRef<boolean>(false)
+  useEffect(() => {
+    webCodecsFailedRef.current = false
+    lastLatencyReportTimeRef.current = 0
+  }, [cameraId, streamType])
+
+  // 延迟遥测上报时间节流（限频 800ms，防高频 React 状态重绘与外部回调颠簸；首帧无延迟立即上报）
+  const lastLatencyReportTimeRef = useRef<number>(0)
+  const reportLatency = useCallback((lat: number) => {
+    const now = performance.now()
+    if (lastLatencyReportTimeRef.current === 0 || now - lastLatencyReportTimeRef.current >= 800) {
+      lastLatencyReportTimeRef.current = now
+      setLatencyMs(lat)
+      onLatencyChangeRef.current?.(lat)
+    }
+  }, [])
+
   // 视口可见性检测 (非 Hero 辅流在移出视口时休眠)
   useEffect(() => {
     if (isHero || !enableAutoStandby) {
@@ -538,8 +560,7 @@ export function LivePlayer({
         if (videoEl && videoEl.buffered.length > 0) {
           const bufferedEnd = videoEl.buffered.end(videoEl.buffered.length - 1)
           const latency = Math.max(0, Math.round((bufferedEnd - videoEl.currentTime) * 1000))
-          setLatencyMs(latency)
-          onLatencyChange?.(latency)
+          reportLatency(latency)
           smoothLagMsRef.current = latency
           lastLagSampleTimeRef.current = performance.now()
         }
@@ -637,6 +658,8 @@ export function LivePlayer({
 
       try {
         const wsUrl = cameraApi.getWebCodecsWsUrl(cameraId, streamType)
+        let hasPlayed = false
+
         wcPlayer = new WebCodecsPlayer({
           wsUrl,
           canvas: videoCanvas,
@@ -644,10 +667,16 @@ export function LivePlayer({
           preferredCodecMime,
           onPlaying: (lat) => {
             if (isCancelled) return
+            hasPlayed = true
             setActiveProtocol('webcodecs')
             setConnectionStatus('connected')
-            setLatencyMs(lat)
-            onLatencyChange?.(lat)
+            reportLatency(lat)
+            if (!stableTimerRef.current) {
+              stableTimerRef.current = setTimeout(() => {
+                retryAttemptRef.current = 0
+                stableTimerRef.current = null
+              }, 5000)
+            }
           },
           onError: () => {
             if (isCancelled) return
@@ -656,6 +685,7 @@ export function LivePlayer({
               wcPlayer = null
             }
             wcPlayerRef.current = null
+            webCodecsFailedRef.current = true
             if (canUseMseVideo()) {
               startFlvPlayer()
             } else {
@@ -664,6 +694,23 @@ export function LivePlayer({
           },
           onClose: () => {
             if (isCancelled) return
+            // 已被降级处理，避免重复触发重连
+            if (webCodecsFailedRef.current) return
+
+            // 若从未收到数据帧且未成功播放，判定当前 WebSocket 连接不可达，平滑降级至 FLV
+            if (!hasPlayed) {
+              if (wcPlayer) {
+                wcPlayer.destroy()
+                wcPlayer = null
+              }
+              wcPlayerRef.current = null
+              webCodecsFailedRef.current = true
+              if (canUseMseVideo()) {
+                startFlvPlayer()
+                return
+              }
+            }
+
             setConnectionStatus('reconnecting')
             scheduleRetry()
           },
@@ -671,6 +718,7 @@ export function LivePlayer({
         wcPlayerRef.current = wcPlayer
         return true
       } catch {
+        webCodecsFailedRef.current = true
         return false
       }
     }
@@ -679,26 +727,22 @@ export function LivePlayer({
       if (!cameraId) return
       setConnectionStatus('connecting')
 
-      const supportedMime = await findSupportedCodecProfile(preferredVideoCodec)
+      if (!webCodecsFailedRef.current) {
+        const supportedMime = await findSupportedCodecProfile(preferredVideoCodec)
 
-      if (supportedMime && !isCancelled) {
-        try {
-          const selected = await startWebCodecsPlayer(supportedMime)
-          if (selected) {
-            if (isAudioActiveRef.current) {
-              startAudioOnlyPlayer()
+        if (supportedMime && !isCancelled) {
+          try {
+            const selected = await startWebCodecsPlayer(supportedMime)
+            if (selected) {
+              return
             }
-            return
+          } catch {
+            webCodecsFailedRef.current = true
           }
-        } catch {
-          // fallback to FLV below
         }
       }
 
       startFlvPlayer()
-      if (isAudioActiveRef.current) {
-        startAudioOnlyPlayer()
-      }
     }
 
     const handleVideoEvent = (e: Event) => {
@@ -732,7 +776,6 @@ export function LivePlayer({
         wcPlayer = null
       }
       wcPlayerRef.current = null
-      destroyAudioPlayer()
       if (flvPlayer) {
         try {
           flvPlayer.pause()
@@ -763,9 +806,7 @@ export function LivePlayer({
     isPaused,
     retryKey,
     preferredVideoCodec,
-    onLatencyChange,
-    destroyAudioPlayer,
-    startAudioOnlyPlayer,
+    reportLatency,
   ])
 
   // Canvas 2D 离屏 60fps 绘制循环（包含 Retina 高分屏物理像素锐化）

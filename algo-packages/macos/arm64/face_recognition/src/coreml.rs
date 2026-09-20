@@ -1036,6 +1036,9 @@ impl CoreMlFaceModels {
         let person_detector =
             CoreMlRunner::load_model(package_root, "yolo26n.mlpackage", "image", "var_911")?;
 
+        let embedder_model_name = std::env::var("EDGEFACE_MODEL_NAME")
+            .unwrap_or_else(|_| "edgeface_s.mlpackage".to_string());
+
         Ok(Self {
             detector: CoreMlRunner::load_model(
                 package_root,
@@ -1045,7 +1048,7 @@ impl CoreMlFaceModels {
             )?,
             embedder: CoreMlRunner::load_model(
                 package_root,
-                "edgeface_s.mlpackage",
+                &embedder_model_name,
                 "input",
                 "embedding",
             )?,

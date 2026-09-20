@@ -56,14 +56,14 @@
 - 抓拍触发：`crates/pipeline/src/rules.rs::evaluate_captures`，**进入 ROI 首帧 + 5s 冷却**（`manager.rs` 传入 `cooldown_ms=5000`）；
 - 快照：`crates/pipeline/src/manager.rs::trigger_snapshot_internal`，**与推理帧强绑定**（子流回退帧容差 `MAX_TARGET_FRAME_DIFF_MS = 100ms`），无历史帧回溯能力（子流路径）；
 - 特征：`crates/pipeline/src/tracker.rs::TrackState` **粘性 embedding**（新特征到达前沿用旧值）；
-- 匹配：`crates/api/src/capture_service.rs::try_match_and_record_recognition` 优先用 sidecar 特征，缺失时降级读裁剪 JPEG 重新 `extract_face`；
+- 匹配：`crates/api/src/capture_service.rs::try_match_and_record_recognition` 仅消费视频流原生 sidecar 模板特征进行 1:N 检索；视频流与离线提取彻底解耦，无特征时仅保留客观通行抓拍，绝不逆向读取磁盘切片调用离线 `extract_face`；
 - 包内融合：`face_recognition/src/best_shot.rs::update_with_fusion`（q² 加权超球面融合 + 防漂移），**上限 4 帧、之后绝对冻结**。
 
 ### 1.2 三个根因
 
 | # | 根因 | 证据 |
 | --- | --- | --- |
-| R1 | **结算时机错位**：识别记录诞生于 ROI 首帧，此时融合模板通常只有 1 帧素材，甚至为空（→ JPEG 二次提取降级） | `rules.rs::evaluate_captures` + `tracker.rs` 粘性语义 |
+| R1 | **结算时机错位**：旧版识别记录诞生于 ROI 首帧，此时融合模板通常只有 1 帧素材甚至为空（原设计曾试图降级读特写图二次提取但尺度不匹配必然失效，导致静默丢失；现已彻底切断降级并改为成熟结算） | `rules.rs::evaluate_captures` + `tracker.rs` 粘性语义 |
 | R2 | **模板 4 帧绝对冻结**：`fused_count >= MAX_FUSED_FRAMES` 的分支排在 ΔQ 之前，后续更好的帧永远进不来 | `best_shot.rs::should_update_best_shot_with_delta` 门控顺序 |
 | R3 | **首帧无条件播种 + 门限过宽**：`min_face_size=30`、`yaw≤45°`、`quality min_score=0.3`，30px 侧脸即可成为初值；无重播种/遗忘 | `config.rs` 默认值 + `plugin.rs::best_shot_sidecar` 首帧分支 |
 
@@ -142,6 +142,7 @@ t*+5s    冷却期满，可开启新一轮 pending（独立峰值，互不污染
 | INV-3 | 事件中的 `bbox / face.bbox` 必须与所存图像同帧（候选路径下替换为峰值帧几何） |
 | INV-4 | 融合模板只由本轨帧构成；防漂移拒绝帧不得进入模板 |
 | INV-5 | 候选不产生盘上中间态与孤儿文件：编码字节随轨道条目替换/释放，崩溃即清零（D5） |
+| INV-6 | **视频流与离线提取彻底解耦**：抓拍对账仅消费视频流在端侧闭环产出的 sidecar 模板特征（640x384 检测 -> 映射回原图裁剪 -> EdgeFace 推理与球面融合）；若视频流未产出特征（低质/侧脸/未达门限），仅作为客观通行抓拍落库 `capture_records`，严禁逆向读盘调用离线大图提取器（`av_algo_extract_face` 仅用于底库录入） |
 
 ---
 

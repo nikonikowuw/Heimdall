@@ -105,7 +105,6 @@ pub struct CaptureDispatchService {
     pub batch_size: usize,
     pub flush_interval_ms: u64,
     pub gallery_index: Option<Arc<crate::gallery_index::FaceFeatureIndex>>,
-    pub algo_registry: Option<Arc<infer::package::AlgoRegistry>>,
     pub event_broadcaster: Option<broadcast::Sender<crate::state::WsBroadcastEvent>>,
     recognition_tx: mpsc::Sender<PipelineCaptureEvent>,
     recognition_rx: RecognitionRxCell,
@@ -187,7 +186,6 @@ impl CaptureDispatchService {
             batch_size: DEFAULT_CAPTURE_BATCH_SIZE,
             flush_interval_ms: DEFAULT_CAPTURE_FLUSH_INTERVAL_MS,
             gallery_index: Some(state.gallery_index.clone()),
-            algo_registry: Some(state.algo_registry.clone()),
             event_broadcaster: Some(state.event_broadcaster.clone()),
             recognition_tx,
             recognition_rx,
@@ -210,7 +208,6 @@ impl CaptureDispatchService {
             batch_size: batch_size.max(1),
             flush_interval_ms: flush_interval_ms.max(10),
             gallery_index: None,
-            algo_registry: None,
             event_broadcaster: None,
             recognition_tx,
             recognition_rx,
@@ -403,44 +400,29 @@ impl CaptureDispatchService {
             return;
         }
 
-        // 新版 face_recognition 包在 best-shot 帧直接把 embedding 通过 C ABI
-        // sidecar 交给宿主；这里优先使用它，避免实时识别再次读盘、JPEG 解码和
-        // 重复调用模型。旧包没有 sidecar 时保留一次性的证据 JPEG 回退路径。
-        //
-        // 回退路径消费的 `crop_image_rel_path` 是**人脸特写**（`face_crop_target()` 的产物）：
-        // 无脸事件在 `is_face_event` 已被挡在门外，不会为了"确认没有脸"而白读一次盘再跑人脸模型。
-        let base_dir = self.pipeline.snapshot_engine().base_evidence_dir();
-        let feature = if let Some(embedding) = event.tracked_object.embedding() {
-            let quality_score = Self::resolve_recognition_quality(&event.tracked_object);
-            RecognitionFeature {
-                embedding: **embedding,
-                quality_score,
+        // 视频流识别与离线提取彻底解耦：
+        // 抓拍对账仅消费视频流自身产出的特征（来自 C ABI sidecar / 航迹时域融合）；
+        // 若视频流未产生 embedding（如侧脸、低质或未达融合门限），该事件仅作为客观通行抓拍留存，
+        // 绝不逆向读取磁盘图片调用离线大图提取器。
+        let feature = match event.tracked_object.embedding() {
+            Some(embedding) => {
+                let quality_score = Self::resolve_recognition_quality(&event.tracked_object);
+                RecognitionFeature {
+                    embedding: **embedding,
+                    quality_score,
+                }
             }
-        } else {
-            if snap.crop_image_rel_path.is_empty() {
+            None => {
+                tracing::debug!(
+                    camera_id = %event.camera_id,
+                    track_id = event.tracked_object.track_id,
+                    "通行抓拍未携带视频流识别特征，跳过 1:N 识别对账，仅保留抓拍记录"
+                );
                 return;
-            }
-            let Some(algo_registry) = &self.algo_registry else {
-                return;
-            };
-            let crop_path = base_dir.join(&snap.crop_image_rel_path);
-            let crop_bytes = match tokio::fs::read(&crop_path).await {
-                Ok(b) => b,
-                Err(_) => return,
-            };
-            let extraction = match algo_registry.extract_face(&crop_bytes).await {
-                Ok(ext) => ext,
-                Err(_) => return,
-            };
-            let embedding = match extraction.embedding.try_into() {
-                Ok(embedding) => embedding,
-                Err(_) => return,
-            };
-            RecognitionFeature {
-                embedding,
-                quality_score: extraction.quality_score,
             }
         };
+
+        let base_dir = self.pipeline.snapshot_engine().base_evidence_dir();
 
         // 动态解析摄像头关联的算法实例阈值 (未显式配置时回退到安全默认值)
         let (confirm_threshold, review_threshold) = self

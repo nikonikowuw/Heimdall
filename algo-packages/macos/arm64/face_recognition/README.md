@@ -3,9 +3,9 @@
 本算法包提供两条能力：
 
 - `instance_process()`：在同一个 640x384 `CVPixelBuffer` 上运行 `yolo26n` 人体检测和 `yolov8_face` 人脸/五点检测，完成当前帧空间关联与质量门控；best-shot 在当前算法 worker 内通过 Core Image 从原生 `CVPixelBuffer` 同步仿射到 112x112 BGRA surface，再直接交给 EdgeFace/ANE，不执行整帧 D2H readback。
-- `av_algo_extract_face()`：接受宿主在 `snapshot_readback_path` 产生的 JPEG，执行检测、五点对齐和 EdgeFace-s 特征提取，返回 L2 归一化 512D embedding 与 112x112 JPEG。
+- `av_algo_extract_face()`：专用于底库录入（`PersonnelService`）单帧全景图片，执行检测、五点对齐和 EdgeFace-s 特征提取，返回 L2 归一化 512D embedding 与 112x112 JPEG。与视频流抓拍对账彻底解耦，不作为实时抓拍的回退路径。
 
-模型输入与常驻检测均在 CoreML 中配置 `MLComputeUnitsAll`，由 Apple Silicon 自动调度 ANE/GPU/CPU。JPEG 特征提取属于低频证据路径，允许 CPU 解码、对齐和 JPEG 编码；常驻检测和 best-shot 特征提取均保持原生 `CVPixelBuffer` 设备侧流转。best-shot 的可选 embedding sidecar 只在后端内存中消费，不进入 WebSocket/HTTP DTO。
+模型输入与常驻检测均在 CoreML 中配置 `MLComputeUnitsAll`，由 Apple Silicon 自动调度 ANE/GPU/CPU。离线底库建档允许 CPU 解码、对齐和 JPEG 编码；常驻检测和 best-shot 特征提取均保持原生 `CVPixelBuffer` 设备侧流转。best-shot 的可选 embedding sidecar 只在后端内存中消费，不进入 WebSocket/HTTP DTO。
 
 ## 模型文件
 

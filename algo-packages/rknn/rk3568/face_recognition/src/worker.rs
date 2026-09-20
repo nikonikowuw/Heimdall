@@ -231,11 +231,22 @@ impl InferenceWorker {
             input_channels: 3,
             output_shapes: vec![[1, 512, 1, 1]],
         };
+        let is_yolov6 = package
+            .person_detector_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.contains("yolov6"))
+            .unwrap_or(false);
+
         let person_detector_contract = RknnModelContract {
             input_width: package.detector_width,
             input_height: package.detector_height,
             input_channels: 3,
-            output_shapes: manifest::PERSON_DETECTOR_OUTPUT_SHAPES.to_vec(),
+            output_shapes: if is_yolov6 {
+                manifest::YOLOV6_PERSON_DETECTOR_OUTPUT_SHAPES.to_vec()
+            } else {
+                manifest::PERSON_DETECTOR_OUTPUT_SHAPES.to_vec()
+            },
         };
         let registration_detector_contract = RknnModelContract {
             input_width: package.registration_detector_width,
@@ -299,17 +310,18 @@ impl InferenceWorker {
                 };
 
                 let mut person_detector = if person_detector_path.is_file() {
+                    let model_label = if is_yolov6 { "YOLOv6n" } else { "YOLOv8n" };
                     match RknnSession::new(
                         Arc::clone(&runtime),
                         &person_detector_path,
                         person_detector_contract,
                     ) {
                         Ok(session) => {
-                            tracing::info!(path = ?person_detector_path, "成功加载 YOLOv8n 人体检测模型");
+                            tracing::info!(path = ?person_detector_path, "成功加载 {model_label} 人体检测模型");
                             Some(session)
                         }
                         Err(error) => {
-                            tracing::warn!(%error, "可选 YOLOv8n 人体检测模型初始化未就绪，使用纯人脸推导");
+                            tracing::warn!(%error, "可选 {model_label} 人体检测模型初始化未就绪，使用纯人脸推导");
                             None
                         }
                     }
@@ -590,7 +602,7 @@ fn decode_person_output(
             ),
         });
     };
-    detect::decode_yolov8_person_multi_int8(values, attrs, layout, min_score, 0.45)
+    detect::decode_person_multi_int8(values, attrs, layout, min_score, 0.45)
 }
 
 fn decode_detector_output(

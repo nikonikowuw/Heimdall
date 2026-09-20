@@ -122,13 +122,24 @@ fn matches_channel_count(attr: &crate::rknn::RknnTensorAttr, expected: u32) -> b
 ///
 /// 支持 NCHW 和 RKNN 的 NC1HWC2 物理通道布局；
 /// 严格只提取 COCO class 0 (person) 进行反量化与 Sigmoid 激活。
-pub fn decode_yolov8_person_multi_int8(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PersonBoxDecoderKind {
+    Yolov8Dfl,
+    Yolov6Direct,
+}
+
+fn decode_person_multi_int8_impl(
     int8_outputs: &[&[i8]],
     output_attrs: &[crate::rknn::RknnTensorAttr],
     layout: &LetterboxLayout,
     conf_threshold: f32,
     nms_threshold: f32,
+    kind: PersonBoxDecoderKind,
 ) -> Result<Vec<PersonCandidate>, AlgoError> {
+    let expected_box_channels = match kind {
+        PersonBoxDecoderKind::Yolov8Dfl => 64,
+        PersonBoxDecoderKind::Yolov6Direct => 4,
+    };
     let threshold = conf_threshold.clamp(0.0, 1.0);
     let mut candidates = Vec::new();
     let eff_w = layout.scaled_w as f32;
@@ -147,7 +158,7 @@ pub fn decode_yolov8_person_multi_int8(
         }
         let box_idx = cls_idx - 1;
         let box_attr = &output_attrs[box_idx];
-        if !matches_channel_count(box_attr, 64)
+        if !matches_channel_count(box_attr, expected_box_channels)
             || box_idx >= int8_outputs.len()
             || cls_idx >= int8_outputs.len()
         {
@@ -170,11 +181,15 @@ pub fn decode_yolov8_person_multi_int8(
         // NMS 排序与人工阈值都不可信。
         let cls_probability_mode = cls_scores_are_probabilities(cls_data, cls_attr, grid_h, grid_w);
         if !CLS_MODE_LOGGED.swap(true, Ordering::Relaxed) {
+            let model_tag = match kind {
+                PersonBoxDecoderKind::Yolov8Dfl => "YOLOv8n",
+                PersonBoxDecoderKind::Yolov6Direct => "YOLOv6n",
+            };
             tracing::info!(
                 probability_mode = cls_probability_mode,
                 grid_w,
                 grid_h,
-                "YOLOv8n 人体检测 cls 分支激活模式判定"
+                "{model_tag} 人体检测 cls 分支激活模式判定"
             );
         }
 
@@ -198,10 +213,36 @@ pub fn decode_yolov8_person_multi_int8(
                     continue;
                 }
 
-                let left = decode_dfl_i8(box_data, box_attr, 0, offset, grid_len, grid_h, grid_w);
-                let top = decode_dfl_i8(box_data, box_attr, 1, offset, grid_len, grid_h, grid_w);
-                let right = decode_dfl_i8(box_data, box_attr, 2, offset, grid_len, grid_h, grid_w);
-                let bottom = decode_dfl_i8(box_data, box_attr, 3, offset, grid_len, grid_h, grid_w);
+                let (left, top, right, bottom) = match kind {
+                    PersonBoxDecoderKind::Yolov8Dfl => {
+                        let l =
+                            decode_dfl_i8(box_data, box_attr, 0, offset, grid_len, grid_h, grid_w);
+                        let t =
+                            decode_dfl_i8(box_data, box_attr, 1, offset, grid_len, grid_h, grid_w);
+                        let r =
+                            decode_dfl_i8(box_data, box_attr, 2, offset, grid_len, grid_h, grid_w);
+                        let b =
+                            decode_dfl_i8(box_data, box_attr, 3, offset, grid_len, grid_h, grid_w);
+                        (l, t, r, b)
+                    }
+                    PersonBoxDecoderKind::Yolov6Direct => {
+                        let (Some(l_raw), Some(t_raw), Some(r_raw), Some(b_raw)) = (
+                            tensor_i8_value(box_data, box_attr.fmt, 0, grid_h, grid_w, gy, gx),
+                            tensor_i8_value(box_data, box_attr.fmt, 1, grid_h, grid_w, gy, gx),
+                            tensor_i8_value(box_data, box_attr.fmt, 2, grid_h, grid_w, gy, gx),
+                            tensor_i8_value(box_data, box_attr.fmt, 3, grid_h, grid_w, gy, gx),
+                        ) else {
+                            continue;
+                        };
+                        (
+                            dequant_i8(l_raw, box_attr.zp, box_attr.scale),
+                            dequant_i8(t_raw, box_attr.zp, box_attr.scale),
+                            dequant_i8(r_raw, box_attr.zp, box_attr.scale),
+                            dequant_i8(b_raw, box_attr.zp, box_attr.scale),
+                        )
+                    }
+                };
+
                 let cx = (gx as f32 + 0.5) * stride_x;
                 let cy = (gy as f32 + 0.5) * stride_y;
                 let x1_px = cx - left * stride_x;
@@ -225,6 +266,89 @@ pub fn decode_yolov8_person_multi_int8(
 
     nms_persons(&mut candidates, nms_threshold);
     Ok(candidates)
+}
+
+/// 解码标准 YOLOv8n 640x384 多张量 INT8 输出，算法与参考 C++ 后处理保持一致。
+///
+/// 契约固定为 3 尺度 × 3 分支 (9 个 NCHW INT8 张量)：
+/// - 尺度 1 (stride 8):  grid 80x48, box 64ch, cls 80ch, score 1ch
+/// - 尺度 2 (stride 16): grid 40x24, box 64ch, cls 80ch, score 1ch
+/// - 尺度 3 (stride 32): grid 20x12, box 64ch, cls 80ch, score 1ch
+///
+/// 支持 NCHW 和 RKNN 的 NC1HWC2 物理通道布局；
+/// 严格只提取 COCO class 0 (person) 进行反量化与 Sigmoid 激活。
+pub fn decode_yolov8_person_multi_int8(
+    int8_outputs: &[&[i8]],
+    output_attrs: &[crate::rknn::RknnTensorAttr],
+    layout: &LetterboxLayout,
+    conf_threshold: f32,
+    nms_threshold: f32,
+) -> Result<Vec<PersonCandidate>, AlgoError> {
+    decode_person_multi_int8_impl(
+        int8_outputs,
+        output_attrs,
+        layout,
+        conf_threshold,
+        nms_threshold,
+        PersonBoxDecoderKind::Yolov8Dfl,
+    )
+}
+
+/// 解码标准 YOLOv6n 640x384 (或 384x640) 多张量 INT8 输出。
+///
+/// 契约固定为 3 尺度 × 3 分支 (9 个 NCHW INT8 张量)：
+/// - 尺度 1 (stride 8):  grid 80x48, box 4ch (left, top, right, bottom), cls 80ch, score 1ch
+/// - 尺度 2 (stride 16): grid 40x24, box 4ch, cls 80ch, score 1ch
+/// - 尺度 3 (stride 32): grid 20x12, box 4ch, cls 80ch, score 1ch
+///
+/// 支持 NCHW 和 RKNN 的 NC1HWC2 物理通道布局；
+/// 严格只提取 COCO class 0 (person) 进行反量化与 Sigmoid 激活。
+pub fn decode_yolov6_person_multi_int8(
+    int8_outputs: &[&[i8]],
+    output_attrs: &[crate::rknn::RknnTensorAttr],
+    layout: &LetterboxLayout,
+    conf_threshold: f32,
+    nms_threshold: f32,
+) -> Result<Vec<PersonCandidate>, AlgoError> {
+    decode_person_multi_int8_impl(
+        int8_outputs,
+        output_attrs,
+        layout,
+        conf_threshold,
+        nms_threshold,
+        PersonBoxDecoderKind::Yolov6Direct,
+    )
+}
+
+/// 统一人体检测后处理入口：自动按输出张量通道数分发至 YOLOv6 或 YOLOv8 解码器。
+pub fn decode_person_multi_int8(
+    int8_outputs: &[&[i8]],
+    output_attrs: &[crate::rknn::RknnTensorAttr],
+    layout: &LetterboxLayout,
+    conf_threshold: f32,
+    nms_threshold: f32,
+) -> Result<Vec<PersonCandidate>, AlgoError> {
+    let is_yolov6 = output_attrs
+        .first()
+        .map(|a| matches_channel_count(a, 4))
+        .unwrap_or(false);
+    if is_yolov6 {
+        decode_yolov6_person_multi_int8(
+            int8_outputs,
+            output_attrs,
+            layout,
+            conf_threshold,
+            nms_threshold,
+        )
+    } else {
+        decode_yolov8_person_multi_int8(
+            int8_outputs,
+            output_attrs,
+            layout,
+            conf_threshold,
+            nms_threshold,
+        )
+    }
 }
 
 fn tensor_i8_value(
@@ -781,6 +905,75 @@ mod tests {
             decode_yolov8_person_multi_int8(&non_person_outputs, &attrs, &layout, 0.5, 0.45)
                 .expect("非 person 类别不应导致人体候选");
         assert!(non_persons.is_empty());
+    }
+
+    #[test]
+    fn test_decode_yolov6_person_multi_int8_non_square_three_scales() {
+        let grid_h = 48usize;
+        let grid_w = 80usize;
+        let grid_len = grid_h * grid_w;
+        let anchor = 10 * grid_w + 10;
+        let mut output_storage = [
+            vec![-10i8; 4 * grid_len],
+            vec![-10i8; 80 * grid_len],
+            vec![-10i8; grid_len],
+            vec![-10i8; 4 * (24 * 40)],
+            vec![-10i8; 80 * (24 * 40)],
+            vec![-10i8; 24 * 40],
+            vec![-10i8; 4 * (12 * 20)],
+            vec![-10i8; 80 * (12 * 20)],
+            vec![-10i8; 12 * 20],
+        ];
+        // left = 1, top = 2, right = 3, bottom = 4
+        for (side, val) in [1i8, 2, 3, 4].into_iter().enumerate() {
+            output_storage[0][side * grid_len + anchor] = val;
+        }
+        output_storage[1][anchor] = 10;
+
+        let make_attr =
+            |index: u32, channels: u32, height: u32, width: u32| crate::rknn::RknnTensorAttr {
+                index,
+                n_dims: 4,
+                dims: [
+                    1, channels, height, width, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ],
+                n_elems: channels * height * width,
+                fmt: crate::rknn::RknnTensorFormat::Nchw,
+                qnt_type: crate::rknn::RknnTensorQntType::AsymmetricChar,
+                scale: 1.0,
+                zp: 0,
+                ..Default::default()
+            };
+        let attrs = [
+            make_attr(0, 4, 48, 80),
+            make_attr(1, 80, 48, 80),
+            make_attr(2, 1, 48, 80),
+            make_attr(3, 4, 24, 40),
+            make_attr(4, 80, 24, 40),
+            make_attr(5, 1, 24, 40),
+            make_attr(6, 4, 12, 20),
+            make_attr(7, 80, 12, 20),
+            make_attr(8, 1, 12, 20),
+        ];
+        let outputs: Vec<&[i8]> = output_storage.iter().map(Vec::as_slice).collect();
+        let layout = LetterboxLayout {
+            scale: 1.0,
+            pad_left: 0,
+            pad_top: 0,
+            dst_w: 640,
+            dst_h: 384,
+            scaled_w: 640,
+            scaled_h: 384,
+        };
+
+        let persons = decode_person_multi_int8(&outputs, &attrs, &layout, 0.5, 0.45)
+            .expect("非方形三尺度 INT8 YOLOv6 解码应成功");
+        assert_eq!(persons.len(), 1);
+        assert!(persons[0].score > 0.99);
+        assert!((persons[0].bbox[0] - 76.0 / 640.0).abs() < 0.01);
+        assert!((persons[0].bbox[1] - 68.0 / 384.0).abs() < 0.01);
+        assert!((persons[0].bbox[2] - 32.0 / 640.0).abs() < 0.01);
+        assert!((persons[0].bbox[3] - 48.0 / 384.0).abs() < 0.01);
     }
     #[test]
     fn test_normalize_to_relative_with_padding() {

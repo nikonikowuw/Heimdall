@@ -52,6 +52,14 @@
       "maximum": 1.0,
       "default": 0.7
     },
+    "osd_margin_top": {
+      "type": "number",
+      "title": "顶部 OSD 水印避让高度",
+      "description": "画面顶部 OSD 水印（时间戳、通道名等）避让高度比例 [0.0, 1.0]。人脸框进入该区域时正常检测与绘制，但不触发特征提取入池，防止字符点阵污染人脸模板。默认为 0.0（不避让）；画面顶部有时间戳水印时推荐配置 0.08（顶部 8% 区域）",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.0
+    },
     "similarity_threshold": {
       "type": "number",
       "title": "识别确认阈值",

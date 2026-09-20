@@ -274,13 +274,15 @@ impl TrackState {
         let face = detection.face;
         let mut template_meta = TemplateMeta::default();
         template_meta.absorb(face.as_ref());
+        let effective_embedding =
+            embedding.or_else(|| face.as_ref().and_then(|f| f.embedding.clone()));
         let mut track = Self {
             track_id,
             class_id: detection.class_id,
             label: detection.label,
             confidence: detection.confidence,
             quality_score: detection.quality_score,
-            embedding,
+            embedding: effective_embedding,
             bbox,
             predicted_bbox: bbox,
             face,

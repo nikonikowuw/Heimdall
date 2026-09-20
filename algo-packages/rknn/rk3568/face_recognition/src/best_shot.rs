@@ -29,7 +29,7 @@ pub const MIN_FUSION_FRAME_INTERVAL: usize = 6;
 /// 新特征相对当前模板的最低余弦相似度。
 pub const DRIFT_REJECTION_SIMILARITY: f32 = 0.55;
 /// 选样时相对任一已选帧达到该相似度即视为冗余。
-pub const REDUNDANCY_SIMILARITY: f32 = 0.85;
+pub const REDUNDANCY_SIMILARITY: f32 = 0.95;
 /// 模板成熟所需的最少池内样本数。
 pub const MIN_MATURE_POOL_SIZE: usize = 3;
 /// 连续无质量提升达到该帧数后允许模板成熟。
@@ -38,9 +38,9 @@ pub const PLATEAU_FRAMES: usize = 10;
 pub const SIZE_TARGET_PIXELS: u32 = 140;
 
 /// 模板重播种触发门限：当新样本质量比池内最佳高出该值时，允许清空旧弱池。
-pub const RESEED_QUALITY_DELTA: f32 = 0.20;
+pub const RESEED_QUALITY_DELTA: f32 = 0.12;
 /// 重播种时的余弦相似度下限，防止彻底异人漂移引发误重置。
-pub const RESEED_SIMILARITY_FLOOR: f32 = 0.35;
+pub const RESEED_SIMILARITY_FLOOR: f32 = 0.25;
 
 /// 融合更新结果
 #[derive(Debug, Clone)]
@@ -168,11 +168,20 @@ impl BestShotManager {
         if !record.pool_is_empty() {
             let similarity = algo_sdk::math::cosine_similarity(record.template(), embedding);
 
-            let can_reseed = quality.score >= record.best_pool_quality() + RESEED_QUALITY_DELTA
+            let is_single_seed = record.pool_len() == 1;
+            // 若池内仅有单个初始种子，且后方出现质量显著优越（+0.08 且绝对分 >= 0.70）的高清正脸：
+            // 即便相似度因初期弱照/水印/偏转跌至 [0.25, 0.55]，也允许抢占重播种，洗掉弱种子。
+            let single_seed_overwrite = is_single_seed
+                && quality.score >= 0.70
+                && quality.score >= record.best_pool_quality() + 0.08
                 && similarity >= RESEED_SIMILARITY_FLOOR;
 
+            let can_reseed = single_seed_overwrite
+                || (quality.score >= record.best_pool_quality() + RESEED_QUALITY_DELTA
+                    && similarity >= RESEED_SIMILARITY_FLOOR);
+
             if similarity < DRIFT_REJECTION_SIMILARITY && !can_reseed {
-                record.mark_extraction_failure(frame_id);
+                record.mark_drift_rejection(frame_id);
                 return FusionUpdate {
                     template: *record.template(),
                     template_quality: record.template_quality,
@@ -468,6 +477,62 @@ mod tests {
         assert_eq!(record.pool_len(), 1);
         assert_eq!(record.quality.score, 0.60);
         assert_eq!(record.retry_after_frame_id, 13);
+    }
+
+    #[test]
+    fn consecutive_drift_rejections_do_not_escalate_exponential_backoff() {
+        let mut manager = BestShotManager::new();
+        let stable = embedding(0);
+        let drift = embedding(100);
+        add(&mut manager, 8, 0.60, 80, &stable, 1);
+
+        // 连续 3 次漂移拒绝
+        add(&mut manager, 8, 0.60, 80, &drift, 7);
+        let r1 = manager.get(8).expect("record exists");
+        assert_eq!(r1.retry_after_frame_id, 13, "第 1 次漂移：等待 6 帧");
+
+        add(&mut manager, 8, 0.60, 80, &drift, 13);
+        let r2 = manager.get(8).expect("record exists");
+        assert_eq!(
+            r2.retry_after_frame_id, 19,
+            "第 2 次漂移必须维持 6 帧重试间隔，严禁升级为 12 帧退避"
+        );
+
+        add(&mut manager, 8, 0.60, 80, &drift, 19);
+        let r3 = manager.get(8).expect("record exists");
+        assert_eq!(
+            r3.retry_after_frame_id, 25,
+            "第 3 次漂移必须维持 6 帧重试间隔，严禁升级为 24 帧退避"
+        );
+    }
+
+    #[test]
+    fn single_seed_overwritten_by_clear_face_with_low_similarity() {
+        let mut manager = BestShotManager::new();
+        let polluted_seed = embedding(0);
+
+        // 模拟一个相似度仅 0.30（跌破 0.55 漂移门、但高于 0.25 下限）的高质量帧 (q=0.85)
+        let mut clear_face = [0.0f32; 512];
+        clear_face[0] = 0.30;
+        clear_face[1] = (1.0 - 0.30f32 * 0.30).sqrt();
+
+        add(&mut manager, 88, 0.65, 70, &polluted_seed, 1);
+        let before = manager.get(88).expect("record exists");
+        assert_eq!(before.best_pool_quality(), 0.65);
+
+        // 高质量帧到达：触发弱单种子覆写重播种
+        let update = add(&mut manager, 88, 0.85, 150, &clear_face, 7);
+        assert!(
+            update.template_changed,
+            "受污染的弱种子必须被新高质量帧覆盖"
+        );
+
+        let after = manager.get(88).expect("record exists");
+        assert_eq!(after.best_pool_quality(), 0.85);
+        assert_eq!(after.pool_len(), 1, "弱种子被清空，重置为高质量单样本");
+
+        let sim = algo_sdk::math::cosine_similarity(&update.template, &clear_face);
+        assert!((sim - 1.0).abs() < 1e-5);
     }
 
     #[test]

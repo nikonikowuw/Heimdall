@@ -48,6 +48,18 @@ pub const PERSON_DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 9] = [
     [1, 1, 12, 20],
 ];
 
+pub const YOLOV6_PERSON_DETECTOR_OUTPUT_SHAPES: [[u32; 4]; 9] = [
+    [1, 4, 48, 80],
+    [1, 80, 48, 80],
+    [1, 1, 48, 80],
+    [1, 4, 24, 40],
+    [1, 80, 24, 40],
+    [1, 1, 24, 40],
+    [1, 4, 12, 20],
+    [1, 80, 12, 20],
+    [1, 1, 12, 20],
+];
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PackageManifest {
     pub manifest_version: u32,
@@ -135,26 +147,57 @@ impl LoadedPackage {
 
         let env = algo_sdk::env::PackageEnv::load(&root);
 
-        let person_detector_path = env.resolve_model_path(
-            &root,
-            "PERSON_DETECTOR_MODEL_PATH",
-            "model/yolov8n-640x384-rk3568.rknn",
-        )?;
-        let detector_path = env.resolve_model_path(
-            &root,
-            "DETECTOR_MODEL_PATH",
-            "model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn",
-        )?;
+        let person_detector_path = env
+            .resolve_model_path(
+                &root,
+                "PERSON_DETECTOR_MODEL_PATH",
+                "model/yolov6n_384x640_i8.rknn",
+            )
+            .or_else(|_| {
+                env.resolve_model_path(
+                    &root,
+                    "PERSON_DETECTOR_MODEL_PATH",
+                    "model/yolov8n-640x384-rk3568.rknn",
+                )
+            })?;
+        let detector_path = env
+            .resolve_model_path(
+                &root,
+                "DETECTOR_MODEL_PATH",
+                "model/scrfd_500m_384x640_mixed.rknn",
+            )
+            .or_else(|_| {
+                env.resolve_model_path(
+                    &root,
+                    "DETECTOR_MODEL_PATH",
+                    "model/scrfd_2.5g_bnkps_640x384_rk3568_mixed.rknn",
+                )
+            })?;
         let registration_detector_path = env.resolve_optional_model_path(
             &root,
             "REGISTRATION_DETECTOR_MODEL_PATH",
             "model/scrfd_2.5g_bnkps_640x640_rk3568_mixed.rknn",
         )?;
-        let embedder_path = env.resolve_model_path(
-            &root,
-            "EMBEDDER_MODEL_PATH",
-            "model/edgeface_s_gamma_05_rk3568_fp16.rknn",
-        )?;
+        let embedder_path = env
+            .resolve_model_path(
+                &root,
+                "EMBEDDER_MODEL_PATH",
+                "model/facelivtv2_m_realistic_final_super_fp16.rknn",
+            )
+            .or_else(|_| {
+                env.resolve_model_path(
+                    &root,
+                    "EMBEDDER_MODEL_PATH",
+                    "model/edgeface_base_distill_fp16.rknn",
+                )
+            })
+            .or_else(|_| {
+                env.resolve_model_path(
+                    &root,
+                    "EMBEDDER_MODEL_PATH",
+                    "model/edgeface_s_gamma_05_rk3568_fp16.rknn",
+                )
+            })?;
 
         verify_model_file(&detector_path)?;
         verify_model_file(&embedder_path)?;

@@ -40,6 +40,19 @@ impl std::fmt::Debug for FaceRecognizer {
     }
 }
 
+/// 跟踪航迹与单帧人脸检测的匹配 IoU 门限（10 FPS 抽帧下位移较大，采用 0.18 保持航迹连续性）
+const FACE_DETECTION_MATCH_IOU: f32 = 0.18;
+/// ByteTrack 内部航迹关联匹配门限
+const FACE_TRACK_MATCH_THRESH: f32 = 0.20;
+
+impl FaceRecognizer {
+    /// 重置跟踪器与 BestShot 状态（用于底库独立提取或场景切换）
+    pub fn reset_tracking(&mut self) {
+        self.tracker = crate::bytetrack::ByteTracker::new(face_tracker_config(&self.config));
+        self.best_shots = crate::best_shot::BestShotManager::new();
+    }
+}
+
 impl AlgoPlugin for FaceRecognizer {
     type Config = InstanceConfig;
 
@@ -114,7 +127,7 @@ impl AlgoPlugin for FaceRecognizer {
         let face_track_ids = crate::association::match_face_tracks_to_detections(
             &active_face_tracks,
             &raw_faces,
-            0.25,
+            FACE_DETECTION_MATCH_IOU,
         );
         self.best_shots
             .remove_tracks(self.tracker.recently_removed_track_ids());
@@ -162,6 +175,10 @@ impl AlgoPlugin for FaceRecognizer {
                         .and_then(|sidecar| sidecar.template_mature),
                     // 合成躯干底部会贴到画面下沿，宿主空间规则需能区分它与真实人体框。
                     pseudo_body: candidate.is_pseudo_body.then_some(true),
+                    // 仅调试：`HEIMDALL_DEBUG_TRACK_ID=1` 时透出包内航迹号，用于诊断身份链路
+                    // 为何只提取一两次特征（同一航迹被间隔门拦住 vs 航迹频繁重启）。
+                    track_id: internal_track_id
+                        .filter(|_| crate::postprocess::debug_track_id_enabled()),
                 })
             } else {
                 None
@@ -210,6 +227,11 @@ impl FaceRecognizer {
         quality: &crate::quality::FaceQuality,
         track_id: u64,
     ) -> Result<Option<BestShotSidecar>, AlgoError> {
+        // 几何避让：若人脸框顶边侵入画面顶部水印区，仅放行检测元数据，不提取特征、不污染种子池。
+        if self.config.osd_margin_top > 0.0 && face.bbox[1] < self.config.osd_margin_top {
+            return Ok(None);
+        }
+
         if !quality.accepted(&self.config.quality_thresholds, self.config.min_face_size) {
             return Ok(None);
         }
@@ -333,6 +355,7 @@ fn face_tracker_config(config: &InstanceConfig) -> crate::bytetrack::ByteTrackCo
     crate::bytetrack::ByteTrackConfig {
         high_thresh: gate,
         track_thresh: gate,
+        match_thresh: FACE_TRACK_MATCH_THRESH,
         confirm_new_tracks: false,
         ..Default::default()
     }
@@ -499,11 +522,8 @@ mod tests {
         assert_eq!(tracker_config.high_thresh, 0.25);
         assert_eq!(tracker_config.track_thresh, 0.25);
         assert!(!tracker_config.confirm_new_tracks);
-        // 关联阈值仍保留 ByteTrack 默认的 IoU 门限，不被分数耦合影响。
-        assert_eq!(
-            tracker_config.match_thresh,
-            crate::bytetrack::ByteTrackConfig::default().match_thresh
-        );
+        // 人脸小目标在 10 FPS 抽帧下位移较大，关联阈值设定为 0.20，不被分数耦合影响。
+        assert_eq!(tracker_config.match_thresh, FACE_TRACK_MATCH_THRESH);
     }
 
     /// 生成逐像素可区分的 RGB24 图案（任何采样偏移都会直接体现为像素差异）。

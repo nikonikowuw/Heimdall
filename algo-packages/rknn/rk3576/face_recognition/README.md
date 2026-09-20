@@ -4,8 +4,8 @@
 
 ## 运行契约
 
-- 常驻 `AlgoPlugin::process` 只执行子码流检测、关键点质量评估和结果发射。
-- 常驻结果中的 `embedding` 为 `null`，`is_best_shot` 为 `false`。特征提取通过 `av_algo_extract_face` 低频抓拍接口执行，避免每帧 CPU readback 和 embedding 推理。
+- 常驻 `AlgoPlugin::process` 执行子码流检测、关键点质量评估和结果发射。
+- 独立离线提取接口 `av_algo_extract_face` 专用于底库照片录入（`PersonnelService`）与特征重提取，与视频流抓拍对账彻底解耦。视频流实时识别采用流内端侧闭环与 sidecar 机制，杜绝逆向读盘离线提取。
 - 在带 RGA 的 Linux/RK3576 构建中，预处理结果优先沿 DMA-BUF 进入 RKNN。Runtime 支持 imported memory 且 stride 兼容时使用 `rknn_create_mem_from_fd` / `rknn_set_io_mem`；否则进入显式 mmap 兼容路径，并执行 `DMA_BUF_IOCTL_SYNC`。
 - Host 路径只用于开发机 CPU 回退或 Runtime 不支持直接 DMA-BUF 绑定的情况，不能视为设备侧纯零拷贝。
 - RKNN detector、embedder context 由固定 OS worker 线程独占；请求队列容量为 2，满载时淘汰最旧请求并让被淘汰调用收到 `Timeout`，不在 Tokio worker 上执行 FFI。

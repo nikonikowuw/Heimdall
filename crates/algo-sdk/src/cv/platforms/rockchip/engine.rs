@@ -23,7 +23,7 @@ const IM_YUV_BT709_LIMIT_RANGE: i32 = 5 << 8;
 const IM_YUV_BT709_FULL_RANGE: i32 = 6 << 8;
 
 /// Maximum number of distinct output geometries cached simultaneously by one engine.
-const MAX_CACHED_POOLS: usize = 16;
+const MAX_CACHED_POOLS: usize = 64;
 
 /// Rockchip RGA-backed CV engine with a CPU fallback for host frames or missing librga.
 pub struct RgaCvEngine {

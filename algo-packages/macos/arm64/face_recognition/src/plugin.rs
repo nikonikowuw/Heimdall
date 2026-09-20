@@ -147,9 +147,11 @@ impl AlgoPlugin for FaceRecognizer {
                     &self.config.quality_thresholds,
                 );
 
-                // 仅在人脸通过姿态质量门控时触发低频 EdgeFace 特征提取 (best-shot)
-                let embedding_str = if quality
-                    .accepted(&self.config.quality_thresholds, self.config.min_face_size)
+                // 仅在人脸通过姿态质量门控且不在顶部 OSD 水印避让区时触发低频 EdgeFace 特征提取 (best-shot)
+                let in_osd =
+                    self.config.osd_margin_top > 0.0 && face.bbox[1] < self.config.osd_margin_top;
+                let embedding_str = if !in_osd
+                    && quality.accepted(&self.config.quality_thresholds, self.config.min_face_size)
                 {
                     let embedding = if !source_pixelbuffer.is_null()
                         && self.best_shots.should_update_best_shot(

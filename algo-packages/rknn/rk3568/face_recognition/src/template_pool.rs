@@ -153,7 +153,14 @@ impl BestShotRecord {
         self.failed_attempts = 0;
     }
 
-    /// 记录一次软失败（提取失败或防漂移拒绝）。
+    /// 记录一次漂移拒绝（特征不匹配非设备故障，维持固定最小重试间隔，不进行指数退避惩罚）。
+    pub(crate) fn mark_drift_rejection(&mut self, frame_id: usize) {
+        self.last_extract_frame_id = frame_id;
+        self.retry_after_frame_id = frame_id.saturating_add(MIN_FUSION_FRAME_INTERVAL);
+        // 注意：不递增 self.failed_attempts，避免陷入 12/24/48 帧的长退避瘫痪航迹
+    }
+
+    /// 记录一次软失败（提取失败或设备错误）。
     pub(crate) fn mark_extraction_failure(&mut self, frame_id: usize) {
         self.last_extract_frame_id = frame_id;
         self.failed_attempts = self.failed_attempts.saturating_add(1);

@@ -218,6 +218,22 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   const [hwLabel, setHwLabel] = useState<string>('')
   const [heroLatency, setHeroLatency] = useState<number>(128)
 
+  const handleHeroLatencyChange = useCallback((lat: number) => {
+    setHeroLatency(lat)
+  }, [])
+
+  const handleToggleHeroAudio = useCallback(() => {
+    setHeroAudioEnabled((prev) => !prev)
+  }, [])
+
+  const handleCloseHero = useCallback(() => {
+    setSelectedHeroId('')
+  }, [])
+
+  const handleSwitchHeroStream = useCallback((s: 'main' | 'sub') => {
+    setHeroStream(s)
+  }, [])
+
   // 模态框
   const [isCameraModalOpen, setIsCameraModalOpen] = useState<boolean>(false)
   const [cameraToEdit, setCameraToEdit] = useState<Camera | null>(null)
@@ -626,10 +642,10 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   stream={heroStream}
                   videoCodec={heroCamera.lastCodec}
                   audioEnabled={heroAudioEnabled}
-                  onToggleAudio={() => setHeroAudioEnabled((prev) => !prev)}
-                  onLatencyChange={(lat) => setHeroLatency(lat)}
-                  onClose={() => setSelectedHeroId('')}
-                  onSwitchStream={(s) => setHeroStream(s)}
+                  onToggleAudio={handleToggleHeroAudio}
+                  onLatencyChange={handleHeroLatencyChange}
+                  onClose={handleCloseHero}
+                  onSwitchStream={handleSwitchHeroStream}
                 />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-[var(--text-muted)]">

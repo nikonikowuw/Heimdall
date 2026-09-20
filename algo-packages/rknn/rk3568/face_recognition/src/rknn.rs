@@ -1311,7 +1311,10 @@ fn validate_output_attr(
             || (actual[0] == 1 && actual[1] == expected[0] && actual[2] == expected[1])
             || (expected[0] == 1 && expected[1] == actual[0] && expected[2] == actual[1])
             || (actual[0] == expected[0] && actual[1] == expected[1]));
-    if !scrfd_2d_match && !embedder_channels_last {
+    let person_detector_box_match =
+        (expected[0] == actual[0] && expected[2] == actual[2] && expected[3] == actual[3])
+            && ((expected[1] == 64 && actual[1] == 4) || (expected[1] == 4 && actual[1] == 64));
+    if !scrfd_2d_match && !embedder_channels_last && !person_detector_box_match {
         return Err(AlgoError::ModelLoad {
             reason: format!(
                 "RKNN 输出 {index} 形状不匹配: expected={expected:?}, actual={:?}",
@@ -1319,9 +1322,14 @@ fn validate_output_attr(
             ),
         });
     }
-    let expected_elems = expected
+    let target_dims = if person_detector_box_match {
+        actual
+    } else {
+        expected
+    };
+    let expected_elems = target_dims
         .iter()
-        .try_fold(1u64, |acc, value| acc.checked_mul(u64::from(*value)))
+        .try_fold(1u64, |acc, &value| acc.checked_mul(u64::from(value)))
         .ok_or(AlgoError::OutOfMemory)?;
     if u64::from(attr.n_elems) < expected_elems || attr.size == 0 {
         return Err(AlgoError::ModelLoad {

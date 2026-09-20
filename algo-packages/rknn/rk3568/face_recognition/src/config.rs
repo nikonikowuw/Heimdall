@@ -3,14 +3,15 @@ use serde::Deserialize;
 
 use crate::best_shot::DEFAULT_FUSION_MIN_QUALITY_SCORE;
 
-const FIELD_DETECTION_CONF: u8 = 1 << 0;
-const FIELD_PERSON_CONF: u8 = 1 << 1;
-const FIELD_MIN_FACE_SIZE: u8 = 1 << 2;
-const FIELD_QUALITY_MIN_SCORE: u8 = 1 << 3;
-const FIELD_QUALITY_MAX_YAW: u8 = 1 << 4;
-const FIELD_QUALITY_MAX_PITCH: u8 = 1 << 5;
-const FIELD_QUALITY_MAX_BLUR: u8 = 1 << 6;
-const FIELD_FUSION_MIN_QUALITY: u8 = 1 << 7;
+const FIELD_DETECTION_CONF: u16 = 1 << 0;
+const FIELD_PERSON_CONF: u16 = 1 << 1;
+const FIELD_MIN_FACE_SIZE: u16 = 1 << 2;
+const FIELD_QUALITY_MIN_SCORE: u16 = 1 << 3;
+const FIELD_QUALITY_MAX_YAW: u16 = 1 << 4;
+const FIELD_QUALITY_MAX_PITCH: u16 = 1 << 5;
+const FIELD_QUALITY_MAX_BLUR: u16 = 1 << 6;
+const FIELD_FUSION_MIN_QUALITY: u16 = 1 << 7;
+const FIELD_OSD_MARGIN_TOP: u16 = 1 << 8;
 
 #[derive(Deserialize, Default)]
 struct RawQualityThresholds {
@@ -45,6 +46,8 @@ struct RawInstanceConfig {
     quality_max_blur: Option<f32>,
     #[serde(default)]
     fusion_min_quality_score: Option<f32>,
+    #[serde(default)]
+    osd_margin_top: Option<f32>,
 }
 
 /// 人脸识别算法实例配置。
@@ -63,8 +66,14 @@ pub struct InstanceConfig {
     /// 阈值的差集会被静默丢弃（只有检测结果，没有特征向量）。
     pub fusion_min_quality_score: f32,
 
+    /// 画面顶部 OSD 水印（时间戳等）避让比例 [0.0, 1.0]。
+    ///
+    /// 人脸框顶边高于此比例（即进入画面上边缘水印区）时正常输出检测框，但跳过
+    /// 特征提取，防止被时间戳字符点阵污染初始人脸模板。默认为 0.0（不避让）。
+    pub osd_margin_top: f32,
+
     /// 记录宿主任务配置显式下发的参数位掩码（用于执行三级优先级隔离）
-    explicit_fields: u8,
+    explicit_fields: u16,
 }
 
 impl Default for InstanceConfig {
@@ -77,6 +86,7 @@ impl Default for InstanceConfig {
             min_face_size: 60,
             quality_thresholds: QualityThresholds::default(),
             fusion_min_quality_score: DEFAULT_FUSION_MIN_QUALITY_SCORE,
+            osd_margin_top: 0.0,
             explicit_fields: 0,
         }
     }
@@ -88,8 +98,8 @@ impl<'de> Deserialize<'de> for InstanceConfig {
         D: serde::Deserializer<'de>,
     {
         let raw = RawInstanceConfig::deserialize(deserializer)?;
-        let mut explicit = 0u8;
-        let set_f32 = |explicit: &mut u8, mask: u8, opt: Option<f32>, target: &mut f32| {
+        let mut explicit = 0u16;
+        let set_f32 = |explicit: &mut u16, mask: u16, opt: Option<f32>, target: &mut f32| {
             if let Some(val) = opt {
                 *explicit |= mask;
                 *target = val;
@@ -145,6 +155,12 @@ impl<'de> Deserialize<'de> for InstanceConfig {
             raw.fusion_min_quality_score,
             &mut config.fusion_min_quality_score,
         );
+        set_f32(
+            &mut explicit,
+            FIELD_OSD_MARGIN_TOP,
+            raw.osd_margin_top,
+            &mut config.osd_margin_top,
+        );
 
         config.explicit_fields = explicit;
         Ok(config)
@@ -159,7 +175,7 @@ impl InstanceConfig {
     /// 2. 宿主未传递该字段时：优先使用 `.env` 局部配置；
     /// 3. 若 `.env` 也未设置：维持代码硬编码默认值。
     pub fn apply_env(&mut self, env: &PackageEnv) {
-        let apply_f32 = |mask: u8, key: &str, target: &mut f32| {
+        let apply_f32 = |mask: u16, key: &str, target: &mut f32| {
             if self.explicit_fields & mask == 0 {
                 if let Some(v) = env.get_f32(key) {
                     *target = v;
@@ -207,6 +223,11 @@ impl InstanceConfig {
             "fusion_min_quality_score",
             &mut self.fusion_min_quality_score,
         );
+        apply_f32(
+            FIELD_OSD_MARGIN_TOP,
+            "osd_margin_top",
+            &mut self.osd_margin_top,
+        );
     }
 
     /// 校验来自 ABI 配置 JSON 的数值范围。
@@ -228,6 +249,9 @@ impl InstanceConfig {
             || !(0.0..=1.0).contains(&self.fusion_min_quality_score)
         {
             return Err("fusion_min_quality_score 必须位于 [0, 1]".to_string());
+        }
+        if !self.osd_margin_top.is_finite() || !(0.0..=1.0).contains(&self.osd_margin_top) {
+            return Err("osd_margin_top 必须位于 [0, 1]".to_string());
         }
         self.quality_thresholds.validate()
     }
@@ -396,6 +420,7 @@ mod tests {
             "quality_max_pitch",
             "quality_max_blur",
             "fusion_min_quality_score",
+            "osd_margin_top",
         ] {
             let prop = properties
                 .get(key)
@@ -440,6 +465,7 @@ mod tests {
             from_schema.fusion_min_quality_score,
             runtime.fusion_min_quality_score
         );
+        assert_eq!(from_schema.osd_margin_top, runtime.osd_margin_top);
     }
 
     #[test]

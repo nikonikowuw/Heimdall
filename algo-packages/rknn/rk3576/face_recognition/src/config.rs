@@ -56,6 +56,8 @@ struct RawInstanceConfig {
     quality_max_pitch: Option<f32>,
     #[serde(default)]
     quality_max_blur: Option<f32>,
+    #[serde(default)]
+    osd_margin_top: Option<f32>,
 }
 
 /// 人脸识别算法实例配置。
@@ -64,6 +66,12 @@ pub struct InstanceConfig {
     pub detection_confidence_threshold: f32,
     pub min_face_size: u32,
     pub quality_thresholds: QualityThresholds,
+
+    /// 画面顶部 OSD 水印（时间戳等）避让比例 [0.0, 1.0]。
+    ///
+    /// 人脸框顶边高于此比例（即进入画面上边缘水印区）时正常输出检测框，但跳过
+    /// 特征提取，防止被时间戳字符点阵污染人脸模板。默认为 0.0（不避让）。
+    pub osd_margin_top: f32,
 
     /// 记录宿主任务配置显式下发的参数名（用于执行三级优先级隔离）
     explicit_fields: HashSet<String>,
@@ -89,6 +97,13 @@ impl<'de> Deserialize<'de> for InstanceConfig {
             v
         } else {
             default_min_face_size()
+        };
+
+        let osd_margin_top = if let Some(v) = raw.osd_margin_top {
+            explicit_fields.insert("osd_margin_top".to_string());
+            v
+        } else {
+            0.0
         };
 
         let mut thresholds = QualityThresholds::default();
@@ -131,6 +146,7 @@ impl<'de> Deserialize<'de> for InstanceConfig {
             detection_confidence_threshold,
             min_face_size,
             quality_thresholds: thresholds,
+            osd_margin_top,
             explicit_fields,
         })
     }
@@ -142,6 +158,7 @@ impl Default for InstanceConfig {
             detection_confidence_threshold: default_detection_threshold(),
             min_face_size: default_min_face_size(),
             quality_thresholds: QualityThresholds::default(),
+            osd_margin_top: 0.0,
             explicit_fields: HashSet::new(),
         }
     }
@@ -188,6 +205,11 @@ impl InstanceConfig {
                 self.quality_thresholds.max_blur = v;
             }
         }
+        if !self.explicit_fields.contains("osd_margin_top") {
+            if let Some(v) = env.get_f32("osd_margin_top") {
+                self.osd_margin_top = v;
+            }
+        }
     }
 
     /// 校验来自 ABI 配置 JSON 的数值范围。
@@ -199,6 +221,9 @@ impl InstanceConfig {
         }
         if self.min_face_size == 0 {
             return Err("min_face_size 必须大于 0".to_string());
+        }
+        if !self.osd_margin_top.is_finite() || !(0.0..=1.0).contains(&self.osd_margin_top) {
+            return Err("osd_margin_top 必须位于 [0, 1]".to_string());
         }
         self.quality_thresholds.validate()
     }
@@ -259,6 +284,7 @@ mod tests {
         assert_eq!(config.quality_thresholds.max_yaw, 45.0);
         assert_eq!(config.quality_thresholds.max_pitch, 30.0);
         assert_eq!(config.quality_thresholds.max_blur, 0.7);
+        assert_eq!(config.osd_margin_top, 0.0);
         assert!(config.validate().is_ok());
     }
 
@@ -270,7 +296,8 @@ mod tests {
             "quality_min_score": 0.55,
             "quality_max_yaw": 30.0,
             "quality_max_pitch": 20.0,
-            "quality_max_blur": 0.6
+            "quality_max_blur": 0.6,
+            "osd_margin_top": 0.08
         }"#;
 
         let config: InstanceConfig = serde_json::from_str(json).expect("解析扁平配置应当成功");
@@ -280,6 +307,7 @@ mod tests {
         assert_eq!(config.quality_thresholds.max_yaw, 30.0);
         assert_eq!(config.quality_thresholds.max_pitch, 20.0);
         assert_eq!(config.quality_thresholds.max_blur, 0.6);
+        assert_eq!(config.osd_margin_top, 0.08);
         assert!(config.validate().is_ok());
     }
 
