@@ -20,6 +20,7 @@
 ## 生命周期
 
 - 创建/销毁成对，句柄用 RAII，检查创建失败后是否仍有部分资源需要释放。
+- C ABI 动态共享底库（如 `AvAlgoGalleryAbi`）遵循严格 RAII 封装：宿主通过 `RawAlgoGallery` 共同持有动态库强引用 `Arc<LoadedLib>` 与裸句柄 `AvAlgoGallery`，`Drop` 时自动调用 `gallery_destroy`，杜绝跨库析构内存泄漏。
 - `CString` 必须绑定具名变量覆盖 FFI 调用期；禁止临时 `CString::new(...).as_ptr()`。
 - `Send`/`Sync` 仅在 SDK 契约允许时实现；可转移不等于可并发，同一 session 绑定所属 Worker。
 - 明确借用/转移、retain/release 与回调数据有效期；不得把回调期裸指针存入异步任务。

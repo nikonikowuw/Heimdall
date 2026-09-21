@@ -45,6 +45,16 @@ fn test_c_abi_structure_sizes() {
         56,
         "AvFaceExtractOutput size mismatch"
     );
+    assert_eq!(
+        size_of::<AvFaceCandidate>(),
+        32,
+        "AvFaceCandidate size mismatch"
+    );
+    assert_eq!(
+        size_of::<AvAlgoGalleryAbi>(),
+        64,
+        "AvAlgoGalleryAbi size mismatch"
+    );
 }
 
 #[test]
@@ -83,4 +93,21 @@ fn test_c_abi_field_offsets() {
     assert_eq!(offset_of!(AvAlgoResult, json_len), 32);
     assert_eq!(offset_of!(AvAlgoResult, image_count), 36);
     assert_eq!(offset_of!(AvAlgoResult, images), 40);
+
+    // av_face_candidate 偏移
+    assert_eq!(offset_of!(AvFaceCandidate, size), 0);
+    assert_eq!(offset_of!(AvFaceCandidate, rank), 4);
+    assert_eq!(offset_of!(AvFaceCandidate, id), 8);
+    assert_eq!(offset_of!(AvFaceCandidate, similarity), 16);
+    assert_eq!(offset_of!(AvFaceCandidate, raw_score), 20);
+    assert_eq!(offset_of!(AvFaceCandidate, reserved0), 24);
+
+    // av_algo_gallery_abi 偏移
+    assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_create), 8);
+    assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_destroy), 16);
+    assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_clear), 24);
+    assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_insert), 32);
+    assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_remove), 40);
+    assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_search), 48);
+    assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_count), 56);
 }

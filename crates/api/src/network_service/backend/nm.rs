@@ -1,8 +1,10 @@
 //! NetworkManager 底层驱动适配
 //!
-//! 连接定位一律走稳定 UUID：活跃连接读 `DEVICE`，未激活连接读 `connection.interface-name`
-//! （`DEVICE` 列对未激活 profile 恒为 `--`）。外呼 nmcli 经 `run_command_with_c_locale`
-//! 强制 `LC_ALL=C.UTF-8`，避免 glib 把非 ASCII 连接名降级成占位字符。
+//! 连接定位一律走稳定 UUID。字段命名空间严格区分：`connection show` 列表模式只接受元字段
+//! （`NAME`/`UUID`/`DEVICE`…，`DEVICE` 仅对活跃连接取值），`connection.interface-name`
+//! 属于 `connection show <ID>` 的 setting.property 命名空间——混用会报 `invalid field`。
+//! 外呼 nmcli 经 `run_command_with_c_locale` 强制 `LC_ALL=C.UTF-8`，避免 glib 把非 ASCII
+//! 连接名降级成占位字符。
 
 use crate::error::ApiError;
 use crate::network_service::detector::{
@@ -18,8 +20,7 @@ use types::system::{
 
 /// 迭代 `nmcli -t` 的 `UUID:X` 输出对
 ///
-/// `X` 可能是 `DEVICE`（nmcli 只对活跃连接填充），也可能是 `connection.interface-name`
-/// （与激活状态无关）；terse 模式下未赋值的字段为空串，`--` 是 nmcli 对空值的占位。
+/// `X` 是列表模式元字段（如 `DEVICE`）；terse 模式下未赋值的字段为空串，`--` 是 nmcli 对空值的占位。
 fn parse_uuid_peer_pairs(output: &str) -> impl Iterator<Item = (&str, &str)> {
     output.lines().filter_map(|line| {
         let (uuid, peer) = line.split_once(':')?;
@@ -36,12 +37,32 @@ pub fn parse_connection_uuid_for_peer(output: &str, peer: &str) -> Option<String
         .map(|(uuid, _)| uuid.to_string())
 }
 
+/// 从 `nmcli connection show <ID>` 的 detail 输出中取 `connection.interface-name`
+///
+/// detail 模式才接受 `setting.property` 字段；列表模式只接受元字段（`NAME`/`UUID`/`DEVICE`…），
+/// 混用会报 `invalid field`。绑定网卡但未激活的 profile 的唯一可靠关联来源就是这里。
+pub fn parse_interface_name_setting(output: &str) -> Option<String> {
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix("connection.interface-name:") {
+            let value = value.trim();
+            if !value.is_empty() && value != "--" {
+                return Some(value.to_string());
+            }
+            return None;
+        }
+    }
+    None
+}
+
 /// 批量提取网卡名与连接 UUID 映射 (Device -> UUID)
 ///
-/// `active_output` 取自 `connection show --active` 的 `DEVICE` 列；`bound_output` 取自
-/// `connection show` 的 `connection.interface-name` 列——后者与激活状态无关，是未激活网卡
-/// 唯一可靠的关联来源（`DEVICE` 列对未激活 profile 恒为 `--`）。
-pub fn parse_device_conn_map(active_output: &str, bound_output: &str) -> HashMap<String, String> {
+/// `active_output` 取自 `connection show --active` 的 `DEVICE` 元字段；`bound_output` 取自
+/// `connection show <ID>` 的 `connection.interface-name` setting——后者与激活状态无关，
+/// 是未激活网卡唯一可靠的关联来源（`DEVICE` 对未激活 profile 恒为 `--`）。
+pub fn parse_device_conn_map(
+    active_output: &str,
+    bound_pairs: &[(String, String)],
+) -> HashMap<String, String> {
     let mut map = HashMap::new();
 
     // 1. 活跃连接优先
@@ -50,9 +71,8 @@ pub fn parse_device_conn_map(active_output: &str, bound_output: &str) -> HashMap
     }
 
     // 2. 未激活网卡按绑定的 profile 兜底，不覆盖已解析的活跃连接
-    for (uuid, dev) in parse_uuid_peer_pairs(bound_output) {
-        map.entry(dev.to_string())
-            .or_insert_with(|| uuid.to_string());
+    for (uuid, dev) in bound_pairs {
+        map.entry(dev.clone()).or_insert_with(|| uuid.clone());
     }
 
     map
@@ -60,8 +80,9 @@ pub fn parse_device_conn_map(active_output: &str, bound_output: &str) -> HashMap
 
 /// 批量读取网卡名与连接 UUID 映射
 ///
-/// 任一 nmcli 调用失败都向上传播：丢失映射会让调用方把所有网卡的 IPv4 误判为“无配置”，
-/// 静默降级比报错更危险。
+/// 活跃连接用列表模式取 `DEVICE`；未激活的 profile 逐个走 detail 模式取
+/// `connection.interface-name`。任一 nmcli 调用失败都向上传播：丢失映射会让调用方把
+/// 所有网卡 IPv4 误判为“无配置”，静默降级比报错更危险。
 pub async fn get_device_conn_map_nm() -> Result<HashMap<String, String>, ApiError> {
     let active_out = run_command_with_c_locale(
         "nmcli",
@@ -69,19 +90,39 @@ pub async fn get_device_conn_map_nm() -> Result<HashMap<String, String>, ApiErro
     )
     .await?;
 
-    let bound_out = run_command_with_c_locale(
-        "nmcli",
-        &[
-            "-t",
-            "-f",
-            "UUID,connection.interface-name",
-            "connection",
-            "show",
-        ],
-    )
-    .await?;
+    // 待补绑定的 profile：排除已解析出活跃网卡的 UUID，避免重复 fork
+    let active_uuids: std::collections::HashSet<String> = parse_uuid_peer_pairs(&active_out)
+        .map(|(uuid, _)| uuid.to_string())
+        .collect();
 
-    Ok(parse_device_conn_map(&active_out, &bound_out))
+    let all_uuids =
+        run_command_with_c_locale("nmcli", &["-t", "-f", "UUID", "connection", "show"]).await?;
+
+    let mut bound_pairs = Vec::new();
+    for uuid in all_uuids
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && *line != "--" && !active_uuids.contains(*line))
+    {
+        let detail = run_command_with_c_locale(
+            "nmcli",
+            &[
+                "-t",
+                "-f",
+                "connection.interface-name",
+                "connection",
+                "show",
+                uuid,
+            ],
+        )
+        .await?;
+
+        if let Some(dev) = parse_interface_name_setting(&detail) {
+            bound_pairs.push((uuid.to_string(), dev));
+        }
+    }
+
+    Ok(parse_device_conn_map(&active_out, &bound_pairs))
 }
 
 /// 枚举由 NetworkManager 管理的所有网卡
@@ -207,22 +248,10 @@ pub async fn get_active_connection_nm(iface: &str) -> Result<String, ApiError> {
     }
 
     // 3. 无活跃连接时退回该网卡绑定的已有 profile。
-    //    必须按 connection.interface-name 查找：nmcli 的 DEVICE 列只对活跃连接取值，
-    //    未激活 profile 恒为 `--`，用 DEVICE 兜底永远匹配不到。
-    let bound_conns = run_command_with_c_locale(
-        "nmcli",
-        &[
-            "-t",
-            "-f",
-            "UUID,connection.interface-name",
-            "connection",
-            "show",
-        ],
-    )
-    .await?;
-
-    if let Some(uuid) = parse_connection_uuid_for_peer(&bound_conns, iface) {
-        return Ok(uuid);
+    //    复用 get_device_conn_map_nm：它内部用 detail 模式取 connection.interface-name，
+    //    而列表模式的 DEVICE 列对未激活 profile 恒为 `--`，无法用于本判定。
+    if let Some(uuid) = get_device_conn_map_nm().await?.get(iface) {
+        return Ok(uuid.clone());
     }
 
     Err(ApiError::NetworkInterfaceNotFound(format!(
@@ -468,12 +497,51 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_interface_name_setting() {
+        // detail 模式（`connection show <ID>`）的 setting.property 输出格式
+        assert_eq!(
+            parse_interface_name_setting(
+                "connection.interface-name:eth0\nconnection.id:Profile 1\n"
+            ),
+            Some("eth0".to_string())
+        );
+        // 未绑定网卡的 profile（terse 空值）与 `--` 占位不得当作绑定
+        assert_eq!(
+            parse_interface_name_setting("connection.interface-name:\n"),
+            None
+        );
+        assert_eq!(
+            parse_interface_name_setting("connection.interface-name:--\n"),
+            None
+        );
+        // 字段缺失（异常/旧版 nmcli）不得误判
+        assert_eq!(
+            parse_interface_name_setting("connection.id:Profile 1\n"),
+            None
+        );
+        // 非 ASCII 接口名不得被截断
+        assert_eq!(
+            parse_interface_name_setting("connection.interface-name:ens 0\n"),
+            Some("ens 0".to_string())
+        );
+    }
+
+    #[test]
     fn test_parse_device_conn_map_prefers_active_then_bound() {
-        // 活跃连接：DEVICE 列
+        // 活跃连接：列表模式元字段 DEVICE
         let active = "c987627a-e455-4a12-8cb2-20c2d3a3c202:eth0\n";
-        // 全量连接：connection.interface-name 列（eth1 未激活但已绑定，末行 profile 未绑定）
-        let bound = "c987627a-e455-4a12-8cb2-20c2d3a3c202:eth0\n81222133-5786-357e-bda7-eea86655800c:eth1\naaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:\n";
-        let map = parse_device_conn_map(active, bound);
+        // 未激活 profile：detail 模式 connection.interface-name（eth1 已绑定，另一个未绑定）
+        let bound_pairs = vec![
+            (
+                "81222133-5786-357e-bda7-eea86655800c".to_string(),
+                "eth1".to_string(),
+            ),
+            (
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+                "eth0".to_string(),
+            ),
+        ];
+        let map = parse_device_conn_map(active, &bound_pairs);
         assert_eq!(
             map.get("eth0"),
             Some(&"c987627a-e455-4a12-8cb2-20c2d3a3c202".to_string())
@@ -482,14 +550,9 @@ mod tests {
             map.get("eth1"),
             Some(&"81222133-5786-357e-bda7-eea86655800c".to_string())
         );
-        assert!(!map.contains_key(""));
 
-        // 活跃连接优先：绑定列中的同网卡另一 profile 不得覆盖
-        let other_bound = "ffffffff-1111-2222-3333-444444444444:eth0\n";
-        assert_eq!(
-            parse_device_conn_map(active, other_bound).get("eth0"),
-            Some(&"c987627a-e455-4a12-8cb2-20c2d3a3c202".to_string())
-        );
+        // 活跃连接优先：绑定列表中同网卡的另一个 profile 不得覆盖
+        assert_eq!(map.len(), 2);
     }
 
     #[test]

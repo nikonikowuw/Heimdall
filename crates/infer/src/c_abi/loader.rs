@@ -533,6 +533,12 @@ impl LoadedLib {
         // SAFETY: 寻址动态库代码段导出的 av_algo_extract_face 符号
         unsafe { self._lib.get(AV_ALGO_EXTRACT_FACE_SYMBOL).ok() }
     }
+
+    /// 尝试寻址人脸底库 C ABI 虚表符号
+    pub fn get_gallery_abi_fn(&self) -> Option<Symbol<'_, AvAlgoGetGalleryAbiFn>> {
+        // SAFETY: 寻址动态库代码段导出的 av_algo_get_gallery_abi 符号
+        unsafe { self._lib.get(AV_ALGO_GET_GALLERY_ABI_SYMBOL).ok() }
+    }
 }
 
 /// 算法库元数据信息（Rust 友好版）
@@ -683,6 +689,17 @@ impl RawAlgoLibrary {
     #[inline]
     pub fn lib(&self) -> &Arc<LoadedLib> {
         &self.lib
+    }
+
+    /// 检查当前算法包是否支持底库检索 C ABI
+    pub fn has_gallery_support(&self) -> bool {
+        self.lib.get_gallery_abi_fn().is_some()
+    }
+
+    /// 创建由当前算法包托管的共享底库实例 (RAII)
+    pub fn create_gallery(self) -> Result<RawAlgoGallery, InferError> {
+        // SAFETY: self.raw 为成功初始化的有效库句柄，self 转移所有权给 RawAlgoGallery 守护生命周期
+        unsafe { RawAlgoGallery::create(self.lib.clone(), self) }
     }
 
     /// 调用底层 C ABI 进行单张人脸特征提取、对齐与质量评估
@@ -949,4 +966,227 @@ fn c_chars_to_string(bytes: &[c_char]) -> String {
         .position(|&c| c == 0)
         .unwrap_or(u8_slice.len());
     String::from_utf8_lossy(&u8_slice[..null_pos]).to_string()
+}
+
+/// C ABI 底库返回的纯计算候选人结果（仅包含数字 ID 与置信得分，无业务元数据）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RawFaceCandidate {
+    pub rank: usize,
+    pub id: u64,
+    pub similarity: f32,
+    pub raw_score: f32,
+}
+
+/// RAII 管理的算法包底库句柄
+#[derive(Debug)]
+pub struct RawAlgoGallery {
+    #[allow(dead_code)]
+    lib: Arc<LoadedLib>,
+    raw: AvAlgoGallery,
+    abi: AvAlgoGalleryAbi,
+    #[allow(dead_code)]
+    _raw_lib: RawAlgoLibrary,
+}
+
+// SAFETY: 算法包内部使用 RCU/RwLock 保证线程安全并发读写
+unsafe impl Send for RawAlgoGallery {}
+// SAFETY: 算法包内部使用 RCU/RwLock 保证多线程并发读安全
+unsafe impl Sync for RawAlgoGallery {}
+
+impl RawAlgoGallery {
+    /// 打开/创建底库
+    ///
+    /// # Safety
+    /// `raw_lib` 必须是由 `av_algo_open` 成功创建且尚未销毁的有效算法库，其所有权将由本结构体托管。
+    pub unsafe fn create(lib: Arc<LoadedLib>, raw_lib: RawAlgoLibrary) -> Result<Self, InferError> {
+        let lib_raw = raw_lib.raw;
+        let get_abi_fn = lib
+            .get_gallery_abi_fn()
+            .ok_or_else(|| InferError::SymbolLookup {
+                symbol: "av_algo_get_gallery_abi".to_string(),
+                reason: "当前算法库未导出 av_algo_get_gallery_abi 符号".to_string(),
+            })?;
+
+        // SAFETY: 请求当前主线版本号
+        let abi_ptr = unsafe { get_abi_fn(AV_ALGO_API_VERSION) };
+        if abi_ptr.is_null() {
+            return Err(InferError::InvalidAbi {
+                reason: "av_algo_get_gallery_abi 返回空指针".to_string(),
+            });
+        }
+        // SAFETY: abi_ptr 指向静态虚表实例
+        let abi = unsafe { *abi_ptr };
+        if abi.size != std::mem::size_of::<AvAlgoGalleryAbi>() as u32
+            || abi.api_version != AV_ALGO_API_VERSION
+        {
+            return Err(InferError::InvalidAbi {
+                reason: format!(
+                    "AvAlgoGalleryAbi 头部无效: size={}, api_version={}",
+                    abi.size, abi.api_version
+                ),
+            });
+        }
+
+        let create_fn = abi.gallery_create.ok_or_else(|| InferError::InvalidAbi {
+            reason: "gallery_create 函数指针为空".to_string(),
+        })?;
+
+        let mut raw: AvAlgoGallery = ptr::null_mut();
+        // SAFETY: create_fn 仅接收有效库句柄并写入局部指针变量
+        let status = unsafe { create_fn(lib_raw, &mut raw) };
+        if status != AV_OK || raw.is_null() {
+            return Err(InferError::Execution {
+                reason: format!("创建底库失败: status={status}"),
+            });
+        }
+
+        Ok(Self {
+            lib,
+            raw,
+            abi,
+            _raw_lib: raw_lib,
+        })
+    }
+
+    /// 清空底库
+    pub fn clear(&self) -> Result<(), InferError> {
+        let clear_fn = self
+            .abi
+            .gallery_clear
+            .ok_or_else(|| InferError::InvalidAbi {
+                reason: "gallery_clear 函数指针为空".to_string(),
+            })?;
+        // SAFETY: raw 由 create 成功获得并维持存活
+        let status = unsafe { clear_fn(self.raw) };
+        if status != AV_OK {
+            return Err(InferError::Execution {
+                reason: format!("清空底库失败: status={status}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// 增量插入样本 (仅按数字 ID 与特征二进制切片索引)
+    pub fn insert(&self, id: u64, feature_bytes: &[u8]) -> Result<(), InferError> {
+        let insert_fn = self
+            .abi
+            .gallery_insert
+            .ok_or_else(|| InferError::InvalidAbi {
+                reason: "gallery_insert 函数指针为空".to_string(),
+            })?;
+
+        // SAFETY: 切片在调用同步期间有效
+        let status = unsafe {
+            insert_fn(
+                self.raw,
+                id,
+                feature_bytes.as_ptr(),
+                feature_bytes.len() as u32,
+            )
+        };
+        if status != AV_OK {
+            return Err(InferError::Execution {
+                reason: format!("插入底库样本失败: status={status}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// 增量删除指定数字 ID 的样本
+    pub fn remove(&self, id: u64) -> Result<(), InferError> {
+        let remove_fn = self
+            .abi
+            .gallery_remove
+            .ok_or_else(|| InferError::InvalidAbi {
+                reason: "gallery_remove 函数指针为空".to_string(),
+            })?;
+        // SAFETY: raw 与 id 传参有效
+        let status = unsafe { remove_fn(self.raw, id) };
+        if status != AV_OK {
+            return Err(InferError::Execution {
+                reason: format!("删除底库样本失败: status={status}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// 获取底库总数
+    pub fn count(&self) -> Result<u32, InferError> {
+        let count_fn = self
+            .abi
+            .gallery_count
+            .ok_or_else(|| InferError::InvalidAbi {
+                reason: "gallery_count 函数指针为空".to_string(),
+            })?;
+        let mut out_count = 0u32;
+        // SAFETY: out_count 指向栈局部变量
+        let status = unsafe { count_fn(self.raw, &mut out_count) };
+        if status != AV_OK {
+            return Err(InferError::Execution {
+                reason: format!("查询底库数量失败: status={status}"),
+            });
+        }
+        Ok(out_count)
+    }
+
+    /// 执行 1:N 检索 (仅返回数字 ID 与置信分)
+    pub fn search(
+        &self,
+        query_feature_bytes: &[u8],
+        top_k: u32,
+        min_threshold: f32,
+    ) -> Result<Vec<RawFaceCandidate>, InferError> {
+        let search_fn = self
+            .abi
+            .gallery_search
+            .ok_or_else(|| InferError::InvalidAbi {
+                reason: "gallery_search 函数指针为空".to_string(),
+            })?;
+
+        let max_candidates = top_k.clamp(1, 256);
+        let mut c_candidates = vec![AvFaceCandidate::default(); max_candidates as usize];
+        let mut out_count = 0u32;
+
+        // SAFETY: c_candidates 预分配并传递容量
+        let status = unsafe {
+            search_fn(
+                self.raw,
+                query_feature_bytes.as_ptr(),
+                query_feature_bytes.len() as u32,
+                top_k,
+                min_threshold,
+                c_candidates.as_mut_ptr(),
+                &mut out_count,
+                max_candidates,
+            )
+        };
+        if status != AV_OK {
+            return Err(InferError::Execution {
+                reason: format!("底库检索失败: status={status}"),
+            });
+        }
+
+        let actual_count = (out_count as usize).min(max_candidates as usize);
+        let mut result = Vec::with_capacity(actual_count);
+        for c in &c_candidates[..actual_count] {
+            result.push(RawFaceCandidate {
+                rank: c.rank as usize,
+                id: c.id,
+                similarity: c.similarity,
+                raw_score: c.raw_score,
+            });
+        }
+        Ok(result)
+    }
+}
+
+impl Drop for RawAlgoGallery {
+    fn drop(&mut self) {
+        if let Some(destroy_fn) = self.abi.gallery_destroy {
+            // SAFETY: raw 由 create 成功获取且只释放一次
+            unsafe {
+                destroy_fn(self.raw);
+            }
+        }
+    }
 }

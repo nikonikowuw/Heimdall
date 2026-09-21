@@ -473,10 +473,9 @@ mod tests {
         // `similarity_threshold` 由宿主对账逻辑（capture_service）消费，
         // 它出现在本包 schema 里只是因为控制台按算法实例表单统一渲染。
         // 若算法包擅自消费，就会与宿主判定形成双重门控（包内通过、宿主不落库）。
-        let config: InstanceConfig = serde_json::from_str(
-            r#"{"similarity_threshold": 0.99, "min_face_size": 48}"#,
-        )
-        .expect("宿主配置应当可解析");
+        let config: InstanceConfig =
+            serde_json::from_str(r#"{"similarity_threshold": 0.99, "min_face_size": 48}"#)
+                .expect("宿主配置应当可解析");
         assert_eq!(config.min_face_size, 48);
         assert_eq!(config.quality_thresholds, QualityThresholds::default());
         assert_eq!(config.detection_confidence_threshold, 0.25);

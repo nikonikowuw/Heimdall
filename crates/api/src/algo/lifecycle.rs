@@ -53,6 +53,14 @@ pub async fn activate_version(state: &AppState, id: &str, version: &str) -> Resu
     let root = Path::new(&ver_model.package_root);
     if root.is_dir() {
         if let Ok(pkg) = state.algo_registry.open_and_register(root).await {
+            if aid == "face_recognition" {
+                crate::gallery_index::sync_algo_gallery_from_package(
+                    &state.gallery_index,
+                    &state.db,
+                    &pkg,
+                )
+                .await;
+            }
             let count = state.pipeline.reload_algorithm_on_pumps(&aid, pkg).await;
             tracing::info!(
                 algorithm_id = %aid,

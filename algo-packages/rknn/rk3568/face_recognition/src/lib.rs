@@ -24,11 +24,11 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use algo_sdk::cv::{compute_letterbox_layout, LetterboxLayout};
 use algo_sdk::error::AlgoError;
-use algo_sdk::export_algo;
 use algo_sdk::plugin::AlgoPlugin;
+use algo_sdk::{export_algo, export_face_gallery};
 use image::RgbImage;
 
-pub use extract::{av_algo_extract_face, fuse_tta_embeddings};
+pub use extract::{av_algo_extract_face, fuse_spherical_average_embeddings, fuse_tta_embeddings};
 use manifest::LoadedPackage;
 use plugin::FaceRecognizer;
 pub use worker::{InferenceWorker, WorkerQueueStats, WorkerSessions};
@@ -121,6 +121,8 @@ export_algo!(
     library_open_hook: algo_sdk::macros::noop_library_open,
     library_close_hook: crate::close_shared_models
 );
+
+export_face_gallery!();
 
 /// 计算两个 512D 特征向量之间的余弦相似度。
 #[inline]

@@ -380,6 +380,14 @@ pub async fn handle_package_upload(
             version = %pkg.manifest().version,
             "算法包上传成功并已即时热装载"
         );
+        if validated_manifest.algorithm_id == "face_recognition" {
+            crate::gallery_index::sync_algo_gallery_from_package(
+                &state.gallery_index,
+                &state.db,
+                &pkg,
+            )
+            .await;
+        }
         state
             .pipeline
             .reload_algorithm_on_pumps(&validated_manifest.algorithm_id, pkg)

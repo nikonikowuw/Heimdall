@@ -398,13 +398,14 @@ impl PersonnelService {
             };
             let saved_face = GalleryFaceRepo::insert(&txn, active_face).await?;
 
-            registered_faces_for_index.push(RegisteredFace {
-                subject_id: subject_id.clone(),
-                subject_name: name.clone(),
-                face_id: meta.face_id,
-                photo_rel_path: meta.photo_rel_path,
-                vector: meta.vector,
-            });
+            registered_faces_for_index.push(RegisteredFace::from_512_with_id(
+                saved_face.id as u64,
+                subject_id.clone(),
+                name.clone(),
+                meta.face_id,
+                meta.photo_rel_path,
+                meta.vector,
+            ));
             face_dtos.push(GalleryFaceDto::from(saved_face));
         }
 
@@ -563,15 +564,16 @@ impl PersonnelService {
                 is_primary: Set(0),
                 created_at: Set(now),
             };
-            GalleryFaceRepo::insert(&txn, active_face).await?;
+            let saved_face = GalleryFaceRepo::insert(&txn, active_face).await?;
 
-            new_registered_faces.push(RegisteredFace {
-                subject_id: subject_id.to_string(),
-                subject_name: person.name.clone(),
-                face_id: meta.face_id,
-                photo_rel_path: meta.photo_rel_path,
-                vector: meta.vector,
-            });
+            new_registered_faces.push(RegisteredFace::from_512_with_id(
+                saved_face.id as u64,
+                subject_id.to_string(),
+                person.name.clone(),
+                meta.face_id,
+                meta.photo_rel_path,
+                meta.vector,
+            ));
         }
 
         txn.commit().await.map_err(ApiError::from)?;

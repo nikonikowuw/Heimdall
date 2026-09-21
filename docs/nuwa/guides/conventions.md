@@ -45,7 +45,9 @@
 
 - 解析外部命令输出时强制 `LC_ALL=C.UTF-8` + `LANG=C.UTF-8`，统一经模块内的 `run_command_with_c_locale` helper 注入，不在调用点各写一套。
 - 仅 `LC_ALL=C` 不足够：`C` 语言环境会把非 ASCII 名称降级成占位字符（glib 的 `g_print` 走 locale 转换）；`C.UTF-8` 自 glibc 2.35 起内建，旧 BSP 缺失时 glibc 只往 stderr 打 warning 并回退到 `C`，修复会静默失效（板端以 `locale -a | grep -i 'c\.utf'` 确认）。
-- 解析一律取机器可读列（UUID、`ipv4.*`、`connection.interface-name`），不依赖人类可读文本、本地化连接名或 `DEVICE` 等与激活状态绑定的列。
+- 解析一律取机器可读列（UUID、`ipv4.*`、`connection.interface-name`），不依赖人类可读文本、本地化连接名或 `DEVICE` 等与激活状态绑定的列。注意：这些 `setting.property` 只能用于 detail 模式，见下条。
+- **nmcli 字段命名空间严格分离**：`nmcli connection show` 列表模式只接受元字段（`NAME`/`UUID`/`DEVICE`/`ACTIVE`…），而 `connection.interface-name`、`ipv4.method` 等 `setting.property` 只在 `nmcli connection show <ID>`（detail 模式，带 ID 实参）下有效。混用直接报 `invalid field 'connection.interface-name'; allowed fields: NAME,UUID,TYPE,...`（RK3568 板端实证）。
+- 另一个坑：`DEVICE` 元字段**仅对活跃连接**取值，未激活 profile 恒为 `--`。查“网卡绑定了哪个 profile”必须走 detail 模式的 `connection.interface-name`，不能用列表模式的 `DEVICE` 兜底。
 
 ## 防御性错误处理
 

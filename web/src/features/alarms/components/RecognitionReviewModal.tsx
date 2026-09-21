@@ -21,7 +21,6 @@ import type { FaceCandidateItem, RecognitionRecord } from '@/types'
 import {
   formatCosineSimilarityPercent,
   getCosineSimilarityLevel,
-  normalizeCosineSimilarity,
 } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
@@ -390,7 +389,7 @@ export function RecognitionReviewModal({
                     const candLevel = getCosineSimilarityLevel(cand.similarity)
                     const simRatio = Math.max(
                       0,
-                      Math.min(100, normalizeCosineSimilarity(cand.similarity ?? 0) * 100),
+                      Math.min(100, (cand.similarity ?? 0) * 100),
                     )
 
                     return (

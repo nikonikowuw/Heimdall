@@ -102,6 +102,28 @@ describe('alarms utils', () => {
         },
       })
     })
+
+    it('parses face-only format without body (backend pseudo-body stripped)', () => {
+      const json = JSON.stringify({
+        face: {
+          bbox: { x1: 0.3, y1: 0.2, x2: 0.5, y2: 0.45 },
+          confidence: 0.98,
+          qualityScore: 0.85,
+          pseudoBody: true,
+        },
+      })
+      const res = parseTargetBBoxes(json)
+      expect(res).toEqual({
+        body: undefined,
+        face: {
+          bbox: { x1: 0.3, y1: 0.2, x2: 0.5, y2: 0.45 },
+          confidence: 0.98,
+          qualityScore: 0.85,
+        },
+      })
+      // 验证向后兼容 parseBBoxCoords 能够获取到人脸坐标作为兜底主体坐标
+      expect(parseBBoxCoords(json)).toEqual({ x1: 0.3, y1: 0.2, x2: 0.5, y2: 0.45 })
+    })
   })
 
   describe('formatFaceBBoxLabel', () => {

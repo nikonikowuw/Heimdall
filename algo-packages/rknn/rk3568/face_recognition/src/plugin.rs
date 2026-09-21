@@ -304,7 +304,7 @@ fn encode_fusion_sidecar(
     let fused_count = u32::try_from(update.fused_count).map_err(|_| AlgoError::Inference {
         reason: format!("融合帧计数超出 sidecar 范围: {}", update.fused_count),
     })?;
-    let embedding = if update.template_changed {
+    let embedding = if update.template_changed || update.template_mature {
         Some(crate::postprocess::encode_embedding(
             update.template.as_slice(),
         )?)

@@ -1,10 +1,53 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-/// 后端内存中的 512 维归一化人脸特征。
+/// 后端内存中的不透明归一化人脸特征二进制字节。
 ///
 /// 该类型只允许在推理、管线和 API 后台之间转移；所有面向前端的 DTO
 /// 都通过 `serde(skip)` 排除它，避免隐私数据进入 WebSocket/HTTP JSON。
-pub type FaceEmbedding = Box<[f32; 512]>;
+pub type FaceEmbedding = Arc<[u8]>;
+
+/// 将小端字节切片反序列化为 f32 浮点切片。
+pub fn bytes_to_floats(bytes: &[u8]) -> Option<Vec<f32>> {
+    if !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut floats = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        floats.push(f32::from_le_bytes(
+            chunk.try_into().expect("4-byte chunk conversion"),
+        ));
+    }
+    Some(floats)
+}
+
+/// 旷视同款人脸识别置信度分段线性标定函数
+///
+/// 锚点映射：
+/// - 0.00 -> 0.50 (512 维正交空间无偏基准)
+/// - 0.10 -> 0.55 (底库负样本基线噪底)
+/// - 0.40 -> 0.68 (疑似待复核门限)
+/// - 0.48 -> 0.78 (高置信确认放行门限)
+/// - 0.58 -> 0.884 (近景高质量时域融合命中)
+/// - 1.00 -> 1.00 (理论满分)
+pub fn megvii_calibrate_cosine(raw_cos: f32) -> f32 {
+    if !raw_cos.is_finite() || raw_cos <= -1.0 {
+        return 0.0;
+    }
+    if raw_cos < 0.10 {
+        (0.50 + raw_cos * 0.50).clamp(0.0, 1.0)
+    } else if raw_cos < 0.40 {
+        (0.55 + (raw_cos - 0.10) * (13.0 / 30.0)).clamp(0.0, 1.0)
+    } else if raw_cos < 0.48 {
+        (0.68 + (raw_cos - 0.40) * 1.25).clamp(0.0, 1.0)
+    } else if raw_cos < 0.58 {
+        (0.78 + (raw_cos - 0.48) * 1.04).clamp(0.0, 1.0)
+    } else if raw_cos >= 1.0 {
+        1.0
+    } else {
+        (0.884 + (raw_cos - 0.58) * (29.0 / 105.0)).clamp(0.0, 1.0)
+    }
+}
 
 /// 归一化矩形边界框 [0.0, 1.0]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -348,9 +391,9 @@ mod tests {
                 template_quality: Some(0.78),
                 template_mature: Some(true),
                 pseudo_body: None,
-                embedding: Some(Box::new([0.25; 512])),
+                embedding: Some(std::sync::Arc::from(vec![0u8; 2048].into_boxed_slice())),
             }),
-            embedding: Some(Box::new([0.25; 512])),
+            embedding: Some(std::sync::Arc::from(vec![0u8; 2048].into_boxed_slice())),
             trajectory: vec![(0.2, 0.6)],
         };
 
@@ -514,5 +557,29 @@ mod tests {
         obj.bbox = BoundingBox::new(0.6, 0.7, 0.4, 0.2);
         assert_eq!(obj.bbox.area(), 0.0);
         assert_eq!(obj.evidence_quality_score(), 0.0);
+    }
+
+    #[test]
+    fn test_megvii_calibrate_cosine() {
+        assert_eq!(megvii_calibrate_cosine(0.0), 0.50);
+        assert_eq!(megvii_calibrate_cosine(0.10), 0.55);
+        assert_eq!(megvii_calibrate_cosine(0.40), 0.68);
+        assert_eq!(megvii_calibrate_cosine(0.48), 0.78);
+        assert!((megvii_calibrate_cosine(0.58) - 0.884).abs() < 1e-4);
+        assert_eq!(megvii_calibrate_cosine(1.00), 1.00);
+
+        assert_eq!(megvii_calibrate_cosine(-1.5), 0.0);
+        assert_eq!(megvii_calibrate_cosine(f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn test_bytes_to_floats() {
+        let floats = vec![1.0f32, -2.5f32, 3.5f32];
+        let mut bytes = Vec::new();
+        for f in &floats {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+        assert_eq!(bytes_to_floats(&bytes), Some(floats));
+        assert_eq!(bytes_to_floats(&[1, 2, 3]), None);
     }
 }

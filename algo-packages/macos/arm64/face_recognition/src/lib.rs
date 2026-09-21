@@ -16,8 +16,8 @@ use std::ffi::c_int;
 
 use algo_sdk::c_abi::{AvAlgoLibrary, AvFaceExtractInput, AvFaceExtractOutput};
 use algo_sdk::error::AlgoError;
-use algo_sdk::export_algo;
 use algo_sdk::plugin::AlgoPlugin;
+use algo_sdk::{export_algo, export_face_gallery};
 use plugin::FaceRecognizer;
 
 #[cfg(not(target_os = "macos"))]
@@ -49,6 +49,8 @@ export_algo!(
     library_open_hook: crate::open_shared_models,
     library_close_hook: crate::close_shared_models
 );
+
+export_face_gallery!();
 
 #[cfg(target_os = "macos")]
 static SHARED_MODELS: OnceLock<Mutex<Option<Arc<CoreMlFaceModels>>>> = OnceLock::new();

@@ -856,21 +856,22 @@ async fn test_face_recognition_below_threshold_does_not_persist_invalid_recognit
         // 设第 0 维和第 i 维，产生可控的点积分数
         vec[0] = 0.50 - (i as f32) * 0.05; // 0.45, 0.40, 0.35, 0.30, 0.25
         vec[i] = (1.0 - vec[0] * vec[0]).sqrt(); // 保持单位模长
-        faces.push(api::RegisteredFace {
-            subject_id: format!("sub_mock_{i}"),
-            subject_name: format!("Mock Person {i}"),
-            face_id: format!("face_mock_{i}"),
-            photo_rel_path: format!("galleries/sub_mock_{i}/photo.jpg"),
-            vector: vec,
-        });
+        faces.push(api::RegisteredFace::from_512(
+            format!("sub_mock_{i}"),
+            format!("Mock Person {i}"),
+            format!("face_mock_{i}"),
+            format!("galleries/sub_mock_{i}/photo.jpg"),
+            vec,
+        ));
     }
     state.gallery_index.upsert_faces(faces).await;
     assert_eq!(state.gallery_index.count().await, 5);
 
     // 2. 构造查询向量: 单位向量 [1.0, 0.0, 0.0, ...]
     // 与候选人的余弦相似度正好等于候选人 vec[0] (0.45, 0.40, 0.35, 0.30, 0.25)，全部低于确认阈值 0.75
-    let mut query_embedding = Box::new([0.0f32; 512]);
-    query_embedding[0] = 1.0;
+    let mut query_vec = [0.0f32; 512];
+    query_vec[0] = 1.0;
+    let query_embedding = std::sync::Arc::from(api::embedding_to_le_bytes(&query_vec));
 
     let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
     let _capture_worker = capture_svc.clone().start_worker();
@@ -958,32 +959,33 @@ async fn test_face_recognition_above_threshold_persists_unconditional_top5_confi
     let mut vec1 = [0.0f32; 512];
     vec1[0] = 0.85;
     vec1[1] = (1.0 - 0.85 * 0.85f32).sqrt();
-    faces.push(api::RegisteredFace {
-        subject_id: "sub_mock_1".to_string(),
-        subject_name: "Mock Person 1".to_string(),
-        face_id: "face_mock_1".to_string(),
-        photo_rel_path: "galleries/sub_mock_1/photo.jpg".to_string(),
-        vector: vec1,
-    });
+    faces.push(api::RegisteredFace::from_512(
+        "sub_mock_1".to_string(),
+        "Mock Person 1".to_string(),
+        "face_mock_1".to_string(),
+        "galleries/sub_mock_1/photo.jpg".to_string(),
+        vec1,
+    ));
 
     for i in 2..=5 {
         let mut vec = [0.0f32; 512];
         vec[0] = 0.50 - (i as f32) * 0.05; // 0.40, 0.35, 0.30, 0.25
         vec[i] = (1.0 - vec[0] * vec[0]).sqrt();
-        faces.push(api::RegisteredFace {
-            subject_id: format!("sub_mock_{i}"),
-            subject_name: format!("Mock Person {i}"),
-            face_id: format!("face_mock_{i}"),
-            photo_rel_path: format!("galleries/sub_mock_{i}/photo.jpg"),
-            vector: vec,
-        });
+        faces.push(api::RegisteredFace::from_512(
+            format!("sub_mock_{i}"),
+            format!("Mock Person {i}"),
+            format!("face_mock_{i}"),
+            format!("galleries/sub_mock_{i}/photo.jpg"),
+            vec,
+        ));
     }
     state.gallery_index.upsert_faces(faces).await;
     assert_eq!(state.gallery_index.count().await, 5);
 
     // 2. 构造查询向量: 单位向量 [1.0, 0.0, 0.0, ...]，与 sub_mock_1 相似度为 0.85
-    let mut query_embedding = Box::new([0.0f32; 512]);
-    query_embedding[0] = 1.0;
+    let mut query_vec = [0.0f32; 512];
+    query_vec[0] = 1.0;
+    let query_embedding = std::sync::Arc::from(api::embedding_to_le_bytes(&query_vec));
 
     let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
     let _capture_worker = capture_svc.clone().start_worker();
@@ -1044,7 +1046,8 @@ async fn test_face_recognition_above_threshold_persists_unconditional_top5_confi
     let rec = &recognitions[0];
     assert_eq!(rec.status, "confirmed", "达标人脸应直接判定为 confirmed");
     assert_eq!(rec.subject_id, "sub_mock_1");
-    assert!((rec.similarity - 0.85).abs() < 1e-4);
+    let expected_calibrated = api::gallery_index::megvii_calibrate_cosine(0.85);
+    assert!((rec.similarity - expected_calibrated).abs() < 1e-4);
 
     // 6. 核心断言：必须保存无条件的完整 Top-5 候选人 (哪怕第 2~5 位分数低)
     let candidates_json = rec
@@ -1055,10 +1058,12 @@ async fn test_face_recognition_above_threshold_persists_unconditional_top5_confi
     assert_eq!(cands.len(), 5, "topk5 必须是无条件的完整 top5");
     assert_eq!(cands[0].rank, 1);
     assert_eq!(cands[0].subject_id, "sub_mock_1");
-    assert!((cands[0].similarity - 0.85).abs() < 1e-4);
+    let exp_c0 = api::gallery_index::megvii_calibrate_cosine(0.85);
+    assert!((cands[0].similarity - exp_c0).abs() < 1e-4);
     assert_eq!(cands[4].rank, 5);
     assert_eq!(cands[4].subject_id, "sub_mock_5");
-    assert!((cands[4].similarity - 0.25).abs() < 1e-4);
+    let exp_c4 = api::gallery_index::megvii_calibrate_cosine(0.25);
+    assert!((cands[4].similarity - exp_c4).abs() < 1e-4);
 
     // 7. 验证 WebSocket 成功广播 TOPIC_RECOGNITION_MATCHED 事件且包含完整的 5 个候选人
     let mut found_ws_match = false;
@@ -1095,26 +1100,27 @@ async fn test_face_recognition_tight_margin_persists_pending_review() {
     state
         .gallery_index
         .upsert_faces(vec![
-            api::RegisteredFace {
-                subject_id: "sub_mock_1".to_string(),
-                subject_name: "Mock Person 1".to_string(),
-                face_id: "face_mock_1".to_string(),
-                photo_rel_path: "galleries/sub_mock_1/photo.jpg".to_string(),
-                vector: vec1,
-            },
-            api::RegisteredFace {
-                subject_id: "sub_mock_2".to_string(),
-                subject_name: "Mock Person 2".to_string(),
-                face_id: "face_mock_2".to_string(),
-                photo_rel_path: "galleries/sub_mock_2/photo.jpg".to_string(),
-                vector: vec2,
-            },
+            api::RegisteredFace::from_512(
+                "sub_mock_1".to_string(),
+                "Mock Person 1".to_string(),
+                "face_mock_1".to_string(),
+                "galleries/sub_mock_1/photo.jpg".to_string(),
+                vec1,
+            ),
+            api::RegisteredFace::from_512(
+                "sub_mock_2".to_string(),
+                "Mock Person 2".to_string(),
+                "face_mock_2".to_string(),
+                "galleries/sub_mock_2/photo.jpg".to_string(),
+                vec2,
+            ),
         ])
         .await;
 
     // 2. 构造查询向量
-    let mut query_embedding = Box::new([0.0f32; 512]);
-    query_embedding[0] = 1.0;
+    let mut query_vec = [0.0f32; 512];
+    query_vec[0] = 1.0;
+    let query_embedding = std::sync::Arc::from(api::embedding_to_le_bytes(&query_vec));
 
     let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
     let _capture_worker = capture_svc.clone().start_worker();

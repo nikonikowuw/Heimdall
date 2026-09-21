@@ -24,7 +24,10 @@ pub use alarm_service::AlarmDispatchService;
 pub use camera_probe::CameraProbeService;
 pub use capture_service::CaptureDispatchService;
 pub use error::ApiError;
-pub use gallery_index::{FaceFeatureIndex, RegisteredFace};
+pub use gallery_index::{
+    embedding_to_le_bytes, le_bytes_to_embedding, sync_algo_gallery_from_package, FaceFeatureIndex,
+    RegisteredFace,
+};
 pub use network_service::NetworkService;
 pub use personnel_reextract::PersonnelReextractManager;
 pub use personnel_service::PersonnelService;

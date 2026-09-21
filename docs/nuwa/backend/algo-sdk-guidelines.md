@@ -132,6 +132,41 @@ unsafe extern "C" fn(
 - 权责边界：本接口专门服务于人员管理与底库录入（`PersonnelService`）及全景图特征重提取，严禁作为视频流实时抓拍对账的逆向降级路径。视频流实时分析由包内全景检测、映射裁剪与时域特征融合独立闭环。
 - 当前实现：[macOS](../../../algo-packages/macos/arm64/face_recognition/src/lib.rs)、[RK3576](../../../algo-packages/rknn/rk3576/face_recognition/src/lib.rs)。
 
+## 共享人脸底库 C ABI (`AvAlgoGalleryAbi`)
+
+`av_algo_get_gallery_abi` 是独立可选虚表符号，不扩展 `AvAlgoAbi` 基础虚表。宿主通过 `libloading` 动态探测，支持该能力的算法包导出该符号；缺失时宿主回退至内存兜底。
+
+```rust
+unsafe extern "C" fn(api_version: u32) -> *const AvAlgoGalleryAbi;
+```
+
+### 虚表与数据契约
+
+- ABI 版本为 `AV_ALGO_API_VERSION = 1`，64 位 `AvAlgoGalleryAbi` 大小为 **64 字节、8 字节对齐**。
+- 虚表包含 `gallery_create`、`gallery_destroy`、`gallery_clear`、`gallery_insert`、`gallery_remove`、`gallery_search`、`gallery_count` 函数指针。
+- 检索候选人 `AvFaceCandidate` 为 **32 字节、8 字节对齐** 的固定布局 POD 结构体（已彻底剥离业务元数据，仅承载纯向量计算输出）：
+  - `id` (`u64`) 为样本的全局唯一数字 ID（由宿主生成或对应 SQLite 主键）；
+  - `similarity` (`f32`) 为算法包**内部直接标定完成的标准置信分**（`[0.0, 1.0]`），严禁宿主与前端二次标定；
+  - `raw_score` (`f32`) 为算法底层原始度量分（如原生余弦相似度）；
+  - `rank` (`u32`) 为 Top-K 排序名次（从 1 开始）；
+  - `reserved0` (`u64`) 为对齐与未来扩展保留字段。
+  - 人员姓名、照片路径等业务元数据全部保留在宿主（`RegisteredFace` / SQLite）侧，通过 `id` 在检索后由宿主做人员聚合与去重，彻底消除 FFI 边界的业务双写一致性负担。
+
+### 并发与内存模型（Wait-Free RCU）
+
+- 算法包内部使用 `FaceGallery` 容器，通过 RCU（Read-Copy-Update）与 `Arc<GallerySnapshot>` 维护底库快照。
+- **读写完全解耦**：写操作（`insert` / `remove` / `clear`）获取排他写锁，生成新快照并原子替换指针；检索操作（`search`）仅在入口获取瞬间读锁克隆快照的 `Arc` 指针即刻释放读锁，后续点积矩阵计算与 Top-K 堆排序在只读快照上执行，实现**多路摄像头 Worker 线程并发检索完全无锁竞争（Wait-Free）**。
+- **内存占用极致轻量**：10,000 张 512D FP32 人脸底库仅占用约 21 MB 内存，多实例完全共享同一底层物理句柄。
+- **宿主单一真实信源（Single Source of Truth）**：持久化数据以宿主 SQLite 为唯一准绳，算法包底库仅作为运行期纯内存加速索引；宿主启动或算法包热重载时通过 C ABI 执行全量同步（`clear` + 批量 `insert`），毫秒级重建完成。
+
+### 导出宏
+
+算法包通过 `export_face_gallery!` 宏一键导出该虚表，内置 panic unwind 隔离防崩溃保护：
+
+```rust
+algo_sdk::export_face_gallery!(FaceRecognizer);
+```
+
 ## 硬件预处理与会话
 
 宿主向算法实例提供解码后的原生 `FrameRef`/`AvFrameDesc`，不为所有算法强制设定统一模型输入尺寸。当前默认由算法包自行选择预处理尺寸、裁切、色彩格式和归一化方式；若后续启用宿主预处理，算法包必须先通过 `instance_negotiate` 声明可接受的帧能力，宿主再按实例约束执行，不能用单一目标尺寸覆盖所有模型。

@@ -1089,7 +1089,7 @@ mod tests {
     #[test]
     fn test_embedding_sidecar_follows_track() {
         let mut tracker = ByteTrack::new();
-        let embedding = Box::new([0.125; 512]);
+        let embedding: FaceEmbedding = std::sync::Arc::from(vec![1u8; 16]);
         let detection = Detection {
             class_id: 0,
             label: "face".to_string(),
@@ -1185,7 +1185,7 @@ mod tests {
                 template_quality: Some(0.83),
                 template_mature: None,
                 pseudo_body: None,
-                embedding: Some(Box::new([0.25; 512])),
+                embedding: Some(std::sync::Arc::from(vec![2u8; 16])),
             }),
         };
         let third = tracker.update_with_embeddings(vec![reseed_frame], vec![None]);
@@ -1216,7 +1216,7 @@ mod tests {
         let fourth_face = fourth[0].face.as_ref().expect("人脸详情必须保留");
         assert_eq!(fourth_face.fused_count, Some(6), "必须沿用最新模板的帧数");
         assert_eq!(fourth_face.template_quality, Some(0.83));
-        let expected: FaceEmbedding = Box::new([0.25_f32; 512]);
+        let expected: FaceEmbedding = std::sync::Arc::from(vec![2u8; 16]);
         assert_eq!(fourth_face.embedding.as_deref(), Some(expected.as_ref()));
     }
 

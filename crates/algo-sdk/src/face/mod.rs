@@ -6,12 +6,17 @@
 //! 不在此通用无状态算子层中维护。
 
 pub mod align;
+pub mod gallery;
 pub mod quality;
 
 pub use align::{
     align_face, align_face_pixels, aligned_source_bounds, apply_affine,
     enhance_face_details_inplace, estimate_affine, estimate_similarity_checked, inverse_coeffs,
     normalize_illumination_inplace, AffineMatrix2D, ALIGNED_SIZE, ARC_FACE_TEMPLATE,
+};
+pub use gallery::{
+    bytes_to_floats, floats_to_bytes, megvii_calibrate_cosine, CandidateItem, FaceGallery,
+    GalleryFace,
 };
 pub use quality::{
     compute_quality, estimate_pitch, estimate_yaw, is_landmark_geometry_plausible, FaceQuality,

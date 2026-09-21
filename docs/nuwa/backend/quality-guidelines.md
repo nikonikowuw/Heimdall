@@ -37,7 +37,7 @@
 | macOS CPU    | `host_processor_info(PROCESSOR_CPU_LOAD_INFO = 2)`，不能用 flavor 1；两次采样 delta，结果限制 `0..=100`                       |
 | macOS uptime | `kern.boottime` 使用完整 `libc::timeval`（64 位为 16 字节）；`uptimeSeconds` 是持续秒数，不是当前 Unix 时间戳                 |
 | macOS 网络   | 只读，`canModifyIp/canSetDhcp = false`；`ifconfig -a` 至少含 `lo0`，`networksetup` 补充信息，外部命令隔离到阻塞任务           |
-| Linux 网络   | NetworkManager 连接一律按 UUID 定位：活跃连接读 `DEVICE`，未激活连接读 `connection.interface-name`（`DEVICE` 列对未激活 profile 恒为 `--`）；`connection show` 失败必须上抛，不得吞成空映射 |
+| Linux 网络   | NetworkManager 连接一律按 UUID 定位。nmcli 字段命名空间不可混用：列表模式（`connection show`）只接受 `NAME`/`UUID`/`DEVICE` 等元字段，`connection.interface-name` 与 `ipv4.*` 属 detail 模式（`connection show <ID>`）的 `setting.property`，混用报 `invalid field`。`DEVICE` 仅对活跃连接取值（未激活恒为 `--`），查 profile 绑定必须走 detail 模式；`connection show` 失败必须上抛，不得吞成空映射 |
 
 实现位置：[AppState](../../../crates/api/src/state.rs)、[system_info.rs](../../../crates/api/src/system_info.rs)、[network_service/macos.rs](../../../crates/api/src/network_service/macos.rs)。
 这些既有路径不改变仓库的平台边界要求，新增功能不得继续向 Handler 扩散平台逻辑。

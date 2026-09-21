@@ -36,6 +36,12 @@ pub const SETTLE_WINDOW_MS: i64 = 1500;
 /// 成像），无脸轨道是归一化面积（0.5 相当于占半幅画面，罕见），因此无脸轨道通常不走平台期
 /// 早结算，而是由窗口到期（[`SETTLE_WINDOW_MS`]）与离场结算产出记录。
 pub const SETTLE_MIN_QUALITY: f32 = 0.50;
+/// 人脸识别轨道高清平台期早结算门限（姿态正、清晰度高的人脸达到该分值即可提前结算）。
+pub const FACE_SETTLE_MIN_QUALITY: f32 = 0.70;
+/// 突破性峰值重入门限：去重冷却期内，若新帧达到高清标准且相比已结算质量提升该幅度，允许穿透冷却重新抓拍。
+pub const BREAKTHROUGH_QUALITY_DELTA: f32 = 0.05;
+/// 突破性峰值绝对质量下限。
+pub const BREAKTHROUGH_MIN_QUALITY: f32 = 0.72;
 /// 峰值刷新门限：新帧质量需超过当前峰值该幅度才刷新。
 pub const PEAK_DELTA: f32 = 0.05;
 /// 候选留存节流（毫秒）：同一轨道两次编码留存的最小间隔。
@@ -221,6 +227,10 @@ struct PendingCapture {
 struct TrackEntry {
     pending: Option<PendingCapture>,
     settled_at_ms: Option<i64>,
+    /// 最近一次结算时的峰值质量，用于判定去重期内的突破性峰值（突破冷却重入）。
+    settled_quality: f32,
+    /// 最近一次结算时的融合帧计数，若结算时仅融合了 <=1 帧，后续达到成熟模板或多帧融合时允许突破冷却。
+    settled_fused_count: u32,
     last_seen: Option<TrackedObject>,
     last_seen_pts_ms: i64,
     /// 最近一次实际触发的帧时标；用于离场宽限判定。
@@ -324,7 +334,20 @@ impl CaptureSettleController {
                     now_ms - settled < dedup_window_ms(config.cooldown_ms, entry.records_written)
                 });
                 if in_dedup_window {
-                    continue;
+                    let quality = frame_quality(obj);
+                    let is_face = obj.face.is_some() || obj.label.eq_ignore_ascii_case("face");
+                    let is_quality_breakthrough = is_face
+                        && quality >= BREAKTHROUGH_MIN_QUALITY
+                        && quality >= entry.settled_quality + BREAKTHROUGH_QUALITY_DELTA;
+                    let is_template_maturity_breakthrough = is_face
+                        && entry.settled_fused_count <= 1
+                        && obj.face.as_ref().is_some_and(|face| {
+                            face.template_mature == Some(true)
+                                || face.fused_count.is_some_and(|count| count >= 2)
+                        });
+                    if !is_quality_breakthrough && !is_template_maturity_breakthrough {
+                        continue;
+                    }
                 }
             }
             seen.push(obj.track_id);
@@ -343,7 +366,30 @@ impl CaptureSettleController {
             };
 
             // 唯一无法避免的每触发帧克隆：结算发生在未来某帧，届时必须能拿到事件载体。
-            entry.last_seen = Some(obj.clone());
+            // 若当前帧没有 embedding，但本轨道此前已生成过识别特征，必须继承最新特征与模板元数据，
+            // 避免后续未发生融合更新的普通帧冲刷掉 embedding，导致结算时丢失识别特征而跳过 1:N 对账。
+            let mut stored_object = obj.clone();
+            if stored_object.embedding().is_none() {
+                if let Some(prev) = entry.last_seen.as_ref() {
+                    if let Some(prev_face) = prev.face.as_ref() {
+                        if prev_face.embedding.is_some() {
+                            if let Some(face) = stored_object.face.as_mut() {
+                                face.embedding = prev_face.embedding.clone();
+                                face.fused_count = face.fused_count.or(prev_face.fused_count);
+                                face.template_quality =
+                                    face.template_quality.or(prev_face.template_quality);
+                                face.template_mature =
+                                    face.template_mature.or(prev_face.template_mature);
+                            } else {
+                                stored_object.face = Some(prev_face.clone());
+                            }
+                        }
+                    } else if prev.embedding.is_some() {
+                        stored_object.embedding = prev.embedding.clone();
+                    }
+                }
+            }
+            entry.last_seen = Some(stored_object);
             entry.last_trigger_pts_ms = now_ms;
 
             match entry.pending.as_mut() {
@@ -352,6 +398,9 @@ impl CaptureSettleController {
                     // 等价旧「首帧抓拍」语义（冷却仍然生效）。
                     if config.settle_window_ms <= 0 {
                         entry.settled_at_ms = Some(now_ms);
+                        entry.settled_quality = quality;
+                        entry.settled_fused_count =
+                            obj.face.as_ref().and_then(|f| f.fused_count).unwrap_or(0);
                         // 退化模式同样计入已落库条数：否则退避窗口与生命周期上限会双双失效。
                         entry.records_written = entry.records_written.saturating_add(1);
                         if let Some(tracked_object) = entry.last_seen.take() {
@@ -412,10 +461,17 @@ impl CaptureSettleController {
                         }
                     }
 
+                    let is_face = obj.face.is_some() || obj.label.eq_ignore_ascii_case("face");
+                    let min_plateau_quality = if is_face {
+                        FACE_SETTLE_MIN_QUALITY
+                    } else {
+                        config.settle_min_quality
+                    };
+
                     let settle_reason = if template_mature {
                         Some(SettleReason::TemplateMature)
                     } else if now_ms - pending.last_improve_pts_ms >= config.plateau_ms
-                        && pending.best.quality >= config.settle_min_quality
+                        && pending.best.quality >= min_plateau_quality
                     {
                         Some(SettleReason::QualityPlateau)
                     } else if now_ms - pending.first_pts_ms >= config.settle_window_ms {
@@ -585,6 +641,12 @@ fn settle_pending(
     let pending = entry.pending.take();
     entry.settled_at_ms = Some(now_ms);
     let pending = pending?;
+    entry.settled_quality = pending.best.quality;
+    entry.settled_fused_count = last_seen
+        .face
+        .as_ref()
+        .and_then(|f| f.fused_count)
+        .unwrap_or(0);
     // 只统计真正产出的结算：退避窗口与生命周期上限都消费这个计数。
     entry.records_written = entry.records_written.saturating_add(1);
     Some(SettleRequest {
@@ -1169,5 +1231,117 @@ mod tests {
         controller.clear_algorithm("algo_a");
         assert_eq!(controller.pending_count(), 0);
         assert_eq!(controller.pending_bytes(), 0, "清算法必须同步释放内存候选");
+    }
+
+    #[test]
+    fn subsequent_non_embedding_frames_inherit_latest_embedding() {
+        let mut controller = CaptureSettleController::new();
+        let rules = empty_rules();
+
+        // 帧 1：产生人脸特征向量与融合元数据
+        let mut f1 = face_object(10, 0.85);
+        if let Some(face) = f1.face.as_mut() {
+            face.embedding = Some(std::sync::Arc::from(vec![1u8; 16]));
+            face.fused_count = Some(2);
+            face.template_quality = Some(0.85);
+        }
+
+        let actions = controller.observe("face_recognition", &[f1], &rules, 1000);
+        assert_eq!(actions.len(), 1); // 登记候选
+
+        // 帧 2：未发生融合更新的普通帧，face.embedding 为 None
+        let f2 = face_object(10, 0.86);
+        assert!(f2.embedding().is_none());
+
+        // 320ms 后触发平台期结算
+        let actions = controller.observe("face_recognition", &[f2], &rules, 1330);
+        assert_eq!(actions.len(), 1);
+        let settle = settle_request(&actions[0]);
+        assert_eq!(settle.track_id, 10);
+        assert_eq!(settle.reason, SettleReason::QualityPlateau);
+
+        // 核心断言：结算请求携带的 tracked_object 必须成功继承帧 1 的特征向量与融合元数据！
+        assert!(
+            settle.tracked_object.embedding().is_some(),
+            "后继无特征帧不得将先前生成的 embedding 冲刷归零"
+        );
+        let face = settle
+            .tracked_object
+            .face
+            .as_ref()
+            .expect("face must exist");
+        assert_eq!(face.fused_count, Some(2));
+        assert_eq!(face.template_quality, Some(0.85));
+    }
+
+    #[test]
+    fn template_maturity_can_breakthrough_cooldown_after_single_frame_settle() {
+        let mut controller = CaptureSettleController::new();
+        let rules = [];
+
+        // 帧 1：质量 0.82 的单帧人脸进入，fused_count = 1，尚未成熟
+        let mut f1 = face_object(20, 0.82);
+        if let Some(face) = f1.face.as_mut() {
+            face.embedding = Some(std::sync::Arc::from(vec![1u8; 16]));
+            face.fused_count = Some(1);
+            face.template_quality = Some(0.82);
+            face.template_mature = Some(false);
+        }
+
+        let _ = controller.observe("face_recognition", &[f1.clone()], &rules, 1000);
+
+        // 350ms 后触发平台期结算（此时 fused_count 仍为 1）
+        let actions = controller.observe("face_recognition", &[f1.clone()], &rules, 1350);
+        assert_eq!(actions.len(), 1);
+        let settle1 = settle_request(&actions[0]);
+        assert_eq!(settle1.reason, SettleReason::QualityPlateau);
+        assert_eq!(
+            settle1
+                .tracked_object
+                .face
+                .as_ref()
+                .expect("face must exist")
+                .fused_count,
+            Some(1)
+        );
+
+        // 此时进入 5000ms 冷却期。
+        // 在 2000ms 时（距上次结算仅 650ms，完全处于冷却期内）：
+        // 算法包输出了多帧融合且成熟的模板 (fused_count = 3, template_mature = true)
+        let mut f2 = face_object(20, 0.82);
+        if let Some(face) = f2.face.as_mut() {
+            face.embedding = Some(std::sync::Arc::from(vec![2u8; 16]));
+            face.fused_count = Some(3);
+            face.template_quality = Some(0.85);
+            face.template_mature = Some(true);
+        }
+
+        let actions = controller.observe("face_recognition", &[f2], &rules, 2000);
+        assert_eq!(
+            actions.len(),
+            1,
+            "成熟模板必须能够穿透去重冷却期，重新触发结算"
+        );
+        let settle2 = settle_request(&actions[0]);
+        assert_eq!(settle2.reason, SettleReason::TemplateMature);
+        assert_eq!(
+            settle2
+                .tracked_object
+                .face
+                .as_ref()
+                .expect("face must exist")
+                .embedding
+                .as_deref(),
+            Some([2u8; 16].as_slice())
+        );
+        assert_eq!(
+            settle2
+                .tracked_object
+                .face
+                .as_ref()
+                .expect("face must exist")
+                .fused_count,
+            Some(3)
+        );
     }
 }

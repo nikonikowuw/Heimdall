@@ -25,9 +25,9 @@ pub const DEFAULT_FUSION_MIN_QUALITY_SCORE: f32 = MIN_FUSION_QUALITY_SCORE;
 /// 新质量超过当前池内峰值该幅度时允许追质量提取。
 pub const DEFAULT_QUALITY_UPGRADE_DELTA: f32 = 0.08;
 /// 两次特征提取之间的最小帧间隔。
-pub const MIN_FUSION_FRAME_INTERVAL: usize = 6;
+pub const MIN_FUSION_FRAME_INTERVAL: usize = 4;
 /// 新特征相对当前模板的最低余弦相似度。
-pub const DRIFT_REJECTION_SIMILARITY: f32 = 0.55;
+pub const DRIFT_REJECTION_SIMILARITY: f32 = 0.50;
 /// 选样时相对任一已选帧达到该相似度即视为冗余。
 pub const REDUNDANCY_SIMILARITY: f32 = 0.95;
 /// 模板成熟所需的最少池内样本数。
@@ -117,7 +117,14 @@ impl BestShotManager {
         let interval_elapsed =
             frame_id.saturating_sub(record.last_extract_frame_id) >= MIN_FUSION_FRAME_INTERVAL;
 
-        if record.pool_len() < MAX_FUSED_FRAMES {
+        if record.pool_len() < MIN_MATURE_POOL_SIZE {
+            // 当池内样本数尚未达到成熟所需的最低数量（3 帧）时，
+            // 只要达到准入门限且不低于当前峰值 0.10（防止严重劣化帧混入），即允许补充采样，
+            // 避免因首帧碰巧处于极高分（如 0.83）而导致后续 0.80~0.82 的优质帧被全盘拒识、永远停留于单帧。
+            interval_elapsed
+                && quality.score >= min_extract_quality
+                && quality.score >= record.best_pool_quality() - 0.10
+        } else if record.pool_len() < MAX_FUSED_FRAMES {
             interval_elapsed && (quality_improved || quality.score >= record.best_pool_quality())
         } else {
             interval_elapsed && quality_improved
@@ -170,11 +177,12 @@ impl BestShotManager {
 
             let is_single_seed = record.pool_len() == 1;
             // 若池内仅有单个初始种子，且后方出现质量显著优越（+0.08 且绝对分 >= 0.70）的高清正脸：
-            // 即便相似度因初期弱照/水印/偏转跌至 [0.25, 0.55]，也允许抢占重播种，洗掉弱种子。
+            // 若初始种子本身质量处于极低准入门限附近 (< 0.59)，即便相似度因早期弱照/偏转跌破下限也允许重播种洗掉弱种子；
+            // 若初始种子已达 0.60+，则维持 RESEED_SIMILARITY_FLOOR 底线防跨人漂移。
             let single_seed_overwrite = is_single_seed
                 && quality.score >= 0.70
                 && quality.score >= record.best_pool_quality() + 0.08
-                && similarity >= RESEED_SIMILARITY_FLOOR;
+                && (similarity >= RESEED_SIMILARITY_FLOOR || record.best_pool_quality() < 0.59);
 
             let can_reseed = single_seed_overwrite
                 || (quality.score >= record.best_pool_quality() + RESEED_QUALITY_DELTA
@@ -331,20 +339,36 @@ mod tests {
         let q = quality(0.60, 80);
         manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, 1);
         assert!(!should_sample(&manager, 7, &q, 1));
-        assert!(!should_sample(&manager, 7, &q, 6));
-        assert!(should_sample(&manager, 7, &q, 7));
+        assert!(!should_sample(
+            &manager,
+            7,
+            &q,
+            1 + MIN_FUSION_FRAME_INTERVAL - 1
+        ));
+        assert!(should_sample(
+            &manager,
+            7,
+            &q,
+            1 + MIN_FUSION_FRAME_INTERVAL
+        ));
 
-        manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, 7);
-        assert!(!should_sample(&manager, 7, &q, 18));
-        assert!(should_sample(&manager, 7, &q, 19));
+        let retry2 = 1 + MIN_FUSION_FRAME_INTERVAL;
+        manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, retry2);
+        let exp2_delay = MIN_FUSION_FRAME_INTERVAL * 2;
+        assert!(!should_sample(&manager, 7, &q, retry2 + exp2_delay - 1));
+        assert!(should_sample(&manager, 7, &q, retry2 + exp2_delay));
 
-        manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, 19);
-        assert!(!should_sample(&manager, 7, &q, 42));
-        assert!(should_sample(&manager, 7, &q, 43));
+        let retry3 = retry2 + exp2_delay;
+        manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, retry3);
+        let exp3_delay = MIN_FUSION_FRAME_INTERVAL * 4;
+        assert!(!should_sample(&manager, 7, &q, retry3 + exp3_delay - 1));
+        assert!(should_sample(&manager, 7, &q, retry3 + exp3_delay));
 
-        manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, 43);
-        assert!(!should_sample(&manager, 7, &q, 90));
-        assert!(should_sample(&manager, 7, &q, 91));
+        let retry4 = retry3 + exp3_delay;
+        manager.record_attempt_without_embedding(7, [0.1; 4], [[0.0; 2]; 5], 0.9, q, retry4);
+        let exp4_delay = MIN_FUSION_FRAME_INTERVAL * 8;
+        assert!(!should_sample(&manager, 7, &q, retry4 + exp4_delay - 1));
+        assert!(should_sample(&manager, 7, &q, retry4 + exp4_delay));
     }
 
     #[test]
@@ -470,13 +494,17 @@ mod tests {
         let stable = embedding(0);
         let drift = embedding(100);
         add(&mut manager, 7, 0.60, 80, &stable, 1);
-        assert!(should_sample(&manager, 7, &quality(0.95, 120), 7));
-        let update = add(&mut manager, 7, 0.95, 120, &drift, 7);
+        let next_f = 1 + MIN_FUSION_FRAME_INTERVAL;
+        assert!(should_sample(&manager, 7, &quality(0.95, 120), next_f));
+        let update = add(&mut manager, 7, 0.95, 120, &drift, next_f);
         assert!(!update.template_changed);
         let record = manager.get(7).expect("record should exist");
         assert_eq!(record.pool_len(), 1);
         assert_eq!(record.quality.score, 0.60);
-        assert_eq!(record.retry_after_frame_id, 13);
+        assert_eq!(
+            record.retry_after_frame_id,
+            next_f + MIN_FUSION_FRAME_INTERVAL
+        );
     }
 
     #[test]
@@ -486,23 +514,26 @@ mod tests {
         let drift = embedding(100);
         add(&mut manager, 8, 0.60, 80, &stable, 1);
 
+        let step = MIN_FUSION_FRAME_INTERVAL;
         // 连续 3 次漂移拒绝
-        add(&mut manager, 8, 0.60, 80, &drift, 7);
+        add(&mut manager, 8, 0.60, 80, &drift, 1 + step);
         let r1 = manager.get(8).expect("record exists");
-        assert_eq!(r1.retry_after_frame_id, 13, "第 1 次漂移：等待 6 帧");
+        assert_eq!(r1.retry_after_frame_id, 1 + step * 2, "第 1 次漂移");
 
-        add(&mut manager, 8, 0.60, 80, &drift, 13);
+        add(&mut manager, 8, 0.60, 80, &drift, 1 + step * 2);
         let r2 = manager.get(8).expect("record exists");
         assert_eq!(
-            r2.retry_after_frame_id, 19,
-            "第 2 次漂移必须维持 6 帧重试间隔，严禁升级为 12 帧退避"
+            r2.retry_after_frame_id,
+            1 + step * 3,
+            "第 2 次漂移必须维持单次重试间隔，严禁升级为指数退避"
         );
 
-        add(&mut manager, 8, 0.60, 80, &drift, 19);
+        add(&mut manager, 8, 0.60, 80, &drift, 1 + step * 3);
         let r3 = manager.get(8).expect("record exists");
         assert_eq!(
-            r3.retry_after_frame_id, 25,
-            "第 3 次漂移必须维持 6 帧重试间隔，严禁升级为 24 帧退避"
+            r3.retry_after_frame_id,
+            1 + step * 4,
+            "第 3 次漂移必须维持单次重试间隔，严禁升级为指数退避"
         );
     }
 
@@ -528,6 +559,36 @@ mod tests {
         );
 
         let after = manager.get(88).expect("record exists");
+        assert_eq!(after.best_pool_quality(), 0.85);
+        assert_eq!(after.pool_len(), 1, "弱种子被清空，重置为高质量单样本");
+
+        let sim = algo_sdk::math::cosine_similarity(&update.template, &clear_face);
+        assert!((sim - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn single_weak_seed_below_068_overwritten_even_with_very_low_similarity() {
+        let mut manager = BestShotManager::new();
+        let polluted_seed = embedding(0);
+
+        // 模拟一个相似度仅 0.05（极低相似度，远低于 0.25 下限）的高质量帧 (q=0.85)
+        let mut clear_face = [0.0f32; 512];
+        clear_face[0] = 0.05;
+        clear_face[1] = (1.0 - 0.05f32 * 0.05).sqrt();
+
+        // 初始弱种子 (q=0.58 < 0.68)
+        add(&mut manager, 89, 0.58, 65, &polluted_seed, 1);
+        let before = manager.get(89).expect("record exists");
+        assert_eq!(before.best_pool_quality(), 0.58);
+
+        // 高质量帧到达：触发弱单种子覆写重播种
+        let update = add(&mut manager, 89, 0.85, 150, &clear_face, 7);
+        assert!(
+            update.template_changed,
+            "极低质量的初生弱种子必须被新高质量正脸彻底覆盖，即便余弦相似度极低"
+        );
+
+        let after = manager.get(89).expect("record exists");
         assert_eq!(after.best_pool_quality(), 0.85);
         assert_eq!(after.pool_len(), 1, "弱种子被清空，重置为高质量单样本");
 

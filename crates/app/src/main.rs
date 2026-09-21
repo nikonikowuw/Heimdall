@@ -336,6 +336,12 @@ async fn main() -> Result<()> {
                 ),
                 Err(err) => tracing::error!(error = %err, "持久化启用任务冷启动恢复流程失败"),
             }
+
+            // 检查是否有装载的人脸识别算法包支持 C ABI 共享底库，若有则进行绑定并重新全量同步
+            if let Some(face_pkg) = state.algo_registry.get("face_recognition").await {
+                api::sync_algo_gallery_from_package(&state.gallery_index, &state.db, &face_pkg)
+                    .await;
+            }
         }
         Err(err) => {
             tracing::warn!(error = %err, "算法包自愈对齐流程产生警告，继续以容灾模式启动");

@@ -7,6 +7,7 @@ use std::ffi::{c_char, c_int, c_void};
 pub const AV_ALGO_API_VERSION: u32 = 1;
 pub const AV_ALGO_GET_ABI_SYMBOL: &[u8] = b"av_algo_get_abi\0";
 pub const AV_ALGO_EXTRACT_FACE_SYMBOL: &[u8] = b"av_algo_extract_face\0";
+pub const AV_ALGO_GET_GALLERY_ABI_SYMBOL: &[u8] = b"av_algo_get_gallery_abi\0";
 
 /// 算法包状态码
 pub const AV_OK: c_int = 0;
@@ -409,3 +410,69 @@ pub type AvAlgoExtractFaceFn = unsafe extern "C" fn(
     input: *const AvFaceExtractInput,
     output: *mut AvFaceExtractOutput,
 ) -> c_int;
+
+pub type AvAlgoGallery = *mut c_void;
+
+/// 1:N 人脸比对候选人结构体 (32 字节，固定 64 位 ABI 布局，8 字节对齐，去业务元数据化)
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct AvFaceCandidate {
+    pub size: u32,
+    pub rank: u32,
+    pub id: u64,
+    pub similarity: f32,
+    pub raw_score: f32,
+    pub reserved0: u64,
+}
+
+impl Default for AvFaceCandidate {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>() as u32,
+            rank: 0,
+            id: 0,
+            similarity: 0.0,
+            raw_score: 0.0,
+            reserved0: 0,
+        }
+    }
+}
+
+/// 底库管理与 1:N 检索虚函数表 (64 字节，8 字节对齐)
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct AvAlgoGalleryAbi {
+    pub size: u32,
+    pub api_version: u32,
+
+    pub gallery_create:
+        Option<unsafe extern "C" fn(lib: AvAlgoLibrary, out: *mut AvAlgoGallery) -> c_int>,
+    pub gallery_destroy: Option<unsafe extern "C" fn(gallery: AvAlgoGallery) -> c_int>,
+    pub gallery_clear: Option<unsafe extern "C" fn(gallery: AvAlgoGallery) -> c_int>,
+    pub gallery_insert: Option<
+        unsafe extern "C" fn(
+            gallery: AvAlgoGallery,
+            id: u64,
+            feature_bytes: *const u8,
+            feature_len: u32,
+        ) -> c_int,
+    >,
+    pub gallery_remove: Option<unsafe extern "C" fn(gallery: AvAlgoGallery, id: u64) -> c_int>,
+    pub gallery_search: Option<
+        unsafe extern "C" fn(
+            gallery: AvAlgoGallery,
+            query_feature_bytes: *const u8,
+            query_len: u32,
+            top_k: u32,
+            min_threshold: f32,
+            out_candidates: *mut AvFaceCandidate,
+            out_count: *mut u32,
+            max_candidates: u32,
+        ) -> c_int,
+    >,
+    pub gallery_count:
+        Option<unsafe extern "C" fn(gallery: AvAlgoGallery, out_count: *mut u32) -> c_int>,
+}
+
+pub type AvAlgoGetGalleryAbiFn =
+    unsafe extern "C" fn(requested_api_version: u32) -> *const AvAlgoGalleryAbi;

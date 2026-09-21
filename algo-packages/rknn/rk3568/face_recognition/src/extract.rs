@@ -145,31 +145,51 @@ fn reflect_pad_image(raw: &[u8], orig_w: u32, orig_h: u32, pad_x: u32, pad_y: u3
     padded
 }
 
-/// 融合原始人脸特征向量与翻转人脸特征向量 (TTA 融合)。
+/// 融合多组扰动特征向量 (超球面均值融合 Spherical Average Embedding)。
 ///
-/// 将两向量相加后重新执行 L2 归一化。若加和模长退化 (< 1e-6)，回退为原始特征向量。
-pub fn fuse_tta_embeddings(
-    original: &[f32; 512],
-    flipped: &[f32; 512],
+/// 将所有特征向量相加并在超球面上重新执行 L2 归一化。
+/// 若加和模长退化 (< 1e-6)，回退为首个特征向量。
+pub fn fuse_spherical_average_embeddings(
+    embeddings: &[[f32; 512]],
 ) -> Result<[f32; 512], AlgoError> {
+    if embeddings.is_empty() {
+        return Err(AlgoError::Preprocess {
+            reason: "待融合向量列表为空".to_string(),
+        });
+    }
     let mut sum = [0.0f32; 512];
-    for i in 0..512 {
-        sum[i] = original[i] + flipped[i];
+    for emb in embeddings {
+        for i in 0..512 {
+            sum[i] += emb[i];
+        }
     }
     match crate::normalize_embedding(&sum) {
         Ok(fused) => Ok(fused),
         Err(err) => {
-            tracing::warn!(%err, "TTA 向量加和归一化失败，回退为原始特征");
-            Ok(*original)
+            tracing::warn!(%err, "超球面均值融合归一化失败，回退为原始首项特征");
+            Ok(embeddings[0])
         }
     }
 }
 
-/// 注册人脸特征提取：执行 TTA (Test-Time Augmentation) 水平翻转增强。
+/// 融合原始人脸特征向量与翻转人脸特征向量 (TTA 双向量融合)。
+#[inline]
+pub fn fuse_tta_embeddings(
+    original: &[f32; 512],
+    flipped: &[f32; 512],
+) -> Result<[f32; 512], AlgoError> {
+    fuse_spherical_average_embeddings(&[*original, *flipped])
+}
+
+/// 注册人脸特征提取：执行 5 组几何与色彩扰动测试时增强 (TTA)，并在超球面上做球面均值融合。
 ///
-/// 1. 推理原图对齐人脸获得 `e_orig`；
-/// 2. 水平翻转 112×112 对齐人脸并推理获得 `e_flip`；
-/// 3. 将两者融合（加和并重新 L2 归一化）；若翻转提取或融合发生非致命错误，平滑降级使用 `e_orig`。
+/// 1. 原图对齐人脸 `e_orig` (1.0 基础尺度)
+/// 2. 水平微翻转 `e_flip` (左右镜像不变性)
+/// 3. 高光亮度微调 `e_bright` (+12% 增益，模拟日光/过曝场景)
+/// 4. 暗光亮度微调 `e_dark` (-12% 衰减，模拟阴影/弱光场景)
+/// 5. 0.95 多尺度中心微裁切重采样 `e_scale` (近景/瞳距尺度容差)
+///
+/// 对上述有效特征在 512 维单位超球面上做 Spherical Average Embedding 融合存库。
 fn extract_embedding_with_registration_tta(
     worker: &crate::InferenceWorker,
     aligned: &[u8],
@@ -185,25 +205,36 @@ fn extract_embedding_with_registration_tta(
         return Ok(orig_embedding);
     }
 
-    let flipped = match align::flip_horizontal_112(aligned) {
-        Ok(flipped) => flipped,
-        Err(err) => {
-            tracing::warn!(%err, "TTA 水平翻转图像失败，降级使用原始特征");
-            return Ok(orig_embedding);
+    let mut embeddings = Vec::with_capacity(5);
+    embeddings.push(orig_embedding);
+
+    // 1. 水平翻转 (Horizontal Flip)
+    if let Ok(flipped) = align::flip_horizontal_112(aligned) {
+        align::dump_debug_aligned_face(&format!("{debug_tag}_tta_flip"), &flipped, quality_score);
+        if let Ok(emb) = worker.embed_host(flipped) {
+            embeddings.push(emb);
         }
-    };
+    }
 
-    align::dump_debug_aligned_face(&format!("{debug_tag}_tta_flip"), &flipped, quality_score);
+    // 2. 亮度高光微调 (+12%)
+    let bright = align::adjust_brightness_112(aligned, 1.12);
+    if let Ok(emb) = worker.embed_host(bright) {
+        embeddings.push(emb);
+    }
 
-    let flipped_embedding = match worker.embed_host(flipped) {
-        Ok(emb) => emb,
-        Err(err) => {
-            tracing::warn!(%err, "TTA 翻转特征提取推理失败，降级使用原始特征");
-            return Ok(orig_embedding);
-        }
-    };
+    // 3. 亮度暗光微调 (-12%)
+    let dark = align::adjust_brightness_112(aligned, 0.88);
+    if let Ok(emb) = worker.embed_host(dark) {
+        embeddings.push(emb);
+    }
 
-    fuse_tta_embeddings(&orig_embedding, &flipped_embedding)
+    // 4. 0.95 多尺度中心微裁切重采样
+    let scaled = align::crop_and_resize_chip_112(aligned, 0.95);
+    if let Ok(emb) = worker.embed_host(scaled) {
+        embeddings.push(emb);
+    }
+
+    fuse_spherical_average_embeddings(&embeddings)
 }
 
 unsafe fn extract_face_impl(
@@ -514,5 +545,21 @@ mod tests {
         // 相反向量相加为零，应优雅回退至原始特征
         let fused = fuse_tta_embeddings(&v1, &v2).expect("相反向量应回退");
         assert_eq!(fused, v1);
+    }
+
+    #[test]
+    fn test_fuse_spherical_average_embeddings_multi() {
+        let mut v1 = [0.0f32; 512];
+        let mut v2 = [0.0f32; 512];
+        let mut v3 = [0.0f32; 512];
+        v1[0] = 1.0;
+        v2[0] = 1.0;
+        v3[0] = 1.0;
+
+        let fused = fuse_spherical_average_embeddings(&[v1, v2, v3]).expect("多向量融合应成功");
+        assert!((fused[0] - 1.0).abs() < 1e-6);
+
+        // 验证空切片错误保护
+        assert!(fuse_spherical_average_embeddings(&[]).is_err());
     }
 }

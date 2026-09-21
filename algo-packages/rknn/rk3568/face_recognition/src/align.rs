@@ -124,6 +124,64 @@ pub fn flip_horizontal_112(rgb: &[u8]) -> Result<Vec<u8>, AlgoError> {
     flip_horizontal_rgb(rgb, ALIGNED_SIZE, ALIGNED_SIZE)
 }
 
+/// 调整 112×112 对齐人脸图像亮度（乘法增益并截断至 [0, 255]）。
+pub fn adjust_brightness_112(chip: &[u8], factor: f32) -> Vec<u8> {
+    let mut out = chip.to_vec();
+    for p in &mut out {
+        *p = ((*p as f32 * factor).round() as u32).min(255) as u8;
+    }
+    out
+}
+
+/// 对 112×112 对齐人脸图像进行中心双线性缩放重采样（多尺度扰动）。
+pub fn crop_and_resize_chip_112(chip: &[u8], scale: f32) -> Vec<u8> {
+    const W: usize = ALIGNED_SIZE as usize;
+    const H: usize = ALIGNED_SIZE as usize;
+    if chip.len() != W * H * 3 {
+        return chip.to_vec();
+    }
+    let mut out = vec![0u8; W * H * 3];
+    let center_x = (W as f32 - 1.0) * 0.5;
+    let center_y = (H as f32 - 1.0) * 0.5;
+
+    for y in 0..H {
+        for x in 0..W {
+            let src_x = center_x + (x as f32 - center_x) * scale;
+            let src_y = center_y + (y as f32 - center_y) * scale;
+
+            if src_x < 0.0 || src_x > (W - 1) as f32 || src_y < 0.0 || src_y > (H - 1) as f32 {
+                let clamp_x = src_x.clamp(0.0, (W - 1) as f32) as usize;
+                let clamp_y = src_y.clamp(0.0, (H - 1) as f32) as usize;
+                let src_idx = (clamp_y * W + clamp_x) * 3;
+                let dst_idx = (y * W + x) * 3;
+                out[dst_idx..dst_idx + 3].copy_from_slice(&chip[src_idx..src_idx + 3]);
+            } else {
+                let x0 = src_x.floor() as usize;
+                let y0 = src_y.floor() as usize;
+                let x1 = (x0 + 1).min(W - 1);
+                let y1 = (y0 + 1).min(H - 1);
+
+                let fx = src_x - x0 as f32;
+                let fy = src_y - y0 as f32;
+
+                let dst_idx = (y * W + x) * 3;
+                for c in 0..3 {
+                    let p00 = chip[(y0 * W + x0) * 3 + c] as f32;
+                    let p10 = chip[(y0 * W + x1) * 3 + c] as f32;
+                    let p01 = chip[(y1 * W + x0) * 3 + c] as f32;
+                    let p11 = chip[(y1 * W + x1) * 3 + c] as f32;
+
+                    let top = p00 + fx * (p10 - p00);
+                    let bottom = p01 + fx * (p11 - p01);
+                    let val = top + fy * (bottom - top);
+                    out[dst_idx + c] = val.round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +274,27 @@ mod tests {
         // 对合性质：连续翻转两次等于自身
         let restored = flip_horizontal_112(&flipped).expect("对合翻转");
         assert_eq!(restored, sample);
+    }
+
+    #[test]
+    fn test_adjust_brightness_112() {
+        let sample = vec![100u8; (ALIGNED_SIZE * ALIGNED_SIZE * 3) as usize];
+        let bright = adjust_brightness_112(&sample, 1.2);
+        assert_eq!(bright[0], 120);
+
+        let dark = adjust_brightness_112(&sample, 0.8);
+        assert_eq!(dark[0], 80);
+
+        let overflow = adjust_brightness_112(&sample, 3.0);
+        assert_eq!(overflow[0], 255);
+    }
+
+    #[test]
+    fn test_crop_and_resize_chip_112() {
+        let sample = vec![128u8; (ALIGNED_SIZE * ALIGNED_SIZE * 3) as usize];
+        let scaled = crop_and_resize_chip_112(&sample, 0.95);
+        assert_eq!(scaled.len(), sample.len());
+        // 均匀图像缩放后仍应保持均匀
+        assert_eq!(scaled[0], 128);
     }
 }

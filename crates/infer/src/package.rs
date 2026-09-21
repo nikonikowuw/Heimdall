@@ -20,6 +20,8 @@ use crate::sandbox::{
 };
 use crate::worker::{InferenceWorker, InferenceWorkerConfig};
 
+pub use crate::c_abi::loader::{RawAlgoGallery, RawFaceCandidate};
+
 /// 算法描述清单固定文件名
 pub const ALGO_MANIFEST_FILENAME: &str = "manifest.json";
 
@@ -158,6 +160,21 @@ impl AlgoPackage {
         self.lib.get_extract_face_fn().is_some()
     }
 
+    /// 检查该算法包是否支持底库检索 C ABI
+    pub fn supports_gallery(&self) -> bool {
+        self.lib.get_gallery_abi_fn().is_some()
+    }
+
+    /// 创建该算法包托管的共享底库实例 (RAII)
+    pub fn create_gallery(&self) -> Result<RawAlgoGallery, InferError> {
+        let raw_lib = RawAlgoLibrary::open(
+            self.lib.clone(),
+            &self.package_dir,
+            &self.manifest.platform_id,
+        )?;
+        raw_lib.create_gallery()
+    }
+
     /// 调用该算法包提取人脸特征向量与对齐人脸切片。
     ///
     /// 库级句柄在当前调用线程打开、使用并关闭；这类离线低频能力不跨线程转移
@@ -280,6 +297,7 @@ impl AlgoPackage {
             raw_lib,
             algorithm_id: self.manifest.algorithm_id.clone(),
             callback_slot,
+            frame_seq: std::sync::atomic::AtomicU64::new(0),
         })
     }
 }
@@ -292,6 +310,7 @@ pub struct AlgoInstance {
     algorithm_id: String,
     // 堆分配的实例回调结果槽，地址在实例生命周期内保持稳定
     callback_slot: Box<std::sync::Mutex<Vec<String>>>,
+    frame_seq: std::sync::atomic::AtomicU64,
 }
 
 impl AlgoInstance {
@@ -369,6 +388,10 @@ impl InferenceBackend for AlgoInstance {
         }
 
         let now_ns = frame.timestamp * 1_000_000;
+        let frame_id = self
+            .frame_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         let mut desc = AvFrameDesc::default_nv12(
             frame.width,
             frame.height,
@@ -376,6 +399,7 @@ impl InferenceBackend for AlgoInstance {
             frame.stride.hor_stride as i32,
             now_ns,
         );
+        desc.frame_id = frame_id;
         desc.alloc_width = frame.stride.hor_stride;
         desc.alloc_height = frame.stride.ver_stride;
 
@@ -626,43 +650,37 @@ struct ParsedDetection {
 }
 
 fn decode_face_embedding(encoded: &str) -> Result<FaceEmbedding, InferError> {
-    const EMBEDDING_BYTES: usize = 512 * std::mem::size_of::<f32>();
-    const EMBEDDING_BASE64_LEN: usize = EMBEDDING_BYTES.div_ceil(3) * 4;
-    if encoded.len() != EMBEDDING_BASE64_LEN {
+    if encoded.is_empty() {
         return Err(InferError::JsonParse {
-            reason: format!(
-                "embedding Base64 长度非法: {}，预期 {}",
-                encoded.len(),
-                EMBEDDING_BASE64_LEN
-            ),
+            reason: "embedding Base64 字符串不能为空".to_string(),
         });
     }
 
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
+        .decode(encoded.trim())
         .map_err(|error| InferError::JsonParse {
             reason: format!("embedding Base64 解码失败: {error}"),
         })?;
-    if bytes.len() != EMBEDDING_BYTES {
+
+    if bytes.is_empty() || bytes.len() % 4 != 0 {
         return Err(InferError::JsonParse {
             reason: format!(
-                "embedding 字节长度非法: {}，预期 {}",
-                bytes.len(),
-                EMBEDDING_BYTES
+                "embedding 字节长度非法: {} (必须为 4 字节的整数倍浮点特征流)",
+                bytes.len()
             ),
         });
     }
 
-    let mut values = [0.0f32; 512];
-    for (index, chunk) in bytes.chunks(4).enumerate() {
-        values[index] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        if !values[index].is_finite() {
+    for chunk in bytes.chunks_exact(4) {
+        let val = f32::from_le_bytes(chunk.try_into().expect("4-byte slice"));
+        if !val.is_finite() {
             return Err(InferError::JsonParse {
-                reason: "embedding 包含非有限浮点数".to_string(),
+                reason: "embedding 包含非有限浮点数 (NaN 或 Inf)".to_string(),
             });
         }
     }
-    Ok(Box::new(values))
+
+    Ok(bytes.into())
 }
 
 /// 从算法包输出的 alarm/detection JSON 中解析目标框与质量元数据。
@@ -1983,8 +2001,13 @@ mod tests {
             .embedding
             .as_ref()
             .expect("best-shot 必须携带 embedding");
-        assert_eq!(embedding.len(), 512);
-        assert!((embedding[1] - (1.0 / 512.0)).abs() < 1e-6);
+        assert_eq!(embedding.len(), 2048);
+        let val_1 = f32::from_le_bytes(
+            embedding[4..8]
+                .try_into()
+                .expect("embedding 4-byte slice conversion"),
+        );
+        assert!((val_1 - (1.0 / 512.0)).abs() < 1e-6);
 
         let public_detections = parse_alarm_objects(&envelope.to_string()).expect("检测解析成功");
         assert_eq!(public_detections.len(), 1);

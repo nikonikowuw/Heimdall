@@ -888,3 +888,207 @@ macro_rules! export_algo {
         }
     };
 }
+
+/// 导出人脸底库 C ABI 虚表与唯一定位符号
+#[macro_export]
+macro_rules! export_face_gallery {
+    ($($algo:ident)?) => {
+        unsafe extern "C" fn __gallery_create(
+            _lib: $crate::c_abi::AvAlgoLibrary,
+            out: *mut $crate::c_abi::AvAlgoGallery,
+        ) -> std::ffi::c_int {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if out.is_null() {
+                    return $crate::c_abi::AV_ERR_INVALID_ARG;
+                }
+                let gallery = Box::into_raw(Box::new($crate::face::FaceGallery::new()));
+                // SAFETY: out 经前置空指针校验为有效指针，将新创建的 FaceGallery 堆对象所有权转交调用方并通过 out 传出
+                unsafe { *out = gallery as *mut std::ffi::c_void };
+                $crate::c_abi::AV_OK
+            }))
+            .unwrap_or_else(|_| {
+                $crate::macros::set_last_error("gallery_create 发生 Panic 崩溃");
+                $crate::c_abi::AV_ERR_INTERNAL
+            })
+        }
+
+        unsafe extern "C" fn __gallery_destroy(
+            gallery: $crate::c_abi::AvAlgoGallery,
+        ) -> std::ffi::c_int {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if gallery.is_null() {
+                    return $crate::c_abi::AV_ERR_INVALID_ARG;
+                }
+                // SAFETY: gallery 由 __gallery_create 分配，且由调用方确保只销毁一次
+                unsafe {
+                    drop(Box::from_raw(gallery as *mut $crate::face::FaceGallery));
+                }
+                $crate::c_abi::AV_OK
+            }))
+            .unwrap_or_else(|_| {
+                $crate::macros::set_last_error("gallery_destroy 发生 Panic 崩溃");
+                $crate::c_abi::AV_ERR_INTERNAL
+            })
+        }
+
+        unsafe extern "C" fn __gallery_clear(
+            gallery: $crate::c_abi::AvAlgoGallery,
+        ) -> std::ffi::c_int {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if gallery.is_null() {
+                    return $crate::c_abi::AV_ERR_INVALID_ARG;
+                }
+                // SAFETY: gallery 经非空校验且由有效创建保证指向活跃的 FaceGallery，其内部通过 RwLock 保证并发写安全
+                let g = unsafe { &*(gallery as *const $crate::face::FaceGallery) };
+                g.clear();
+                $crate::c_abi::AV_OK
+            }))
+            .unwrap_or_else(|_| {
+                $crate::macros::set_last_error("gallery_clear 发生 Panic 崩溃");
+                $crate::c_abi::AV_ERR_INTERNAL
+            })
+        }
+
+        unsafe extern "C" fn __gallery_insert(
+            gallery: $crate::c_abi::AvAlgoGallery,
+            id: u64,
+            feature_bytes: *const u8,
+            feature_len: u32,
+        ) -> std::ffi::c_int {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if gallery.is_null() || feature_bytes.is_null() || feature_len == 0 {
+                    return $crate::c_abi::AV_ERR_INVALID_ARG;
+                }
+                // SAFETY: feature_bytes 经非空校验且 feature_len 在调用期有效
+                let bytes =
+                    unsafe { std::slice::from_raw_parts(feature_bytes, feature_len as usize) };
+                let feature = match $crate::face::bytes_to_floats(bytes) {
+                    Some(f) => f,
+                    None => return $crate::c_abi::AV_ERR_INVALID_ARG,
+                };
+
+                // SAFETY: gallery 经非空校验且指向有效 FaceGallery，内部通过 RwLock 保证并发写安全
+                let g = unsafe { &*(gallery as *const $crate::face::FaceGallery) };
+                g.insert($crate::face::GalleryFace { id, feature });
+                $crate::c_abi::AV_OK
+            }))
+            .unwrap_or_else(|_| {
+                $crate::macros::set_last_error("gallery_insert 发生 Panic 崩溃");
+                $crate::c_abi::AV_ERR_INTERNAL
+            })
+        }
+
+        unsafe extern "C" fn __gallery_remove(
+            gallery: $crate::c_abi::AvAlgoGallery,
+            id: u64,
+        ) -> std::ffi::c_int {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if gallery.is_null() {
+                    return $crate::c_abi::AV_ERR_INVALID_ARG;
+                }
+                // SAFETY: gallery 经非空校验且指向有效 FaceGallery，内部通过 RwLock 保证并发写安全
+                let g = unsafe { &*(gallery as *const $crate::face::FaceGallery) };
+                g.remove(id);
+                $crate::c_abi::AV_OK
+            }))
+            .unwrap_or_else(|_| {
+                $crate::macros::set_last_error("gallery_remove 发生 Panic 崩溃");
+                $crate::c_abi::AV_ERR_INTERNAL
+            })
+        }
+
+        unsafe extern "C" fn __gallery_search(
+            gallery: $crate::c_abi::AvAlgoGallery,
+            query_feature_bytes: *const u8,
+            query_len: u32,
+            top_k: u32,
+            min_threshold: f32,
+            out_candidates: *mut $crate::c_abi::AvFaceCandidate,
+            out_count: *mut u32,
+            max_candidates: u32,
+        ) -> std::ffi::c_int {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if gallery.is_null()
+                    || query_feature_bytes.is_null()
+                    || out_candidates.is_null()
+                    || out_count.is_null()
+                {
+                    return $crate::c_abi::AV_ERR_INVALID_ARG;
+                }
+                // SAFETY: query_feature_bytes 经非空校验且 query_len 在调用期有效
+                let bytes =
+                    unsafe { std::slice::from_raw_parts(query_feature_bytes, query_len as usize) };
+                let query = match $crate::face::bytes_to_floats(bytes) {
+                    Some(q) => q,
+                    None => return $crate::c_abi::AV_ERR_INVALID_ARG,
+                };
+
+                // SAFETY: gallery 经非空校验且指向有效 FaceGallery，内部通过不可变快照保证并发读安全
+                let g = unsafe { &*(gallery as *const $crate::face::FaceGallery) };
+                let candidates = g.search(&query, top_k as usize, min_threshold);
+
+                let write_count = candidates.len().min(max_candidates as usize);
+                for i in 0..write_count {
+                    // SAFETY: out_candidates 为调用方预分配且可写至少 max_candidates 个元素的缓冲数组
+                    unsafe {
+                        *out_candidates.add(i) = candidates[i].to_c_abi();
+                    }
+                }
+                // SAFETY: out_count 经非空校验为有效指针
+                unsafe {
+                    *out_count = write_count as u32;
+                }
+                $crate::c_abi::AV_OK
+            }))
+            .unwrap_or_else(|_| {
+                $crate::macros::set_last_error("gallery_search 发生 Panic 崩溃");
+                $crate::c_abi::AV_ERR_INTERNAL
+            })
+        }
+
+        unsafe extern "C" fn __gallery_count(
+            gallery: $crate::c_abi::AvAlgoGallery,
+            out_count: *mut u32,
+        ) -> std::ffi::c_int {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if gallery.is_null() || out_count.is_null() {
+                    return $crate::c_abi::AV_ERR_INVALID_ARG;
+                }
+                // SAFETY: gallery 经非空校验且指向有效 FaceGallery，内部通过只读快照保证并发读安全
+                let g = unsafe { &*(gallery as *const $crate::face::FaceGallery) };
+                // SAFETY: out_count 经非空校验为有效指针
+                unsafe {
+                    *out_count = g.count() as u32;
+                }
+                $crate::c_abi::AV_OK
+            }))
+            .unwrap_or_else(|_| {
+                $crate::macros::set_last_error("gallery_count 发生 Panic 崩溃");
+                $crate::c_abi::AV_ERR_INTERNAL
+            })
+        }
+
+        static __GALLERY_ABI: $crate::c_abi::AvAlgoGalleryAbi = $crate::c_abi::AvAlgoGalleryAbi {
+            size: std::mem::size_of::<$crate::c_abi::AvAlgoGalleryAbi>() as u32,
+            api_version: $crate::c_abi::AV_ALGO_API_VERSION,
+            gallery_create: Some(__gallery_create),
+            gallery_destroy: Some(__gallery_destroy),
+            gallery_clear: Some(__gallery_clear),
+            gallery_insert: Some(__gallery_insert),
+            gallery_remove: Some(__gallery_remove),
+            gallery_search: Some(__gallery_search),
+            gallery_count: Some(__gallery_count),
+        };
+
+        #[no_mangle]
+        pub unsafe extern "C" fn av_algo_get_gallery_abi(
+            requested_api_version: u32,
+        ) -> *const $crate::c_abi::AvAlgoGalleryAbi {
+            if requested_api_version == $crate::c_abi::AV_ALGO_API_VERSION {
+                &__GALLERY_ABI
+            } else {
+                std::ptr::null()
+            }
+        }
+    };
+}

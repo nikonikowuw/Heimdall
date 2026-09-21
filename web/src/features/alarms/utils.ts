@@ -23,7 +23,7 @@ export interface ParsedBBoxCoords {
 }
 
 export interface ParsedTargetBBoxes {
-  body: ParsedBBoxCoords
+  body?: ParsedBBoxCoords
   face?: {
     bbox: ParsedBBoxCoords
     confidence?: number
@@ -73,7 +73,7 @@ export function formatFaceBBoxLabel(face: ParsedTargetBBoxes['face'] | undefined
  * 支持：
  * 1. 数组形式：[x1, y1, x2, y2]
  * 2. 扁平对象：{ x1, y1, x2, y2 }
- * 3. 复合对象：{ body: [..] | {..}, face?: { bbox: [..] | {..}, confidence?, qualityScore? } }
+ * 3. 复合对象：{ body?: [..] | {..}, face?: { bbox: [..] | {..}, confidence?, qualityScore? } }
  */
 export function parseTargetBBoxes(raw?: string): ParsedTargetBBoxes | null {
   if (!raw) return null
@@ -81,15 +81,14 @@ export function parseTargetBBoxes(raw?: string): ParsedTargetBBoxes | null {
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object') return null
 
-    // 格式 1: 复合对象 { body: ..., face?: ... }
-    if ('body' in parsed) {
-      const bodyCoords = parseCoordsHelper(parsed.body)
-      if (!bodyCoords) return null
+    // 格式 1: 复合对象 { body?: ..., face?: ... }
+    if ('body' in parsed || 'face' in parsed) {
+      const bodyCoords = 'body' in parsed ? parseCoordsHelper(parsed.body) : undefined
 
       let face: ParsedTargetBBoxes['face'] = undefined
       if (parsed.face && typeof parsed.face === 'object') {
         const faceObj = parsed.face as Record<string, unknown>
-        const faceBBox = parseCoordsHelper(faceObj.bbox)
+        const faceBBox = parseCoordsHelper(faceObj.bbox) ?? parseCoordsHelper(faceObj)
         if (faceBBox) {
           const qualityScore =
             asOptionalNumber(faceObj.qualityScore) ?? asOptionalNumber(faceObj.quality_score)
@@ -101,7 +100,13 @@ export function parseTargetBBoxes(raw?: string): ParsedTargetBBoxes | null {
         }
       }
 
-      return { body: bodyCoords, face }
+      if (bodyCoords || face) {
+        return {
+          body: bodyCoords ?? undefined,
+          face,
+        }
+      }
+      return null
     }
 
     // 格式 2: 扁平数组或对象
@@ -113,11 +118,11 @@ export function parseTargetBBoxes(raw?: string): ParsedTargetBBoxes | null {
 }
 
 /**
- * 解析归一化对角两点式 BBox 坐标（向后兼容，始终返回主体 body 坐标）
+ * 解析归一化对角两点式 BBox 坐标（向后兼容，优先返回主体 body，纯人脸时返回 face 坐标）
  */
 export function parseBBoxCoords(raw?: string): ParsedBBoxCoords | null {
   const target = parseTargetBBoxes(raw)
-  return target ? target.body : null
+  return target ? (target.body ?? target.face?.bbox ?? null) : null
 }
 
 /**

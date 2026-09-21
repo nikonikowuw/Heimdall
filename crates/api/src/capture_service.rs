@@ -85,9 +85,9 @@ pub const DEFAULT_CAPTURE_FLUSH_INTERVAL_MS: u64 = 500;
 pub const DEFAULT_RECOGNITION_QUEUE_CAPACITY: usize = 256;
 
 /// 低频识别输入；embedding 只在 API 后台内存中存在。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct RecognitionFeature {
-    embedding: [f32; 512],
+    embedding: std::sync::Arc<[u8]>,
     quality_score: f32,
 }
 
@@ -427,7 +427,7 @@ impl CaptureDispatchService {
             Some(embedding) => {
                 let quality_score = Self::resolve_recognition_quality(&event.tracked_object);
                 RecognitionFeature {
-                    embedding: **embedding,
+                    embedding: embedding.clone(),
                     quality_score,
                 }
             }

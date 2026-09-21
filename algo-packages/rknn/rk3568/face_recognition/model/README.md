@@ -11,7 +11,8 @@
 | `yolov6n_384x640_i8.rknn` | COCO 人体检测 (person class 0) | 1×384×640×3 | RGB24, 9 个 NCHW INT8 输出（3 个尺度） | rknn_model_zoo YOLOv6n 384×640 INT8（兼容 YOLOv8n） |
 | `scrfd_500m_384x640_mixed.rknn` | 视频流人脸检测与 5 点定位 (16:9 横屏轻量优化) | 1×384×640×3 (NHWC) | RGB24, INT8/FP16 混合精度 (9 个输出) | SCRFD-500M 骨干（兼容 SCRFD-2.5G 640×384） |
 | `scrfd_2.5g_bnkps_640x640_rk3568_mixed.rknn` | 底库注册人脸检测与 5 点定位 (9:16/正方形照片优化) | 1×640×640×3 (NHWC) | RGB24, INT8/FP16 混合精度 (9 个输出) | rknn_model_zoo SCRFD-2.5G BNKPS |
-| `edgeface_base_distill_fp16.rknn` | 人脸特征提取 (512D EdgeFace-Base 监控蒸馏版) | 1×112×112×3 (NHWC) | RGB24, FP16 | EdgeFace-Base distill FP16（消除 CPU 回退，28.5 FPS） |
+| `edgeface_base_distill_fp16.rknn` | 人脸特征提取 (512D EdgeFace-Base 监控蒸馏版，主线推荐) | 1×112×112×3 (NHWC) | RGB24, FP16 | EdgeFace-Base distill FP16（消除 CPU 回退，28.5 FPS） |
+| `facelivtv2_l_realistic_final_super_fp16.rknn` | 人脸特征提取 (512D FaceLiVTv2-L，可选实验模型，通过 `EMBEDDER_MODEL_PATH` 覆盖) | 1×112×112×3 (NHWC) | RGB24, FP16 | FaceLiVTv2-L SuperMHLA（0 CPU 回退，27.9ms，Margin +0.4334） |
 
 ## 模型契约与说明
 
