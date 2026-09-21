@@ -1,8 +1,10 @@
 //! 六步安全沙箱自检器与平台拓扑感知体系
 //! 支持物理子进程隔离执行自检，坚决防范段错误（SIGSEGV）带崩主进程。
 
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::mpsc::{SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -207,7 +209,7 @@ impl AlgoManifest {
     }
 }
 
-/// 算法包自检结果
+/// 算法包沙箱自检结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfTestReport {
     pub status: String,
@@ -215,6 +217,173 @@ pub struct SelfTestReport {
     pub version: String,
     pub detections_count: usize,
     pub duration_ms: u64,
+}
+
+/// 六步沙箱检查的可观测状态。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SandboxStepStatus {
+    Running,
+    Passed,
+    Failed,
+}
+
+/// 六步沙箱检查进度事件。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxProgressEvent {
+    pub step: usize,
+    pub status: SandboxStepStatus,
+}
+
+impl SandboxProgressEvent {
+    pub const fn running(step: usize) -> Self {
+        Self {
+            step,
+            status: SandboxStepStatus::Running,
+        }
+    }
+
+    pub const fn passed(step: usize) -> Self {
+        Self {
+            step,
+            status: SandboxStepStatus::Passed,
+        }
+    }
+}
+
+/// 沙箱子进程 stdout 上的行协议。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload", rename_all = "camelCase")]
+pub enum SandboxChildMessage {
+    Progress(SandboxProgressEvent),
+    Report(SelfTestReport),
+}
+
+const MAX_SANDBOX_STDOUT_LINE_BYTES: usize = 64 * 1024;
+const MAX_SANDBOX_STDERR_BYTES: usize = 64 * 1024;
+const SANDBOX_OUTPUT_DRAIN_TIMEOUT_MS: u64 = 250;
+
+type SandboxReportSlot = Arc<Mutex<Option<SelfTestReport>>>;
+
+#[derive(Debug, Default)]
+struct CappedOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+impl CappedOutput {
+    fn append(&mut self, chunk: &[u8]) {
+        let remaining = MAX_SANDBOX_STDERR_BYTES.saturating_sub(self.bytes.len());
+        let captured = chunk.len().min(remaining);
+        self.bytes.extend_from_slice(&chunk[..captured]);
+        self.truncated |= captured < chunk.len();
+    }
+
+    fn snapshot(&self) -> String {
+        let mut message = String::from_utf8_lossy(&self.bytes).into_owned();
+        if self.truncated {
+            message.push_str(" [stderr truncated at 64 KiB]");
+        }
+        message
+    }
+}
+
+fn try_send_sandbox_protocol_line(
+    tx: &SyncSender<SandboxProgressEvent>,
+    report_slot: &SandboxReportSlot,
+    line: &[u8],
+) -> bool {
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let Ok(message) = serde_json::from_slice::<SandboxChildMessage>(line) else {
+        return true;
+    };
+
+    match message {
+        SandboxChildMessage::Report(report) => {
+            if let Ok(mut slot) = report_slot.lock() {
+                *slot = Some(report);
+            }
+            true
+        }
+        SandboxChildMessage::Progress(progress) => match tx.try_send(progress) {
+            Ok(()) | Err(TrySendError::Full(_)) => true,
+            Err(TrySendError::Disconnected(_)) => false,
+        },
+    }
+}
+
+fn forward_sandbox_line(
+    tx: &SyncSender<SandboxProgressEvent>,
+    report_slot: &SandboxReportSlot,
+    line: &[u8],
+    truncated: bool,
+) -> bool {
+    !truncated && try_send_sandbox_protocol_line(tx, report_slot, line)
+}
+
+/// 只把合法协议行投递给父线程。
+///
+/// 算法库与底层 SDK 可能向 stdout 输出普通日志，因此不能把每一行原文放入
+/// 有界通道：普通日志应被丢弃，进度消息使用非阻塞投递，避免 reader 反向
+/// 阻塞子进程退出。最终报告放入单槽位，不能因进度洪泛而被丢弃。单行也必须
+/// 有上限，防止无换行的日志占满内存。
+fn spawn_sandbox_stdout_reader(
+    stdout: impl Read + Send + 'static,
+    tx: SyncSender<SandboxProgressEvent>,
+    report_slot: SandboxReportSlot,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::with_capacity(256);
+        let mut truncated = false;
+
+        while let Ok(buffer) = reader.fill_buf() {
+            if buffer.is_empty() {
+                if !line.is_empty() && !forward_sandbox_line(&tx, &report_slot, &line, truncated) {
+                    return;
+                }
+                break;
+            }
+
+            let mut consumed = 0;
+            for &byte in buffer {
+                consumed += 1;
+                if byte == b'\n' {
+                    if !forward_sandbox_line(&tx, &report_slot, &line, truncated) {
+                        return;
+                    }
+                    line.clear();
+                    truncated = false;
+                } else if !truncated {
+                    if line.len() < MAX_SANDBOX_STDOUT_LINE_BYTES {
+                        line.push(byte);
+                    } else {
+                        truncated = true;
+                    }
+                }
+            }
+            reader.consume(consumed);
+        }
+    })
+}
+
+fn spawn_sandbox_stderr_reader(
+    stderr: impl Read + Send + 'static,
+    output: Arc<Mutex<CappedOutput>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut chunk = [0u8; 4096];
+        while let Ok(read) = reader.read(&mut chunk) {
+            if read == 0 {
+                break;
+            }
+            if let Ok(mut captured) = output.lock() {
+                captured.append(&chunk[..read]);
+            }
+        }
+    })
 }
 
 /// 算法包安全沙箱自检器
@@ -229,7 +398,20 @@ impl AlgoSandbox {
         package_dir: &Path,
         use_subprocess: bool,
     ) -> Result<AlgoManifest, InferError> {
+        Self::validate_package_with_progress(package_dir, use_subprocess, |_| {})
+    }
+
+    /// 执行六步沙箱校验并在真实检查边界发出进度事件。
+    pub fn validate_package_with_progress<F>(
+        package_dir: &Path,
+        use_subprocess: bool,
+        mut on_progress: F,
+    ) -> Result<AlgoManifest, InferError>
+    where
+        F: FnMut(SandboxProgressEvent),
+    {
         let step = "1.路径防穿透与结构检查";
+        on_progress(SandboxProgressEvent::running(1));
         if package_dir.as_os_str().is_empty() {
             return Err(InferError::SandboxValidation {
                 step: step.to_string(),
@@ -299,8 +481,10 @@ impl AlgoSandbox {
         let manifest_path = check_contained_entry(ALGO_MANIFEST_FILENAME, false)?;
         let _lib_dir = check_contained_entry("lib", true)?;
         let _testimage_path = check_contained_entry("testimage.jpg", false)?;
+        on_progress(SandboxProgressEvent::passed(1));
 
         let step = "2.解析 Manifest 与平台匹配";
+        on_progress(SandboxProgressEvent::running(2));
         let manifest_str =
             std::fs::read_to_string(&manifest_path).map_err(|e| InferError::SandboxValidation {
                 step: step.to_string(),
@@ -328,7 +512,9 @@ impl AlgoSandbox {
             });
         }
 
+        on_progress(SandboxProgressEvent::passed(2));
         let step = "3.Config Schema 格式校验";
+        on_progress(SandboxProgressEvent::running(3));
         let schema_path = canonical_dir.join("config.schema.json");
         if schema_path.exists() {
             let canonical_schema =
@@ -362,12 +548,17 @@ impl AlgoSandbox {
             })?;
         }
 
-        let entry_lib_path = find_entry_library(&canonical_dir, &manifest.algorithm_id)?;
-
+        on_progress(SandboxProgressEvent::passed(3));
         if use_subprocess {
-            Self::run_subprocess_self_test(&canonical_dir)?;
+            Self::run_subprocess_self_test_with_progress(&canonical_dir, &mut on_progress)?;
         } else {
-            Self::run_in_process_self_test(&canonical_dir, &entry_lib_path, &manifest)?;
+            let entry_lib_path = find_entry_library(&canonical_dir, &manifest.algorithm_id)?;
+            Self::run_in_process_self_test_with_progress(
+                &canonical_dir,
+                &entry_lib_path,
+                &manifest,
+                &mut on_progress,
+            )?;
         }
 
         tracing::info!(
@@ -380,9 +571,14 @@ impl AlgoSandbox {
     }
 
     /// 通过独立子进程运行自测试（物理故障域隔离，防 SIGSEGV / 内存越界）
-    fn run_subprocess_self_test(package_dir: &Path) -> Result<(), InferError> {
-        use std::io::Read;
-
+    fn run_subprocess_self_test_with_progress<F>(
+        package_dir: &Path,
+        mut on_progress: F,
+    ) -> Result<(), InferError>
+    where
+        F: FnMut(SandboxProgressEvent),
+    {
+        on_progress(SandboxProgressEvent::running(4));
         let current_exe = std::env::var("HEIMDALL_BIN")
             .map(PathBuf::from)
             .or_else(|_| std::env::current_exe())
@@ -402,45 +598,126 @@ impl AlgoSandbox {
                 reason: format!("启动自测子进程失败: {e}"),
             })?;
 
-        // 设置 10 秒超时看门狗
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(InferError::SandboxValidation {
+                    step: "4.派生隔离子进程".to_string(),
+                    reason: "自测子进程 stdout 管道不可用".to_string(),
+                });
+            }
+        };
+        let stderr = match child.stderr.take() {
+            Some(stderr) => stderr,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(InferError::SandboxValidation {
+                    step: "4.派生隔离子进程".to_string(),
+                    reason: "自测子进程 stderr 管道不可用".to_string(),
+                });
+            }
+        };
+
+        let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel::<SandboxProgressEvent>(16);
+        let stderr_output = Arc::new(Mutex::new(CappedOutput::default()));
+        let report_slot: SandboxReportSlot = Arc::new(Mutex::new(None));
+        let stdout_reader = spawn_sandbox_stdout_reader(stdout, stdout_tx, report_slot.clone());
+        let stderr_reader = spawn_sandbox_stderr_reader(stderr, stderr_output.clone());
+
+        // 进程创建成功且 stdout/stderr 已被独立线程接管，第四步的隔离与监控设施就绪。
+        on_progress(SandboxProgressEvent::passed(4));
+
+        let mut reported_failed_step: Option<usize> = None;
+        let mut consume_progress = |progress: SandboxProgressEvent| {
+            if progress.status == SandboxStepStatus::Failed {
+                reported_failed_step = Some(progress.step);
+            }
+            on_progress(progress);
+        };
+
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(10);
 
         loop {
+            while let Ok(progress) = stdout_rx.try_recv() {
+                consume_progress(progress);
+            }
+
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    if status.success() {
-                        let mut stdout_msg = String::new();
-                        if let Some(mut out_pipe) = child.stdout.take() {
-                            let _ = out_pipe.read_to_string(&mut stdout_msg);
+                    // reader 线程使用非阻塞投递，不能因日志洪泛反向阻塞父线程。
+                    // 子进程退出后只给管道一个有限排空窗口；若算法 fork 出持有管道的
+                    // 后代，也不能让本次上传永久等待 reader 结束。
+                    let drain_deadline = std::time::Instant::now()
+                        + Duration::from_millis(SANDBOX_OUTPUT_DRAIN_TIMEOUT_MS);
+                    while (!stdout_reader.is_finished() || !stderr_reader.is_finished())
+                        && std::time::Instant::now() < drain_deadline
+                    {
+                        while let Ok(progress) = stdout_rx.try_recv() {
+                            consume_progress(progress);
                         }
-                        if let Ok(report) = serde_json::from_str::<SelfTestReport>(&stdout_msg) {
-                            tracing::info!(
-                                algorithm_id = %report.algorithm_id,
-                                version = %report.version,
-                                detections = report.detections_count,
-                                duration_ms = report.duration_ms,
-                                "沙箱子进程真实前向自检成功完成"
-                            );
-                        }
-                        return Ok(());
-                    } else {
-                        // 进程崩溃或异常退出（例如收到 SIGSEGV）
-                        let mut stderr_msg = String::new();
-                        if let Some(mut err_pipe) = child.stderr.take() {
-                            let _ = err_pipe.read_to_string(&mut stderr_msg);
-                        }
-                        return Err(InferError::SandboxValidation {
-                            step: "6.真实前向推理自测".to_string(),
-                            reason: format!(
-                                "沙箱子进程异常退出 (状态码: {status:?}, stderr: {stderr_msg})"
-                            ),
-                        });
+                        std::thread::sleep(Duration::from_millis(5));
                     }
+                    while let Ok(progress) = stdout_rx.try_recv() {
+                        consume_progress(progress);
+                    }
+
+                    let stderr_msg = stderr_output
+                        .lock()
+                        .map(|captured| captured.snapshot())
+                        .unwrap_or_default();
+                    let report = report_slot.lock().ok().and_then(|mut slot| slot.take());
+
+                    if status.success() {
+                        let report = report.ok_or_else(|| InferError::SandboxValidation {
+                            step: "6.真实前向推理自测".to_string(),
+                            reason: "沙箱子进程未返回有效自测报告".to_string(),
+                        })?;
+                        tracing::info!(
+                            algorithm_id = %report.algorithm_id,
+                            version = %report.version,
+                            detections = report.detections_count,
+                            duration_ms = report.duration_ms,
+                            "沙箱子进程真实前向自检成功完成"
+                        );
+                        return Ok(());
+                    }
+
+                    let failed_step_number = reported_failed_step.unwrap_or_else(|| {
+                        if stderr_msg.contains("5.")
+                            || stderr_msg.contains("定位动态库")
+                            || stderr_msg.contains("查找动态库")
+                            || stderr_msg.contains("C ABI")
+                            || stderr_msg.contains("instance_create")
+                            || stderr_msg.contains("instance_process")
+                        {
+                            5
+                        } else {
+                            6
+                        }
+                    });
+                    let failed_step = match failed_step_number {
+                        1 => "1.路径防穿透与结构检查",
+                        2 => "2.解析 Manifest 与平台匹配",
+                        3 => "3.Config Schema 格式校验",
+                        4 => "4.派生隔离子进程",
+                        5 => "5.算法库 C ABI 导出符号核对",
+                        _ => "6.真实前向推理自测",
+                    };
+                    return Err(InferError::SandboxValidation {
+                        step: failed_step.to_string(),
+                        reason: format!(
+                            "沙箱子进程异常退出 (状态码: {status:?}, stderr: {stderr_msg})"
+                        ),
+                    });
                 }
                 Ok(None) => {
                     if start.elapsed() > timeout {
                         let _ = child.kill();
+                        let _ = child.wait();
                         return Err(InferError::SandboxValidation {
                             step: "6.真实前向推理自测".to_string(),
                             reason: "算法包自测超时 (超过 10 秒)，已被沙箱强杀".to_string(),
@@ -449,6 +726,8 @@ impl AlgoSandbox {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
                     return Err(InferError::SandboxValidation {
                         step: "4.监控隔离子进程".to_string(),
                         reason: format!("等待子进程出错: {e}"),
@@ -464,7 +743,21 @@ impl AlgoSandbox {
         entry_lib_path: &Path,
         manifest: &AlgoManifest,
     ) -> Result<SelfTestReport, InferError> {
+        Self::run_in_process_self_test_with_progress(package_dir, entry_lib_path, manifest, |_| {})
+    }
+
+    /// 进程内执行自测，并在 ABI 握手与真实前向推理边界发出事件。
+    pub fn run_in_process_self_test_with_progress<F>(
+        package_dir: &Path,
+        entry_lib_path: &Path,
+        manifest: &AlgoManifest,
+        mut on_progress: F,
+    ) -> Result<SelfTestReport, InferError>
+    where
+        F: FnMut(SandboxProgressEvent),
+    {
         let start_time = std::time::Instant::now();
+        on_progress(SandboxProgressEvent::running(5));
 
         // 1. 加载动态库
         let loaded_lib = Arc::new(LoadedLib::load(entry_lib_path)?);
@@ -482,6 +775,16 @@ impl AlgoSandbox {
                 ),
             });
         }
+
+        let abi = loaded_lib.abi();
+        let create_fn = abi.instance_create.ok_or_else(|| InferError::InvalidAbi {
+            reason: "instance_create 为空".to_string(),
+        })?;
+        let process_fn = abi.instance_process.ok_or_else(|| InferError::InvalidAbi {
+            reason: "instance_process 为空".to_string(),
+        })?;
+        on_progress(SandboxProgressEvent::passed(5));
+        on_progress(SandboxProgressEvent::running(6));
 
         // 3. 准备测试图像并转换为硬件加速平台帧
         let testimage_path = package_dir.join("testimage.jpg");
@@ -529,10 +832,6 @@ impl AlgoSandbox {
         };
 
         let mut raw_inst: AvAlgoInstance = std::ptr::null_mut();
-        let abi = loaded_lib.abi();
-        let create_fn = abi.instance_create.ok_or_else(|| InferError::InvalidAbi {
-            reason: "instance_create 为空".to_string(),
-        })?;
 
         // SAFETY: inst_args 栈有效，raw_inst 指向有效指针
         let create_code = unsafe { create_fn(raw_lib.raw(), &inst_args, &mut raw_inst) };
@@ -598,16 +897,14 @@ impl AlgoSandbox {
             frame.opaque = host_nv12.as_mut_ptr() as *mut std::ffi::c_void;
         }
 
-        let process_fn = abi.instance_process.ok_or_else(|| InferError::InvalidAbi {
-            reason: "instance_process 为空".to_string(),
-        })?;
-
         // SAFETY: frame 栈内存有效
         let process_code = unsafe { process_fn(raw_inst, &frame) };
         if process_code != AV_OK {
             // SAFETY: 调用方保证 abi 与 raw_inst 内存有效
             return Err(unsafe { check_c_status(process_code, abi, raw_inst) });
         }
+
+        on_progress(SandboxProgressEvent::passed(6));
 
         // 验证回调结果
         let detections_count = collected_results.lock().map(|r| r.len()).unwrap_or(0);
@@ -768,4 +1065,63 @@ fn rgb_to_nv12_bytes(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
     }
 
     nv12
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stdout_reader_discards_plugin_logs_without_blocking_protocol_delivery() {
+        let mut output = String::new();
+        for _ in 0..128 {
+            output.push_str("plugin log\n");
+        }
+        let message = SandboxChildMessage::Progress(SandboxProgressEvent::passed(5));
+        output.push_str(&serde_json::to_string(&message).expect("沙箱协议消息序列化失败"));
+        output.push('\n');
+
+        let report = SandboxChildMessage::Report(SelfTestReport {
+            status: "ok".to_string(),
+            algorithm_id: "flood-test".to_string(),
+            version: "1.0.0".to_string(),
+            detections_count: 1,
+            duration_ms: 1,
+        });
+        output.push_str(&serde_json::to_string(&report).expect("沙箱报告序列化失败"));
+        output.push('\n');
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let report_slot: SandboxReportSlot = Arc::new(Mutex::new(None));
+        let reader = spawn_sandbox_stdout_reader(
+            std::io::Cursor::new(output.into_bytes()),
+            tx,
+            report_slot.clone(),
+        );
+        assert!(reader.join().is_ok());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(SandboxProgressEvent {
+                step: 5,
+                status: SandboxStepStatus::Passed,
+            })
+        ));
+        assert!(matches!(
+            report_slot.lock().ok().and_then(|mut slot| slot.take()),
+            Some(SelfTestReport {
+                detections_count: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn stderr_capture_is_bounded() {
+        let mut output = CappedOutput::default();
+        output.append(&vec![b'x'; MAX_SANDBOX_STDERR_BYTES + 1]);
+
+        assert_eq!(output.bytes.len(), MAX_SANDBOX_STDERR_BYTES);
+        assert!(output.truncated);
+        assert!(output.snapshot().ends_with("[stderr truncated at 64 KiB]"));
+    }
 }

@@ -79,11 +79,11 @@ pub struct InstanceConfig {
 impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
-            // 与 config.schema.json 默认值、.env.example 及 RK3576 姊妹包保持一致：
+            // 与 config.schema.json 和 .env.example 默认值保持一致：
             // 缺省回退必须等同于控制台未改动表单时的下发值，否则“缺省路径”与“表单路径”行为分叉。
-            detection_confidence_threshold: 0.25,
-            person_confidence_threshold: 0.4,
-            min_face_size: 60,
+            detection_confidence_threshold: 0.6,
+            person_confidence_threshold: 0.6,
+            min_face_size: 50,
             quality_thresholds: QualityThresholds::default(),
             fusion_min_quality_score: DEFAULT_FUSION_MIN_QUALITY_SCORE,
             osd_margin_top: 0.0,
@@ -272,7 +272,7 @@ pub struct QualityThresholds {
 
 impl QualityThresholds {
     const fn default_min_score() -> f32 {
-        0.3
+        0.5
     }
     const fn default_max_yaw() -> f32 {
         25.0
@@ -319,10 +319,10 @@ mod tests {
     #[test]
     fn default_config_has_expected_values() {
         let config = InstanceConfig::default();
-        assert_eq!(config.detection_confidence_threshold, 0.25);
-        assert_eq!(config.person_confidence_threshold, 0.4);
-        assert_eq!(config.min_face_size, 60);
-        assert_eq!(config.quality_thresholds.min_score, 0.3);
+        assert_eq!(config.detection_confidence_threshold, 0.6);
+        assert_eq!(config.person_confidence_threshold, 0.6);
+        assert_eq!(config.min_face_size, 50);
+        assert_eq!(config.quality_thresholds.min_score, 0.5);
         assert_eq!(config.quality_thresholds.max_yaw, 25.0);
         assert_eq!(config.quality_thresholds.max_pitch, 30.0);
         assert_eq!(config.quality_thresholds.max_blur, 0.7);
@@ -434,8 +434,7 @@ mod tests {
 
     /// schema 声明的默认值必须与运行时缺省值逐字段一致。
     ///
-    /// 否则「控制台未改动表单」与「宿主未下发该字段」两条路径会得到不同阈值
-    /// （历史缺陷：detection 在 schema 为 0.25、运行时为 0.5）。
+    /// 否则「控制台未改动表单」与「宿主未下发该字段」两条路径会得到不同阈值。
     #[test]
     fn schema_defaults_match_runtime_defaults() {
         let properties = load_schema_properties();
@@ -478,7 +477,7 @@ mod tests {
                 .expect("宿主配置应当可解析");
         assert_eq!(config.min_face_size, 48);
         assert_eq!(config.quality_thresholds, QualityThresholds::default());
-        assert_eq!(config.detection_confidence_threshold, 0.25);
+        assert_eq!(config.detection_confidence_threshold, 0.6);
     }
 
     #[test]

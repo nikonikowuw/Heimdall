@@ -1,8 +1,34 @@
 //! 算法包六步沙箱校验与真实前向推理自测测试套件
 
 use infer::package::AlgoRegistry;
-use infer::sandbox::{normalize_platform_id, AlgoSandbox};
+use infer::sandbox::{
+    normalize_platform_id, AlgoSandbox, SandboxChildMessage, SandboxProgressEvent,
+    SandboxStepStatus,
+};
 use std::path::Path;
+
+#[test]
+fn sandbox_progress_message_round_trips_as_json_line() {
+    let message = SandboxChildMessage::Progress(SandboxProgressEvent {
+        step: 5,
+        status: SandboxStepStatus::Passed,
+    });
+    let encoded = serde_json::to_string(&message).expect("沙箱进度消息应可序列化");
+    assert_eq!(
+        encoded,
+        r#"{"kind":"progress","payload":{"step":5,"status":"passed"}}"#
+    );
+
+    let decoded: SandboxChildMessage =
+        serde_json::from_str(&encoded).expect("沙箱进度消息应可反序列化");
+    assert!(matches!(
+        decoded,
+        SandboxChildMessage::Progress(SandboxProgressEvent {
+            step: 5,
+            status: SandboxStepStatus::Passed,
+        })
+    ));
+}
 
 fn resolve_path(rel: &str) -> Option<std::path::PathBuf> {
     let p1 = Path::new(rel);
@@ -120,8 +146,28 @@ fn test_sandbox_subprocess_self_test() {
     if let Some(bin) = candidates.into_iter().find(|p| p.exists()) {
         if let Ok(canon) = bin.canonicalize() {
             std::env::set_var("HEIMDALL_BIN", canon);
-            let res = AlgoSandbox::validate_package(&pkg_path, true);
+            let mut events = Vec::new();
+            let res = AlgoSandbox::validate_package_with_progress(&pkg_path, true, |event| {
+                events.push(event);
+            });
             assert!(res.is_ok(), "子进程物理隔离自检失败: {:?}", res.err());
+            assert_eq!(
+                events,
+                vec![
+                    SandboxProgressEvent::running(1),
+                    SandboxProgressEvent::passed(1),
+                    SandboxProgressEvent::running(2),
+                    SandboxProgressEvent::passed(2),
+                    SandboxProgressEvent::running(3),
+                    SandboxProgressEvent::passed(3),
+                    SandboxProgressEvent::running(4),
+                    SandboxProgressEvent::passed(4),
+                    SandboxProgressEvent::running(5),
+                    SandboxProgressEvent::passed(5),
+                    SandboxProgressEvent::running(6),
+                    SandboxProgressEvent::passed(6),
+                ]
+            );
         }
     }
 }

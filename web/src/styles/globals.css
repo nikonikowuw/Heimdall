@@ -33,6 +33,12 @@
   --accent-green: #10b981;
   --accent-amber: #d97706;
   --destructive: #dc2626;
+  --status-success: #047857;
+  --status-success-soft: rgba(4, 120, 87, 0.1);
+  --status-success-border: rgba(4, 120, 87, 0.24);
+  --status-danger: #b91c1c;
+  --status-danger-soft: rgba(185, 28, 28, 0.1);
+  --status-danger-border: rgba(185, 28, 28, 0.24);
 
   --border: rgba(15, 23, 42, 0.08);
   --border-strong: rgba(15, 23, 42, 0.15);
@@ -62,6 +68,12 @@
   --accent-green: #34d399;
   --accent-amber: #fbbf24;
   --destructive: #ef4444;
+  --status-success: #34d399;
+  --status-success-soft: rgba(52, 211, 153, 0.12);
+  --status-success-border: rgba(52, 211, 153, 0.26);
+  --status-danger: #f87171;
+  --status-danger-soft: rgba(248, 113, 113, 0.12);
+  --status-danger-border: rgba(248, 113, 113, 0.26);
 
   --border: rgba(241, 245, 249, 0.08);
   --border-strong: rgba(241, 245, 249, 0.15);
@@ -500,8 +512,7 @@ h4 {
   }
 }
 
-/* ── 不确定态进度条 (Indeterminate Progress) ── */
-/* 服务端六步沙箱自检不回流中间进度，因此只能表达「进行中」而不能假装确定百分比 */
+/* ── 不确定态进度条（适用于无法提供确定百分比的加载状态） ── */
 @keyframes indeterminateSlide {
   0% {
     transform: translateX(-100%);

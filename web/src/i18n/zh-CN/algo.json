@@ -106,8 +106,19 @@
       "tooLarge": "文件体积超出推荐上限，服务端可能直接拦截"
     },
     "multipleFilesHint": "一次只能上传一个算法包，已选取第一个文件",
-    "testingTitle": "六步安全沙箱自检中…",
-    "progressHint": "自检在设备侧子进程内执行，逐项结果将在完成后一次性返回，期间请勿关闭",
+    "testingTitle": "沙箱安全自测进行中",
+    "waitingTitle": "等待沙箱安全自测",
+    "sandboxSectionTitle": "沙箱安全自测",
+    "stepCount": "{{passed}} / {{total}} 已通过",
+    "currentStep": "当前检查步骤：第 {{step}} 步",
+    "progressHint": "设备侧隔离子进程会在真实检查边界回传进度，已完成的步骤才会勾选，期间请勿关闭",
+    "noResultHint": "未收到完整的设备进度，以下步骤仅显示已确认的结果",
+    "stepStatus": {
+      "pending": "待检查",
+      "running": "检查中",
+      "passed": "已通过",
+      "failed": "未通过"
+    },
     "closingBlocked": "自检进行中，暂不支持关闭",
     "startVerify": "上传并自检",
     "passedTitle": "沙箱安全自测全项通过",

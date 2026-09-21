@@ -44,9 +44,18 @@ export const WS_TOPICS = {
   CAMERA_TELEMETRY: 'camera.telemetry',
   RECOGNITION_MATCHED: 'recognition.matched',
   RECOGNITION_STATUS_CHANGED: 'recognition.status_changed',
+  ALGORITHM_UPLOAD_PROGRESS: 'algorithm.upload.progress',
 } as const
 
 export type WsTopic = (typeof WS_TOPICS)[keyof typeof WS_TOPICS]
+
+export type SandboxStepStatus = 'running' | 'passed' | 'failed'
+
+export interface AlgorithmUploadProgress {
+  uploadId: string
+  step: number
+  status: SandboxStepStatus
+}
 
 export type AlarmStatus = 'unprocessed' | 'processed'
 export type AlarmSeverity = 'warning' | 'critical'

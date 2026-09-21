@@ -16,7 +16,8 @@ pub use package::{
     ALGO_MANIFEST_FILENAME, DEFAULT_ALGO_COOLDOWN_SECS, DEFAULT_ALGO_PACKAGES_DIR,
 };
 pub use sandbox::{
-    current_platform_id, normalize_platform_id, AlgoManifest, AlgoSandbox, VERIFY_ALGO_ARG,
+    current_platform_id, normalize_platform_id, AlgoManifest, AlgoSandbox, SandboxChildMessage,
+    SandboxProgressEvent, SandboxStepStatus, VERIFY_ALGO_ARG,
 };
 pub use worker::{
     list_quarantined_workers, quarantined_workers_count, try_reclaim_quarantined_workers,

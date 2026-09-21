@@ -22,3 +22,6 @@ pub const TOPIC_RECOGNITION_MATCHED: &str = "recognition.matched";
 
 /// 人脸 1:N 识别对账人工审核状态变更广播事件
 pub const TOPIC_RECOGNITION_STATUS_CHANGED: &str = "recognition.status_changed";
+
+/// 算法包上传沙箱自检的逐步进度广播事件
+pub const TOPIC_ALGORITHM_UPLOAD_PROGRESS: &str = "algorithm.upload.progress";

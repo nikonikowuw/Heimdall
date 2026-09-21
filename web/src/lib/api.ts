@@ -540,8 +540,15 @@ function postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
   })
 }
 
-function uploadFormData<T>(endpoint: string, file: File): Promise<T> {
+function uploadFormData<T>(
+  endpoint: string,
+  file: File,
+  fields: Record<string, string> = {},
+): Promise<T> {
   const formData = new FormData()
+  for (const [name, value] of Object.entries(fields)) {
+    formData.append(name, value)
+  }
   formData.append('file', file)
   return postFormData<T>(endpoint, formData)
 }
@@ -584,8 +591,12 @@ export const algorithmApi = {
     return api.get<AlgorithmVersionItem[]>(`/algorithms/${encodeURIComponent(id)}/versions`)
   },
 
-  uploadPackage(file: File): Promise<UploadAlgorithmResponse> {
-    return uploadFormData<UploadAlgorithmResponse>('/algorithms/upload', file)
+  uploadPackage(file: File, uploadId?: string): Promise<UploadAlgorithmResponse> {
+    return uploadFormData<UploadAlgorithmResponse>(
+      '/algorithms/upload',
+      file,
+      uploadId ? { uploadId } : undefined,
+    )
   },
 
   activateVersion(id: number | string, version: string): Promise<void> {

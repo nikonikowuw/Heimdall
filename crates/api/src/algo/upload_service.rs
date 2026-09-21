@@ -8,15 +8,18 @@ use std::path::{Path, PathBuf};
 use axum::extract::multipart::{Field, MultipartError};
 use axum::extract::Multipart;
 use db::{AlgorithmRepo, UpsertAlgorithmParams, UpsertVersionParams};
-use infer::{compute_dir_size, AlgoManifest, AlgoSandbox, ALGO_MANIFEST_FILENAME};
+use infer::{
+    compute_dir_size, AlgoManifest, AlgoSandbox, SandboxProgressEvent, ALGO_MANIFEST_FILENAME,
+};
 use tokio::io::AsyncWriteExt;
+use types::TOPIC_ALGORITHM_UPLOAD_PROGRESS;
 
 use super::archive::{
     copy_dir_all, extract_archive_package_from_file, TempDirGuard, TempFileGuard,
 };
 use super::dto::{get_standard_steps, SandboxCheckResultDto, UploadVersionInfo};
 use crate::error::ApiError;
-use crate::state::AppState;
+use crate::state::{AppState, WsBroadcastEvent};
 
 pub const BYTES_PER_MEGABYTE: usize = 1024 * 1024;
 
@@ -147,6 +150,18 @@ pub fn process_uploaded_package_archive_sync(
     archive_path: &Path,
     upload_filename: Option<&str>,
 ) -> Result<ProcessedUploadResult, Box<ProcessedUploadError>> {
+    process_uploaded_package_archive_sync_with_progress(archive_path, upload_filename, |_| {})
+}
+
+/// 同步执行上传处理，并把沙箱真实阶段事件交给调用方广播。
+pub fn process_uploaded_package_archive_sync_with_progress<F>(
+    archive_path: &Path,
+    upload_filename: Option<&str>,
+    mut on_progress: F,
+) -> Result<ProcessedUploadResult, Box<ProcessedUploadError>>
+where
+    F: FnMut(SandboxProgressEvent),
+{
     let temp_dir =
         std::env::temp_dir().join(format!("heimdall_pkg_{}", uuid::Uuid::now_v7().simple()));
     if let Err(e) = std::fs::create_dir_all(&temp_dir) {
@@ -192,17 +207,18 @@ pub fn process_uploaded_package_archive_sync(
         }
     };
 
-    let validated_manifest = match AlgoSandbox::validate_package(&src_pkg_dir, false) {
-        Ok(m) => m,
-        Err(e) => {
-            let failed_idx = parse_failed_step_index(&e);
-            return Err(Box::new(ProcessedUploadError {
-                failed_idx,
-                message: e.to_string(),
-                manifest: Some(manifest),
-            }));
-        }
-    };
+    let validated_manifest =
+        match AlgoSandbox::validate_package_with_progress(&src_pkg_dir, true, &mut on_progress) {
+            Ok(m) => m,
+            Err(e) => {
+                let failed_idx = parse_failed_step_index(&e);
+                return Err(Box::new(ProcessedUploadError {
+                    failed_idx,
+                    message: e.to_string(),
+                    manifest: Some(manifest),
+                }));
+            }
+        };
 
     let base_packages_dir = PathBuf::from("var/packages");
     let target_dir = base_packages_dir
@@ -265,6 +281,26 @@ pub fn process_uploaded_package_archive_sync(
     })
 }
 
+fn broadcast_upload_progress(
+    broadcaster: &tokio::sync::broadcast::Sender<WsBroadcastEvent>,
+    upload_id: Option<&str>,
+    event: SandboxProgressEvent,
+) {
+    let Some(upload_id) = upload_id else {
+        return;
+    };
+
+    let _ = broadcaster.send(WsBroadcastEvent {
+        topic: TOPIC_ALGORITHM_UPLOAD_PROGRESS.to_string(),
+        payload: serde_json::json!({
+            "uploadId": upload_id,
+            "step": event.step,
+            "status": event.status,
+        }),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+    });
+}
+
 /// 上传算法包完整业务编排：限流、流式落盘、沙箱自检、数据库记录与即时热装载
 pub async fn handle_package_upload(
     state: &AppState,
@@ -278,19 +314,30 @@ pub async fn handle_package_upload(
         .map_err(|_| ApiError::Internal("算法包上传并发控制器已关闭".to_string()))?;
     let steps = get_standard_steps();
     let mut upload_filename: Option<String> = None;
+    let mut upload_id: Option<String> = None;
     let mut upload_guard: Option<TempFileGuard> = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|error| {
         map_multipart_error(error, "解析上传表单失败", state.max_upload_size_bytes)
     })? {
         let name = field.name().unwrap_or_default().to_string();
+        if name == "uploadId" {
+            let value = field.text().await.map_err(|error| {
+                map_multipart_error(error, "读取上传任务标识失败", state.max_upload_size_bytes)
+            })?;
+            if uuid::Uuid::parse_str(&value).is_err() {
+                return Err(ApiError::BadRequest("上传任务标识格式无效".to_string()));
+            }
+            upload_id = Some(value);
+            continue;
+        }
+
         if name == "file" || name == "package" {
             if let Some(filename) = field.file_name() {
                 upload_filename = Some(filename.to_string());
             }
             upload_guard =
                 Some(write_upload_field_to_temp_file(field, state.max_upload_size_bytes).await?);
-            break;
         }
     }
 
@@ -299,18 +346,49 @@ pub async fn handle_package_upload(
         None => return Err(ApiError::BadRequest("未找到有效的算法包文件流".to_string())),
     };
     let process_path = upload_guard.path().to_path_buf();
+    let event_broadcaster = state.event_broadcaster.clone();
+    let progress_upload_id = upload_id.clone();
     let process_res = tokio::task::spawn_blocking(move || {
         let _upload_guard = upload_guard;
-        process_uploaded_package_archive_sync(&process_path, upload_filename.as_deref())
+        process_uploaded_package_archive_sync_with_progress(
+            &process_path,
+            upload_filename.as_deref(),
+            |event| {
+                broadcast_upload_progress(&event_broadcaster, progress_upload_id.as_deref(), event);
+            },
+        )
     })
     .await;
 
-    let process_res = process_res
-        .map_err(|error| ApiError::Internal(format!("执行沙箱解包自检任务异常: {error}")))?;
+    let process_res = match process_res {
+        Ok(result) => result,
+        Err(error) => {
+            broadcast_upload_progress(
+                &state.event_broadcaster,
+                upload_id.as_deref(),
+                SandboxProgressEvent {
+                    step: 1,
+                    status: infer::sandbox::SandboxStepStatus::Failed,
+                },
+            );
+            return Err(ApiError::Internal(format!(
+                "执行沙箱解包自检任务异常: {error}"
+            )));
+        }
+    };
 
     let processed = match process_res {
         Ok(res) => res,
         Err(boxed_err) => {
+            let failed_step = boxed_err.failed_idx.saturating_add(1).clamp(1, 6);
+            broadcast_upload_progress(
+                &state.event_broadcaster,
+                upload_id.as_deref(),
+                SandboxProgressEvent {
+                    step: failed_step,
+                    status: infer::sandbox::SandboxStepStatus::Failed,
+                },
+            );
             return Ok(SandboxCheckResultDto {
                 passed: false,
                 steps_total: 6,

@@ -106,8 +106,19 @@
       "tooLarge": "File exceeds the recommended size limit and may be rejected by the server"
     },
     "multipleFilesHint": "Only one package can be uploaded at a time; the first file was selected",
-    "testingTitle": "Running 6-step sandbox self-test…",
-    "progressHint": "The self-test runs in an isolated subprocess on the device. Per-step results are returned once it finishes — keep this dialog open.",
+    "testingTitle": "Sandbox security self-test in progress",
+    "waitingTitle": "Waiting for sandbox security self-test",
+    "sandboxSectionTitle": "Sandbox security self-test",
+    "stepCount": "{{passed}} / {{total}} passed",
+    "currentStep": "Current check: step {{step}}",
+    "progressHint": "The isolated device subprocess reports progress at each real check boundary. Only completed checks are marked, so keep this dialog open.",
+    "noResultHint": "A complete device progress report was not received. Only confirmed checks are shown below.",
+    "stepStatus": {
+      "pending": "Pending",
+      "running": "Checking",
+      "passed": "Passed",
+      "failed": "Failed"
+    },
     "closingBlocked": "Self-test in progress, closing is disabled",
     "startVerify": "Upload and Verify",
     "passedTitle": "All Sandbox Tests Passed",

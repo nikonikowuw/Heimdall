@@ -439,12 +439,60 @@ fn execute_algo_verification(pkg_path: &std::path::Path) -> Result<(), String> {
         serde_json::from_str(&manifest_str).map_err(|e| format!("解析 manifest 失败: {e}"))?;
     let entry_lib = infer::sandbox::find_entry_library(pkg_path, &manifest.algorithm_id)
         .map_err(|e| format!("查找动态库失败: {e}"))?;
-    let report =
-        infer::sandbox::AlgoSandbox::run_in_process_self_test(pkg_path, &entry_lib, &manifest)
-            .map_err(|e| format!("自测执行失败: {e}"))?;
-    let json = serde_json::to_string(&report).map_err(|e| format!("序列化自测报告失败: {e}"))?;
-    println!("{json}");
-    Ok(())
+
+    let mut write_error: Option<String> = None;
+    let mut active_step = 5usize;
+    let report = match infer::sandbox::AlgoSandbox::run_in_process_self_test_with_progress(
+        pkg_path,
+        &entry_lib,
+        &manifest,
+        |progress| {
+            if progress.status == infer::sandbox::SandboxStepStatus::Running {
+                active_step = progress.step;
+            }
+            if write_error.is_none() {
+                write_error = write_sandbox_child_message(
+                    &infer::sandbox::SandboxChildMessage::Progress(progress),
+                )
+                .err();
+            }
+        },
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            if write_error.is_none() {
+                write_error =
+                    write_sandbox_child_message(&infer::sandbox::SandboxChildMessage::Progress(
+                        infer::sandbox::SandboxProgressEvent {
+                            step: active_step,
+                            status: infer::sandbox::SandboxStepStatus::Failed,
+                        },
+                    ))
+                    .err();
+            }
+            return Err(write_error.unwrap_or_else(|| format!("自测执行失败: {error}")));
+        }
+    };
+
+    if let Some(error) = write_error {
+        return Err(format!("写入沙箱进度失败: {error}"));
+    }
+    write_sandbox_child_message(&infer::sandbox::SandboxChildMessage::Report(report))
+}
+
+fn write_sandbox_child_message(
+    message: &infer::sandbox::SandboxChildMessage,
+) -> Result<(), String> {
+    use std::io::Write;
+
+    let json = serde_json::to_vec(message).map_err(|e| format!("序列化沙箱子进程消息失败: {e}"))?;
+    let stdout = std::io::stdout();
+    let mut output = stdout.lock();
+    output
+        .write_all(&json)
+        .and_then(|_| output.write_all(b"\n"))
+        .and_then(|_| output.flush())
+        .map_err(|e| format!("写入沙箱子进程 stdout 失败: {e}"))
 }
 
 async fn shutdown_signal() {

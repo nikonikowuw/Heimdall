@@ -106,8 +106,19 @@
       "tooLarge": "檔案大小超出建議上限，服務端可能直接攔截"
     },
     "multipleFilesHint": "一次只能上傳一個演算法包，已選取第一個檔案",
-    "testingTitle": "六步安全沙箱自檢中…",
-    "progressHint": "自檢在裝置端子程序內執行，逐項結果將於完成後一次性回傳，期間請勿關閉",
+    "testingTitle": "沙箱安全自檢進行中",
+    "waitingTitle": "等待沙箱安全自檢",
+    "sandboxSectionTitle": "沙箱安全自檢",
+    "stepCount": "{{passed}} / {{total}} 已通過",
+    "currentStep": "目前檢查步驟：第 {{step}} 步",
+    "progressHint": "裝置端隔離子程序會在真實檢查邊界回傳進度，已完成的步驟才會勾選，期間請勿關閉",
+    "noResultHint": "未收到完整的裝置進度，以下步驟僅顯示已確認的結果",
+    "stepStatus": {
+      "pending": "待檢查",
+      "running": "檢查中",
+      "passed": "已通過",
+      "failed": "未通過"
+    },
     "closingBlocked": "自檢進行中，暫不支援關閉",
     "startVerify": "上傳並自檢",
     "passedTitle": "沙箱安全自測全項通過",
