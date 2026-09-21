@@ -145,7 +145,7 @@ function MotionGateControl({
     <section className="space-y-2.5 rounded-[8px] border border-[var(--border)] bg-[var(--bg-surface)] p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
-          <Activity className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-green)]" />
+          <Activity className="mt-0.5 h-4 w-4 shrink-0 text-[var(--status-success)]" />
           <div className="min-w-0">
             <h3 className="text-xs font-bold text-[var(--text-primary)]">
               {t('studio.motionGateTitle', { defaultValue: '运动检测门控' })}
@@ -164,12 +164,12 @@ function MotionGateControl({
           aria-label={t('studio.motionGateTitle', { defaultValue: '运动检测门控' })}
           className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
             enabled
-              ? 'bg-[var(--accent-green)]'
+              ? 'bg-[var(--status-success)]'
               : 'border border-[var(--border)] bg-[var(--bg-secondary)]'
           }`}
         >
           <span
-            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-[var(--bg-surface-solid)] shadow-md transition-transform ${
               enabled ? 'translate-x-4' : 'translate-x-0.5'
             }`}
           />
@@ -192,7 +192,7 @@ function MotionGateControl({
             value={threshold}
             aria-label={t('studio.motionGateSensitivity', { defaultValue: '灵敏度阈值' })}
             onChange={(event) => onThresholdChange(Number(event.target.value))}
-            className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent-green)]"
+            className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--status-success)]"
           />
 
           {/* 实时变动量 vs 触发阈值对照仪表条 (Motion VU Meter) */}
@@ -212,17 +212,17 @@ function MotionGateControl({
               </span>
             </div>
             {/* 刻度槽与游标 */}
-            <div className="relative mt-1.5 h-2 w-full overflow-hidden rounded-full bg-black/20">
+            <div className="relative mt-1.5 h-2 w-full overflow-hidden rounded-full bg-[var(--bg-secondary)]">
               {/* 当前实时变动光棒 */}
               <div
-                className="h-full rounded-full bg-[var(--accent-green)] transition-all duration-150"
+                className="h-full rounded-full bg-[var(--status-success)] transition-all duration-150"
                 style={{
                   width: `${Math.min(100, (currentMotionScore ?? 0) * 100)}%`,
                 }}
               />
               {/* 设定阈值垂直警戒标 */}
               <div
-                className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-[var(--accent-amber)] shadow-[0_0_4px_var(--accent-amber)]"
+                className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-[var(--status-warning)] shadow-[0_0_4px_var(--status-warning-soft)]"
                 style={{ left: `${threshold}%` }}
                 title={`${threshold}% 唤醒阈值`}
               />
@@ -232,8 +232,8 @@ function MotionGateControl({
               <span
                 className={
                   isGated
-                    ? 'font-semibold text-[var(--accent-amber)]'
-                    : 'font-semibold text-[var(--accent-green)]'
+                    ? 'font-semibold text-[var(--status-warning)]'
+                    : 'font-semibold text-[var(--status-success)]'
                 }
               >
                 {isGated
@@ -1243,7 +1243,7 @@ export function LiveRulesStudio({
         {/* 右侧：码流选择 + 布防总闸 + 保存 */}
         <div className="flex shrink-0 items-center gap-3">
           {saveFeedback?.kind === 'applied' && (
-            <span className="hidden font-mono text-xs font-semibold text-[var(--accent-green)] xl:inline">
+            <span className="hidden font-mono text-xs font-semibold text-[var(--status-success)] xl:inline">
               {t('footer.saveSuccess', { defaultValue: '任务配置已保存并生效' })}
             </span>
           )}
@@ -1295,7 +1295,7 @@ export function LiveRulesStudio({
               className={`inline-flex items-center gap-2 rounded-[6px] border px-2 py-1 font-mono text-[11px] font-semibold ${
                 saveFeedback.summary.tone === 'failed'
                   ? 'border-[var(--destructive)]/40 bg-[var(--destructive)]/10 text-[var(--destructive)]'
-                  : 'border-[var(--accent-amber)]/40 bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]'
+                  : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
               }`}
               title={unappliedNoticeLines(saveFeedback.summary).join('\n')}
             >
@@ -1343,7 +1343,7 @@ export function LiveRulesStudio({
               aria-pressed={streamMode === 'sub'}
               className={`rounded-md px-2 py-1 font-medium transition-colors ${
                 streamMode === 'sub'
-                  ? 'bg-[var(--accent-amber)] font-semibold text-[var(--text-primary)] shadow-2xs'
+                  ? 'bg-[var(--status-warning)] font-semibold text-[var(--text-primary)] shadow-2xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
               title={t('streamMode.subDesc', {
@@ -1792,7 +1792,7 @@ export function LiveRulesStudio({
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-2 font-mono text-[11px] text-[var(--text-secondary)]">
             <div className="flex items-center gap-2.5">
               <span className="flex items-center gap-1.5 rounded-[5px] border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 shadow-2xs">
-                <span className="h-2 w-2 rounded-full bg-[var(--accent-green)] shadow-[0_0_5px_var(--accent-green)]" />
+                <span className="h-2 w-2 rounded-full bg-[var(--status-success)] shadow-[0_0_5px_var(--status-success-soft)]" />
                 <span className="font-semibold text-[var(--text-primary)]">
                   {camera.lastWidth || 1920}×{camera.lastHeight || 1080}
                 </span>
@@ -1825,15 +1825,15 @@ export function LiveRulesStudio({
               <span
                 className={`flex items-center gap-1.5 rounded-[5px] border px-2 py-0.5 font-semibold shadow-2xs ${
                   telemetry?.isMotionGated
-                    ? 'border-[var(--accent-amber)]/40 bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]'
-                    : 'border-[var(--accent-green)]/40 bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
+                    ? 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
+                    : 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
                 }`}
               >
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${
                     telemetry?.isMotionGated
-                      ? 'bg-[var(--accent-amber)]'
-                      : 'animate-pulse bg-[var(--accent-green)] shadow-[0_0_6px_var(--accent-green)]'
+                      ? 'bg-[var(--status-warning)]'
+                      : 'animate-pulse bg-[var(--status-success)] shadow-[0_0_6px_var(--status-success-soft)]'
                   }`}
                 />
                 <span>
@@ -1858,9 +1858,9 @@ export function LiveRulesStudio({
                 duration: reduceMotion ? 0 : motionTokens.duration.fast,
                 ease: motionTokens.easing.smooth,
               }}
-              className="flex h-[44vh] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-black/5 bg-white/75 shadow-[-12px_0_40px_rgba(0,0,0,0.2)] backdrop-blur-2xl lg:h-auto lg:max-h-none lg:w-[360px] lg:border-t-0 lg:border-l xl:w-[400px] dark:border-white/10 dark:bg-[#07090e]/80"
+              className="flex h-[44vh] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-[var(--shadow-lg)] backdrop-blur-2xl lg:h-auto lg:max-h-none lg:w-[360px] lg:border-t-0 lg:border-l xl:w-[400px]"
             >
-              <div className="flex h-11 shrink-0 items-center justify-between border-b border-black/5 bg-white/40 px-3.5 backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.02]">
+              <div className="flex h-11 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-surface)] px-3.5 backdrop-blur-xl">
                 <span className="flex min-w-0 items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
                   {selectedRule ? (
                     <>
@@ -1869,13 +1869,13 @@ export function LiveRulesStudio({
                         onClick={() => setSelectedRuleId(null)}
                         title={t('inspector.backToOverview', { defaultValue: '返回全局配置' })}
                         aria-label={t('inspector.backToOverview', { defaultValue: '返回全局配置' })}
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-black/5 bg-black/5 text-[var(--text-muted)] transition-all hover:bg-black/10 hover:text-[var(--text-primary)] dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
                       >
                         <ArrowLeft className="h-3.5 w-3.5" />
                       </button>
                       <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_6px_var(--accent)]" />
                       <span className="truncate">{selectedRule.name}</span>
-                      <span className="shrink-0 rounded-md border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-[var(--accent)]">
+                      <span className="shrink-0 rounded-md border border-[var(--accent)]/20 bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[9px] font-bold text-[var(--accent)]">
                         {selectedRule.role.toUpperCase()}
                       </span>
                     </>
@@ -1894,7 +1894,7 @@ export function LiveRulesStudio({
                     onClick={() => setIsPanelOpen(false)}
                     title={t('studio.collapsePanel', { defaultValue: '收起配置面板' })}
                     aria-label={t('studio.collapsePanel', { defaultValue: '收起配置面板' })}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-black/5 bg-black/5 text-[var(--text-muted)] transition-colors hover:bg-black/10 hover:text-[var(--text-primary)] dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)]"
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -1923,7 +1923,7 @@ export function LiveRulesStudio({
                         onDeleteRule={handleDeleteRule}
                         activeAlgorithmNames={activeAlgorithmNames}
                       />
-                      <div className="h-px bg-black/5 dark:bg-white/10" />
+                      <div className="h-px bg-[var(--border)]" />
                     </motion.div>
                   ) : (
                     <motion.div
@@ -1945,14 +1945,14 @@ export function LiveRulesStudio({
                         currentMotionScore={telemetry?.motionScore}
                         isGated={telemetry?.isMotionGated}
                       />
-                      <div className="h-px bg-black/5 dark:bg-white/10" />
+                      <div className="h-px bg-[var(--border)]" />
                       <AlgorithmRack
                         availableAlgos={availableAlgos}
                         activeInstances={activeInstances}
                         onToggleAlgo={handleToggleAlgo}
                         onOpenParams={handleOpenParams}
                       />
-                      <div className="h-px bg-black/5 dark:bg-white/10" />
+                      <div className="h-px bg-[var(--border)]" />
                     </motion.div>
                   )}
                 </AnimatePresence>

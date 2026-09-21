@@ -49,7 +49,7 @@ export function BatchActionBar({
               whileTap={{ scale: 0.96 }}
               onClick={onMarkProcessed}
               disabled={isProcessing}
-              className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-500 transition-all hover:bg-emerald-500 hover:text-white disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--status-success)] transition-all hover:bg-[var(--status-success)] hover:text-white disabled:opacity-50"
             >
               <CheckCircle2 className="h-3.5 w-3.5" />
               <span>{t('batch.markProcessed')}</span>
@@ -60,7 +60,7 @@ export function BatchActionBar({
               whileTap={{ scale: 0.96 }}
               onClick={onMarkUnprocessed}
               disabled={isProcessing}
-              className="flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-500 transition-all hover:bg-amber-500 hover:text-white disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--status-warning)] transition-all hover:bg-[var(--status-warning)] hover:text-white disabled:opacity-50"
             >
               <RotateCcw className="h-3.5 w-3.5" />
               <span>{t('batch.markUnprocessed')}</span>

@@ -80,7 +80,7 @@ export function AlgoSandboxDrawer({
               </div>
               <div className="flex justify-between">
                 <span className="text-[var(--text-muted)]">{t('algoDrawer.platforms')}</span>
-                <span className="font-mono text-xs font-bold text-[var(--accent-green)]">
+                <span className="font-mono text-xs font-bold text-[var(--status-success)]">
                   {algo.supportedPlatforms.join(', ')}
                 </span>
               </div>
@@ -108,7 +108,7 @@ export function AlgoSandboxDrawer({
             {/* 一级算法仓库解耦提示与导航入口 */}
             <div className="mt-4 rounded-[8px] border border-[var(--border)] bg-[var(--bg-secondary)] p-4 text-xs">
               <div className="flex items-center gap-2 font-semibold text-[var(--text-primary)]">
-                <ShieldCheck className="h-4 w-4 text-[var(--accent-green)]" />
+                <ShieldCheck className="h-4 w-4 text-[var(--status-success)]" />
                 <span>
                   {t('algoDrawer.managementTitle', { defaultValue: '算法资产与版本管理' })}
                 </span>

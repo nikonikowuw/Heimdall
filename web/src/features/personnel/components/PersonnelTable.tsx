@@ -19,24 +19,24 @@ export interface PersonnelTableProps {
 
 const AVATAR_PALETTES = [
   {
-    bg: 'from-blue-500/15 to-indigo-500/15 dark:from-blue-500/25 dark:to-indigo-500/25',
-    text: 'text-indigo-600 dark:text-indigo-400',
+    bg: 'bg-[var(--accent-soft)]',
+    text: 'text-[var(--accent)]',
   },
   {
-    bg: 'from-emerald-500/15 to-teal-500/15 dark:from-emerald-500/25 dark:to-teal-500/25',
-    text: 'text-emerald-600 dark:text-emerald-400',
+    bg: 'bg-[var(--status-success-soft)]',
+    text: 'text-[var(--status-success)]',
   },
   {
-    bg: 'from-violet-500/15 to-purple-500/15 dark:from-violet-500/25 dark:to-purple-500/25',
-    text: 'text-violet-600 dark:text-violet-400',
+    bg: 'bg-[var(--status-info-soft)]',
+    text: 'text-[var(--status-info)]',
   },
   {
-    bg: 'from-amber-500/15 to-orange-500/15 dark:from-amber-500/25 dark:to-orange-500/25',
-    text: 'text-amber-600 dark:text-amber-400',
+    bg: 'bg-[var(--status-warning-soft)]',
+    text: 'text-[var(--status-warning)]',
   },
   {
-    bg: 'from-cyan-500/15 to-sky-500/15 dark:from-cyan-500/25 dark:to-sky-500/25',
-    text: 'text-cyan-600 dark:text-cyan-400',
+    bg: 'bg-[var(--status-danger-soft)]',
+    text: 'text-[var(--status-danger)]',
   },
 ]
 
@@ -69,9 +69,9 @@ export function SampleHealthDots({ count }: { count: number }): React.ReactEleme
 
   let textColor = 'text-[var(--text-muted)]'
   if (isSaturated) {
-    textColor = 'text-emerald-500'
+    textColor = 'text-[var(--status-success)]'
   } else if (safeCount > 0) {
-    textColor = 'text-amber-500'
+    textColor = 'text-[var(--status-warning)]'
   }
 
   return (
@@ -81,8 +81,8 @@ export function SampleHealthDots({ count }: { count: number }): React.ReactEleme
           let dotColor = 'bg-[var(--border-strong)]/40'
           if (idx <= safeCount) {
             dotColor = isSaturated
-              ? 'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]'
-              : 'bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.4)]'
+              ? 'bg-[var(--status-success)] shadow-[0_0_5px_var(--status-success-soft)]'
+              : 'bg-[var(--status-warning)] shadow-[0_0_4px_var(--status-warning-soft)]'
           }
           return <span key={idx} className={`h-2 w-2 rounded-xs transition-colors ${dotColor}`} />
         })}
@@ -185,9 +185,7 @@ export function PersonnelTable({
                   key={person.id}
                   onClick={() => onView(person)}
                   className={`group cursor-pointer transition-colors ${
-                    isSelected
-                      ? 'bg-[var(--accent-soft)]/50'
-                      : 'hover:bg-[var(--bg-secondary)]/50 dark:hover:bg-white/[0.02]'
+                    isSelected ? 'bg-[var(--accent-soft)]/50' : 'hover:bg-[var(--bg-secondary)]/50'
                   }`}
                 >
                   {/* 复选框 */}
@@ -204,7 +202,7 @@ export function PersonnelTable({
                   {/* 人员基本信息 (头像 + 姓名) */}
                   <td className="px-3.5 py-2.5 whitespace-nowrap">
                     <div className="flex items-center gap-3">
-                      <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-2xl border border-black/10 bg-[var(--bg-secondary)] shadow-xs dark:border-white/10">
+                      <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] shadow-xs">
                         {avatarUrl ? (
                           <img
                             src={avatarUrl}
@@ -214,7 +212,7 @@ export function PersonnelTable({
                           />
                         ) : (
                           <div
-                            className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${palette.bg}`}
+                            className={`flex h-full w-full items-center justify-center ${palette.bg}`}
                           >
                             <span className={`font-mono text-sm font-extrabold ${palette.text}`}>
                               {initials}
@@ -246,7 +244,7 @@ export function PersonnelTable({
                         title={t('common:copy')}
                       >
                         {copiedId === person.subjectId ? (
-                          <Check className="h-3 w-3 text-emerald-500" />
+                          <Check className="h-3 w-3 text-[var(--status-success)]" />
                         ) : (
                           <Copy className="h-3 w-3" />
                         )}
@@ -305,7 +303,7 @@ export function PersonnelTable({
                           onClick={() => onAddFace(person)}
                           title={t('actions.addFacesShort')}
                           aria-label={t('actions.addFacesShort')}
-                          className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-600 transition-colors hover:bg-emerald-500/10 dark:text-emerald-400"
+                          className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--status-success)] transition-colors hover:bg-[var(--status-success-soft)]"
                         >
                           <ImagePlus className="h-3.5 w-3.5" />
                         </button>
@@ -326,7 +324,7 @@ export function PersonnelTable({
                         onClick={() => onDelete(person)}
                         title={t('actions.delete')}
                         aria-label={t('actions.delete')}
-                        className="flex h-7 w-7 items-center justify-center rounded-lg text-rose-500 transition-colors hover:bg-rose-500/10"
+                        className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-soft)]"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>

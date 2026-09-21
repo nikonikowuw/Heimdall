@@ -75,7 +75,7 @@ export function DeleteConfirmModal({
             {/* 头部 */}
             <div className="flex items-start justify-between gap-3 border-b border-[var(--border)]/70 px-5 py-4">
               <div className="flex min-w-0 items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-500/25 bg-rose-500/10 text-rose-500 shadow-xs">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs">
                   <Trash2 className="h-5 w-5" aria-hidden="true" />
                 </div>
                 <div className="min-w-0">
@@ -117,8 +117,10 @@ export function DeleteConfirmModal({
                   <p className="truncate text-sm font-semibold text-[var(--text-primary)]">
                     {target.name}
                   </p>
-                  <span className="font-data mt-1 inline-flex items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-400 tabular-nums select-text">
-                    <span className="text-[9px] font-medium text-emerald-400/70">ID</span>
+                  <span className="font-data mt-1 inline-flex items-center gap-1 rounded-md border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--status-success)] tabular-nums select-text">
+                    <span className="text-[9px] font-medium text-[var(--status-success)]/70">
+                      ID
+                    </span>
                     <span>{target.subjectId}</span>
                   </span>
                 </div>
@@ -129,9 +131,9 @@ export function DeleteConfirmModal({
               </div>
 
               {/* 影响范围与不可逆提示 */}
-              <div className="flex items-start gap-2.5 rounded-2xl border border-rose-500/20 bg-rose-500/5 p-3.5">
+              <div className="flex items-start gap-2.5 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3.5">
                 <AlertTriangle
-                  className="mt-0.5 h-4 w-4 shrink-0 text-rose-500"
+                  className="mt-0.5 h-4 w-4 shrink-0 text-[var(--status-danger)]"
                   aria-hidden="true"
                 />
                 <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
@@ -166,7 +168,7 @@ export function DeleteConfirmModal({
                   type="button"
                   onClick={onConfirm}
                   disabled={isDeleting}
-                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-rose-500 px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-rose-600 focus-visible:ring-2 focus-visible:ring-rose-500/50 focus-visible:outline-none disabled:opacity-50"
+                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--status-danger)] px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none disabled:opacity-50"
                 >
                   {isDeleting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   {isDeleting ? t('actions.delete') : t('actions.confirm')}

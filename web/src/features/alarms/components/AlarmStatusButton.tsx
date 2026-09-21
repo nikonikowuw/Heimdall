@@ -19,7 +19,7 @@ export function AlarmStatusButton({
       <button
         type="button"
         onClick={onClick}
-        className={`flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-500 transition-all hover:bg-emerald-500/25 ${className}`}
+        className={`flex items-center gap-1.5 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-3 py-1 text-xs font-semibold text-[var(--status-success)] transition-all hover:bg-[var(--status-success-soft)] ${className}`}
         title={t('card.processed')}
       >
         <CheckCircle2 className="h-3.5 w-3.5" />
@@ -32,7 +32,7 @@ export function AlarmStatusButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/15 px-3 py-1 text-xs font-semibold text-rose-500 transition-all hover:bg-rose-500 hover:text-white ${className}`}
+      className={`flex items-center gap-1.5 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-3 py-1 text-xs font-semibold text-[var(--status-danger)] transition-all hover:bg-[var(--status-danger)] hover:text-white ${className}`}
       title={t('card.markProcessed')}
     >
       <Check className="h-3.5 w-3.5" />

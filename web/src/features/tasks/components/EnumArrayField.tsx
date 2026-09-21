@@ -51,11 +51,11 @@ export function EnumArrayField({
   }
 
   return (
-    <div className="space-y-2.5 rounded-xl border border-black/[0.06] bg-white/40 p-3.5 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]">
+    <div className="space-y-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5 shadow-2xs backdrop-blur-md">
       <div className="flex items-center justify-between">
         <span className="flex items-center gap-1.5 font-medium text-[var(--text-secondary)]">
           <span className="text-xs font-semibold text-[var(--text-primary)]">{title}</span>
-          <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 font-mono text-[10px] font-bold text-[var(--accent)]">
+          <span className="rounded-full border border-[var(--accent)]/20 bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[10px] font-bold text-[var(--accent)]">
             {value.length}/{options.length}
           </span>
         </span>
@@ -67,16 +67,16 @@ export function EnumArrayField({
           >
             {t('studio.selectAll', { defaultValue: '全选' })}
           </button>
-          <span className="text-black/15 dark:text-white/15">·</span>
+          <span className="text-[var(--text-muted)]">·</span>
           <button
             type="button"
             onClick={handleInvert}
-            className="rounded-md px-1.5 py-0.5 text-[var(--text-muted)] transition-colors hover:bg-black/5 hover:text-[var(--text-primary)] dark:hover:bg-white/5"
+            className="rounded-md px-1.5 py-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
             title={t('studio.invertSelection', { defaultValue: '反选已选项目' })}
           >
             {t('studio.invert', { defaultValue: '反选' })}
           </button>
-          <span className="text-black/15 dark:text-white/15">·</span>
+          <span className="text-[var(--text-muted)]">·</span>
           <button
             type="button"
             onClick={() => onChange([])}
@@ -98,13 +98,13 @@ export function EnumArrayField({
               defaultValue: '过滤候选项 (如: 人, 车, dog)...',
             })}
             aria-label={title}
-            className="w-full rounded-lg border border-black/10 bg-white/60 py-1.5 pr-7 pl-8 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] backdrop-blur-sm transition-all outline-none focus:border-[var(--accent)] focus:bg-white focus:ring-2 focus:ring-[var(--accent)]/20 dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-black/60"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] py-1.5 pr-7 pl-8 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] backdrop-blur-sm transition-all outline-none focus:border-[var(--accent)] focus:bg-[var(--bg-surface-solid)] focus:ring-2 focus:ring-[var(--accent)]/20"
           />
           {search && (
             <button
               type="button"
               onClick={() => onSearchChange('')}
-              className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-[var(--text-muted)] hover:bg-black/5 hover:text-[var(--text-primary)] dark:hover:bg-white/10"
+              className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
             >
               <X className="h-3 w-3" />
             </button>
@@ -125,8 +125,8 @@ export function EnumArrayField({
               }
               className={`group/opt flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-left text-[11px] transition-all select-none ${
                 isChecked
-                  ? 'border-blue-500/40 bg-blue-500/10 font-semibold text-[var(--text-primary)] shadow-2xs ring-1 ring-blue-500/20 dark:bg-blue-500/15'
-                  : 'border-black/5 bg-white/50 text-[var(--text-secondary)] hover:border-black/15 hover:bg-white/80 dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:border-white/15 dark:hover:bg-white/[0.05]'
+                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] font-semibold text-[var(--text-primary)] shadow-2xs ring-1 ring-[var(--accent)]/20'
+                  : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-solid)]'
               }`}
             >
               <span className="flex min-w-0 items-center gap-1.5">
@@ -143,7 +143,7 @@ export function EnumArrayField({
                 className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors ${
                   isChecked
                     ? 'border-[var(--accent)] bg-[var(--accent)] text-white shadow-xs'
-                    : 'border-black/20 bg-transparent opacity-40 group-hover/opt:opacity-80 dark:border-white/20'
+                    : 'border-[var(--border-strong)] bg-transparent opacity-40 group-hover/opt:opacity-80'
                 }`}
               >
                 {isChecked && <Check className="h-2.5 w-2.5 stroke-[3]" />}

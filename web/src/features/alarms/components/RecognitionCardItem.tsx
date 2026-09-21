@@ -18,6 +18,7 @@ import type { RecognitionRecord } from '@/types'
 import { formatCosineSimilarityPercent, getCosineSimilarityLevel } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
+import { RECOGNITION_STATUS_STYLES, SIMILARITY_STYLES } from '../statusStyles'
 
 export interface RecognitionCardItemProps {
   recognition: RecognitionRecord
@@ -29,32 +30,17 @@ export interface RecognitionCardItemProps {
 
 const STATUS_CONFIG = {
   confirmed: {
-    textColor: 'text-emerald-500',
-    chipClass:
-      'border-emerald-500/30 bg-emerald-500/10 text-emerald-500 dark:border-emerald-500/30 dark:bg-emerald-500/15',
-    dotClass: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]',
-    ambientGlow: 'from-emerald-500/5',
-    cardBorder: 'hover:border-emerald-500/40 hover:shadow-emerald-500/5',
+    ...RECOGNITION_STATUS_STYLES.confirmed,
     Icon: CheckCircle2,
     labelKey: 'card.statusConfirmed',
   },
   pending_review: {
-    textColor: 'text-amber-500',
-    chipClass:
-      'border-amber-500/30 bg-amber-500/10 text-amber-500 dark:border-amber-500/30 dark:bg-amber-500/15',
-    dotClass: 'bg-amber-500 animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.6)]',
-    ambientGlow: 'from-amber-500/5',
-    cardBorder: 'border-amber-500/30 hover:border-amber-500/50 hover:shadow-amber-500/5',
+    ...RECOGNITION_STATUS_STYLES.pending_review,
     Icon: AlertCircle,
     labelKey: 'card.statusPendingReview',
   },
   rejected: {
-    textColor: 'text-rose-400',
-    chipClass:
-      'border-rose-500/30 bg-rose-500/10 text-rose-400 dark:border-rose-500/30 dark:bg-rose-500/15',
-    dotClass: 'bg-rose-500/80',
-    ambientGlow: 'from-rose-500/5',
-    cardBorder: 'border-rose-500/20 opacity-85 hover:opacity-100 hover:border-rose-500/40',
+    ...RECOGNITION_STATUS_STYLES.rejected,
     Icon: XCircle,
     labelKey: 'card.statusRejected',
   },
@@ -160,13 +146,7 @@ export const RecognitionCardItem = React.memo(function RecognitionCardItem({
   const simPct = formatCosineSimilarityPercent(recognition.similarity, 0)
   const simLevel = getCosineSimilarityLevel(recognition.similarity)
 
-  // 现代 SaaS 相似度仪色彩阶 (基于归一化百分比层级判定)
-  const simColorClass =
-    simLevel === 'high'
-      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
-      : simLevel === 'medium'
-        ? 'border-amber-500/40 bg-amber-500/10 text-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
-        : 'border-rose-500/40 bg-rose-500/10 text-rose-400 shadow-[0_0_12px_rgba(244,63,94,0.15)]'
+  const simColorClass = SIMILARITY_STYLES[simLevel]
 
   return (
     <div
@@ -317,7 +297,7 @@ export const RecognitionCardItem = React.memo(function RecognitionCardItem({
                 type="button"
                 whileTap={{ scale: 0.96 }}
                 onClick={() => onQuickReview(recognition, 'confirmed')}
-                className="flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-500 shadow-2xs backdrop-blur-xs transition-all hover:border-emerald-500 hover:bg-emerald-500 hover:text-white hover:shadow-emerald-500/20"
+                className="flex items-center gap-1 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--status-success)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-success)] hover:bg-[var(--status-success)] hover:text-white hover:shadow-[0_0_12px_var(--status-success-soft)]"
                 title={t('card.passTop1')}
               >
                 <Check className="h-3.5 w-3.5 stroke-[2.5]" />
@@ -327,7 +307,7 @@ export const RecognitionCardItem = React.memo(function RecognitionCardItem({
                 type="button"
                 whileTap={{ scale: 0.96 }}
                 onClick={() => onQuickReview(recognition, 'rejected')}
-                className="flex items-center gap-1 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-500 shadow-2xs backdrop-blur-xs transition-all hover:border-rose-500 hover:bg-rose-500 hover:text-white hover:shadow-rose-500/20"
+                className="flex items-center gap-1 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger)] hover:text-white hover:shadow-[0_0_12px_var(--status-danger-soft)]"
                 title={t('card.reject')}
               >
                 <X className="h-3.5 w-3.5 stroke-[2.5]" />

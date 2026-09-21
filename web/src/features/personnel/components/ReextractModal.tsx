@@ -35,7 +35,7 @@ const FOOTER_BUTTON_CLASS =
 
 const GHOST_BUTTON_CLASS = `${FOOTER_BUTTON_CLASS} border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]`
 
-const PRIMARY_BUTTON_CLASS = `${FOOTER_BUTTON_CLASS} bg-emerald-500 font-semibold text-black shadow-xs hover:bg-emerald-400 active:scale-95`
+const PRIMARY_BUTTON_CLASS = `${FOOTER_BUTTON_CLASS} bg-[var(--accent)] font-semibold text-white shadow-xs hover:opacity-90 active:scale-95`
 
 function formatFailureReason(
   reason: string,
@@ -159,11 +159,14 @@ export function ReextractModal({
       ? ((progress.finishedAt - progress.startedAt) / 1000).toFixed(1)
       : null
 
-  let completedBadgeClass = 'border-amber-500/30 bg-amber-500/10 text-amber-500'
+  let completedBadgeClass =
+    'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
   if (isTaskFailed) {
-    completedBadgeClass = 'border-rose-500/30 bg-rose-500/10 text-rose-500'
+    completedBadgeClass =
+      'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
   } else if (isAllSuccess) {
-    completedBadgeClass = 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500'
+    completedBadgeClass =
+      'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
   }
 
   let completedTitle = t('reextract.successTitle')
@@ -181,7 +184,7 @@ export function ReextractModal({
   let headerIconNode: React.ReactNode
   if (error) {
     headerIconNode = (
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-500/25 bg-rose-500/10 text-rose-500 shadow-xs">
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs">
         <AlertCircle className="h-5 w-5" aria-hidden="true" />
       </div>
     )
@@ -199,7 +202,7 @@ export function ReextractModal({
     )
   } else {
     headerIconNode = (
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/25 bg-emerald-500/10 text-emerald-500 shadow-xs">
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-xs">
         <RefreshCw className={`h-5 w-5 ${isRunning ? 'animate-spin' : ''}`} aria-hidden="true" />
       </div>
     )
@@ -225,7 +228,7 @@ export function ReextractModal({
       return (
         <div
           role="alert"
-          className="flex items-start gap-2.5 rounded-2xl border border-rose-500/25 bg-rose-500/5 p-3.5 text-xs text-rose-500"
+          className="flex items-start gap-2.5 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3.5 text-xs text-[var(--status-danger)]"
         >
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="leading-relaxed">{error}</span>
@@ -241,10 +244,10 @@ export function ReextractModal({
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
             <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
-                <Check className="h-3 w-3 text-emerald-500" aria-hidden="true" />
+                <Check className="h-3 w-3 text-[var(--status-success)]" aria-hidden="true" />
                 <span>{t('reextract.successCount')}</span>
               </div>
-              <p className="font-data mt-1 text-base font-bold text-emerald-500 tabular-nums">
+              <p className="font-data mt-1 text-base font-bold text-[var(--status-success)] tabular-nums">
                 {succeeded}{' '}
                 <span className="text-xs font-normal text-[var(--text-muted)]">/ {total}</span>
               </p>
@@ -252,22 +255,22 @@ export function ReextractModal({
 
             <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
-                <Percent className="h-3 w-3 text-cyan-500" aria-hidden="true" />
+                <Percent className="h-3 w-3 text-[var(--status-info)]" aria-hidden="true" />
                 <span>{t('reextract.successRate')}</span>
               </div>
-              <p className="font-data mt-1 text-base font-bold text-cyan-500 tabular-nums">
+              <p className="font-data mt-1 text-base font-bold text-[var(--status-info)] tabular-nums">
                 {percent}%
               </p>
             </div>
 
             <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
-                <AlertCircle className="h-3 w-3 text-amber-500" aria-hidden="true" />
+                <AlertCircle className="h-3 w-3 text-[var(--status-warning)]" aria-hidden="true" />
                 <span>{t('reextract.failedCount')}</span>
               </div>
               <p
                 className={`font-data mt-1 text-base font-bold tabular-nums ${
-                  failed > 0 ? 'text-amber-500' : 'text-[var(--text-muted)]'
+                  failed > 0 ? 'text-[var(--status-warning)]' : 'text-[var(--text-muted)]'
                 }`}
               >
                 {failed}
@@ -302,7 +305,10 @@ export function ReextractModal({
                 className="flex w-full items-center justify-between rounded-lg text-xs font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
               >
                 <span className="flex items-center gap-1.5">
-                  <AlertCircle className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
+                  <AlertCircle
+                    className="h-3.5 w-3.5 text-[var(--status-warning)]"
+                    aria-hidden="true"
+                  />
                   {t('reextract.failuresTitle')} ({failures.length})
                 </span>
                 {showFailures ? (
@@ -326,7 +332,7 @@ export function ReextractModal({
                         <span className="font-data break-all">Face: {item.faceId}</span>
                         <span className="font-data break-all">Subj: {item.subjectId}</span>
                       </div>
-                      <p className="mt-1 text-amber-500/90">
+                      <p className="mt-1 text-[var(--status-warning)]">
                         {formatFailureReason(item.reason, t)}
                       </p>
                     </div>
@@ -346,7 +352,7 @@ export function ReextractModal({
             <p className="text-xs leading-relaxed text-[var(--text-muted)]">
               {t('reextract.inProgress')}
             </p>
-            <span className="font-data text-xl font-bold text-emerald-500 tabular-nums">
+            <span className="font-data text-xl font-bold text-[var(--accent)] tabular-nums">
               {percent}%
             </span>
           </div>
@@ -360,7 +366,7 @@ export function ReextractModal({
             className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-secondary)]"
           >
             <div
-              className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-300 ease-out"
+              className="h-full bg-[var(--accent)] transition-all duration-300 ease-out"
               style={{ width: `${percent}%` }}
             />
           </div>
@@ -372,15 +378,19 @@ export function ReextractModal({
                 {processed} / {total}
               </p>
             </div>
-            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-2.5">
-              <p className="text-[10px] text-emerald-500/80">{t('reextract.successCount')}</p>
-              <p className="font-data mt-0.5 text-sm font-bold text-emerald-500 tabular-nums">
+            <div className="rounded-2xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] p-2.5">
+              <p className="text-[10px] text-[var(--status-success)]">
+                {t('reextract.successCount')}
+              </p>
+              <p className="font-data mt-0.5 text-sm font-bold text-[var(--status-success)] tabular-nums">
                 {succeeded}
               </p>
             </div>
-            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-2.5">
-              <p className="text-[10px] text-amber-500/80">{t('reextract.failedCount')}</p>
-              <p className="font-data mt-0.5 text-sm font-bold text-amber-500 tabular-nums">
+            <div className="rounded-2xl border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] p-2.5">
+              <p className="text-[10px] text-[var(--status-warning)]">
+                {t('reextract.failedCount')}
+              </p>
+              <p className="font-data mt-0.5 text-sm font-bold text-[var(--status-warning)] tabular-nums">
                 {failed}
               </p>
             </div>
@@ -503,7 +513,7 @@ export function ReextractModal({
                   </h3>
                   {headerSubtitle && (
                     <p
-                      className={`mt-0.5 truncate text-xs ${error ? 'text-rose-500' : 'text-[var(--text-muted)]'}`}
+                      className={`mt-0.5 truncate text-xs ${error ? 'text-[var(--status-danger)]' : 'text-[var(--text-muted)]'}`}
                     >
                       {headerSubtitle}
                     </p>

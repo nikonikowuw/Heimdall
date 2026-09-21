@@ -90,7 +90,7 @@ export function DeleteTaskModal({
 
         {/* 头部危险警示图标 */}
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-[var(--status-warning-soft)] text-[var(--status-warning)]">
             <AlertTriangle className="h-5 w-5" />
           </div>
           <div>
@@ -109,7 +109,7 @@ export function DeleteTaskModal({
               defaultValue: `确定要删除布防任务「${taskName || cameraId}」吗？`,
             })}
           </p>
-          <div className="rounded-[8px] border border-[var(--accent-amber)]/20 bg-[var(--accent-amber)]/5 p-3 text-[var(--accent-amber)]">
+          <div className="rounded-[8px] border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] p-3 text-[var(--status-warning)]">
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>

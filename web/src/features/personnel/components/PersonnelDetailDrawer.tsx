@@ -52,29 +52,29 @@ function getQualityGrade(score: number, t: (key: string) => string): QualityGrad
   if (scorePercent >= 80) {
     return {
       label: t('quality.excellent'),
-      colorClass: 'text-emerald-500 dark:text-emerald-400',
-      bgClass: 'bg-emerald-500/10',
-      borderClass: 'border-emerald-500/30',
-      barClass: 'bg-emerald-500',
+      colorClass: 'text-[var(--status-success)]',
+      bgClass: 'bg-[var(--status-success-soft)]',
+      borderClass: 'border-[var(--status-success-border)]',
+      barClass: 'bg-[var(--status-success)]',
       scorePercent,
     }
   }
   if (scorePercent >= 65) {
     return {
       label: t('quality.good'),
-      colorClass: 'text-sky-500 dark:text-sky-400',
-      bgClass: 'bg-sky-500/10',
-      borderClass: 'border-sky-500/30',
-      barClass: 'bg-sky-500',
+      colorClass: 'text-[var(--status-info)]',
+      bgClass: 'bg-[var(--status-info-soft)]',
+      borderClass: 'border-[var(--status-info-border)]',
+      barClass: 'bg-[var(--status-info)]',
       scorePercent,
     }
   }
   return {
     label: t('quality.fair'),
-    colorClass: 'text-amber-500 dark:text-amber-400',
-    bgClass: 'bg-amber-500/10',
-    borderClass: 'border-amber-500/30',
-    barClass: 'bg-amber-500',
+    colorClass: 'text-[var(--status-warning)]',
+    bgClass: 'bg-[var(--status-warning-soft)]',
+    borderClass: 'border-[var(--status-warning-border)]',
+    barClass: 'bg-[var(--status-warning)]',
     scorePercent,
   }
 }
@@ -316,7 +316,7 @@ export function PersonnelDetailDrawer({
                 duration: motionTokens.duration.normal,
                 ease: motionTokens.easing.smooth,
               }}
-              className="relative z-10 flex h-full w-full max-w-xl flex-col border-l border-[var(--border)] bg-white shadow-2xl dark:bg-[var(--bg-surface-solid)]"
+              className="relative z-10 flex h-full w-full max-w-xl flex-col border-l border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-2xl"
             >
               {/* ── 1. 抽屉 Header ── */}
               <header className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-5 py-3.5 sm:px-6">
@@ -343,7 +343,7 @@ export function PersonnelDetailDrawer({
                         >
                           <span>{`#${detail.subjectId}`}</span>
                           {copiedId ? (
-                            <Check className="h-2.5 w-2.5 text-emerald-500" />
+                            <Check className="h-2.5 w-2.5 text-[var(--status-success)]" />
                           ) : (
                             <Copy className="h-2.5 w-2.5 opacity-60 group-hover/id:opacity-100" />
                           )}
@@ -366,18 +366,18 @@ export function PersonnelDetailDrawer({
                     <div
                       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold transition-colors ${
                         detail.faces.length === 5
-                          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                          : 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                          ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
+                          : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
                       }`}
                     >
                       <div className="flex items-center gap-0.5">
                         {[1, 2, 3, 4, 5].map((slot) => {
-                          let dotColor = 'bg-black/15 dark:bg-white/15'
+                          let dotColor = 'bg-[var(--border-strong)]/40'
                           if (slot <= detail.faces.length) {
                             dotColor =
                               detail.faces.length === 5
-                                ? 'bg-emerald-500 shadow-[0_0_3px_rgba(16,185,129,0.7)]'
-                                : 'bg-amber-500'
+                                ? 'bg-[var(--status-success)] shadow-[0_0_3px_var(--status-success-soft)]'
+                                : 'bg-[var(--status-warning)]'
                           }
                           return (
                             <span key={slot} className={`h-1.5 w-1.5 rounded-xs ${dotColor}`} />
@@ -412,7 +412,7 @@ export function PersonnelDetailDrawer({
                     {error && (
                       <div
                         role="alert"
-                        className="flex items-start gap-2.5 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-500 shadow-2xs"
+                        className="flex items-start gap-2.5 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3.5 text-xs text-[var(--status-danger)] shadow-2xs"
                       >
                         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                         <span className="leading-relaxed">{error}</span>
@@ -441,7 +441,7 @@ export function PersonnelDetailDrawer({
                           }}
                           aria-label={t('table.previewPhoto', { defaultValue: '查看主照片' })}
                           title={t('table.previewPhoto', { defaultValue: '查看主照片' })}
-                          className="group/avatar relative h-28 w-22 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-black/10 bg-[var(--bg-secondary)] shadow-inner sm:h-32 sm:w-26 dark:border-white/10"
+                          className="group/avatar relative h-28 w-22 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] shadow-inner sm:h-32 sm:w-26"
                         >
                           {detail.primaryPhotoPath ? (
                             <>
@@ -463,8 +463,8 @@ export function PersonnelDetailDrawer({
 
                           {/* 主头像微标 */}
                           <div className="absolute bottom-1.5 left-1.5 z-10">
-                            <span className="inline-flex items-center gap-0.5 rounded-md border border-emerald-500/30 bg-black/70 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-400 shadow-xs backdrop-blur-md">
-                              <Sparkles className="h-2.5 w-2.5 text-emerald-400" />
+                            <span className="inline-flex items-center gap-0.5 rounded-md border border-[var(--status-success-border)] bg-[var(--overlay-scrim)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--status-success)] shadow-xs backdrop-blur-md">
+                              <Sparkles className="h-2.5 w-2.5 text-[var(--status-success)]" />
                               <span>{t('card.primary')}</span>
                             </span>
                           </div>
@@ -520,7 +520,7 @@ export function PersonnelDetailDrawer({
                               <span className="tabular-nums">({primaryGrade.scorePercent}%)</span>
                             </span>
                           </div>
-                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-secondary)]">
                             <div
                               className={`h-full rounded-full transition-all duration-500 ${primaryGrade.barClass}`}
                               style={{ width: `${Math.max(6, primaryGrade.scorePercent)}%` }}
@@ -629,7 +629,7 @@ export function PersonnelDetailDrawer({
                               key={face.faceId}
                               className={`group/tile relative flex flex-col justify-between rounded-2xl border p-2.5 shadow-2xs transition-all hover:shadow-md ${
                                 face.isPrimary
-                                  ? 'border-emerald-500/50 bg-emerald-500/5'
+                                  ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)]'
                                   : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]'
                               }`}
                             >
@@ -646,7 +646,7 @@ export function PersonnelDetailDrawer({
                                 }}
                                 title={t('table.previewPhoto', { defaultValue: '查看大图' })}
                                 aria-label={t('table.previewPhoto', { defaultValue: '查看大图' })}
-                                className="relative aspect-4/3 w-full cursor-pointer overflow-hidden rounded-xl bg-black/80 sm:aspect-square"
+                                className="relative aspect-4/3 w-full cursor-pointer overflow-hidden rounded-xl bg-[var(--video-surface)] sm:aspect-square"
                               >
                                 <img
                                   src={imgUrl}
@@ -656,14 +656,14 @@ export function PersonnelDetailDrawer({
                                 />
 
                                 {/* 悬停放大镜遮罩 */}
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity group-hover/tile:opacity-100">
+                                <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-scrim)] opacity-0 transition-opacity group-hover/tile:opacity-100">
                                   <Eye className="h-4 w-4 text-white drop-shadow" />
                                 </div>
 
                                 {/* 主头像徽标 */}
                                 {face.isPrimary && (
-                                  <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-bold text-black shadow-xs">
-                                    <Sparkles className="h-2.5 w-2.5 fill-black" />
+                                  <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 rounded-md bg-[var(--status-success)] px-1.5 py-0.5 text-[9px] font-bold text-white shadow-xs">
+                                    <Sparkles className="h-2.5 w-2.5" />
                                     <span>{t('card.primary')}</span>
                                   </div>
                                 )}
@@ -697,7 +697,7 @@ export function PersonnelDetailDrawer({
                                     {Math.round(face.detectionScore * 100)}%
                                   </span>
                                 </div>
-                                <div className="h-1 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                                <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--bg-secondary)]">
                                   <div
                                     className={`h-full rounded-full transition-all duration-300 ${grade.barClass}`}
                                     style={{ width: `${Math.max(6, grade.scorePercent)}%` }}
@@ -717,7 +717,7 @@ export function PersonnelDetailDrawer({
                                     {t('actions.setPrimary')}
                                   </button>
                                 ) : (
-                                  <span className="inline-flex items-center gap-1 px-1 text-[10px] font-semibold text-emerald-500">
+                                  <span className="inline-flex items-center gap-1 px-1 text-[10px] font-semibold text-[var(--status-success)]">
                                     <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
                                     <span>{t('card.isPrimary')}</span>
                                   </span>
@@ -729,7 +729,7 @@ export function PersonnelDetailDrawer({
                                   disabled={actionLoading || detail.faces.length <= 1}
                                   aria-label={t('actions.deleteFace')}
                                   title={t('actions.deleteFace')}
-                                  className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-rose-500/10 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-500/50 focus-visible:outline-none disabled:opacity-30"
+                                  className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none disabled:opacity-30"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
@@ -775,7 +775,7 @@ export function PersonnelDetailDrawer({
                 {!loading && !detail && error && (
                   <div
                     role="alert"
-                    className="flex items-start gap-2.5 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-500"
+                    className="flex items-start gap-2.5 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-4 text-xs text-[var(--status-danger)]"
                   >
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                     <div className="flex-1 space-y-2">
@@ -784,7 +784,7 @@ export function PersonnelDetailDrawer({
                         <button
                           type="button"
                           onClick={() => fetchDetail(subjectId)}
-                          className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-rose-500/40 px-3 text-xs font-medium transition-colors hover:bg-rose-500/10 focus-visible:ring-2 focus-visible:ring-rose-500/40 focus-visible:outline-none"
+                          className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-[var(--status-danger-border)] px-3 text-xs font-medium transition-colors hover:bg-[var(--status-danger-soft)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/40 focus-visible:outline-none"
                         >
                           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                           <span>{t('actions.retry')}</span>
@@ -804,7 +804,7 @@ export function PersonnelDetailDrawer({
         {previewPhotoUrl && (
           <div
             onClick={() => setPreviewPhotoUrl(null)}
-            className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md"
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-md"
           >
             <motion.div
               initial={reduceMotion ? false : { opacity: 0, scale: 0.94 }}
@@ -812,7 +812,7 @@ export function PersonnelDetailDrawer({
               exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94 }}
               transition={{ duration: motionTokens.duration.fast }}
               onClick={(e) => e.stopPropagation()}
-              className="relative max-h-[85vh] max-w-[85vw] overflow-hidden rounded-2xl border border-white/20 bg-black shadow-2xl"
+              className="relative max-h-[85vh] max-w-[85vw] overflow-hidden rounded-2xl border border-white/20 bg-[var(--video-surface)] shadow-2xl"
             >
               <img
                 src={previewPhotoUrl}
@@ -823,7 +823,7 @@ export function PersonnelDetailDrawer({
                 type="button"
                 onClick={() => setPreviewPhotoUrl(null)}
                 aria-label={t('common:close')}
-                className="absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none"
+                className="absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-full bg-[var(--overlay-scrim)] text-white transition-colors hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -851,10 +851,10 @@ export function PersonnelDetailDrawer({
                 duration: motionTokens.duration.fast,
                 ease: motionTokens.easing.smooth,
               }}
-              className="relative w-full max-w-sm overflow-hidden rounded-2xl border border-[var(--border)] bg-white p-6 shadow-2xl dark:bg-[var(--bg-surface-solid)]"
+              className="relative w-full max-w-sm overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-6 shadow-2xl"
             >
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-500">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)]">
                   <AlertCircle className="h-5 w-5" aria-hidden="true" />
                 </div>
                 <h3 className="text-base font-bold tracking-tight text-[var(--text-primary)]">
@@ -878,7 +878,7 @@ export function PersonnelDetailDrawer({
                   type="button"
                   onClick={handleConfirmDeleteFace}
                   disabled={actionLoading}
-                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-rose-500 px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-rose-600 focus-visible:ring-2 focus-visible:ring-rose-500/50 focus-visible:outline-none disabled:opacity-50"
+                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--status-danger)] px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none disabled:opacity-50"
                 >
                   {actionLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   <span>{actionLoading ? t('actions.delete') : t('actions.confirm')}</span>

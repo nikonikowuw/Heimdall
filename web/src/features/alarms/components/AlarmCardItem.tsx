@@ -85,11 +85,11 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
           : isProcessed
             ? 'border-[var(--border)] opacity-75 hover:opacity-100'
             : isCritical
-              ? 'border-rose-500/70 shadow-[0_0_12px_rgba(244,63,94,0.25)] hover:border-rose-500'
-              : 'border-amber-500/40 hover:border-amber-500/70'
+              ? 'border-[var(--status-danger)]/70 shadow-[0_0_12px_var(--status-danger-soft)] hover:border-[var(--status-danger)]'
+              : 'border-[var(--status-warning-border)] hover:border-[var(--status-warning)]'
       }`}
     >
-      <div className="relative aspect-video w-full overflow-hidden bg-black/90">
+      <div className="relative aspect-video w-full overflow-hidden bg-[var(--video-surface)]">
         {/* 多选勾选复选框 */}
         {onToggleSelect && (
           <div
@@ -111,7 +111,7 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
         {thumbUrl && !imageError ? (
           <>
             {!imageLoaded && (
-              <div className="absolute inset-0 flex animate-pulse items-center justify-center bg-slate-900/60 font-mono text-[10px] text-slate-500">
+              <div className="absolute inset-0 flex animate-pulse items-center justify-center bg-[var(--overlay-scrim)] font-mono text-[10px] text-[var(--text-muted)]">
                 LOADING...
               </div>
             )}
@@ -128,7 +128,7 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
             />
           </>
         ) : (
-          <div className="flex h-full w-full items-center justify-center font-mono text-xs text-slate-500">
+          <div className="flex h-full w-full items-center justify-center font-mono text-xs text-[var(--text-muted)]">
             {t('card.noImage')}
           </div>
         )}
@@ -154,7 +154,9 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
         <div className="absolute top-2 left-2 flex items-center gap-1.5">
           <span
             className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
-              isCritical ? 'animate-pulse bg-rose-500/90 text-white' : 'bg-amber-500/90 text-white'
+              isCritical
+                ? 'animate-pulse bg-[var(--status-danger)] text-white'
+                : 'bg-[var(--status-warning)] text-white'
             }`}
           >
             {alarm.severity || 'WARNING'}
@@ -202,8 +204,8 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
             }}
             className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all duration-150 focus-visible:ring-1 focus-visible:ring-[var(--accent)] ${
               isProcessed
-                ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
-                : 'border border-rose-500/30 bg-rose-500/10 text-rose-500 hover:bg-rose-500/20'
+                ? 'border border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] hover:bg-[var(--status-success-soft)]'
+                : 'border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] hover:bg-[var(--status-danger-soft)]'
             }`}
             aria-label={isProcessed ? t('card.processed') : t('card.markProcessed')}
           >

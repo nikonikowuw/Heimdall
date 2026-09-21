@@ -38,23 +38,23 @@ function getPipelineRuntimeStatus(
     case 1:
       return {
         label: t('card.pipelineStarting', { defaultValue: '启动中' }),
-        className: 'text-[var(--accent-amber)]',
+        className: 'text-[var(--status-warning)]',
       }
     case 2:
       return {
         label: t('card.pipelineRunning', { defaultValue: '运行中' }),
-        className: 'text-[var(--accent-green)]',
+        className: 'text-[var(--status-success)]',
       }
     case 3:
     case 4:
       return {
         label: t('card.pipelineDegraded', { defaultValue: '重连中' }),
-        className: 'text-[var(--accent-amber)]',
+        className: 'text-[var(--status-warning)]',
       }
     case 5:
       return {
         label: t('card.pipelineError', { defaultValue: '异常' }),
-        className: 'text-[var(--destructive)]',
+        className: 'text-[var(--status-danger)]',
       }
     default:
       return {
@@ -79,18 +79,19 @@ const STREAM_MODE_CONFIG: Record<
   main: {
     labelKey: 'cardStream.main',
     defaultLabel: '主码流',
-    className: 'border-blue-500/30 bg-blue-500/10 text-[var(--accent)]',
+    className:
+      'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info)]',
   },
   sub: {
     labelKey: 'cardStream.sub',
     defaultLabel: '子码流',
-    className: 'border-amber-500/30 bg-amber-500/10 text-[var(--accent-amber)]',
+    className:
+      'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]',
   },
   auto: {
     labelKey: 'cardStream.auto',
     defaultLabel: '自动',
-    className:
-      'border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 text-[var(--text-secondary)]',
+    className: 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]',
   },
 }
 
@@ -228,22 +229,20 @@ export function TaskCameraCard({
       transition={{ duration: 0.2, ease: motionTokens.easing.smooth }}
       className={`group relative flex flex-col overflow-hidden rounded-2xl border p-4 text-left backdrop-blur-xl transition-all duration-300 ${
         isArmed
-          ? 'border-emerald-500/40 bg-white/80 shadow-sm ring-1 ring-emerald-500/20 hover:border-emerald-500/60 hover:shadow-[0_8px_30px_rgba(16,185,129,0.12)] dark:bg-[#0b0e14]/80'
-          : 'border-black/[0.07] bg-white/70 shadow-sm hover:border-black/15 hover:shadow-lg dark:border-white/[0.08] dark:bg-[#0b0e14]/65 dark:hover:border-white/15'
+          ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] shadow-sm ring-1 ring-[var(--status-success-border)] hover:border-[var(--status-success-border)]'
+          : 'border-[var(--border)] bg-[var(--bg-surface)] shadow-sm hover:border-[var(--border-strong)] hover:shadow-lg'
       }`}
       style={{
-        boxShadow: isArmed
-          ? 'inset 0 1px 0 0 rgba(255, 255, 255, 0.12), 0 4px 20px rgba(0, 0, 0, 0.04)'
-          : 'inset 0 1px 0 0 rgba(255, 255, 255, 0.08)',
+        boxShadow: isArmed ? 'var(--shadow-md)' : 'var(--shadow-sm)',
       }}
     >
       {/* 1. 头部：身份 + 操作 */}
       <div className="relative z-10 flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-black/5 bg-gradient-to-br from-blue-500/10 to-indigo-500/10 shadow-2xs dark:border-white/10">
+          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] shadow-2xs">
             <Video className="h-4 w-4 text-[var(--accent)]" />
             <span
-              className={`absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white dark:border-[#0b0e14] ${probeBadge.dotClass}`}
+              className={`absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-surface-solid)] ${probeBadge.dotClass}`}
             />
           </div>
           <div className="min-w-0">
@@ -268,8 +267,8 @@ export function TaskCameraCard({
             title={isArmed ? t('status.armed') : t('status.disarmed')}
             className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-all ${
               isArmed
-                ? 'border-emerald-500/35 bg-emerald-500/15 text-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.25)] hover:bg-emerald-500/20'
-                : 'border-black/10 bg-black/5 text-[var(--text-muted)] hover:border-black/20 hover:text-[var(--text-primary)] dark:border-white/10 dark:bg-white/5 dark:hover:border-white/20'
+                ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-[0_0_12px_var(--status-success-soft)] hover:bg-[var(--status-success-soft)]'
+                : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
             }`}
           >
             <ShieldCheck className="h-3.5 w-3.5" />
@@ -285,7 +284,7 @@ export function TaskCameraCard({
             whileTap={reduceMotion ? undefined : { scale: 0.92 }}
             title={t('actions.configureRules', { defaultValue: '配置算法与布防规则' })}
             aria-label={t('actions.configureRules', { defaultValue: '配置算法与布防规则' })}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-black/5 bg-black/5 text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--accent)]/10 hover:text-[var(--accent)] dark:border-white/10 dark:bg-white/5"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
           >
             <Pencil className="h-3.5 w-3.5" />
           </motion.button>
@@ -297,7 +296,7 @@ export function TaskCameraCard({
             whileTap={reduceMotion ? undefined : { scale: 0.92 }}
             title={t('deleteTask', { defaultValue: '删除布防任务' })}
             aria-label={t('deleteTask', { defaultValue: '删除布防任务' })}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-black/5 bg-black/5 text-[var(--text-secondary)] transition-colors hover:border-[var(--destructive)]/40 hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)] dark:border-white/10 dark:bg-white/5"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] transition-colors hover:border-[var(--destructive)]/40 hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </motion.button>
@@ -450,7 +449,7 @@ export function TaskCameraCard({
 
       {/* 3. 配置摘要微磁贴（Frosted Micro-tiles） */}
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2 backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.025]">
+        <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 backdrop-blur-md">
           <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
             <Hexagon className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
             <span className="truncate whitespace-nowrap">{t('card.geometryRules')}</span>
@@ -460,13 +459,13 @@ export function TaskCameraCard({
           </span>
         </div>
 
-        <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2 backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.025]">
+        <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 backdrop-blur-md">
           <span className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
-            <Activity className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+            <Activity className="h-3.5 w-3.5 shrink-0 text-[var(--status-success)]" />
             <span className="truncate whitespace-nowrap">{t('card.motionGate')}</span>
           </span>
           <span
-            className={`shrink-0 font-semibold whitespace-nowrap ${isMotionGateEco ? 'text-emerald-500' : 'text-[var(--accent-amber)]'}`}
+            className={`shrink-0 font-semibold whitespace-nowrap ${isMotionGateEco ? 'text-[var(--status-success)]' : 'text-[var(--status-warning)]'}`}
           >
             {isMotionGateEco ? t('card.motionGateEco') : t('card.motionGateAlways')}
           </span>
@@ -474,7 +473,7 @@ export function TaskCameraCard({
       </div>
 
       {/* 4. 算法绑定与运行状态 */}
-      <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-black/[0.06] bg-black/[0.02] px-3 py-2 text-xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.025]">
+      <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs backdrop-blur-md">
         <span className="flex min-w-0 items-center gap-1.5">
           <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
           {algorithmId ? (
@@ -483,7 +482,7 @@ export function TaskCameraCard({
                 {algorithmId}
               </span>
               {enabledInstances.length > 1 && (
-                <span className="shrink-0 rounded-md border border-black/10 bg-black/5 px-1.5 font-mono text-[10px] text-[var(--text-muted)] dark:border-white/10 dark:bg-white/5">
+                <span className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 font-mono text-[10px] text-[var(--text-muted)]">
                   +{enabledInstances.length - 1}
                 </span>
               )}
@@ -495,7 +494,7 @@ export function TaskCameraCard({
           )}
         </span>
         <span className="flex shrink-0 items-center gap-2 font-mono text-[11px]">
-          <span className="rounded-md border border-black/5 bg-black/5 px-1.5 py-0.5 text-[10px] text-[var(--text-muted)] dark:border-white/10 dark:bg-white/5">
+          <span className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
             {analysisFps > 0 ? `${analysisFps} FPS` : t('card.fpsAuto', { defaultValue: '自动' })}
           </span>
           <span className={`flex items-center gap-1 font-semibold ${runtimeStatus.className}`}>
@@ -507,7 +506,7 @@ export function TaskCameraCard({
               className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${
                 applySummary.tone === 'failed'
                   ? 'border-[var(--destructive)]/40 bg-[var(--destructive)]/10 text-[var(--destructive)]'
-                  : 'border-[var(--accent-amber)]/40 bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]'
+                  : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
               }`}
               title={unappliedNoticeLines(applySummary).join('\n')}
             >
@@ -523,7 +522,7 @@ export function TaskCameraCard({
       </div>
 
       {/* 5. 接入状态与码流/地址 */}
-      <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-black/5 pt-3 dark:border-white/10">
+      <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-[var(--border)] pt-3">
         <span
           className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${probeBadge.badgeBg}`}
         >
@@ -559,13 +558,13 @@ export function TaskCameraCard({
             onClick={handleCopyRtsp}
             title={`${t('card.copyRtsp')}\n${camera.rtspUrl}`}
             aria-label={`${t('card.copyRtsp')}: ${camera.rtspUrl}`}
-            className="flex shrink-0 items-center gap-1 rounded-lg border border-black/5 bg-black/5 px-2 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent)]/10 hover:text-[var(--accent)] dark:border-white/10 dark:bg-white/5"
+            className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
           >
             <Radio className="h-3.5 w-3.5" />
             {copied ? (
               <>
-                <Check className="h-3 w-3 text-emerald-500" />
-                <span className="text-emerald-500">{t('card.copied')}</span>
+                <Check className="h-3 w-3 text-[var(--status-success)]" />
+                <span className="text-[var(--status-success)]">{t('card.copied')}</span>
               </>
             ) : (
               <Copy className="h-3 w-3" />

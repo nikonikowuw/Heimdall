@@ -1,11 +1,7 @@
 import React from 'react'
 import { Check, ChevronRight, Cpu } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  denormalizeCosineSimilarity,
-  isCosineThresholdKey,
-  normalizeCosineSimilarity,
-} from '@/lib/similarity'
+import { isCosineThresholdKey, percentToScore, scoreToPercent } from '@/lib/similarity'
 import type { AlgoManifest } from '@/types'
 import { getLocalizedClassName } from './rulesStudioTypes'
 
@@ -78,7 +74,7 @@ export function AlgoSettingsSidebar({
           <Cpu className="h-4 w-4 text-[var(--accent)]" />
           <span>{t('studio.algoPanelTitle', { defaultValue: '算法与目标感知' })}</span>
         </div>
-        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-500">
+        <span className="rounded-full border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--status-success)]">
           READY
         </span>
       </div>
@@ -113,7 +109,7 @@ export function AlgoSettingsSidebar({
               <span className="max-w-[140px] truncate font-mono font-bold text-[var(--accent)]">
                 {activeAlgo.algorithmId}
               </span>
-              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-500">
+              <span className="rounded bg-[var(--status-success-soft)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--status-success)]">
                 v{activeAlgo.version}
               </span>
             </div>
@@ -281,14 +277,10 @@ export function AlgoSettingsSidebar({
                   const rawValue = typeof val === 'number' ? val : rawDefault
                   const boundedRawValue = Math.min(rawMax, Math.max(rawMin, rawValue))
                   const displayValue = isCosineThreshold
-                    ? normalizeCosineSimilarity(boundedRawValue) * 100
+                    ? scoreToPercent(boundedRawValue)
                     : boundedRawValue
-                  const displayMin = isCosineThreshold
-                    ? normalizeCosineSimilarity(rawMin) * 100
-                    : rawMin
-                  const displayMax = isCosineThreshold
-                    ? normalizeCosineSimilarity(rawMax) * 100
-                    : rawMax
+                  const displayMin = isCosineThreshold ? scoreToPercent(rawMin) : rawMin
+                  const displayMax = isCosineThreshold ? scoreToPercent(rawMax) : rawMax
                   return (
                     <div key={key} className="space-y-1">
                       <div className="flex items-center justify-between">
@@ -306,9 +298,7 @@ export function AlgoSettingsSidebar({
                         onChange={(e) => {
                           const parsed = Number(e.target.value)
                           if (!Number.isFinite(parsed)) return
-                          const nextRawValue = isCosineThreshold
-                            ? denormalizeCosineSimilarity(parsed / 100)
-                            : parsed
+                          const nextRawValue = isCosineThreshold ? percentToScore(parsed) : parsed
                           const boundedNextValue = Math.min(rawMax, Math.max(rawMin, nextRawValue))
                           onCustomAlgoParamChange?.(key, boundedNextValue)
                         }}

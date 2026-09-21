@@ -62,10 +62,10 @@ export function BatchDeleteModal({
               duration: motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="lens-glass relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-rose-500/20 bg-[var(--bg-surface-solid)]/98 p-6 shadow-2xl dark:bg-[var(--bg-secondary)]/98"
+            className="lens-glass relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-[var(--status-danger-border)] bg-[var(--bg-surface-solid)]/98 p-6 shadow-2xl"
           >
             <div className="flex items-start gap-4">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-500/20 bg-rose-500/10 text-rose-500 shadow-xs">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs">
                 <AlertTriangle className="h-5 w-5" />
               </div>
 
@@ -96,7 +96,7 @@ export function BatchDeleteModal({
 
                 {/* 进度显示 */}
                 {isDeleting && currentProgress && (
-                  <div className="mt-3 text-xs text-rose-500">
+                  <div className="mt-3 text-xs text-[var(--status-danger)]">
                     {t('batch.deleting', {
                       current: currentProgress.current,
                       total: currentProgress.total,
@@ -120,7 +120,7 @@ export function BatchDeleteModal({
                 type="button"
                 disabled={isDeleting}
                 onClick={onConfirm}
-                className="flex items-center gap-1.5 rounded-xl bg-rose-500 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:bg-rose-600 focus-visible:ring-2 focus-visible:ring-rose-500/50 focus-visible:outline-none active:scale-95 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-xl bg-[var(--status-danger)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none active:scale-95 disabled:opacity-50"
               >
                 {isDeleting ? (
                   <>

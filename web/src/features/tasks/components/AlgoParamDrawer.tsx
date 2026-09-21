@@ -5,11 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { motionTokens } from '@/lib/motionTokens'
 import type { AlgoManifest } from '@/types'
-import {
-  denormalizeCosineSimilarity,
-  isCosineThresholdKey,
-  normalizeCosineSimilarity,
-} from '@/lib/similarity'
+import { isCosineThresholdKey, percentToScore, scoreToPercent } from '@/lib/similarity'
 import { getEnumOptions, resolveEnumSelection, stripLegacyInjectedParams } from '../algoMetadata'
 import {
   clampNumericParam,
@@ -45,10 +41,8 @@ function getNumericParamBounds(
 ): { inputMin?: number; inputMax?: number; stepVal: number } {
   if (isCosineThreshold) {
     return {
-      inputMin:
-        config.minimum === undefined ? undefined : normalizeCosineSimilarity(config.minimum) * 100,
-      inputMax:
-        config.maximum === undefined ? undefined : normalizeCosineSimilarity(config.maximum) * 100,
+      inputMin: config.minimum === undefined ? undefined : scoreToPercent(config.minimum),
+      inputMax: config.maximum === undefined ? undefined : scoreToPercent(config.maximum),
       stepVal: 0.5,
     }
   }
@@ -125,13 +119,11 @@ export function AlgoParamDrawer({
   }
 
   function getDisplayNumericValue(key: string, rawValue: number): number {
-    return isCosineThresholdKey(key) ? normalizeCosineSimilarity(rawValue) * 100 : rawValue
+    return isCosineThresholdKey(key) ? scoreToPercent(rawValue) : rawValue
   }
 
   function getRawNumericValue(key: string, displayValue: number): number {
-    return isCosineThresholdKey(key)
-      ? denormalizeCosineSimilarity(displayValue / 100)
-      : displayValue
+    return isCosineThresholdKey(key) ? percentToScore(displayValue) : displayValue
   }
 
   function commitNumericDraft(
@@ -222,16 +214,12 @@ export function AlgoParamDrawer({
                 duration: reduceMotion ? 0 : motionTokens.duration.normal,
                 ease: motionTokens.easing.smooth,
               }}
-              className="flex w-screen max-w-md flex-col border-l border-white/10 bg-white/80 shadow-[-24px_0_80px_rgba(0,0,0,0.55)] backdrop-blur-2xl dark:bg-[#07090e]/80"
-              style={{
-                boxShadow:
-                  'inset 0 1px 0 0 rgba(255, 255, 255, 0.12), -24px 0 80px rgba(0, 0, 0, 0.55)',
-              }}
+              className="flex w-screen max-w-md flex-col border-l border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-[var(--shadow-lg)] backdrop-blur-2xl"
             >
               {/* 抽屉头部：毛玻璃微光 */}
-              <div className="flex h-16 shrink-0 items-center justify-between border-b border-black/5 bg-white/40 px-5 backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.02]">
+              <div className="flex h-16 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-surface)] px-5 backdrop-blur-xl">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-blue-500/25 bg-gradient-to-br from-blue-500/15 to-indigo-500/15 text-[var(--accent)] shadow-sm">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] text-[var(--accent)] shadow-sm">
                     <Sliders className="h-4 w-4" />
                   </div>
                   <div>
@@ -242,7 +230,7 @@ export function AlgoParamDrawer({
                       >
                         {algo.name}
                       </h3>
-                      <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 font-mono text-[9px] font-bold text-[var(--accent)]">
+                      <span className="rounded-full border border-[var(--accent)]/20 bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[9px] font-bold text-[var(--accent)]">
                         {algo.category?.toUpperCase() || 'ALGO'}
                       </span>
                     </div>
@@ -259,7 +247,7 @@ export function AlgoParamDrawer({
                   onClick={onClose}
                   aria-label={t('studio.closeDrawerHint', { defaultValue: '关闭参数面板' })}
                   title={t('studio.closeDrawerHint', { defaultValue: '关闭参数面板' })}
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-black/5 bg-black/5 text-[var(--text-muted)] transition-all hover:bg-black/10 hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/15"
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -268,7 +256,7 @@ export function AlgoParamDrawer({
               {/* 抽屉正文表单（半透明独立滚动视窗） */}
               <div className="flex-1 space-y-4 overflow-y-auto p-4 text-xs sm:p-5">
                 {/* 1. 算力开销 FPS 调度 */}
-                <div className="space-y-3 rounded-xl border border-black/[0.06] bg-white/50 p-3.5 shadow-sm backdrop-blur-xl transition-all dark:border-white/[0.08] dark:bg-white/[0.025]">
+                <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5 shadow-sm backdrop-blur-xl transition-all">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold tracking-tight text-[var(--text-primary)]">
                       {t('analysisFps', { defaultValue: '推理算力调度 (FPS)' })}
@@ -279,7 +267,7 @@ export function AlgoParamDrawer({
                   </div>
 
                   {/* 分段跑道式调度选择器 */}
-                  <div className="grid grid-cols-4 gap-1.5 rounded-xl border border-black/5 bg-black/[0.03] p-1 font-mono text-[11px] dark:border-white/[0.06] dark:bg-black/40">
+                  <div className="grid grid-cols-4 gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-1 font-mono text-[11px]">
                     {FPS_PRESETS.map((item) => {
                       const isActive = localFps === item.fps
                       return (
@@ -289,8 +277,8 @@ export function AlgoParamDrawer({
                           onClick={() => setLocalFps(item.fps)}
                           className={`flex flex-col items-center justify-center rounded-lg py-2 transition-all ${
                             isActive
-                              ? 'border border-black/5 bg-white font-bold text-[var(--text-primary)] shadow-sm dark:border-white/20 dark:bg-white/15'
-                              : 'text-[var(--text-muted)] hover:bg-black/[0.02] hover:text-[var(--text-secondary)] dark:hover:bg-white/[0.04]'
+                              ? 'border border-[var(--border)] bg-[var(--bg-surface-solid)] font-bold text-[var(--text-primary)] shadow-sm'
+                              : 'text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-secondary)]'
                           }`}
                         >
                           <span className="text-xs">{item.fps} FPS</span>
@@ -312,7 +300,7 @@ export function AlgoParamDrawer({
 
                 {/* 2. 模型自定义专属参数 */}
                 {schemaParams.length > 0 && (
-                  <div className="space-y-3 rounded-xl border border-black/[0.06] bg-white/50 p-3.5 shadow-sm backdrop-blur-xl transition-all dark:border-white/[0.08] dark:bg-white/[0.025]">
+                  <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5 shadow-sm backdrop-blur-xl transition-all">
                     <div className="flex items-center gap-1.5 font-bold text-[var(--text-primary)]">
                       <Cpu className="h-3.5 w-3.5 text-[var(--accent)]" />
                       <span className="text-xs">
@@ -333,7 +321,7 @@ export function AlgoParamDrawer({
                           return (
                             <div
                               key={key}
-                              className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-white/40 px-3.5 py-2.5 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                              className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2.5 shadow-2xs backdrop-blur-md"
                             >
                               <div className="pr-2">
                                 <span className="block text-xs font-semibold text-[var(--text-primary)]">
@@ -353,12 +341,12 @@ export function AlgoParamDrawer({
                                 onClick={() => setLocalParams((p) => ({ ...p, [key]: !checked }))}
                                 className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
                                   checked
-                                    ? 'bg-[var(--accent-green)] shadow-[0_0_10px_rgba(16,185,129,0.35)]'
-                                    : 'border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10'
+                                    ? 'bg-[var(--status-success)] shadow-[0_0_10px_var(--status-success-soft)]'
+                                    : 'border border-[var(--border)] bg-[var(--bg-secondary)]'
                                 }`}
                               >
                                 <span
-                                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md transition-transform ${
+                                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-[var(--bg-surface-solid)] shadow-md transition-transform ${
                                     checked ? 'translate-x-4' : 'translate-x-0.5'
                                   }`}
                                 />
@@ -390,7 +378,7 @@ export function AlgoParamDrawer({
                           return (
                             <div
                               key={key}
-                              className="space-y-2.5 rounded-xl border border-black/[0.06] bg-white/40 p-3 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                              className="space-y-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 shadow-2xs backdrop-blur-md"
                             >
                               <div className="flex items-center justify-between">
                                 <span className="text-xs font-semibold text-[var(--text-primary)]">
@@ -429,7 +417,7 @@ export function AlgoParamDrawer({
                                           ),
                                         }))
                                       }}
-                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-black/10 accent-[var(--accent)] dark:bg-white/10"
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-[var(--bg-secondary)] accent-[var(--accent)]"
                                     />
                                     <div className="flex items-center justify-between font-mono text-[9px] text-[var(--text-muted)]">
                                       <span>
@@ -475,7 +463,7 @@ export function AlgoParamDrawer({
                                         boundedRawValue,
                                       )
                                     }
-                                    className="w-full rounded-lg border border-black/10 bg-white/60 px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-white focus:ring-2 focus:ring-[var(--accent)]/20 dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-black/60"
+                                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-[var(--bg-surface-solid)] focus:ring-2 focus:ring-[var(--accent)]/20"
                                   />
                                 </div>
                               </div>
@@ -525,7 +513,7 @@ export function AlgoParamDrawer({
                               return (
                                 <div
                                   key={key}
-                                  className="space-y-2 rounded-xl border border-black/[0.06] bg-white/40 p-3 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                                  className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 shadow-2xs backdrop-blur-md"
                                 >
                                   <span className="text-xs font-semibold text-[var(--text-primary)]">
                                     {title}
@@ -540,8 +528,8 @@ export function AlgoParamDrawer({
                                         }
                                         className={`rounded-lg border px-2 py-1.5 text-center text-xs font-semibold transition-all ${
                                           textValue === opt
-                                            ? 'border-blue-500/30 bg-[var(--accent)] text-white shadow-sm'
-                                            : 'border-black/5 bg-white/50 text-[var(--text-secondary)] hover:border-black/15 dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-white/20'
+                                            ? 'border-[var(--accent)] bg-[var(--accent)] text-white shadow-sm'
+                                            : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]'
                                         }`}
                                       >
                                         {getLocalizedClassName(opt, i18n.language)}
@@ -560,7 +548,7 @@ export function AlgoParamDrawer({
                             return (
                               <div
                                 key={key}
-                                className="space-y-2 rounded-xl border border-black/[0.06] bg-white/40 p-3 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                                className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 shadow-2xs backdrop-blur-md"
                               >
                                 <span className="text-xs font-semibold text-[var(--text-primary)]">
                                   {title}
@@ -571,7 +559,7 @@ export function AlgoParamDrawer({
                                   onChange={(e) =>
                                     setLocalParams((prev) => ({ ...prev, [key]: e.target.value }))
                                   }
-                                  className="w-full rounded-lg border border-black/10 bg-white/60 px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-white focus:ring-2 focus:ring-[var(--accent)]/20 dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-black/60"
+                                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-[var(--bg-surface-solid)] focus:ring-2 focus:ring-[var(--accent)]/20"
                                 >
                                   {stringEnumOptions.map((opt) => (
                                     <option key={opt} value={opt}>
@@ -591,7 +579,7 @@ export function AlgoParamDrawer({
                           return (
                             <div
                               key={key}
-                              className="space-y-2 rounded-xl border border-black/[0.06] bg-white/40 p-3 shadow-2xs backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]"
+                              className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 shadow-2xs backdrop-blur-md"
                             >
                               <span className="text-xs font-semibold text-[var(--text-primary)]">
                                 {title}
@@ -603,7 +591,7 @@ export function AlgoParamDrawer({
                                 onChange={(e) =>
                                   setLocalParams((prev) => ({ ...prev, [key]: e.target.value }))
                                 }
-                                className="w-full rounded-lg border border-black/10 bg-white/60 px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-white focus:ring-2 focus:ring-[var(--accent)]/20 dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-black/60"
+                                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-[var(--bg-surface-solid)] focus:ring-2 focus:ring-[var(--accent)]/20"
                               />
                               {desc && (
                                 <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
@@ -623,11 +611,11 @@ export function AlgoParamDrawer({
               </div>
 
               {/* 抽屉底部行动栏：磨砂高光 */}
-              <div className="flex shrink-0 items-center justify-between border-t border-black/5 bg-white/60 px-5 py-4 backdrop-blur-2xl dark:border-white/10 dark:bg-[#07090e]/80">
+              <div className="flex shrink-0 items-center justify-between border-t border-[var(--border)] bg-[var(--bg-surface)] px-5 py-4 backdrop-blur-2xl">
                 <button
                   type="button"
                   onClick={handleResetDefaults}
-                  className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-[var(--text-muted)] transition-colors hover:bg-black/5 hover:text-[var(--text-primary)] dark:hover:bg-white/5"
+                  className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
                   title={t('resetDefaults', { defaultValue: '恢复芯片推荐默认工况' })}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
@@ -638,14 +626,14 @@ export function AlgoParamDrawer({
                   <button
                     type="button"
                     onClick={onClose}
-                    className="rounded-lg border border-black/10 bg-black/5 px-3.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-black/10 hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+                    className="rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-3.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                   >
                     {t('cancel', { defaultValue: '取消' })}
                   </button>
                   <button
                     type="button"
                     onClick={handleApply}
-                    className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 px-4 py-1.5 text-xs font-semibold text-white shadow-[0_2px_12px_rgba(59,130,246,0.4)] transition-all hover:opacity-95 hover:shadow-[0_4px_16px_rgba(59,130,246,0.55)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95"
+                    className="flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-4 py-1.5 text-xs font-semibold text-white shadow-[var(--shadow-md)] transition-all hover:opacity-95 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95"
                   >
                     <Check className="h-3.5 w-3.5 stroke-[2.5]" />
                     <span>{t('applyParams', { defaultValue: '应用参数' })}</span>

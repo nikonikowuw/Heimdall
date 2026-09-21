@@ -34,7 +34,7 @@ export function RecognitionContent({
     if (searchQuery && searchQuery.trim()) {
       return (
         <div className="flex flex-col items-center justify-center py-24 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-500 shadow-xs">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-xs">
             <Search className="h-6 w-6" />
           </div>
           <p className="mt-3 text-sm font-semibold tracking-tight text-[var(--text-primary)]">
@@ -56,7 +56,7 @@ export function RecognitionContent({
 
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-500 shadow-xs">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-xs">
           <UserCheck className="h-6 w-6" />
         </div>
         <p className="mt-3 text-sm font-semibold tracking-tight text-[var(--text-primary)]">

@@ -18,12 +18,10 @@ import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { evidenceApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import type { FaceCandidateItem, RecognitionRecord } from '@/types'
-import {
-  formatCosineSimilarityPercent,
-  getCosineSimilarityLevel,
-} from '@/lib/similarity'
+import { formatCosineSimilarityPercent, getCosineSimilarityLevel } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
+import { RECOGNITION_STATUS_STYLES, SIMILARITY_STYLES } from '../statusStyles'
 
 export interface RecognitionReviewModalProps {
   recognition: RecognitionRecord
@@ -105,18 +103,15 @@ function MiniAvatar({
 
 const STATUS_CONFIG = {
   confirmed: {
-    chipClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500',
-    dotClass: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]',
+    ...RECOGNITION_STATUS_STYLES.confirmed,
     labelKey: 'card.statusConfirmed',
   },
   pending_review: {
-    chipClass: 'border-amber-500/30 bg-amber-500/10 text-amber-500',
-    dotClass: 'bg-amber-500 animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.6)]',
+    ...RECOGNITION_STATUS_STYLES.pending_review,
     labelKey: 'card.statusPendingReview',
   },
   rejected: {
-    chipClass: 'border-rose-500/30 bg-rose-500/10 text-rose-400',
-    dotClass: 'bg-rose-500/80',
+    ...RECOGNITION_STATUS_STYLES.rejected,
     labelKey: 'card.statusRejected',
   },
 } as const
@@ -152,13 +147,7 @@ export function RecognitionReviewModal({
   const statusConfig =
     STATUS_CONFIG[recognition.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.pending_review
 
-  // 动态高光色阶 (基于归一化百分比层级判定)
-  const activeSimClass =
-    activeLevel === 'high'
-      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
-      : activeLevel === 'medium'
-        ? 'border-amber-500/40 bg-amber-500/10 text-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
-        : 'border-rose-500/40 bg-rose-500/10 text-rose-400 shadow-[0_0_12px_rgba(244,63,94,0.15)]'
+  const activeSimClass = SIMILARITY_STYLES[activeLevel]
 
   return (
     <motion.div
@@ -331,7 +320,9 @@ export function RecognitionReviewModal({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-[var(--text-muted)]">{t('card.similarity')}:</span>
-                    <span className="font-mono font-bold text-emerald-500">{simPct}</span>
+                    <span className="font-mono font-bold text-[var(--status-success)]">
+                      {simPct}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -387,10 +378,7 @@ export function RecognitionReviewModal({
                     const isSelected = activeCandidate?.faceId === cand.faceId
                     const isTop1 = idx === 0
                     const candLevel = getCosineSimilarityLevel(cand.similarity)
-                    const simRatio = Math.max(
-                      0,
-                      Math.min(100, (cand.similarity ?? 0) * 100),
-                    )
+                    const simRatio = Math.max(0, Math.min(100, (cand.similarity ?? 0) * 100))
 
                     return (
                       <div
@@ -406,7 +394,7 @@ export function RecognitionReviewModal({
                           {/* 排名勋章 */}
                           <div className="flex shrink-0 flex-col items-center justify-center">
                             {isTop1 ? (
-                              <span className="flex h-7 w-7 items-center justify-center rounded-xl border border-amber-500/40 bg-gradient-to-br from-amber-500/20 to-emerald-500/20 font-mono text-xs font-bold text-amber-500 shadow-xs">
+                              <span className="flex h-7 w-7 items-center justify-center rounded-xl border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] font-mono text-xs font-bold text-[var(--status-warning)] shadow-xs">
                                 <Award className="h-4 w-4" />
                               </span>
                             ) : (
@@ -428,7 +416,7 @@ export function RecognitionReviewModal({
                                 })
                               }
                             }}
-                            className={`group/thumb relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs ${
+                            className={`group/thumb relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--video-surface)] shadow-xs ${
                               cand.photoRelPath ? 'cursor-pointer hover:border-[var(--accent)]' : ''
                             }`}
                             title={cand.photoRelPath ? t('card.viewHd') : undefined}
@@ -442,12 +430,12 @@ export function RecognitionReviewModal({
                                   decoding="async"
                                   className="h-full w-full object-cover transition-transform duration-200 group-hover/thumb:scale-105"
                                 />
-                                <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
+                                <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-[var(--overlay-scrim)] opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
                                   <ZoomIn className="h-3 w-3 text-white" />
                                 </div>
                               </>
                             ) : (
-                              <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
+                              <div className="flex h-full items-center justify-center text-[10px] text-[var(--text-muted)]">
                                 {t('card.noImage')}
                               </div>
                             )}
@@ -460,7 +448,7 @@ export function RecognitionReviewModal({
                                 {cand.subjectName}
                               </span>
                               {isTop1 && (
-                                <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-500">
+                                <span className="rounded-md border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] px-1.5 py-0.5 font-mono text-[9px] font-semibold text-[var(--status-warning)]">
                                   {t('card.topMatchBadge')}
                                 </span>
                               )}
@@ -474,10 +462,10 @@ export function RecognitionReviewModal({
                                 <div
                                   className={`h-full rounded-full transition-all duration-300 ${
                                     candLevel === 'high'
-                                      ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                                      ? 'bg-[var(--status-success)]'
                                       : candLevel === 'medium'
-                                        ? 'bg-gradient-to-r from-amber-500 to-yellow-400'
-                                        : 'bg-gradient-to-r from-rose-500 to-orange-400'
+                                        ? 'bg-[var(--status-warning)]'
+                                        : 'bg-[var(--status-danger)]'
                                   }`}
                                   style={{ width: `${simRatio}%` }}
                                 />
@@ -485,10 +473,10 @@ export function RecognitionReviewModal({
                               <span
                                 className={`font-mono text-[10px] font-bold ${
                                   candLevel === 'high'
-                                    ? 'text-emerald-500'
+                                    ? 'text-[var(--status-success)]'
                                     : candLevel === 'medium'
-                                      ? 'text-amber-500'
-                                      : 'text-rose-400'
+                                      ? 'text-[var(--status-warning)]'
+                                      : 'text-[var(--status-danger)]'
                                 }`}
                               >
                                 {scorePct}
@@ -505,7 +493,7 @@ export function RecognitionReviewModal({
                               e.stopPropagation()
                               onReview(recognition, 'confirmed', cand)
                             }}
-                            className="flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-500 shadow-2xs backdrop-blur-xs transition-all hover:border-emerald-500 hover:bg-emerald-500 hover:text-white hover:shadow-emerald-500/20 active:scale-95"
+                            className="flex items-center gap-1 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2.5 py-1.5 text-xs font-semibold text-[var(--status-success)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-success)] hover:bg-[var(--status-success)] hover:text-white hover:shadow-[0_0_12px_var(--status-success-soft)] active:scale-95"
                             title={t('card.confirmCandidate')}
                           >
                             <Check className="h-3.5 w-3.5 stroke-[2.5]" />
@@ -527,7 +515,7 @@ export function RecognitionReviewModal({
             type="button"
             whileTap={{ scale: 0.96 }}
             onClick={() => onReview(recognition, 'rejected')}
-            className="flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs font-semibold text-rose-500 shadow-2xs backdrop-blur-xs transition-all hover:border-rose-500 hover:bg-rose-500 hover:text-white hover:shadow-rose-500/20"
+            className="flex items-center gap-1.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-4 py-2 text-xs font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger)] hover:text-white hover:shadow-[0_0_12px_var(--status-danger-soft)]"
           >
             <X className="h-4 w-4 stroke-[2.5]" />
             <span>{t('card.rejectMatch')}</span>
@@ -547,7 +535,7 @@ export function RecognitionReviewModal({
                 type="button"
                 whileTap={{ scale: 0.96 }}
                 onClick={() => onReview(recognition, 'confirmed', activeCandidate)}
-                className="flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-600 px-4.5 py-2 text-xs font-semibold text-white shadow-md shadow-emerald-600/20 transition-all hover:bg-emerald-500"
+                className="flex items-center gap-1.5 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success)] px-4.5 py-2 text-xs font-semibold text-white shadow-md transition-all hover:opacity-90"
               >
                 <CheckCircle2 className="h-4 w-4 stroke-[2.5]" />
                 <span>

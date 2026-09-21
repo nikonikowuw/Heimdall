@@ -17,6 +17,7 @@ import type { RecognitionRecord } from '@/types'
 import { formatCosineSimilarityPercent, getCosineSimilarityLevel } from '@/lib/similarity'
 import { formatTimestamp } from '../utils'
 import { ImagePreviewModal } from './ImagePreviewModal'
+import { RECOGNITION_STATUS_STYLES, SIMILARITY_STYLES } from '../statusStyles'
 
 export interface RecognitionTableRowProps {
   recognition: RecognitionRecord
@@ -28,23 +29,17 @@ export interface RecognitionTableRowProps {
 
 const STATUS_CONFIG = {
   confirmed: {
-    chipClass:
-      'border-emerald-500/30 bg-emerald-500/10 text-emerald-500 dark:border-emerald-500/30 dark:bg-emerald-500/15',
-    dotClass: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]',
+    ...RECOGNITION_STATUS_STYLES.confirmed,
     Icon: CheckCircle2,
     labelKey: 'card.statusConfirmed',
   },
   pending_review: {
-    chipClass:
-      'border-amber-500/30 bg-amber-500/10 text-amber-500 dark:border-amber-500/30 dark:bg-amber-500/15',
-    dotClass: 'bg-amber-500 animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.6)]',
+    ...RECOGNITION_STATUS_STYLES.pending_review,
     Icon: AlertCircle,
     labelKey: 'card.statusPendingReview',
   },
   rejected: {
-    chipClass:
-      'border-rose-500/30 bg-rose-500/10 text-rose-400 dark:border-rose-500/30 dark:bg-rose-500/15',
-    dotClass: 'bg-rose-500/80',
+    ...RECOGNITION_STATUS_STYLES.rejected,
     Icon: XCircle,
     labelKey: 'card.statusRejected',
   },
@@ -133,12 +128,7 @@ export const RecognitionTableRow = React.memo(function RecognitionTableRow({
   const simPct = formatCosineSimilarityPercent(recognition.similarity, 0)
   const simLevel = getCosineSimilarityLevel(recognition.similarity)
 
-  const simColorClass =
-    simLevel === 'high'
-      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.15)]'
-      : simLevel === 'medium'
-        ? 'border-amber-500/40 bg-amber-500/10 text-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.15)]'
-        : 'border-rose-500/40 bg-rose-500/10 text-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.15)]'
+  const simColorClass = SIMILARITY_STYLES[simLevel]
 
   return (
     <>
@@ -294,7 +284,7 @@ export const RecognitionTableRow = React.memo(function RecognitionTableRow({
                   type="button"
                   whileTap={{ scale: 0.96 }}
                   onClick={() => onQuickReview(recognition, 'confirmed')}
-                  className="flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-500 shadow-2xs backdrop-blur-xs transition-all hover:border-emerald-500 hover:bg-emerald-500 hover:text-white"
+                  className="flex items-center gap-1 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--status-success)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-success)] hover:bg-[var(--status-success)] hover:text-white"
                   title={t('card.passTop1')}
                 >
                   <Check className="h-3 w-3 stroke-[2.5]" />
@@ -304,7 +294,7 @@ export const RecognitionTableRow = React.memo(function RecognitionTableRow({
                   type="button"
                   whileTap={{ scale: 0.96 }}
                   onClick={() => onQuickReview(recognition, 'rejected')}
-                  className="flex items-center gap-1 rounded-xl border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[11px] font-semibold text-rose-500 shadow-2xs backdrop-blur-xs transition-all hover:border-rose-500 hover:bg-rose-500 hover:text-white"
+                  className="flex items-center gap-1 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger)] hover:text-white"
                   title={t('card.reject')}
                 >
                   <X className="h-3 w-3 stroke-[2.5]" />

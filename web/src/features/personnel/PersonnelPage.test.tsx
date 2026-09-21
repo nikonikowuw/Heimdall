@@ -44,6 +44,17 @@ describe('Personnel floating layers', () => {
     expect(html).toContain('aria-labelledby=')
   })
 
+  it('uses semantic theme tokens for register modal states', () => {
+    const html = renderToString(
+      <PersonnelModal isOpen onClose={() => {}} onSuccess={() => {}} editTarget={null} />,
+    )
+
+    expect(html).toContain('bg-[var(--accent)]')
+    expect(html).toContain('focus:ring-[var(--ring)]')
+    expect(html).toContain('bg-[var(--bg-surface-solid)]')
+    expect(html).not.toMatch(/(?:emerald|rose|amber)-\d+/)
+  })
+
   it('labels the destructive confirmation with the target identity', () => {
     const html = renderToString(
       <DeleteConfirmModal

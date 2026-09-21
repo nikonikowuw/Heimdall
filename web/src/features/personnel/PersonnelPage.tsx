@@ -37,7 +37,7 @@ const HEADER_ACTION_CLASS =
   'inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border text-xs font-medium transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95 disabled:cursor-not-allowed disabled:opacity-40'
 
 const PAGER_CLASS =
-  'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:border-emerald-500/40 hover:text-emerald-500 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-40 disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-secondary)]'
+  'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-40 disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-secondary)]'
 
 type ViewMode = 'grid' | 'table'
 type SampleFilter = 'all' | 'saturated' | 'incomplete' | 'empty'
@@ -634,8 +634,8 @@ export function PersonnelPage(): React.ReactElement {
                 !hasStats
                   ? 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]'
                   : stats.algoReady
-                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-500'
-                    : 'border-amber-500/25 bg-amber-500/10 text-amber-500'
+                    ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
+                    : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
               }`}
             >
               <span
@@ -644,8 +644,8 @@ export function PersonnelPage(): React.ReactElement {
                   !hasStats
                     ? 'bg-[var(--text-muted)]'
                     : stats.algoReady
-                      ? 'animate-pulse bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]'
-                      : 'bg-amber-500'
+                      ? 'animate-pulse bg-[var(--status-success)] shadow-[0_0_6px_var(--status-success-soft)]'
+                      : 'bg-[var(--status-warning)]'
                 }`}
               />
               <span className="truncate">
@@ -665,8 +665,8 @@ export function PersonnelPage(): React.ReactElement {
                 title={t('reextract.viewReportTooltip')}
                 className={`${HEADER_ACTION_CLASS} ${
                   reextractProgress.failed > 0
-                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20'
-                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                    ? 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)] hover:bg-[var(--status-warning-soft)]'
+                    : 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] hover:bg-[var(--status-success-soft)]'
                 }`}
               >
                 <FileText className="h-3.5 w-3.5" aria-hidden="true" />
@@ -689,8 +689,8 @@ export function PersonnelPage(): React.ReactElement {
               aria-label={reextractTooltip}
               className={`${HEADER_ACTION_CLASS} ${
                 isTaskRunning
-                  ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
-                  : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-emerald-500/40 hover:text-emerald-500'
+                  ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] hover:bg-[var(--status-success-soft)]'
+                  : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]'
               }`}
             >
               <RefreshCw
@@ -711,7 +711,7 @@ export function PersonnelPage(): React.ReactElement {
               disabled={isLoading}
               aria-label={t('actions.refresh')}
               title={t('actions.refresh')}
-              className={`${HEADER_ACTION_CLASS} w-9 border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-emerald-500/40 hover:text-emerald-500`}
+              className={`${HEADER_ACTION_CLASS} w-9 border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]`}
             >
               <RotateCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             </button>

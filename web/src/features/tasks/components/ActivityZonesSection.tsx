@@ -91,7 +91,7 @@ export function ActivityZonesSection({
 
       {/* 一键下笔：4 类绘制工具并列 (ROI / 绊线 / 遮罩 / 特写取景) */}
       <div
-        className="grid grid-cols-4 gap-1.5 rounded-xl border border-black/5 bg-black/[0.03] p-1 backdrop-blur-md dark:border-white/[0.08] dark:bg-black/40"
+        className="grid grid-cols-4 gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-1 backdrop-blur-md"
         role="group"
         aria-label={t('studio.zoneTypeTools', { defaultValue: '防区类型' })}
       >
@@ -119,8 +119,8 @@ export function ActivityZonesSection({
               }`}
               className={`group/action relative flex h-8 min-w-0 items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-semibold whitespace-nowrap transition-all ${
                 isActive
-                  ? 'border border-black/5 bg-white font-bold text-[var(--text-primary)] shadow-sm dark:border-white/20 dark:bg-white/15'
-                  : 'text-[var(--text-muted)] hover:bg-black/[0.02] hover:text-[var(--text-secondary)] dark:hover:bg-white/[0.04]'
+                  ? 'border border-[var(--border)] bg-[var(--bg-surface-solid)] font-bold text-[var(--text-primary)] shadow-sm'
+                  : 'text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-secondary)]'
               }`}
             >
               {action.icon}
@@ -150,7 +150,7 @@ export function ActivityZonesSection({
 
       {/* 防区列表 / 空状态 */}
       {rules.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-black/10 bg-white/40 px-4 py-3.5 text-[11px] text-[var(--text-muted)] backdrop-blur-md dark:border-white/10 dark:bg-white/[0.02]">
+        <div className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3.5 text-[11px] text-[var(--text-muted)] backdrop-blur-md">
           <div className="flex items-start gap-2.5">
             <Hexagon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)] opacity-50" />
             <div className="space-y-1">
@@ -197,8 +197,8 @@ export function ActivityZonesSection({
                   }}
                   className={`group flex items-center justify-between rounded-xl border p-2.5 text-xs backdrop-blur-md transition-all duration-200 ${
                     isSelected
-                      ? 'border-blue-500/40 bg-blue-500/10 shadow-sm ring-1 ring-blue-500/20 dark:bg-blue-500/15'
-                      : 'border-black/[0.06] bg-white/40 hover:border-black/15 hover:bg-white/70 dark:border-white/[0.07] dark:bg-white/[0.02] dark:hover:border-white/15 dark:hover:bg-white/[0.05]'
+                      ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)] shadow-sm ring-1 ring-[var(--accent)]/20'
+                      : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-solid)]'
                   }`}
                 >
                   <button
@@ -245,7 +245,7 @@ export function ActivityZonesSection({
                           ? t('layers.hideRule', { defaultValue: '隐藏该规则' })
                           : t('layers.showRule', { defaultValue: '显示该规则' })
                       }
-                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-black/5 hover:text-[var(--text-primary)] dark:hover:bg-white/10"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
                     >
                       {rule.visible ? (
                         <Eye className="h-3.5 w-3.5" />

@@ -66,19 +66,19 @@ export function RuleInspectorSidebar({
   }
 
   return (
-    <aside className="flex w-72 max-w-72 min-w-72 flex-col overflow-hidden border-l border-black/5 bg-white/75 text-sm shadow-[-12px_0_40px_rgba(0,0,0,0.2)] backdrop-blur-2xl dark:border-white/10 dark:bg-[#07090e]/80">
-      <div className="flex items-center justify-between border-b border-black/5 bg-white/40 p-3.5 backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.02]">
+    <aside className="flex w-72 max-w-72 min-w-72 flex-col overflow-hidden border-l border-[var(--border)] bg-[var(--bg-surface-solid)] text-sm shadow-[var(--shadow-lg)] backdrop-blur-2xl">
+      <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-surface)] p-3.5 backdrop-blur-xl">
         <span className="flex items-center gap-1.5 font-bold tracking-tight text-[var(--text-primary)]">
           <Layers className="h-4 w-4 text-[var(--accent)]" />
           <span>{t('layers.title')}</span>
         </span>
-        <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-2.5 py-0.5 font-mono text-xs font-bold text-[var(--accent)]">
+        <span className="rounded-full border border-[var(--accent)]/20 bg-[var(--accent-soft)] px-2.5 py-0.5 font-mono text-xs font-bold text-[var(--accent)]">
           {rules.length} {t('footer.items')}
         </span>
       </div>
 
       {/* 图层列表 */}
-      <div className="max-h-56 space-y-1.5 overflow-y-auto border-b border-black/5 p-2.5 dark:border-white/10">
+      <div className="max-h-56 space-y-1.5 overflow-y-auto border-b border-[var(--border)] p-2.5">
         {rules.length === 0 ? (
           <div className="py-6 text-center text-[var(--text-muted)]">
             <p>{t('layers.empty')}</p>
@@ -94,8 +94,8 @@ export function RuleInspectorSidebar({
                 onClick={() => onSelectRule(rule.id)}
                 className={`flex cursor-pointer items-center justify-between rounded-xl border p-2.5 backdrop-blur-md transition-all select-none ${
                   isSelected
-                    ? 'border-blue-500/40 bg-blue-500/10 font-semibold text-[var(--text-primary)] shadow-2xs ring-1 ring-blue-500/20 dark:bg-blue-500/15'
-                    : 'border-black/[0.06] bg-white/40 text-[var(--text-secondary)] hover:border-black/15 hover:bg-white/70 dark:border-white/[0.07] dark:bg-white/[0.02] dark:hover:border-white/15 dark:hover:bg-white/[0.05]'
+                    ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)] font-semibold text-[var(--text-primary)] shadow-2xs ring-1 ring-[var(--accent)]/20'
+                    : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-solid)]'
                 }`}
               >
                 <div className="flex items-center gap-2.5">
@@ -117,7 +117,7 @@ export function RuleInspectorSidebar({
                       e.stopPropagation()
                       onToggleRuleVisibility(rule.id)
                     }}
-                    className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-black/5 hover:text-[var(--text-primary)] dark:hover:bg-white/10"
+                    className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
                   >
                     {rule.visible ? (
                       <Eye className="h-3.5 w-3.5" />
@@ -154,7 +154,7 @@ export function RuleInspectorSidebar({
               className={`rounded-lg border px-2 py-0.5 font-mono text-[10px] font-bold uppercase ${
                 selectedRule.role === 'precrop'
                   ? 'border-lime-500/30 bg-lime-500/10 text-lime-400'
-                  : 'border-blue-500/30 bg-blue-500/10 text-[var(--accent)]'
+                  : 'border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[var(--accent)]'
               }`}
             >
               {selectedRule.role === 'precrop'
@@ -178,7 +178,7 @@ export function RuleInspectorSidebar({
                 type="text"
                 value={selectedRule.name}
                 onChange={(e) => onUpdateRule(selectedRule.id, { name: e.target.value })}
-                className="w-full rounded-xl border border-black/10 bg-white/60 px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-white focus:ring-2 focus:ring-[var(--accent)]/20 dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-black/60"
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all outline-none focus:border-[var(--accent)] focus:bg-[var(--bg-surface-solid)] focus:ring-2 focus:ring-[var(--accent)]/20"
               />
             </div>
 
@@ -214,7 +214,7 @@ export function RuleInspectorSidebar({
                       : t('studio.selectAll', { defaultValue: '全选' })}
                   </button>
                 </div>
-                <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-xl border border-black/[0.06] bg-white/40 p-2 backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]">
+                <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-2 backdrop-blur-md">
                   {activeAlgo.classes.map((cls) => {
                     const isChecked = targetClasses.includes(cls)
                     return (
@@ -224,8 +224,8 @@ export function RuleInspectorSidebar({
                         onClick={() => handleToggleSingleTarget(cls)}
                         className={`rounded-lg px-2 py-1 text-xs font-medium transition-all ${
                           isChecked
-                            ? 'border border-blue-500/30 bg-[var(--accent)] font-semibold text-white shadow-xs'
-                            : 'border border-black/5 bg-white/50 text-[var(--text-muted)] hover:text-[var(--text-primary)] dark:border-white/10 dark:bg-white/[0.03]'
+                            ? 'border border-[var(--accent)] bg-[var(--accent)] font-semibold text-white shadow-xs'
+                            : 'border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                         }`}
                       >
                         {getLocalizedClassName(cls, i18n.language)}
@@ -271,7 +271,7 @@ export function RuleInspectorSidebar({
                 <label className="mb-1.5 block font-mono text-[10px] tracking-wider text-[var(--text-muted)] uppercase">
                   {t('inspector.lineDirection')}
                 </label>
-                <div className="grid grid-cols-3 gap-1 rounded-xl border border-black/5 bg-black/[0.03] p-1 text-center text-xs backdrop-blur-md dark:border-white/[0.08] dark:bg-black/40">
+                <div className="grid grid-cols-3 gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-1 text-center text-xs backdrop-blur-md">
                   {(['both', 'a_to_b', 'b_to_a'] as DetectionLineDirection[]).map((dir) => {
                     const isActive = selectedRule.lineDirection === dir
                     return (
@@ -281,8 +281,8 @@ export function RuleInspectorSidebar({
                         onClick={() => onUpdateRule(selectedRule.id, { lineDirection: dir })}
                         className={`rounded-lg py-1.5 font-medium transition-all ${
                           isActive
-                            ? 'border border-black/5 bg-white font-bold text-[var(--text-primary)] shadow-sm dark:border-white/20 dark:bg-white/15'
-                            : 'text-[var(--text-muted)] hover:bg-black/[0.02] hover:text-[var(--text-secondary)] dark:hover:bg-white/[0.04]'
+                            ? 'border border-[var(--border)] bg-[var(--bg-surface-solid)] font-bold text-[var(--text-primary)] shadow-sm'
+                            : 'text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-secondary)]'
                         }`}
                       >
                         {getDirectionLabel(dir, t)}
@@ -301,8 +301,8 @@ export function RuleInspectorSidebar({
                 onClick={() => onCloneRule(selectedRule.id)}
                 className={`flex items-center justify-center gap-1.5 rounded-xl border py-2 text-xs font-semibold transition-all ${
                   selectedRule.role === 'precrop'
-                    ? 'cursor-not-allowed border-black/5 bg-black/5 text-[var(--text-muted)] opacity-50 dark:border-white/10 dark:bg-white/5'
-                    : 'border-blue-500/30 bg-blue-500/10 text-[var(--accent)] hover:bg-blue-500/15 active:scale-98'
+                    ? 'cursor-not-allowed border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] opacity-50'
+                    : 'border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent-soft)] active:scale-98'
                 }`}
                 title={
                   selectedRule.role === 'precrop'
@@ -318,7 +318,7 @@ export function RuleInspectorSidebar({
               <button
                 type="button"
                 onClick={() => onDeleteRule(selectedRule.id)}
-                className="flex items-center justify-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 py-2 text-xs font-semibold text-rose-500 transition-all hover:bg-rose-500/15 active:scale-98"
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] py-2 text-xs font-semibold text-[var(--status-danger)] transition-all hover:bg-[var(--status-danger-soft)] active:scale-98"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 <span>{t('inspector.delete')}</span>

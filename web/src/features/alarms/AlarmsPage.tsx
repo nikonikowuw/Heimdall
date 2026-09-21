@@ -787,10 +787,10 @@ export function AlarmsPage(): React.ReactElement {
           <div
             className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-xs transition-colors duration-200 ${
               activeTab === 'recognition'
-                ? 'bg-emerald-500/10 text-emerald-500'
+                ? 'bg-[var(--status-success-soft)] text-[var(--status-success)]'
                 : activeTab === 'captures'
-                  ? 'bg-cyan-500/10 text-cyan-500'
-                  : 'bg-rose-500/10 text-rose-500'
+                  ? 'bg-[var(--status-info-soft)] text-[var(--status-info)]'
+                  : 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
             }`}
           >
             {activeTab === 'recognition' ? (
@@ -817,14 +817,14 @@ export function AlarmsPage(): React.ReactElement {
             onClick={handleToggleSound}
             className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-all ${
               soundEnabled
-                ? 'border-rose-500/30 bg-rose-500/10 text-rose-500 shadow-xs'
+                ? 'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs'
                 : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
             title={soundEnabled ? t('sound.enabled') : t('sound.disabled')}
             aria-label={t('sound.toggleAlert')}
           >
             {soundEnabled ? (
-              <Volume2 className="h-3.5 w-3.5 animate-pulse text-rose-500" />
+              <Volume2 className="h-3.5 w-3.5 animate-pulse text-[var(--status-danger)]" />
             ) : (
               <VolumeX className="h-3.5 w-3.5" />
             )}
@@ -841,27 +841,30 @@ export function AlarmsPage(): React.ReactElement {
                   key: 'recognition' as const,
                   label: t('tabs.recognition'),
                   icon: UserCheck,
-                  activeClass: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-500 shadow-xs',
-                  iconColor: 'text-emerald-500',
-                  badgeBg: 'bg-emerald-500/10 text-emerald-500',
+                  activeClass:
+                    'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-xs',
+                  iconColor: 'text-[var(--status-success)]',
+                  badgeBg: 'bg-[var(--status-success-soft)] text-[var(--status-success)]',
                   badgeCount: activeTab === 'recognition' ? totalCount : tabCounts.recognition,
                 },
                 {
                   key: 'alarms' as const,
                   label: t('tabs.alarms'),
                   icon: AlertCircle,
-                  activeClass: 'border-rose-500/30 bg-rose-500/15 text-rose-500 shadow-xs',
-                  iconColor: 'text-rose-500',
-                  badgeBg: 'bg-rose-500/10 text-rose-500',
+                  activeClass:
+                    'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs',
+                  iconColor: 'text-[var(--status-danger)]',
+                  badgeBg: 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]',
                   badgeCount: activeTab === 'alarms' ? totalCount : tabCounts.alarms,
                 },
                 {
                   key: 'captures' as const,
                   label: t('tabs.captures'),
                   icon: CameraIcon,
-                  activeClass: 'border-cyan-500/30 bg-cyan-500/15 text-cyan-500 shadow-xs',
-                  iconColor: 'text-cyan-500',
-                  badgeBg: 'bg-cyan-500/10 text-cyan-500',
+                  activeClass:
+                    'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info)] shadow-xs',
+                  iconColor: 'text-[var(--status-info)]',
+                  badgeBg: 'bg-[var(--status-info-soft)] text-[var(--status-info)]',
                   badgeCount: activeTab === 'captures' ? totalCount : tabCounts.captures,
                 },
               ] as const
@@ -1170,7 +1173,7 @@ export function AlarmsPage(): React.ReactElement {
                 setSelectedTrackId(null)
                 setPage(1)
               }}
-              className="flex items-center gap-1.5 rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1.5 font-mono text-xs font-semibold text-cyan-500 shadow-2xs backdrop-blur-md transition-all hover:border-cyan-500/70 hover:bg-cyan-500/20"
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--status-info-border)] bg-[var(--status-info-soft)] px-2.5 py-1.5 font-mono text-xs font-semibold text-[var(--status-info)] shadow-2xs backdrop-blur-md transition-all hover:border-[var(--status-info-border)] hover:bg-[var(--status-info-soft)]"
               title={t('trackFilter.clear')}
             >
               <span>{t('trackFilter.active', { trackId: selectedTrackId })}</span>
@@ -1194,12 +1197,12 @@ export function AlarmsPage(): React.ReactElement {
               type="button"
               whileTap={{ scale: 0.95 }}
               onClick={handleResetFilters}
-              className="flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs font-semibold text-rose-500 shadow-2xs backdrop-blur-md transition-all hover:border-rose-500/60 hover:bg-rose-500/20"
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-2.5 py-1.5 text-xs font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-md transition-all hover:border-[var(--status-danger-border)] hover:bg-[var(--status-danger-soft)]"
               title={t('filter.reset')}
             >
               <RotateCcw className="h-3 w-3" />
               <span>{t('filter.reset')}</span>
-              <span className="py-0.2 rounded-full bg-rose-500/20 px-1.5 font-mono text-[10px] font-bold text-rose-400">
+              <span className="py-0.2 rounded-full bg-[var(--status-danger-soft)] px-1.5 font-mono text-[10px] font-bold text-[var(--status-danger)]">
                 {activeFilterCount}
               </span>
             </motion.button>
@@ -1251,7 +1254,7 @@ export function AlarmsPage(): React.ReactElement {
 
       {/* 错误提示 */}
       {errorMessage && (
-        <div className="flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-500">
+        <div className="flex items-center gap-2 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3 text-xs text-[var(--status-danger)]">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{errorMessage}</span>
         </div>
@@ -1320,7 +1323,7 @@ export function AlarmsPage(): React.ReactElement {
         <div className="flex items-center gap-3">
           <span>{t('pagination.page', { current: page })}</span>
           {isSearching ? (
-            <span className="font-mono font-semibold text-emerald-500">
+            <span className="font-mono font-semibold text-[var(--status-success)]">
               ({t('search.pageFiltered', { count: currentFilteredCount })})
             </span>
           ) : (

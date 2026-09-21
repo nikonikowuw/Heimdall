@@ -30,10 +30,10 @@ export function RealtimeAlarmBanner({
             duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
             ease: motionTokens.easing.smooth,
           }}
-          className="flex items-center justify-between rounded-xl border border-rose-500/40 bg-rose-500/15 px-4 py-2 text-xs text-rose-400 shadow-md backdrop-blur-md"
+          className="flex items-center justify-between rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-4 py-2 text-xs text-[var(--status-danger)] shadow-md backdrop-blur-md"
         >
           <div className="flex items-center gap-2">
-            <BellRing className="h-4 w-4 animate-bounce text-rose-500" />
+            <BellRing className="h-4 w-4 animate-bounce text-[var(--status-danger)]" />
             <span className="font-semibold">{t('realtime.newAlarms', { count })}</span>
           </div>
 
@@ -42,7 +42,7 @@ export function RealtimeAlarmBanner({
               type="button"
               whileTap={{ scale: 0.96 }}
               onClick={onViewNew}
-              className="flex items-center gap-1 rounded-lg bg-rose-500 px-3 py-1 font-semibold text-white shadow-xs transition-opacity hover:opacity-90"
+              className="flex items-center gap-1 rounded-lg bg-[var(--status-danger)] px-3 py-1 font-semibold text-white shadow-xs transition-opacity hover:opacity-90"
             >
               <span>{t('realtime.viewNew')}</span>
               <ArrowUp className="h-3.5 w-3.5" />
@@ -51,7 +51,7 @@ export function RealtimeAlarmBanner({
             <button
               type="button"
               onClick={onDismiss}
-              className="rounded-lg p-1 text-rose-400 transition-colors hover:bg-rose-500/20 hover:text-white"
+              className="rounded-lg p-1 text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-soft)] hover:text-white"
               title={t('realtime.dismiss')}
             >
               <X className="h-3.5 w-3.5" />

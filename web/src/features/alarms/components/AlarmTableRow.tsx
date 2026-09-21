@@ -46,7 +46,7 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
         isSelected
           ? 'bg-[var(--accent-soft)]/30'
           : isCritical
-            ? 'bg-rose-500/5 hover:bg-rose-500/10'
+            ? 'bg-[var(--status-danger-soft)] hover:bg-[var(--status-danger-soft)]'
             : 'hover:bg-[var(--accent-soft)]/20'
       }`}
     >
@@ -78,7 +78,7 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
                 onSelect(alarm)
               }
             }}
-            className="h-10 w-16 shrink-0 overflow-hidden rounded border border-[var(--border)] bg-black/80 transition-all duration-200 hover:border-[var(--accent)]/50 hover:shadow-md"
+            className="h-10 w-16 shrink-0 overflow-hidden rounded border border-[var(--border)] bg-[var(--video-surface)] transition-all duration-200 hover:border-[var(--accent)]/50 hover:shadow-md"
             title={alarm.cropImageRelPath ? t('modal.cropImage') : t('modal.fullImage')}
             aria-label={alarm.cropImageRelPath ? t('modal.cropImage') : t('modal.fullImage')}
           >
@@ -91,7 +91,7 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
             />
           </button>
         ) : (
-          <div className="flex h-10 w-16 items-center justify-center rounded border border-[var(--border)] bg-black/80 font-mono text-[9px] text-slate-500">
+          <div className="flex h-10 w-16 items-center justify-center rounded border border-[var(--border)] bg-[var(--video-surface)] font-mono text-[9px] text-[var(--text-muted)]">
             N/A
           </div>
         )}
@@ -108,8 +108,8 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
         <span
           className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
             isCritical
-              ? 'animate-pulse bg-rose-500/20 text-rose-500'
-              : 'bg-amber-500/20 text-amber-500'
+              ? 'animate-pulse bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
+              : 'bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
           }`}
         >
           {alarm.severity || 'WARNING'}
@@ -122,8 +122,8 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
         <span
           className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
             isProcessed
-              ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500'
-              : 'border border-rose-500/30 bg-rose-500/15 text-rose-500'
+              ? 'border border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
+              : 'border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
           }`}
         >
           {isProcessed ? t('card.processed') : t('statusFilter.unprocessed')}
@@ -141,8 +141,8 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
           }}
           className={`rounded px-2.5 py-1 text-[11px] font-semibold transition-all ${
             isProcessed
-              ? 'bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25'
-              : 'bg-rose-500/15 text-rose-500 hover:bg-rose-500/25'
+              ? 'bg-[var(--status-success-soft)] text-[var(--status-success)] hover:bg-[var(--status-success-soft)]'
+              : 'bg-[var(--status-danger-soft)] text-[var(--status-danger)] hover:bg-[var(--status-danger-soft)]'
           }`}
           aria-label={isProcessed ? t('card.processed') : t('card.markProcessed')}
         >

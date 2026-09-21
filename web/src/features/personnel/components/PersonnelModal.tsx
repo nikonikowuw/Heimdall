@@ -23,7 +23,7 @@ interface ImageFilePreview {
 const MAX_PHOTOS = 5
 
 const FIELD_CLASS =
-  'w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/70 px-3 py-2 text-sm text-[var(--text-primary)] transition-colors placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-emerald-500/70 focus:bg-[var(--bg-surface)] focus:ring-2 focus:ring-emerald-500/15 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60'
+  'w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/70 px-3 py-2 text-sm text-[var(--text-primary)] transition-colors placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface-solid)] focus:ring-2 focus:ring-[var(--ring)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60'
 
 const LABEL_CLASS = 'mb-1.5 block text-xs font-medium text-[var(--text-secondary)]'
 
@@ -50,6 +50,7 @@ export function PersonnelModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const titleId = useId()
+  const descriptionId = useId()
   const nameId = useId()
   const subjectIdFieldId = useId()
   const idCardFieldId = useId()
@@ -252,6 +253,7 @@ export function PersonnelModal({
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
+            aria-describedby={descriptionId}
             initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 12 }}
@@ -259,12 +261,12 @@ export function PersonnelModal({
               duration: motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="relative flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-[var(--bg-surface)] shadow-[0_28px_60px_-16px_rgba(0,0,0,0.4)] backdrop-blur-2xl"
+            className="relative flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-[var(--bg-surface)] shadow-[var(--shadow-lg)] backdrop-blur-2xl"
           >
             {/* ── 1. 头部 ── */}
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)]/70 px-5 py-4 sm:px-6">
               <div className="flex min-w-0 items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-500 shadow-xs">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs">
                   <ImageIcon className="h-5 w-5" aria-hidden="true" />
                 </div>
                 <div className="min-w-0">
@@ -279,7 +281,10 @@ export function PersonnelModal({
                       {isEdit ? 'EDIT' : 'NEW'}
                     </span>
                   </div>
-                  <p className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
+                  <p
+                    id={descriptionId}
+                    className="mt-0.5 truncate text-xs text-[var(--text-muted)]"
+                  >
                     {isEdit && editTarget
                       ? `${editTarget.name} · ${editTarget.subjectId}`
                       : t('modal.subjectIdPlaceholder')}
@@ -304,7 +309,7 @@ export function PersonnelModal({
                 {errorMessage && (
                   <div
                     role="alert"
-                    className="flex items-start gap-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-500"
+                    className="flex items-start gap-2.5 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]"
                   >
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                     <span className="leading-relaxed">{errorMessage}</span>
@@ -314,7 +319,7 @@ export function PersonnelModal({
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label htmlFor={nameId} className={LABEL_CLASS}>
-                      {t('modal.name')} <span className="text-rose-500">*</span>
+                      {t('modal.name')} <span className="text-[var(--destructive)]">*</span>
                     </label>
                     <input
                       id={nameId}
@@ -375,10 +380,10 @@ export function PersonnelModal({
 
                 {/* 编辑模式下的人脸样本库入口提示与快捷追加 */}
                 {isEdit && editTarget && (
-                  <div className="flex flex-col gap-2.5 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-3.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-col gap-2.5 rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] p-3.5 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 items-start gap-2.5">
                       <ImageIcon
-                        className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500"
+                        className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]"
                         aria-hidden="true"
                       />
                       <div className="min-w-0">
@@ -397,7 +402,7 @@ export function PersonnelModal({
                           handleClose()
                           onManagePhotos(editTarget)
                         }}
-                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 text-xs font-medium text-emerald-500 transition-colors hover:bg-emerald-500/20 focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:outline-none"
+                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/15 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                       >
                         <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
                         {t('actions.manageOrAddFaces')}
@@ -414,20 +419,21 @@ export function PersonnelModal({
                     onDrop={handleDrop}
                     className={`rounded-2xl border p-3 transition-colors ${
                       isDragging
-                        ? 'border-emerald-500/60 bg-emerald-500/10'
+                        ? 'border-[var(--accent)]/60 bg-[var(--accent-soft)]'
                         : 'border-[var(--border)]/70 bg-[var(--bg-secondary)]/25'
                     }`}
                   >
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
                         <p className="text-xs font-medium text-[var(--text-secondary)]">
-                          {t('modal.photoUploadTitle')} <span className="text-rose-500">*</span>
+                          {t('modal.photoUploadTitle')}{' '}
+                          <span className="text-[var(--destructive)]">*</span>
                         </p>
                         <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
                           {t('modal.photoUploadDesc')}
                         </p>
                       </div>
-                      <span className="font-data shrink-0 rounded-full border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">
+                      <span className="font-data shrink-0 rounded-full border border-[var(--border)]/70 bg-[var(--bg-surface-solid)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">
                         {t('modal.photoCounter', {
                           current: selectedImages.length,
                           max: MAX_PHOTOS,
@@ -439,9 +445,9 @@ export function PersonnelModal({
                       {selectedImages.map((img, idx) => (
                         <div
                           key={img.previewUrl}
-                          className={`group relative aspect-square overflow-hidden rounded-xl border bg-black/40 shadow-xs ${
+                          className={`group relative aspect-square overflow-hidden rounded-xl border bg-[var(--video-surface)] shadow-xs ${
                             primaryIndex === idx
-                              ? 'border-emerald-500/70 ring-2 ring-emerald-500/25'
+                              ? 'border-[var(--accent)]/70 ring-2 ring-[var(--ring)]'
                               : 'border-[var(--border)]'
                           }`}
                         >
@@ -466,14 +472,14 @@ export function PersonnelModal({
                                 ? t('modal.primaryBadge')
                                 : t('modal.setAsPrimary')
                             }
-                            className={`absolute top-1 left-1 flex h-6 w-6 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-emerald-500/60 focus-visible:outline-none ${
+                            className={`absolute top-1 left-1 flex h-6 w-6 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
                               primaryIndex === idx
-                                ? 'bg-emerald-500 text-black shadow-xs'
-                                : 'bg-black/60 text-white/70 hover:text-amber-400'
+                                ? 'bg-[var(--accent)] text-white shadow-xs'
+                                : 'bg-[var(--overlay-scrim)] text-white/70 hover:text-[var(--accent)]'
                             }`}
                           >
                             <Star
-                              className={`h-3.5 w-3.5 ${primaryIndex === idx ? 'fill-black' : ''}`}
+                              className={`h-3.5 w-3.5 ${primaryIndex === idx ? 'fill-current' : ''}`}
                               aria-hidden="true"
                             />
                           </button>
@@ -484,7 +490,7 @@ export function PersonnelModal({
                             onClick={() => handleRemoveImage(idx)}
                             aria-label={t('modal.removePhoto')}
                             title={t('modal.removePhoto')}
-                            className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded-md bg-black/60 text-white/70 transition-colors hover:bg-rose-500 hover:text-white focus-visible:ring-2 focus-visible:ring-rose-500/60 focus-visible:outline-none"
+                            className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded-md bg-[var(--overlay-scrim)] text-white/70 transition-colors hover:bg-[var(--destructive)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                           >
                             <X className="h-3.5 w-3.5" aria-hidden="true" />
                           </button>
@@ -496,10 +502,10 @@ export function PersonnelModal({
                         <button
                           type="button"
                           onClick={() => fileInputRef.current?.click()}
-                          className={`flex aspect-square flex-col items-center justify-center rounded-xl border-2 border-dashed p-2 text-center transition-colors focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:outline-none ${
+                          className={`flex aspect-square flex-col items-center justify-center rounded-xl border-2 border-dashed p-2 text-center transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
                             isDragging
-                              ? 'border-emerald-500 bg-emerald-500/10 text-emerald-500'
-                              : 'border-[var(--border)] bg-[var(--bg-secondary)]/40 text-[var(--text-muted)] hover:border-emerald-500/50 hover:text-emerald-500'
+                              ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                              : 'border-[var(--border)] bg-[var(--bg-secondary)]/40 text-[var(--text-muted)] hover:border-[var(--accent)]/50 hover:text-[var(--accent)]'
                           }`}
                         >
                           <UploadCloud className="mb-1 h-6 w-6" aria-hidden="true" />
@@ -551,7 +557,7 @@ export function PersonnelModal({
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="inline-flex h-9 min-w-[7rem] items-center justify-center gap-2 rounded-xl bg-emerald-500 px-5 text-xs font-semibold text-black shadow-xs transition-all hover:bg-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-500/50 focus-visible:outline-none active:scale-95 disabled:opacity-50"
+                    className="inline-flex h-9 min-w-[7rem] items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-5 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95 disabled:opacity-50"
                   >
                     {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                     <span>{submitButtonText}</span>

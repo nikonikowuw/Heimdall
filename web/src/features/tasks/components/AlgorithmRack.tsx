@@ -100,13 +100,13 @@ export function AlgorithmRack({
                 }}
                 className={`group relative flex min-h-[108px] min-w-0 flex-col rounded-[8px] border bg-[var(--bg-surface)] py-2.5 pr-2.5 pl-3.5 transition-[border-color,background-color,box-shadow] select-none ${
                   isEnabled
-                    ? 'border-[var(--accent-green)]/50 bg-[var(--accent-green)]/10 shadow-[0_0_12px_rgba(16,185,129,0.08)]'
+                    ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] shadow-[0_0_12px_var(--status-success-soft)]'
                     : 'border-[var(--border)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-secondary)]'
                 }`}
               >
                 {/* 启用态左侧垂直光纤指示条 (Light-pipe LED) */}
                 {isEnabled && (
-                  <span className="absolute top-0 bottom-0 left-0 w-1 rounded-l-[7px] bg-[var(--accent-green)] shadow-[0_0_8px_var(--accent-green)]" />
+                  <span className="absolute top-0 bottom-0 left-0 w-1 rounded-l-[7px] bg-[var(--status-success)] shadow-[0_0_8px_var(--status-success-soft)]" />
                 )}
 
                 <div className="flex min-w-0 items-start gap-2">
@@ -124,7 +124,7 @@ export function AlgorithmRack({
                     <span
                       className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border transition-colors ${
                         isEnabled
-                          ? 'border-[var(--accent-green)]/30 bg-[var(--accent-green)]/15 text-[var(--accent-green)]'
+                          ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
                           : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]'
                       }`}
                     >
@@ -143,7 +143,7 @@ export function AlgorithmRack({
                         <span
                           className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                             isEnabled
-                              ? 'bg-[var(--accent-green)] shadow-[0_0_4px_var(--accent-green)]'
+                              ? 'bg-[var(--status-success)] shadow-[0_0_4px_var(--status-success-soft)]'
                               : 'bg-[var(--text-muted)]/50'
                           }`}
                         />
@@ -177,7 +177,7 @@ export function AlgorithmRack({
                     {algo.algorithmId}
                   </span>
                   {isEnabled && (
-                    <span className="shrink-0 rounded-[4px] border border-[var(--accent-green)]/30 bg-[var(--accent-green)]/15 px-1.5 py-0.5 font-bold text-[var(--accent-green)] shadow-2xs">
+                    <span className="shrink-0 rounded-[4px] border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-1.5 py-0.5 font-bold text-[var(--status-success)] shadow-2xs">
                       {instance.analysisFps || 10} FPS
                     </span>
                   )}
