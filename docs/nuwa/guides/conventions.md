@@ -26,6 +26,8 @@
 ## 边缘资源与内存预算
 
 - **CMA 连续物理内存**：受限平台（如 RK3568 CMA 仅 16MB）多模型算法通过单例 Actor 或算力租约（`AlgoLease`）复用常驻上下文，杜绝频繁初始化销毁导致 CMA 碎片化。
+- **DMA-BUF 堆选择优先级**：消费者经 IOMMU 访问、**不要求物理连续**时（Rockchip RGA 自带 `RGA_MMU`，MPP 编解码单元均带 `iommus` 属性），DMA-BUF 一律优先 `/dev/dma_heap/system-dma32`（或 uncached 变体），**禁止把 `/dev/dma_heap/cma` 排在候选首位**。CMA 只留给真正要求物理连续的消费者；把每帧申请都导向 CMA 会把 16MB 池持续切分，引发内核 `alloc_contig_range: [..) PFNs busy` 重试噪声并挤压其它连续内存消费者。CMA 作为**兜底**排在 DMA32 之后、裸 `system` 之前（CMA 保证低地址，满足 32 位 MMU 的 4GB 上限；裸 `system` 在 >4GB 板卡上可能返回超限物理页）。堆候选顺序必须由单测钉住，见 `media::dmabuf_sync::tests::dma32_heaps_precede_cma_to_protect_cma_pool`。
+- **进程级静态引擎必须显式回收硬件资源**：存放在 `static` 容器（`OnceLock` 等）里的引擎**永远不会执行 `Drop`**，其持有的 DMA-BUF 导入句柄会一直挂在设备驱动上，直到进程退出才由内核强制回收并打印设备侧告警（如 `rga_mm: [tgid:N] Destroy handle[M] when the user exits`）。凡是把硬件引擎放进进程级静态的模块，都必须提供显式释放入口（Trait 方法 + 释放函数），并由**实例计数租约**在最后一个实例销毁时触发，见 `algo_sdk::cv::DefaultEngineLease`。
 - **DMA-BUF 映射权限**：DMA-BUF 映射为张量虚拟地址时必须声明 `PROT_READ | PROT_WRITE`，严防 `rknn_inputs_set` 触发内核缺页写保护段错误。
 - **热路径零动态分配**：热路径预分配并复用缓冲，杜绝逐帧 `format!`、临时像素 Vec 与模型重载；FFI 及超 1ms 计算必须分流至固定专用 OS Worker。
 

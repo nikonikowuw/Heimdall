@@ -487,6 +487,30 @@ impl CvEngine for RgaCvEngine {
         }
         self.hardware_resize(frame, dst_w, dst_h)
     }
+
+    fn release_hardware(&self) {
+        // 从缓存表移除全部池是唯一必要的动作：RgaBufferPool 内部为 Arc<PoolInner>，
+        // 一旦此处最后一个 Arc 被丢弃（正常路径下不会有在租 lease 存活——实例已销毁），
+        // PoolInner 随即析构，其 slots 中的 PoolResource 触发 Drop → releasebuffer_handle，
+        // 对应 DMA-BUF 的 rga_mm 句柄与内核映射一并释放。
+        //
+        // 幂等：表为空时提前返回，不重复扰动运行中的硬件。
+        let drained = match self.pools.lock() {
+            Ok(mut pools) => {
+                let count = pools.len();
+                pools.clear();
+                count
+            }
+            Err(_) => {
+                tracing::error!("RGA pool map lock poisoned while releasing hardware");
+                return;
+            }
+        };
+
+        if drained > 0 {
+            tracing::debug!(pools = drained, "RGA CV engine hardware released");
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -656,6 +680,7 @@ mod tests {
     use super::*;
     use crate::c_abi::{AvFrameDesc, AV_OPAQUE_NONE, AV_PIX_RGB24};
     use crate::cv::platforms::rockchip::config::RgaCore;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn source_color_space_follows_frame_metadata() {
@@ -762,5 +787,82 @@ mod tests {
             result,
             Err(AlgoError::Preprocess { ref reason }) if reason.contains("exceeded maximum cached RGA buffer pools")
         ));
+    }
+
+    /// `release_hardware` 必须清空池表并归还每个池持有的 RGA 句柄，且可重复调用。
+    ///
+    /// 这锁住的是「最后一个算法实例销毁 → 进程级静态引擎归还硬件资源」的回收契约：
+    /// 若此处不归还，`rga_mm` 上的导入句柄会一直存活到进程退出，由内核强制回收。
+    #[test]
+    fn release_hardware_returns_handles_and_is_idempotent() {
+        struct CountingFactory {
+            releases: Arc<AtomicUsize>,
+        }
+        impl super::super::pool::SlotFactory for CountingFactory {
+            fn create(&self) -> Result<super::super::pool::SlotData, AlgoError> {
+                let file = std::fs::File::open("/dev/null").map_err(|_| AlgoError::OutOfMemory)?;
+                use std::os::fd::{FromRawFd, IntoRawFd};
+                // SAFETY: into_raw_fd transfers ownership of this freshly opened /dev/null descriptor to OwnedFd.
+                let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(file.into_raw_fd()) };
+                Ok(super::super::pool::SlotData { fd, handle: 1 })
+            }
+            fn release(&self, _handle: u32) {
+                self.releases.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let releases = Arc::new(AtomicUsize::new(0));
+        let engine = RgaCvEngine::new_with_config(RgaPoolConfig::default()).expect("config");
+
+        // 两个规格各驻留 2 个槽位，共 4 个句柄待归还。
+        let pool = Arc::new(
+            RgaBufferPool::with_factory(
+                RgaPoolConfig {
+                    min_idle: 2,
+                    max_size: 2,
+                    ..RgaPoolConfig::default()
+                },
+                Arc::new(CountingFactory {
+                    releases: Arc::clone(&releases),
+                }),
+            )
+            .expect("counting pool"),
+        );
+        {
+            let mut pools = engine.pools.lock().expect("pools lock");
+            for i in 1..=2u32 {
+                let extent = i * 64;
+                pools.insert(
+                    RgaBufferSpec {
+                        width: extent,
+                        height: extent,
+                        w_stride: extent,
+                        h_stride: extent,
+                        format: PixelFormat::Rgb24,
+                        size: (extent * extent * 3) as usize,
+                    },
+                    Arc::clone(&pool),
+                );
+            }
+        }
+        assert_eq!(engine.pools.lock().expect("pools lock").len(), 2);
+        assert_eq!(releases.load(Ordering::Relaxed), 0);
+
+        CvEngine::release_hardware(&engine);
+
+        assert!(
+            engine.pools.lock().expect("pools lock").is_empty(),
+            "释放后不得残留池"
+        );
+        // 两个池引用归还后 PoolInner 析构，2 个槽位的句柄被释放。
+        assert_eq!(
+            releases.load(Ordering::Relaxed),
+            2,
+            "池内句柄必须实际归还给 librga"
+        );
+
+        // 幂等：重复调用不得 panic 也不得重复释放。
+        CvEngine::release_hardware(&engine);
+        assert_eq!(releases.load(Ordering::Relaxed), 2);
     }
 }

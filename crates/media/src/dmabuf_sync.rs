@@ -305,12 +305,27 @@ impl DmaBufSyncGuard {
 // DMA-BUF 堆内存分配 (dma-heap UAPI)
 // ============================================================================
 
+/// DMA-BUF 堆节点候选顺序（按序尝试，首个成功即返回）。
+///
+/// **排序依据**：本模块的消费者（RGA 缩放/裁剪、MPP JPEG 编码、门控缩略图回读）全部经
+/// IOMMU 访问，**不要求物理连续**：
+/// - RGA2 自带 `RGA_MMU`，驱动对 `orig_nents > 1` 的 sg_table 走 `rga_mm_lookup_iova`，
+///   只有 `RGA_NONE_MMU` 才拒绝离散页（内核 `rga_mm.c: rga_mm_map_dma_buffer`）；
+/// - MPP 编解码单元（vepu/vdpu/jpegd）设备树均带 `iommus` 属性，可挂载离散 DMA-BUF。
+///
+/// 因此优先 DMA32 堆：既满足 RGA2 32 位 MMU 的 4GB 物理寻址上限，又不占用
+/// RK3568 上仅 16MB 的 CMA 池——CMA 必须留给真正要求物理连续的消费者，
+/// 否则每帧申请会把 CMA 榨到 1MB 量级并触发 `alloc_contig_range: PFNs busy` 重试噪声。
+///
+/// CMA 排在 DMA32 之后、`system` 之前：CMA 保证落在低地址（满足 4GB 约束），
+/// 而裸 `system` 在 8GB/16GB 板卡上可能返回 4GB 以上物理页导致 RGA2 寻址失败，
+/// 故只能作为最后兜底。
 #[cfg(target_os = "linux")]
 const DMA_HEAP_PATHS: [&[u8]; 6] = [
-    b"/dev/dma_heap/cma\0",
-    b"/dev/dma_heap/cma-uncached\0",
     b"/dev/dma_heap/system-dma32\0",
     b"/dev/dma_heap/system-uncached-dma32\0",
+    b"/dev/dma_heap/cma\0",
+    b"/dev/dma_heap/cma-uncached\0",
     b"/dev/dma_heap/system\0",
     b"/dev/dma_heap/system-uncached\0",
 ];
@@ -327,7 +342,9 @@ struct DmaHeapAlloc {
 #[cfg(target_os = "linux")]
 const DMA_HEAP_IOCTL_ALLOC: libc::c_ulong = 0xc018_4800;
 
-/// 从 Linux 标准 DMA 堆节点（如 cma / system-dma32 / system）分配连续 DMA-BUF
+/// 从 Linux 标准 DMA 堆节点（按 [`DMA_HEAP_PATHS`] 优先级）分配 DMA-BUF
+///
+/// 优先 DMA32 堆，避免占用 CMA；CMA 仅在缺少 DMA32 堆节点的内核上兜底。
 #[cfg(target_os = "linux")]
 pub fn alloc_dma_buf(size: usize) -> Result<OwnedFd, MediaError> {
     let page_size = 4096usize;
@@ -443,5 +460,39 @@ mod tests {
         let guard = DmaBufSyncGuard::acquire(test_fd, DmaBufSyncDirection::Read);
         assert!(guard.is_ok());
         drop(guard);
+    }
+
+    /// 堆优先级必须让 DMA32 堆先于 CMA。
+    ///
+    /// 消费者（RGA 缩放/裁剪、MPP JPEG 编码）全部经 IOMMU 访问，不要求物理连续；
+    /// 若把 CMA 排到首位，RK3568 仅 16MB 的 CMA 池会被常驻缓冲持续切分，
+    /// 触发 `alloc_contig_range: PFNs busy` 重试并挤压真正需要连续内存的消费者。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dma32_heaps_precede_cma_to_protect_cma_pool() {
+        let cma_index = DMA_HEAP_PATHS
+            .iter()
+            .position(|p| p.starts_with(b"/dev/dma_heap/cma"))
+            .expect("CMA 堆必须作为兜底保留在候选列表中");
+        let first_dma32 = DMA_HEAP_PATHS
+            .iter()
+            .position(|p| p.ends_with(b"dma32\0"))
+            .expect("必须存在 DMA32 堆节点");
+
+        assert!(
+            first_dma32 < cma_index,
+            "DMA32 堆必须先于 CMA 尝试，当前顺序: {:?}",
+            DMA_HEAP_PATHS
+                .iter()
+                .map(|p| String::from_utf8_lossy(&p[..p.len() - 1]).into_owned())
+                .collect::<Vec<_>>()
+        );
+
+        // 裸 system 堆可能返回 4GB 以上物理页导致 RGA2 寻址失败，只能最后兜底。
+        let last_system = DMA_HEAP_PATHS
+            .iter()
+            .rposition(|p| p.starts_with(b"/dev/dma_heap/system"))
+            .expect("system 堆必须作为最后兜底");
+        assert_eq!(last_system, DMA_HEAP_PATHS.len() - 1);
     }
 }

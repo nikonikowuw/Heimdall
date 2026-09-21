@@ -2,6 +2,7 @@
 //! 提供统一门面函数 `cv::letterbox` / `cv::resize`，底层自动分派到最佳硬件加速器。
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 pub mod buffer;
@@ -29,6 +30,69 @@ thread_local! {
 }
 
 static DEFAULT_ENGINE: OnceLock<SharedCvEngine> = OnceLock::new();
+
+/// 进程内活跃算法实例计数。
+///
+/// 每个算法包是独立 `cdylib`，静态链接本 SDK，因此该计数天然按库隔离，
+/// 不会跨算法包互相干扰。
+static ACTIVE_INSTANCES: AtomicUsize = AtomicUsize::new(0);
+
+/// 默认引擎的实例租约：最后一个实例销毁时回收进程级硬件资源。
+///
+/// **为何需要显式回收**：[`default_engine`] 把引擎存放在 `static OnceLock` 中，
+/// 而 Rust 静态变量**永不执行 `Drop`**；RGA 池持有的 DMA-BUF 导入句柄因此会一直
+/// 挂在 `rga_mm` 上，直到进程退出才由内核强制回收，在内核日志留下
+/// `rga_mm: [tgid:N] Destroy handle[M] when the user exits` 噪声。
+///
+/// 本租约在算法实例创建时登记、销毁时注销，归零即回收硬件资源，
+/// 使动态卸载算法包或服务停机不再依赖内核兜底。
+///
+/// 引擎本身保留在 [`DEFAULT_ENGINE`] 中，后续实例会按需重建缓冲池。
+pub struct DefaultEngineLease {
+    _not_constructible: (),
+}
+
+impl DefaultEngineLease {
+    /// 登记一个持有默认引擎的算法实例。
+    pub fn acquire() -> Self {
+        ACTIVE_INSTANCES.fetch_add(1, Ordering::AcqRel);
+        Self {
+            _not_constructible: (),
+        }
+    }
+}
+
+impl Drop for DefaultEngineLease {
+    fn drop(&mut self) {
+        // 饱和递减：计数异常（如未配对 acquire）时不得回绕成天文数字而永不归零。
+        let previous =
+            ACTIVE_INSTANCES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            });
+        if previous == Ok(1) {
+            release_default_engine();
+        }
+    }
+}
+
+impl std::fmt::Debug for DefaultEngineLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DefaultEngineLease")
+            .field("activeInstances", &ACTIVE_INSTANCES.load(Ordering::Relaxed))
+            .finish()
+    }
+}
+
+/// 回收默认引擎持有的硬件资源（RGA 导入句柄与缓冲池）。
+///
+/// 幂等：引擎尚未初始化或已被回收时为空操作。
+/// 通常无需直接调用——实例销毁会经 [`DefaultEngineLease`] 自动触发。
+pub fn release_default_engine() {
+    if let Some(engine) = DEFAULT_ENGINE.get() {
+        engine.release_hardware();
+    }
+}
 
 fn default_engine() -> SharedCvEngine {
     DEFAULT_ENGINE
@@ -119,4 +183,53 @@ pub fn resize(
     dst_h: u32,
 ) -> Result<(CvBuffer, PreprocessMode), AlgoError> {
     active_engine().resize(frame, dst_w, dst_h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 串行化共享 `ACTIVE_INSTANCES` 静态计数的用例（cargo test 默认多线程执行）。
+    static LEASE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 租约计数必须在最后一个实例销毁时归零并触发引擎回收。
+    ///
+    /// 这锁住的是「进程级 `static` 引擎不能被 `Drop` 回收」这一 Rust 语言约束下的
+    /// 显式回收契约：若退化为依赖静态析构，内核会持续打印
+    /// `rga_mm: [tgid:N] Destroy handle[M] when the user exits`。
+    ///
+    /// 测试只验证计数语义，不依赖 librga：未初始化引擎时 `release_default_engine` 为空操作。
+    #[test]
+    fn lease_releases_engine_when_last_instance_drops() {
+        let _guard = LEASE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let first = DefaultEngineLease::acquire();
+        let second = DefaultEngineLease::acquire();
+        assert_eq!(ACTIVE_INSTANCES.load(Ordering::Acquire), 2);
+
+        drop(first);
+        assert_eq!(
+            ACTIVE_INSTANCES.load(Ordering::Acquire),
+            1,
+            "还有实例存活时不得回收引擎"
+        );
+
+        // 最后一个租约销毁：计数归零并触发回收路径。
+        drop(second);
+        assert_eq!(ACTIVE_INSTANCES.load(Ordering::Acquire), 0);
+    }
+
+    /// 计数为零时的递减必须饱和而非回绕（回绕会使引擎永不回收）。
+    #[test]
+    fn lease_decrement_saturates_at_zero() {
+        let _guard = LEASE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(ACTIVE_INSTANCES.load(Ordering::Acquire), 0);
+
+        let previous =
+            ACTIVE_INSTANCES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            });
+        assert_eq!(previous, Err(0), "计数为零时必须拒绝递减而非回绕");
+        assert_eq!(ACTIVE_INSTANCES.load(Ordering::Acquire), 0);
+    }
 }

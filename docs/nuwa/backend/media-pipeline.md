@@ -124,6 +124,7 @@
 - **单实例串行调度**：快照编码器常驻单实例（由 `SnapEncoder` 互斥锁保护排队），严禁按摄像头或并发请求创建多上下文，避免硬件单通道争抢与 CMA 内存耗尽；失败时逐级降级至 CPU。
 - **几何与对齐规范**：裁剪参数统一经由 `compute_crop_roi` 纯数学算法计算，严格保障 NV12 起点与宽高偶数对齐、硬件 16 字节 Stride 对齐、硬件下限防溢出（$\ge 16\times 16$）以及向左上平移的防越界补偿。
 - **Scratchpad 单画板机制**：RGA 等设备侧裁剪输出采用单块最大分辨率常驻预分配 DMA-BUF（受 RGA 硬件 dst 端口 `act_w <= 2048, act_h <= 2048, vir_h <= 2048` 限制，统一预分配 1080P 约 3.1MB，超限特写自动平滑走 CPU 保底），严禁根据目标 BBox 动态分配，杜绝 CMA 连续内存碎片化与系统崩溃。
+- **常驻缓冲走 DMA32 而非 CMA**：RGA 缩放/裁剪与门控缩略图的输出缓冲（如 Scratchpad 3.1MB 与每路 $320\times180$ 缩略图 88KB）经 RGA 自带 `RGA_MMU` 访问，**不要求物理连续**，必须走 `system-dma32` 堆。经 RK3568 实测：4 块常驻缓冲（3.1MB + 3×88KB）落在 CMA 时会占去 16MB 池的约 20%，并触发 `alloc_contig_range: PFNs busy`；改走 DMA32 后设备侧导入句柄由 `mm_flag=0x7`（含 `PHYSICAL_CONTIGUOUS`）变为 `0x3`（仅 `UNDER_4G|NEED_USE_IOMMU`），功能无回归。
 - **色彩空间防发灰**：硬件 JPEG 编码必须显式声明 BT.601 Full Range（如 `MPP_FRAME_RANGE_JPEG`），杜绝因未映射 Limited Range 导致暗部泛白与对比度下降。
 - **MPP 配置顺序**：MPP JPEGE 必须在 `mpp_enc_cfg_init` 后先执行 `MPP_ENC_GET_CFG`，再设置质量、NV12 色彩范围及真实帧的宽高/stride，最后执行 `MPP_ENC_SET_CFG`；编码器构造阶段不得用零尺寸提交 `SET_CFG`。
 

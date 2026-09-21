@@ -178,6 +178,12 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
 - `compute_letterbox_layout` 提供 scale、padding 和缩放尺寸，`unmap_box` 复用同一布局完成逆变换。
 - RGA 输出池在初始化时 import handle 并复用；输入 handle 由 `RgaHandleGuard` 单帧管理，禁止每帧重复 import/release 输出池。
 - 单 `RgaCvEngine` 最多缓存 **16** 个输出规格，超限拒绝；优先 system-dma32/system，只有显式 Rga2 强制 DMA32，Auto/Rga3 可使用 64 位物理地址堆。
+- **进程级默认引擎必须显式回收**：`cv::default_engine` 把引擎存放在 `static OnceLock`，而 Rust 静态变量永不执行 `Drop`；若不显式回收，RGA 池持有的 DMA-BUF 导入句柄会一直存活到进程退出，由内核强制回收并在 dmesg 留下 `rga_mm: [tgid:N] Destroy handle[M] when the user exits`。契约：
+  1. `CvEngine::release_hardware` 负责释放引擎持有的全部硬件资源（RGA 引擎清空并丢弃池表，池引用归零后各 `PoolResource` 析构即归还句柄），必须幂等且对无硬件资源的平台为空实现；
+  2. `export_algo!` 展开的 `instance_create` 为每个实例登记 `DefaultEngineLease`，字段声明在 `InstanceContext` **末尾**，确保在 `plugin`/`engine` 之后析构；
+  3. 最后一个实例销毁时计数归零并自动调用 `release_default_engine`（饱和递减，计数为 0 时拒绝递减而非回绕）；
+  4. 引擎本体保留在静态中，后续实例按需重建缓冲池。
+  不要改用 `library_close_hook` 做此事：`library_close` 在**每次** `RawAlgoLibrary::drop` 都触发（含 `extract_face` 等高频短操作），挂在彼处会造成池反复销毁/重建的句柄抖动。
 - 规格预算按**进程**共享且**不淘汰**：所有算法包、所有实例、所有分辨率都从同一 16 个槽位分配。因此算法包请求的 RGA 输出几何必须收敛到固定集合，**禁止**把随帧变化的 ROI 尺寸直接作为裁剪尺寸（典型翻车：best-shot 按人脸位置逐帧精确裁切，十几条航迹即耗尽预算，此后该引擎全部 `letterbox/resize` 永久失败）；超出档位集合时必须显式退化为固定尺寸（如整帧该轴尺寸），不得静默新增规格。
 - **几何预算的真实不变量是「单分辨率内有界」，不是「与分辨率无关」**：仅靠「超出档位就退化为整帧该轴尺寸」的策略，每个分辨率仍会额外贡献 1 个与帧尺寸绑定的退化档位（含该分辨率的 letterbox 规格则算 2 个），因此**进程并集随部署分辨率种类线性增长**——实测 4 种常见分辨率（640×360 / 704×576 / 1280×720 / 1920×1080）在 RK3568 人脸包上并集为 9 种几何，7 种分辨率可达 12 种，逼近 16 槽上限。落地要求：
   1. 档位集合与退化策略必须用**跨分辨率并集**回归测试钉住上限（参考 RK3568 人脸包 `plugin::tests::snapshot_roi_geometry_union_stays_within_process_budget`，含「扫描确实到达退化分支」的饱和校验），不能只断言单分辨率内的档位数；

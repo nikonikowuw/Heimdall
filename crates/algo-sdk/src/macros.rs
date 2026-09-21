@@ -73,6 +73,11 @@ pub struct InstanceContext<P: AlgoPlugin> {
     pub engine: crate::cv::SharedCvEngine,
     pub on_result: Option<AvAlgoResultCb>,
     pub user_data: *mut c_void,
+    /// 默认引擎的实例租约；最后一个实例销毁时回收 RGA 句柄与缓冲池。
+    ///
+    /// 声明在末尾以确保在 `plugin` / `engine` 字段之后析构，待实例自身引用全部释放后才触发回收。
+    /// 字段必须 `pub`：`export_algo!` 在算法包（外部 crate）内展开并构造本结构。
+    pub _engine_lease: crate::cv::DefaultEngineLease,
 }
 
 impl<P: AlgoPlugin> std::fmt::Debug for InstanceContext<P> {
@@ -568,6 +573,7 @@ macro_rules! export_algo {
                     engine,
                     on_result: raw_args.on_result,
                     user_data: raw_args.result_user,
+                    _engine_lease: $crate::cv::DefaultEngineLease::acquire(),
                 });
 
                 // SAFETY: out 非空且由调用方提供可写句柄槽位。
