@@ -1500,6 +1500,17 @@ fn write_candidate_evidence(
     base_evidence_dir: &std::path::Path,
     db_path: Option<&std::path::Path>,
 ) -> Result<SnapshotResult, PipelineError> {
+    if evidence.geometry.face_bbox.is_some()
+        && evidence
+            .crop_jpeg
+            .as_ref()
+            .is_none_or(|crop| crop.is_empty())
+    {
+        return Err(PipelineError::Snapshot(
+            "有人脸候选缺少人脸特写，拒绝写入不完整证据".into(),
+        ));
+    }
+
     // 候选恒带目标框，因此在紧急水位下与告警靶向凭据一样放行（沿用既有裁决：
     // 抓拍是淘汰阶梯的第一级，遇到磁盘压力时先于告警被清理，不在此处二次抑制）。
     check_storage_breaker(
@@ -1647,6 +1658,38 @@ mod tests {
         assert!(crop_file.is_file(), "特写抠图必须落盘");
 
         // 清理测试临时目录
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn face_candidate_without_crop_is_rejected_before_writing() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_missing_face_crop_writer_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let candidate = CandidateEvidence {
+            full_jpeg: Arc::from(vec![1_u8; 16]),
+            crop_jpeg: None,
+            body_crop_jpeg: Some(Arc::from(vec![2_u8; 16])),
+            width: 64,
+            height: 64,
+            geometry: crate::capture_settle::FrameGeometry {
+                bbox: BoundingBox::new(0.2, 0.2, 0.8, 0.9),
+                face_bbox: Some(BoundingBox::new(0.4, 0.3, 0.6, 0.55)),
+                is_pseudo_body: false,
+                pts_ms: 1000,
+                quality: 0.8,
+            },
+            stream: EvidenceImageStream::Sub,
+        };
+
+        let result = write_candidate_evidence("cam_missing_crop", &candidate, &temp_dir, None);
+        assert!(result.is_err());
+        assert!(
+            !temp_dir.join("cam_missing_crop").exists(),
+            "无效候选在写盘前就应被拒绝"
+        );
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
 

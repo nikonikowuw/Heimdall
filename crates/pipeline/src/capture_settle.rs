@@ -381,7 +381,9 @@ impl CaptureSettleController {
                                 face.template_mature =
                                     face.template_mature.or(prev_face.template_mature);
                             } else {
-                                stored_object.face = Some(prev_face.clone());
+                                // 当前帧没有人脸时只继承特征，不继承上一帧的 bbox。
+                                // 旧 bbox 不能用于当前帧裁剪，否则会把无脸帧伪装成人脸事件。
+                                stored_object.embedding = prev_face.embedding.clone();
                             }
                         }
                     } else if prev.embedding.is_some() {
@@ -447,11 +449,21 @@ impl CaptureSettleController {
                     }
                 }
                 Some(pending) => {
-                    if quality > pending.best.quality + config.peak_delta {
+                    // 人脸特写是识别事件的必要证据：同一轨道一旦出现人脸框，
+                    // 不能再被更高面积/质量的无脸帧覆盖。无脸候选切到有人脸候选时
+                    // 即使仍在编码节流窗口内也必须强制留存，否则结算会继续复用旧无脸图。
+                    let face_recovered =
+                        geometry.face_bbox.is_some() && pending.best.face_bbox.is_none();
+                    let same_face_mode =
+                        geometry.face_bbox.is_some() == pending.best.face_bbox.is_some();
+                    let quality_improved =
+                        same_face_mode && quality > pending.best.quality + config.peak_delta;
+                    if quality_improved || face_recovered {
                         pending.best = geometry;
                         pending.last_improve_pts_ms = now_ms;
-                        if now_ms - pending.last_candidate_attempt_ms
-                            >= config.candidate_throttle_ms
+                        if face_recovered
+                            || now_ms - pending.last_candidate_attempt_ms
+                                >= config.candidate_throttle_ms
                         {
                             pending.last_candidate_attempt_ms = now_ms;
                             actions.push(CaptureAction::RetainCandidate(CandidateRetainRequest {
@@ -1040,6 +1052,28 @@ mod tests {
         // 退避窗口届满重新挂起（结算在 1400，窗口 10s 至 11400）。
         let actions = controller.observe("algo", &[face_object(11, 0.70)], &rules, 11_400);
         assert_eq!(actions.len(), 1, "退避窗口届满重入必须重新留盘");
+    }
+
+    #[test]
+    fn face_candidate_replaces_faceless_peak_even_inside_throttle() {
+        let mut controller = CaptureSettleController::with_config(CaptureSettleConfig {
+            candidate_throttle_ms: 10_000,
+            ..CaptureSettleConfig::default()
+        });
+        let rules = empty_rules();
+
+        let faceless = faceless_object(42, BoundingBox::new(0.3, 0.2, 0.7, 0.8));
+        let actions = controller.observe("algo", &[faceless], &rules, 1000);
+        assert_eq!(retain_request(&actions[0]).geometry.face_bbox, None);
+
+        // 人脸质量低于无脸人体面积时，仍必须升级为有人脸候选；否则识别事件
+        // 会携带 embedding，却只能写出 body crop，最终形成空 face_crop_path。
+        let actions = controller.observe("algo", &[face_object(42, 0.10)], &rules, 1040);
+        assert_eq!(actions.len(), 1, "人脸恢复必须绕过候选编码节流");
+        assert!(
+            retain_request(&actions[0]).geometry.face_bbox.is_some(),
+            "有人脸帧必须成为候选几何"
+        );
     }
 
     #[test]

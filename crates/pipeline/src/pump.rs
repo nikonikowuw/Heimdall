@@ -16,7 +16,9 @@ use media::decoder::VideoDecoder;
 use media::stream_hub::CameraStreamSession;
 use media::{ConsumerKind, StreamItem};
 use tokio_util::sync::CancellationToken;
-use types::{BoundingBox, DetectionRule, FrameRef, MotionGateConfig, StreamTag, TrackedObject};
+use types::{
+    BoundingBox, DetectionRule, FaceDetail, FrameRef, MotionGateConfig, StreamTag, TrackedObject,
+};
 
 use infer::{InferenceWorker, InferenceWorkerHandle};
 
@@ -977,7 +979,50 @@ async fn execute_capture_actions(
                 let settle = *settle;
                 let mut candidate_geometry = None;
                 let mut snapshot = None;
-                if let Some(candidate) = settle.candidate.as_ref() {
+                let candidate_face_mismatch = settle.candidate.as_ref().is_some_and(|candidate| {
+                    candidate.geometry.face_bbox.is_none()
+                        && settle.tracked_object.face_crop_target().is_some()
+                });
+                let candidate_missing_face_crop =
+                    settle.candidate.as_ref().is_some_and(|candidate| {
+                        candidate.geometry.face_bbox.is_some()
+                            && candidate
+                                .crop_jpeg
+                                .as_ref()
+                                .is_none_or(|crop| crop.is_empty())
+                    });
+                if candidate_face_mismatch {
+                    // 候选图没有人脸裁剪，但结算对象已是人脸事件：旧候选不能与
+                    // 当前事件拼接，否则会把 body crop 误当成识别现场证据。
+                    tracing::warn!(
+                        camera_id,
+                        algorithm_id,
+                        track_id = settle.track_id,
+                        candidate_pts = settle
+                            .candidate
+                            .as_ref()
+                            .map(|candidate| candidate.geometry.pts_ms),
+                        event_pts = settle.last_seen_pts_ms,
+                        "候选缺少人脸特写，丢弃旧候选并回退当前分析帧"
+                    );
+                }
+                if candidate_missing_face_crop {
+                    tracing::warn!(
+                        camera_id,
+                        algorithm_id,
+                        track_id = settle.track_id,
+                        candidate_pts = settle
+                            .candidate
+                            .as_ref()
+                            .map(|candidate| candidate.geometry.pts_ms),
+                        "有人脸候选内存中缺少人脸特写，回退当前分析帧"
+                    );
+                }
+                if let Some(candidate) = settle
+                    .candidate
+                    .as_ref()
+                    .filter(|_| !candidate_face_mismatch && !candidate_missing_face_crop)
+                {
                     // 结算即唯一一次落盘：此前候选仅以编码字节驻留内存。
                     match pipeline_mgr
                         .write_capture_candidate(camera_id, candidate)
@@ -1087,8 +1132,23 @@ async fn execute_capture_actions(
                 if let Some(geometry) = candidate_geometry {
                     // INV-3：事件 bbox 必须与所存图像同帧（候选提升时替换为峰值帧几何）。
                     event_object.bbox = geometry.bbox;
-                    if let Some(face) = event_object.face.as_mut() {
-                        face.bbox = geometry.face_bbox.unwrap_or(geometry.bbox);
+                    if let Some(face_bbox) = geometry.face_bbox {
+                        if let Some(face) = event_object.face.as_mut() {
+                            face.bbox = face_bbox;
+                        } else {
+                            // 结算帧可能短暂丢脸，但候选图仍是完整的人脸峰值帧。
+                            // 用候选帧几何重建最小 FaceDetail，避免复用当前帧旧 bbox，
+                            // 同时保留 embedding 使该事件仍能进入 1:N 识别。
+                            let mut face = FaceDetail::new(face_bbox, event_object.confidence);
+                            face.quality_score = Some(geometry.quality);
+                            face.embedding = event_object.embedding.clone();
+                            event_object.face = Some(face);
+                        }
+                    } else {
+                        // 无脸候选不能继续携带上一帧 sticky face 元数据，否则会把
+                        // body bbox/旧 face bbox 写成一个看似有效的识别事件。
+                        event_object.face = None;
+                        event_object.embedding = None;
                     }
                 }
 
@@ -2022,9 +2082,13 @@ pub type SubStreamAnalysisPump = AnalysisPump;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture_settle::{CandidateRetainRequest, FrameGeometry};
+    use crate::capture_settle::{
+        CandidateEvidence, CandidateRetainRequest, FrameGeometry, SettleReason, SettleRequest,
+    };
     use crate::test_support::{dir_entry_count, test_nv12_frame};
-    use types::{BoundingBox, FaceDetail, FrameHandle, PixelFormat, StrideInfo};
+    use types::{
+        BoundingBox, EvidenceImageStream, FaceDetail, FrameHandle, PixelFormat, StrideInfo,
+    };
 
     /// 取景框未配置：原帧直通，且不得要求任何坐标还原。
     #[test]
@@ -2241,6 +2305,263 @@ mod tests {
             dir_entry_count(&temp_dir.join(camera_id)),
             3,
             "结算应写下全景、人脸特写与人体特写三份正式证据"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 无脸峰值候选不能与有人脸结算对象拼接；必须回退当前帧生成人脸特写。
+    #[tokio::test]
+    async fn faceless_candidate_falls_back_when_settled_event_has_face() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_capture_face_mismatch_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager = PipelineManager::with_all_options(
+            temp_dir.clone(),
+            crate::snapshot::SnapshotConfig::default(),
+            2,
+            1000,
+        );
+        let camera_id = "cam_face_mismatch";
+        let algorithm_id = "algo_face";
+        let mut events = manager.subscribe_analysis_events();
+        let body_bbox = BoundingBox::new(0.3, 0.2, 0.7, 0.8);
+        let face_bbox = BoundingBox::new(0.42, 0.32, 0.58, 0.52);
+        let candidate = CandidateEvidence {
+            full_jpeg: Arc::from(vec![1_u8; 64]),
+            crop_jpeg: None,
+            body_crop_jpeg: Some(Arc::from(vec![2_u8; 32])),
+            width: 64,
+            height: 64,
+            geometry: FrameGeometry {
+                bbox: body_bbox,
+                face_bbox: None,
+                is_pseudo_body: false,
+                pts_ms: 1000,
+                quality: 0.24,
+            },
+            stream: EvidenceImageStream::Sub,
+        };
+
+        let event_object = TrackedObject {
+            track_id: 7,
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            quality_score: Some(0.80),
+            embedding: None,
+            bbox: body_bbox,
+            face: Some(FaceDetail {
+                bbox: face_bbox,
+                confidence: 0.95,
+                quality_score: Some(0.80),
+                fused_count: Some(2),
+                template_quality: Some(0.70),
+                template_mature: Some(true),
+                pseudo_body: None,
+                embedding: None,
+            }),
+            trajectory: vec![(0.5, 0.6)],
+        };
+
+        execute_capture_actions(
+            &manager,
+            camera_id,
+            algorithm_id,
+            vec![CaptureAction::Settle(Box::new(SettleRequest {
+                track_id: event_object.track_id,
+                reason: SettleReason::QualityPlateau,
+                tracked_object: event_object,
+                last_seen_pts_ms: 1000,
+                target_in_current_frame: true,
+                candidate: Some(candidate),
+            }))],
+            &test_nv12_frame(camera_id, 1000),
+            1000,
+            &InstanceMetrics::default(),
+            &PumpMetrics::default(),
+        )
+        .await;
+
+        match events.recv().await.expect("通行抓拍事件") {
+            PipelineAnalysisEvent::Capture(event) => {
+                let snapshot = event.snapshot.expect("回退路径必须产出证据快照");
+                assert!(!snapshot.crop_image_rel_path.is_empty());
+                assert!(temp_dir.join(&snapshot.crop_image_rel_path).is_file());
+                assert_eq!(
+                    event.tracked_object.face.as_ref().expect("人脸细节").bbox,
+                    face_bbox,
+                    "回退当前帧时不得把人脸框替换为人体框"
+                );
+            }
+            other => panic!("期望通行抓拍事件，实际为 {other:?}"),
+        }
+
+        assert_eq!(
+            dir_entry_count(&temp_dir.join(camera_id)),
+            3,
+            "回退应写下全景、人脸特写与人体特写"
+        );
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 有脸峰值候选在结算帧短暂丢脸时，事件仍必须保留候选人脸几何并进入识别门控。
+    #[tokio::test]
+    async fn face_candidate_rebuilds_event_after_settle_frame_loses_face() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_capture_face_recovery_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager = PipelineManager::with_all_options(
+            temp_dir.clone(),
+            crate::snapshot::SnapshotConfig::default(),
+            2,
+            1000,
+        );
+        let camera_id = "cam_face_recovery";
+        let algorithm_id = "algo_face";
+        let mut events = manager.subscribe_analysis_events();
+        let body_bbox = BoundingBox::new(0.3, 0.2, 0.7, 0.8);
+        let face_bbox = BoundingBox::new(0.42, 0.32, 0.58, 0.52);
+        let embedding: Arc<[u8]> = Arc::from(vec![3_u8; 16]);
+        let candidate = CandidateEvidence {
+            full_jpeg: Arc::from(vec![1_u8; 64]),
+            crop_jpeg: Some(Arc::from(vec![2_u8; 32])),
+            body_crop_jpeg: Some(Arc::from(vec![4_u8; 32])),
+            width: 64,
+            height: 64,
+            geometry: FrameGeometry {
+                bbox: body_bbox,
+                face_bbox: Some(face_bbox),
+                is_pseudo_body: false,
+                pts_ms: 1000,
+                quality: 0.86,
+            },
+            stream: EvidenceImageStream::Sub,
+        };
+
+        let event_object = TrackedObject {
+            track_id: 8,
+            class_id: 0,
+            label: "person".to_string(),
+            confidence: 0.95,
+            quality_score: None,
+            embedding: Some(embedding),
+            bbox: body_bbox,
+            face: None,
+            trajectory: vec![(0.5, 0.6)],
+        };
+
+        execute_capture_actions(
+            &manager,
+            camera_id,
+            algorithm_id,
+            vec![CaptureAction::Settle(Box::new(SettleRequest {
+                track_id: event_object.track_id,
+                reason: SettleReason::QualityPlateau,
+                tracked_object: event_object,
+                last_seen_pts_ms: 1040,
+                target_in_current_frame: true,
+                candidate: Some(candidate),
+            }))],
+            &test_nv12_frame(camera_id, 1040),
+            1040,
+            &InstanceMetrics::default(),
+            &PumpMetrics::default(),
+        )
+        .await;
+
+        match events.recv().await.expect("通行抓拍事件") {
+            PipelineAnalysisEvent::Capture(event) => {
+                let face = event
+                    .tracked_object
+                    .face
+                    .as_ref()
+                    .expect("候选有人脸时事件必须保留 FaceDetail");
+                assert_eq!(face.bbox, face_bbox);
+                assert_eq!(face.quality_score, Some(0.86));
+                assert!(event.tracked_object.embedding().is_some());
+                let snapshot = event.snapshot.expect("候选结算必须产出证据快照");
+                assert!(temp_dir.join(&snapshot.crop_image_rel_path).is_file());
+            }
+            other => panic!("期望通行抓拍事件，实际为 {other:?}"),
+        }
+        assert_eq!(
+            dir_entry_count(&temp_dir.join(camera_id)),
+            3,
+            "候选结算应写下全景、人脸特写与人体特写"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 有脸候选缺少人脸 JPEG 时，回退当前帧不得留下候选写盘产生的孤儿文件。
+    #[tokio::test]
+    async fn face_candidate_without_crop_falls_back_without_orphan_files() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_capture_missing_face_crop_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let manager = PipelineManager::with_all_options(
+            temp_dir.clone(),
+            crate::snapshot::SnapshotConfig::default(),
+            2,
+            1000,
+        );
+        let camera_id = "cam_missing_face_crop";
+        let algorithm_id = "algo_face";
+        let mut events = manager.subscribe_analysis_events();
+        let body_bbox = BoundingBox::new(0.3, 0.2, 0.7, 0.8);
+        let face_bbox = BoundingBox::new(0.42, 0.32, 0.58, 0.52);
+        let candidate = CandidateEvidence {
+            full_jpeg: Arc::from(vec![1_u8; 64]),
+            crop_jpeg: None,
+            body_crop_jpeg: Some(Arc::from(vec![2_u8; 32])),
+            width: 64,
+            height: 64,
+            geometry: FrameGeometry {
+                bbox: body_bbox,
+                face_bbox: Some(face_bbox),
+                is_pseudo_body: false,
+                pts_ms: 1000,
+                quality: 0.86,
+            },
+            stream: EvidenceImageStream::Sub,
+        };
+        let event_object = capture_object(9, body_bbox, 0.86);
+
+        execute_capture_actions(
+            &manager,
+            camera_id,
+            algorithm_id,
+            vec![CaptureAction::Settle(Box::new(SettleRequest {
+                track_id: event_object.track_id,
+                reason: SettleReason::QualityPlateau,
+                tracked_object: event_object,
+                last_seen_pts_ms: 1000,
+                target_in_current_frame: true,
+                candidate: Some(candidate),
+            }))],
+            &test_nv12_frame(camera_id, 1000),
+            1000,
+            &InstanceMetrics::default(),
+            &PumpMetrics::default(),
+        )
+        .await;
+
+        match events.recv().await.expect("通行抓拍事件") {
+            PipelineAnalysisEvent::Capture(event) => {
+                let snapshot = event.snapshot.expect("缺失候选必须回退当前帧");
+                assert!(!snapshot.crop_image_rel_path.is_empty());
+                assert!(temp_dir.join(&snapshot.image_rel_path).is_file());
+            }
+            other => panic!("期望通行抓拍事件，实际为 {other:?}"),
+        }
+        assert_eq!(
+            dir_entry_count(&temp_dir.join(camera_id)),
+            3,
+            "回退后只能保留当前帧的一套全景、人脸特写与人体特写"
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);

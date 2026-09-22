@@ -1,88 +1,29 @@
+/**
+ * 阈值类参数键：其取值与底库检索输出同处「标定置信分域」[0, 1]
+ * （0.50 = 512 维正交基准，0.78 = 确认放行锚点）。
+ */
 export function isCosineThresholdKey(key: string): boolean {
   return key === 'similarity_threshold' || key === 'review_threshold'
 }
 
 /**
- * 旷视同款人脸识别置信度分段线性标定（Megvii-style Calibration）：
+ * 标定置信分 [0, 1] → 展示百分比。
  *
- * 锚点物理定义（基于 512 维超球面高维统计与旷视 Face++ 工业界实践）：
- * - 正交随机底线 (x0 = 0.00 -> y0 = 50.0%):
- *     在 512 维空间中，两张无关陌生人人脸特征呈近似正交 (余弦期望为 0)，
- *     映射为 50.0% 先验抛硬币状态 (无偏基准)。
- * - 底库负样本上限 (x1 = 0.10 -> y1 = 55.0%):
- *     底库非目标候选人余弦底噪集中在 [0.02, 0.10]，斜率 0.50，
- *     精准覆盖实测候选人分布：白俊聪 (0.026 -> 51.3%, 0.050 -> 52.5%)、许丽娜 (0.052 -> 52.6%)、林青 (0.102 -> 55.1%)。
- * - 疑似复核门限 (x2 = 0.40 -> y2 = 68.0%):
- *     将 review_threshold (0.40) 锚定为 68.0% (对标旷视 1e-4 门限 69.1)。
- * - 确认放行门限 (x3 = 0.48 -> y3 = 78.0%):
- *     将 similarity_threshold (0.48) 锚定为 78.0% (对标旷视 1e-5 金融级门限 74~75)。
- * - 时域融合近景门限 (x4 = 0.58 -> y4 = 88.4%):
- *     近景抓拍与时域球面融合区间 (0.50~0.58) 映射为 80.4% ~ 88.4% 高分。
- * - 极高置信上限 (x5 = 1.00 -> y5 = 100.0%):
- *     同图/近乎相同照片的理论上限 1.00 映射为 100.0%。
- *
- * 分段斜率与解析公式：
- * - x <= -1.0: y = 0.0
- * - -1.0 < x < 0.10: y = 0.50 + x * 0.50 (斜率 0.50)
- * - 0.10 <= x < 0.40: y = 0.55 + (x - 0.10) * (13 / 30) (斜率 0.433)
- * - 0.40 <= x < 0.48: y = 0.68 + (x - 0.40) * 1.25 (斜率 1.25, 门禁陡增跃升)
- * - 0.48 <= x < 0.58: y = 0.78 + (x - 0.48) * 1.04 (斜率 1.04, 确认同人区)
- * - 0.58 <= x <= 1.00: y = 0.884 + (x - 0.58) * (29 / 105) (斜率 0.276, 平缓收敛)
- * - x > 1.00: y = 1.0
+ * 阈值参数与底库检索结果（`candidates[].similarity`）共用同一度量域，
+ * 控制台只允许做 ×100 线性缩放：宿主 `capture_service` 会把
+ * `params_json.similarity_threshold` 当作**标定置信分**直接消费，
+ * 若在此套用原始余弦标定曲线或其逆运算，界面上设置的 75% 会在宿主侧
+ * 被解读为 45.6%，确认门槛被静默下调近 30 个点。
  */
-export function normalizeCosineSimilarity(similarity: number): number {
-  if (!Number.isFinite(similarity) || similarity <= -1.0) {
-    return 0
-  }
-  if (similarity < 0.1) {
-    return 0.5 + similarity * 0.5
-  }
-  if (similarity < 0.4) {
-    return 0.55 + (similarity - 0.1) * (13 / 30)
-  }
-  if (similarity < 0.48) {
-    return 0.68 + (similarity - 0.4) * 1.25
-  }
-  if (similarity < 0.58) {
-    return 0.78 + (similarity - 0.48) * 1.04
-  }
-  if (similarity >= 1.0) {
-    return 1.0
-  }
-  return 0.884 + (similarity - 0.58) * (29 / 105)
+export function scoreToPercent(score: number): number {
+  return score * 100
 }
 
 /**
- * 将展示层百分比归一化分值 [0, 1] 严格逆映射回算法底层的原始余弦相似度（[-1, 1]），
- * 供控制台任务参数配置、阈值滑块双向绑定反解：
- * - y <= 0.0: 反解为 -1.0
- * - 0.0 < y < 0.55: x = (y - 0.50) / 0.50
- * - 0.55 <= y < 0.68: x = 0.10 + (y - 0.55) * (30 / 13)
- * - 0.68 <= y < 0.78: x = 0.40 + (y - 0.68) / 1.25
- * - 0.78 <= y < 0.884: x = 0.48 + (y - 0.78) / 1.04
- * - 0.884 <= y <= 1.00: x = 0.58 + (y - 0.884) * (105 / 29)
- * - y > 1.00: 反解为 1.00
+ * 展示百分比 → 标定置信分 [0, 1]，[`scoreToPercent`] 的精确逆运算。
  */
-export function denormalizeCosineSimilarity(normalized: number): number {
-  if (!Number.isFinite(normalized) || normalized <= 0) {
-    return -1.0
-  }
-  if (normalized < 0.55) {
-    return (normalized - 0.5) / 0.5
-  }
-  if (normalized < 0.68) {
-    return 0.1 + (normalized - 0.55) * (30 / 13)
-  }
-  if (normalized < 0.78) {
-    return 0.4 + (normalized - 0.68) / 1.25
-  }
-  if (normalized < 0.884) {
-    return 0.48 + (normalized - 0.78) / 1.04
-  }
-  if (normalized >= 1.0) {
-    return 1.0
-  }
-  return 0.58 + (normalized - 0.884) * (105 / 29)
+export function percentToScore(percent: number): number {
+  return percent / 100
 }
 
 /**

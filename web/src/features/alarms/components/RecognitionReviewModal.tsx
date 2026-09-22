@@ -143,6 +143,7 @@ export function RecognitionReviewModal({
   const simPct = formatCosineSimilarityPercent(activeSimilarity, 0)
   const activeLevel = getCosineSimilarityLevel(activeSimilarity)
   const fieldImagePath = recognition.fieldImagePath
+  const fieldCropPath = recognition.fieldCropPath || fieldImagePath || ''
 
   const statusConfig =
     STATUS_CONFIG[recognition.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.pending_review
@@ -251,15 +252,15 @@ export function RecognitionReviewModal({
                 <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-2xl border border-[var(--border)]/40 bg-[var(--bg-surface)]/50 p-3.5 shadow-xs backdrop-blur-xs">
                   {/* 左像：现场抓拍特写 */}
                   <MiniAvatar
-                    src={recognition.fieldCropPath}
+                    src={fieldCropPath}
                     alt={t('card.siteCrop')}
                     label={t('card.fieldCapture')}
                     viewHdText={t('card.viewHd')}
                     noImageText={t('card.noImage')}
                     onZoom={() => {
-                      if (recognition.fieldCropPath) {
+                      if (fieldCropPath) {
                         setPreviewImage({
-                          src: evidenceApi.getImageUrl(recognition.fieldCropPath),
+                          src: evidenceApi.getImageUrl(fieldCropPath),
                           title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
                           subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
                         })

@@ -34,6 +34,8 @@ export interface PersonnelDetailDrawerProps {
   autoOpenUpload?: boolean
   onClose: () => void
   onUpdate: () => void
+  /** 打开单人特征重提前通知页面容器关闭其他同类浮层 */
+  onBeforeOpenReextract?: () => void
   /** 操作成功后的即时反馈，由页面容器翻译成 Toast */
   onNotify?: (payload: { title: string; message: string }) => void
 }
@@ -85,6 +87,7 @@ export function PersonnelDetailDrawer({
   autoOpenUpload,
   onClose,
   onUpdate,
+  onBeforeOpenReextract,
   onNotify,
 }: PersonnelDetailDrawerProps): React.ReactElement {
   const { t } = useTranslation(['personnel', 'common'])
@@ -160,6 +163,14 @@ export function PersonnelDetailDrawer({
     }
   }, [isOpen, subjectId, autoOpenUpload, fetchDetail])
 
+  useEffect(() => {
+    if (isOpen) return
+
+    setIsReextractModalOpen(false)
+    setReextractReport(null)
+    setReextractError(null)
+  }, [isOpen])
+
   const handleCopyId = async (idText: string) => {
     const success = await copyToClipboard(idText)
     if (!success) return
@@ -219,6 +230,7 @@ export function PersonnelDetailDrawer({
   }
 
   const handleOpenReextract = () => {
+    onBeforeOpenReextract?.()
     setReextractReport(null)
     setReextractError(null)
     setIsReextractModalOpen(true)
@@ -891,7 +903,7 @@ export function PersonnelDetailDrawer({
 
       {/* ── 单人重新提取特征弹窗 ── */}
       <ReextractModal
-        isOpen={isReextractModalOpen}
+        isOpen={isOpen && isReextractModalOpen}
         isGlobal={false}
         targetName={detail?.name}
         progress={null}

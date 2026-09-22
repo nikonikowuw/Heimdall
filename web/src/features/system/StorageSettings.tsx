@@ -641,21 +641,19 @@ function RetentionRow({
         <span className="font-medium text-[var(--text-primary)]">{label}</span>
       </td>
       <td className="px-3 py-3">
-        <input
-          type="number"
+        <NumericInput
           min={1}
           max={365}
           value={days}
-          onChange={(e) => onChange(Number(e.target.value) || 1, quota)}
+          onChange={(nextDays) => onChange(nextDays, quota)}
           className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-center font-mono text-[13px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none"
         />
       </td>
       <td className="px-3 py-3">
-        <input
-          type="number"
+        <NumericInput
           min={0}
           value={quota}
-          onChange={(e) => onChange(days, Number(e.target.value) || 0)}
+          onChange={(nextQuota) => onChange(days, nextQuota)}
           placeholder="0=不限"
           className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-center font-mono text-[13px] text-[var(--text-primary)] transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none"
         />
@@ -752,6 +750,50 @@ function RadioOption({
   )
 }
 
+function NumericInput({
+  value,
+  onChange,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur' | 'type'> & {
+  value: number
+  onChange: (value: number) => void
+}): React.ReactElement {
+  const [inputValue, setInputValue] = useState(() => String(value))
+  const [isEditing, setIsEditing] = useState(false)
+
+  useEffect(() => {
+    if (!isEditing) setInputValue(String(value))
+  }, [isEditing, value])
+
+  const handleBlur = () => {
+    setIsEditing(false)
+    const parsed = Number(inputValue)
+    if (inputValue.trim() === '' || !Number.isFinite(parsed)) {
+      setInputValue(String(value))
+      return
+    }
+    onChange(parsed)
+    setInputValue(String(parsed))
+  }
+
+  return (
+    <input
+      {...props}
+      type="number"
+      value={inputValue}
+      onFocus={() => setIsEditing(true)}
+      onChange={(event) => {
+        const nextValue = event.currentTarget.value
+        setInputValue(nextValue)
+        if (nextValue.trim() === '') return
+        const parsed = Number(nextValue)
+        if (Number.isFinite(parsed)) onChange(parsed)
+      }}
+      onBlur={handleBlur}
+    />
+  )
+}
+
 function NumberInput({
   label,
   value,
@@ -766,12 +808,11 @@ function NumberInput({
       <label className="mb-1.5 block text-[12px] font-medium text-[var(--text-muted)]">
         {label}
       </label>
-      <input
-        type="number"
+      <NumericInput
         min={0}
         max={100}
         value={value}
-        onChange={(e) => onChange(Number(e.target.value) || 0)}
+        onChange={onChange}
         className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-[13px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none"
       />
     </div>

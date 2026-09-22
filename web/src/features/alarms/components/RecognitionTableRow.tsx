@@ -113,8 +113,8 @@ export const RecognitionTableRow = React.memo(function RecognitionTableRow({
   const isPending = recognition.status === 'pending_review'
   const candidates = recognition.candidates || []
   const registeredPhotoRel = recognition.registeredPhotoPath || candidates[0]?.photoRelPath || ''
-  const fieldCropPath = recognition.fieldCropPath
   const fieldImagePath = recognition.fieldImagePath
+  const fieldCropPath = recognition.fieldCropPath || fieldImagePath || ''
 
   const [previewModal, setPreviewModal] = useState<{
     src: string

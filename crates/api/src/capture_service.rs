@@ -266,6 +266,11 @@ impl CaptureDispatchService {
         obj.face.is_some() || obj.label.eq_ignore_ascii_case("face")
     }
 
+    /// 识别对账必须拥有独立的人脸特写路径；全景图只能作为展示回退，不能作为识别证据。
+    fn has_face_crop_path(path: &str) -> bool {
+        !path.trim().is_empty()
+    }
+
     /// 将单个 `PipelineCaptureEvent` 转换为数据库 `ActiveModel`
     fn event_to_active_model(
         event: &PipelineCaptureEvent,
@@ -414,6 +419,17 @@ impl CaptureDispatchService {
         let Some(snap) = &event.snapshot else {
             return;
         };
+
+        if !Self::has_face_crop_path(&snap.crop_image_rel_path) {
+            tracing::warn!(
+                capture_id = %event.capture_id,
+                camera_id = %event.camera_id,
+                track_id = event.tracked_object.track_id,
+                image_path = %snap.image_rel_path,
+                "人脸识别事件缺少人脸特写，跳过识别对账落库"
+            );
+            return;
+        }
 
         if gallery_index.count().await == 0 {
             return;
@@ -841,6 +857,13 @@ mod tests {
         // 消费 1 个后通道容量应恢复
         assert!(rx.try_recv().is_ok());
         assert_eq!(tx.capacity(), 1);
+    }
+
+    #[test]
+    fn empty_face_crop_path_is_rejected_for_recognition() {
+        assert!(!CaptureDispatchService::has_face_crop_path(""));
+        assert!(!CaptureDispatchService::has_face_crop_path("  \n"));
+        assert!(CaptureDispatchService::has_face_crop_path("CAM/crop.jpg"));
     }
 
     /// 人脸门控只允许存在于识别分发：无脸事件不得进入 1:N 比对队列。

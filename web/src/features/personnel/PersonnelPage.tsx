@@ -109,11 +109,17 @@ export function PersonnelPage(): React.ReactElement {
   const lastStatusRef = useRef<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
+  const closeDetailDrawer = useCallback(() => {
+    setDrawerSubjectId(null)
+    setDrawerAutoOpenUpload(false)
+  }, [])
+
   const handleOpenReport = useCallback(() => {
+    closeDetailDrawer()
     setReextractError(null)
     setReextractModalMode('report')
     setIsReextractModalOpen(true)
-  }, [])
+  }, [closeDetailDrawer])
 
   const pushNotice = useCallback(
     (
@@ -431,6 +437,7 @@ export function PersonnelPage(): React.ReactElement {
   }
 
   const handleOpenReextract = () => {
+    closeDetailDrawer()
     setReextractError(null)
     setReextractModalMode('confirm')
     setIsReextractModalOpen(true)
@@ -949,10 +956,8 @@ export function PersonnelPage(): React.ReactElement {
         isOpen={Boolean(drawerSubjectId)}
         subjectId={drawerSubjectId}
         autoOpenUpload={drawerAutoOpenUpload}
-        onClose={() => {
-          setDrawerSubjectId(null)
-          setDrawerAutoOpenUpload(false)
-        }}
+        onClose={closeDetailDrawer}
+        onBeforeOpenReextract={handleCloseReextractModal}
         onUpdate={loadData}
         onNotify={handleDrawerNotify}
       />

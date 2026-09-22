@@ -950,6 +950,84 @@ async fn test_face_recognition_below_threshold_does_not_persist_invalid_recognit
 }
 
 #[tokio::test]
+async fn test_face_recognition_without_face_crop_does_not_persist_recognition() {
+    let (_app, state, _token) = setup_test_app().await;
+
+    let mut gallery_vec = [0.0f32; 512];
+    gallery_vec[0] = 1.0;
+    state
+        .gallery_index
+        .upsert_faces(vec![api::RegisteredFace::from_512(
+            "sub-no-crop".to_string(),
+            "No Crop Person".to_string(),
+            "face-no-crop".to_string(),
+            "galleries/sub-no-crop/photo.jpg".to_string(),
+            gallery_vec,
+        )])
+        .await;
+
+    let mut query_vec = [0.0f32; 512];
+    query_vec[0] = 1.0;
+    let query_embedding = std::sync::Arc::from(api::embedding_to_le_bytes(&query_vec));
+
+    let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
+    let _capture_worker = capture_svc.clone().start_worker();
+    let capture_id = uuid::Uuid::now_v7().to_string();
+    let timestamp = 1_741_100_090_000;
+    let mock_capture = PipelineCaptureEvent {
+        capture_id: capture_id.clone(),
+        camera_id: "CAM-REC-NO-CROP".to_string(),
+        algorithm_id: "face_recognition".to_string(),
+        tracked_object: TrackedObject {
+            track_id: 1001,
+            class_id: 0,
+            label: "face".to_string(),
+            confidence: 0.98,
+            quality_score: Some(0.86),
+            embedding: Some(query_embedding),
+            bbox: BoundingBox::new(0.3, 0.3, 0.5, 0.5),
+            face: None,
+            trajectory: vec![(0.4, 0.4)],
+        },
+        snapshot: Some(SnapshotResult {
+            image_id: "snap_full_no_crop".to_string(),
+            image_rel_path: "2026/03/04/CAM-REC-NO-CROP/full.jpg".to_string(),
+            crop_image_id: String::new(),
+            crop_image_rel_path: String::new(),
+            body_crop_image_id: String::new(),
+            body_crop_image_rel_path: String::new(),
+            file_size_bytes: 10240,
+            width: 1920,
+            height: 1080,
+            frame_pts_ms: timestamp,
+            image_source: EvidenceImageSource::PeakCandidate,
+            image_stream: EvidenceImageStream::Sub,
+        }),
+        timestamp,
+    };
+
+    state
+        .pipeline
+        .publish_analysis_event(PipelineAnalysisEvent::Capture(Box::new(mock_capture)));
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let captures = CaptureRepo::list_recent(&state.db, Some("CAM-REC-NO-CROP"), 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(captures.len(), 1, "普通抓拍凭证仍应落库");
+    assert_eq!(captures[0].capture_id, capture_id);
+    assert!(captures[0].crop_image_rel_path.is_empty());
+
+    let recognitions = db::RecognitionRepo::list_recent(&state.db, Some("CAM-REC-NO-CROP"), 10, 0)
+        .await
+        .unwrap();
+    assert!(
+        recognitions.is_empty(),
+        "缺少人脸特写时不得落库识别对账记录"
+    );
+}
+
+#[tokio::test]
 async fn test_face_recognition_above_threshold_persists_unconditional_top5_confirmed() {
     let (_app, state, _token) = setup_test_app().await;
 
