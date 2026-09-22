@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   ArrowRight,
   Check,
   Eye,
   EyeOff,
   KeyRound,
+  Loader2,
   Lock,
   Moon,
   Sun,
@@ -18,6 +19,7 @@ import { authApi } from '@/lib/api'
 import { getRememberedUser, useAuthStore } from '@/stores/auth'
 import { CursorRing } from './components/CursorRing'
 import { GargantuaCanvas } from './components/GargantuaCanvas'
+import { Starfield } from './components/Starfield'
 
 interface ToastInfo {
   id: number
@@ -27,7 +29,7 @@ interface ToastInfo {
 }
 
 export function LoginPage(): React.ReactElement {
-  const { t } = useTranslation('auth')
+  const { t, i18n } = useTranslation('auth')
   const login = useAuthStore((state) => state.login)
 
   // 初始化状态与模式
@@ -41,6 +43,31 @@ export function LoginPage(): React.ReactElement {
   const [isSuccess, setIsSuccess] = useState(false)
   const { isDark, toggleTheme } = useTheme()
   const [toasts, setToasts] = useState<ToastInfo[]>([])
+  const usernameInputRef = useRef<HTMLInputElement | null>(null)
+  const passwordInputRef = useRef<HTMLInputElement | null>(null)
+  const confirmPasswordInputRef = useRef<HTMLInputElement | null>(null)
+
+  // 同步原生约束校验与应用语言文案。
+  useEffect(() => {
+    usernameInputRef.current?.setCustomValidity(username.trim() ? '' : t('usernameRequired'))
+
+    const passwordError = !password
+      ? t('passwordRequired')
+      : isInitialized === false && password.length < 6
+        ? t('passwordLengthError')
+        : ''
+    passwordInputRef.current?.setCustomValidity(passwordError)
+
+    const confirmPasswordError =
+      isInitialized === false
+        ? !confirmPassword
+          ? t('confirmPasswordRequired')
+          : password !== confirmPassword
+            ? t('passwordMismatch')
+            : ''
+        : ''
+    confirmPasswordInputRef.current?.setCustomValidity(confirmPasswordError)
+  }, [confirmPassword, i18n.language, isInitialized, password, t, username])
 
   const handleAuthSuccess = (accessToken: string, authUsername: string) => {
     setIsSuccess(true)
@@ -73,7 +100,7 @@ export function LoginPage(): React.ReactElement {
         if (mounted) {
           setIsInitialized(status.initialized)
           if (!status.initialized) {
-            addToast('info', 'SETUP REQUIRED', t('setupSubtitle'))
+            addToast('info', t('toastSetupRequired'), t('setupSubtitle'))
           }
         }
       })
@@ -103,19 +130,19 @@ export function LoginPage(): React.ReactElement {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const trimmedUsername = username.trim()
-    if (!trimmedUsername || !password) {
-      addToast('error', 'AUTH ERROR', t('loginError'))
+    if (!trimmedUsername || !password || (isInitialized === false && !confirmPassword)) {
+      addToast('error', t('toastAuthError'), t('requiredFields'))
       return
     }
 
     // 开箱向导分支：密码确认与强度校验
     if (isInitialized === false) {
       if (password.length < 6) {
-        addToast('error', 'PASSWORD TOO SHORT', t('passwordLengthError'))
+        addToast('error', t('toastPasswordShort'), t('passwordLengthError'))
         return
       }
       if (password !== confirmPassword) {
-        addToast('error', 'MISMATCH', t('passwordMismatch'))
+        addToast('error', t('toastMismatch'), t('passwordMismatch'))
         return
       }
 
@@ -125,12 +152,12 @@ export function LoginPage(): React.ReactElement {
           username: trimmedUsername,
           password,
         })
-        addToast('success', 'SYSTEM INITIALIZED', t('setupSuccess'))
+        addToast('success', t('toastSystemReady'), t('setupSuccess'))
         handleAuthSuccess(res.accessToken, res.username)
       } catch (err: unknown) {
         setLoading(false)
         const msg = err instanceof Error ? err.message : t('loginError')
-        addToast('error', 'INIT FAILED', msg)
+        addToast('error', t('toastInitFailed'), msg)
       }
       return
     }
@@ -146,7 +173,7 @@ export function LoginPage(): React.ReactElement {
     } catch (err: unknown) {
       setLoading(false)
       const msg = err instanceof Error ? err.message : t('loginError')
-      addToast('error', 'ACCESS DENIED', msg)
+      addToast('error', t('toastAccessDenied'), msg)
     }
   }
 
@@ -158,63 +185,66 @@ export function LoginPage(): React.ReactElement {
   }
 
   return (
-    <div className="relative flex min-h-screen w-full flex-col justify-between overflow-x-hidden font-sans antialiased select-none">
+    <main className="auth-shell auth-accent relative flex min-h-dvh w-full flex-col justify-between overflow-x-hidden font-sans antialiased">
       {/* 视觉底层：相对论黑洞/白洞 WebGL 物理渲染器 */}
       <GargantuaCanvas isDark={isDark} onFpsUpdate={handleFpsUpdate} />
 
       {/* 氛围渐变柔和暗角 */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-[1] bg-[radial-gradient(ellipse_75%_65%_at_50%_48%,transparent_35%,rgba(15,23,42,0.06)_100%)] dark:bg-[radial-gradient(ellipse_75%_65%_at_50%_48%,transparent_30%,rgba(0,0,0,0.55)_100%)]"
-      />
+      <div aria-hidden="true" className="auth-vignette" />
+
+      {/*
+        动态极光层：承接页面动感，黑洞保持原样不动。
+        首个渲染帧即由 CSS 动画驱动，主线程零参与；
+        仅驱动 transform / opacity，全程位于 GPU 合成层。
+      */}
+      <div aria-hidden="true" className="auth-aurora">
+        <div className="auth-aurora__blob auth-aurora__blob--primary" />
+        <div className="auth-aurora__blob auth-aurora__blob--secondary" />
+        <div className="auth-aurora__blob auth-aurora__blob--tertiary" />
+      </div>
+
+      {/* 远方星场：独立于 WebGL 黑洞的可见闪烁层，中央留出奇点与吸积盘空间 */}
+      <Starfield />
 
       {/* 顶层标定微网格 */}
-      <div className="calibration-grid pointer-events-none fixed inset-0 z-10 opacity-30" />
+      <div className="auth-grid pointer-events-none fixed inset-0 z-10" />
 
       {/* 伴生物理柔光环 (仅在登录/初始化科技网关启用，支持 prefers-reduced-motion) */}
       <CursorRing />
 
       {/* 全局 HUD Toast 浮层 */}
-      <div className="pointer-events-none fixed top-5 right-5 z-50 flex w-[calc(100vw-2.5rem)] max-w-sm flex-col gap-2.5">
+      <div className="pointer-events-none fixed top-20 right-5 z-50 flex w-[calc(100vw-2.5rem)] max-w-sm flex-col gap-2.5 sm:top-24">
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={`lens-glass pointer-events-auto flex items-start gap-3 rounded-2xl border p-4 shadow-xl backdrop-blur-xl ${
-              toast.type === 'success'
-                ? 'border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
-                : toast.type === 'error'
-                  ? 'border-rose-500/30 text-rose-600 dark:text-rose-400'
-                  : 'border-indigo-500/30 text-indigo-600 dark:text-cyan-400'
-            }`}
+            role={toast.type === 'error' ? 'alert' : 'status'}
+            aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
+            aria-atomic="true"
+            className={`auth-toast auth-toast--${toast.type} pointer-events-auto`}
           >
             <div className="flex-1">
-              <div className="font-mono text-[10px] font-bold tracking-wider uppercase">
-                {toast.title}
-              </div>
-              <div className="mt-0.5 text-xs text-[var(--text-primary)]">{toast.message}</div>
+              <div className="auth-toast__title">{toast.title}</div>
+              <div className="auth-toast__message">{toast.message}</div>
             </div>
           </div>
         ))}
       </div>
 
       {/* 全局通栏 Header：左上角 Logo，右上角全局视口控制器（语言/FPS/主题滑块） */}
-      <header className="pointer-events-none fixed inset-x-0 top-0 z-30 flex items-center justify-between px-6 py-5 sm:px-10 sm:py-6 lg:px-12">
+      <header className="auth-header pointer-events-none fixed inset-x-0 top-0 z-30 flex items-center justify-between">
         {/* 左上角：官方品牌标识 */}
         <div className="pointer-events-auto flex items-center">
           <img
             src={isDark ? '/logo-horizontal-dark.svg' : '/logo-horizontal-light.svg'}
             alt="Heimdall"
-            className="h-8.5 w-auto transition-transform select-none hover:scale-[1.02] sm:h-9"
+            className="auth-brand select-none"
           />
         </div>
 
         {/* 右上角：全局视口控制组（FPS 标尺 + 语言自由选择下拉 + 日/夜胶囊滑块） */}
-        <div className="pointer-events-auto flex items-center gap-3">
+        <div className="auth-header__controls pointer-events-auto">
           {/* 实时 FPS 指示 */}
-          <span
-            id="webgl-fps-badge"
-            className="rounded-full border border-black/5 bg-white/60 px-2.5 py-1 font-mono text-[10px] text-slate-500 tabular-nums shadow-sm backdrop-blur-md select-none dark:border-white/10 dark:bg-black/40 dark:text-slate-400"
-          >
+          <span id="webgl-fps-badge" className="auth-fps-badge select-none">
             60 FPS
           </span>
 
@@ -227,106 +257,86 @@ export function LoginPage(): React.ReactElement {
             onClick={toggleTheme}
             role="switch"
             aria-checked={isDark}
-            aria-label="Toggle Theme: Light / Dark"
-            title="切换亮色 / 暗色主题"
-            className="group relative h-[28px] w-[54px] shrink-0 cursor-pointer rounded-full border border-slate-300 bg-slate-200/90 p-[2.5px] shadow-inner transition-colors duration-300 select-none focus:outline-none dark:border-slate-700/80 dark:bg-slate-900/90"
+            aria-label={t('themeToggle')}
+            title={t('themeToggle')}
+            className="auth-theme-toggle"
           >
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-between px-2 text-[10px] opacity-50">
-              <Sun className="h-3 w-3 text-amber-500" />
-              <Moon className="h-3 w-3 text-indigo-400" />
+            <div className="pointer-events-none flex items-center justify-between">
+              <span className="auth-theme-toggle__icon auth-theme-toggle__icon--sun">
+                <Sun className="h-3 w-3" />
+              </span>
+              <span className="auth-theme-toggle__icon auth-theme-toggle__icon--moon">
+                <Moon className="h-3 w-3" />
+              </span>
             </div>
             <div
-              className={`relative z-10 flex h-[22px] w-[22px] items-center justify-center rounded-full shadow-md transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${
-                isDark
-                  ? 'translate-x-[26px] bg-indigo-600 text-white'
-                  : 'translate-x-0 bg-white text-slate-800'
-              }`}
+              className={`auth-theme-toggle__thumb ${isDark ? 'auth-theme-toggle__thumb--dark' : 'auth-theme-toggle__thumb--light'}`}
             >
-              {isDark ? (
-                <Moon className="h-3.5 w-3.5 text-white" />
-              ) : (
-                <Sun className="h-3.5 w-3.5 text-amber-500" />
-              )}
+              {isDark ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
             </div>
           </button>
         </div>
       </header>
 
       {/* 核心双栏架构：左侧边缘管线拓扑遥测 + 右侧先锋悬浮控制吊舱 */}
-      <div className="pointer-events-none relative z-20 flex min-h-screen w-full flex-col items-center justify-between px-6 pt-20 pb-6 sm:px-10 sm:pb-8 lg:flex-row lg:px-12 lg:pt-24">
+      <div className="pointer-events-none relative z-20 flex min-h-dvh w-full flex-col items-center justify-between px-6 pt-20 pb-6 sm:px-10 sm:pb-8 lg:flex-row lg:px-12 lg:pt-24">
         {/* 左侧：完全通透，把视觉舞台全部还给 Gargantua 物理黑洞 */}
-        <div className="flex min-h-[38vh] w-full flex-col justify-between select-none lg:min-h-[calc(100vh-8rem)] lg:flex-1">
-          <div />
+        <div className="auth-stage flex min-h-[38vh] w-full flex-col justify-between lg:min-h-[calc(100dvh-8rem)] lg:flex-1">
+          <div className="auth-stage-label hidden lg:flex">
+            <span className="auth-stage-label__line" />
+            <span>{t('terminal')}</span>
+          </div>
           <div className="flex flex-1 items-center justify-center" />
 
-          {/* 底栏运行参数状态 (极简极轻量，紧贴视口边缘) */}
-          <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] tracking-widest text-slate-400/80 uppercase select-none dark:text-slate-500/80">
-            <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+          {/* 底栏运行参数状态 */}
+          <div className="auth-stage-telemetry select-none">
+            <span className="auth-stage-telemetry__status">
+              <span className="auth-stage-telemetry__dot motion-safe:animate-pulse" />
               <span>{t('opticalSensor')}</span>
             </span>
-            <span className="hidden text-slate-300 sm:inline dark:text-slate-800">|</span>
+            <span className="auth-stage-telemetry__divider hidden sm:inline">/</span>
             <span className="hidden sm:inline">{t('kerrMetric')}</span>
-            <span className="hidden text-slate-300 md:inline dark:text-slate-800">|</span>
+            <span className="auth-stage-telemetry__divider hidden md:inline">/</span>
             <span className="hidden md:inline">{t('directBus')}</span>
           </div>
         </div>
 
         {/* 右侧：先锋悬浮控制吊舱 */}
-        <div className="pointer-events-auto my-auto w-full lg:mr-2 lg:w-[410px] xl:mr-6 xl:w-[430px]">
-          <aside
-            id="command-dock"
-            className="lens-glass relative w-full overflow-hidden rounded-3xl p-6 shadow-2xl backdrop-blur-3xl transition-all duration-300 sm:p-7"
-          >
-            {/* 工规微 Reticle 准星角标 */}
-            <div className="pointer-events-none absolute top-3 left-3 h-2 w-2 border-t border-l border-indigo-400/50" />
-            <div className="pointer-events-none absolute top-3 right-3 h-2 w-2 border-t border-r border-indigo-400/50" />
-            <div className="pointer-events-none absolute bottom-3 left-3 h-2 w-2 border-b border-l border-indigo-400/50" />
-            <div className="pointer-events-none absolute right-3 bottom-3 h-2 w-2 border-r border-b border-indigo-400/50" />
+        <div className="pointer-events-auto my-auto w-full max-w-[460px] lg:mr-2 xl:mr-6">
+          <section id="command-dock" aria-labelledby="auth-title" className="auth-panel">
+            <div className="auth-panel__corner auth-panel__corner--top-left" />
+            <div className="auth-panel__corner auth-panel__corner--top-right" />
+            <div className="auth-panel__corner auth-panel__corner--bottom-left" />
+            <div className="auth-panel__corner auth-panel__corner--bottom-right" />
 
-            {/* 顶部激光微光条 */}
             <div
-              className={`pointer-events-none absolute inset-x-0 top-0 h-[2px] transition-all duration-300 ${
-                isSuccess
-                  ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.8)]'
-                  : 'bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent'
-              }`}
+              className={`auth-panel__accent-line ${isSuccess ? 'auth-panel__accent-line--success' : ''}`}
             />
 
-            <div className="pointer-events-none absolute -top-20 left-1/2 h-32 w-64 -translate-x-1/2 rounded-full bg-gradient-to-b from-indigo-500/20 via-pink-500/10 to-transparent blur-2xl" />
+            <div className="auth-panel__halo" />
 
-            <div className="relative z-10 flex items-center justify-between border-b border-black/5 pb-4 dark:border-white/5">
-              <div className="flex items-center gap-2">
-                <span className="relative flex h-2 w-2">
-                  <span
-                    className={`absolute inline-flex h-full w-full animate-ping rounded-full ${
-                      isInitialized === false ? 'bg-amber-400' : 'bg-emerald-400'
-                    } opacity-75`}
-                  />
-                  <span
-                    className={`relative inline-flex h-2 w-2 rounded-full ${
-                      isInitialized === false ? 'bg-amber-500' : 'bg-emerald-500'
-                    }`}
-                  />
-                </span>
-                <span className="font-mono text-[10px] font-semibold tracking-widest text-slate-700 uppercase dark:text-slate-300">
-                  {isInitialized === false ? 'OOBE // FIRST BOOT' : t('nodeStatus')}
-                </span>
+            <div className="auth-panel__header">
+              <div className="auth-panel__status">
+                <span
+                  className={`auth-panel__status-dot ${isInitialized === false ? 'auth-panel__status-dot--setup' : ''} motion-safe:animate-pulse`}
+                />
+                <span>{isInitialized === false ? t('firstBoot') : t('nodeStatus')}</span>
               </div>
 
-              <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500">
-                REV. 2026.1
-              </span>
+              <span className="auth-panel__revision">REV. 2026.1</span>
             </div>
 
-            {/* 控制台核心面板 */}
-            <div className="my-auto py-5">
-              <div className="mb-5 space-y-1">
-                <h2 className="font-display flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-                  {isInitialized === false && <Wand2 className="h-5 w-5 text-amber-500" />}
+            <div className="auth-panel__body">
+              <div className="auth-panel__intro">
+                <div className="auth-panel__eyebrow">
+                  <span className="auth-panel__eyebrow-mark" />
+                  <span>{t('terminal')}</span>
+                </div>
+                <h1 id="auth-title" className="auth-panel__title">
+                  {isInitialized === false && <Wand2 className="auth-setup-icon h-5 w-5" />}
                   <span>{isInitialized === false ? t('setupTitle') : t('title')}</span>
-                </h2>
-                <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                </h1>
+                <p className="auth-panel__subtitle">
                   {isInitialized === false ? t('setupSubtitle') : t('subtitle')}
                 </p>
               </div>
@@ -335,59 +345,57 @@ export function LoginPage(): React.ReactElement {
               <form onSubmit={handleSubmit} className="space-y-4">
                 {/* 用户名 */}
                 <div>
-                  <label
-                    htmlFor="username"
-                    className="mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300"
-                  >
+                  <label htmlFor="username" className="auth-label">
                     {t('operatorId')}
                   </label>
                   <div className="relative">
-                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
+                    <div className="auth-input-icon">
                       <User className="h-4 w-4" />
                     </div>
                     <input
+                      ref={usernameInputRef}
                       type="text"
                       id="username"
                       name="username"
+                      autoComplete="username"
                       required
                       disabled={loading || isSuccess}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       placeholder={isInitialized === false ? 'admin' : t('operatorId')}
-                      className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-4 pl-10 text-sm text-[var(--text-primary)] transition-all placeholder:text-slate-400 focus:border-cyan-400 focus:bg-[var(--bg-surface)] focus:ring-1 focus:ring-cyan-400/50 focus:outline-none disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
+                      className="auth-input"
                     />
                   </div>
                 </div>
 
                 {/* 密码 */}
                 <div>
-                  <label
-                    htmlFor="password"
-                    className="mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300"
-                  >
+                  <label htmlFor="password" className="auth-label">
                     {isInitialized === false ? t('newPassword') : t('password')}
                   </label>
                   <div className="relative">
-                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
+                    <div className="auth-input-icon">
                       <KeyRound className="h-4 w-4" />
                     </div>
                     <input
+                      ref={passwordInputRef}
                       type={showPassword ? 'text' : 'password'}
                       id="password"
                       name="password"
+                      autoComplete={isInitialized === false ? 'new-password' : 'current-password'}
                       required
                       disabled={loading || isSuccess}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••••••"
-                      className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-10 pl-10 text-sm text-[var(--text-primary)] transition-all placeholder:text-slate-400 focus:border-pink-400 focus:bg-[var(--bg-surface)] focus:ring-1 focus:ring-pink-400/50 focus:outline-none disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
+                      className="auth-input"
                     />
                     <button
                       type="button"
                       disabled={loading || isSuccess}
                       onClick={() => setShowPassword(!showPassword)}
-                      aria-label="Toggle password visibility"
-                      className="absolute inset-y-0 right-0 flex cursor-pointer items-center pr-3.5 text-slate-400 transition-colors hover:text-slate-600 disabled:opacity-50 dark:hover:text-slate-200"
+                      aria-label={showPassword ? t('hidePassword') : t('showPassword')}
+                      className="auth-input__toggle"
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
@@ -397,26 +405,25 @@ export function LoginPage(): React.ReactElement {
                 {/* 开箱向导模式：确认密码 */}
                 {isInitialized === false && (
                   <div>
-                    <label
-                      htmlFor="confirmPassword"
-                      className="mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300"
-                    >
+                    <label htmlFor="confirmPassword" className="auth-label">
                       {t('confirmPassword')}
                     </label>
                     <div className="relative">
-                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
+                      <div className="auth-input-icon">
                         <KeyRound className="h-4 w-4" />
                       </div>
                       <input
+                        ref={confirmPasswordInputRef}
                         type={showPassword ? 'text' : 'password'}
                         id="confirmPassword"
                         name="confirmPassword"
+                        autoComplete="new-password"
                         required
                         disabled={loading || isSuccess}
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         placeholder="••••••••••••"
-                        className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-10 pl-10 text-sm text-[var(--text-primary)] transition-all placeholder:text-slate-400 focus:border-indigo-400 focus:bg-[var(--bg-surface)] focus:ring-1 focus:ring-indigo-400/50 focus:outline-none disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.04] dark:placeholder:text-slate-600"
+                        className="auth-input"
                       />
                     </div>
                   </div>
@@ -424,22 +431,18 @@ export function LoginPage(): React.ReactElement {
 
                 {/* 记住凭证选项（仅正常登录） */}
                 {isInitialized !== false && (
-                  <div className="flex items-center justify-between pt-0.5">
-                    <label className="flex cursor-pointer items-center gap-2 select-none">
+                  <div className="auth-options">
+                    <label className="auth-remember">
                       <input
                         type="checkbox"
                         disabled={loading || isSuccess}
                         checked={remember}
                         onChange={(e) => setRemember(e.target.checked)}
-                        className="h-4 w-4 rounded border-slate-300 bg-slate-100 text-indigo-600 accent-indigo-500 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
+                        className="auth-checkbox"
                       />
-                      <span className="text-xs text-slate-600 dark:text-slate-400">
-                        {t('remember')}
-                      </span>
+                      <span>{t('remember')}</span>
                     </label>
-                    <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500">
-                      {t('keystoreOk')}
-                    </span>
+                    <span className="auth-keystore">{t('keystoreOk')}</span>
                   </div>
                 )}
 
@@ -448,20 +451,20 @@ export function LoginPage(): React.ReactElement {
                   <button
                     type="submit"
                     disabled={loading || isSuccess}
-                    className={`font-display relative flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-3 text-xs font-bold tracking-wider text-white uppercase shadow-lg transition-all duration-200 active:scale-[0.99] disabled:cursor-not-allowed ${
-                      isSuccess
-                        ? 'bg-emerald-500 shadow-emerald-500/30'
-                        : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 shadow-indigo-600/25 hover:opacity-95'
-                    } disabled:opacity-80`}
+                    className={`auth-submit ${isSuccess ? 'auth-submit--success' : ''}`}
                   >
                     {isSuccess ? (
                       <>
                         <Check className="h-4 w-4" />
-                        <span>{t('loginSuccess', { defaultValue: '验证成功' })}</span>
+                        <span>{t('loginSuccess')}</span>
                       </>
                     ) : (
                       <>
-                        <ArrowRight className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                        {loading ? (
+                          <Loader2 className="h-4 w-4 motion-safe:animate-spin" />
+                        ) : (
+                          <ArrowRight className="h-4 w-4" />
+                        )}
                         <span>{submitLabel}</span>
                       </>
                     )}
@@ -469,48 +472,32 @@ export function LoginPage(): React.ReactElement {
                 </div>
               </form>
 
-              {/* 工业技术标尺三联 */}
-              <div className="mt-6 grid grid-cols-3 gap-2 border-t border-black/5 pt-4 text-center select-none dark:border-white/5">
-                <div className="rounded-lg border border-black/5 bg-black/[0.02] p-2 dark:border-white/5 dark:bg-white/[0.02]">
-                  <div className="text-[10px] text-slate-400 dark:text-slate-500">
-                    {t('ingestion')}
-                  </div>
-                  <div className="mt-0.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
-                    WebRTC/RTSP
-                  </div>
+              <div className="auth-metrics select-none">
+                <div className="auth-metric">
+                  <div className="auth-metric__label">{t('ingestion')}</div>
+                  <div className="auth-metric__value">WebRTC/RTSP</div>
                 </div>
-                <div className="rounded-lg border border-black/5 bg-black/[0.02] p-2 dark:border-white/5 dark:bg-white/[0.02]">
-                  <div className="text-[10px] text-slate-400 dark:text-slate-500">
-                    {t('pipeline')}
-                  </div>
-                  <div className="mt-0.5 text-xs font-semibold text-cyan-600 dark:text-cyan-400">
-                    DMA-BUF
-                  </div>
+                <div className="auth-metric">
+                  <div className="auth-metric__label">{t('pipeline')}</div>
+                  <div className="auth-metric__value">DMA-BUF</div>
                 </div>
-                <div className="rounded-lg border border-black/5 bg-black/[0.02] p-2 dark:border-white/5 dark:bg-white/[0.02]">
-                  <div className="text-[10px] text-slate-400 dark:text-slate-500">
-                    {t('zeroCopy')}
-                  </div>
-                  <div className="mt-0.5 text-xs font-semibold text-indigo-600 dark:text-pink-400">
-                    Zero-Copy
-                  </div>
+                <div className="auth-metric">
+                  <div className="auth-metric__label">{t('zeroCopy')}</div>
+                  <div className="auth-metric__value auth-metric__value--accent">Zero-Copy</div>
                 </div>
               </div>
             </div>
 
-            {/* 吊舱底部安全与版权 */}
-            <div className="border-t border-black/5 pt-4 text-xs text-slate-500 dark:border-white/5">
-              <div className="flex items-center justify-between font-mono text-[11px] text-slate-400 select-none dark:text-slate-500">
-                <span className="flex items-center gap-1.5">
-                  <Lock className="h-3.5 w-3.5 text-emerald-500" />
-                  <span>{t('security')}</span>
-                </span>
-                <span>© 2026 Heimdall</span>
-              </div>
-            </div>
-          </aside>
+            <footer className="auth-panel__footer">
+              <span className="auth-panel__security">
+                <Lock className="h-3.5 w-3.5" />
+                <span>{t('security')}</span>
+              </span>
+              <span className="auth-panel__copyright">{t('copyright')}</span>
+            </footer>
+          </section>
         </div>
       </div>
-    </div>
+    </main>
   )
 }
