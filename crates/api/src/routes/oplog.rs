@@ -8,12 +8,11 @@ use db::OplogRepo;
 
 use crate::error::ApiError;
 use crate::response::ApiResponse;
+use crate::routes::query_params::parse_keyword;
 use crate::state::AppState;
 
 const DEFAULT_LIMIT: u64 = 20;
 const MAX_LIMIT: u64 = 100;
-/// 关键字长度上限：LIKE 模式不能由客户端无限拉长
-const MAX_KEYWORD_CHARS: usize = 64;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,19 +46,6 @@ fn parse_status(value: Option<&str>) -> Result<Option<StatusClass>, ApiError> {
             "status 只支持 success 或 failed，收到 {other}"
         ))),
     }
-}
-
-/// 解析 `q` 查询参数，空串视为未过滤，超长直接拒绝
-fn parse_keyword(value: Option<&str>) -> Result<Option<&str>, ApiError> {
-    let Some(keyword) = value.map(str::trim).filter(|raw| !raw.is_empty()) else {
-        return Ok(None);
-    };
-    if keyword.chars().count() > MAX_KEYWORD_CHARS {
-        return Err(ApiError::BadRequest(format!(
-            "q 长度不能超过 {MAX_KEYWORD_CHARS} 个字符"
-        )));
-    }
-    Ok(Some(keyword))
 }
 
 /// 面向 HTTP 客户端的操作日志 DTO，隔离 SeaORM entity 和时间/字段命名细节。
@@ -202,22 +188,5 @@ mod tests {
 
         let rejected = parse_status(Some("2xx")).unwrap_err();
         assert!(rejected.to_string().contains("status"));
-    }
-
-    #[test]
-    fn parse_keyword_trims_and_bounds_the_pattern() {
-        assert!(parse_keyword(None).unwrap().is_none());
-        assert!(parse_keyword(Some("   ")).unwrap().is_none());
-        assert_eq!(parse_keyword(Some("  cameras  ")).unwrap(), Some("cameras"));
-
-        let at_limit = "a".repeat(MAX_KEYWORD_CHARS);
-        assert_eq!(
-            parse_keyword(Some(&at_limit)).unwrap(),
-            Some(at_limit.as_str())
-        );
-
-        let over_limit = "a".repeat(MAX_KEYWORD_CHARS + 1);
-        let rejected = parse_keyword(Some(&over_limit)).unwrap_err();
-        assert!(rejected.to_string().contains("q"));
     }
 }

@@ -105,8 +105,8 @@ export async function request<T>(endpoint: string, options: RequestInit = {}): P
 }
 
 export const api = {
-  get<T>(endpoint: string): Promise<T> {
-    return request<T>(endpoint, { method: 'GET' })
+  get<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
+    return request<T>(endpoint, { method: 'GET', signal })
   },
   post<T>(endpoint: string, data?: unknown): Promise<T> {
     return request<T>(endpoint, {
@@ -282,50 +282,60 @@ export const taskApi = {
 }
 
 export const alarmApi = {
-  list(params?: {
-    cameraId?: string
-    status?: AlarmStatus | string
-    targetLabel?: string
-    ruleType?: string
-    severity?: string
-    startTime?: number
-    endTime?: number
-    limit?: number
-    offset?: number
-  }): Promise<AlarmRecord[]> {
+  list(
+    params?: {
+      cameraId?: string
+      status?: AlarmStatus | string
+      targetLabel?: string
+      ruleType?: string
+      severity?: string
+      q?: string
+      startTime?: number
+      endTime?: number
+      limit?: number
+      offset?: number
+    },
+    signal?: AbortSignal,
+  ): Promise<AlarmRecord[]> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       status: params?.status,
       target_label: params?.targetLabel,
       rule_type: params?.ruleType,
       severity: params?.severity,
+      q: params?.q,
       start_time: params?.startTime,
       end_time: params?.endTime,
       limit: params?.limit,
       offset: params?.offset,
     })
-    return api.get<AlarmRecord[]>(`/alarms${qs}`)
+    return api.get<AlarmRecord[]>(`/alarms${qs}`, signal)
   },
 
-  count(params?: {
-    cameraId?: string
-    status?: AlarmStatus | string
-    targetLabel?: string
-    ruleType?: string
-    severity?: string
-    startTime?: number
-    endTime?: number
-  }): Promise<{ total: number }> {
+  count(
+    params?: {
+      cameraId?: string
+      status?: AlarmStatus | string
+      targetLabel?: string
+      ruleType?: string
+      severity?: string
+      q?: string
+      startTime?: number
+      endTime?: number
+    },
+    signal?: AbortSignal,
+  ): Promise<{ total: number }> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       status: params?.status,
       target_label: params?.targetLabel,
       rule_type: params?.ruleType,
       severity: params?.severity,
+      q: params?.q,
       start_time: params?.startTime,
       end_time: params?.endTime,
     })
-    return api.get<{ total: number }>(`/alarms/count${qs}`)
+    return api.get<{ total: number }>(`/alarms/count${qs}`, signal)
   },
 
   updateStatus(id: number, status: AlarmStatus): Promise<AlarmRecord> {
@@ -338,81 +348,101 @@ export const alarmApi = {
 }
 
 export const evidenceApi = {
-  listCaptures(params?: {
-    cameraId?: string
-    targetLabel?: string
-    /** 轨道过滤（服务端执行）：定位同一个人的一次通行的全部结算记录 */
-    trackId?: number
-    startTime?: number
-    endTime?: number
-    limit?: number
-    offset?: number
-  }): Promise<CaptureRecord[]> {
+  listCaptures(
+    params?: {
+      cameraId?: string
+      targetLabel?: string
+      q?: string
+      /** 轨道过滤（服务端执行）：定位同一个人的一次通行的全部结算记录 */
+      trackId?: number
+      startTime?: number
+      endTime?: number
+      limit?: number
+      offset?: number
+    },
+    signal?: AbortSignal,
+  ): Promise<CaptureRecord[]> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       target_label: params?.targetLabel,
+      q: params?.q,
       track_id: params?.trackId,
       start_time: params?.startTime,
       end_time: params?.endTime,
       limit: params?.limit,
       offset: params?.offset,
     })
-    return api.get<CaptureRecord[]>(`/evidence/captures${qs}`)
+    return api.get<CaptureRecord[]>(`/evidence/captures${qs}`, signal)
   },
 
-  countCaptures(params?: {
-    cameraId?: string
-    targetLabel?: string
-    trackId?: number
-    startTime?: number
-    endTime?: number
-  }): Promise<{ total: number }> {
+  countCaptures(
+    params?: {
+      cameraId?: string
+      targetLabel?: string
+      q?: string
+      trackId?: number
+      startTime?: number
+      endTime?: number
+    },
+    signal?: AbortSignal,
+  ): Promise<{ total: number }> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       target_label: params?.targetLabel,
+      q: params?.q,
       track_id: params?.trackId,
       start_time: params?.startTime,
       end_time: params?.endTime,
     })
-    return api.get<{ total: number }>(`/evidence/captures/count${qs}`)
+    return api.get<{ total: number }>(`/evidence/captures/count${qs}`, signal)
   },
 
-  listRecognitions(params?: {
-    cameraId?: string
-    status?: string
-    startTime?: number
-    endTime?: number
-    limit?: number
-    offset?: number
-  }): Promise<RecognitionRecord[]> {
+  listRecognitions(
+    params?: {
+      cameraId?: string
+      status?: string
+      q?: string
+      startTime?: number
+      endTime?: number
+      limit?: number
+      offset?: number
+    },
+    signal?: AbortSignal,
+  ): Promise<RecognitionRecord[]> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       status: params?.status,
+      q: params?.q,
       start_time: params?.startTime,
       end_time: params?.endTime,
       limit: params?.limit,
       offset: params?.offset,
     })
-    return api.get<RecognitionRecord[]>(`/evidence/recognitions${qs}`)
+    return api.get<RecognitionRecord[]>(`/evidence/recognitions${qs}`, signal)
   },
 
   getRecognition(recognitionId: string): Promise<RecognitionRecord> {
     return api.get<RecognitionRecord>(`/evidence/recognitions/${recognitionId}`)
   },
 
-  countRecognitions(params?: {
-    cameraId?: string
-    status?: string
-    startTime?: number
-    endTime?: number
-  }): Promise<{ total: number }> {
+  countRecognitions(
+    params?: {
+      cameraId?: string
+      status?: string
+      q?: string
+      startTime?: number
+      endTime?: number
+    },
+    signal?: AbortSignal,
+  ): Promise<{ total: number }> {
     const qs = toQueryString({
       camera_id: params?.cameraId,
       status: params?.status,
+      q: params?.q,
       start_time: params?.startTime,
       end_time: params?.endTime,
     })
-    return api.get<{ total: number }>(`/evidence/recognitions/count${qs}`)
+    return api.get<{ total: number }>(`/evidence/recognitions/count${qs}`, signal)
   },
 
   reviewRecognition(

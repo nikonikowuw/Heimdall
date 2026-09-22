@@ -5,11 +5,15 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use types::{AlarmSeverity, AlarmStatus, TOPIC_ALARM_STATUS_CHANGED};
 
-use db::AlarmRepo;
+use db::{AlarmFilter, AlarmRepo};
 
 use crate::error::ApiError;
 use crate::response::ApiResponse;
+use crate::routes::query_params::parse_keyword;
 use crate::state::{AppState, WsBroadcastEvent};
+
+const DEFAULT_LIMIT: u64 = 20;
+const MAX_LIMIT: u64 = 100;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +70,8 @@ pub struct AlarmQuery {
     pub target_label: Option<String>,
     pub rule_type: Option<String>,
     pub severity: Option<String>,
+    /// 关键字匹配事件 ID、类别、规则、通道 ID 或通道名称。
+    pub q: Option<String>,
     pub start_time: Option<i64>,
     pub end_time: Option<i64>,
     #[serde(default = "default_limit")]
@@ -81,6 +87,8 @@ pub struct AlarmCountQuery {
     pub target_label: Option<String>,
     pub rule_type: Option<String>,
     pub severity: Option<String>,
+    /// 关键字匹配事件 ID、类别、规则、通道 ID 或通道名称。
+    pub q: Option<String>,
     pub start_time: Option<i64>,
     pub end_time: Option<i64>,
 }
@@ -103,7 +111,7 @@ pub struct BatchUpdateAlarmStatusRequest {
 }
 
 fn default_limit() -> u64 {
-    20
+    DEFAULT_LIMIT
 }
 
 pub fn router() -> Router<AppState> {
@@ -121,19 +129,24 @@ async fn list_alarms(
     State(state): State<AppState>,
     Query(params): Query<AlarmQuery>,
 ) -> Result<ApiResponse<Vec<AlarmDto>>, ApiError> {
+    let limit = params.limit.clamp(1, MAX_LIMIT);
     let start_utc = params.start_time.and_then(DateTime::from_timestamp_millis);
     let end_utc = params.end_time.and_then(DateTime::from_timestamp_millis);
+    let keyword = parse_keyword(params.q.as_deref())?;
 
     let list = AlarmRepo::list_filtered(
         &state.db,
-        params.camera_id.as_deref(),
-        params.status.as_deref(),
-        params.target_label.as_deref(),
-        params.rule_type.as_deref(),
-        params.severity.as_deref(),
-        start_utc,
-        end_utc,
-        params.limit,
+        AlarmFilter {
+            camera_id: params.camera_id.as_deref(),
+            status: params.status.as_deref(),
+            target_label: params.target_label.as_deref(),
+            rule_type: params.rule_type.as_deref(),
+            severity: params.severity.as_deref(),
+            keyword,
+            start_time: start_utc,
+            end_time: end_utc,
+        },
+        limit,
         params.offset,
     )
     .await?;
@@ -147,16 +160,20 @@ async fn count_alarms(
 ) -> Result<ApiResponse<AlarmCountDto>, ApiError> {
     let start_utc = params.start_time.and_then(DateTime::from_timestamp_millis);
     let end_utc = params.end_time.and_then(DateTime::from_timestamp_millis);
+    let keyword = parse_keyword(params.q.as_deref())?;
 
     let total = AlarmRepo::count_filtered(
         &state.db,
-        params.camera_id.as_deref(),
-        params.status.as_deref(),
-        params.target_label.as_deref(),
-        params.rule_type.as_deref(),
-        params.severity.as_deref(),
-        start_utc,
-        end_utc,
+        AlarmFilter {
+            camera_id: params.camera_id.as_deref(),
+            status: params.status.as_deref(),
+            target_label: params.target_label.as_deref(),
+            rule_type: params.rule_type.as_deref(),
+            severity: params.severity.as_deref(),
+            keyword,
+            start_time: start_utc,
+            end_time: end_utc,
+        },
     )
     .await?;
 

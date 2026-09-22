@@ -3,9 +3,11 @@ import {
   calculateFittedImageRect,
   captureEvidencePath,
   deriveEvidenceOriginBadges,
+  foldForSearch,
   formatFaceBBoxLabel,
   formatTimestamp,
   getRuleTypeLabel,
+  matchesSearchTerm,
   parseBBoxCoords,
   parseTargetBBoxes,
 } from './utils'
@@ -230,5 +232,48 @@ describe('captureEvidencePath 抓拍证据图回退链', () => {
 
   it('returns an empty path when no evidence image is recorded', () => {
     expect(captureEvidencePath({})).toBe('')
+  })
+
+  describe('foldForSearch', () => {
+    it('folds ASCII letters only, matching SQLite LIKE', () => {
+      expect(foldForSearch('Front Gate')).toBe('front gate')
+      // SQLite 的 LIKE 不折叠非 ASCII：Ä 与 ä 视为不同字符
+      expect(foldForSearch('Ä')).toBe('Ä')
+      expect(foldForSearch('ä')).toBe('ä')
+      expect(foldForSearch('Ⅰ')).toBe('Ⅰ')
+    })
+
+    it('leaves digits, punctuation and CJK untouched', () => {
+      expect(foldForSearch('cam_01 100%')).toBe('cam_01 100%')
+      expect(foldForSearch('前门通道')).toBe('前门通道')
+    })
+  })
+
+  describe('matchesSearchTerm', () => {
+    it('matches any candidate field case-insensitively for ASCII', () => {
+      expect(matchesSearchTerm('gate', ['Front Gate', 'cam_01'])).toBe(true)
+      expect(matchesSearchTerm('GATE', ['Front Gate'])).toBe(true)
+      expect(matchesSearchTerm('gate', ['Front Gate', 'cam_01'])).toBe(true)
+    })
+
+    it('returns true for a blank keyword so unfiltered streams stay visible', () => {
+      expect(matchesSearchTerm('', ['anything'])).toBe(true)
+      expect(matchesSearchTerm('   ', [])).toBe(true)
+    })
+
+    it('returns false when nothing matches', () => {
+      expect(matchesSearchTerm('nope', ['Front Gate', 'cam_01'])).toBe(false)
+    })
+
+    it('skips null and undefined fields without throwing', () => {
+      expect(matchesSearchTerm('gate', [null, undefined, 'Front Gate'])).toBe(true)
+      expect(matchesSearchTerm('gate', [null, undefined])).toBe(false)
+    })
+
+    it('treats non-ASCII case as distinct, mirroring the server-side LIKE', () => {
+      // 若这里用 toLowerCase() 就会误命中，与服务端结果不一致
+      expect(matchesSearchTerm('ä', ['Ä'])).toBe(false)
+      expect(matchesSearchTerm('Ä', ['Ä'])).toBe(true)
+    })
   })
 })

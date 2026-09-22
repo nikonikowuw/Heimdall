@@ -9,6 +9,7 @@ pub mod gb28181_device;
 pub mod operational_log;
 pub mod oplog;
 pub mod personnel;
+pub(crate) mod query;
 pub mod recognition;
 pub mod sys_gb28181_config;
 pub mod system_config;

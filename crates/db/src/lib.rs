@@ -9,9 +9,11 @@ pub use connection::init_db;
 pub use error::DbError;
 pub use migration::{init_test_db, reset_database, run_migrations, run_migrations_on_seaorm};
 pub use repository::{
+    alarm::AlarmFilter,
     algorithm::{AlgorithmRepo, AlgorithmStats, UpsertAlgorithmParams, UpsertVersionParams},
     algorithm_instance::{AlgorithmInstanceRepo, CreateInstanceParams, UpdateInstanceParams},
     camera::ProbeUpdateParams,
+    recognition::RecognitionFilter,
     AdminUserRepo, AlarmRepo, CameraRepo, CaptureFilter, CaptureRepo, GalleryFaceRepo,
     Gb28181DeviceRepo, OperationalLogRepo, OplogRepo, PersonnelRepo, RecognitionRepo,
     SaveTaskAlgorithmInstanceParams, SaveTaskParams, SaveTaskWithInstancesParams,

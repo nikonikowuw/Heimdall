@@ -693,3 +693,125 @@ async fn test_get_recognition_by_id_and_topk_candidates() {
     let res_404 = app.oneshot(req_404).await.unwrap();
     assert_eq!(res_404.status(), StatusCode::NOT_FOUND);
 }
+
+/// 发起一次带鉴权的 GET，返回 (状态码, 解析后的 JSON)。
+async fn get_json(app: axum::Router, uri: &str, token: &str) -> (StatusCode, serde_json::Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), 1024 * 16)
+        .await
+        .unwrap();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+/// `q` 的服务端契约：空白不过滤、`%` 按字面量、通道名称可命中、超长返回 400。
+///
+/// 回归的是「客户端二次过滤」被移除后的行为——筛选必须在服务端与分页同源生效，
+/// 否则会退化成「本页无命中但后续页有命中」的空表误判。
+#[tokio::test]
+async fn test_evidence_keyword_search_contract() {
+    let (app, state, token) = setup_test_app().await;
+
+    db::CameraRepo::insert(
+        &state.db,
+        db::entity::camera::ActiveModel {
+            camera_id: Set("CAM-SEARCH".to_string()),
+            name: Set("Front Gate".to_string()),
+            rtsp_url: Set("rtsp://localhost/search".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let now = chrono::Utc::now();
+    for (rec_id, subject) in [
+        ("rec_literal_pct", "100% person"),
+        ("rec_plain", "100X person"),
+    ] {
+        RecognitionRepo::insert(
+            &state.db,
+            RecognitionActiveModel {
+                recognition_id: Set(rec_id.to_string()),
+                camera_id: Set("CAM-SEARCH".to_string()),
+                gallery_id: Set("default".to_string()),
+                subject_id: Set(format!("sub_{rec_id}")),
+                subject_name: Set(subject.to_string()),
+                similarity: Set(0.9),
+                field_crop_path: Set(format!("{rec_id}.jpg")),
+                field_image_path: Set(format!("{rec_id}_full.jpg")),
+                field_bbox_json: Set("[]".to_string()),
+                registered_photo_path: Set("reg.jpg".to_string()),
+                recognized_at: Set(now),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    // 1. 通道名称命中：两条记录都挂在该通道下
+    let (status, json) = get_json(
+        app.clone(),
+        "/api/v1/evidence/recognitions/count?q=Front%20Gate",
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["code"], 0);
+    assert_eq!(json["data"]["total"], 2);
+
+    // 2. `%` 按字面量匹配：只有 "100% person" 命中，不能把 `%` 当通配符吞掉 "100X person"
+    let (_, json) = get_json(
+        app.clone(),
+        "/api/v1/evidence/recognitions/count?q=100%25",
+        &token,
+    )
+    .await;
+    assert_eq!(json["data"]["total"], 1);
+
+    // 3. 纯空白视为未过滤
+    let (_, json) = get_json(
+        app.clone(),
+        "/api/v1/evidence/recognitions/count?q=%20%20",
+        &token,
+    )
+    .await;
+    assert_eq!(json["data"]["total"], 2);
+
+    // 4. 抓拍列表同样支持该关键字（抓拍表此时为空，命中 0 而不是报错）
+    let (status, json) = get_json(
+        app.clone(),
+        "/api/v1/evidence/captures/count?q=Front%20Gate",
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["total"], 0);
+
+    // 5. 超长关键字必须被拒绝，而不是当成合法 LIKE 模式扫全表
+    let over_limit = "a".repeat(65);
+    let uri = format!("/api/v1/evidence/recognitions/count?q={over_limit}");
+    let (status, _) = get_json(app.clone(), &uri, &token).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // 6. 告警列表复用同一份解析规则
+    let (status, _) = get_json(
+        app.clone(),
+        &format!("/api/v1/alarms?q={over_limit}"),
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, json) = get_json(app, "/api/v1/alarms/count?q=Front%20Gate", &token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["total"], 0);
+}

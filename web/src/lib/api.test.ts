@@ -426,10 +426,14 @@ describe('API Client', () => {
       }),
     })
 
-    const res = await alarmApi.count({ cameraId: 'cam-01', status: 'unprocessed' })
+    const res = await alarmApi.count({
+      cameraId: 'cam-01',
+      status: 'unprocessed',
+      q: 'Front Gate',
+    })
     expect(res.total).toBe(42)
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/v1/alarms/count?camera_id=cam-01&status=unprocessed',
+      '/api/v1/alarms/count?camera_id=cam-01&status=unprocessed&q=Front+Gate',
       expect.objectContaining({ method: 'GET' }),
     )
   })
@@ -445,18 +449,57 @@ describe('API Client', () => {
       }),
     })
 
-    const capRes = await evidenceApi.countCaptures({ targetLabel: 'person' })
+    const capRes = await evidenceApi.countCaptures({
+      targetLabel: 'person',
+      q: 'Front Gate',
+    })
     expect(capRes.total).toBe(88)
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/v1/evidence/captures/count?target_label=person',
+      '/api/v1/evidence/captures/count?target_label=person&q=Front+Gate',
       expect.objectContaining({ method: 'GET' }),
     )
 
-    const recRes = await evidenceApi.countRecognitions({ status: 'confirmed' })
+    const recRes = await evidenceApi.countRecognitions({
+      status: 'confirmed',
+      q: 'Alice',
+    })
     expect(recRes.total).toBe(88)
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/v1/evidence/recognitions/count?status=confirmed',
+      '/api/v1/evidence/recognitions/count?status=confirmed&q=Alice',
       expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('evidence and alarm list APIs should forward the server-side search query', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: [],
+        timestamp: 1747584000000,
+      }),
+    })
+
+    const controller = new AbortController()
+    await alarmApi.list({ q: 'Front Gate', limit: 24, offset: 0 }, controller.signal)
+    await evidenceApi.listCaptures({ q: 'Front Gate', limit: 24, offset: 0 }, controller.signal)
+    await evidenceApi.listRecognitions({ q: 'Front Gate', limit: 24, offset: 0 }, controller.signal)
+
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/alarms?q=Front+Gate&limit=24&offset=0',
+      expect.objectContaining({ method: 'GET', signal: controller.signal }),
+    )
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/evidence/captures?q=Front+Gate&limit=24&offset=0',
+      expect.objectContaining({ method: 'GET', signal: controller.signal }),
+    )
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/evidence/recognitions?q=Front+Gate&limit=24&offset=0',
+      expect.objectContaining({ method: 'GET', signal: controller.signal }),
     )
   })
 

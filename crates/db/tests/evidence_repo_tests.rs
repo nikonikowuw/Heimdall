@@ -1,5 +1,8 @@
-use db::entity::{capture, recognition};
-use db::{init_test_db, CaptureRepo, RecognitionRepo, UpdateRecognitionReviewParams};
+use db::entity::{alarm, camera, capture, recognition};
+use db::{
+    init_test_db, AlarmFilter, AlarmRepo, CameraRepo, CaptureFilter, CaptureRepo,
+    RecognitionFilter, RecognitionRepo, UpdateRecognitionReviewParams,
+};
 use sea_orm::ActiveValue::Set;
 
 #[tokio::test]
@@ -114,4 +117,167 @@ async fn test_capture_and_recognition_repository_lifecycle() {
     assert_eq!(updated.status, "confirmed");
     assert_eq!(updated.subject_name, "Alice Cooper");
     assert_eq!(updated.reviewer_id, Some("admin".to_string()));
+}
+
+#[tokio::test]
+async fn test_evidence_keyword_filters_and_stable_order() {
+    let db = init_test_db().await.expect("init in-memory db");
+    let now = chrono::Utc::now();
+
+    CameraRepo::insert(
+        &db,
+        camera::ActiveModel {
+            camera_id: Set("cam_search".to_string()),
+            name: Set("Front Gate".to_string()),
+            rtsp_url: Set("rtsp://localhost/search".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("insert camera");
+
+    AlarmRepo::insert(
+        &db,
+        alarm::ActiveModel {
+            event_id: Set("evt_search".to_string()),
+            camera_id: Set("cam_search".to_string()),
+            alarm_type_id: Set("intrusion".to_string()),
+            occurred_at: Set(now),
+            target_label: Set("person".to_string()),
+            confidence: Set(0.9),
+            track_id: Set(7),
+            bbox_json: Set("[]".to_string()),
+            image_id: Set("alarm_image".to_string()),
+            image_rel_path: Set("alarm.jpg".to_string()),
+            crop_image_id: Set("alarm_crop".to_string()),
+            crop_image_rel_path: Set("alarm_crop.jpg".to_string()),
+            rule_type: Set("intrusion".to_string()),
+            severity: Set("high".to_string()),
+            status: Set("unprocessed".to_string()),
+            handled_at: Set(None),
+            created_at: Set(now),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("insert alarm");
+
+    let alarms_by_camera_name = AlarmRepo::list_filtered(
+        &db,
+        AlarmFilter {
+            keyword: Some("Front Gate"),
+            ..AlarmFilter::default()
+        },
+        10,
+        0,
+    )
+    .await
+    .expect("search alarms by camera name");
+    assert_eq!(alarms_by_camera_name.len(), 1);
+    assert_eq!(
+        AlarmRepo::count_filtered(
+            &db,
+            AlarmFilter {
+                keyword: Some("Front Gate"),
+                ..AlarmFilter::default()
+            }
+        )
+        .await
+        .expect("count alarm search"),
+        1
+    );
+
+    let make_capture = |capture_id: &str, target_label: &str| capture::ActiveModel {
+        capture_id: Set(capture_id.to_string()),
+        camera_id: Set("cam_search".to_string()),
+        track_id: Set(7),
+        target_label: Set(target_label.to_string()),
+        confidence: Set(0.9),
+        quality_score: Set(80.0),
+        bbox_json: Set("[]".to_string()),
+        image_id: Set(format!("{capture_id}_image")),
+        image_rel_path: Set(format!("{capture_id}.jpg")),
+        crop_image_id: Set(format!("{capture_id}_crop")),
+        crop_image_rel_path: Set(format!("{capture_id}_crop.jpg")),
+        captured_at: Set(now),
+        ..Default::default()
+    };
+
+    let first = CaptureRepo::insert(&db, make_capture("cap_percent", "100% person"))
+        .await
+        .expect("insert first capture");
+    let second = CaptureRepo::insert(&db, make_capture("cap_plain", "100X person"))
+        .await
+        .expect("insert second capture");
+
+    let all = CaptureRepo::list_filtered(
+        &db,
+        CaptureFilter {
+            camera_id: Some("cam_search"),
+            ..Default::default()
+        },
+        10,
+        0,
+    )
+    .await
+    .expect("list captures");
+    assert_eq!(all.len(), 2);
+    assert!(all[0].id > all[1].id, "same-timestamp order must use id");
+
+    let by_camera_name = CaptureRepo::list_filtered(
+        &db,
+        CaptureFilter {
+            keyword: Some("Front Gate"),
+            ..Default::default()
+        },
+        10,
+        0,
+    )
+    .await
+    .expect("search by camera name");
+    assert_eq!(by_camera_name.len(), 2);
+
+    let by_literal_wildcard = CaptureRepo::list_filtered(
+        &db,
+        CaptureFilter {
+            keyword: Some("100%"),
+            ..Default::default()
+        },
+        10,
+        0,
+    )
+    .await
+    .expect("search literal wildcard");
+    assert_eq!(by_literal_wildcard.len(), 1);
+    assert_eq!(by_literal_wildcard[0].id, first.id);
+    assert_ne!(by_literal_wildcard[0].id, second.id);
+
+    let new_rec = recognition::ActiveModel {
+        recognition_id: Set("rec_search".to_string()),
+        camera_id: Set("cam_search".to_string()),
+        gallery_id: Set("gal_search".to_string()),
+        subject_id: Set("subject_7".to_string()),
+        subject_name: Set("Alice".to_string()),
+        similarity: Set(0.96),
+        field_crop_path: Set("crop.jpg".to_string()),
+        field_image_path: Set("full.jpg".to_string()),
+        field_bbox_json: Set("[]".to_string()),
+        registered_photo_path: Set("registered.jpg".to_string()),
+        recognized_at: Set(now),
+        ..Default::default()
+    };
+    RecognitionRepo::insert(&db, new_rec)
+        .await
+        .expect("insert recognition");
+
+    let recognition_count = RecognitionRepo::count_filtered(
+        &db,
+        RecognitionFilter {
+            keyword: Some("Alice"),
+            ..RecognitionFilter::default()
+        },
+    )
+    .await
+    .expect("count recognition search");
+    assert_eq!(recognition_count, 1);
 }

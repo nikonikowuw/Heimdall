@@ -69,6 +69,32 @@ export function formatFaceBBoxLabel(face: ParsedTargetBBoxes['face'] | undefined
 }
 
 /**
+ * 与服务端 `LIKE` 对齐的大小写折叠：SQLite 的 `LIKE` 默认只对 ASCII 做不区分大小写匹配，
+ * 非 ASCII 字符按码点原样比较。若用 `toLowerCase()`（Unicode 感知），
+ * 实时事件会比服务端多命中一类（如 `Ä`/`ä`），出现「服务端搜不到但新事件插得进列表」的错位。
+ */
+export function foldForSearch(value: string): string {
+  return value.replace(/[A-Z]/g, (ch) => ch.toLowerCase())
+}
+
+/**
+ * 本地判定一条文本是否命中关键字，用于实时事件（WS 推送）而不重新请求服务端。
+ *
+ * 服务端列表走 SQL `LIKE`，两边的折叠规则必须一致，否则同一次搜索会有两种结果。
+ */
+export function matchesSearchTerm(
+  keyword: string,
+  values: readonly (string | null | undefined)[],
+): boolean {
+  const normalizedKeyword = foldForSearch(keyword.trim())
+  if (!normalizedKeyword) return true
+  return values.some(
+    (value) =>
+      value !== null && value !== undefined && foldForSearch(value).includes(normalizedKeyword),
+  )
+}
+
+/**
  * 解析目标及其挂载人脸检测框坐标与质量分
  * 支持：
  * 1. 数组形式：[x1, y1, x2, y2]

@@ -7,8 +7,7 @@
     "placeholderCaptures": "依抓拍 ID、類別或通道搜尋... (/ 聚焦)",
     "clear": "清除搜尋",
     "noMatch": "未找到與 \"{{query}}\" 相關的記錄",
-    "clearQuery": "清除搜尋",
-    "pageFiltered": "當前頁匹配 {{count}} 條"
+    "clearQuery": "清除搜尋"
   },
   "columns": {
     "thumbnail": "縮略證據",

@@ -2,12 +2,14 @@ use std::collections::HashSet;
 
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, FromQueryResult,
+    JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
 };
 
-use crate::entity::capture::{ActiveModel, Column, Entity, Model};
+use crate::entity::camera;
+use crate::entity::capture::{ActiveModel, Column, Entity, Model, Relation};
 use crate::error::DbError;
+use crate::repository::query::keyword_pattern;
 
 #[derive(Debug)]
 pub struct CaptureRepo;
@@ -20,6 +22,7 @@ pub struct CaptureRepo;
 pub struct CaptureFilter<'a> {
     pub camera_id: Option<&'a str>,
     pub target_label: Option<&'a str>,
+    pub keyword: Option<&'a str>,
     /// 轨道过滤：`track_id` 只在单机位追踪器内唯一，调用方必须同时限定 `camera_id`。
     pub track_id: Option<i64>,
     pub start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
@@ -28,6 +31,17 @@ pub struct CaptureFilter<'a> {
 
 fn build_filter_query(filter: CaptureFilter<'_>) -> sea_orm::Select<Entity> {
     let mut query = Entity::find();
+    if let Some(pattern) = keyword_pattern(filter.keyword) {
+        query = query
+            .join(JoinType::LeftJoin, Relation::Camera.def())
+            .filter(
+                Condition::any()
+                    .add(Column::CaptureId.like(pattern.clone()))
+                    .add(Column::CameraId.like(pattern.clone()))
+                    .add(Column::TargetLabel.like(pattern.clone()))
+                    .add(camera::Column::Name.like(pattern)),
+            );
+    }
     if let Some(cid) = filter.camera_id.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::CameraId.eq(cid));
     }
@@ -75,6 +89,7 @@ impl CaptureRepo {
     ) -> Result<Vec<Model>, DbError> {
         build_filter_query(filter)
             .order_by_desc(Column::CapturedAt)
+            .order_by_desc(Column::Id)
             .limit(limit)
             .offset(offset)
             .all(db)
@@ -159,6 +174,7 @@ impl CaptureRepo {
     ) -> Result<Vec<Model>, DbError> {
         Entity::find()
             .order_by_asc(Column::CapturedAt)
+            .order_by_asc(Column::Id)
             .limit(limit)
             .all(db)
             .await
@@ -199,6 +215,7 @@ impl CaptureRepo {
         Entity::find()
             .filter(Column::CapturedAt.lt(before))
             .order_by_asc(Column::CapturedAt)
+            .order_by_asc(Column::Id)
             .limit(limit)
             .all(db)
             .await

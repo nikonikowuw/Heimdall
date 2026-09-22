@@ -17,6 +17,7 @@ import {
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker'
+import { useDebounce } from '@/hooks/use-debounce'
 import { alarmApi, cameraApi, evidenceApi } from '@/lib/api'
 import { resolveEffectiveTimeRange, type DateTimeRangeValue } from '@/lib/dateRange'
 import { wsClient } from '@/lib/wsClient'
@@ -42,6 +43,7 @@ import { RealtimeAlarmBanner } from './components/RealtimeAlarmBanner'
 import { RecognitionContent } from './components/RecognitionContent'
 import { RecognitionReviewModal } from './components/RecognitionReviewModal'
 import { isAlarmSoundEnabled, playAlarmAlertSound, setAlarmSoundEnabled } from './sound'
+import { matchesSearchTerm } from './utils'
 
 type EvidenceTab = 'recognition' | 'alarms' | 'captures'
 
@@ -68,6 +70,23 @@ function matchesTimeRange(timeRange: DateTimeRangeValue, timestamp: number): boo
   return afterStart && beforeEnd
 }
 
+/**
+ * 实时事件回调依赖的最新过滤快照。
+ *
+ * 关键字与通道名映射只参与「新事件是否应插入当前列表」的判定，用 ref 承载即可；
+ * 若放进订阅 effect 的依赖数组，每次按键和每次通道列表刷新都会拆建 4 条订阅。
+ */
+interface LiveFilterSnapshot {
+  searchQuery: string
+  cameraNameMap: Record<string, string>
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError'
+  )
+}
+
 export function AlarmsPage(): React.ReactElement {
   const { t } = useTranslation('alarm')
   const [activeTab, setActiveTab] = useState<EvidenceTab>('recognition')
@@ -83,6 +102,7 @@ export function AlarmsPage(): React.ReactElement {
   // 轨道过滤：与机位联合生效（track_id 仅在单机位追踪器内唯一），用于回看同一个人的一次通行
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState<string>('')
+  const debouncedSearchQuery = useDebounce(searchQuery, 300)
 
   // 时间维度筛选 (默认查询当前最新记录 - 今天)
   const [timeRange, setTimeRange] = useState<DateTimeRangeValue>(getInitialTodayRange)
@@ -92,7 +112,7 @@ export function AlarmsPage(): React.ReactElement {
 
   // 分页与总数 (支持动态选择每页条数)
   const [page, setPage] = useState<number>(1)
-  const [pageSize, setPageSize] = useState<number>(20)
+  const [pageSize, setPageSize] = useState<number>(24)
   const [totalCount, setTotalCount] = useState<number>(0)
   const [tabCounts, setTabCounts] = useState<Record<EvidenceTab, number>>({
     alarms: 0,
@@ -115,6 +135,9 @@ export function AlarmsPage(): React.ReactElement {
   // 实时事件微批次注入缓冲 (Micro-batch Ingestion Buffer)
   const pendingAlarmsRef = useRef<AlarmRecord[]>([])
   const pendingCountRef = useRef<number>(0)
+  const dataAbortControllerRef = useRef<AbortController | null>(null)
+  // 实时事件回调读取的最新过滤条件（见 LiveFilterSnapshot）
+  const liveFilterRef = useRef<LiveFilterSnapshot>({ searchQuery: '', cameraNameMap: {} })
 
   // 界面状态
   const [isLoading, setIsLoading] = useState(false)
@@ -165,6 +188,11 @@ export function AlarmsPage(): React.ReactElement {
     }
     return map
   }, [cameras])
+
+  // 供 WS 订阅回调读取最新过滤条件，避免把高频变化的值放进订阅依赖数组
+  useEffect(() => {
+    liveFilterRef.current = { searchQuery, cameraNameMap }
+  }, [searchQuery, cameraNameMap])
 
   // 动态汇聚已出现的所有目标标签 (消除硬编码)
   const distinctTargetLabels = useMemo(() => {
@@ -249,6 +277,15 @@ export function AlarmsPage(): React.ReactElement {
 
   // 数据加载函数
   const loadData = useCallback(async () => {
+    // 代次 + AbortController 只保留一套机制：控制器身份即「本次请求是否为当前请求」，
+    // 被新请求接管（ref 换成新控制器）或已 abort 时一律不再写状态。
+    dataAbortControllerRef.current?.abort()
+    const controller = new AbortController()
+    dataAbortControllerRef.current = controller
+    const { signal } = controller
+    const isCurrentRequest = (): boolean =>
+      dataAbortControllerRef.current === controller && !signal.aborted
+
     setIsLoading(true)
     setErrorMessage(null)
     try {
@@ -257,83 +294,122 @@ export function AlarmsPage(): React.ReactElement {
       const ruleTypeParam = selectedRuleType === 'all' ? undefined : selectedRuleType
       const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
       const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
+      const keyword = debouncedSearchQuery.trim() || undefined
       const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
       const offset = (page - 1) * pageSize
 
+      // 各分支只负责取数与投放本页数据；总数与徽标在同处结算，避免三份重复守卫
+      let refreshedTotal: number | null = null
+
       if (activeTab === 'alarms') {
         const [list, countRes] = await Promise.all([
-          alarmApi.list({
-            cameraId: camId,
-            status: statusParam,
-            targetLabel: targetLbl,
-            ruleType: ruleTypeParam,
-            severity: severityParam,
-            startTime: startMs,
-            endTime: endMs,
-            limit: pageSize,
-            offset,
-          }),
-          alarmApi.count({
-            cameraId: camId,
-            status: statusParam,
-            targetLabel: targetLbl,
-            ruleType: ruleTypeParam,
-            severity: severityParam,
-            startTime: startMs,
-            endTime: endMs,
-          }),
+          alarmApi.list(
+            {
+              cameraId: camId,
+              status: statusParam,
+              targetLabel: targetLbl,
+              ruleType: ruleTypeParam,
+              severity: severityParam,
+              q: keyword,
+              startTime: startMs,
+              endTime: endMs,
+              limit: pageSize,
+              offset,
+            },
+            signal,
+          ),
+          alarmApi.count(
+            {
+              cameraId: camId,
+              status: statusParam,
+              targetLabel: targetLbl,
+              ruleType: ruleTypeParam,
+              severity: severityParam,
+              q: keyword,
+              startTime: startMs,
+              endTime: endMs,
+            },
+            signal,
+          ),
         ])
+        if (!isCurrentRequest()) return
         setAlarms(list)
-        setTotalCount(countRes.total)
-        setTabCounts((prev) => ({ ...prev, alarms: countRes.total }))
+        refreshedTotal = countRes.total
       } else if (activeTab === 'captures') {
         const [list, countRes] = await Promise.all([
-          evidenceApi.listCaptures({
-            cameraId: camId,
-            targetLabel: targetLbl,
-            trackId: selectedTrackId ?? undefined,
-            startTime: startMs,
-            endTime: endMs,
-            limit: pageSize,
-            offset,
-          }),
-          evidenceApi.countCaptures({
-            cameraId: camId,
-            targetLabel: targetLbl,
-            trackId: selectedTrackId ?? undefined,
-            startTime: startMs,
-            endTime: endMs,
-          }),
+          evidenceApi.listCaptures(
+            {
+              cameraId: camId,
+              targetLabel: targetLbl,
+              q: keyword,
+              trackId: selectedTrackId ?? undefined,
+              startTime: startMs,
+              endTime: endMs,
+              limit: pageSize,
+              offset,
+            },
+            signal,
+          ),
+          evidenceApi.countCaptures(
+            {
+              cameraId: camId,
+              targetLabel: targetLbl,
+              q: keyword,
+              trackId: selectedTrackId ?? undefined,
+              startTime: startMs,
+              endTime: endMs,
+            },
+            signal,
+          ),
         ])
+        if (!isCurrentRequest()) return
         setCaptures(list)
-        setTotalCount(countRes.total)
-        setTabCounts((prev) => ({ ...prev, captures: countRes.total }))
+        refreshedTotal = countRes.total
       } else if (activeTab === 'recognition') {
         const [list, countRes] = await Promise.all([
-          evidenceApi.listRecognitions({
-            cameraId: camId,
-            status: statusParam,
-            startTime: startMs,
-            endTime: endMs,
-            limit: pageSize,
-            offset,
-          }),
-          evidenceApi.countRecognitions({
-            cameraId: camId,
-            status: statusParam,
-            startTime: startMs,
-            endTime: endMs,
-          }),
+          evidenceApi.listRecognitions(
+            {
+              cameraId: camId,
+              status: statusParam,
+              q: keyword,
+              startTime: startMs,
+              endTime: endMs,
+              limit: pageSize,
+              offset,
+            },
+            signal,
+          ),
+          evidenceApi.countRecognitions(
+            {
+              cameraId: camId,
+              status: statusParam,
+              q: keyword,
+              startTime: startMs,
+              endTime: endMs,
+            },
+            signal,
+          ),
         ])
+        if (!isCurrentRequest()) return
         setRecognitions(list)
-        setTotalCount(countRes.total)
-        setTabCounts((prev) => ({ ...prev, recognition: countRes.total }))
+        refreshedTotal = countRes.total
+      }
+      if (refreshedTotal === null) return
+      setTotalCount(refreshedTotal)
+      // 关键字生效时 totalCount 是筛选命中数，不得污染「未筛选总数」徽标
+      if (!keyword) {
+        setTabCounts((prev) => ({ ...prev, [activeTab]: refreshedTotal }))
       }
       setSelectedAlarmIds(new Set())
     } catch (err) {
+      if (!isCurrentRequest() || isAbortError(err)) return
       setErrorMessage(err instanceof Error ? err.message : String(err))
     } finally {
-      setIsLoading(false)
+      // 仅当前请求能结束加载态：被接管的请求在到达这里前已将 ref 交给新控制器
+      if (dataAbortControllerRef.current === controller) {
+        dataAbortControllerRef.current = null
+        setIsLoading(false)
+      }
     }
   }, [
     activeTab,
@@ -344,12 +420,16 @@ export function AlarmsPage(): React.ReactElement {
     selectedStatus,
     selectedTrackId,
     timeRange,
+    debouncedSearchQuery,
     page,
     pageSize,
   ])
 
   useEffect(() => {
-    loadData()
+    void loadData()
+    return () => {
+      dataAbortControllerRef.current?.abort()
+    }
   }, [loadData])
 
   // 微批次推流消费周期 (每 200ms 合并刷入一次，抵御推流风暴)
@@ -410,6 +490,14 @@ export function AlarmsPage(): React.ReactElement {
       const matchesSeverity = selectedSeverity === 'all' || selectedSeverity === p.severity
       const matchesStatus = selectedStatus === 'all' || selectedStatus === 'unprocessed'
       const isLiveTime = matchesTimeRange(timeRange, p.occurredAt)
+      const matchesSearch = matchesSearchTerm(liveFilterRef.current.searchQuery, [
+        p.eventId,
+        p.cameraId,
+        p.cameraName,
+        p.targetLabel,
+        p.ruleType,
+        p.alarmTypeId,
+      ])
 
       if (
         page === 1 &&
@@ -418,7 +506,8 @@ export function AlarmsPage(): React.ReactElement {
         matchesRule &&
         matchesSeverity &&
         matchesStatus &&
-        isLiveTime
+        isLiveTime &&
+        matchesSearch
       ) {
         const newRecord: AlarmRecord = {
           id: p.id,
@@ -489,8 +578,15 @@ export function AlarmsPage(): React.ReactElement {
         const matchesCamera = !selectedCameraId || selectedCameraId === p.cameraId
         const matchesStatus = selectedStatus === 'all' || selectedStatus === p.status
         const isLiveTime = matchesTimeRange(timeRange, p.recognizedAt)
+        const matchesSearch = matchesSearchTerm(liveFilterRef.current.searchQuery, [
+          p.subjectName,
+          p.subjectId,
+          p.cameraId,
+          liveFilterRef.current.cameraNameMap[p.cameraId],
+          p.recognitionId,
+        ])
 
-        if (page === 1 && matchesCamera && matchesStatus && isLiveTime) {
+        if (page === 1 && matchesCamera && matchesStatus && isLiveTime && matchesSearch) {
           setRecognitions((prev) => {
             if (prev.some((r) => r.recognitionId === p.recognitionId)) return prev
             return [p, ...prev.slice(0, pageSize - 1)]
@@ -704,69 +800,7 @@ export function AlarmsPage(): React.ReactElement {
     }
   }
 
-  // 根据搜索关键词进行即时多字段模糊匹配
-  const filteredRecognitions = useMemo(() => {
-    if (!searchQuery.trim()) return recognitions
-    const q = searchQuery.trim().toLowerCase()
-    return recognitions.filter((r) => {
-      const name = (r.subjectName || '').toLowerCase()
-      const subjectId = (r.subjectId || '').toLowerCase()
-      const camId = (r.cameraId || '').toLowerCase()
-      const camName = (cameraNameMap[r.cameraId] || '').toLowerCase()
-      const recId = (r.recognitionId || '').toLowerCase()
-      return (
-        name.includes(q) ||
-        subjectId.includes(q) ||
-        camId.includes(q) ||
-        camName.includes(q) ||
-        recId.includes(q)
-      )
-    })
-  }, [recognitions, searchQuery, cameraNameMap])
-
-  const filteredAlarms = useMemo(() => {
-    if (!searchQuery.trim()) return alarms
-    const q = searchQuery.trim().toLowerCase()
-    return alarms.filter((a) => {
-      const evtId = (a.eventId || '').toLowerCase()
-      const camId = (a.cameraId || '').toLowerCase()
-      const camName = (cameraNameMap[a.cameraId] || '').toLowerCase()
-      const target = (a.targetLabel || '').toLowerCase()
-      const rule = (a.ruleType || '').toLowerCase()
-      const alarmType = (a.alarmTypeId || '').toLowerCase()
-      return (
-        evtId.includes(q) ||
-        camId.includes(q) ||
-        camName.includes(q) ||
-        target.includes(q) ||
-        rule.includes(q) ||
-        alarmType.includes(q)
-      )
-    })
-  }, [alarms, searchQuery, cameraNameMap])
-
-  const filteredCaptures = useMemo(() => {
-    if (!searchQuery.trim()) return captures
-    const q = searchQuery.trim().toLowerCase()
-    return captures.filter((c) => {
-      const capId = (c.captureId || '').toLowerCase()
-      const camId = (c.cameraId || '').toLowerCase()
-      const camName = (cameraNameMap[c.cameraId] || '').toLowerCase()
-      const target = (c.targetLabel || '').toLowerCase()
-      return capId.includes(q) || camId.includes(q) || camName.includes(q) || target.includes(q)
-    })
-  }, [captures, searchQuery, cameraNameMap])
-
-  const isSearching = Boolean(searchQuery.trim())
-  const currentFilteredCount =
-    activeTab === 'recognition'
-      ? filteredRecognitions.length
-      : activeTab === 'captures'
-        ? filteredCaptures.length
-        : filteredAlarms.length
-
-  const effectiveTotalCount = isSearching ? currentFilteredCount : totalCount
-  const totalPages = Math.max(1, Math.ceil(effectiveTotalCount / pageSize))
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
 
   return (
     <div className="flex h-full flex-col gap-3 text-[var(--text-primary)] select-none">
@@ -845,7 +879,7 @@ export function AlarmsPage(): React.ReactElement {
                     'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-xs',
                   iconColor: 'text-[var(--status-success)]',
                   badgeBg: 'bg-[var(--status-success-soft)] text-[var(--status-success)]',
-                  badgeCount: activeTab === 'recognition' ? totalCount : tabCounts.recognition,
+                  badgeCount: tabCounts.recognition,
                 },
                 {
                   key: 'alarms' as const,
@@ -855,7 +889,7 @@ export function AlarmsPage(): React.ReactElement {
                     'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs',
                   iconColor: 'text-[var(--status-danger)]',
                   badgeBg: 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]',
-                  badgeCount: activeTab === 'alarms' ? totalCount : tabCounts.alarms,
+                  badgeCount: tabCounts.alarms,
                 },
                 {
                   key: 'captures' as const,
@@ -865,7 +899,7 @@ export function AlarmsPage(): React.ReactElement {
                     'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info)] shadow-xs',
                   iconColor: 'text-[var(--status-info)]',
                   badgeBg: 'bg-[var(--status-info-soft)] text-[var(--status-info)]',
-                  badgeCount: activeTab === 'captures' ? totalCount : tabCounts.captures,
+                  badgeCount: tabCounts.captures,
                 },
               ] as const
             ).map((tab) => {
@@ -926,7 +960,10 @@ export function AlarmsPage(): React.ReactElement {
             {searchQuery ? (
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
+                onClick={() => {
+                  setSearchQuery('')
+                  setPage(1)
+                }}
                 className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
                 title={t('search.clear')}
               >
@@ -1269,7 +1306,7 @@ export function AlarmsPage(): React.ReactElement {
       >
         {activeTab === 'alarms' && (
           <AlarmsContent
-            alarms={filteredAlarms}
+            alarms={alarms}
             totalCount={totalCount}
             viewMode={viewMode}
             cameraNameMap={cameraNameMap}
@@ -1277,7 +1314,10 @@ export function AlarmsPage(): React.ReactElement {
             hasActiveFilters={hasActiveFilters}
             searchQuery={searchQuery}
             onResetFilters={handleResetFilters}
-            onClearSearch={() => setSearchQuery('')}
+            onClearSearch={() => {
+              setSearchQuery('')
+              setPage(1)
+            }}
             onToggleSelectAlarm={handleToggleSelectAlarm}
             onToggleSelectAll={handleToggleSelectAll}
             onSelect={handleSelectAlarm}
@@ -1289,13 +1329,16 @@ export function AlarmsPage(): React.ReactElement {
 
         {activeTab === 'captures' && (
           <CapturesContent
-            captures={filteredCaptures}
+            captures={captures}
             viewMode={viewMode}
             cameraNameMap={cameraNameMap}
             hasActiveFilters={hasActiveFilters}
             searchQuery={searchQuery}
             onResetFilters={handleResetFilters}
-            onClearSearch={() => setSearchQuery('')}
+            onClearSearch={() => {
+              setSearchQuery('')
+              setPage(1)
+            }}
             onSelect={setLightboxCapture}
             onSelectTrack={handleSelectTrack}
             t={t}
@@ -1304,13 +1347,16 @@ export function AlarmsPage(): React.ReactElement {
 
         {activeTab === 'recognition' && (
           <RecognitionContent
-            recognitions={filteredRecognitions}
+            recognitions={recognitions}
             viewMode={viewMode}
             cameraNameMap={cameraNameMap}
             hasActiveFilters={hasActiveFilters}
             searchQuery={searchQuery}
             onResetFilters={handleResetFilters}
-            onClearSearch={() => setSearchQuery('')}
+            onClearSearch={() => {
+              setSearchQuery('')
+              setPage(1)
+            }}
             onOpenReview={setReviewModalRec}
             onQuickReview={(recognition, status) => handleReviewRecognition(recognition, status)}
             t={t}
@@ -1322,16 +1368,10 @@ export function AlarmsPage(): React.ReactElement {
       <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
         <div className="flex items-center gap-3">
           <span>{t('pagination.page', { current: page })}</span>
-          {isSearching ? (
-            <span className="font-mono font-semibold text-[var(--status-success)]">
-              ({t('search.pageFiltered', { count: currentFilteredCount })})
+          {totalCount > 0 && (
+            <span className="font-mono text-[var(--text-muted)]">
+              ({t('pagination.total', { total: totalCount })})
             </span>
-          ) : (
-            totalCount > 0 && (
-              <span className="font-mono text-[var(--text-muted)]">
-                ({t('pagination.total', { total: totalCount })})
-              </span>
-            )
           )}
 
           {/* 每页条数选择器 */}
@@ -1346,7 +1386,7 @@ export function AlarmsPage(): React.ReactElement {
               className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--text-primary)] transition-all outline-none hover:border-[var(--accent)] focus:border-[var(--accent)]"
               title={t('pagination.pageSize')}
             >
-              {[10, 20, 50, 100].map((size) => (
+              {[12, 24, 48].map((size) => (
                 <option key={size} value={size}>
                   {t('pagination.perPage', { count: size })}
                 </option>

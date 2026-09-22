@@ -19,7 +19,16 @@
 
 - 清理覆盖卸载、依赖变化和重复挂载，不能只处理正常响应。
 - 筛选条件或分页请求变化时防止旧响应覆盖新状态；中止请求不显示为业务故障。
+- 不用同时维护代次 ref 与 AbortController 两套机制：控制器身份（`dataAbortControllerRef.current === controller`）本身就能回答「本次请求是否仍是最新」，双机制只会让两侧守卫不一致。
 - 不吞错误；返回明确错误状态，由调用方决定展示。
+
+### 长生命周期订阅与高频依赖
+
+WS 订阅 effect 只在「影响订阅本身」的依赖上重建。仅参与回调内判定的高频值（搜索关键字、通道名映射等）不进依赖数组，否则每次按键、每次列表刷新都会拆建全部订阅：
+
+- 用 ref 承载最新快照（参考 [AlarmsPage](../../../web/src/features/alarms/AlarmsPage.tsx) 的 `LiveFilterSnapshot`），由一个小 effect 同步写入；
+- 不得为了消除依赖警告而在回调里读过期闭包值，也不能关闭 `exhaustive-deps` 来回避，两者会把「订不到」换成更难查的「判定用旧值」。
+- 实时事件的服务端等价匹配必须与列表查询同语义：本地字符串匹配要与 SQL `LIKE` 的 ASCII-only 折叠对齐（见 [API 契约](../backend/api-guidelines.md#证据与告警列表的-q)）。
 
 ## 依赖与复用
 

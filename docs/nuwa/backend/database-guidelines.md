@@ -43,6 +43,9 @@
 - **[规划设计] 录像切片实体 (RecordSegments)**：独立于抓拍单张图管理，表名为 `record_segments`。记录 `camera_id`、`stream_type`、`start_time_ms`、`end_time_ms`、`duration_ms`、`file_path`（必须为相对路径）、`has_motion`、`has_alarm`、`alarm_ids` 及 `status`。必须建立 `(camera_id, start_time_ms, end_time_ms)` 与 `(status, has_alarm, start_time_ms)` 复合索引，满足时间轴毫秒级范围检索与高效淘汰。详见 [视频录像与回放引擎设计](../designs/video-recording-and-playback-engine.md)。
 - 查询封装在 Repository，`api` / `pipeline` 不直接使用 SeaORM DSL；列表必须有 `limit`。
 - 时间范围与摄像头过滤建立对应复合索引，例如 `(camera_id, timestamp)`；分页遵循 [API 契约](./api-guidelines.md#分页)。
+- **排序一律以 `id` 兜底**：`occurred_at`/`captured_at`/`recognized_at`/`created_at` 均非唯一，同一毫秒的批量写入会造出大量并列行；只按时间列排时 SQLite 不保证稳定顺序，`limit`+`offset` 翻页会重复或漏行，淘汰扫描（`find_oldest_batch`）更会在同 `limit` 重查时反复拿到已删除的批次。排序必须写成 `order_by_*(时间列).order_by_*(Column::Id)`，同向追加。
+- 关键字过滤（`q`）是 `LIKE '%...%'`，**无法命中索引**，其代价由 64 字符上限与保留期约束（见 [API 契约](./api-guidelines.md#证据与告警列表的-q)）。通道名称匹配需要 `LEFT JOIN cameras`，而 `cameras.name` 非唯一列也无索引：该 join 只在客户端传 `q` 时拼入，不得无条件预置，否则会给无搜索的常态列表平白增加一次全表扫描。
+- 查询共用工具收敛在 [repository/query.rs](../../../crates/db/src/repository/query.rs)（`escape_like` / `keyword_pattern`）；新增仓储不得再抄一份转义逻辑。
 
 ### 查询模式：杜绝 N+1
 

@@ -12,6 +12,7 @@ pub mod live;
 pub mod operational_log;
 pub mod oplog;
 pub mod personnel;
+pub mod query_params;
 pub mod system;
 pub mod task;
 pub mod ws;

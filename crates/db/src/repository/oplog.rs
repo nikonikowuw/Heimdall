@@ -1,4 +1,3 @@
-use sea_orm::sea_query::LikeExpr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect, Set,
@@ -6,6 +5,7 @@ use sea_orm::{
 
 use crate::entity::oplog::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
+use crate::repository::query::keyword_pattern;
 
 /// 状态码分类过滤，与 `GET /logs/operations` 的 `status` 参数取值一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,18 +27,6 @@ pub struct ListParams<'a> {
     pub to_ms: Option<i64>,
     pub limit: u64,
     pub offset: u64,
-}
-
-/// 转义 LIKE 通配符，让用户输入按字面量匹配而不是被当成模式
-fn escape_like(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if matches!(ch, '\\' | '%' | '_') {
-            escaped.push('\\');
-        }
-        escaped.push(ch);
-    }
-    escaped
 }
 
 #[derive(Debug)]
@@ -64,8 +52,7 @@ impl OplogRepo {
                 StatusClass::Failed => query.filter(Column::StatusCode.gte(400)),
             };
         }
-        if let Some(keyword) = params.keyword {
-            let pattern = LikeExpr::new(format!("%{}%", escape_like(keyword))).escape('\\');
+        if let Some(pattern) = keyword_pattern(params.keyword) {
             query = query.filter(
                 Condition::any()
                     .add(Column::Username.like(pattern.clone()))
@@ -372,13 +359,5 @@ mod tests {
         assert!(first_page
             .iter()
             .all(|row| second_page.iter().all(|other| row.id != other.id)));
-    }
-
-    #[test]
-    fn test_escape_like_escapes_wildcards_and_backslash() {
-        assert_eq!(escape_like("plain"), "plain");
-        assert_eq!(escape_like("100%"), "100\\%");
-        assert_eq!(escape_like("a_b"), "a\\_b");
-        assert_eq!(escape_like("c:\\tmp"), "c:\\\\tmp");
     }
 }

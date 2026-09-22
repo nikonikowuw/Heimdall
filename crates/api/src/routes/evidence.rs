@@ -7,7 +7,7 @@ use axum::Router;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 
-use db::{CaptureRepo, RecognitionRepo};
+use db::{CaptureRepo, RecognitionFilter, RecognitionRepo};
 
 use crate::capture_service::{
     isolate_gallery_evidence_photo, normalize_evidence_relative_path, parse_evidence_origin,
@@ -15,7 +15,11 @@ use crate::capture_service::{
 use crate::error::ApiError;
 use crate::middleware::AuthUser;
 use crate::response::ApiResponse;
+use crate::routes::query_params::parse_keyword;
 use crate::state::AppState;
+
+const DEFAULT_LIMIT: u64 = 20;
+const MAX_LIMIT: u64 = 100;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,6 +158,8 @@ impl From<db::entity::recognition::Model> for RecognitionDto {
 pub struct EvidenceQuery {
     pub camera_id: Option<String>,
     pub target_label: Option<String>,
+    /// 关键字匹配抓拍 ID、类别、通道 ID 或通道名称。
+    pub q: Option<String>,
     /// 轨道过滤：定位"同一个人的一次通行"的全部结算记录。仅抓拍列表支持。
     pub track_id: Option<i64>,
     pub status: Option<String>,
@@ -173,12 +179,24 @@ impl EvidenceQuery {
         )
     }
 
-    pub fn to_capture_filter(&self) -> db::CaptureFilter<'_> {
+    pub fn to_capture_filter<'a>(&'a self, keyword: Option<&'a str>) -> db::CaptureFilter<'a> {
         let (start_time, end_time) = self.time_range();
         db::CaptureFilter {
             camera_id: self.camera_id.as_deref(),
             target_label: self.target_label.as_deref(),
+            keyword,
             track_id: self.track_id,
+            start_time,
+            end_time,
+        }
+    }
+
+    pub fn to_recognition_filter<'a>(&'a self, keyword: Option<&'a str>) -> RecognitionFilter<'a> {
+        let (start_time, end_time) = self.time_range();
+        RecognitionFilter {
+            camera_id: self.camera_id.as_deref(),
+            status: self.status.as_deref(),
+            keyword,
             start_time,
             end_time,
         }
@@ -186,7 +204,7 @@ impl EvidenceQuery {
 }
 
 fn default_limit() -> u64 {
-    20
+    DEFAULT_LIMIT
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -218,7 +236,8 @@ async fn count_captures(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<EvidenceCountDto>, ApiError> {
-    let total = CaptureRepo::count_filtered(&state.db, params.to_capture_filter()).await?;
+    let keyword = parse_keyword(params.q.as_deref())?;
+    let total = CaptureRepo::count_filtered(&state.db, params.to_capture_filter(keyword)).await?;
     Ok(ApiResponse::success(EvidenceCountDto { total }))
 }
 
@@ -226,15 +245,9 @@ async fn count_recognitions(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<EvidenceCountDto>, ApiError> {
-    let (start_utc, end_utc) = params.time_range();
-    let total = RecognitionRepo::count_filtered(
-        &state.db,
-        params.camera_id.as_deref(),
-        params.status.as_deref(),
-        start_utc,
-        end_utc,
-    )
-    .await?;
+    let keyword = parse_keyword(params.q.as_deref())?;
+    let total =
+        RecognitionRepo::count_filtered(&state.db, params.to_recognition_filter(keyword)).await?;
     Ok(ApiResponse::success(EvidenceCountDto { total }))
 }
 
@@ -242,10 +255,12 @@ async fn list_captures(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<Vec<CaptureDto>>, ApiError> {
+    let limit = params.limit.clamp(1, MAX_LIMIT);
+    let keyword = parse_keyword(params.q.as_deref())?;
     let list = CaptureRepo::list_filtered(
         &state.db,
-        params.to_capture_filter(),
-        params.limit,
+        params.to_capture_filter(keyword),
+        limit,
         params.offset,
     )
     .await?;
@@ -257,14 +272,12 @@ async fn list_recognitions(
     State(state): State<AppState>,
     Query(params): Query<EvidenceQuery>,
 ) -> Result<ApiResponse<Vec<RecognitionDto>>, ApiError> {
-    let (start_utc, end_utc) = params.time_range();
+    let limit = params.limit.clamp(1, MAX_LIMIT);
+    let keyword = parse_keyword(params.q.as_deref())?;
     let list = RecognitionRepo::list_filtered(
         &state.db,
-        params.camera_id.as_deref(),
-        params.status.as_deref(),
-        start_utc,
-        end_utc,
-        params.limit,
+        params.to_recognition_filter(keyword),
+        limit,
         params.offset,
     )
     .await?;

@@ -1,45 +1,71 @@
 use std::collections::HashSet;
 
+use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, FromQueryResult,
+    JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
+    TransactionTrait,
 };
 
-use crate::entity::alarm::{ActiveModel, Column, Entity, Model};
+use crate::entity::alarm::{ActiveModel, Column, Entity, Model, Relation};
+use crate::entity::camera;
 use crate::error::DbError;
+use crate::repository::query::keyword_pattern;
 
 #[derive(Debug)]
 pub struct AlarmRepo;
 
-fn build_filter_query(
-    camera_id: Option<&str>,
-    status: Option<&str>,
-    target_label: Option<&str>,
-    rule_type: Option<&str>,
-    severity: Option<&str>,
-    start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
-    end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
-) -> sea_orm::Select<Entity> {
+/// 告警列表/计数的过滤条件（各字段为 `None` 或空串表示不限制）。
+///
+/// 收拢为结构体而不是继续加函数参数：过滤维度每加一个，调用点的位置参数就会错位一次，
+/// 而这里多数字段都是 `Option`，类型系统无法帮忙发现传串了。
+#[derive(Debug, Clone, Default)]
+pub struct AlarmFilter<'a> {
+    pub camera_id: Option<&'a str>,
+    pub status: Option<&'a str>,
+    pub target_label: Option<&'a str>,
+    pub rule_type: Option<&'a str>,
+    pub severity: Option<&'a str>,
+    /// 关键字，字面量匹配事件 ID、类别、规则、通道 ID 与通道名称
+    pub keyword: Option<&'a str>,
+    pub start_time: Option<DateTimeUtc>,
+    pub end_time: Option<DateTimeUtc>,
+}
+
+fn build_filter_query(filter: AlarmFilter<'_>) -> sea_orm::Select<Entity> {
     let mut query = Entity::find();
-    if let Some(cid) = camera_id.filter(|s| !s.trim().is_empty()) {
+    if let Some(cid) = filter.camera_id.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::CameraId.eq(cid));
     }
-    if let Some(st) = status.filter(|s| !s.trim().is_empty()) {
+    if let Some(st) = filter.status.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::Status.eq(st));
     }
-    if let Some(lbl) = target_label.filter(|s| !s.trim().is_empty()) {
+    if let Some(lbl) = filter.target_label.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::TargetLabel.eq(lbl));
     }
-    if let Some(rt) = rule_type.filter(|s| !s.trim().is_empty()) {
+    if let Some(rt) = filter.rule_type.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::RuleType.eq(rt));
     }
-    if let Some(sev) = severity.filter(|s| !s.trim().is_empty()) {
+    if let Some(sev) = filter.severity.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::Severity.eq(sev));
     }
-    if let Some(start) = start_time {
+    if let Some(pattern) = keyword_pattern(filter.keyword) {
+        query = query
+            .join(JoinType::LeftJoin, Relation::Camera.def())
+            .filter(
+                Condition::any()
+                    .add(Column::EventId.like(pattern.clone()))
+                    .add(Column::CameraId.like(pattern.clone()))
+                    .add(Column::AlarmTypeId.like(pattern.clone()))
+                    .add(Column::TargetLabel.like(pattern.clone()))
+                    .add(Column::RuleType.like(pattern.clone()))
+                    .add(camera::Column::Name.like(pattern)),
+            );
+    }
+    if let Some(start) = filter.start_time {
         query = query.filter(Column::OccurredAt.gte(start));
     }
-    if let Some(end) = end_time {
+    if let Some(end) = filter.end_time {
         query = query.filter(Column::OccurredAt.lte(end));
     }
     query
@@ -53,64 +79,41 @@ impl AlarmRepo {
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
         Self::list_filtered(
-            db, camera_id, None, None, None, None, None, None, limit, offset,
+            db,
+            AlarmFilter {
+                camera_id,
+                ..AlarmFilter::default()
+            },
+            limit,
+            offset,
         )
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn list_filtered(
         db: &DatabaseConnection,
-        camera_id: Option<&str>,
-        status: Option<&str>,
-        target_label: Option<&str>,
-        rule_type: Option<&str>,
-        severity: Option<&str>,
-        start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
-        end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        filter: AlarmFilter<'_>,
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        build_filter_query(
-            camera_id,
-            status,
-            target_label,
-            rule_type,
-            severity,
-            start_time,
-            end_time,
-        )
-        .order_by_desc(Column::OccurredAt)
-        .limit(limit)
-        .offset(offset)
-        .all(db)
-        .await
-        .map_err(DbError::from)
+        build_filter_query(filter)
+            .order_by_desc(Column::OccurredAt)
+            .order_by_desc(Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .all(db)
+            .await
+            .map_err(DbError::from)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn count_filtered(
         db: &DatabaseConnection,
-        camera_id: Option<&str>,
-        status: Option<&str>,
-        target_label: Option<&str>,
-        rule_type: Option<&str>,
-        severity: Option<&str>,
-        start_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
-        end_time: Option<sea_orm::entity::prelude::DateTimeUtc>,
+        filter: AlarmFilter<'_>,
     ) -> Result<u64, DbError> {
-        build_filter_query(
-            camera_id,
-            status,
-            target_label,
-            rule_type,
-            severity,
-            start_time,
-            end_time,
-        )
-        .count(db)
-        .await
-        .map_err(DbError::from)
+        build_filter_query(filter)
+            .count(db)
+            .await
+            .map_err(DbError::from)
     }
 
     pub async fn update_status(
@@ -212,12 +215,15 @@ impl AlarmRepo {
         Ok(res.rows_affected)
     }
 
+    /// 淘汰扫描的取批游标：`occurred_at` 相同时必须由 `id` 兜底，
+    /// 否则每次以相同 `limit` 重查会拿到不确定顺序，可能重复取到已删除的批次。
     pub async fn find_oldest_batch(
         db: &DatabaseConnection,
         limit: u64,
     ) -> Result<Vec<Model>, DbError> {
         Entity::find()
             .order_by_asc(Column::OccurredAt)
+            .order_by_asc(Column::Id)
             .limit(limit)
             .all(db)
             .await
@@ -275,6 +281,7 @@ impl AlarmRepo {
         Entity::find()
             .filter(Column::CreatedAt.lt(before))
             .order_by_asc(Column::CreatedAt)
+            .order_by_asc(Column::Id)
             .limit(limit)
             .all(db)
             .await

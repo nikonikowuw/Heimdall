@@ -99,6 +99,16 @@
 [运维事件接口](../../../crates/api/src/routes/operational_log.rs) 使用 `before` 毫秒游标，支持 `level`/`event`/`target`/`cameraId`/`fromMs`/`toMs`，并同时接受 camelCase 与 snake_case 别名。
 列表筛选一律下推服务端：筛选参数与分页同源，客户端不得对已取回的一页再做二次过滤，否则会出现「本页无命中但后续页有命中」的空表误判，且页内计数与真实命中数不一致。
 
+### 证据与告警列表的 `q`
+
+`GET /alarms`、`GET /alarms/count`、`GET /evidence/captures`、`GET /evidence/captures/count`、`GET /evidence/recognitions`、`GET /evidence/recognitions/count` 接受可选 `q`（默认 20、上限 100，`offset` 分页）：
+
+- 与操作日志同一条契约：限 64 字符，空串/纯空白视为未过滤，超长返回 400；`%`/`_`/`\` 一律转义为字面量。
+- 解析与转义只有一份实现（[query_params.rs](../../../crates/api/src/routes/query_params.rs)、[repository/query.rs](../../../crates/db/src/repository/query.rs)），新增列表端点必须复用，不得就地手写 `LIKE` 拼串——漏掉转义会把 `100%` 变成前缀通配符，既返回错误结果又让 `LIKE` 退化为全表扫描。
+- 匹配列：告警命中 `eventId`/`cameraId`/`alarmTypeId`/`targetLabel`/`ruleType` 与**通道名称**；抓拍命中 `captureId`/`cameraId`/`targetLabel` 与通道名称；识别命中 `recognitionId`/`cameraId`/`subjectId`/`subjectName` 与通道名称。通道名称匹配需 `LEFT JOIN cameras`，该 join 只随关键字生效。
+- 大小写：`q` 走 SQLite `LIKE`，**只对 ASCII 做不区分大小写折叠**，非 ASCII 按码点比较（`Ä` 与 `ä` 不同）。前端实时事件（WS）不重新请求服务端，其本地匹配必须使用 [`foldForSearch`](../../../web/src/features/alarms/utils.ts) 对齐该语义，不得用 `toLowerCase()`。
+- 关键字生效时列表返回的是**筛选命中数**，而 tab 徽标始终展示未筛选总数：二者语义不同，不得互相写入（徽标误解会让「筛到 3 条」看起来像「全库只有 3 条」）。
+
 ## 初始化与审计
 
 - 无出厂弱密码。`GET /auth/init-status` 公开返回初始化状态；`POST /auth/initialize` 设置管理员、加盐 PBKDF2-HMAC-SHA256 密码并签发 JWT。

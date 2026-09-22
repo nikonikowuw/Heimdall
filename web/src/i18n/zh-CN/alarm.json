@@ -7,8 +7,7 @@
     "placeholderCaptures": "按抓拍 ID、类别或通道搜索... (/ 聚焦)",
     "clear": "清空搜索",
     "noMatch": "未找到与 \"{{query}}\" 相关的记录",
-    "clearQuery": "清空搜索",
-    "pageFiltered": "当前页匹配 {{count}} 条"
+    "clearQuery": "清空搜索"
   },
   "columns": {
     "thumbnail": "缩略证据",

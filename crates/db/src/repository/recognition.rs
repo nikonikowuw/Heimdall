@@ -2,12 +2,14 @@ use std::collections::HashSet;
 
 use sea_orm::entity::prelude::DateTimeUtc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, FromQueryResult,
+    JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
 };
 
-use crate::entity::recognition::{ActiveModel, Column, Entity, Model};
+use crate::entity::camera;
+use crate::entity::recognition::{ActiveModel, Column, Entity, Model, Relation};
 use crate::error::DbError;
+use crate::repository::query::keyword_pattern;
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdateRecognitionReviewParams<'a> {
@@ -20,23 +22,41 @@ pub struct UpdateRecognitionReviewParams<'a> {
     pub selected_similarity: Option<f32>,
 }
 
-fn build_filter_query(
-    camera_id: Option<&str>,
-    status: Option<&str>,
-    start_time: Option<DateTimeUtc>,
-    end_time: Option<DateTimeUtc>,
-) -> sea_orm::Select<Entity> {
+/// 识别列表/计数的过滤条件（各字段为 `None` 或空串表示不限制）。
+#[derive(Debug, Clone, Default)]
+pub struct RecognitionFilter<'a> {
+    pub camera_id: Option<&'a str>,
+    pub status: Option<&'a str>,
+    /// 关键字，字面量匹配识别 ID、主体 ID/姓名、通道 ID 与通道名称
+    pub keyword: Option<&'a str>,
+    pub start_time: Option<DateTimeUtc>,
+    pub end_time: Option<DateTimeUtc>,
+}
+
+fn build_filter_query(filter: RecognitionFilter<'_>) -> sea_orm::Select<Entity> {
     let mut query = Entity::find();
-    if let Some(cid) = camera_id.filter(|s| !s.trim().is_empty()) {
+    if let Some(cid) = filter.camera_id.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::CameraId.eq(cid));
     }
-    if let Some(st) = status.filter(|s| !s.trim().is_empty()) {
+    if let Some(st) = filter.status.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::Status.eq(st));
     }
-    if let Some(start) = start_time {
+    if let Some(pattern) = keyword_pattern(filter.keyword) {
+        query = query
+            .join(JoinType::LeftJoin, Relation::Camera.def())
+            .filter(
+                Condition::any()
+                    .add(Column::RecognitionId.like(pattern.clone()))
+                    .add(Column::CameraId.like(pattern.clone()))
+                    .add(Column::SubjectId.like(pattern.clone()))
+                    .add(Column::SubjectName.like(pattern.clone()))
+                    .add(camera::Column::Name.like(pattern)),
+            );
+    }
+    if let Some(start) = filter.start_time {
         query = query.filter(Column::RecognizedAt.gte(start));
     }
-    if let Some(end) = end_time {
+    if let Some(end) = filter.end_time {
         query = query.filter(Column::RecognizedAt.lte(end));
     }
     query
@@ -52,20 +72,27 @@ impl RecognitionRepo {
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        Self::list_filtered(db, camera_id, None, None, None, limit, offset).await
+        Self::list_filtered(
+            db,
+            RecognitionFilter {
+                camera_id,
+                ..RecognitionFilter::default()
+            },
+            limit,
+            offset,
+        )
+        .await
     }
 
     pub async fn list_filtered(
         db: &DatabaseConnection,
-        camera_id: Option<&str>,
-        status: Option<&str>,
-        start_time: Option<DateTimeUtc>,
-        end_time: Option<DateTimeUtc>,
+        filter: RecognitionFilter<'_>,
         limit: u64,
         offset: u64,
     ) -> Result<Vec<Model>, DbError> {
-        build_filter_query(camera_id, status, start_time, end_time)
+        build_filter_query(filter)
             .order_by_desc(Column::RecognizedAt)
+            .order_by_desc(Column::Id)
             .limit(limit)
             .offset(offset)
             .all(db)
@@ -75,12 +102,9 @@ impl RecognitionRepo {
 
     pub async fn count_filtered(
         db: &DatabaseConnection,
-        camera_id: Option<&str>,
-        status: Option<&str>,
-        start_time: Option<DateTimeUtc>,
-        end_time: Option<DateTimeUtc>,
+        filter: RecognitionFilter<'_>,
     ) -> Result<u64, DbError> {
-        build_filter_query(camera_id, status, start_time, end_time)
+        build_filter_query(filter)
             .count(db)
             .await
             .map_err(DbError::from)
@@ -179,6 +203,7 @@ impl RecognitionRepo {
         Entity::find()
             .filter(Column::RecognizedAt.lt(before))
             .order_by_asc(Column::RecognizedAt)
+            .order_by_asc(Column::Id)
             .limit(limit)
             .all(db)
             .await
@@ -191,6 +216,7 @@ impl RecognitionRepo {
     ) -> Result<Vec<Model>, DbError> {
         Entity::find()
             .order_by_asc(Column::RecognizedAt)
+            .order_by_asc(Column::Id)
             .limit(limit)
             .all(db)
             .await

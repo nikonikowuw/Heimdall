@@ -7,8 +7,7 @@
     "placeholderCaptures": "Search by capture ID, class, or camera... (/ to focus)",
     "clear": "Clear search",
     "noMatch": "No records found matching \"{{query}}\"",
-    "clearQuery": "Clear search",
-    "pageFiltered": "Matched {{count}} on this page"
+    "clearQuery": "Clear search"
   },
   "columns": {
     "thumbnail": "Evidence",
