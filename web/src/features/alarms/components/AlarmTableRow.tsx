@@ -108,7 +108,7 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
         <span
           className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
             isCritical
-              ? 'animate-pulse bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
+              ? 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
               : 'bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
           }`}
         >

@@ -111,7 +111,7 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
         {thumbUrl && !imageError ? (
           <>
             {!imageLoaded && (
-              <div className="absolute inset-0 flex animate-pulse items-center justify-center bg-[var(--overlay-scrim)] font-mono text-[10px] text-[var(--text-muted)]">
+              <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-scrim)] font-mono text-[10px] text-[var(--text-muted)]">
                 LOADING...
               </div>
             )}
@@ -155,7 +155,7 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
           <span
             className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
               isCritical
-                ? 'animate-pulse bg-[var(--status-danger)] text-white'
+                ? 'bg-[var(--status-danger)] text-white'
                 : 'bg-[var(--status-warning)] text-white'
             }`}
           >

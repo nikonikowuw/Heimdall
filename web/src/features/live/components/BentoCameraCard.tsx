@@ -23,12 +23,12 @@ function getStatusBadge(
     case 'healthy':
       return {
         text: t('status.online', { defaultValue: '在线' }),
-        dotClass: 'bg-emerald-400 animate-pulse',
+        dotClass: 'bg-emerald-400',
       }
     case 'degraded':
       return {
         text: t('status.degraded', { defaultValue: '网络波动' }),
-        dotClass: 'bg-amber-400 animate-ping',
+        dotClass: 'bg-amber-400',
       }
     case 'offline':
       return {
@@ -65,7 +65,7 @@ export const BentoCameraCard = React.memo(function BentoCameraCard({
       }}
       className={`group flex flex-col overflow-hidden rounded-xl border bg-[var(--bg-secondary)] shadow-xs transition-colors duration-300 ${
         isAlarming
-          ? 'animate-pulse border-rose-500 ring-2 shadow-rose-500/25 ring-rose-500'
+          ? 'border-rose-500 shadow-lg ring-2 shadow-rose-500/40 ring-rose-500'
           : 'border-[var(--border)] hover:border-[var(--accent)]/40 hover:shadow-md'
       }`}
     >

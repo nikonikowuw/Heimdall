@@ -517,7 +517,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                 {t('live.title')}
               </span>
               <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                <Radio className="h-2.5 w-2.5 animate-pulse" />
+                <Radio className="h-2.5 w-2.5" />
                 <span>{t('live.webcodecsBadge')}</span>
               </span>
               <span className="flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-700 dark:text-cyan-400">
@@ -545,7 +545,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             <span>{t('live.autoSpotlight')}</span>
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                autoSpotlight ? 'animate-pulse bg-cyan-400' : 'bg-gray-500'
+                autoSpotlight ? 'bg-cyan-400' : 'bg-gray-500'
               }`}
             />
           </motion.button>
@@ -679,7 +679,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             {/* Hero 下方实时遥测事件滚动胶囊 */}
             <div className="frosted-glass flex items-center justify-between rounded-lg px-3 py-1.5 text-xs text-[var(--text-secondary)]">
               <div className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="flex h-2 w-2 animate-ping rounded-full bg-cyan-500 dark:bg-cyan-400" />
+                <span className="flex h-2 w-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
                 <span className="font-semibold text-cyan-700 dark:text-cyan-400">
                   {t('live.liveTelemetry')}:
                 </span>

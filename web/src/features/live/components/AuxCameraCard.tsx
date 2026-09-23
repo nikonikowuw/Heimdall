@@ -35,13 +35,13 @@ function getStatusBadge(
     case 'healthy':
       return {
         text: t('status.online', { defaultValue: '在线' }),
-        dotClass: 'bg-emerald-400 animate-pulse',
+        dotClass: 'bg-emerald-400',
         statusColor: 'text-emerald-400',
       }
     case 'degraded':
       return {
         text: t('status.degraded', { defaultValue: '网络波动' }),
-        dotClass: 'bg-amber-400 animate-ping',
+        dotClass: 'bg-amber-400',
         statusColor: 'text-amber-400',
       }
     case 'offline':
@@ -84,7 +84,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
       }}
       className={`group relative cursor-pointer overflow-hidden rounded-xl border bg-[var(--bg-secondary)] text-left transition-colors duration-300 hover:shadow-lg ${
         isAlarming
-          ? 'animate-pulse border-rose-500 ring-2 shadow-rose-500/25 ring-rose-500'
+          ? 'border-rose-500 shadow-lg ring-2 shadow-rose-500/40 ring-rose-500'
           : isFocused
             ? 'border-cyan-500 ring-1 shadow-cyan-500/20 ring-cyan-500'
             : 'border-[var(--border)] hover:border-cyan-500/50 hover:shadow-cyan-500/10'
@@ -92,8 +92,8 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
     >
       {/* 告警中微型指示标签 */}
       {isAlarming && (
-        <div className="absolute top-2 left-2 z-20 flex items-center gap-1 rounded-md bg-rose-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md backdrop-blur-xs">
-          <ShieldAlert className="h-3 w-3 animate-bounce" />
+        <div className="absolute top-2 left-2 z-20 flex items-center gap-1 rounded-md bg-rose-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md">
+          <ShieldAlert className="h-3 w-3" />
           <span>{t('live.alarmDetected')}</span>
         </div>
       )}
@@ -101,7 +101,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
       {/* 微缩播放器视口 */}
       <div className="relative aspect-video w-full">
         {/* 悬停快捷操作组 */}
-        <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-0 backdrop-blur-xs transition-opacity group-hover:opacity-100">
+        <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-0 transition-opacity group-hover:opacity-100">
           <button
             type="button"
             onClick={(e) => {
@@ -129,7 +129,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
         {isFocused ? (
           <div className="flex h-full w-full flex-col items-center justify-center bg-black/80 p-2 text-center">
             <div className="flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-400">
-              <Eye className="h-3 w-3 animate-pulse" />
+              <Eye className="h-3 w-3" />
               <span>主屏呈现中</span>
             </div>
             <span className="mt-1.5 text-[10px] text-[var(--text-muted)]">

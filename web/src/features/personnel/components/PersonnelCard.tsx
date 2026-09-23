@@ -444,7 +444,9 @@ export function PersonnelCardSkeleton(): React.ReactElement {
   return (
     <div
       aria-hidden="true"
-      className="frosted-glass flex min-w-0 animate-pulse flex-col justify-between overflow-hidden rounded-2xl border border-[var(--border)] p-3.5"
+      // 骨架屏保留 animate-pulse（加载语义），但不叠 .frosted-glass：
+      // 动画元素自身再作 backdrop 采样源会让模糊结果逐帧重算，得不偿失。
+      className="flex min-w-0 animate-pulse flex-col justify-between overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-3.5"
     >
       <div className="flex min-w-0 items-start gap-3.5">
         {/* 左侧肖像骨架 */}

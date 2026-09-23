@@ -342,7 +342,7 @@ export function PersonnelTable({
 
 export function PersonnelTableSkeleton(): React.ReactElement {
   return (
-    <div className="frosted-glass animate-pulse overflow-hidden rounded-2xl border border-[var(--border)] shadow-xs">
+    <div className="animate-pulse overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-xs">
       <div className="w-full overflow-x-auto">
         <table className="w-full min-w-[860px] border-collapse text-left text-xs">
           <thead>

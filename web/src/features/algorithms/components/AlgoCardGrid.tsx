@@ -42,7 +42,10 @@ export function AlgoCardGrid({
         {[1, 2, 3, 4].map((n) => (
           <div
             key={n}
-            className="frosted-glass h-44 animate-pulse rounded-2xl border border-[var(--border)] p-5"
+            // 骨架屏保留 animate-pulse（加载语义），但不叠 .frosted-glass：
+            // 它自己既做 backdrop 采样又做逐帧动画会让模糊结果每帧重算；
+            // 骨架屏使用不透明底色，模糊没有视觉收益。
+            className="h-44 animate-pulse rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-5"
           />
         ))}
       </div>

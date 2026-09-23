@@ -858,7 +858,7 @@ export function AlarmsPage(): React.ReactElement {
             aria-label={t('sound.toggleAlert')}
           >
             {soundEnabled ? (
-              <Volume2 className="h-3.5 w-3.5 animate-pulse text-[var(--status-danger)]" />
+              <Volume2 className="h-3.5 w-3.5 text-[var(--status-danger)]" />
             ) : (
               <VolumeX className="h-3.5 w-3.5" />
             )}

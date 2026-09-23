@@ -33,7 +33,7 @@ export function RealtimeAlarmBanner({
           className="flex items-center justify-between rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-4 py-2 text-xs text-[var(--status-danger)] shadow-md backdrop-blur-md"
         >
           <div className="flex items-center gap-2">
-            <BellRing className="h-4 w-4 animate-bounce text-[var(--status-danger)]" />
+            <BellRing className="h-4 w-4 text-[var(--status-danger)]" />
             <span className="font-semibold">{t('realtime.newAlarms', { count })}</span>
           </div>
 

@@ -12,8 +12,10 @@ export const RECOGNITION_STATUS_STYLES = {
     textColor: 'text-[var(--status-warning)]',
     chipClass:
       'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]',
-    dotClass:
-      'bg-[var(--status-warning)] animate-pulse shadow-[0_0_8px_var(--status-warning-soft)]',
+    // 状态点位于卡片毛玻璃栈内部：backdrop-filter 会因子树内任何持续动画而逐帧重采样，
+    // 实测告警中心（24 张卡片）因此持续占用一个 CPU 核心的约 50%，冻结动画后回落至 0.4%。
+    // 待复核语义由静态高亮 + 发光承担，不加动画。
+    dotClass: 'bg-[var(--status-warning)] shadow-[0_0_8px_var(--status-warning-soft)]',
     ambientGlow: 'from-[var(--status-warning-soft)]',
     cardBorder:
       'border-[var(--status-warning-border)] hover:border-[var(--status-warning-border)] hover:shadow-[0_0_12px_var(--status-warning-soft)]',

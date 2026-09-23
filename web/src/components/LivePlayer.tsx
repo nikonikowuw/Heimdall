@@ -37,13 +37,15 @@ type ConnectionStatus =
   'connecting' | 'connected' | 'reconnecting' | 'failed' | 'paused' | 'standby'
 
 function getStatusIndicatorClass(status: ConnectionStatus): string {
+  // 连接态只用颜色区分，不启用循环脉冲/闪烁。
+  // 实测此前本页 5 个 6～12px 状态点在 1920×1080@2x 下合计占用约 9%。
   switch (status) {
     case 'connected':
-      return 'animate-pulse bg-emerald-400'
+      return 'bg-emerald-400'
     case 'reconnecting':
-      return 'animate-ping bg-amber-400'
+      return 'bg-amber-400'
     case 'connecting':
-      return 'animate-pulse bg-cyan-400'
+      return 'bg-cyan-400'
     case 'paused':
       return 'bg-amber-400'
     case 'failed':
@@ -823,16 +825,13 @@ export function LivePlayer({
     }
 
     let animId: number
+    let paintedLastFrame = false
     const render = () => {
       const ctx = canvas.getContext('2d')
       if (ctx) {
         const dpr = Math.max(1, window.devicePixelRatio || 1)
         const logicalW = canvas.width / dpr
         const logicalH = canvas.height / dpr
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
-        ctx.save()
-        ctx.scale(dpr, dpr)
 
         // 动态推导当前画面呈现时刻的源帧绝对 PTS (毫秒)
         const currentVideoPts = estimateVideoPts({
@@ -847,6 +846,17 @@ export function LivePlayer({
         const tracks =
           externalTracksRef.current ??
           trackStore.getTracks(cameraId, currentVideoPts, FLV_TRACK_PTS_TOLERANCE_MS)
+
+        // 空轨迹帧且画布已清空时不再清屏：避免每帧扫描整张高 DPR 画布。
+        if (tracks.length === 0 && !paintedLastFrame) {
+          animId = requestAnimationFrame(render)
+          return
+        }
+        paintedLastFrame = tracks.length > 0
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        ctx.save()
+        ctx.scale(dpr, dpr)
 
         for (const item of tracks) {
           const [nx1, ny1, nx2, ny2] = item.bbox
@@ -1076,7 +1086,7 @@ export function LivePlayer({
             transition={{ duration: motionTokens.duration.fast }}
             className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs"
           >
-            <RefreshCw className="h-6 w-6 animate-spin text-[var(--accent)]" />
+            <RefreshCw className="h-6 w-6 text-[var(--accent)]" />
             <span className="mt-2 text-xs font-medium text-[var(--text-secondary)]">
               {t('live.negotiating')}
             </span>
@@ -1093,7 +1103,7 @@ export function LivePlayer({
             className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/50"
           >
             <div className="flex items-center gap-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs text-amber-400 backdrop-blur-md">
-              <Wifi className="h-4 w-4 animate-pulse" />
+              <Wifi className="h-4 w-4" />
               <span>{t('live.reconnecting')}</span>
             </div>
           </motion.div>
@@ -1128,7 +1138,9 @@ export function LivePlayer({
       {/* 顶部/左上角沉浸式科技 HUD 面板 (专业视频 OSD 深色防眩光底盘，杜绝亮色模式下白底白字低对比度问题) */}
       {showHud && (
         <div
-          className={`absolute top-2.5 left-2.5 z-20 flex items-center gap-2 rounded-lg border border-white/15 bg-black/75 px-2.5 py-1 font-mono text-[11px] text-white/90 shadow-lg backdrop-blur-md transition-opacity duration-300 ${
+          // 刻意不用 backdrop-filter：本 HUD 悬浮于实时视频之上，视频帧变化时会重复采样，
+          // 且 bg-black/75 下模糊效果几乎不可见。
+          className={`absolute top-2.5 left-2.5 z-20 flex items-center gap-2 rounded-lg border border-white/15 bg-black/75 px-2.5 py-1 font-mono text-[11px] text-white/90 shadow-lg transition-opacity duration-300 ${
             isControlsVisible || connectionStatus !== 'connected'
               ? 'opacity-100'
               : 'pointer-events-none opacity-0'
@@ -1158,7 +1170,7 @@ export function LivePlayer({
             <>
               <span className="text-white/40">|</span>
               <span className="flex items-center gap-1 text-emerald-400">
-                <Volume2 className="h-3 w-3 animate-pulse" />
+                <Volume2 className="h-3 w-3" />
                 <span className="text-[9px] font-bold tracking-wider">AUDIO</span>
               </span>
             </>
@@ -1187,7 +1199,7 @@ export function LivePlayer({
         <button
           type="button"
           onClick={handleCaptureSnapshot}
-          className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-cyan-500/80 hover:text-white"
+          className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-cyan-500/80 hover:text-white"
           title={t('live.snapshot')}
         >
           <Camera className="h-3.5 w-3.5" />
@@ -1197,7 +1209,7 @@ export function LivePlayer({
         <button
           type="button"
           onClick={handleToggleOsdInternal}
-          className={`rounded-md p-1 backdrop-blur-md transition-colors ${
+          className={`rounded-md p-1 transition-colors ${
             currentShowOsd
               ? 'bg-black/60 text-cyan-300 hover:bg-black/80 hover:text-white'
               : 'bg-black/60 text-white/40 hover:bg-black/80 hover:text-white'
@@ -1212,7 +1224,7 @@ export function LivePlayer({
           <button
             type="button"
             onClick={handleToggleFitModeInternal}
-            className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-black/80 hover:text-white"
+            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white"
             title={currentFitMode === 'contain' ? t('live.fitCover') : t('live.fitContain')}
           >
             {currentFitMode === 'contain' ? (
@@ -1228,7 +1240,7 @@ export function LivePlayer({
           <button
             type="button"
             onClick={() => onSwitchStream(streamType === 'main' ? 'sub' : 'main')}
-            className="flex items-center gap-1 rounded-md bg-black/60 px-2 py-1 text-[10px] font-medium text-white/90 backdrop-blur-md transition-colors hover:bg-black/80 hover:text-white"
+            className="flex items-center gap-1 rounded-md bg-black/60 px-2 py-1 text-[10px] font-medium text-white/90 transition-colors hover:bg-black/80 hover:text-white"
             title={streamType === 'main' ? t('live.subStream') : t('live.mainStream')}
           >
             <Layers className="h-3 w-3 text-cyan-400" />
@@ -1241,7 +1253,7 @@ export function LivePlayer({
           <button
             type="button"
             onClick={onTogglePause}
-            className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-black/80 hover:text-white"
+            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white"
             title={isPaused ? t('live.openPreview') : t('live.closePreview')}
           >
             {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
@@ -1253,7 +1265,7 @@ export function LivePlayer({
           <button
             type="button"
             onClick={handleToggleAudio}
-            className={`rounded-md p-1 backdrop-blur-md transition-colors ${
+            className={`rounded-md p-1 transition-colors ${
               isAudioActive
                 ? 'bg-[var(--accent)] text-white shadow-xs'
                 : 'bg-black/60 text-white/90 hover:bg-black/80 hover:text-white'
@@ -1273,7 +1285,7 @@ export function LivePlayer({
           <button
             type="button"
             onClick={onSpotlight}
-            className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-cyan-500/80 hover:text-white"
+            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-cyan-500/80 hover:text-white"
             title={t('live.focusHero')}
           >
             <Eye className="h-3.5 w-3.5" />
@@ -1284,7 +1296,7 @@ export function LivePlayer({
         <button
           type="button"
           onClick={handleToggleFullscreen}
-          className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-black/80 hover:text-white"
+          className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white"
           title={isFullscreen ? t('live.exitFullscreen') : t('live.fullscreen')}
         >
           {isFullscreen ? (
@@ -1299,7 +1311,7 @@ export function LivePlayer({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md bg-black/60 p-1 text-white/90 backdrop-blur-md transition-colors hover:bg-rose-500/80 hover:text-white"
+            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-rose-500/80 hover:text-white"
             title={t('live.close')}
           >
             <X className="h-3.5 w-3.5" />
@@ -1310,7 +1322,7 @@ export function LivePlayer({
       {/* 底部遥测状态栏 (仅在主大屏展示，支持闲置淡出) */}
       {isHero && displayTelemetry && (
         <div
-          className={`absolute right-2.5 bottom-2.5 left-2.5 z-20 flex items-center justify-between rounded-lg bg-black/60 px-3 py-1.5 font-mono text-[11px] text-white/80 backdrop-blur-md transition-opacity duration-300 ${
+          className={`absolute right-2.5 bottom-2.5 left-2.5 z-20 flex items-center justify-between rounded-lg bg-black/60 px-3 py-1.5 font-mono text-[11px] text-white/80 transition-opacity duration-300 ${
             isControlsVisible || connectionStatus !== 'connected'
               ? 'opacity-100'
               : 'pointer-events-none opacity-0'

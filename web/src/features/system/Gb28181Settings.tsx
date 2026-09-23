@@ -122,8 +122,8 @@ export function Gb28181Settings(): React.ReactElement {
   if (loading && !data) {
     return (
       <div className="space-y-6">
-        <div className="frosted-glass h-24 animate-pulse rounded-2xl border border-[var(--border)]" />
-        <div className="frosted-glass h-48 animate-pulse rounded-2xl border border-[var(--border)]" />
+        <div className="h-24 animate-pulse rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)]" />
+        <div className="h-48 animate-pulse rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)]" />
       </div>
     )
   }

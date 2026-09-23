@@ -84,9 +84,10 @@ function AvatarBox({
         }`}
         title={isClickable ? viewHdText : undefined}
       >
-        {/* 渐变加载骨架屏 */}
+        {/* 渐变加载骨架屏。刻意不动画：本元素位于卡片 backdrop-filter 子树内，
+            动画会反复更新该卡片的 backdrop 表面；加载状态由占位图本身表达。 */}
         {!isLoaded && !hasError && src && (
-          <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-slate-800 to-slate-900" />
+          <div className="absolute inset-0 bg-gradient-to-br from-slate-800 to-slate-900" />
         )}
 
         {src && !hasError ? (

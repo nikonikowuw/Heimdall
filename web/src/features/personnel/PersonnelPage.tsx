@@ -634,7 +634,7 @@ export function PersonnelPage(): React.ReactElement {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* 算法就绪状态：微脉冲呼吸灯指示 */}
+            {/* 算法就绪状态 */}
             <span
               title={t('stats.algoStatus')}
               className={`hidden max-w-[15rem] items-center gap-1.5 truncate rounded-xl border px-2.5 py-1.5 text-[11px] font-medium lg:inline-flex ${
@@ -651,7 +651,7 @@ export function PersonnelPage(): React.ReactElement {
                   !hasStats
                     ? 'bg-[var(--text-muted)]'
                     : stats.algoReady
-                      ? 'animate-pulse bg-[var(--status-success)] shadow-[0_0_6px_var(--status-success-soft)]'
+                      ? 'bg-[var(--status-success)] shadow-[0_0_6px_var(--status-success-soft)]'
                       : 'bg-[var(--status-warning)]'
                 }`}
               />
