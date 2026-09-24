@@ -5,7 +5,7 @@
   "logCenter": {
     "title": "System Log Center",
     "subtitle": "Unified tracking for operation audit and system runtime state",
-    "liveStatus": "Live Stream"
+    "liveStatus": "Refreshes every 5s"
   },
   "tabs": {
     "operations": "Audit Logs",

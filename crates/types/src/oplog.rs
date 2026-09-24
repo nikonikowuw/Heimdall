@@ -43,12 +43,16 @@ pub enum OpEvent {
     },
     CameraOffline {
         camera_id: String,
-        last_frame_ts: i64,
+        /// 仅填写真实视频帧 PTS；探活结果不含帧时间时保持未知。
+        last_frame_ts: Option<i64>,
         reason: String,
     },
 
     // ── 任务状态 ──
     TaskStarted {
+        task_id: i64,
+    },
+    TaskStopped {
         task_id: i64,
     },
     TaskCompleted {
@@ -78,6 +82,10 @@ pub enum OpEvent {
     AlgoUnloaded {
         algo_id: String,
     },
+    AlgoLoadFailed {
+        algo_id: String,
+        error: String,
+    },
     AlgoSandboxFailed {
         algo_id: String,
         error: String,
@@ -86,7 +94,9 @@ pub enum OpEvent {
         backend: String,
         error: String,
     },
-    VpuExhausted,
+    VpuExhausted {
+        camera_id: String,
+    },
 
     // ── 存储 ──
     StorageWatermark {
@@ -108,15 +118,17 @@ impl OpEvent {
             Self::CameraOnline { .. } => "camera_online",
             Self::CameraOffline { .. } => "camera_offline",
             Self::TaskStarted { .. } => "task_started",
+            Self::TaskStopped { .. } => "task_stopped",
             Self::TaskCompleted { .. } => "task_completed",
             Self::TaskFailed { .. } => "task_failed",
             Self::TaskDegraded { .. } => "task_degraded",
             Self::AlarmTriggered { .. } => "alarm_triggered",
             Self::AlgoLoaded { .. } => "algo_loaded",
             Self::AlgoUnloaded { .. } => "algo_unloaded",
+            Self::AlgoLoadFailed { .. } => "algo_load_failed",
             Self::AlgoSandboxFailed { .. } => "algo_sandbox_failed",
             Self::NpuInitFailed { .. } => "npu_init_failed",
-            Self::VpuExhausted => "vpu_exhausted",
+            Self::VpuExhausted { .. } => "vpu_exhausted",
             Self::StorageWatermark { .. } => "storage_watermark",
             Self::StorageEviction { .. } => "storage_eviction",
         }
@@ -125,9 +137,11 @@ impl OpEvent {
     /// 日志级别 (运维日志只有 error / warn / info)
     pub fn level(&self) -> &'static str {
         match self {
-            Self::NpuInitFailed { .. } | Self::AlgoSandboxFailed { .. } | Self::VpuExhausted => {
-                "error"
-            }
+            Self::NpuInitFailed { .. }
+            | Self::AlgoLoadFailed { .. }
+            | Self::AlgoSandboxFailed { .. }
+            | Self::VpuExhausted { .. } => "error",
+            Self::StorageWatermark { level, .. } if level == "normal" => "info",
             Self::CameraOffline { .. }
             | Self::TaskFailed { .. }
             | Self::TaskDegraded { .. }
@@ -141,7 +155,41 @@ impl OpEvent {
         match self {
             Self::CameraOnline { camera_id, .. }
             | Self::CameraOffline { camera_id, .. }
-            | Self::AlarmTriggered { camera_id, .. } => Some(camera_id.as_str()),
+            | Self::AlarmTriggered { camera_id, .. }
+            | Self::VpuExhausted { camera_id } => Some(camera_id.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn error_detail(&self) -> Option<&str> {
+        match self {
+            Self::CameraOffline { reason, .. }
+            | Self::TaskFailed { error: reason, .. }
+            | Self::TaskDegraded { reason, .. }
+            | Self::AlgoLoadFailed { error: reason, .. }
+            | Self::AlgoSandboxFailed { error: reason, .. }
+            | Self::NpuInitFailed { error: reason, .. } => Some(reason),
+            _ => None,
+        }
+    }
+
+    pub fn task_id(&self) -> Option<i64> {
+        match self {
+            Self::TaskStarted { task_id }
+            | Self::TaskStopped { task_id }
+            | Self::TaskCompleted { task_id }
+            | Self::TaskFailed { task_id, .. }
+            | Self::TaskDegraded { task_id, .. } => Some(*task_id),
+            _ => None,
+        }
+    }
+
+    pub fn algo_id(&self) -> Option<&str> {
+        match self {
+            Self::AlgoLoaded { algo_id, .. }
+            | Self::AlgoUnloaded { algo_id }
+            | Self::AlgoLoadFailed { algo_id, .. }
+            | Self::AlgoSandboxFailed { algo_id, .. } => Some(algo_id),
             _ => None,
         }
     }
@@ -152,14 +200,16 @@ impl OpEvent {
             Self::ServiceStarted { .. } | Self::ServiceStopped => "system",
             Self::CameraOnline { .. } | Self::CameraOffline { .. } => "media",
             Self::TaskStarted { .. }
+            | Self::TaskStopped { .. }
             | Self::TaskCompleted { .. }
             | Self::TaskFailed { .. }
             | Self::TaskDegraded { .. } => "pipeline",
             Self::AlarmTriggered { .. } => "rule",
             Self::AlgoLoaded { .. }
             | Self::AlgoUnloaded { .. }
+            | Self::AlgoLoadFailed { .. }
             | Self::AlgoSandboxFailed { .. } => "infer",
-            Self::NpuInitFailed { .. } | Self::VpuExhausted => "hardware",
+            Self::NpuInitFailed { .. } | Self::VpuExhausted { .. } => "hardware",
             Self::StorageWatermark { .. } | Self::StorageEviction { .. } => "storage",
         }
     }
@@ -171,17 +221,12 @@ impl OpEvent {
                 format!("Heimdall {version} 服务启动，监听端口 {port}")
             }
             Self::ServiceStopped => "Heimdall 服务已停止".to_string(),
-            Self::CameraOnline { camera_id } => {
-                format!("摄像头 {camera_id} 连接就绪")
-            }
-            Self::CameraOffline {
-                camera_id, reason, ..
-            } => {
-                format!("摄像头 {camera_id} 离线: {reason}")
-            }
+            Self::CameraOnline { .. } => "摄像头连接就绪".to_string(),
+            Self::CameraOffline { .. } => "摄像头离线".to_string(),
             Self::TaskStarted { task_id } => {
                 format!("任务 #{task_id} 已启动")
             }
+            Self::TaskStopped { .. } => "任务已停止".to_string(),
             Self::TaskCompleted { task_id } => {
                 format!("任务 #{task_id} 已完成")
             }
@@ -206,13 +251,14 @@ impl OpEvent {
             Self::AlgoUnloaded { algo_id } => {
                 format!("算法包 {algo_id} 已卸载")
             }
+            Self::AlgoLoadFailed { .. } => "算法包加载失败".to_string(),
             Self::AlgoSandboxFailed { algo_id, error } => {
                 format!("算法包 {algo_id} 沙箱自检失败: {error}")
             }
             Self::NpuInitFailed { backend, error } => {
                 format!("NPU 后端 {backend} 初始化失败: {error}")
             }
-            Self::VpuExhausted => "VPU 通道池耗尽".to_string(),
+            Self::VpuExhausted { .. } => "VPU 抓拍通道配额耗尽".to_string(),
             Self::StorageWatermark { level, free_ratio } => {
                 format!("存储水位 {level}: 剩余 {:.1}%", free_ratio * 100.0)
             }
@@ -228,15 +274,16 @@ impl OpEvent {
             Self::ServiceStarted { version, port } => {
                 serde_json::json!({ "version": version, "port": port })
             }
-            Self::CameraOffline { last_frame_ts, .. } => {
-                serde_json::json!({ "last_frame_ts": last_frame_ts })
+            Self::CameraOffline {
+                last_frame_ts,
+                reason,
+                ..
+            } => {
+                serde_json::json!({ "last_frame_ts": last_frame_ts, "reason": reason })
             }
-            Self::TaskStarted { task_id } => {
-                serde_json::json!({ "task_id": task_id })
-            }
-            Self::TaskCompleted { task_id } => {
-                serde_json::json!({ "task_id": task_id })
-            }
+            Self::TaskStarted { task_id }
+            | Self::TaskStopped { task_id }
+            | Self::TaskCompleted { task_id } => serde_json::json!({ "task_id": task_id }),
             Self::TaskFailed { task_id, error } => {
                 serde_json::json!({ "task_id": task_id, "error": error })
             }
@@ -252,11 +299,15 @@ impl OpEvent {
             Self::AlgoUnloaded { algo_id } => {
                 serde_json::json!({ "algo_id": algo_id })
             }
-            Self::AlgoSandboxFailed { algo_id, error } => {
+            Self::AlgoLoadFailed { algo_id, error }
+            | Self::AlgoSandboxFailed { algo_id, error } => {
                 serde_json::json!({ "algo_id": algo_id, "error": error })
             }
             Self::NpuInitFailed { backend, error } => {
                 serde_json::json!({ "backend": backend, "error": error })
+            }
+            Self::VpuExhausted { camera_id } => {
+                serde_json::json!({ "camera_id": camera_id })
             }
             Self::StorageWatermark { free_ratio, .. } => {
                 serde_json::json!({ "free_ratio": free_ratio })
@@ -265,10 +316,113 @@ impl OpEvent {
                 serde_json::json!({ "evicted": evicted, "freed_mb": freed_mb })
             }
             // 无结构化附加字段的变体
-            Self::ServiceStopped | Self::CameraOnline { .. } | Self::VpuExhausted => {
+            Self::ServiceStopped | Self::CameraOnline { .. } => {
                 return None;
             }
         };
         serde_json::to_string(&value).ok()
+    }
+
+    /// 将任务状态变化映射到适合运维日志展示的生命周期事件。
+    pub fn task_status_transition(
+        task_id: i64,
+        previous: i32,
+        current: crate::TaskStatus,
+        reason: &str,
+    ) -> Option<Self> {
+        if crate::TaskStatus::from_i32(previous) == Some(current) {
+            return None;
+        }
+
+        match current {
+            crate::TaskStatus::Running => Some(Self::TaskStarted { task_id }),
+            crate::TaskStatus::Stopped => Some(Self::TaskStopped { task_id }),
+            crate::TaskStatus::Error => Some(Self::TaskFailed {
+                task_id,
+                error: reason.to_string(),
+            }),
+            crate::TaskStatus::Degraded | crate::TaskStatus::Reconnecting => {
+                Some(Self::TaskDegraded {
+                    task_id,
+                    reason: reason.to_string(),
+                })
+            }
+            crate::TaskStatus::Starting => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OpEvent;
+    use crate::TaskStatus;
+
+    #[test]
+    fn task_status_transition_only_emits_changed_operational_states() {
+        assert!(matches!(
+            OpEvent::task_status_transition(
+                7,
+                TaskStatus::Stopped.as_i32(),
+                TaskStatus::Running,
+                "",
+            ),
+            Some(OpEvent::TaskStarted { task_id: 7 })
+        ));
+        assert!(matches!(
+            OpEvent::task_status_transition(
+                7,
+                TaskStatus::Running.as_i32(),
+                TaskStatus::Stopped,
+                "",
+            ),
+            Some(OpEvent::TaskStopped { task_id: 7 })
+        ));
+        assert!(OpEvent::task_status_transition(
+            7,
+            TaskStatus::Running.as_i32(),
+            TaskStatus::Running,
+            "",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn vpu_exhaustion_is_correlated_to_its_camera() {
+        let event = OpEvent::VpuExhausted {
+            camera_id: "CAM-01".to_string(),
+        };
+        assert_eq!(event.tag(), "vpu_exhausted");
+        assert_eq!(event.camera_id(), Some("CAM-01"));
+        assert_eq!(event.target(), "hardware");
+    }
+
+    #[test]
+    fn algo_load_failure_keeps_details_out_of_the_message() {
+        let event = OpEvent::AlgoLoadFailed {
+            algo_id: "detector".to_string(),
+            error: "missing entry point".to_string(),
+        };
+        assert_eq!(event.message(), "算法包加载失败");
+        assert_eq!(event.error_detail(), Some("missing entry point"));
+        let details: serde_json::Value =
+            serde_json::from_str(&event.extra_json().expect("algorithm details"))
+                .expect("valid event details");
+        assert_eq!(details["algo_id"], "detector");
+        assert_eq!(details["error"], "missing entry point");
+    }
+
+    #[test]
+    fn camera_offline_details_preserve_unknown_frame_time() {
+        let event = OpEvent::CameraOffline {
+            camera_id: "CAM-01".to_string(),
+            last_frame_ts: None,
+            reason: "probe timeout".to_string(),
+        };
+        assert_eq!(event.message(), "摄像头离线");
+        let details: serde_json::Value =
+            serde_json::from_str(&event.extra_json().expect("camera details"))
+                .expect("valid event details");
+        assert!(details["last_frame_ts"].is_null());
+        assert_eq!(details["reason"], "probe timeout");
     }
 }

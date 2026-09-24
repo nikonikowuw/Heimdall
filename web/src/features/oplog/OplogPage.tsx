@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react'
-import { Activity, Radio, ShieldCheck } from 'lucide-react'
+import { Activity, ShieldCheck } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { OperationLogsTab } from './OperationLogsTab'
@@ -42,10 +42,6 @@ export function OplogPage(): ReactElement {
               <h2 className="truncate text-sm font-semibold text-[var(--text-primary)]">
                 {t('logCenter.title')}
               </h2>
-              <span className="hidden items-center gap-1 rounded-full border border-[var(--accent-green)]/25 bg-[var(--accent-green)]/10 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-[var(--accent-green)] uppercase sm:inline-flex">
-                <Radio className="h-2.5 w-2.5" />
-                {t('logCenter.liveStatus')}
-              </span>
             </div>
             <p className="mt-0.5 truncate text-[11px] text-[var(--text-muted)]">
               {t('logCenter.subtitle')}

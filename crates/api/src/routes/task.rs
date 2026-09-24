@@ -642,8 +642,10 @@ async fn delete_task(
     State(state): State<AppState>,
     Path(camera_id): Path<String>,
 ) -> Result<ApiResponse<()>, ApiError> {
+    let task = TaskRepo::find_by_camera_id(&state.db, &camera_id).await?;
+
     // 1. 严格先停止运行时与媒体订阅，确保解码器与分析泵安全回收
-    state
+    let was_running = state
         .task_coordinator
         .stop_camera_pipeline(&camera_id)
         .await
@@ -668,6 +670,19 @@ async fn delete_task(
 
     if rows == 0 {
         return Err(ApiError::NotFound(format!("任务未找到: {camera_id}")));
+    }
+
+    if let Some(task) = task {
+        if was_running {
+            pipeline::op_log::record(types::OpEvent::TaskStopped { task_id: task.id });
+        } else if let Some(event) = types::OpEvent::task_status_transition(
+            task.id,
+            task.actual_status,
+            types::TaskStatus::Stopped,
+            "",
+        ) {
+            pipeline::op_log::record(event);
+        }
     }
 
     Ok(ApiResponse::success(()))
@@ -891,6 +906,14 @@ async fn apply_persisted_runtime(
                 &err_msg,
             )
             .await?;
+            if let Some(event) = types::OpEvent::task_status_transition(
+                task.id,
+                task.actual_status,
+                types::TaskStatus::Error,
+                &err_msg,
+            ) {
+                pipeline::op_log::record(event);
+            }
             stop_unrunnable_runtime(state, camera_id).await?;
         } else {
             let camera = camera.expect("camera is guaranteed Some when err_msg is None");
@@ -928,6 +951,20 @@ async fn apply_persisted_runtime(
                         state.pipeline.set_ai_active(camera_id, false).await;
                         return Err(ApiError::Db(err));
                     }
+                    let reason = sync
+                        .outcomes
+                        .iter()
+                        .find(|outcome| outcome.apply_state != types::InstanceApplyState::Applied)
+                        .map(|outcome| outcome.status_message.as_str())
+                        .unwrap_or_default();
+                    if let Some(event) = types::OpEvent::task_status_transition(
+                        task.id,
+                        task.actual_status,
+                        task_status,
+                        reason,
+                    ) {
+                        pipeline::op_log::record(event);
+                    }
                 }
                 Ok(None) => {
                     // 本次没有可收敛的运行时：期望配置与真实运行状态保持数据库中的原值
@@ -941,14 +978,25 @@ async fn apply_persisted_runtime(
                     );
                     let instance_updates =
                         uniform_instance_updates(instances, types::TaskStatus::Error, &err_msg);
-                    let _ = TaskRepo::update_task_runtime_state(
+                    if TaskRepo::update_task_runtime_state(
                         &state.db,
                         camera_id.to_string(),
                         types::TaskStatus::Error,
                         err_msg.clone(),
                         instance_updates,
                     )
-                    .await;
+                    .await
+                    .is_ok()
+                    {
+                        if let Some(event) = types::OpEvent::task_status_transition(
+                            task.id,
+                            task.actual_status,
+                            types::TaskStatus::Error,
+                            &err_msg,
+                        ) {
+                            pipeline::op_log::record(event);
+                        }
+                    }
                     state.pipeline.set_ai_active(camera_id, false).await;
                 }
             }
@@ -956,7 +1004,7 @@ async fn apply_persisted_runtime(
     } else {
         // 停用分析管线
         match state.task_coordinator.stop_camera_pipeline(camera_id).await {
-            Ok(_) => {
+            Ok(was_running) => {
                 state.pipeline.set_ai_active(camera_id, false).await;
                 state
                     .task_coordinator
@@ -972,6 +1020,16 @@ async fn apply_persisted_runtime(
                     instance_updates,
                 )
                 .await?;
+                if was_running {
+                    pipeline::op_log::record(types::OpEvent::TaskStopped { task_id: task.id });
+                } else if let Some(event) = types::OpEvent::task_status_transition(
+                    task.id,
+                    task.actual_status,
+                    types::TaskStatus::Stopped,
+                    "",
+                ) {
+                    pipeline::op_log::record(event);
+                }
                 // 无运行时时期望配置就是下次启动要用的那一份，必须立即收敛代际；
                 // 否则实例会长期停在 pending，无法区分「排队中」与「已生效」。
                 converge_instance_revisions(state, camera_id).await?;
@@ -985,14 +1043,25 @@ async fn apply_persisted_runtime(
                 );
                 let instance_updates =
                     uniform_instance_updates(instances, types::TaskStatus::Error, &err_msg);
-                let _ = TaskRepo::update_task_runtime_state(
+                if TaskRepo::update_task_runtime_state(
                     &state.db,
                     camera_id.to_string(),
                     types::TaskStatus::Error,
                     err_msg.clone(),
                     instance_updates,
                 )
-                .await;
+                .await
+                .is_ok()
+                {
+                    if let Some(event) = types::OpEvent::task_status_transition(
+                        task.id,
+                        task.actual_status,
+                        types::TaskStatus::Error,
+                        &err_msg,
+                    ) {
+                        pipeline::op_log::record(event);
+                    }
+                }
             }
         }
     }
@@ -1069,6 +1138,11 @@ async fn sync_pipeline_with_models(
             (types::TaskStatus::Error, "无已启用的算法实例")
         };
         TaskRepo::update_status(&state.db, camera_id, status.as_i32(), msg).await?;
+        if let Some(event) =
+            types::OpEvent::task_status_transition(task.id, task.actual_status, status, msg)
+        {
+            pipeline::op_log::record(event);
+        }
         return Ok(None);
     }
 

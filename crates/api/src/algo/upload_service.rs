@@ -381,6 +381,12 @@ pub async fn handle_package_upload(
         Ok(res) => res,
         Err(boxed_err) => {
             let failed_step = boxed_err.failed_idx.saturating_add(1).clamp(1, 6);
+            if let Some(manifest) = boxed_err.manifest.as_ref() {
+                pipeline::op_log::record(types::OpEvent::AlgoSandboxFailed {
+                    algo_id: manifest.algorithm_id.clone(),
+                    error: format!("第 {failed_step} 步校验失败: {}", boxed_err.message),
+                });
+            }
             broadcast_upload_progress(
                 &state.event_broadcaster,
                 upload_id.as_deref(),
@@ -452,24 +458,36 @@ pub async fn handle_package_upload(
 
     // 热加载至内存注册中心，并热重载给运行中管线 (零停机、不断流；无需重复前向推理自测)
     let target_dir = PathBuf::from(&target_dir_str);
-    if let Ok(pkg) = state.algo_registry.open_and_register(&target_dir).await {
-        tracing::info!(
-            algorithm_id = %pkg.manifest().algorithm_id,
-            version = %pkg.manifest().version,
-            "算法包上传成功并已即时热装载"
-        );
-        if validated_manifest.algorithm_id == "face_recognition" {
-            crate::gallery_index::sync_algo_gallery_from_package(
-                &state.gallery_index,
-                &state.db,
-                &pkg,
-            )
-            .await;
+    match state.algo_registry.open_and_register(&target_dir).await {
+        Ok(pkg) => {
+            tracing::info!(
+                algorithm_id = %pkg.manifest().algorithm_id,
+                version = %pkg.manifest().version,
+                "算法包上传成功并已即时热装载"
+            );
+            pipeline::op_log::record(types::OpEvent::AlgoLoaded {
+                algo_id: pkg.manifest().algorithm_id.clone(),
+                platform: pkg.manifest().platform_id.clone(),
+            });
+            if validated_manifest.algorithm_id == "face_recognition" {
+                crate::gallery_index::sync_algo_gallery_from_package(
+                    &state.gallery_index,
+                    &state.db,
+                    &pkg,
+                )
+                .await;
+            }
+            state
+                .pipeline
+                .reload_algorithm_on_pumps(&validated_manifest.algorithm_id, pkg)
+                .await;
         }
-        state
-            .pipeline
-            .reload_algorithm_on_pumps(&validated_manifest.algorithm_id, pkg)
-            .await;
+        Err(error) => {
+            pipeline::op_log::record(types::OpEvent::AlgoLoadFailed {
+                algo_id: validated_manifest.algorithm_id.clone(),
+                error: error.to_string(),
+            });
+        }
     }
 
     Ok(SandboxCheckResultDto {

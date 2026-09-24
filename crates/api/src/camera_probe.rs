@@ -63,7 +63,17 @@ impl CameraProbeService {
             error_code = %params.error_code,
             "更新摄像头探活状态入库并向全网广播 WebSocket 事件"
         );
-        let _ = db::CameraRepo::update_probe_status(db, camera_id, params.clone()).await;
+        if let Ok(Some(previous)) = db::CameraRepo::update_probe_status(db, camera_id, params).await
+        {
+            if let Some(event) = camera_status_transition(
+                Some(&previous.status),
+                params.status,
+                camera_id,
+                params.error_code,
+            ) {
+                pipeline::op_log::record(event);
+            }
+        }
 
         let _ = broadcaster.send(WsBroadcastEvent {
             topic: types::TOPIC_CAMERA_PROBE_UPDATED.to_string(),
@@ -270,5 +280,77 @@ impl CameraProbeService {
                 }
             }
         });
+    }
+}
+
+fn camera_status_transition(
+    previous: Option<&str>,
+    current: &str,
+    camera_id: &str,
+    reason: &str,
+) -> Option<types::OpEvent> {
+    let current_online = camera_connection_state(current)?;
+    if previous.and_then(camera_connection_state) == Some(current_online) {
+        return None;
+    }
+
+    if current_online {
+        Some(types::OpEvent::CameraOnline {
+            camera_id: camera_id.to_string(),
+        })
+    } else {
+        let reason = if reason.trim().is_empty() {
+            format!("探活状态变为 {current}")
+        } else {
+            reason.to_string()
+        };
+        Some(types::OpEvent::CameraOffline {
+            camera_id: camera_id.to_string(),
+            last_frame_ts: None,
+            reason,
+        })
+    }
+}
+
+fn camera_connection_state(status: &str) -> Option<bool> {
+    match types::ProbeStatus::parse(status)? {
+        types::ProbeStatus::Healthy => Some(true),
+        types::ProbeStatus::Failed => Some(false),
+        types::ProbeStatus::Never | types::ProbeStatus::Degraded => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::camera_status_transition;
+
+    #[test]
+    fn camera_events_follow_online_and_offline_boundaries_only() {
+        assert!(camera_status_transition(Some("healthy"), "healthy", "CAM-01", "").is_none());
+        assert!(matches!(
+            camera_status_transition(Some("healthy"), "failed", "CAM-01", "probe timeout"),
+            Some(types::OpEvent::CameraOffline {
+                camera_id,
+                last_frame_ts: None,
+                ..
+            }) if camera_id == "CAM-01"
+        ));
+        assert!(matches!(
+            camera_status_transition(Some("failed"), "healthy", "CAM-01", ""),
+            Some(types::OpEvent::CameraOnline { camera_id }) if camera_id == "CAM-01"
+        ));
+        assert!(camera_status_transition(Some("degraded"), "degraded", "CAM-01", "").is_none());
+        assert!(camera_status_transition(Some(" ONLINE "), "failed", "CAM-01", "").is_some());
+    }
+
+    #[test]
+    fn first_failed_probe_is_an_offline_event_without_a_fabricated_frame_time() {
+        assert!(matches!(
+            camera_status_transition(None, "failed", "CAM-01", ""),
+            Some(types::OpEvent::CameraOffline {
+                last_frame_ts: None,
+                ..
+            })
+        ));
     }
 }

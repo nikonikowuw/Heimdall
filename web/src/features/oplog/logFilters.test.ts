@@ -48,9 +48,11 @@ describe('filter vocabularies', () => {
 
   it('declares every OpEvent tag exactly once, with no duplicates in the event list', () => {
     const tags = EVENT_FILTERS.filter((tag) => tag !== 'all')
-    expect(tags).toHaveLength(16)
+    expect(tags).toHaveLength(18)
     expect(new Set(tags).size).toBe(tags.length)
     expect(tags).toContain('service_started')
+    expect(tags).toContain('task_stopped')
+    expect(tags).toContain('algo_load_failed')
     expect(tags).toContain('storage_eviction')
   })
 })

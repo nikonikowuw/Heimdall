@@ -5,7 +5,7 @@
   "logCenter": {
     "title": "系統日誌中心",
     "subtitle": "操作安全審計與系統執行狀態統一追蹤",
-    "liveStatus": "即時日誌流"
+    "liveStatus": "每 5 秒自動更新"
   },
   "tabs": {
     "operations": "操作審計",

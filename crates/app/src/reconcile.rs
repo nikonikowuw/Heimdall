@@ -12,7 +12,7 @@ use infer::{
     ALGO_MANIFEST_FILENAME, DEFAULT_ALGO_PACKAGES_DIR,
 };
 use pipeline::TaskRuntimeService;
-use types::TaskStatus;
+use types::{OpEvent, TaskStatus};
 
 /// 启动时自愈对齐扫描与装载：
 /// 1. 扫描当前平台内置目录 (algo-packages/{platform}) 与已安装目录 (var/packages)
@@ -152,6 +152,10 @@ pub async fn reconcile_and_seed_algorithms(
                 seeded_count += 1;
             }
             Err(e) => {
+                pipeline::op_log::record(OpEvent::AlgoSandboxFailed {
+                    algo_id: preview_manifest.algorithm_id.clone(),
+                    error: e.to_string(),
+                });
                 tracing::warn!(
                     path = %dir.display(),
                     error = %e,
@@ -174,6 +178,10 @@ pub async fn reconcile_and_seed_algorithms(
                 path = %ver.package_root,
                 "数据库记录的活跃算法包物理目录不存在或已损坏"
             );
+            pipeline::op_log::record(OpEvent::AlgoLoadFailed {
+                algo_id: ver.algorithm_id.clone(),
+                error: "活跃算法包物理目录不存在或已损坏".to_string(),
+            });
             continue;
         }
 
@@ -184,6 +192,10 @@ pub async fn reconcile_and_seed_algorithms(
                     version = %pkg.manifest().version,
                     "成功装载并激活运行算法包"
                 );
+                pipeline::op_log::record(OpEvent::AlgoLoaded {
+                    algo_id: pkg.manifest().algorithm_id.clone(),
+                    platform: pkg.manifest().platform_id.clone(),
+                });
                 loaded_count += 1;
             }
             Err(e) => {
@@ -194,6 +206,10 @@ pub async fn reconcile_and_seed_algorithms(
                     error = %e,
                     "装载活跃算法包失败"
                 );
+                pipeline::op_log::record(OpEvent::AlgoLoadFailed {
+                    algo_id: ver.algorithm_id.clone(),
+                    error: e.to_string(),
+                });
             }
         }
     }
@@ -234,6 +250,8 @@ pub async fn recover_enabled_tasks(
             update_recovery_status(
                 db,
                 &task.camera_id,
+                task.id,
+                task.actual_status,
                 TaskStatus::Error,
                 "任务关联的摄像头不存在",
             )
@@ -246,6 +264,8 @@ pub async fn recover_enabled_tasks(
             update_recovery_status(
                 db,
                 &task.camera_id,
+                task.id,
+                task.actual_status,
                 TaskStatus::Reconnecting,
                 "摄像头启动时未通过健康检查，等待探活恢复",
             )
@@ -266,6 +286,8 @@ pub async fn recover_enabled_tasks(
             update_recovery_status(
                 db,
                 &task.camera_id,
+                task.id,
+                task.actual_status,
                 TaskStatus::Error,
                 "任务未绑定任何可运行的算法实例",
             )
@@ -277,7 +299,15 @@ pub async fn recover_enabled_tasks(
         let launch_instances = match parse_launch_instances(&enabled_instances) {
             Ok(instances) => instances,
             Err(message) => {
-                update_recovery_status(db, &task.camera_id, TaskStatus::Error, &message).await?;
+                update_recovery_status(
+                    db,
+                    &task.camera_id,
+                    task.id,
+                    task.actual_status,
+                    TaskStatus::Error,
+                    &message,
+                )
+                .await?;
                 summary.failed += 1;
                 continue;
             }
@@ -338,6 +368,8 @@ pub async fn recover_enabled_tasks(
                 update_recovery_status(
                     db,
                     &task.camera_id,
+                    task.id,
+                    task.actual_status,
                     TaskStatus::Running,
                     &format!("冷启动恢复成功，运行代次 {generation}"),
                 )
@@ -347,7 +379,15 @@ pub async fn recover_enabled_tasks(
             Err(err) => {
                 let message = format!("冷启动恢复失败: {err}");
                 tracing::error!(camera_id = %task.camera_id, error = %err, "启用任务冷启动恢复失败");
-                update_recovery_status(db, &task.camera_id, TaskStatus::Error, &message).await?;
+                update_recovery_status(
+                    db,
+                    &task.camera_id,
+                    task.id,
+                    task.actual_status,
+                    TaskStatus::Error,
+                    &message,
+                )
+                .await?;
                 summary.failed += 1;
             }
         }
@@ -382,19 +422,26 @@ fn parse_launch_instances(
 }
 
 fn is_recoverable_camera_status(status: &str) -> bool {
-    matches!(
-        status.trim().to_ascii_lowercase().as_str(),
-        "healthy" | "success" | "online"
-    )
+    types::ProbeStatus::parse(status) == Some(types::ProbeStatus::Healthy)
 }
 
 async fn update_recovery_status(
     db: &DatabaseConnection,
     camera_id: &str,
+    task_id: i64,
+    previous_status: i32,
     status: TaskStatus,
     message: &str,
 ) -> Result<()> {
     TaskRepo::update_status(db, camera_id, status.as_i32(), message).await?;
+    let event = if status == TaskStatus::Running {
+        Some(OpEvent::TaskStarted { task_id })
+    } else {
+        OpEvent::task_status_transition(task_id, previous_status, status, message)
+    };
+    if let Some(event) = event {
+        pipeline::op_log::record(event);
+    }
     Ok(())
 }
 

@@ -1058,6 +1058,7 @@ impl TaskRuntimeCoordinator {
         config_json: Option<&str>,
     ) -> Result<infer::InferenceWorker, CoordinatorError> {
         let package = package.clone();
+        let backend = package.manifest().platform_id.clone();
         let worker_name = format!(
             "infer-worker-{}-{instance_id}",
             package.manifest().algorithm_id
@@ -1074,9 +1075,21 @@ impl TaskRuntimeCoordinator {
         .await
         {
             Ok(Ok(worker)) => Ok(worker),
-            Ok(Err(err)) => Err(CoordinatorError::AlgorithmInstance {
-                reason: err.to_string(),
-            }),
+            Ok(Err(err)) => {
+                let reason = err.to_string();
+                if matches!(
+                    &err,
+                    infer::InferError::BackendUnavailable { .. }
+                        | infer::InferError::Execution { .. }
+                        | infer::InferError::Timeout(_)
+                ) {
+                    crate::op_log::record(types::OpEvent::NpuInitFailed {
+                        backend,
+                        error: reason.clone(),
+                    });
+                }
+                Err(CoordinatorError::AlgorithmInstance { reason })
+            }
             Err(err) => Err(CoordinatorError::TaskJoin(err)),
         }
     }

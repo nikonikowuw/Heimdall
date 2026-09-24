@@ -5,7 +5,7 @@
   "logCenter": {
     "title": "系统日志中心",
     "subtitle": "操作安全审计与系统运行状态统一追踪",
-    "liveStatus": "实时日志流"
+    "liveStatus": "5 秒自动刷新"
   },
   "tabs": {
     "operations": "操作审计",

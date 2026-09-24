@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { Camera, Filter, Layers, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
+import { Camera, Filter, Layers, Radio, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker'
 import { resolveEffectiveTimeRange, type DateTimeRangeValue } from '@/lib/dateRange'
@@ -22,6 +22,8 @@ import {
 } from './logFilters'
 import { DEFAULT_LOG_PAGE_SIZE } from './logPaging'
 import { getToneClasses, LEVEL_ICONS, levelTone, type LogTone } from './logTone'
+
+const LIVE_REFRESH_INTERVAL_MS = 5_000
 
 /** 级别分段筛选；tone 只用于选中态的实心配色 */
 const LEVEL_SEGMENTS: readonly { id: LevelFilter; tone: LogTone }[] = [
@@ -72,6 +74,24 @@ export function OperationalLogsTab(): ReactElement {
     page,
     pageSize,
   )
+
+  useEffect(() => {
+    if (page !== 1 || isLoading) return
+
+    let timerId: number
+    const scheduleRefresh = () => {
+      timerId = window.setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          refresh()
+        } else {
+          scheduleRefresh()
+        }
+      }, LIVE_REFRESH_INTERVAL_MS)
+    }
+
+    scheduleRefresh()
+    return () => window.clearTimeout(timerId)
+  }, [isLoading, page, refresh])
 
   // 翻页平滑回顶
   const handlePageChange = (newPage: number) => {
@@ -242,6 +262,12 @@ export function OperationalLogsTab(): ReactElement {
         </div>
 
         {/* 右侧工具集：密度切换、手动刷新 */}
+        {page === 1 && (
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--accent-green)]">
+            <Radio className="h-3 w-3" />
+            {t('logCenter.liveStatus')}
+          </span>
+        )}
         <OplogToolbar
           isLoading={isLoading}
           onRefresh={refresh}

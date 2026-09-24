@@ -24,7 +24,7 @@ pub mod tombstone;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -268,11 +268,40 @@ impl Default for StorageCleanerConfig {
     }
 }
 
+const WATERMARK_INITIAL: u8 = 0;
+
+fn storage_level_code(level: StorageHealthLevel) -> u8 {
+    match level {
+        StorageHealthLevel::Normal => 1,
+        StorageHealthLevel::Evicting => 2,
+        StorageHealthLevel::Emergency => 3,
+        StorageHealthLevel::Critical => 4,
+    }
+}
+
+fn storage_level_name(level: StorageHealthLevel) -> &'static str {
+    match level {
+        StorageHealthLevel::Normal => "normal",
+        StorageHealthLevel::Evicting => "evicting",
+        StorageHealthLevel::Emergency => "emergency",
+        StorageHealthLevel::Critical => "critical",
+    }
+}
+
+fn should_record_watermark(previous: u8, level: StorageHealthLevel) -> bool {
+    if previous == WATERMARK_INITIAL {
+        level != StorageHealthLevel::Normal
+    } else {
+        previous != storage_level_code(level)
+    }
+}
+
 /// 工业级存储淘汰与自愈清理器
 pub struct StorageCleaner {
     config: Arc<RwLock<StorageCleanerConfig>>,
     metrics: Arc<EvictionMetrics>,
     dispatcher: UnlinkDispatcher,
+    last_watermark_level: AtomicU8,
     _worker_handle: tokio::task::JoinHandle<()>,
 }
 
@@ -293,6 +322,7 @@ impl StorageCleaner {
             config: Arc::new(RwLock::new(config)),
             metrics,
             dispatcher,
+            last_watermark_level: AtomicU8::new(WATERMARK_INITIAL),
             _worker_handle: worker_handle,
         }
     }
@@ -374,6 +404,19 @@ impl StorageCleaner {
         self.dispatcher.flush_wait().await;
     }
 
+    fn record_watermark(&self, level: StorageHealthLevel, free_ratio: f64) {
+        let code = storage_level_code(level);
+        let previous = self.last_watermark_level.swap(code, Ordering::AcqRel);
+        if !should_record_watermark(previous, level) {
+            return;
+        }
+
+        crate::op_log::record(types::OpEvent::StorageWatermark {
+            level: storage_level_name(level).to_string(),
+            free_ratio,
+        });
+    }
+
     /// 检查磁盘与 Inode 水位，在空间不足时执行工业级回滞连续淘汰循环 (Continuous Drain Loop)
     pub async fn clean_if_needed<S: EvictionStore>(
         &self,
@@ -390,12 +433,14 @@ impl StorageCleaner {
 
         let target_ratio = config.target_free_ratio.max(config.min_free_ratio);
         let decision = StorageCircuitBreaker::evaluate(&stat, &config.thresholds());
+        self.record_watermark(decision.level, stat.free_ratio);
 
         if !decision.should_evict {
             return Ok(None);
         }
 
         let free_ratio_before = stat.free_ratio;
+        let available_bytes_before = stat.available_bytes;
 
         tracing::warn!(
             health_level = ?decision.level,
@@ -619,6 +664,12 @@ impl StorageCleaner {
             missing = total_missing_files,
             "连续回滞排空循环执行完毕"
         );
+
+        let evicted = total_captures_deleted + total_recognitions_deleted + total_alarms_deleted;
+        let freed_mb = stat.available_bytes.saturating_sub(available_bytes_before) / (1024 * 1024);
+        if evicted > 0 {
+            crate::op_log::record(types::OpEvent::StorageEviction { evicted, freed_mb });
+        }
 
         Ok(Some(EvictionReport {
             free_ratio_before,
@@ -1008,6 +1059,26 @@ mod tests {
             }
             Ok(set)
         }
+    }
+
+    #[test]
+    fn storage_watermarks_are_recorded_once_per_level_transition_and_on_recovery() {
+        assert!(should_record_watermark(
+            WATERMARK_INITIAL,
+            StorageHealthLevel::Emergency,
+        ));
+        assert!(!should_record_watermark(
+            storage_level_code(StorageHealthLevel::Emergency),
+            StorageHealthLevel::Emergency,
+        ));
+        assert!(should_record_watermark(
+            storage_level_code(StorageHealthLevel::Emergency),
+            StorageHealthLevel::Normal,
+        ));
+        assert!(!should_record_watermark(
+            storage_level_code(StorageHealthLevel::Normal),
+            StorageHealthLevel::Normal,
+        ));
     }
 
     #[tokio::test]

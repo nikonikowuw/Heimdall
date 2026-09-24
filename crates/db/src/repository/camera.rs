@@ -7,7 +7,7 @@ use crate::entity::camera::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
 
 /// 探活结果更新参数
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ProbeUpdateParams<'a> {
     pub status: &'a str,
     pub codec: &'a str,
@@ -17,32 +17,30 @@ pub struct ProbeUpdateParams<'a> {
     pub error_code: &'a str,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProbeStatusSnapshot {
+    pub status: String,
+}
+
 #[derive(Debug)]
 pub struct CameraRepo;
 
 impl CameraRepo {
     pub async fn list_all(db: &DatabaseConnection) -> Result<Vec<Model>, DbError> {
         let mut list = Entity::find().all(db).await.map_err(DbError::from)?;
+        let rank = |status: &str| {
+            types::ProbeStatus::parse(status)
+                .map(|status| status.priority())
+                .unwrap_or(5)
+        };
         list.sort_by(|a, b| {
-            let rank_a = match a.last_probe_status.to_lowercase().as_str() {
-                "healthy" | "success" | "online" => 1,
-                "never" | "pending" | "" => 2,
-                "degraded" | "reconnecting" => 3,
-                "failed" | "error" | "offline" => 4,
-                _ => 5,
-            };
-            let rank_b = match b.last_probe_status.to_lowercase().as_str() {
-                "healthy" | "success" | "online" => 1,
-                "never" | "pending" | "" => 2,
-                "degraded" | "reconnecting" => 3,
-                "failed" | "error" | "offline" => 4,
-                _ => 5,
-            };
-            rank_a.cmp(&rank_b).then_with(|| {
-                b.last_success_at
-                    .cmp(&a.last_success_at)
-                    .then_with(|| b.id.cmp(&a.id))
-            })
+            rank(&a.last_probe_status)
+                .cmp(&rank(&b.last_probe_status))
+                .then_with(|| {
+                    b.last_success_at
+                        .cmp(&a.last_success_at)
+                        .then_with(|| b.id.cmp(&a.id))
+                })
         });
         Ok(list)
     }
@@ -94,23 +92,55 @@ impl CameraRepo {
         db: &DatabaseConnection,
         camera_id: &str,
         params: ProbeUpdateParams<'_>,
-    ) -> Result<(), DbError> {
-        if let Some(model) = Self::find_by_camera_id(db, camera_id).await? {
-            let mut active: ActiveModel = model.into();
-            active.last_probe_status = Set(params.status.to_string());
-            active.last_probe_at = Set(Some(chrono::Utc::now()));
-            active.last_codec = Set(params.codec.to_string());
-            active.last_width = Set(params.width);
-            active.last_height = Set(params.height);
-            active.last_fps = Set(params.fps);
-            active.last_probe_error_code = Set(params.error_code.to_string());
-            if params.status == "healthy" || params.status == "success" {
-                active.last_success_at = Set(Some(chrono::Utc::now()));
+    ) -> Result<Option<ProbeStatusSnapshot>, DbError> {
+        loop {
+            let Some(model) = Self::find_by_camera_id(db, camera_id).await? else {
+                return Ok(None);
+            };
+            let previous_status = model.last_probe_status;
+            if Self::try_update_probe_status_if_current(db, camera_id, &previous_status, params)
+                .await?
+            {
+                return Ok(Some(ProbeStatusSnapshot {
+                    status: previous_status,
+                }));
             }
-            active.updated_at = Set(chrono::Utc::now());
-            active.update(db).await?;
         }
-        Ok(())
+    }
+
+    async fn try_update_probe_status_if_current(
+        db: &DatabaseConnection,
+        camera_id: &str,
+        expected_status: &str,
+        params: ProbeUpdateParams<'_>,
+    ) -> Result<bool, DbError> {
+        let now = chrono::Utc::now();
+        let last_success_at =
+            if types::ProbeStatus::parse(params.status) == Some(types::ProbeStatus::Healthy) {
+                Set(Some(now))
+            } else {
+                sea_orm::ActiveValue::NotSet
+            };
+        let active = ActiveModel {
+            last_probe_status: Set(params.status.to_string()),
+            last_probe_at: Set(Some(now)),
+            last_codec: Set(params.codec.to_string()),
+            last_width: Set(params.width),
+            last_height: Set(params.height),
+            last_fps: Set(params.fps),
+            last_probe_error_code: Set(params.error_code.to_string()),
+            last_success_at,
+            updated_at: Set(now),
+            ..Default::default()
+        };
+
+        let result = Entity::update_many()
+            .set(active)
+            .filter(Column::CameraId.eq(camera_id))
+            .filter(Column::LastProbeStatus.eq(expected_status))
+            .exec(db)
+            .await?;
+        Ok(result.rows_affected > 0)
     }
 
     pub async fn update_stream_mode(
@@ -130,5 +160,62 @@ impl CameraRepo {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::{ActiveModel, CameraRepo, ProbeUpdateParams};
+    use sea_orm::Set;
+
+    #[tokio::test]
+    async fn stale_probe_update_cannot_overwrite_a_transition() {
+        let db = crate::init_test_db().await.unwrap();
+        CameraRepo::insert(
+            &db,
+            ActiveModel {
+                camera_id: Set("CAM-CAS".to_string()),
+                name: Set("CAS test camera".to_string()),
+                rtsp_url: Set("rtsp://127.0.0.1/live".to_string()),
+                last_probe_status: Set("healthy".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let params = ProbeUpdateParams {
+            status: "failed",
+            codec: "",
+            width: 0,
+            height: 0,
+            fps: 0.0,
+            error_code: "timeout",
+        };
+        assert!(
+            CameraRepo::try_update_probe_status_if_current(&db, "CAM-CAS", "healthy", params)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !CameraRepo::try_update_probe_status_if_current(&db, "CAM-CAS", "healthy", params)
+                .await
+                .unwrap()
+        );
+
+        let previous = CameraRepo::update_probe_status(&db, "CAM-CAS", params)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(previous.status, "failed");
+        assert_eq!(
+            CameraRepo::find_by_camera_id(&db, "CAM-CAS")
+                .await
+                .unwrap()
+                .unwrap()
+                .last_probe_status,
+            "failed"
+        );
     }
 }

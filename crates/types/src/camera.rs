@@ -142,11 +142,16 @@ impl ProbeStatus {
     }
 
     pub fn from_str_loose(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "healthy" | "success" => Self::Healthy,
-            "degraded" | "reconnecting" => Self::Degraded,
-            "failed" | "error" | "offline" => Self::Failed,
-            _ => Self::Never,
+        Self::parse(s).unwrap_or(Self::Never)
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "healthy" | "success" | "online" => Some(Self::Healthy),
+            "never" | "pending" | "" => Some(Self::Never),
+            "degraded" | "reconnecting" => Some(Self::Degraded),
+            "failed" | "error" | "offline" => Some(Self::Failed),
+            _ => None,
         }
     }
 
@@ -369,6 +374,11 @@ mod tests {
             ProbeStatus::Degraded
         );
         assert_eq!(ProbeStatus::from_str_loose("OFFLINE"), ProbeStatus::Failed);
+        assert_eq!(
+            ProbeStatus::from_str_loose(" ONLINE "),
+            ProbeStatus::Healthy
+        );
+        assert_eq!(ProbeStatus::parse("unknown"), None);
     }
 
     #[test]

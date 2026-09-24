@@ -109,6 +109,11 @@ impl AlarmDispatchService {
 
         // 3. 持久化告警事实（检测类告警仅写入 alarm_records，不重复落 capture_records）
         let saved_alarm = AlarmRepo::insert(&self.db, active_alarm).await?;
+        pipeline::op_log::record(types::OpEvent::AlarmTriggered {
+            alarm_id: saved_alarm.event_id.clone(),
+            camera_id: saved_alarm.camera_id.clone(),
+            rule_type: saved_alarm.rule_type.clone(),
+        });
 
         // 4. 解析摄像头展示名称
         let camera_name = match CameraRepo::find_by_camera_id(&self.db, &event.camera_id).await {

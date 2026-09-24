@@ -1143,6 +1143,7 @@ impl PipelineManager {
             self.snapshot_semaphore.acquire(),
         )
         .await;
+        let permit_exhausted = permit_res.is_err();
 
         let (frame_to_process, is_sub_stream_frame) = match permit_res {
             Ok(Ok(permit)) => {
@@ -1184,6 +1185,9 @@ impl PipelineManager {
                 (frame, is_sub_fallback)
             }
             _ => {
+                if permit_exhausted {
+                    crate::op_log::record_vpu_exhausted(camera_id);
+                }
                 // 配额满载时只允许复用经过 PTS 严格校验的候选帧；主流无候选则失败。
                 if let Some(fallback_src) = fallback_frame {
                     let is_sub_stream = fallback_src.is_sub_stream();

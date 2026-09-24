@@ -52,23 +52,40 @@ pub async fn activate_version(state: &AppState, id: &str, version: &str) -> Resu
     // 检查并加载进内存注册中心，并通知 Pipeline 优雅热替换
     let root = Path::new(&ver_model.package_root);
     if root.is_dir() {
-        if let Ok(pkg) = state.algo_registry.open_and_register(root).await {
-            if aid == "face_recognition" {
-                crate::gallery_index::sync_algo_gallery_from_package(
-                    &state.gallery_index,
-                    &state.db,
-                    &pkg,
-                )
-                .await;
+        match state.algo_registry.open_and_register(root).await {
+            Ok(pkg) => {
+                pipeline::op_log::record(types::OpEvent::AlgoLoaded {
+                    algo_id: pkg.manifest().algorithm_id.clone(),
+                    platform: pkg.manifest().platform_id.clone(),
+                });
+                if aid == "face_recognition" {
+                    crate::gallery_index::sync_algo_gallery_from_package(
+                        &state.gallery_index,
+                        &state.db,
+                        &pkg,
+                    )
+                    .await;
+                }
+                let count = state.pipeline.reload_algorithm_on_pumps(&aid, pkg).await;
+                tracing::info!(
+                    algorithm_id = %aid,
+                    version = %version,
+                    reloaded_pumps = count,
+                    "已原子完成单进程算法版本优雅热重载"
+                );
             }
-            let count = state.pipeline.reload_algorithm_on_pumps(&aid, pkg).await;
-            tracing::info!(
-                algorithm_id = %aid,
-                version = %version,
-                reloaded_pumps = count,
-                "已原子完成单进程算法版本优雅热重载"
-            );
+            Err(error) => {
+                pipeline::op_log::record(types::OpEvent::AlgoLoadFailed {
+                    algo_id: aid.clone(),
+                    error: error.to_string(),
+                });
+            }
         }
+    } else {
+        pipeline::op_log::record(types::OpEvent::AlgoLoadFailed {
+            algo_id: aid.clone(),
+            error: "活跃算法包物理目录不存在".to_string(),
+        });
     }
 
     Ok(())
@@ -118,13 +135,28 @@ pub async fn uninstall_version(
             {
                 let p = Path::new(&active_ver.package_root);
                 if p.is_dir() {
-                    let _ = state.algo_registry.open_and_register(p).await;
+                    match state.algo_registry.open_and_register(p).await {
+                        Ok(pkg) => pipeline::op_log::record(types::OpEvent::AlgoLoaded {
+                            algo_id: pkg.manifest().algorithm_id.clone(),
+                            platform: pkg.manifest().platform_id.clone(),
+                        }),
+                        Err(error) => pipeline::op_log::record(types::OpEvent::AlgoLoadFailed {
+                            algo_id: aid.clone(),
+                            error: error.to_string(),
+                        }),
+                    }
+                } else {
+                    pipeline::op_log::record(types::OpEvent::AlgoLoadFailed {
+                        algo_id: aid.clone(),
+                        error: "活跃算法包物理目录不存在".to_string(),
+                    });
                 }
             }
         }
     } else {
         // 该算法已被彻底删除
         state.algo_registry.unregister(&aid).await;
+        pipeline::op_log::record(types::OpEvent::AlgoUnloaded { algo_id: aid });
     }
 
     Ok(())
