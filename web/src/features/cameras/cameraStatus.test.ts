@@ -31,7 +31,7 @@ describe('cameraStatus helper', () => {
     const offlineBadge = getProbeBadge('offline')
     expect(offlineBadge.status).toBe('offline')
     expect(offlineBadge.text).toBe('离线')
-    expect(offlineBadge.dotClass).toContain('bg-rose-500')
+    expect(offlineBadge.dotClass).toContain('var(--status-danger)')
 
     const unprobedBadge = getProbeBadge('unknown')
     expect(unprobedBadge.status).toBe('unprobed')

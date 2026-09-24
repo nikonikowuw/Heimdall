@@ -51,21 +51,8 @@ export function DeleteCameraModal({
     }
   }, [camera, onSuccess, onClose, t])
 
-  // ESC 浮层栈支持
-  useDismissStack(isOpen, onClose, { disabled: isDeleting })
-
-  // Enter 快捷确认删除
-  useEffect(() => {
-    if (!isOpen) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && !isDeleting) {
-        e.preventDefault()
-        handleDelete()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, isDeleting, handleDelete])
+  // ESC 浮层栈支持；Enter 经同一栈分发，仅栈顶弹窗可接管确认
+  useDismissStack(isOpen, onClose, { disabled: isDeleting, onConfirm: handleDelete })
 
   return (
     <AnimatePresence
@@ -80,19 +67,19 @@ export function DeleteCameraModal({
               onClose()
             }
           }}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="modal-backdrop modal-backdrop--top"
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.96, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="relative flex w-full max-w-md flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-white shadow-[0_24px_50px_-12px_rgba(0,0,0,0.28)] dark:bg-[var(--bg-surface-solid)]"
+            className="modal-surface modal-surface--compact"
           >
             {/* 危险警告头部 */}
             <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">
               <div className="flex items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-500/20 bg-rose-500/10 text-rose-500 shadow-xs">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs">
                   <Trash2 className="h-5 w-5" />
                 </div>
                 <div>
@@ -126,7 +113,7 @@ export function DeleteCameraModal({
 
               {/* 错误提示条 */}
               {errorMsg && (
-                <div className="flex items-center gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-500">
+                <div className="flex items-center gap-2 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3 text-xs text-[var(--status-danger)]">
                   <AlertCircle className="h-4 w-4 shrink-0" />
                   <span>{errorMsg}</span>
                 </div>
@@ -156,7 +143,7 @@ export function DeleteCameraModal({
                   type="button"
                   onClick={handleDelete}
                   disabled={isDeleting}
-                  className="flex min-h-9 items-center gap-2 rounded-xl bg-rose-600 px-5 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:bg-rose-700 active:scale-95 disabled:opacity-50"
+                  className="flex min-h-9 items-center gap-2 rounded-xl bg-[var(--status-danger-solid)] px-5 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
                 >
                   {isDeleting ? (
                     <>

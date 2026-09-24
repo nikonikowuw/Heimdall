@@ -22,22 +22,27 @@ export function NetworkConflictModal({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* 遮罩 */}
-      <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
-      />
+    <div className="modal-layer modal-layer--center">
+      <div className="modal-scrim transition-opacity" onClick={onClose} />
 
       {/* 弹窗实体 */}
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-[var(--accent-red)]/30 bg-[var(--bg-surface)] p-6 shadow-2xl transition-all">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="network-conflict-title"
+        tabIndex={-1}
+        className="modal-surface modal-surface--compact modal-surface--glass border-[var(--status-danger)]/30 p-6 transition-all"
+      >
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent-red)]/15 text-[var(--accent-red)]">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--status-danger)]/15 text-[var(--status-danger)]">
               <AlertOctagon className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-[16px] font-semibold text-[var(--text-primary)]">
+              <h3
+                id="network-conflict-title"
+                className="text-[16px] font-semibold text-[var(--text-primary)]"
+              >
                 {t('network.conflictTitle', { defaultValue: 'RFC 5227 静态 IP 冲突拦截' })}
               </h3>
               <p className="text-[12px] text-[var(--text-muted)]">
@@ -59,7 +64,7 @@ export function NetworkConflictModal({
               <span className="text-[var(--text-secondary)]">
                 {t('network.targetIp', { defaultValue: '拟绑定 IP' })}
               </span>
-              <span className="font-mono font-bold text-[var(--accent-red)]">{conflictIp}</span>
+              <span className="font-mono font-bold text-[var(--status-danger)]">{conflictIp}</span>
             </div>
             {conflictMac && (
               <div className="mt-2 flex items-center justify-between text-[13px]">
@@ -73,8 +78,8 @@ export function NetworkConflictModal({
             )}
           </div>
 
-          <div className="space-y-2 rounded-xl bg-[var(--accent-red)]/5 p-3.5 text-[12px] text-[var(--text-secondary)]">
-            <div className="flex items-center gap-1.5 font-medium text-[var(--accent-red)]">
+          <div className="space-y-2 rounded-xl bg-[var(--status-danger)]/5 p-3.5 text-[12px] text-[var(--text-secondary)]">
+            <div className="flex items-center gap-1.5 font-medium text-[var(--status-danger)]">
               <ShieldAlert className="h-4 w-4" />
               <span>{t('network.conflictWarning', { defaultValue: '工业安全拦截说明' })}</span>
             </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useId, useState } from 'react'
 import {
   AlertCircle,
   Camera as CameraIcon,
@@ -7,11 +7,11 @@ import {
   Loader2,
   Radio,
   Sparkles,
-  X,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { StreamModeSelector } from '@/components/StreamModeSelector'
+import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { cameraApi, gb28181Api } from '@/lib/api'
 import type {
@@ -38,6 +38,14 @@ export function CameraModal({
 }: CameraModalProps): React.ReactElement | null {
   const { t } = useTranslation('camera')
   const { t: tc } = useTranslation('common')
+  const titleId = useId()
+  const descriptionId = useId()
+  const nameFieldId = useId()
+  const remarkFieldId = useId()
+  const deviceFieldId = useId()
+  const channelFieldId = useId()
+  const mainUrlFieldId = useId()
+  const subUrlFieldId = useId()
 
   const isEdit = Boolean(camera)
 
@@ -248,51 +256,34 @@ export function CameraModal({
                 onClose()
               }
             }}
-            className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+            className="modal-backdrop modal-backdrop--top"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              className="relative flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-white shadow-[0_24px_50px_-12px_rgba(0,0,0,0.28)] dark:bg-[var(--bg-surface-solid)]"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              aria-describedby={descriptionId}
+              className="modal-surface modal-surface--form"
             >
-              {/* ── 1. 现代化 SaaS 风格头部 ── */}
-              <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">
-                <div className="flex items-center gap-3.5">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 shadow-xs dark:text-emerald-400">
-                    <CameraIcon className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-bold tracking-tight text-[var(--text-primary)] sm:text-lg">
-                        {isEdit ? t('manage.editCameraTitle') : t('manage.addCameraTitle')}
-                      </h3>
-                      <span className="rounded-full border border-[var(--border)]/70 bg-[var(--bg-secondary)]/70 px-2 py-0.5 text-[10px] font-semibold text-[var(--text-muted)]">
-                        {isEdit ? 'CONFIG' : protocol.toUpperCase()}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-                      {isEdit ? t('manage.editCameraDesc') : t('manage.addCameraDesc')}
-                    </p>
-                  </div>
-                </div>
-
-                {/* 优雅右上角关闭按钮 */}
-                <button
-                  type="button"
-                  onClick={onClose}
-                  disabled={isSubmitting}
-                  aria-label={t('live.close', { defaultValue: '关闭' })}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
+              <ModalFormHeader
+                icon={CameraIcon}
+                title={isEdit ? t('manage.editCameraTitle') : t('manage.addCameraTitle')}
+                titleId={titleId}
+                description={isEdit ? t('manage.editCameraDesc') : t('manage.addCameraDesc')}
+                descriptionId={descriptionId}
+                badge={isEdit ? 'CONFIG' : protocol.toUpperCase()}
+                closeLabel={t('live.close', { defaultValue: '关闭' })}
+                onClose={onClose}
+                closeDisabled={isSubmitting}
+              />
 
               {/* ── 2. 协议切换分段控制器 (仅新增时展示) ── */}
               {!isEdit && (
-                <div className="shrink-0 border-b border-[var(--border)]/60 bg-[var(--bg-secondary)]/25 px-6 py-3">
+                <div className="shrink-0 border-b border-[var(--border)]/60 bg-[var(--bg-secondary)]/25 px-5 py-3 sm:px-6">
                   <div className="flex items-center gap-1.5 rounded-2xl border border-[var(--border)]/80 bg-[var(--bg-secondary)]/60 p-1">
                     <button
                       type="button"
@@ -302,7 +293,7 @@ export function CameraModal({
                       }}
                       className={`flex-1 rounded-xl py-1.5 text-xs font-semibold transition-all ${
                         protocol === 'rtsp'
-                          ? 'bg-white text-slate-900 shadow-xs dark:bg-[var(--bg-surface-solid)] dark:text-slate-100'
+                          ? 'bg-[var(--bg-surface-solid)] text-[var(--text-primary)] shadow-xs'
                           : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                       }`}
                     >
@@ -318,7 +309,7 @@ export function CameraModal({
                       }}
                       className={`flex-1 rounded-xl py-1.5 text-xs font-semibold transition-all ${
                         protocol === 'gb28181'
-                          ? 'bg-white text-slate-900 shadow-xs dark:bg-[var(--bg-surface-solid)] dark:text-slate-100'
+                          ? 'bg-[var(--bg-surface-solid)] text-[var(--text-primary)] shadow-xs'
                           : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                       }`}
                     >
@@ -329,11 +320,14 @@ export function CameraModal({
               )}
 
               {/* ── 3. 主体表单区 (卡片分组 + 滚动条) ── */}
-              <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
-                <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+              <form
+                onSubmit={handleSubmit}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+              >
+                <div className="modal-form-content space-y-4">
                   {/* 错误警告提示条 */}
                   {errorMsg && (
-                    <div className="flex items-center gap-2.5 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-500 dark:text-rose-400">
+                    <div className="flex items-center gap-2.5 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3.5 text-xs text-[var(--status-danger)]">
                       <AlertCircle className="h-4 w-4 shrink-0" />
                       <span className="leading-relaxed">{errorMsg}</span>
                     </div>
@@ -349,35 +343,43 @@ export function CameraModal({
                     </div>
 
                     <div>
-                      <label className="flex items-center justify-between text-xs font-semibold text-[var(--text-secondary)]">
+                      <label
+                        htmlFor={nameFieldId}
+                        className="modal-form-label flex items-center justify-between"
+                      >
                         <span>{t('manage.name')}</span>
-                        <span className="text-[10px] font-normal text-rose-500">
+                        <span className="text-[10px] font-normal text-[var(--status-danger)]">
                           {t('manage.requiredTag', { defaultValue: '* 必填' })}
                         </span>
                       </label>
                       <input
+                        id={nameFieldId}
                         type="text"
                         required
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder={t('manage.namePlaceholder')}
-                        className="mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                        className="modal-form-field mt-1.5"
                       />
                     </div>
 
                     <div>
-                      <label className="flex items-center justify-between text-xs font-semibold text-[var(--text-secondary)]">
+                      <label
+                        htmlFor={remarkFieldId}
+                        className="modal-form-label flex items-center justify-between"
+                      >
                         <span>{t('manage.remark')}</span>
                         <span className="text-[10px] font-normal text-[var(--text-muted)]">
                           {t('manage.optionalTag', { defaultValue: '可选' })}
                         </span>
                       </label>
                       <input
+                        id={remarkFieldId}
                         type="text"
                         value={remark}
                         onChange={(e) => setRemark(e.target.value)}
                         placeholder={t('manage.remarkPlaceholder')}
-                        className="mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                        className="modal-form-field mt-1.5"
                       />
                     </div>
                   </div>
@@ -397,7 +399,7 @@ export function CameraModal({
                     {protocol === 'gb28181' ? (
                       <div className="space-y-3">
                         <div>
-                          <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                          <label htmlFor={deviceFieldId} className="modal-form-label mb-1 block">
                             {t('protocol.selectGbDevice', { defaultValue: '选择注册的国标设备' })}
                           </label>
                           {gbDevices.length === 0 ? (
@@ -410,9 +412,10 @@ export function CameraModal({
                           ) : (
                             <div className="relative">
                               <select
+                                id={deviceFieldId}
                                 value={selectedGbDevice}
                                 onChange={(e) => handleGbDeviceChange(e.target.value)}
-                                className="w-full appearance-none rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 pr-9 text-xs text-[var(--text-primary)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                                className="modal-form-field appearance-none pr-9"
                               >
                                 {gbDevices.map((d) => (
                                   <option key={d.deviceId} value={d.deviceId}>
@@ -427,14 +430,15 @@ export function CameraModal({
 
                         {currentGbDev && currentGbDev.channels && (
                           <div>
-                            <label className="mb-1 block text-xs font-semibold text-[var(--text-secondary)]">
+                            <label htmlFor={channelFieldId} className="modal-form-label mb-1 block">
                               {t('protocol.selectGbChannel', { defaultValue: '选择视频通道' })}
                             </label>
                             <div className="relative">
                               <select
+                                id={channelFieldId}
                                 value={selectedGbChannel}
                                 onChange={(e) => handleGbChannelChange(e.target.value)}
-                                className="w-full appearance-none rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 pr-9 text-xs text-[var(--text-primary)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                                className="modal-form-field appearance-none pr-9"
                               >
                                 {currentGbDev.channels.map((ch) => (
                                   <option key={ch.channelId} value={ch.channelId}>
@@ -456,13 +460,16 @@ export function CameraModal({
                     {/* 主码流地址 */}
                     <div>
                       <div className="flex items-center justify-between">
-                        <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-secondary)]">
+                        <label
+                          htmlFor={mainUrlFieldId}
+                          className="modal-form-label flex items-center gap-1.5"
+                        >
                           <span>
                             {protocol === 'gb28181'
                               ? t('protocol.gbUri', { defaultValue: '国标 URI 地址' })
                               : t('manage.mainRtspUrl')}
                           </span>
-                          <span className="text-[10px] font-normal text-rose-500">
+                          <span className="text-[10px] font-normal text-[var(--status-danger)]">
                             {t('manage.requiredTag', { defaultValue: '* 必填' })}
                           </span>
                         </label>
@@ -488,6 +495,7 @@ export function CameraModal({
                         )}
                       </div>
                       <input
+                        id={mainUrlFieldId}
                         type="text"
                         required
                         value={mainUrl}
@@ -499,7 +507,7 @@ export function CameraModal({
                             ? 'gb28181://{deviceId}/{channelId}'
                             : t('manage.mainRtspPlaceholder')
                         }
-                        className={`font-data mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)] ${
+                        className={`font-data modal-form-field mt-1.5 ${
                           protocol === 'gb28181' ? 'opacity-80' : ''
                         }`}
                       />
@@ -509,7 +517,10 @@ export function CameraModal({
                     {protocol === 'rtsp' && (
                       <div>
                         <div className="flex items-center justify-between">
-                          <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-secondary)]">
+                          <label
+                            htmlFor={subUrlFieldId}
+                            className="modal-form-label flex items-center gap-1.5"
+                          >
                             <span>{t('manage.subRtspUrl')}</span>
                             <span className="text-[10px] font-normal text-[var(--text-muted)]">
                               {t('manage.optionalTag', { defaultValue: '可选' })}
@@ -523,11 +534,12 @@ export function CameraModal({
                           )}
                         </div>
                         <input
+                          id={subUrlFieldId}
                           type="text"
                           value={subUrl}
                           onChange={(e) => setSubUrl(e.target.value)}
                           placeholder={t('manage.subRtspPlaceholder')}
-                          className="font-data mt-1.5 w-full rounded-xl border border-[var(--border)]/80 bg-white px-3.5 py-2 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] transition-all focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-none dark:bg-[var(--bg-surface-solid)]"
+                          className="font-data modal-form-field mt-1.5"
                         />
                         <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
                           {t('manage.subRtspHint')}
@@ -546,7 +558,7 @@ export function CameraModal({
                                   className={`font-data flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] transition-all ${
                                     isSelected
                                       ? 'border border-emerald-500/50 bg-emerald-500/15 font-semibold text-emerald-700 dark:text-emerald-300'
-                                      : 'border border-[var(--border)]/80 bg-white text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)] dark:bg-[var(--bg-surface-solid)]'
+                                      : 'border border-[var(--border)]/80 bg-[var(--bg-surface-solid)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
                                   }`}
                                   title={c.description}
                                 >
@@ -570,28 +582,20 @@ export function CameraModal({
                 </div>
 
                 {/* ── 4. 现代化 SaaS 底部吸底操作栏 ── */}
-                <div className="flex shrink-0 items-center justify-between border-t border-[var(--border)]/70 bg-[var(--bg-secondary)]/20 px-6 py-4">
-                  <div className="hidden items-center gap-1 text-[11px] text-[var(--text-muted)] sm:flex">
-                    <span>{t('manage.pressKeyPrefix', { defaultValue: '按' })}</span>
-                    <kbd className="rounded border border-[var(--border)] bg-white px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] shadow-xs dark:bg-[var(--bg-surface-solid)]">
-                      ESC
-                    </kbd>
-                    <span>{t('manage.toClose', { defaultValue: '关闭窗口' })}</span>
-                  </div>
-
-                  <div className="flex items-center gap-2.5">
+                <div className="modal-form-footer">
+                  <div className="modal-form-actions">
                     <button
                       type="button"
                       onClick={onClose}
                       disabled={isSubmitting}
-                      className="rounded-xl border border-[var(--border)]/80 bg-white px-4 py-2 text-xs font-medium text-[var(--text-secondary)] shadow-xs transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 dark:bg-[var(--bg-surface-solid)]"
+                      className="modal-form-button modal-form-button--secondary"
                     >
                       {t('manage.cancel')}
                     </button>
                     <button
                       type="submit"
                       disabled={isSubmitting}
-                      className="flex min-h-9 items-center gap-2 rounded-xl bg-slate-900 px-5 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:bg-slate-800 active:scale-95 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                      className="modal-form-button modal-form-button--primary"
                     >
                       {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                       <span>{submitButtonText}</span>

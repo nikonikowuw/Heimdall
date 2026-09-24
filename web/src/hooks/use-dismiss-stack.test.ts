@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   getDismissStackLength,
+  handleGlobalConfirmKeyDown,
   handleGlobalEscapeKeyDown,
   isAnyModalOpen,
   registerDismissEntry,
@@ -19,6 +20,7 @@ describe('useDismissStack & Dismiss Manager', () => {
     while (cleanups.length > 0) {
       cleanups.pop()!()
     }
+    vi.unstubAllGlobals()
   })
 
   it('should initially be empty', () => {
@@ -141,6 +143,35 @@ describe('useDismissStack & Dismiss Manager', () => {
     expect(onDismissUnder).not.toHaveBeenCalled()
   })
 
+  it('restores the original body overflow only after the last locked modal closes', () => {
+    const body = { style: { overflow: 'clip' } }
+    vi.stubGlobal('document', { body })
+
+    const unregisterFirst = registerDismissEntry({
+      id: 'scroll-lock-first',
+      getOnDismiss: () => vi.fn(),
+      getDisabled: () => false,
+      priority: 0,
+      lockScroll: true,
+    })
+    cleanups.push(unregisterFirst)
+
+    const unregisterSecond = registerDismissEntry({
+      id: 'scroll-lock-second',
+      getOnDismiss: () => vi.fn(),
+      getDisabled: () => false,
+      priority: 0,
+      lockScroll: true,
+    })
+    cleanups.push(unregisterSecond)
+
+    expect(body.style.overflow).toBe('hidden')
+    unregisterFirst()
+    expect(body.style.overflow).toBe('hidden')
+    unregisterSecond()
+    expect(body.style.overflow).toBe('clip')
+  })
+
   it('should ignore non-Escape keys', () => {
     const onDismiss = vi.fn()
     const unreg = registerDismissEntry({
@@ -151,9 +182,123 @@ describe('useDismissStack & Dismiss Manager', () => {
       lockScroll: false,
     })
     cleanups.push(unreg)
-
     const consumed = handleGlobalEscapeKeyDown({ key: 'Enter' })
     expect(consumed).toBe(false)
     expect(onDismiss).not.toHaveBeenCalled()
+  })
+
+  describe('Enter confirm dispatch', () => {
+    it('runs onConfirm for the top entry that declares it', () => {
+      const onConfirm = vi.fn()
+      const unreg = registerDismissEntry({
+        id: 'confirmable',
+        getOnDismiss: () => vi.fn(),
+        getOnConfirm: () => onConfirm,
+        getDisabled: () => false,
+        priority: 0,
+        lockScroll: false,
+      })
+      cleanups.push(unreg)
+
+      expect(handleGlobalConfirmKeyDown({ key: 'Enter' })).toBe(true)
+      expect(onConfirm).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not intercept Enter when the top entry declares no confirm', () => {
+      const unreg = registerDismissEntry({
+        id: 'no-confirm',
+        getOnDismiss: () => vi.fn(),
+        getDisabled: () => false,
+        priority: 0,
+        lockScroll: false,
+      })
+      cleanups.push(unreg)
+
+      // 未声明 onConfirm 的浮层不得吞掉页面自身的 Enter 语义
+      expect(handleGlobalConfirmKeyDown({ key: 'Enter' })).toBe(false)
+    })
+
+    it('does not intercept Enter on an empty stack', () => {
+      expect(handleGlobalConfirmKeyDown({ key: 'Enter' })).toBe(false)
+    })
+
+    it('routes Enter to the highest-priority entry, not the newest', () => {
+      const onConfirmLow = vi.fn()
+      const onConfirmHigh = vi.fn()
+      cleanups.push(
+        registerDismissEntry({
+          id: 'confirm-high',
+          getOnDismiss: () => vi.fn(),
+          getOnConfirm: () => onConfirmHigh,
+          getDisabled: () => false,
+          priority: 20,
+          lockScroll: false,
+        }),
+        registerDismissEntry({
+          id: 'confirm-low',
+          getOnDismiss: () => vi.fn(),
+          getOnConfirm: () => onConfirmLow,
+          getDisabled: () => false,
+          priority: 0,
+          lockScroll: false,
+        }),
+      )
+
+      expect(handleGlobalConfirmKeyDown({ key: 'Enter' })).toBe(true)
+      expect(onConfirmHigh).toHaveBeenCalledTimes(1)
+      expect(onConfirmLow).not.toHaveBeenCalled()
+    })
+
+    it('does not run a disabled entry confirm but still consumes the key', () => {
+      const onConfirm = vi.fn()
+      const unreg = registerDismissEntry({
+        id: 'confirm-disabled',
+        getOnDismiss: () => vi.fn(),
+        getOnConfirm: () => onConfirm,
+        getDisabled: () => true,
+        priority: 0,
+        lockScroll: false,
+      })
+      cleanups.push(unreg)
+
+      expect(handleGlobalConfirmKeyDown({ key: 'Enter' })).toBe(true)
+      expect(onConfirm).not.toHaveBeenCalled()
+    })
+
+    it('does not treat Enter as confirm while an input holds focus', () => {
+      const onConfirm = vi.fn()
+      cleanups.push(
+        registerDismissEntry({
+          id: 'confirm-behind-input',
+          getOnDismiss: () => vi.fn(),
+          getOnConfirm: () => onConfirm,
+          getDisabled: () => false,
+          priority: 0,
+          lockScroll: false,
+        }),
+      )
+      vi.stubGlobal('document', { activeElement: { tagName: 'INPUT', isContentEditable: false } })
+
+      // 输入态下 Enter 属于用户输入行为，不得升级为确认
+      expect(handleGlobalConfirmKeyDown({ key: 'Enter' })).toBe(false)
+      expect(onConfirm).not.toHaveBeenCalled()
+    })
+
+    it('ignores non-Enter keys', () => {
+      const onConfirm = vi.fn()
+      cleanups.push(
+        registerDismissEntry({
+          id: 'confirm-stack',
+          getOnDismiss: () => vi.fn(),
+          getOnConfirm: () => onConfirm,
+          getDisabled: () => false,
+          priority: 0,
+          lockScroll: false,
+        }),
+      )
+
+      expect(handleGlobalConfirmKeyDown({ key: 'Escape' })).toBe(false)
+      expect(onConfirm).not.toHaveBeenCalled()
+    })
   })
 })

@@ -76,7 +76,7 @@ export function PersonnelBatchBar({
               type="button"
               onClick={onBatchDelete}
               disabled={isExecuting}
-              className="flex shrink-0 items-center gap-1.5 rounded-xl bg-[var(--status-danger)] px-3 py-1.5 text-xs font-semibold whitespace-nowrap text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none active:scale-95 disabled:opacity-50 sm:px-3.5"
+              className="flex shrink-0 items-center gap-1.5 rounded-xl bg-[var(--status-danger-solid)] px-3 py-1.5 text-xs font-semibold whitespace-nowrap text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none active:scale-95 disabled:opacity-50 sm:px-3.5"
             >
               <Trash2 className="h-3.5 w-3.5" />
               <span>{t('batch.batchDelete')}</span>

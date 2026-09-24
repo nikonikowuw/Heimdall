@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useId, useRef, useState } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -7,10 +7,8 @@ import {
   Loader2,
   ShieldCheck,
   Upload,
-  X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { algorithmApi } from '@/lib/api'
 import { isAlgorithmUploadProgress } from '@/lib/uploadProgress'
 import { cn } from '@/lib/utils'
@@ -23,7 +21,8 @@ import {
   validateAlgoPackage,
   type AlgoPackageRejection,
 } from '../uploadValidation'
-import { Overlay } from './Overlay'
+import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 
 export interface UploadModalProps {
   isOpen: boolean
@@ -84,7 +83,7 @@ function stepStateClasses(state: UploadStepState): string {
     case 'failed':
       return 'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
     default:
-      return 'border-transparent text-[var(--text-muted)]'
+      return 'border-transparent text-[var(--text-secondary)]'
   }
 }
 
@@ -110,6 +109,8 @@ function StepIcon({ state }: { state: UploadStepState }): React.ReactElement {
  */
 export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): React.ReactElement {
   const { t } = useTranslation('algo')
+  const titleId = useId()
+  const descriptionId = useId()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const progressUnsubscribeRef = useRef<(() => void) | null>(null)
 
@@ -130,8 +131,6 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
   const [extraFilesNotice, setExtraFilesNotice] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [stepStates, setStepStates] = useState<UploadStepState[]>(createInitialStepStates)
-
-  useDismissStack(isOpen, onClose, { disabled: isUploading })
 
   useEffect(() => {
     return () => {
@@ -233,7 +232,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
   }
 
   const passedSteps = stepStates.filter((state) => state === 'passed').length
-  const hasOutcome = Boolean(uploadResult) || errorMsg !== null
+  const hasOutcome = uploadResult !== null || errorMsg !== null
   const rejectionMessage = rejection ? t(`upload.rejection.${rejection}`) : null
   const currentStepIndex = stepStates.findIndex((state) => state === 'running')
   const firstPendingStepIndex = stepStates.findIndex((state) => state === 'pending')
@@ -256,38 +255,29 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
   }
 
   return (
-    <Overlay
+    <ModalOverlay
       isOpen={isOpen}
       onClose={onClose}
       ariaLabel={t('upload.title')}
-      variant="modal"
-      panelClassName="max-w-xl"
+      ariaLabelledBy={titleId}
+      ariaDescribedBy={descriptionId}
+      surface="solid"
+      closeDisabled={isUploading}
+      panelClassName="modal-surface--form max-w-xl p-0"
     >
-      <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border)] pb-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)]">
-            <Upload className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <h3 className="text-sm font-bold text-[var(--text-primary)]">{t('upload.title')}</h3>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
-              {t('upload.subtitle')}
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={isUploading}
-          aria-label={t('actions.close')}
-          title={isUploading ? t('upload.closingBlocked') : t('actions.close')}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
+      <ModalFormHeader
+        icon={Upload}
+        title={t('upload.title')}
+        titleId={titleId}
+        description={t('upload.subtitle')}
+        descriptionId={descriptionId}
+        closeLabel={t('actions.close')}
+        closeTitle={isUploading ? t('upload.closingBlocked') : t('actions.close')}
+        onClose={onClose}
+        closeDisabled={isUploading}
+      />
 
-      <div className="mt-5 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+      <div className="modal-form-content space-y-4">
         {!isUploading && !uploadResult && (
           <div
             onDragOver={(event) => {
@@ -323,7 +313,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
                 <p className="truncate text-xs font-semibold text-[var(--text-primary)]">
                   {selectedFile ? selectedFile.name : t('upload.dragTip')}
                 </p>
-                <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">
+                <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-secondary)]">
                   {selectedFile
                     ? formatBytes(selectedFile.size)
                     : t('upload.fileHint', {
@@ -347,7 +337,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
         )}
 
         {extraFilesNotice && !isUploading && (
-          <p role="status" className="text-[11px] text-[var(--text-muted)]">
+          <p role="status" className="text-[11px] text-[var(--text-secondary)]">
             {t('upload.multipleFilesHint')}
           </p>
         )}
@@ -365,7 +355,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
                 >
                   {t('upload.sandboxSectionTitle')}
                 </h4>
-                <p className="mt-1 text-[11px] text-[var(--text-muted)]">{statusTitle}</p>
+                <p className="mt-1 text-[11px] text-[var(--text-secondary)]">{statusTitle}</p>
               </div>
               <span className="font-data shrink-0 rounded-lg border border-[var(--border)] bg-[var(--bg-surface-solid)] px-2 py-1 text-[11px] font-semibold text-[var(--text-secondary)] tabular-nums">
                 {t('upload.stepCount', { passed: passedSteps, total: STEP_COUNT })}
@@ -387,14 +377,14 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
                     style={{ width: `${(passedSteps / STEP_COUNT) * 100}%` }}
                   />
                 </div>
-                <p className="text-[11px] leading-relaxed text-[var(--text-muted)]">
+                <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
                   {t('upload.progressHint')}
                 </p>
               </div>
             )}
 
             {!isUploading && !uploadResult && errorMsg && (
-              <p className="mt-3 text-[11px] leading-relaxed text-[var(--text-muted)]">
+              <p className="mt-3 text-[11px] leading-relaxed text-[var(--text-secondary)]">
                 {t('upload.noResultHint')}
               </p>
             )}
@@ -456,40 +446,42 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
         )}
       </div>
 
-      <div className="mt-5 flex shrink-0 flex-wrap items-center justify-end gap-2.5 border-t border-[var(--border)] pt-4">
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={isUploading}
-          className="inline-flex h-9 items-center justify-center rounded-xl border border-[var(--border)] px-4 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {t('actions.close')}
-        </button>
-
-        {hasOutcome && !uploadResult?.passed && (
+      <div className="modal-form-footer">
+        <div className="modal-form-actions">
           <button
             type="button"
-            onClick={handleReset}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-4 text-xs font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-solid)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden"
+            onClick={onClose}
+            disabled={isUploading}
+            className="modal-form-button modal-form-button--secondary"
           >
-            {t('upload.reupload')}
+            {t('actions.close')}
           </button>
-        )}
 
-        {!uploadResult?.passed && (
-          <button
-            type="button"
-            disabled={!selectedFile || Boolean(rejection) || isUploading}
-            onClick={handleUploadAndVerify}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 text-xs font-semibold text-white shadow-sm transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isUploading && (
-              <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
-            )}
-            <span>{t('upload.startVerify')}</span>
-          </button>
-        )}
+          {hasOutcome && !uploadResult?.passed && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="modal-form-button modal-form-button--secondary"
+            >
+              {t('upload.reupload')}
+            </button>
+          )}
+
+          {!uploadResult?.passed && (
+            <button
+              type="button"
+              disabled={!selectedFile || Boolean(rejection) || isUploading}
+              onClick={handleUploadAndVerify}
+              className="modal-form-button modal-form-button--primary"
+            >
+              {isUploading && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
+              )}
+              <span>{t('upload.startVerify')}</span>
+            </button>
+          )}
+        </div>
       </div>
-    </Overlay>
+    </ModalOverlay>
   )
 }

@@ -53,11 +53,12 @@ const TONE_CLASSES: Record<LogTone, LogToneClasses> = {
     text: 'text-[var(--accent-amber)]',
   },
   danger: {
-    badge: 'border-[var(--destructive)]/30 bg-[var(--destructive)]/10 text-[var(--destructive)]',
-    chip: 'bg-[var(--destructive)]/10 text-[var(--destructive)]',
-    dot: 'bg-[var(--destructive)]',
-    solid: 'bg-[var(--destructive)] text-white',
-    text: 'text-[var(--destructive)]',
+    badge:
+      'border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10 text-[var(--status-danger)]',
+    chip: 'bg-[var(--status-danger)]/10 text-[var(--status-danger)]',
+    dot: 'bg-[var(--status-danger)]',
+    solid: 'bg-[var(--status-danger-solid)] text-white',
+    text: 'text-[var(--status-danger)]',
   },
 }
 

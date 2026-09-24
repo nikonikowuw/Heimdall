@@ -32,7 +32,7 @@ export function AlarmStatusButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-3 py-1 text-xs font-semibold text-[var(--status-danger)] transition-all hover:bg-[var(--status-danger)] hover:text-white ${className}`}
+      className={`flex items-center gap-1.5 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-3 py-1 text-xs font-semibold text-[var(--status-danger)] transition-all hover:bg-[var(--status-danger-solid)] hover:text-white ${className}`}
       title={t('card.markProcessed')}
     >
       <Check className="h-3.5 w-3.5" />

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { AlertCircle, AlertTriangle, Loader2, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
@@ -44,21 +44,11 @@ export function DeleteTaskModal({
     }
   }, [cameraId, onSuccess, onClose, t])
 
-  // ESC 浮层栈支持
-  useDismissStack(isOpen, onClose, { disabled: isDeleting })
-
-  // Enter 快捷确认删除
-  useEffect(() => {
-    if (!isOpen) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && !isDeleting) {
-        e.preventDefault()
-        handleDelete()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, isDeleting, handleDelete])
+  // ESC 浮层栈支持；Enter 经同一栈分发，仅栈顶弹窗可接管确认
+  useDismissStack(isOpen && Boolean(cameraId), onClose, {
+    disabled: isDeleting,
+    onConfirm: handleDelete,
+  })
 
   if (!isOpen || !cameraId) return null
 
@@ -69,13 +59,13 @@ export function DeleteTaskModal({
           onClose()
         }
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-xs"
+      className="modal-backdrop"
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-task-title"
-        className="lens-glass relative w-full max-w-md rounded-[8px] border border-[var(--border)] bg-[var(--bg-surface-solid)] p-6 shadow-2xl transition-all"
+        className="modal-surface modal-surface--compact p-6"
       >
         {/* 右上角关闭 */}
         <button
@@ -124,7 +114,7 @@ export function DeleteTaskModal({
 
         {/* 错误提示 */}
         {errorMsg && (
-          <div className="mt-3 flex items-center gap-2 rounded-[8px] border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]">
+          <div className="mt-3 flex items-center gap-2 rounded-[8px] border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10 p-3 text-xs text-[var(--status-danger)]">
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{errorMsg}</span>
           </div>
@@ -144,7 +134,7 @@ export function DeleteTaskModal({
             type="button"
             onClick={handleDelete}
             disabled={isDeleting}
-            className="flex items-center gap-1.5 rounded-[6px] bg-[var(--destructive)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-[6px] bg-[var(--status-danger-solid)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
           >
             {isDeleting ? (
               <>

@@ -223,7 +223,7 @@ export function StudioToolIsland({
               whileTap={reduceMotion ? undefined : { scale: 0.92 }}
               aria-label={t('studio.cancelDrawing', { defaultValue: '取消当前绘制' })}
               title={t('studio.cancelDrawing', { defaultValue: '取消当前绘制 (Esc)' })}
-              className="flex h-9 w-9 animate-pulse items-center justify-center rounded-lg bg-[var(--destructive)]/20 text-[var(--destructive)] ring-1 ring-[var(--destructive)]/40 transition-colors hover:bg-[var(--destructive)]/30"
+              className="flex h-9 w-9 animate-pulse items-center justify-center rounded-lg bg-[var(--status-danger)]/20 text-[var(--status-danger)] ring-1 ring-[var(--status-danger)]/40 transition-colors hover:bg-[var(--status-danger)]/30"
             >
               <X className="h-4 w-4" />
             </motion.button>

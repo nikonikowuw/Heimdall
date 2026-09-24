@@ -52,12 +52,12 @@ const RING_CONFIGS: Record<CursorMode, RingConfig> = {
     width: '42px',
     height: '42px',
     borderRadius: '9999px',
-    borderColor: 'var(--destructive)',
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    boxShadow: '0 0 18px rgba(239, 68, 68, 0.4)',
+    borderColor: 'var(--status-danger)',
+    backgroundColor: 'rgba(var(--status-danger-rgb), 0.12)',
+    boxShadow: '0 0 18px rgba(var(--status-danger-rgb), 0.4)',
     dotOpacity: '1',
-    dotBg: 'var(--destructive)',
-    dotShadow: '0 0 8px rgba(239, 68, 68, 0.9)',
+    dotBg: 'var(--status-danger)',
+    dotShadow: '0 0 8px rgba(var(--status-danger-rgb), 0.9)',
   },
 }
 
@@ -162,7 +162,7 @@ export function CursorRing(): React.ReactElement | null {
       }
 
       const destructive = target.closest(
-        '[data-destructive="true"], .text-\\[var\\(--destructive\\)\\]',
+        '[data-destructive="true"], .text-\\[var\\(--status-danger\\)\\]',
       )
       if (destructive) {
         currentMode = 'destructive'

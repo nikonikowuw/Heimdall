@@ -42,6 +42,7 @@ describe('Personnel floating layers', () => {
     expect(html).toContain('role="dialog"')
     expect(html).toContain('aria-modal="true"')
     expect(html).toContain('aria-labelledby=')
+    expect(html).toContain('aria-describedby=')
   })
 
   it('uses semantic theme tokens for register modal states', () => {
@@ -49,8 +50,12 @@ describe('Personnel floating layers', () => {
       <PersonnelModal isOpen onClose={() => {}} onSuccess={() => {}} editTarget={null} />,
     )
 
-    expect(html).toContain('bg-[var(--accent)]')
-    expect(html).toContain('focus:ring-[var(--ring)]')
+    expect(html).toContain('modal-form-header')
+    expect(html).toContain('modal-form-field')
+    expect(html).toContain('modal-form-button--primary')
+    expect(html).toContain('modal-surface--form')
+    expect(html).not.toContain('modal-surface--glass')
+    expect(html).toContain('focus-visible:ring-[var(--ring)]')
     expect(html).toContain('bg-[var(--bg-surface-solid)]')
     expect(html).not.toMatch(/(?:emerald|rose|amber)-\d+/)
   })

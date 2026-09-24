@@ -47,7 +47,8 @@ const ROLE_BADGES: Record<
   mask: {
     label: 'MASK',
     labelKey: 'tools.mask',
-    badgeClass: 'border border-rose-500/30 bg-rose-500/15 text-rose-500',
+    badgeClass:
+      'border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)]',
   },
   precrop: {
     label: 'CROP',
@@ -260,7 +261,7 @@ export function ActivityZonesSection({
                         onDeleteRule(rule.id)
                       }}
                       aria-label={t('layers.deleteRule', { defaultValue: '删除该规则' })}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--status-danger)]/10 hover:text-[var(--status-danger)]"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>

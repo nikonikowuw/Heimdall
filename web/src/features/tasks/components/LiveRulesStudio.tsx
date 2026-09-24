@@ -1249,14 +1249,14 @@ export function LiveRulesStudio({
           )}
 
           {saveFeedback?.kind === 'requestFailed' && (
-            <span className="hidden font-mono text-xs font-semibold text-[var(--destructive)] xl:inline">
+            <span className="hidden font-mono text-xs font-semibold text-[var(--status-danger)] xl:inline">
               {saveFeedback.message}
             </span>
           )}
 
           {saveFeedback?.kind === 'conflict' && (
             <span
-              className="inline-flex items-center gap-2 rounded-[6px] border border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-2 py-1 font-mono text-[11px] font-semibold text-[var(--destructive)]"
+              className="inline-flex items-center gap-2 rounded-[6px] border border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 px-2 py-1 font-mono text-[11px] font-semibold text-[var(--status-danger)]"
               title={t('footer.conflictHint', {
                 defaultValue:
                   '本次编辑基于的配置版本已被其他会话修改。可以载入服务端最新配置（放弃本地修改），或以当前内容覆盖保存。',
@@ -1294,7 +1294,7 @@ export function LiveRulesStudio({
             <span
               className={`inline-flex items-center gap-2 rounded-[6px] border px-2 py-1 font-mono text-[11px] font-semibold ${
                 saveFeedback.summary.tone === 'failed'
-                  ? 'border-[var(--destructive)]/40 bg-[var(--destructive)]/10 text-[var(--destructive)]'
+                  ? 'border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 text-[var(--status-danger)]'
                   : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
               }`}
               title={unappliedNoticeLines(saveFeedback.summary).join('\n')}
@@ -1752,7 +1752,7 @@ export function LiveRulesStudio({
                             onClick={() => handleDeleteRule(rule.id)}
                             aria-label={t('inspector.delete', { defaultValue: '删除防区' })}
                             title={t('inspector.delete', { defaultValue: '删除防区' })}
-                            className="rounded p-0.5 text-[var(--destructive)] hover:bg-[var(--destructive)]/15"
+                            className="rounded p-0.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/15"
                           >
                             <X className="h-3 w-3" />
                           </button>

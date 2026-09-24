@@ -20,7 +20,7 @@ import { formatTimestampShort } from '@/lib/time'
 import type { AlgorithmItem, AlgorithmVersionItem } from '@/types'
 import { blockingUsageEntries, type AlgoUsageEntry } from '../algoUsage'
 import { formatBytes } from '../format'
-import { Overlay } from './Overlay'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 
 export interface VersionsDrawerProps {
   isOpen: boolean
@@ -59,7 +59,6 @@ export function VersionsDrawer({
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [versionToUninstall, setVersionToUninstall] = useState<AlgorithmVersionItem | null>(null)
 
-  useDismissStack(isOpen, onClose, { disabled: operatingVersionId !== null })
   useDismissStack(isOpen && Boolean(versionToUninstall), () => setVersionToUninstall(null), {
     priority: 10,
     disabled: operatingVersionId !== null,
@@ -103,11 +102,13 @@ export function VersionsDrawer({
   }
 
   return (
-    <Overlay
+    <ModalOverlay
       isOpen={isOpen && Boolean(algorithm)}
       onClose={onClose}
       ariaLabel={t('drawer.title')}
       variant="drawer"
+      closeDisabled={operatingVersionId !== null}
+      panelClassName="modal-surface--compact"
     >
       <div className="flex items-center justify-between border-b border-[var(--border)] pb-4">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -372,6 +373,6 @@ export function VersionsDrawer({
           )
         })}
       </div>
-    </Overlay>
+    </ModalOverlay>
   )
 }

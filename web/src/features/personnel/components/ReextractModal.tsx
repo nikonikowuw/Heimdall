@@ -128,20 +128,10 @@ export function ReextractModal({
   }, [isCompleted, currentMode])
 
   // ESC 浮层栈支持（执行中可按 ESC 关闭弹窗转入后台运行）
-  useDismissStack(isOpen, onClose)
-
-  // Enter 快捷确认（仅限确认阶段）
-  useEffect(() => {
-    if (!isOpen || currentMode !== 'confirm') return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        onConfirm()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, currentMode, onConfirm])
+  // Enter 仅在确认阶段触发重提（与底部主按钮一致，进行中/报告阶段不响应）
+  useDismissStack(isOpen, onClose, {
+    onConfirm: currentMode === 'confirm' ? onConfirm : undefined,
+  })
 
   // 汇总结算数据
   const total = isGlobal ? (progress?.total ?? 0) : (singleReport?.total ?? 0)
@@ -485,7 +475,7 @@ export function ReextractModal({
           onClick={(e) => {
             if (e.target === e.currentTarget) onClose()
           }}
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-sm"
+          className="modal-backdrop modal-backdrop--raised"
         >
           <motion.div
             role="dialog"
@@ -498,7 +488,7 @@ export function ReextractModal({
               duration: motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="relative flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-[var(--bg-surface)] shadow-[0_28px_60px_-16px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+            className="modal-surface modal-surface--narrow modal-surface--glass max-h-[92vh]"
           >
             {/* 头部 */}
             <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border)]/70 px-5 py-4">

@@ -287,7 +287,7 @@ export function CamerasPage(): React.ReactElement {
               {offlineCount > 0 && (
                 <>
                   <span className="text-[var(--border-strong)]">/</span>
-                  <span className="flex items-center gap-1 text-rose-500">
+                  <span className="flex items-center gap-1 text-[var(--status-danger)]">
                     <span>{t('manage.offlineDevices', { defaultValue: '离线' })}:</span>
                     <strong className="font-semibold">{offlineCount}</strong>
                   </span>
@@ -356,7 +356,7 @@ export function CamerasPage(): React.ReactElement {
             <button
               type="button"
               onClick={() => setBannerDismissed(true)}
-              className="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
+              className="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-secondary)]"
               title={t('discovery.ignore', { defaultValue: '忽略' })}
             >
               <X className="h-4 w-4" />
@@ -498,8 +498,8 @@ export function CamerasPage(): React.ReactElement {
               }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 statusFilter === 'offline'
-                  ? 'bg-rose-500 text-white shadow-xs'
-                  : 'text-[var(--text-secondary)] hover:text-rose-500'
+                  ? 'bg-[var(--status-danger-solid)] text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--status-danger)]'
               }`}
             >
               {t('manage.offlineDevices', { defaultValue: '离线' })} ({offlineCount})
@@ -631,7 +631,7 @@ export function CamerasPage(): React.ReactElement {
         </div>
       </div>
 
-      {/* 摄像头完整详情抽屉 (z-50 侧边抽屉) */}
+      {/* 摄像头完整详情抽屉（modal-layer--drawer 层级） */}
       <CameraDetailDrawer
         camera={selectedCameraForDetail}
         task={selectedCameraForDetail ? taskMap.get(selectedCameraForDetail.cameraId) : undefined}
@@ -651,7 +651,7 @@ export function CamerasPage(): React.ReactElement {
         }
       />
 
-      {/* 摄像头添加/编辑模态框 (z-[70] 模态层，严格层叠在详情抽屉之上) */}
+      {/* 摄像头添加/编辑模态框（modal-backdrop--top，层叠在详情抽屉之上） */}
       <CameraModal
         isOpen={isCameraModalOpen}
         camera={cameraToEdit}
@@ -662,7 +662,7 @@ export function CamerasPage(): React.ReactElement {
         onSuccess={handleCameraSaved}
       />
 
-      {/* 摄像头删除确认模态框 (z-[70] 模态层) */}
+      {/* 摄像头删除确认模态框（modal-backdrop--top） */}
       <DeleteCameraModal
         isOpen={Boolean(cameraToDelete)}
         camera={cameraToDelete}

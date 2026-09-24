@@ -125,9 +125,9 @@ function LiveAlarmToastItem({
         duration: reducedMotion ? motionTokens.duration.fast : motionTokens.duration.normal,
         ease: motionTokens.easing.smooth,
       }}
-      className="fixed top-6 right-6 z-50 flex items-center gap-3 rounded-2xl border border-rose-500/50 bg-black/90 p-3.5 text-white shadow-2xl backdrop-blur-md"
+      className="on-dark-surface fixed top-6 right-6 z-50 flex items-center gap-3 rounded-2xl border border-[var(--status-danger)]/50 bg-black/90 p-3.5 text-white shadow-2xl backdrop-blur-md"
     >
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/20 text-rose-500">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger)]/20 text-[var(--status-danger)]">
         <ShieldAlert className="h-5 w-5" />
       </div>
       {alarm.cropImageRelPath && (
@@ -141,7 +141,9 @@ function LiveAlarmToastItem({
       )}
       <div className="space-y-0.5 text-xs">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold text-rose-400 uppercase">{ruleTypeLabel}</span>
+          <span className="text-[10px] font-bold text-[var(--status-danger)] uppercase">
+            {ruleTypeLabel}
+          </span>
           <span className="font-semibold text-slate-300">{cameraName || alarm.cameraId}</span>
         </div>
         <p className="font-medium text-slate-200">
@@ -167,7 +169,7 @@ function LiveAlarmToastItem({
               onClose()
               onNavigateToAlarms()
             }}
-            className="rounded-lg bg-rose-500 px-2.5 py-1 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90"
+            className="rounded-lg bg-[var(--status-danger-solid)] px-2.5 py-1 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90"
           >
             {t('alarm:toast.viewEvidence')}
           </button>
@@ -717,7 +719,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                     <button
                       type="button"
                       onClick={() => setCameraToDelete(heroCamera)}
-                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-rose-500/10 hover:text-rose-500"
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
                       title={t('manage.deleteCamera')}
                     >
                       <Trash2 className="h-3 w-3" />
@@ -777,7 +779,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                               ? 'bg-[var(--accent)] shadow-xs'
                               : filter === 'healthy'
                                 ? 'bg-emerald-500/20'
-                                : 'bg-rose-500/20'
+                                : 'bg-[var(--status-danger)]/20'
                           }`}
                           transition={{
                             type: 'spring',
@@ -793,7 +795,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                               ? 'font-medium text-white'
                               : filter === 'healthy'
                                 ? 'font-medium text-emerald-700 dark:text-emerald-400'
-                                : 'font-medium text-rose-700 dark:text-rose-400'
+                                : 'font-medium text-[var(--status-danger)]'
                             : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                         }`}
                       >

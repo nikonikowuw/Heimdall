@@ -131,7 +131,7 @@ export function RuleInspectorSidebar({
                       e.stopPropagation()
                       onDeleteRule(rule.id)
                     }}
-                    className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
+                    className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--status-danger)]/10 hover:text-[var(--status-danger)]"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

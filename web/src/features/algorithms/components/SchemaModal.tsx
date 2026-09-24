@@ -1,11 +1,10 @@
 import React, { useMemo, useState } from 'react'
 import { Code2, Copy, FileJson, Search, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { copyToClipboard } from '@/lib/utils'
 import type { AlgorithmItem } from '@/types'
 import { activeVersionItem } from '../algoFilters'
-import { Overlay } from './Overlay'
 
 export interface SchemaModalProps {
   isOpen: boolean
@@ -34,8 +33,6 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
   const [showRaw, setShowRaw] = useState(false)
   const [copied, setCopied] = useState(false)
   const [propertyQuery, setPropertyQuery] = useState('')
-
-  useDismissStack(isOpen, onClose)
 
   const activeVersion = algorithm ? activeVersionItem(algorithm) : undefined
 
@@ -75,7 +72,7 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
   }
 
   return (
-    <Overlay
+    <ModalOverlay
       isOpen={isOpen && Boolean(algorithm)}
       onClose={onClose}
       ariaLabel={`${t('schema.title')} - ${algorithm?.name ?? ''}`}
@@ -241,6 +238,6 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
           {t('actions.close')}
         </button>
       </div>
-    </Overlay>
+    </ModalOverlay>
   )
 }

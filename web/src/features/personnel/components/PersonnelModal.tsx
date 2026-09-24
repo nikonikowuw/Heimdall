@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useId } from 'react'
 import { AlertCircle, Image as ImageIcon, Loader2, Star, UploadCloud, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { personnelApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
@@ -22,10 +23,9 @@ interface ImageFilePreview {
 
 const MAX_PHOTOS = 5
 
-const FIELD_CLASS =
-  'w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/70 px-3 py-2 text-sm text-[var(--text-primary)] transition-colors placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface-solid)] focus:ring-2 focus:ring-[var(--ring)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60'
+const FIELD_CLASS = 'modal-form-field'
 
-const LABEL_CLASS = 'mb-1.5 block text-xs font-medium text-[var(--text-secondary)]'
+const LABEL_CLASS = 'modal-form-label mb-1.5 block'
 
 export function PersonnelModal({
   isOpen,
@@ -247,7 +247,7 @@ export function PersonnelModal({
               handleClose()
             }
           }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-sm"
+          className="modal-backdrop"
         >
           <motion.div
             role="dialog"
@@ -261,55 +261,31 @@ export function PersonnelModal({
               duration: motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="relative flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-[var(--bg-surface)] shadow-[var(--shadow-lg)] backdrop-blur-2xl"
+            className="modal-surface modal-surface--form"
           >
-            {/* ── 1. 头部 ── */}
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)]/70 px-5 py-4 sm:px-6">
-              <div className="flex min-w-0 items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs">
-                  <ImageIcon className="h-5 w-5" aria-hidden="true" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2
-                      id={titleId}
-                      className="truncate text-base font-bold tracking-tight text-[var(--text-primary)] sm:text-lg"
-                    >
-                      {isEdit ? t('modal.editTitle') : t('modal.registerTitle')}
-                    </h2>
-                    <span className="hidden rounded-full border border-[var(--border)]/70 bg-[var(--bg-secondary)]/70 px-2 py-0.5 text-[10px] font-semibold text-[var(--text-muted)] sm:inline-block">
-                      {isEdit ? 'EDIT' : 'NEW'}
-                    </span>
-                  </div>
-                  <p
-                    id={descriptionId}
-                    className="mt-0.5 truncate text-xs text-[var(--text-muted)]"
-                  >
-                    {isEdit && editTarget
-                      ? `${editTarget.name} · ${editTarget.subjectId}`
-                      : t('modal.subjectIdPlaceholder')}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleClose}
-                disabled={isSubmitting}
-                aria-label={t('common:close')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+            <ModalFormHeader
+              icon={ImageIcon}
+              title={isEdit ? t('modal.editTitle') : t('modal.registerTitle')}
+              titleId={titleId}
+              description={
+                isEdit && editTarget
+                  ? `${editTarget.name} · ${editTarget.subjectId}`
+                  : t('modal.subjectIdPlaceholder')
+              }
+              descriptionId={descriptionId}
+              badge={isEdit ? 'EDIT' : 'NEW'}
+              closeLabel={t('common:close')}
+              onClose={handleClose}
+              closeDisabled={isSubmitting}
+            />
 
             {/* ── 2. 表单 ── */}
             <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-6">
+              <div className="modal-form-content space-y-4">
                 {errorMessage && (
                   <div
                     role="alert"
-                    className="flex items-start gap-2.5 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]"
+                    className="flex items-start gap-2.5 rounded-xl border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10 p-3 text-xs text-[var(--status-danger)]"
                   >
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                     <span className="leading-relaxed">{errorMessage}</span>
@@ -319,7 +295,7 @@ export function PersonnelModal({
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label htmlFor={nameId} className={LABEL_CLASS}>
-                      {t('modal.name')} <span className="text-[var(--destructive)]">*</span>
+                      {t('modal.name')} <span className="text-[var(--status-danger)]">*</span>
                     </label>
                     <input
                       id={nameId}
@@ -427,7 +403,7 @@ export function PersonnelModal({
                       <div>
                         <p className="text-xs font-medium text-[var(--text-secondary)]">
                           {t('modal.photoUploadTitle')}{' '}
-                          <span className="text-[var(--destructive)]">*</span>
+                          <span className="text-[var(--status-danger)]">*</span>
                         </p>
                         <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
                           {t('modal.photoUploadDesc')}
@@ -490,7 +466,7 @@ export function PersonnelModal({
                             onClick={() => handleRemoveImage(idx)}
                             aria-label={t('modal.removePhoto')}
                             title={t('modal.removePhoto')}
-                            className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded-md bg-[var(--overlay-scrim)] text-white/70 transition-colors hover:bg-[var(--destructive)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                            className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded-md bg-[var(--overlay-scrim)] text-white/70 transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                           >
                             <X className="h-3.5 w-3.5" aria-hidden="true" />
                           </button>
@@ -536,28 +512,20 @@ export function PersonnelModal({
               </div>
 
               {/* ── 3. 吸底操作栏 ── */}
-              <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--border)]/70 px-5 py-4 sm:px-6">
-                <div className="hidden items-center gap-1 text-[11px] text-[var(--text-muted)] sm:flex">
-                  <span>{t('modal.escHintPrefix')}</span>
-                  <kbd className="rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] shadow-xs">
-                    ESC
-                  </kbd>
-                  <span>{t('modal.escHintSuffix')}</span>
-                </div>
-
-                <div className="flex items-center gap-2.5">
+              <div className="modal-form-footer">
+                <div className="modal-form-actions">
                   <button
                     type="button"
                     onClick={handleClose}
                     disabled={isSubmitting}
-                    className="inline-flex h-9 items-center justify-center rounded-xl border border-[var(--border)] px-4 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
+                    className="modal-form-button modal-form-button--secondary"
                   >
                     {t('actions.cancel')}
                   </button>
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="inline-flex h-9 min-w-[7rem] items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-5 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95 disabled:opacity-50"
+                    className="modal-form-button modal-form-button--primary"
                   >
                     {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                     <span>{submitButtonText}</span>

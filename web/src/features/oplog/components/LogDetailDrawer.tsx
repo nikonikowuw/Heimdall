@@ -78,7 +78,7 @@ export function LogDetailDrawer({ log, onClose }: LogDetailDrawerProps): ReactEl
   return (
     <AnimatePresence>
       {isOpen && log && (
-        <div className="fixed inset-0 z-50 flex justify-end">
+        <div className="modal-layer modal-layer--drawer">
           {/* 背景遮罩 */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -86,7 +86,7 @@ export function LogDetailDrawer({ log, onClose }: LogDetailDrawerProps): ReactEl
             exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }}
             onClick={onClose}
-            className="fixed inset-0 bg-[var(--overlay-scrim)] backdrop-blur-xs"
+            className="modal-scrim"
             aria-hidden="true"
           />
 
@@ -99,7 +99,7 @@ export function LogDetailDrawer({ log, onClose }: LogDetailDrawerProps): ReactEl
             animate={{ x: 0 }}
             exit={reducedMotion ? undefined : { x: '100%' }}
             transition={{ type: 'spring', damping: 30, stiffness: 350 }}
-            className="relative z-10 flex h-full w-full max-w-2xl flex-col border-l border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-2xl"
+            className="modal-surface modal-surface--drawer modal-surface--drawer-wide"
           >
             {/* 抽屉顶部 Header */}
             <header className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">

@@ -9,9 +9,9 @@ import {
   Sliders,
   Sparkles,
   Video,
-  X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
 import type { AlgorithmItem, Camera, TaskConfigDto } from '@/types'
@@ -212,7 +212,7 @@ export function CreateTaskModal({
   function renderBody(): React.ReactElement {
     if (cameras.length === 0) {
       return (
-        <div className="flex flex-col items-center justify-center p-6 text-center text-xs">
+        <div className="modal-form-content flex flex-col items-center justify-center text-center text-xs">
           <Video className="mb-2 h-8 w-8 text-[var(--text-muted)] opacity-50" />
           <p className="font-semibold text-[var(--text-primary)]">
             {t('noCamerasAvailable', {
@@ -236,7 +236,7 @@ export function CreateTaskModal({
 
     if (creatable.length === 0) {
       return (
-        <div className="flex flex-col items-center justify-center p-6 text-center text-xs">
+        <div className="modal-form-content flex flex-col items-center justify-center text-center text-xs">
           <Video className="mb-2 h-8 w-8 text-[var(--text-muted)] opacity-50" />
           <p className="font-semibold text-[var(--text-primary)]">
             {t('allCamerasAssigned', { defaultValue: '所有已接入的摄像头均已建立布防任务' })}
@@ -259,12 +259,12 @@ export function CreateTaskModal({
 
     return (
       <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 text-xs">
+        <div className="modal-form-content space-y-4 text-xs">
           {/* 通道选择 */}
           <fieldset>
-            <legend className="mb-1.5 block font-semibold text-[var(--text-primary)]">
+            <legend className="modal-form-label mb-1.5 block">
               {t('selectChannel', { defaultValue: '选择摄像头通道' })}
-              <span className="ml-1 text-[var(--destructive)]">*</span>
+              <span className="ml-1 text-[var(--status-danger)]">*</span>
             </legend>
 
             <div className="relative mb-2">
@@ -283,7 +283,7 @@ export function CreateTaskModal({
                   defaultValue: '搜索通道名称 / ID',
                 })}
                 disabled={isSubmitting}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] py-2 pr-3 pl-8 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+                className="modal-form-field pl-8"
               />
             </div>
 
@@ -356,12 +356,9 @@ export function CreateTaskModal({
 
           {/* 任务名称 */}
           <div>
-            <label
-              htmlFor="create-task-name"
-              className="mb-1.5 block font-semibold text-[var(--text-primary)]"
-            >
+            <label htmlFor="create-task-name" className="modal-form-label mb-1.5 block">
               {t('taskName', { defaultValue: '任务名称' })}
-              <span className="ml-1 text-[var(--destructive)]">*</span>
+              <span className="ml-1 text-[var(--status-danger)]">*</span>
             </label>
             <input
               id="create-task-name"
@@ -375,16 +372,16 @@ export function CreateTaskModal({
                 defaultValue: '例如：周界防范 - 库房正门',
               })}
               disabled={isSubmitting}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+              className="modal-form-field"
             />
           </div>
 
           {/* 初始算法 */}
           <fieldset>
-            <legend className="mb-1.5 flex w-full items-center justify-between font-semibold text-[var(--text-primary)]">
+            <legend className="modal-form-label mb-1.5 flex w-full items-center justify-between">
               <span>
                 {t('algorithm', { defaultValue: '分析算法' })}
-                <span className="ml-1 text-[var(--destructive)]">*</span>
+                <span className="ml-1 text-[var(--status-danger)]">*</span>
               </span>
               {selectedAlgo && activeVersion && (
                 <span className="font-data text-[10px] font-normal text-[var(--text-muted)] tabular-nums">
@@ -516,7 +513,7 @@ export function CreateTaskModal({
           {errorMsg && (
             <div
               role="alert"
-              className="flex items-center gap-2 rounded-lg border border-[var(--destructive)]/30 bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]"
+              className="flex items-center gap-2 rounded-lg border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10 p-3 text-xs text-[var(--status-danger)]"
             >
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{errorMsg}</span>
@@ -525,33 +522,35 @@ export function CreateTaskModal({
         </div>
 
         {/* 底部操作栏 */}
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--border)] p-4">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSubmitting}
-            className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] disabled:opacity-50"
-          >
-            {tc('cancel')}
-          </button>
+        <div className="modal-form-footer">
+          <div className="modal-form-actions">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isSubmitting}
+              className="modal-form-button modal-form-button--secondary"
+            >
+              {tc('cancel')}
+            </button>
 
-          <button
-            type="submit"
-            disabled={isSubmitting || !selectedCameraId || !selectedAlgorithmId}
-            className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                <span>{t('creating', { defaultValue: '创建中...' })}</span>
-              </>
-            ) : (
-              <>
-                <Check className="h-3.5 w-3.5" />
-                <span>{t('confirmAndDrawRules', { defaultValue: '创建并进入工作台' })}</span>
-              </>
-            )}
-          </button>
+            <button
+              type="submit"
+              disabled={isSubmitting || !selectedCameraId || !selectedAlgorithmId}
+              className="modal-form-button modal-form-button--primary"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>{t('creating', { defaultValue: '创建中...' })}</span>
+                </>
+              ) : (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  <span>{t('confirmAndDrawRules', { defaultValue: '创建并进入工作台' })}</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </form>
     )
@@ -564,43 +563,27 @@ export function CreateTaskModal({
           onClose()
         }
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-xs"
+      className="modal-backdrop"
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-task-title"
-        className="relative flex max-h-[90vh] w-full max-w-xl flex-col rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] shadow-2xl"
+        aria-describedby="create-task-description"
+        className="modal-surface modal-surface--form"
       >
-        {/* 头部 */}
-        <div className="shrink-0 rounded-t-2xl border-b border-[var(--border)] bg-[var(--bg-secondary)]/45 p-5 pb-4">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSubmitting}
-            aria-label={tc('close')}
-            className="absolute top-5 right-5 rounded-lg p-1 text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
-          >
-            <X className="h-4 w-4" />
-          </button>
-
-          <div className="flex items-center gap-3 pr-8">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--accent-soft)] text-[var(--accent)]">
-              <Sliders className="h-5 w-5" />
-            </div>
-            <div>
-              <h3 id="create-task-title" className="text-base font-bold text-[var(--text-primary)]">
-                {t('createTaskTitle', { defaultValue: '创建 AI 分析与布防任务' })}
-              </h3>
-              <p className="text-xs text-[var(--text-muted)]">
-                {t('quickCreateSubtitle', {
-                  defaultValue:
-                    '选择通道与算法即可建立任务，防区与识别参数稍后在布防工作台中微调。',
-                })}
-              </p>
-            </div>
-          </div>
-        </div>
+        <ModalFormHeader
+          icon={Sliders}
+          title={t('createTaskTitle', { defaultValue: '创建 AI 分析与布防任务' })}
+          titleId="create-task-title"
+          description={t('quickCreateSubtitle', {
+            defaultValue: '选择通道与算法即可建立任务，防区与识别参数稍后在布防工作台中微调。',
+          })}
+          descriptionId="create-task-description"
+          closeLabel={tc('close')}
+          onClose={onClose}
+          closeDisabled={isSubmitting}
+        />
 
         {/* 正文 */}
         {renderBody()}

@@ -1,4 +1,4 @@
-import { useEffect, useId } from 'react'
+import { useId } from 'react'
 import { AlertTriangle, Loader2, Trash2, User, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -32,21 +32,8 @@ export function DeleteConfirmModal({
   const reduceMotion = useReducedMotion()
   const titleId = useId()
 
-  // ESC 浮层栈支持
-  useDismissStack(isOpen && Boolean(target), onClose, { disabled: isDeleting })
-
-  // Enter 快捷确认
-  useEffect(() => {
-    if (!isOpen || !target) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && !isDeleting) {
-        e.preventDefault()
-        onConfirm()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, target, isDeleting, onConfirm])
+  // ESC 浮层栈支持；Enter 经同一栈分发，仅栈顶弹窗可接管确认
+  useDismissStack(isOpen && Boolean(target), onClose, { disabled: isDeleting, onConfirm })
 
   const avatarUrl = target?.primaryPhotoPath ? evidenceApi.getImageUrl(target.primaryPhotoPath) : ''
 
@@ -57,7 +44,7 @@ export function DeleteConfirmModal({
           onClick={(e) => {
             if (e.target === e.currentTarget && !isDeleting) onClose()
           }}
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-sm"
+          className="modal-backdrop modal-backdrop--raised"
         >
           <motion.div
             role="alertdialog"
@@ -70,7 +57,7 @@ export function DeleteConfirmModal({
               duration: motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="relative w-full max-w-md overflow-hidden rounded-[26px] border border-[var(--border)] bg-[var(--bg-surface)] shadow-[0_28px_60px_-16px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+            className="modal-surface modal-surface--compact modal-surface--glass"
           >
             {/* 头部 */}
             <div className="flex items-start justify-between gap-3 border-b border-[var(--border)]/70 px-5 py-4">
@@ -103,7 +90,7 @@ export function DeleteConfirmModal({
             <div className="space-y-3.5 px-5 py-5">
               {/* 待删除对象核对区 */}
               <div className="flex items-center gap-3 rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-3">
-                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)]/80 bg-[var(--bg-tertiary)]">
+                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)]/80 bg-[var(--bg-secondary)]">
                   {avatarUrl ? (
                     <img src={avatarUrl} alt={target.name} className="h-full w-full object-cover" />
                   ) : (
@@ -168,7 +155,7 @@ export function DeleteConfirmModal({
                   type="button"
                   onClick={onConfirm}
                   disabled={isDeleting}
-                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--status-danger)] px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none disabled:opacity-50"
+                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--status-danger-solid)] px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none disabled:opacity-50"
                 >
                   {isDeleting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   {isDeleting ? t('actions.delete') : t('actions.confirm')}

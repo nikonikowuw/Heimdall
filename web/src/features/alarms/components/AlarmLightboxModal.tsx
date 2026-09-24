@@ -171,19 +171,19 @@ export function AlarmLightboxModal({
         duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
         ease: motionTokens.easing.smooth,
       }}
-      className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white backdrop-blur-2xl select-none"
+      className="modal-backdrop modal-backdrop--immersive flex-col text-white select-none"
     >
       {/* 顶部悬浮磨砂指挥条 */}
       <div className="absolute inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/10 bg-gradient-to-b from-black/85 via-black/50 to-transparent px-6 py-3.5 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <ShieldAlert
-            className={`h-5 w-5 ${isCritical ? 'animate-pulse text-rose-500' : 'text-amber-500'}`}
+            className={`h-5 w-5 ${isCritical ? 'animate-pulse text-[var(--status-danger)]' : 'text-amber-500'}`}
           />
           <div className="flex flex-wrap items-center gap-2">
             <span
               className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
                 isCritical
-                  ? 'animate-pulse bg-rose-500/90 text-white'
+                  ? 'animate-pulse bg-[var(--status-danger-solid)] text-white'
                   : 'bg-amber-500/90 text-white'
               }`}
             >
@@ -245,7 +245,7 @@ export function AlarmLightboxModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition-all hover:bg-rose-500/30 hover:text-rose-300 focus-visible:ring-2 focus-visible:ring-rose-500"
+            className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]"
             title={`${t('modal.close')} (Esc)`}
             aria-label="Close"
           >
@@ -270,12 +270,12 @@ export function AlarmLightboxModal({
             />
             {isFullLoading && (
               <div className="absolute bottom-16 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-1.5 text-xs text-zinc-200 shadow-lg backdrop-blur-md">
-                <Loader2 className="h-4 w-4 animate-spin text-rose-500" />
+                <Loader2 className="h-4 w-4 animate-spin text-[var(--status-danger)]" />
                 <span>{t('modal.loadingFullHd')}</span>
               </div>
             )}
             {isFullError && (
-              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-rose-400/30 bg-black/80 px-4 py-2 text-xs text-zinc-200 shadow-lg">
+              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-black/80 px-4 py-2 text-xs text-zinc-200 shadow-lg">
                 <span>{t('modal.fullImageLoadFailed')}</span>
                 {retryButton}
               </div>
@@ -285,7 +285,7 @@ export function AlarmLightboxModal({
 
         {isFullLoading && !alarm.cropImageRelPath && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <Loader2 className="h-10 w-10 animate-spin text-rose-500 opacity-70" />
+            <Loader2 className="h-10 w-10 animate-spin text-[var(--status-danger)] opacity-70" />
           </div>
         )}
 
@@ -318,10 +318,10 @@ export function AlarmLightboxModal({
             {/* 目标人体 BBox 框 */}
             {bodyBBox && imgRect && isFullLoaded && (
               <div
-                className="pointer-events-none absolute border-2 border-rose-500 bg-rose-500/15 shadow-[0_0_15px_rgba(244,63,94,0.6)] transition-all"
+                className="pointer-events-none absolute border-2 border-[var(--status-danger)] bg-[var(--status-danger)]/15 shadow-[0_0_15px_rgba(var(--status-danger-rgb),0.6)] transition-all"
                 style={getBBoxStyle(bodyBBox, imgRect)}
               >
-                <span className="absolute -top-5.5 left-0 rounded bg-rose-600 px-1.5 py-0.5 font-mono text-[9px] font-bold whitespace-nowrap text-white shadow-md">
+                <span className="absolute -top-5.5 left-0 rounded bg-[var(--status-danger-solid)] px-1.5 py-0.5 font-mono text-[9px] font-bold whitespace-nowrap text-white shadow-md">
                   #{alarm.trackId} {alarm.targetLabel} ({((alarm.confidence ?? 0) * 100).toFixed(0)}
                   %)
                 </span>
@@ -394,7 +394,7 @@ export function AlarmLightboxModal({
             className={`flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold shadow-md transition-all ${
               isProcessed
                 ? 'border border-emerald-500/30 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                : 'border border-rose-500/30 bg-rose-500/20 text-rose-300 hover:bg-rose-500/30'
+                : 'border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/20 text-[var(--status-danger)] hover:bg-[var(--status-danger-soft)]'
             }`}
           >
             {isProcessed ? (

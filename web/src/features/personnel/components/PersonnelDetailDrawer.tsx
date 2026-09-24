@@ -304,7 +304,7 @@ export function PersonnelDetailDrawer({
     <>
       <AnimatePresence>
         {isOpen && (
-          <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="modal-layer modal-layer--drawer">
             {/* 背景遮罩 */}
             <motion.div
               initial={{ opacity: 0 }}
@@ -312,7 +312,7 @@ export function PersonnelDetailDrawer({
               exit={{ opacity: 0 }}
               transition={{ duration: motionTokens.duration.fast }}
               onClick={onClose}
-              className="fixed inset-0 bg-black/60 backdrop-blur-xs"
+              className="modal-scrim"
               aria-hidden="true"
             />
 
@@ -328,7 +328,7 @@ export function PersonnelDetailDrawer({
                 duration: motionTokens.duration.normal,
                 ease: motionTokens.easing.smooth,
               }}
-              className="relative z-10 flex h-full w-full max-w-xl flex-col border-l border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-2xl"
+              className="modal-surface modal-surface--drawer modal-surface--drawer-medium"
             >
               {/* ── 1. 抽屉 Header ── */}
               <header className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-5 py-3.5 sm:px-6">
@@ -816,7 +816,7 @@ export function PersonnelDetailDrawer({
         {previewPhotoUrl && (
           <div
             onClick={() => setPreviewPhotoUrl(null)}
-            className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-md"
+            className="modal-backdrop modal-backdrop--top"
           >
             <motion.div
               initial={reduceMotion ? false : { opacity: 0, scale: 0.94 }}
@@ -824,7 +824,7 @@ export function PersonnelDetailDrawer({
               exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.94 }}
               transition={{ duration: motionTokens.duration.fast }}
               onClick={(e) => e.stopPropagation()}
-              className="relative max-h-[85vh] max-w-[85vw] overflow-hidden rounded-2xl border border-white/20 bg-[var(--video-surface)] shadow-2xl"
+              className="modal-surface modal-surface--image border-white/20"
             >
               <img
                 src={previewPhotoUrl}
@@ -851,7 +851,7 @@ export function PersonnelDetailDrawer({
             onClick={(e) => {
               if (e.target === e.currentTarget && !actionLoading) setFaceToDelete(null)
             }}
-            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+            className="modal-backdrop modal-backdrop--raised"
           >
             <motion.div
               role="alertdialog"
@@ -863,7 +863,7 @@ export function PersonnelDetailDrawer({
                 duration: motionTokens.duration.fast,
                 ease: motionTokens.easing.smooth,
               }}
-              className="relative w-full max-w-sm overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-6 shadow-2xl"
+              className="modal-surface modal-surface--small p-6"
             >
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)]">
@@ -890,7 +890,7 @@ export function PersonnelDetailDrawer({
                   type="button"
                   onClick={handleConfirmDeleteFace}
                   disabled={actionLoading}
-                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--status-danger)] px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none disabled:opacity-50"
+                  className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--status-danger-solid)] px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none disabled:opacity-50"
                 >
                   {actionLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   <span>{actionLoading ? t('actions.delete') : t('actions.confirm')}</span>

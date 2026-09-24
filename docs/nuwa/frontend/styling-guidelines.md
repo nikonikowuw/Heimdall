@@ -6,6 +6,10 @@
 
 - 亮色为 Clean-Room Minimal Industrial，暗色为 Dark Industrial；保留 32px 校准网格与低噪工业界面。
 - 色彩使用 CSS 变量或语义 Tailwind 类，不写硬编码色值、`bg-blue-500` 等具名色；不在组件用 `dark:` 重复配色。
+  - **危险色角色**：`--status-danger` 及其 `-soft` / `-border` / `-rgb` 变体用于主题感知的状态文字、图标、提示底和描边。`--status-danger-solid` 是两主题固定的深红，仅用于危险实底配白字（白字对比度 6.47:1）；不要将亮色档 `--status-danger` 用作白字实底。
+  - **例外：矢量/分类色板**。画布描边、ROI 抽屉、类别徽标等需要在同一容器内**并列区分**的多色场景（如 `ROI_PALETTES`、`rulesStudioTypes` 的 role 色板）使用字面色。此类颜色不表达状态语义，套用语义 token 会破坏可区分性。状态色仍须走 token。
+- **恒定深底子树的状态色**：底色不随主题变化的区域（视频 OSD、灯箱）加 `.on-dark-surface`（灯箱容器 `.modal-backdrop--immersive` / `--lightbox` 已内置），它在该子树内把状态色固定为暗色档。原因：亮色档 `--status-danger` `#b91c1c` 在 `--video-surface` 上仅 2.99:1，不加作用域会不可读。不要在深底上直接写 rose-* 等具名色绕过这一机制。
+- 需要 rgba 三元组（发光阴影等）时用 `--*-rgb` token，如 `rgba(var(--status-danger-rgb), 0.6)`；不要写死 `rgba(244,63,94,…)`。
 - `.dark` 根类切换变量，初始主题及持久化以 [use-theme.ts](../../../web/src/hooks/use-theme.ts) 为准（当前默认 dark）。
 - 面板复用 `.frosted-glass` 等共享材质，卡片使用 16～24px 圆角，避免直角；不随意使用 `!important`。
 - 需要悬停/聚焦反馈的可点击面板用 `.frosted-glass-interactive`：它与 `.frosted-glass` 材质参数一致，但声明在 `@layer components`，因此 `hover:border-*`、`hover:shadow-*` 等 utilities 能正常覆盖。`.frosted-glass` 是 unlayered 规则，会压过 utilities 的 border/background/box-shadow，在这些属性上属于静默失效。
@@ -16,6 +20,13 @@
   - 视频/Canvas OSD 若背景已是高不透明度纯色，优先移除看不出效果的 `backdrop-filter`；加载骨架屏保留必要的加载动画，但不叠加无视觉收益的 `frosted-glass`。
   - 检测持续动画：`document.getAnimations().filter(a => a.effect?.getTiming().iterations === Infinity).length`。在持续渲染页面中逐项核对结果；非零项必须有明确的用户语义和实测预算。
 - `cn()` 组合类名，调用方 `className` 放末尾；工具类由格式化工具排序。
+
+## 表单弹窗
+
+- 创建/编辑表单统一使用 [ModalFormHeader](../../../web/src/components/ui/ModalFormHeader.tsx) 与 `.modal-surface--form`。表单面板使用实体 `--bg-surface-solid`；遮罩可保留单层轻模糊，不叠加 `.modal-surface--glass`，标题、滚动内容、底部操作分别使用 `.modal-form-header`、`.modal-form-content`、`.modal-form-footer`。
+- 文本输入、选择框和文本域复用 `.modal-form-field`；标签使用 `.modal-form-label`，操作按钮使用 `.modal-form-button` 的次要/主要变体。业务分组和选择项可保留各自布局，不重复定义弹窗外壳的尺寸、滚动与页脚间距。
+- 表单说明、徽标、关闭控件和字段占位文字使用 `--text-secondary`；`--text-muted` 只用于非关键元数据。主操作按钮使用 `--accent` 背景和 `--bg-surface-solid` 前景，让亮暗主题分别采用高对比文字色；避免在调用处强制 `text-white`。
+- 验证键盘焦点、字段错误、内容溢出及亮暗主题；窄视口下标题和说明允许换行，不能遮挡关闭按钮。
 
 ## 排印
 

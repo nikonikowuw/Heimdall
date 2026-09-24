@@ -1,19 +1,24 @@
-import React, { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode, type ReactElement } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { motionTokens } from '@/lib/motionTokens'
 import { cn } from '@/lib/utils'
 
-/** 面板形态：`modal` 居中缩放，`drawer` 从右侧推入 */
-export type OverlayVariant = 'modal' | 'drawer'
+export type ModalOverlayVariant = 'modal' | 'drawer'
+export type ModalOverlaySurface = 'glass' | 'solid'
 
-export interface OverlayProps {
+export interface ModalOverlayProps {
   isOpen: boolean
   onClose: () => void
-  /** 无障碍名称（role=dialog 的 aria-label），必须是已翻译文本 */
   ariaLabel: string
-  variant?: OverlayVariant
-  /** 面板尺寸与布局覆盖；不传时按形态取默认值 */
+  ariaLabelledBy?: string
+  ariaDescribedBy?: string
+  role?: 'dialog' | 'alertdialog'
+  variant?: ModalOverlayVariant
+  surface?: ModalOverlaySurface
   panelClassName?: string
+  closeDisabled?: boolean
+  priority?: number
   children: ReactNode
 }
 
@@ -26,47 +31,31 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ')
 
-const VARIANT_CLASSES: Record<OverlayVariant, { container: string; panel: string }> = {
-  modal: {
-    container: 'items-center justify-center p-4',
-    panel: 'flex w-full max-w-2xl flex-col max-h-[85vh] rounded-3xl p-6',
-  },
-  drawer: {
-    container: 'justify-end',
-    panel: 'flex h-full w-full max-w-md flex-col border-l p-6',
-  },
-}
-
-/**
- * 浮层外壳：负责退场动画、对话框语义与键盘焦点。
- *
- * 三个约定：
- * 1. **条件渲染必须在 AnimatePresence 内部**。调用方提前 `return null` 会让整棵子树
- *    在关闭瞬间被卸载，`exit` 永不触发——进有动画、退是硬切；
- * 2. `role="dialog"` + `aria-modal` + 焦点移入/归还 + Tab 循环，避免焦点落在遮罩背后的页面上；
- * 3. ESC 与 body 滚动锁仍由调用方的 `useDismissStack` 负责（各浮层的禁用条件不同）。
- */
-function getPanelInitial(reducedMotion: boolean | null, isDrawer: boolean) {
-  if (reducedMotion) return false
+function getPanelHiddenState(
+  isDrawer: boolean,
+): { x: string } | { opacity: number; scale: number } {
   return isDrawer ? { x: '100%' } : { opacity: 0, scale: 0.96 }
 }
 
-function getPanelExit(reducedMotion: boolean | null, isDrawer: boolean) {
-  if (reducedMotion) return undefined
-  return isDrawer ? { x: '100%' } : { opacity: 0, scale: 0.96 }
-}
-
-export function Overlay({
+export function ModalOverlay({
   isOpen,
   onClose,
   ariaLabel,
+  ariaLabelledBy,
+  ariaDescribedBy,
+  role = 'dialog',
   variant = 'modal',
+  surface = 'glass',
   panelClassName,
+  closeDisabled = false,
+  priority = 0,
   children,
-}: OverlayProps): React.ReactElement {
+}: ModalOverlayProps): ReactElement {
   const panelRef = useRef<HTMLDivElement>(null)
   const reducedMotion = useReducedMotion()
-  const variantClasses = VARIANT_CLASSES[variant]
+  const isDrawer = variant === 'drawer'
+
+  useDismissStack(isOpen, onClose, { disabled: closeDisabled, priority })
 
   useEffect(() => {
     if (!isOpen) return
@@ -75,8 +64,6 @@ export function Overlay({
 
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
-
-    // 初始焦点：优先显式标记的目标，其次第一个可聚焦元素，最后面板本身
     const initialTarget =
       panel.querySelector<HTMLElement>('[data-autofocus]') ??
       panel.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ??
@@ -91,6 +78,7 @@ export function Overlay({
       )
       if (focusable.length === 0) {
         event.preventDefault()
+        panel.focus()
         return
       }
 
@@ -101,7 +89,7 @@ export function Overlay({
       if (event.shiftKey && (active === first || !panel.contains(active))) {
         event.preventDefault()
         last.focus()
-      } else if (!event.shiftKey && active === last) {
+      } else if (!event.shiftKey && (active === last || !panel.contains(active))) {
         event.preventDefault()
         first.focus()
       }
@@ -110,19 +98,16 @@ export function Overlay({
     panel.addEventListener('keydown', handleKeyDown)
     return () => {
       panel.removeEventListener('keydown', handleKeyDown)
-      // 元素可能已被卸载，focus 在游离节点上是空操作，无需额外判空保护
       previouslyFocused?.focus({ preventScroll: true })
     }
   }, [isOpen])
-
-  const isDrawer = variant === 'drawer'
 
   return (
     <AnimatePresence mode="wait">
       {isOpen && (
         <motion.div
-          key="overlay"
-          initial={reducedMotion ? false : { opacity: 0 }}
+          key="modal-backdrop"
+          initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={reducedMotion ? undefined : { opacity: 0 }}
           transition={
@@ -130,31 +115,36 @@ export function Overlay({
               ? { duration: 0 }
               : { duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }
           }
-          onClick={onClose}
-          className={`fixed inset-0 z-50 flex cursor-pointer bg-[var(--overlay-scrim)] backdrop-blur-xs ${variantClasses.container}`}
+          onClick={(event) => {
+            if (!closeDisabled && event.target === event.currentTarget) {
+              onClose()
+            }
+          }}
+          className={cn('modal-backdrop cursor-pointer', isDrawer && 'modal-backdrop--drawer')}
         >
           <motion.div
-            key="overlay-panel"
+            key="modal-panel"
             ref={panelRef}
-            role="dialog"
+            role={role}
             aria-modal="true"
-            aria-label={ariaLabel}
+            aria-label={ariaLabelledBy ? undefined : ariaLabel}
+            aria-labelledby={ariaLabelledBy}
+            aria-describedby={ariaDescribedBy}
             tabIndex={-1}
-            initial={getPanelInitial(reducedMotion, isDrawer)}
+            initial={reducedMotion ? false : getPanelHiddenState(isDrawer)}
             animate={isDrawer ? { x: 0 } : { opacity: 1, scale: 1 }}
-            exit={getPanelExit(reducedMotion, isDrawer)}
+            exit={reducedMotion ? undefined : getPanelHiddenState(isDrawer)}
             transition={
               reducedMotion
                 ? { duration: 0 }
-                : {
-                    duration: motionTokens.duration.normal,
-                    ease: motionTokens.easing.smooth,
-                  }
+                : { duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }
             }
             onClick={(event) => event.stopPropagation()}
             className={cn(
-              'frosted-glass relative z-10 cursor-default bg-[var(--bg-surface-solid)] shadow-2xl outline-hidden',
-              variantClasses.panel,
+              // p-6 为默认内衬；共享表单布局由调用方覆盖内边距，并使用自己的内容区和页脚间距
+              'modal-surface cursor-default p-6 outline-hidden',
+              surface === 'glass' && 'modal-surface--glass',
+              isDrawer ? 'modal-surface--drawer' : 'modal-surface--wide',
               panelClassName,
             )}
           >

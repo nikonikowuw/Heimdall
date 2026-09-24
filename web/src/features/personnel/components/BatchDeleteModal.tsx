@@ -35,7 +35,7 @@ export function BatchDeleteModal({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="modal-layer modal-layer--center">
           <motion.div
             aria-hidden="true"
             initial={{ opacity: 0 }}
@@ -43,7 +43,7 @@ export function BatchDeleteModal({
             exit={{ opacity: 0 }}
             transition={{ duration: motionTokens.duration.fast }}
             onClick={isDeleting ? undefined : onClose}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            className="modal-scrim"
           />
 
           <motion.div
@@ -62,7 +62,7 @@ export function BatchDeleteModal({
               duration: motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="lens-glass relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-[var(--status-danger-border)] bg-[var(--bg-surface-solid)]/98 p-6 shadow-2xl"
+            className="modal-surface modal-surface--compact modal-surface--glass border-[var(--status-danger-border)] p-6"
           >
             <div className="flex items-start gap-4">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs">
@@ -120,7 +120,7 @@ export function BatchDeleteModal({
                 type="button"
                 disabled={isDeleting}
                 onClick={onConfirm}
-                className="flex items-center gap-1.5 rounded-xl bg-[var(--status-danger)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none active:scale-95 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-xl bg-[var(--status-danger-solid)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/50 focus-visible:outline-none active:scale-95 disabled:opacity-50"
               >
                 {isDeleting ? (
                   <>

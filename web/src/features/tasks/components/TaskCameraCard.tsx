@@ -296,7 +296,7 @@ export function TaskCameraCard({
             whileTap={reduceMotion ? undefined : { scale: 0.92 }}
             title={t('deleteTask', { defaultValue: '删除布防任务' })}
             aria-label={t('deleteTask', { defaultValue: '删除布防任务' })}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] transition-colors hover:border-[var(--destructive)]/40 hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] transition-colors hover:border-[var(--status-danger)]/40 hover:bg-[var(--status-danger)]/10 hover:text-[var(--status-danger)]"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </motion.button>
@@ -421,7 +421,7 @@ export function TaskCameraCard({
                 </span>
               )}
               {maskCount > 0 && (
-                <span className="rounded-md border border-[var(--destructive)]/30 bg-[var(--destructive)]/15 px-1.5 py-0.5 font-semibold text-[var(--destructive)] backdrop-blur-xs">
+                <span className="rounded-md border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/15 px-1.5 py-0.5 font-semibold text-[var(--status-danger)] backdrop-blur-xs">
                   {maskCount} MASK
                 </span>
               )}
@@ -505,7 +505,7 @@ export function TaskCameraCard({
             <span
               className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${
                 applySummary.tone === 'failed'
-                  ? 'border-[var(--destructive)]/40 bg-[var(--destructive)]/10 text-[var(--destructive)]'
+                  ? 'border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 text-[var(--status-danger)]'
                   : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
               }`}
               title={unappliedNoticeLines(applySummary).join('\n')}

@@ -127,8 +127,9 @@ export function getProbeBadge(
       return {
         status: norm,
         text: resolveText(['card.offlineStatus', 'status.offline'], '离线'),
-        dotClass: 'bg-rose-500',
-        badgeBg: 'bg-rose-500/10 text-rose-500 border-rose-500/20',
+        dotClass: 'bg-[var(--status-danger)]',
+        badgeBg:
+          'bg-[var(--status-danger-soft)] text-[var(--status-danger)] border-[var(--status-danger-border)]',
       }
     case 'unprobed':
     default:

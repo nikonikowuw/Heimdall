@@ -49,7 +49,7 @@ function getStatusIndicatorClass(status: ConnectionStatus): string {
     case 'paused':
       return 'bg-amber-400'
     case 'failed':
-      return 'bg-rose-500'
+      return 'bg-[var(--status-danger)]'
     case 'standby':
       return 'bg-slate-400'
   }
@@ -968,7 +968,7 @@ export function LivePlayer({
       ref={containerRef}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
-      className={`group relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--video-surface)] ${className}`}
+      className={`group on-dark-surface relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--video-surface)] ${className}`}
     >
       {/* 抓拍快门瞬间白色闪光遮罩 */}
       {isFlashing && (
@@ -1118,8 +1118,10 @@ export function LivePlayer({
             transition={{ duration: motionTokens.duration.fast }}
             className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80"
           >
-            <WifiOff className="h-8 w-8 text-rose-500 opacity-80" />
-            <span className="mt-2 text-xs font-medium text-rose-400">{t('live.streamFailed')}</span>
+            <WifiOff className="h-8 w-8 text-[var(--status-danger)] opacity-80" />
+            <span className="mt-2 text-xs font-medium text-[var(--status-danger)]">
+              {t('live.streamFailed')}
+            </span>
             <button
               type="button"
               onClick={() => {
@@ -1311,7 +1313,7 @@ export function LivePlayer({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-rose-500/80 hover:text-white"
+            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-[var(--status-danger-solid)]/80 hover:text-white"
             title={t('live.close')}
           >
             <X className="h-3.5 w-3.5" />

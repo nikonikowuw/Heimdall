@@ -35,7 +35,7 @@ export function AlgoSandboxDrawer({
           exit={{ opacity: 0 }}
           transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
           onClick={onClose}
-          className="fixed inset-0 z-50 flex cursor-pointer justify-end bg-[var(--overlay-scrim)] backdrop-blur-xs"
+          className="modal-backdrop modal-backdrop--drawer cursor-pointer"
         >
           <motion.div
             key="algo-drawer-panel"
@@ -47,7 +47,7 @@ export function AlgoSandboxDrawer({
               ease: motionTokens.easing.smooth,
             }}
             onClick={(e) => e.stopPropagation()}
-            className="lens-glass flex h-full w-96 cursor-default flex-col space-y-4 overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-surface-solid)] p-5 shadow-2xl"
+            className="modal-surface modal-surface--drawer modal-surface--small cursor-default space-y-4 overflow-y-auto p-5"
           >
             <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
               <div className="flex items-center gap-2.5">

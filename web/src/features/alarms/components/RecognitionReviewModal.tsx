@@ -159,7 +159,7 @@ export function RecognitionReviewModal({
         duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
         ease: motionTokens.easing.smooth,
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md select-none sm:p-6"
+      className="modal-backdrop select-none sm:p-6"
       onClick={onClose}
     >
       <motion.div
@@ -170,7 +170,7 @@ export function RecognitionReviewModal({
           duration: shouldReduce ? 0.1 : motionTokens.duration.normal,
           ease: motionTokens.easing.smooth,
         }}
-        className="frosted-glass relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-[var(--border)]/80 bg-[var(--bg-surface)]/90 shadow-2xl backdrop-blur-2xl"
+        className="modal-surface modal-surface--extra-wide modal-surface--glass max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶部高光反射线 */}
@@ -516,7 +516,7 @@ export function RecognitionReviewModal({
             type="button"
             whileTap={{ scale: 0.96 }}
             onClick={() => onReview(recognition, 'rejected')}
-            className="flex items-center gap-1.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-4 py-2 text-xs font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger)] hover:text-white hover:shadow-[0_0_12px_var(--status-danger-soft)]"
+            className="flex items-center gap-1.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-4 py-2 text-xs font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger-solid)] hover:text-white hover:shadow-[0_0_12px_var(--status-danger-soft)]"
           >
             <X className="h-4 w-4 stroke-[2.5]" />
             <span>{t('card.rejectMatch')}</span>

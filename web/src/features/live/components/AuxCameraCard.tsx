@@ -47,8 +47,8 @@ function getStatusBadge(
     case 'offline':
       return {
         text: t('status.offline', { defaultValue: '离线/故障' }),
-        dotClass: 'bg-rose-500',
-        statusColor: 'text-rose-400',
+        dotClass: 'bg-[var(--status-danger)]',
+        statusColor: 'text-[var(--status-danger)]',
       }
     case 'unprobed':
     default:
@@ -84,7 +84,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
       }}
       className={`group relative cursor-pointer overflow-hidden rounded-xl border bg-[var(--bg-secondary)] text-left transition-colors duration-300 hover:shadow-lg ${
         isAlarming
-          ? 'border-rose-500 shadow-lg ring-2 shadow-rose-500/40 ring-rose-500'
+          ? 'border-[var(--status-danger)] shadow-[var(--status-danger)]/40 shadow-lg ring-2 ring-[var(--status-danger)]'
           : isFocused
             ? 'border-cyan-500 ring-1 shadow-cyan-500/20 ring-cyan-500'
             : 'border-[var(--border)] hover:border-cyan-500/50 hover:shadow-cyan-500/10'
@@ -92,7 +92,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
     >
       {/* 告警中微型指示标签 */}
       {isAlarming && (
-        <div className="absolute top-2 left-2 z-20 flex items-center gap-1 rounded-md bg-rose-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md">
+        <div className="absolute top-2 left-2 z-20 flex items-center gap-1 rounded-md bg-[var(--status-danger-solid)] px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md">
           <ShieldAlert className="h-3 w-3" />
           <span>{t('live.alarmDetected')}</span>
         </div>
@@ -101,7 +101,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
       {/* 微缩播放器视口 */}
       <div className="relative aspect-video w-full">
         {/* 悬停快捷操作组 */}
-        <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="on-dark-surface absolute top-2 right-2 z-20 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-0 transition-opacity group-hover:opacity-100">
           <button
             type="button"
             onClick={(e) => {
@@ -119,7 +119,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
               e.stopPropagation()
               onDeleteCamera(camera)
             }}
-            className="rounded p-1 text-rose-400 transition-colors hover:bg-rose-500/20 hover:text-rose-300"
+            className="rounded p-1 text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white"
             title={t('manage.deleteCamera')}
           >
             <Trash2 className="h-3 w-3" />
@@ -155,7 +155,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
           <span
             className={`text-xs font-semibold transition-colors ${
               isAlarming
-                ? 'text-rose-500 dark:text-rose-400'
+                ? 'text-[var(--status-danger)]'
                 : isFocused
                   ? 'text-cyan-700 dark:text-cyan-400'
                   : 'text-[var(--text-primary)] group-hover:text-cyan-700 dark:group-hover:text-cyan-400'
@@ -167,7 +167,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
             className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
               normalizeProbeStatus(camera.lastProbeStatus) === 'healthy'
                 ? 'bg-emerald-500/10 text-emerald-400'
-                : 'bg-rose-500/10 text-rose-400'
+                : 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
             }`}
           >
             {getResolutionBadge(camera)}

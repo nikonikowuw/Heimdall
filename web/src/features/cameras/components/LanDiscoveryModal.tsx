@@ -56,14 +56,14 @@ export function LanDiscoveryModal({
           onClick={(e) => {
             if (e.target === e.currentTarget && !scanning) onClose()
           }}
-          className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="modal-backdrop modal-backdrop--highest"
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.96, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="relative flex max-h-[82vh] w-full max-w-xl flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-white shadow-[0_24px_50px_-12px_rgba(0,0,0,0.28)] dark:bg-[var(--bg-surface-solid)]"
+            className="modal-surface max-h-[82vh]"
           >
             {/* 头部 */}
             <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">
@@ -185,7 +185,7 @@ export function LanDiscoveryModal({
               )}
 
               {error && (
-                <div className="mt-3 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-500">
+                <div className="mt-3 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3 text-xs text-[var(--status-danger)]">
                   {error}
                 </div>
               )}

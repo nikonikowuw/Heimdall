@@ -308,7 +308,7 @@ export const RecognitionCardItem = React.memo(function RecognitionCardItem({
                 type="button"
                 whileTap={{ scale: 0.96 }}
                 onClick={() => onQuickReview(recognition, 'rejected')}
-                className="flex items-center gap-1 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger)] hover:text-white hover:shadow-[0_0_12px_var(--status-danger-soft)]"
+                className="flex items-center gap-1 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger-solid)] hover:text-white hover:shadow-[0_0_12px_var(--status-danger-soft)]"
                 title={t('card.reject')}
               >
                 <X className="h-3.5 w-3.5 stroke-[2.5]" />

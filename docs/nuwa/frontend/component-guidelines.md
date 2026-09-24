@@ -34,7 +34,9 @@
 
 - 控件使用语义化 button/link，图标按钮有翻译后的 `aria-label`，表单关联 label，保持可见焦点。
 - 面板沿用 `.frosted-glass`，自定义光标目标加 `.reticle-target`；生成 UI 通过封装定制。
-- 浮层按栈响应 ESC，避免穿透关闭外层；表单/确认弹窗支持 Enter。
+- 浮层按栈响应 ESC，避免穿透关闭外层；表单/确认弹窗支持 Enter。两者均由 [use-dismiss-stack](../../../web/src/hooks/use-dismiss-stack.ts) 的同一浮层栈分发（LIFO + `priority`），组件不各自挂 `window` 键盘监听；确认类弹窗传 `onConfirm` 才接管 Enter，焦点在 `INPUT` / `TEXTAREA` 或可编辑区时让行。
+- 浮层外壳统一使用 `.modal-layer` / `.modal-scrim` / `.modal-backdrop` / `.modal-surface` 系列类，层级走 `--layer-*` token，不在组件内写 `z-[70]` 等魔法值。
+- 创建与编辑表单弹窗复用 `ModalFormHeader`、`.modal-surface--form`、`.modal-form-content` 与 `.modal-form-footer`；保留业务字段分组，但标题、滚动区、按钮区不另起一套视觉结构。标题与描述必须通过 `aria-labelledby` / `aria-describedby` 关联，关闭按钮使用本地化 `aria-label`。
 - 高风险媒体/图形视口局部错误隔离，不牵连导航和其他监控路。
 
 验证无关事件下播放器稳定、动态 key、键盘行为及反复挂载/切流后的资源释放。

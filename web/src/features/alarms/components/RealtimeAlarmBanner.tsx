@@ -42,7 +42,7 @@ export function RealtimeAlarmBanner({
               type="button"
               whileTap={{ scale: 0.96 }}
               onClick={onViewNew}
-              className="flex items-center gap-1 rounded-lg bg-[var(--status-danger)] px-3 py-1 font-semibold text-white shadow-xs transition-opacity hover:opacity-90"
+              className="flex items-center gap-1 rounded-lg bg-[var(--status-danger-solid)] px-3 py-1 font-semibold text-white shadow-xs transition-opacity hover:opacity-90"
             >
               <span>{t('realtime.viewNew')}</span>
               <ArrowUp className="h-3.5 w-3.5" />
@@ -51,7 +51,7 @@ export function RealtimeAlarmBanner({
             <button
               type="button"
               onClick={onDismiss}
-              className="rounded-lg p-1 text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-soft)] hover:text-white"
+              className="rounded-lg p-1 text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white"
               title={t('realtime.dismiss')}
             >
               <X className="h-3.5 w-3.5" />

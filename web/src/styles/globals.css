@@ -22,6 +22,11 @@
   --bg-surface-solid: #ffffff;
   --video-surface: #0b0e14;
   --overlay-scrim: rgba(3, 4, 8, 0.64);
+  --layer-modal: 50;
+  --layer-modal-raised: 60;
+  --layer-modal-top: 70;
+  --layer-modal-highest: 75;
+  --layer-lightbox: 100;
 
   --text-primary: #0b0f19;
   --text-secondary: #475569;
@@ -32,13 +37,15 @@
   --accent-soft: rgba(0, 82, 255, 0.08);
   --accent-green: #10b981;
   --accent-amber: #d97706;
-  --destructive: #dc2626;
   --status-success: #047857;
   --status-success-soft: rgba(4, 120, 87, 0.1);
   --status-success-border: rgba(4, 120, 87, 0.24);
   --status-danger: #b91c1c;
   --status-danger-soft: rgba(185, 28, 28, 0.1);
   --status-danger-border: rgba(185, 28, 28, 0.24);
+  --status-danger-rgb: 185, 28, 28;
+  /* Fixed dark fill for danger surfaces with white foreground in either theme. */
+  --status-danger-solid: #b91c1c;
   --status-warning: #b45309;
   --status-warning-soft: rgba(180, 83, 9, 0.1);
   --status-warning-border: rgba(180, 83, 9, 0.24);
@@ -73,13 +80,13 @@
   --accent-soft: rgba(59, 130, 246, 0.12);
   --accent-green: #34d399;
   --accent-amber: #fbbf24;
-  --destructive: #ef4444;
   --status-success: #34d399;
   --status-success-soft: rgba(52, 211, 153, 0.12);
   --status-success-border: rgba(52, 211, 153, 0.26);
   --status-danger: #f87171;
   --status-danger-soft: rgba(248, 113, 113, 0.12);
   --status-danger-border: rgba(248, 113, 113, 0.26);
+  --status-danger-rgb: 248, 113, 113;
   --status-warning: #fbbf24;
   --status-warning-soft: rgba(251, 191, 36, 0.12);
   --status-warning-border: rgba(251, 191, 36, 0.26);
@@ -226,6 +233,317 @@
  * 需要悬停反馈的可点击面板（卡片、瓦片）用它来保留覆盖能力。
  */
 @layer components {
+  .modal-layer {
+    position: fixed;
+    inset: 0;
+    z-index: var(--layer-modal);
+  }
+
+  .modal-layer--center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .modal-layer--drawer {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .modal-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background-color: var(--overlay-scrim);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--layer-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background-color: var(--overlay-scrim);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+
+  .modal-backdrop--raised {
+    z-index: var(--layer-modal-raised);
+  }
+
+  .modal-backdrop--top {
+    z-index: var(--layer-modal-top);
+  }
+
+  .modal-backdrop--highest {
+    z-index: var(--layer-modal-highest);
+  }
+
+  /*
+   * 恒定深底子树：状态色固定为暗色档。
+   * 灯箱 / 视频 OSD 的底色恒为近黑（--video-surface），而亮色主题的
+   * --status-danger (#b91c1c) 在近黑底上仅 2.99:1，不可读；故在此类
+   * 子树上重定义为浅红 (#f87171，6.98:1)。同 .auth-accent 的作用域覆写思路。
+   */
+  .on-dark-surface,
+  .modal-backdrop--immersive,
+  .modal-backdrop--lightbox {
+    --status-danger: #f87171;
+    --status-danger-rgb: 248, 113, 113;
+    --status-danger-soft: rgba(248, 113, 113, 0.12);
+    --status-danger-border: rgba(248, 113, 113, 0.26);
+  }
+
+  .modal-backdrop--immersive {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
+    background-color: var(--video-surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .modal-backdrop--lightbox {
+    z-index: var(--layer-lightbox);
+  }
+
+  .modal-backdrop--drawer {
+    align-items: stretch;
+    justify-content: flex-end;
+    padding: 0;
+  }
+
+  .modal-surface {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    width: 100%;
+    max-width: 36rem;
+    max-height: calc(100dvh - 2rem);
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background-color: var(--bg-surface-solid);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .modal-surface--small {
+    max-width: 24rem;
+  }
+
+  .modal-surface--compact {
+    max-width: 28rem;
+  }
+
+  .modal-surface--narrow {
+    max-width: 32rem;
+  }
+
+  .modal-surface--wide {
+    max-width: 48rem;
+  }
+
+  .modal-surface--extra-wide {
+    max-width: 64rem;
+  }
+
+  .modal-surface--medium {
+    max-width: 42rem;
+  }
+
+  .modal-surface--form {
+    max-height: min(90dvh, 56rem);
+  }
+
+  .modal-form-header {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--border);
+    padding: 1rem 1.25rem;
+  }
+
+  .modal-form-icon {
+    display: grid;
+    width: 2.5rem;
+    height: 2.5rem;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+    border-radius: 0.75rem;
+    background-color: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .modal-form-badge {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    background-color: var(--bg-secondary);
+    padding: 0.125rem 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.6875rem;
+    font-weight: 600;
+  }
+
+  .modal-form-content {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 1.25rem;
+  }
+
+  .modal-form-label {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .modal-form-field {
+    display: block;
+    width: 100%;
+    min-height: 2.5rem;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    background-color: var(--bg-surface-solid);
+    padding: 0.5rem 0.75rem;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  .modal-form-field::placeholder {
+    color: var(--text-secondary);
+  }
+
+  .modal-form-field:hover:not(:disabled) {
+    border-color: var(--border-strong);
+  }
+
+  .modal-form-field:focus {
+    border-color: var(--accent);
+    outline: none;
+    box-shadow: 0 0 0 2px var(--ring);
+  }
+
+  .modal-form-field:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .modal-form-footer {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    border-top: 1px solid var(--border);
+    padding: 0.875rem 1.25rem;
+  }
+
+  .modal-form-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+  }
+
+  .modal-form-button {
+    display: inline-flex;
+    min-height: 2.5rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    transition:
+      color 150ms ease,
+      background-color 150ms ease,
+      border-color 150ms ease,
+      opacity 150ms ease,
+      transform 150ms ease;
+  }
+
+  .modal-form-button:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  .modal-form-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .modal-form-button:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .modal-form-button--secondary {
+    border: 1px solid var(--border);
+    background-color: var(--bg-surface-solid);
+    color: var(--text-secondary);
+  }
+
+  .modal-form-button--secondary:hover:not(:disabled) {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+  }
+
+  .modal-form-button--primary {
+    min-width: 7rem;
+    background-color: var(--accent);
+    color: var(--bg-surface-solid);
+  }
+
+  .modal-form-button--primary:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .modal-surface--glass {
+    background-color: var(--bg-surface);
+    backdrop-filter: blur(20px) saturate(170%);
+    -webkit-backdrop-filter: blur(20px) saturate(170%);
+  }
+
+  .modal-surface--drawer {
+    width: min(100%, 32rem);
+    height: 100dvh;
+    max-height: 100dvh;
+    border-block: 0;
+    border-right: 0;
+    border-radius: 0;
+  }
+
+  .modal-surface--drawer-wide {
+    width: min(100%, 42rem);
+    max-width: 42rem;
+  }
+
+  .modal-surface--drawer-medium {
+    width: min(100%, 36rem);
+  }
+
+  .modal-surface--image {
+    width: auto;
+    max-width: 85vw;
+    max-height: 85vh;
+    /* 图片灯箱沿用暗色视频底色，亮色主题下不衬白底 */
+    background-color: var(--video-surface);
+  }
+
   .frosted-glass-interactive {
     background: var(--bg-surface);
     backdrop-filter: blur(20px) saturate(170%);
@@ -240,6 +558,14 @@
     box-shadow:
       inset 0 1px 0 0 rgba(255, 255, 255, 0.07),
       var(--shadow-sm);
+  }
+  @media (min-width: 640px) {
+    .modal-form-header,
+    .modal-form-content,
+    .modal-form-footer {
+      padding-right: 1.5rem;
+      padding-left: 1.5rem;
+    }
   }
 }
 
@@ -1019,7 +1345,7 @@
 }
 
 .auth-input__toggle:hover:not(:disabled) {
-  background: var(--auth-accent-soft);
+  background: var(--accent-soft);
   color: var(--auth-accent-strong);
 }
 

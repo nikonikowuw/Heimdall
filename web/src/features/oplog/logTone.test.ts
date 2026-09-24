@@ -65,6 +65,14 @@ describe('levelTone', () => {
 })
 
 describe('getToneClasses', () => {
+  it('uses the fixed solid danger token for white-on-red segments', () => {
+    const danger = getToneClasses('danger')
+
+    expect(danger.solid).toContain('var(--status-danger-solid)')
+    expect(danger.solid).toContain('text-white')
+    expect(danger.text).toContain('var(--status-danger)')
+  })
+
   it('exposes a complete class set for every tone', () => {
     for (const tone of ALL_TONES) {
       const classes = getToneClasses(tone)

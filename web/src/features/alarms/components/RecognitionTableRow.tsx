@@ -294,7 +294,7 @@ export const RecognitionTableRow = React.memo(function RecognitionTableRow({
                   type="button"
                   whileTap={{ scale: 0.96 }}
                   onClick={() => onQuickReview(recognition, 'rejected')}
-                  className="flex items-center gap-1 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger)] hover:text-white"
+                  className="flex items-center gap-1 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--status-danger)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-danger)] hover:bg-[var(--status-danger-solid)] hover:text-white"
                   title={t('card.reject')}
                 >
                   <X className="h-3 w-3 stroke-[2.5]" />

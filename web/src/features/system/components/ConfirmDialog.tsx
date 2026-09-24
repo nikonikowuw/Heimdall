@@ -53,35 +53,31 @@ export function ConfirmDialog({
   useEffect(() => {
     if (!open) return
     previousActiveElement.current = document.activeElement
-    document.body.style.overflow = 'hidden'
     setTimeout(() => confirmRef.current?.focus(), 50)
     document.addEventListener('keydown', handleKeyDown)
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
-      document.body.style.overflow = ''
       if (previousActiveElement.current instanceof HTMLElement) {
         previousActiveElement.current.focus()
       }
     }
   }, [open, handleKeyDown])
 
-  const iconBg = variant === 'danger' ? 'bg-[var(--destructive)]/10' : 'bg-[var(--accent-amber)]/10'
+  const iconBg =
+    variant === 'danger' ? 'bg-[var(--status-danger)]/10' : 'bg-[var(--accent-amber)]/10'
   const iconColor =
-    variant === 'danger' ? 'text-[var(--destructive)]' : 'text-[var(--accent-amber)]'
+    variant === 'danger' ? 'text-[var(--status-danger)]' : 'text-[var(--accent-amber)]'
   const confirmBg =
     variant === 'danger'
-      ? 'bg-[var(--destructive)] hover:bg-[var(--destructive)]/90 shadow-lg shadow-[var(--destructive)]/20'
+      ? 'bg-[var(--status-danger-solid)] hover:bg-[var(--status-danger-solid)]/90 shadow-lg shadow-[var(--status-danger)]/20'
       : 'bg-[var(--accent-amber)] hover:bg-[var(--accent-amber)]/90 shadow-lg shadow-[var(--accent-amber)]/20'
 
   return (
     <AnimatePresence>
       {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          role="presentation"
-        >
+        <div className="modal-layer modal-layer--center" role="presentation">
           <motion.div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            className="modal-scrim"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -97,7 +93,7 @@ export function ConfirmDialog({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 8 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-2xl backdrop-blur-xl"
+            className="modal-surface modal-surface--compact"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}

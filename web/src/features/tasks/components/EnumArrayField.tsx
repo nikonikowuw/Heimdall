@@ -80,7 +80,7 @@ export function EnumArrayField({
           <button
             type="button"
             onClick={() => onChange([])}
-            className="rounded-md px-1.5 py-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
+            className="rounded-md px-1.5 py-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--status-danger)]/10 hover:text-[var(--status-danger)]"
           >
             {t('studio.clearAll', { defaultValue: '清空' })}
           </button>
