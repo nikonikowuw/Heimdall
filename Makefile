@@ -34,6 +34,7 @@ ALGO_MANIFEST     := $(ALGO_ROOT)/$(ALGO_PLATFORM)/Cargo.toml
 ALGO_MANIFEST_MACOS  := $(ALGO_ROOT)/macos/Cargo.toml
 ALGO_MANIFEST_RK3568 := $(ALGO_ROOT)/rknn/rk3568/Cargo.toml
 ALGO_MANIFEST_RK3576 := $(ALGO_ROOT)/rknn/rk3576/Cargo.toml
+ALGO_MANIFEST_RK3588 := $(ALGO_ROOT)/rknn/rk3588/Cargo.toml
 
 # 支持加载项目本地可选环境变量 (.env)
 -include .env
@@ -275,12 +276,14 @@ algo-check-all: ## 检查全部平台算法 workspace
 	$(MAKE) algo-check ALGO_PLATFORM=macos
 	$(MAKE) algo-check ALGO_PLATFORM=rknn/rk3568
 	$(MAKE) algo-check ALGO_PLATFORM=rknn/rk3576
+	$(MAKE) algo-check ALGO_PLATFORM=rknn/rk3588
 
 .PHONY: algo-test-all
 algo-test-all: ## 测试全部平台算法 workspace
 	$(MAKE) algo-test ALGO_PLATFORM=macos
 	$(MAKE) algo-test ALGO_PLATFORM=rknn/rk3568
 	$(MAKE) algo-test ALGO_PLATFORM=rknn/rk3576
+	$(MAKE) algo-test ALGO_PLATFORM=rknn/rk3588
 
 # ============================================================================
 #  交叉编译 — 主程序

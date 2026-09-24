@@ -97,9 +97,16 @@ pub(crate) mod ffi {
     pub const MPP_DEC_GET_CFG: c_int = 0x00300000 | 0x00010000 | CMD_DEC_CFG | 2; // 0x00310202
 
     // 缓冲区类型与模式常量 (依据 mpp_buffer.h)
+    //
+    // 本解码器对 mpp_buffer_group_get 的 type 参数只传纯 MppBufferType 枚举值。
+    // 头文件允许把 `MPP_BUFFER_FLAGS_*` 编入 type，但支持情况依赖目标 MPP 版本与分配器。
+    // RK3588 崩溃现场位于 get_group；目前尚未证明 flags 组合值是崩溃原因。
+    // 观测到目标板使用纯枚举后 DMA_HEAP buffer group 创建成功，因此这里保持纯枚举探测。
+    pub const MPP_BUFFER_TYPE_ION: c_int = 1;
     pub const MPP_BUFFER_TYPE_DRM: c_int = 3;
     pub const MPP_BUFFER_TYPE_DMA_HEAP: c_int = 4;
-    pub const MPP_BUFFER_TYPE_ION: c_int = 1;
+    pub const MPP_BUFFER_TYPE_MASK: c_int = 0x0000FFFF;
+    pub const MPP_BUFFER_FLAGS_MASK: c_int = 0x003F0000;
     pub const MPP_BUFFER_FLAGS_DMA32: c_int = 0x00200000;
     pub const MPP_BUFFER_INTERNAL: c_int = 0;
 
@@ -548,37 +555,39 @@ impl MppDecoderInner {
                 if self.buf_group.is_null() {
                     let tag = c"HeimdallMppBufGrp".as_ptr() as *const c_char;
                     let caller = c"info_change".as_ptr() as *const c_char;
-                    let mut ret = ffi::mpp_buffer_group_get(
-                        &mut self.buf_group,
-                        ffi::MPP_BUFFER_TYPE_DMA_HEAP | ffi::MPP_BUFFER_FLAGS_DMA32,
-                        ffi::MPP_BUFFER_INTERNAL,
-                        tag,
-                        caller,
-                    );
-                    if ret != 0 {
+                    // NOTE: type 必须逐字为纯枚举值，严禁或入 MPP_BUFFER_FLAGS_*（详见 ffi 常量注释）。
+                    // 按 DMA_HEAP -> DRM -> ION 优先级探测内核实际可用的分配器后端：
+                    // 旧 BSP 可能没有 /dev/dma_heap，此时 DMA_HEAP 探测失败并自动回退 DRM。
+                    let mut ret = ffi::MPP_NOK;
+                    let mut backend = "none";
+                    for (name, buf_type) in [
+                        ("DMA_HEAP", ffi::MPP_BUFFER_TYPE_DMA_HEAP),
+                        ("DRM", ffi::MPP_BUFFER_TYPE_DRM),
+                        ("ION", ffi::MPP_BUFFER_TYPE_ION),
+                    ] {
                         ret = ffi::mpp_buffer_group_get(
                             &mut self.buf_group,
-                            ffi::MPP_BUFFER_TYPE_DRM | ffi::MPP_BUFFER_FLAGS_DMA32,
+                            buf_type,
                             ffi::MPP_BUFFER_INTERNAL,
                             tag,
                             caller,
                         );
+                        if ret == ffi::MPP_OK && !self.buf_group.is_null() {
+                            backend = name;
+                            break;
+                        }
                     }
-                    if ret != 0 {
-                        ret = ffi::mpp_buffer_group_get(
-                            &mut self.buf_group,
-                            ffi::MPP_BUFFER_TYPE_ION | ffi::MPP_BUFFER_FLAGS_DMA32,
-                            ffi::MPP_BUFFER_INTERNAL,
-                            tag,
-                            caller,
-                        );
-                    }
-                    if ret != 0 || self.buf_group.is_null() {
+                    if ret != ffi::MPP_OK || self.buf_group.is_null() {
                         let _ = ffi::mpp_frame_deinit(&mut frame);
                         return Err(MediaError::Decode {
                             reason: format!("创建 MPP 缓冲池组失败, 返回码: {ret}"),
                         });
                     }
+                    debug!(
+                        camera_id = %self.camera_id,
+                        backend,
+                        "MPP 缓冲池组分配器后端已就绪"
+                    );
                 }
 
                 // 工业级加固：根据分辨率自适应计算缓冲深度，避免固定 24 帧导致多路并发时 CMA 显存耗尽
@@ -1218,6 +1227,29 @@ mod tests {
         assert_eq!(ffi::MPP_SET_INPUT_TIMEOUT, 0x00200006);
         assert_eq!(ffi::MPP_SET_OUTPUT_TIMEOUT, 0x00200007);
         assert_eq!(ffi::MPP_ERR_BUFFER_FULL, -1012);
+    }
+
+    #[test]
+    fn test_mpp_buffer_group_types_are_unflagged() {
+        // 当前解码器的 allocator 探测只使用纯枚举；这锁定本地调用约定，
+        // 不表示 MPP API 普遍禁止 flags，也不推断此前崩溃由 flags 引起。
+        for buf_type in [
+            ffi::MPP_BUFFER_TYPE_DMA_HEAP,
+            ffi::MPP_BUFFER_TYPE_DRM,
+            ffi::MPP_BUFFER_TYPE_ION,
+        ] {
+            assert_eq!(
+                buf_type & ffi::MPP_BUFFER_FLAGS_MASK,
+                0,
+                "MppBufferType 不得携带 flags 高位: {buf_type:#x}"
+            );
+            assert_eq!(buf_type, buf_type & ffi::MPP_BUFFER_TYPE_MASK);
+        }
+
+        // 示例组合会设置 flags 位；当前解码器有意不使用这种组合。
+        let with_dma32_flag = ffi::MPP_BUFFER_TYPE_DMA_HEAP | ffi::MPP_BUFFER_FLAGS_DMA32;
+        assert_eq!(with_dma32_flag, 0x0020_0004);
+        assert_ne!(with_dma32_flag & ffi::MPP_BUFFER_FLAGS_MASK, 0);
     }
 
     #[test]

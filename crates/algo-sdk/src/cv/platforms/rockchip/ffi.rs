@@ -11,7 +11,7 @@ use crate::error::AlgoError;
 const IM_STATUS_SUCCESS: c_int = 1;
 const IM_STATUS_NOERROR: c_int = 2;
 const IM_SYNC: c_int = 1 << 19;
-const IM_RGB_FULL_RANGE: c_int = 1 << 8;
+const IM_COLOR_SPACE_DEFAULT: c_int = 0;
 const DMA_HEAP_IOCTL_ALLOC: libc::c_ulong = 0xc018_4800;
 
 #[repr(C)]
@@ -122,6 +122,13 @@ type ImProcess = unsafe extern "C" fn(
     usage: c_int,
 ) -> c_int;
 type ErrorString = unsafe extern "C" fn(status: c_int) -> *const c_char;
+
+fn fill_target(dst: RgaBuffer) -> RgaBuffer {
+    let mut target = dst;
+    // `imfill_t` does not perform CSC, so do not pass conversion metadata to it.
+    target.color_space_mode = IM_COLOR_SPACE_DEFAULT;
+    target
+}
 
 enum ImportBufferFn {
     Size(ImportFdBySize),
@@ -359,7 +366,9 @@ impl RgaRuntime {
         }
         if let Some((rect, color)) = fill_rect {
             // SAFETY: dst is a live imported handle and rect is inside the validated destination.
-            let fill_status = unsafe { (self.api.fill)(dst, rect, color, 1) };
+            // The fill-only descriptor clears CSC metadata; the original dst remains unchanged
+            // for the following NV12-to-RGB `improcess` call.
+            let fill_status = unsafe { (self.api.fill)(fill_target(dst), rect, color, 1) };
             if !is_success(fill_status) {
                 return Err(self.status_error("imfill_t", fill_status));
             }
@@ -535,7 +544,7 @@ pub(crate) fn rgb_fill_color([red, green, blue]: [u8; 3]) -> c_int {
 }
 
 pub(crate) fn rgb_color_space_mode() -> c_int {
-    IM_RGB_FULL_RANGE
+    IM_COLOR_SPACE_DEFAULT
 }
 
 #[cfg(test)]
@@ -565,5 +574,28 @@ mod tests {
     #[test]
     fn fill_color_uses_rgb_byte_order() {
         assert_eq!(rgb_fill_color([0x11, 0x22, 0x33]), 0x0033_2211);
+    }
+
+    #[test]
+    fn fill_target_clears_csc_without_mutating_blit_target() {
+        let dst = RgaBuffer {
+            fd: 17,
+            width: 640,
+            height: 640,
+            wstride: 640,
+            hstride: 640,
+            format: 0x0200,
+            color_space_mode: 0x100,
+            handle: 23,
+            ..RgaBuffer::default()
+        };
+
+        let fill_dst = fill_target(dst);
+
+        assert_eq!(fill_dst.color_space_mode, 0);
+        assert_eq!(fill_dst.fd, dst.fd);
+        assert_eq!(fill_dst.handle, dst.handle);
+        assert_eq!(fill_dst.format, dst.format);
+        assert_eq!(dst.color_space_mode, 0x100);
     }
 }

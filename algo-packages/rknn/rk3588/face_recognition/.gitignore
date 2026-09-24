@@ -1,0 +1,6 @@
+.env
+result.jpg
+*.tar.gz
+*.tgz
+lib/
+*.mp4

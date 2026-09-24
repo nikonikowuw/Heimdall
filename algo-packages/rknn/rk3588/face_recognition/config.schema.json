@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RK3568 人脸识别配置",
+  "description": "常驻人脸检测质量门控配置；特征向量通过低频抓拍接口生成。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "detection_confidence_threshold": {
+      "type": "number",
+      "title": "检测置信度阈值",
+      "description": "人脸检测框置信度过滤阈值，低于该值的候选框将被过滤",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.6
+    },
+    "person_confidence_threshold": {
+      "type": "number",
+      "title": "人体置信度阈值",
+      "description": "人体检测框置信度过滤阈值，仅用作人脸与人体的空间关联上下文，不参与人脸身份判定",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.6
+    },
+    "min_face_size": {
+      "type": "integer",
+      "title": "最小人脸尺寸",
+      "description": "人脸框最小边长像素限制，以分析帧像素为基准（analysis_mode 决定分析帧是低分辨率子码流还是主码流；切换到主码流后同一数值对应的实际人脸更小）；低于该尺寸的人脸不参与特征提取与识别比对（检测框仍会输出）",
+      "minimum": 1,
+      "default": 50
+    },
+    "quality_min_score": {
+      "type": "number",
+      "title": "最小人脸质量分数",
+      "description": "人脸综合质量门控得分，低于此阈值的人脸不参与识别比对；单帧是否真正触发特征提取还受 fusion_min_quality_score 约束（实际提取门限取两者较大值）",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.5
+    },
+    "quality_max_yaw": {
+      "type": "number",
+      "title": "最大偏航角 (Yaw)",
+      "description": "人脸水平偏转最大角度限制；超过此角度的大侧脸不参与特征提取与识别比对（检测框仍会输出）",
+      "minimum": 0.0,
+      "maximum": 180.0,
+      "default": 25.0
+    },
+    "quality_max_pitch": {
+      "type": "number",
+      "title": "最大俯仰角 (Pitch)",
+      "description": "人脸垂直俯仰最大角度限制；超过此角度的低头或仰头人脸不参与特征提取与识别比对（检测框仍会输出）",
+      "minimum": 0.0,
+      "maximum": 90.0,
+      "default": 30.0
+    },
+    "quality_max_blur": {
+      "type": "number",
+      "title": "最大模糊度分数",
+      "description": "模糊度代理评分上限（当前代理量为 1 - 检测置信度：SCRFD 交付模型不输出关键点分数）；超过此阈值的模糊人脸不参与特征提取与识别比对（检测框仍会输出）",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.7
+    },
+    "fusion_min_quality_score": {
+      "type": "number",
+      "title": "特征提取触发门限",
+      "description": "触发 EdgeFace 特征提取（NPU 前向）的最低人脸质量分；低于该分的人脸只输出检测框与质量分，不产生特征向量，也就无法参与识别比对。默认为 0.5；现场为提升比对成功率而放宽 quality_min_score 时，须同步下调本项",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.5
+    },
+    "osd_margin_top": {
+      "type": "number",
+      "title": "顶部 OSD 水印避让高度",
+      "description": "画面顶部 OSD 水印（时间戳、通道名等）避让高度比例 [0.0, 1.0]。人脸框进入该区域时正常检测与绘制，但不触发特征提取入池，防止字符点阵污染人脸模板。默认为 0.0（不避让）；画面顶部有时间戳水印时推荐配置 0.08（顶部 8% 区域）",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.0
+    },
+    "similarity_threshold": {
+      "type": "number",
+      "title": "识别确认阈值",
+      "description": "1:N 底库比对确认放行阈值（宿主侧对账逻辑消费，算法包不读取），高于此相似度直接判定为命中",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.75
+    }
+  }
+}

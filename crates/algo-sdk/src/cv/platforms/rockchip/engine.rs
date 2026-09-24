@@ -17,9 +17,10 @@ const RGA_FORMAT_NV12: u32 = 0x0a00;
 const RGA_FORMAT_BGRA_8888: u32 = 0x0300;
 const RGA_FORMAT_RGB_888: u32 = 0x0200;
 const RGA_FORMAT_YUV420_PLANAR: u32 = 0x0b00;
-const IM_YUV_BT601_LIMIT_RANGE: i32 = 3 << 8;
-const IM_YUV_BT601_FULL_RANGE: i32 = 4 << 8;
-const IM_YUV_BT709_LIMIT_RANGE: i32 = 5 << 8;
+// Legacy YUV-to-RGB selectors from librga's `im2d_type.h`.
+const IM_YUV_TO_RGB_BT601_LIMIT: i32 = 1;
+const IM_YUV_TO_RGB_BT601_FULL: i32 = 2;
+const IM_YUV_TO_RGB_BT709_LIMIT: i32 = 3;
 const IM_YUV_BT709_FULL_RANGE: i32 = 6 << 8;
 
 /// Maximum number of distinct output geometries cached simultaneously by one engine.
@@ -669,9 +670,9 @@ fn source_color_space_mode(frame: &SafeFrame<'_>, format: PixelFormat) -> i32 {
     }
     match frame.raw_desc().color_space {
         crate::c_abi::AV_COLOR_SPACE_BT709_FULL => IM_YUV_BT709_FULL_RANGE,
-        crate::c_abi::AV_COLOR_SPACE_BT709_LIMITED => IM_YUV_BT709_LIMIT_RANGE,
-        crate::c_abi::AV_COLOR_SPACE_BT601_FULL => IM_YUV_BT601_FULL_RANGE,
-        _ => IM_YUV_BT601_LIMIT_RANGE,
+        crate::c_abi::AV_COLOR_SPACE_BT709_LIMITED => IM_YUV_TO_RGB_BT709_LIMIT,
+        crate::c_abi::AV_COLOR_SPACE_BT601_FULL => IM_YUV_TO_RGB_BT601_FULL,
+        _ => IM_YUV_TO_RGB_BT601_LIMIT,
     }
 }
 
@@ -694,6 +695,34 @@ mod tests {
             source_color_space_mode(&frame, PixelFormat::Rgb24),
             rgb_color_space_mode()
         );
+        assert_eq!(rgb_color_space_mode(), 0);
+    }
+
+    #[test]
+    fn yuv_source_uses_legacy_conversion_modes() {
+        use crate::c_abi::{
+            AV_COLOR_SPACE_BT601_FULL, AV_COLOR_SPACE_BT601_LIMITED, AV_COLOR_SPACE_BT709_FULL,
+            AV_COLOR_SPACE_BT709_LIMITED,
+        };
+
+        for (color_space, expected_mode) in [
+            (AV_COLOR_SPACE_BT601_LIMITED, 1),
+            (AV_COLOR_SPACE_BT601_FULL, 2),
+            (AV_COLOR_SPACE_BT709_LIMITED, 3),
+            (AV_COLOR_SPACE_BT709_FULL, 6 << 8),
+        ] {
+            let data = vec![0u8; 640 * 480 * 3 / 2];
+            let mut desc = AvFrameDesc::default_nv12(640, 480, 640, 0, 0);
+            desc.color_space = color_space;
+            desc.opaque = data.as_ptr() as *mut std::ffi::c_void;
+            desc.opaque_kind = AV_OPAQUE_NONE;
+            let frame = SafeFrame::from_ref(&desc).expect("valid frame");
+
+            assert_eq!(
+                source_color_space_mode(&frame, PixelFormat::Nv12),
+                expected_mode
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,424 @@
+//! 本地单机评测工具 (run_local)
+//!
+//! 模拟真实 MPP 硬件解码输出帧（16 字节对齐 NV12 / DMA-BUF），
+//! 通过 RGA2 硬件 2D 引擎完成色彩空间转换与 Letterbox，
+//! 并直通 RKNN NPU 进行全硬件管线前向推理。
+//!
+//! 用法: `cargo run -p face-recognition-rk3588-rknn --bin face_recognition_rk3588_rknn_run_local -- [image_path] [--loops N] [--face-conf F] [--person-conf F]`
+//!
+//! `--face-conf` / `--person-conf` 以宿主显式配置的优先级覆盖阈值，用于现场分数分布评估。
+
+use std::env;
+use std::ffi::c_void;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use algo_sdk::c_abi::AvAlgoResult;
+use algo_sdk::emitter::ResultEmitter;
+use algo_sdk::plugin::{AlgoPlugin, InitContext};
+use algo_sdk::testing::{MockEmitter, MockFrameBuilder};
+use face_recognition_rk3588::config::InstanceConfig;
+use face_recognition_rk3588::plugin::FaceRecognizer;
+
+/// 在 RGB 图片上绘制矩形框
+fn draw_rect_rgb(
+    img: &mut image::RgbImage,
+    x1: u32,
+    y1: u32,
+    x2: u32,
+    y2: u32,
+    color: image::Rgb<u8>,
+) {
+    let w = img.width();
+    let h = img.height();
+    let x1 = x1.min(w - 1);
+    let y1 = y1.min(h - 1);
+    let x2 = x2.min(w - 1);
+    let y2 = y2.min(h - 1);
+
+    // 绘制四条边
+    for x in x1..=x2 {
+        img.put_pixel(x, y1, color);
+        img.put_pixel(x, y2, color);
+    }
+    for y in y1..=y2 {
+        img.put_pixel(x1, y, color);
+        img.put_pixel(x2, y, color);
+    }
+}
+
+fn normalized_bbox_to_pixels(
+    value: &serde_json::Value,
+    width: f32,
+    height: f32,
+) -> Option<[u32; 4]> {
+    let bbox = value.as_array()?;
+    let [x1, y1, x2, y2] = bbox.as_slice() else {
+        return None;
+    };
+    Some(
+        [
+            (x1.as_f64()? as f32).clamp(0.0, 1.0) * width,
+            (y1.as_f64()? as f32).clamp(0.0, 1.0) * height,
+            (x2.as_f64()? as f32).clamp(0.0, 1.0) * width,
+            (y2.as_f64()? as f32).clamp(0.0, 1.0) * height,
+        ]
+        .map(|coordinate| coordinate as u32),
+    )
+}
+
+unsafe extern "C" fn on_result_callback(result: *const AvAlgoResult, user_data: *mut c_void) {
+    if !result.is_null() && !user_data.is_null() {
+        // SAFETY: user_data 指向有效 MockEmitter 实例
+        let emitter = unsafe { &mut *(user_data as *mut MockEmitter) };
+        // SAFETY: result 为合法指针
+        emitter.record_c_result(unsafe { &*result });
+    }
+}
+
+/// 解析浮点命令行选项，非法或缺失时返回 None。
+fn parse_f32_option(args: &[String], name: &str) -> Option<f32> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|index| args.get(index + 1)?.parse::<f32>().ok())
+        .filter(|value| value.is_finite())
+}
+
+/// 汇总当前阈值下的检测数量与最高分数，用于现场阈值标定。
+fn summarize_detections(json: Option<&String>) -> String {
+    let Some(json) = json else {
+        return "未发射结果".to_string();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return "结果 JSON 解析失败".to_string();
+    };
+    let Some(objects) = value["objects"].as_array() else {
+        return "结果缺少 objects 字段".to_string();
+    };
+    let best_person = objects
+        .iter()
+        .filter_map(|obj| obj["confidence"].as_f64())
+        .fold(f64::NAN, f64::max);
+    let best_face = objects
+        .iter()
+        .filter_map(|obj| obj["face"]["confidence"].as_f64())
+        .fold(f64::NAN, f64::max);
+    format!(
+        "人体={} (最高 {:.4})，人脸={} (最高 {:.4})",
+        objects
+            .iter()
+            .filter(|obj| obj["confidence"].is_number())
+            .count(),
+        best_person,
+        objects
+            .iter()
+            .filter(|obj| obj["face"]["confidence"].is_number())
+            .count(),
+        best_face
+    )
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+
+    let args: Vec<String> = env::args().collect();
+    let package_root_buf = if Path::new(env!("CARGO_MANIFEST_DIR")).exists() {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    } else {
+        PathBuf::from(".")
+    };
+    let package_root = package_root_buf.as_path();
+    let default_image = package_root.join("testimage.jpg");
+    let mut image_path = None;
+    let mut skip_option_value = false;
+    for arg in args.iter().skip(1) {
+        if skip_option_value {
+            skip_option_value = false;
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "--output" | "--loops" | "--face-conf" | "--person-conf"
+        ) {
+            skip_option_value = true;
+            continue;
+        }
+        if arg == "--input" {
+            continue;
+        }
+        if !arg.starts_with("--")
+            && (arg.ends_with(".jpg") || arg.ends_with(".jpeg") || arg.ends_with(".png"))
+        {
+            image_path = Some(PathBuf::from(arg));
+            break;
+        }
+    }
+    let image_path = image_path.unwrap_or(default_image);
+
+    let loops: usize = args
+        .iter()
+        .position(|arg| arg == "--loops")
+        .and_then(|index| args.get(index + 1)?.parse().ok())
+        .unwrap_or(1);
+
+    let output_path = args
+        .iter()
+        .position(|arg| arg == "--output")
+        .and_then(|index| args.get(index + 1).map(PathBuf::from))
+        .unwrap_or_else(|| package_root.join("result.jpg"));
+
+    println!("================================================================");
+    println!("  RK3588 人脸识别算法包全硬件流转本地测试");
+    println!("  模型: SCRFD (人脸检测) + FaceLiVTv2 / EdgeFace (特征嵌入)");
+    println!("  图片: {}", image_path.display());
+    println!("================================================================");
+
+    // 1. 初始化算法实例 (插件接口)
+    println!("\n[1/4] 初始化 FaceRecognizer 插件实例...");
+    let t0 = Instant::now();
+    let init_ctx = InitContext {
+        package_root,
+        platform_id: "linux-rknn",
+        instance_id: "local_hardware_test",
+        is_self_test: false,
+    };
+    // 阈值覆盖通过正常的 Deserialize 路径构造，确保 explicit_fields 生效，
+    // 从而让命令行优先级高于包内 `.env`。
+    let mut overrides = serde_json::Map::new();
+    if let Some(value) = parse_f32_option(&args, "--face-conf") {
+        overrides.insert("detection_confidence_threshold".to_string(), value.into());
+    }
+    if let Some(value) = parse_f32_option(&args, "--person-conf") {
+        overrides.insert("person_confidence_threshold".to_string(), value.into());
+    }
+    let config: InstanceConfig = if overrides.is_empty() {
+        InstanceConfig::default()
+    } else {
+        serde_json::from_value(serde_json::Value::Object(overrides))?
+    };
+    let face_conf = config.detection_confidence_threshold;
+    let person_conf = config.person_confidence_threshold;
+    println!(
+        "  阈值: detection_confidence_threshold={face_conf}, person_confidence_threshold={person_conf}"
+    );
+    let mut recognizer = FaceRecognizer::init(&init_ctx, config)?;
+    println!(
+        "  插件实例与 RKNN 会话初始化耗时: {:.2} ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+
+    // 2. 模拟真实 MPP 硬件解码输出帧：
+    // MPP 解码器输出为 16 字节行跨距对齐的 NV12 (YUV420SP) 格式，通过 DMA-BUF 零拷贝直通传递。
+    println!("\n[2/4] 加载图片并构建 MPP 硬件解码帧格式 (NV12 + DMA-BUF)...");
+    let mock_frame = MockFrameBuilder::from_image_hardware(&image_path).unwrap_or_else(|error| {
+        tracing::warn!("无法从 dma_heap 直接分配硬件 DMA-BUF ({error})，回退到步长对齐 NV12");
+        let img = image::open(&image_path).expect("读取图片失败");
+        MockFrameBuilder::new()
+            .dimensions(img.width(), img.height())
+            .host_data(img.to_rgb8().into_raw())
+            .to_nv12(16)
+    });
+    let mock_frame = mock_frame.build();
+    let safe_frame = mock_frame.as_safe_frame();
+
+    let is_dma_buf = matches!(
+        safe_frame.handle_view(),
+        algo_sdk::frame::FrameHandleView::DmaBuf { .. }
+    );
+    let dma_status = if is_dma_buf {
+        "已分配物理 DMA-BUF fd (零拷贝直通模式)"
+    } else {
+        "Host NV12 内存布局"
+    };
+    println!(
+        "  帧格式: {:?}, 尺寸: {}×{}, 步长: [{}, {}], 存储: {}",
+        safe_frame.pixel_format(),
+        safe_frame.width(),
+        safe_frame.height(),
+        safe_frame.stride(0),
+        safe_frame.stride(1),
+        dma_status
+    );
+
+    // 3. 执行单帧全硬件前向检测推理 (MPP NV12 -> RGA2 Letterbox -> RKNN NPU)
+    println!("\n[3/4] 执行全硬件前向流程 (MPP NV12 -> RGA2 -> RKNN NPU)...");
+    let mut mock_emitter = MockEmitter::new();
+    let t1 = Instant::now();
+    {
+        // SAFETY: on_result_callback 与 mock_emitter 在本作用域有效存活，未转移所有权。
+        let mut emitter = unsafe {
+            ResultEmitter::from_raw(
+                1,
+                Some(on_result_callback),
+                &mut mock_emitter as *mut _ as *mut c_void,
+            )
+        };
+        recognizer.process(safe_frame, &mut emitter)?;
+    }
+    let process_ms = t1.elapsed().as_secs_f64() * 1000.0;
+    println!("  全流程前向耗时: {:.2} ms", process_ms);
+    println!(
+        "  发射事件数量: {}，原始 JSON:\n{}",
+        mock_emitter.raw_json_events().len(),
+        mock_emitter
+            .raw_json_events()
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("(无结果)")
+    );
+    println!(
+        "  检测汇总: {}",
+        summarize_detections(mock_emitter.raw_json_events().first())
+    );
+
+    // 4. 特征嵌入测试 (FaceLiVTv2 / EdgeFace)
+    println!("\n[4/4] 特征嵌入提取测试 (FaceLiVTv2 / EdgeFace)...");
+    let dynamic_img = image::open(&image_path)?.to_rgb8();
+    let (orig_w, orig_h) = (dynamic_img.width(), dynamic_img.height());
+    let models = face_recognition_rk3588::shared_models(package_root)?;
+
+    // 人脸和人体模型均为 640x384，共用同一份预处理输入
+    let (_persons, faces) = if is_dma_buf {
+        let (buf, mode) = algo_sdk::cv::letterbox(
+            &safe_frame,
+            models.detector_width,
+            models.detector_height,
+            [114, 114, 114],
+        )?;
+        let algo_sdk::cv::PreprocessMode::Letterbox(layout) = mode else {
+            return Err("检测预处理模式非 Letterbox".into());
+        };
+        models
+            .worker
+            .detect_dma_buf(buf, layout, face_conf, person_conf)?
+    } else {
+        let (data, layout) = face_recognition_rk3588::prepare_detector_input_for(
+            &dynamic_img,
+            models.detector_width,
+            models.detector_height,
+        )?;
+        models
+            .worker
+            .detect_host(data, layout, face_conf, person_conf)?
+    };
+    println!(
+        "  独立检测: 人体={} 人脸={}，最高人脸分数={:.4}",
+        _persons.len(),
+        faces.len(),
+        faces.iter().map(|face| face.score).fold(f32::NAN, f32::max)
+    );
+
+    if let Some(best) = faces
+        .iter()
+        .max_by(|left, right| left.score.total_cmp(&right.score))
+    {
+        let aligned = face_recognition_rk3588::align::align_face(
+            dynamic_img.as_raw(),
+            orig_w,
+            orig_h,
+            &best.landmarks,
+        )?;
+        face_recognition_rk3588::align::dump_debug_aligned_face("run_local", &aligned, best.score);
+        let t2 = Instant::now();
+        let embed_result = models.worker.embed_host(aligned)?;
+        let embed_ms = t2.elapsed().as_secs_f64() * 1000.0;
+        println!("  嵌入推理耗时: {:.2} ms", embed_ms);
+        println!("  Embedding 维度: {}", embed_result.len());
+        println!(
+            "  L2 norm: {:.6}",
+            embed_result
+                .iter()
+                .map(|value| value * value)
+                .sum::<f32>()
+                .sqrt()
+        );
+        println!("  前 10 维: {:?}", &embed_result[..10]);
+    } else {
+        println!("  未检出有效人脸，跳过特征提取");
+    }
+
+    // 5. 性能压测模式
+    if loops > 1 {
+        println!("\n================================================================");
+        println!("  硬件流转性能测试: {} 轮连续推理", loops);
+        println!("================================================================");
+
+        // Warmup
+        for _ in 0..3 {
+            // SAFETY: on_result_callback 与 mock_emitter 在本作用域有效存活。
+            let mut emitter = unsafe {
+                ResultEmitter::from_raw(
+                    0,
+                    Some(on_result_callback),
+                    &mut mock_emitter as *mut _ as *mut c_void,
+                )
+            };
+            recognizer.process(safe_frame, &mut emitter)?;
+        }
+
+        let mut times = Vec::with_capacity(loops);
+        for i in 0..loops {
+            let t_start = Instant::now();
+            // SAFETY: on_result_callback 与 mock_emitter 在本作用域有效存活。
+            let mut emitter = unsafe {
+                ResultEmitter::from_raw(
+                    (i + 1) as u64,
+                    Some(on_result_callback),
+                    &mut mock_emitter as *mut _ as *mut c_void,
+                )
+            };
+            recognizer.process(safe_frame, &mut emitter)?;
+            times.push(t_start.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        times.sort_by(|left, right| left.total_cmp(right));
+        let avg_ms = times.iter().sum::<f64>() / times.len() as f64;
+        let p50_ms = times[times.len() / 2];
+        let p99_ms = times[(times.len() * 99 / 100).min(times.len() - 1)];
+        let min_ms = times.first().copied().unwrap_or(0.0);
+        let max_ms = times.last().copied().unwrap_or(0.0);
+        let fps = if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 };
+
+        println!(
+            "  全流程 (RGA2 Letterbox + NPU 推理 + 后处理):\n    avg={:.2}ms, p50={:.2}ms, p99={:.2}ms, min={:.2}ms, max={:.2}ms\n    吞吐量: {:.1} FPS",
+            avg_ms, p50_ms, p99_ms, min_ms, max_ms, fps
+        );
+    }
+
+    // 5. 绘制检测框并保存结果图片
+    if let Some(json_str) = mock_emitter.raw_json_events().first() {
+        if let Ok(result) = serde_json::from_str::<serde_json::Value>(json_str) {
+            if let Some(objects) = result["objects"].as_array() {
+                let mut img = image::open(&image_path)?.to_rgb8();
+                let (w, h) = (img.width() as f32, img.height() as f32);
+
+                for obj in objects {
+                    // 绘制人体框 (红色)
+                    if let Some([x1, y1, x2, y2]) = normalized_bbox_to_pixels(&obj["bbox"], w, h) {
+                        draw_rect_rgb(&mut img, x1, y1, x2, y2, image::Rgb([255, 0, 0]));
+                    }
+
+                    // 绘制人脸框 (绿色)
+                    if let Some(face) = obj["face"].as_object() {
+                        if let Some([x1, y1, x2, y2]) =
+                            normalized_bbox_to_pixels(&face["bbox"], w, h)
+                        {
+                            draw_rect_rgb(&mut img, x1, y1, x2, y2, image::Rgb([0, 255, 0]));
+                        }
+                    }
+                }
+
+                img.save(&output_path)?;
+                println!("\n结果图片已保存: {}", output_path.display());
+            }
+        }
+    }
+
+    println!("\n================================================================");
+    println!("  测试完成");
+    println!("================================================================");
+
+    Ok(())
+}
