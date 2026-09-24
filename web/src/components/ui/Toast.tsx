@@ -26,11 +26,12 @@ const TONES: Record<ToastType, ToneConfig> = {
   },
   error: {
     icon: AlertCircle,
-    iconClass: 'text-rose-500',
-    iconBgClass: 'border-rose-500/25 bg-rose-500/10',
-    badgeClass: 'text-rose-600 dark:text-rose-400 bg-rose-500/10 border-rose-500/20',
-    dotClass: 'bg-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.7)]',
-    progressClass: 'bg-rose-500',
+    iconClass: 'text-[var(--status-danger)]',
+    iconBgClass: 'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)]',
+    badgeClass:
+      'text-[var(--status-danger)] bg-[var(--status-danger-soft)] border-[var(--status-danger-border)]',
+    dotClass: 'bg-[var(--status-danger)] shadow-[0_0_8px_rgba(var(--status-danger-rgb),0.7)]',
+    progressClass: 'bg-[var(--status-danger)]',
   },
   warning: {
     icon: AlertTriangle,

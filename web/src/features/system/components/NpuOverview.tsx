@@ -38,7 +38,7 @@ function calculateBalance(cores: NpuCoreMetrics[]): number {
 function getBalanceClass(balance: number): string {
   if (balance >= 80) return 'text-[var(--accent-green)]'
   if (balance >= 60) return 'text-[var(--accent-amber)]'
-  return 'text-[var(--destructive)]'
+  return 'text-[var(--status-danger)]'
 }
 
 function CoreBar({ core, maxUtilization }: { core: NpuCoreMetrics; maxUtilization: number }) {

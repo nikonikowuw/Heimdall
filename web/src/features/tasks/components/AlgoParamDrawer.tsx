@@ -190,7 +190,7 @@ export function AlgoParamDrawer({
           role="dialog"
           aria-modal="true"
           aria-labelledby="algo-param-drawer-title"
-          className="fixed inset-0 z-50 overflow-hidden"
+          className="modal-layer modal-layer--drawer"
         >
           {/* 背景轻量微暗遮罩 */}
           <motion.div
@@ -200,7 +200,7 @@ export function AlgoParamDrawer({
             exit={{ opacity: 0 }}
             transition={{ duration: reduceMotion ? 0 : motionTokens.duration.fast }}
             onClick={onClose}
-            className="fixed inset-0 bg-[var(--overlay-scrim)] backdrop-blur-xs"
+            className="modal-scrim"
           />
 
           {/* 右侧滑出抽屉主体：现代 SaaS 半透明玻璃磨砂风格 */}
@@ -214,7 +214,7 @@ export function AlgoParamDrawer({
                 duration: reduceMotion ? 0 : motionTokens.duration.normal,
                 ease: motionTokens.easing.smooth,
               }}
-              className="flex w-screen max-w-md flex-col border-l border-[var(--border)] bg-[var(--bg-surface-solid)] shadow-[var(--shadow-lg)] backdrop-blur-2xl"
+              className="modal-surface modal-surface--drawer modal-surface--compact"
             >
               {/* 抽屉头部：毛玻璃微光 */}
               <div className="flex h-16 shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-surface)] px-5 backdrop-blur-xl">

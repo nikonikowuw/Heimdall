@@ -162,7 +162,7 @@ export function CaptureLightboxModal({
         duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
         ease: motionTokens.easing.smooth,
       }}
-      className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white backdrop-blur-2xl select-none"
+      className="modal-backdrop modal-backdrop--immersive flex-col text-white select-none"
     >
       {/* 顶部悬浮磨砂指挥条 */}
       <div className="absolute inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/10 bg-gradient-to-b from-black/85 via-black/50 to-transparent px-6 py-3.5 backdrop-blur-md">
@@ -238,7 +238,7 @@ export function CaptureLightboxModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition-all hover:bg-rose-500/30 hover:text-rose-300 focus-visible:ring-2 focus-visible:ring-rose-500"
+            className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]"
             title={`${t('modal.close')} (Esc)`}
             aria-label="Close"
           >
@@ -268,7 +268,7 @@ export function CaptureLightboxModal({
               </div>
             )}
             {isFullError && (
-              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-rose-400/30 bg-black/80 px-4 py-2 text-xs text-zinc-200 shadow-lg">
+              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-black/80 px-4 py-2 text-xs text-zinc-200 shadow-lg">
                 <span>{t('modal.fullImageLoadFailed')}</span>
                 {retryButton}
               </div>

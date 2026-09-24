@@ -117,7 +117,7 @@ export function ImagePreviewModal({
         duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
         ease: motionTokens.easing.smooth,
       }}
-      className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/90 p-4 backdrop-blur-md select-none"
+      className="modal-backdrop modal-backdrop--lightbox flex-col items-center justify-center p-4 select-none"
       onClick={onClose}
     >
       {/* 浮动工具栏 */}
@@ -176,7 +176,7 @@ export function ImagePreviewModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-white/10 bg-white/5 p-1.5 text-zinc-400 transition-all hover:bg-rose-500/20 hover:text-rose-400"
+            className="rounded-xl border border-white/10 bg-white/5 p-1.5 text-zinc-400 transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
             title={`${t('modal.close')} (Esc)`}
             aria-label="Close"
           >

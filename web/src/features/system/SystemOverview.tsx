@@ -94,7 +94,7 @@ function RingGauge({
 }
 
 function getUsageColor(percent: number): string {
-  if (percent >= 95) return 'var(--destructive)'
+  if (percent >= 95) return 'var(--status-danger)'
   if (percent >= 80) return 'var(--accent-amber)'
   return 'var(--accent-green)'
 }

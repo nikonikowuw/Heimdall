@@ -456,7 +456,7 @@ export function DateTimeRangePicker({
               onChange({ quickPreset: 'all', startTime: undefined, endTime: undefined })
               setIsOpen(false)
             }}
-            className="ml-0.5 rounded-md p-0.5 text-[var(--text-muted)] hover:bg-rose-500/20 hover:text-rose-400"
+            className="ml-0.5 rounded-md p-0.5 text-[var(--text-muted)] hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
             title={t('timeFilter.clear')}
           >
             <X className="h-3 w-3" />
@@ -628,7 +628,7 @@ export function DateTimeRangePicker({
               <div className="mt-4 flex items-center justify-between border-t border-[var(--border)] pt-3">
                 <div className="text-[11px]">
                   {isInvalid ? (
-                    <span className="flex items-center gap-1 font-medium text-rose-500">
+                    <span className="flex items-center gap-1 font-medium text-[var(--status-danger)]">
                       <X className="h-3.5 w-3.5" />
                       {t('timeFilter.invalidRange')}
                     </span>

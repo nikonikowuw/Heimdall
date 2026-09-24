@@ -68,7 +68,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
       </div>
 
       {errorMsg && (
-        <div className="mb-4 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-600 dark:text-rose-400">
+        <div className="mb-4 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3 text-xs text-[var(--status-danger)]">
           {errorMsg}
         </div>
       )}

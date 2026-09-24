@@ -369,7 +369,7 @@ export function Layout(): React.ReactElement {
                           setUserMenuOpen(false)
                           handleLogout()
                         }}
-                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-rose-500 transition-colors hover:bg-rose-500/10"
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-soft)]"
                       >
                         <LogOut className="h-3.5 w-3.5 opacity-80" />
                         <span>

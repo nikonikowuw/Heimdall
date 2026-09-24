@@ -280,14 +280,14 @@ export function OperationalLogsTab(): ReactElement {
       {/* 错误提示横幅 */}
       {error && (
         <div
-          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/8 px-3.5 py-2.5 text-xs text-[var(--destructive)]"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/8 px-3.5 py-2.5 text-xs text-[var(--status-danger)]"
           role="alert"
         >
           <span>{t('operational.loadError', { error: error || t('unknownError') })}</span>
           <button
             type="button"
             onClick={refresh}
-            className="reticle-target inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors hover:bg-[var(--destructive)]/10"
+            className="reticle-target inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors hover:bg-[var(--status-danger)]/10"
           >
             <RefreshCw className="h-3 w-3" />
             {t('retry')}

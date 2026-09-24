@@ -39,7 +39,7 @@ const AI_STATUS_STYLES: Record<CameraAiRuntimeStatus, string> = {
   active: 'text-slate-800 dark:text-slate-200',
   starting: 'text-amber-500',
   degraded: 'text-amber-500',
-  error: 'text-rose-500',
+  error: 'text-[var(--status-danger)]',
   inactive: 'text-[var(--text-muted)]',
 }
 
@@ -347,7 +347,7 @@ export function CameraDeviceTile({
                         setMenuOpen(false)
                         onDelete(camera)
                       }}
-                      className="flex min-h-9 w-full items-center gap-2 rounded-xl px-2.5 text-xs font-medium text-rose-500 transition-colors hover:bg-rose-500/10 focus-visible:ring-2 focus-visible:ring-rose-500/40 focus-visible:outline-none"
+                      className="flex min-h-9 w-full items-center gap-2 rounded-xl px-2.5 text-xs font-medium text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-soft)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/40 focus-visible:outline-none"
                     >
                       <Trash2 className="h-3.5 w-3.5 opacity-80" />
                       <span>{t('tile.deleteAction', { defaultValue: '移除设备' })}</span>

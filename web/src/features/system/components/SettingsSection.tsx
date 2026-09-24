@@ -67,13 +67,13 @@ interface ErrorBannerProps {
 export function ErrorBanner({ message, onRetry }: ErrorBannerProps): React.ReactElement {
   const { t } = useTranslation('system')
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 px-4 py-3">
-      <div className="h-2 w-2 shrink-0 rounded-full bg-[var(--destructive)]" />
-      <p className="flex-1 text-[13px] text-[var(--destructive)]">{message}</p>
+    <div className="flex items-center gap-3 rounded-xl border border-[var(--status-danger)]/20 bg-[var(--status-danger)]/5 px-4 py-3">
+      <div className="h-2 w-2 shrink-0 rounded-full bg-[var(--status-danger)]" />
+      <p className="flex-1 text-[13px] text-[var(--status-danger)]">{message}</p>
       {onRetry && (
         <button
           onClick={onRetry}
-          className="shrink-0 text-[13px] font-medium text-[var(--destructive)] underline underline-offset-2 hover:no-underline"
+          className="shrink-0 text-[13px] font-medium text-[var(--status-danger)] underline underline-offset-2 hover:no-underline"
         >
           {t('retry', { defaultValue: 'Retry' })}
         </button>

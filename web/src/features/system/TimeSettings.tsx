@@ -329,7 +329,7 @@ export function TimeSettings(): React.ReactElement {
             </div>
 
             {saveError && (
-              <div className="rounded-lg border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 px-3 py-2 text-[13px] text-[var(--destructive)]">
+              <div className="rounded-lg border border-[var(--status-danger)]/20 bg-[var(--status-danger)]/5 px-3 py-2 text-[13px] text-[var(--status-danger)]">
                 {saveError}
               </div>
             )}

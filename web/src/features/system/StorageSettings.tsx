@@ -155,13 +155,13 @@ export function StorageSettings(): React.ReactElement {
     },
     emergency: {
       label: t('storage.healthLevel.emergency', { defaultValue: '紧急' }),
-      color: 'var(--destructive)',
-      bg: 'var(--destructive)',
+      color: 'var(--status-danger)',
+      bg: 'var(--status-danger)',
     },
     critical: {
       label: t('storage.healthLevel.critical', { defaultValue: '熔断' }),
-      color: 'var(--destructive)',
-      bg: 'var(--destructive)',
+      color: 'var(--status-danger)',
+      bg: 'var(--status-danger)',
     },
   }
 
@@ -200,7 +200,7 @@ export function StorageSettings(): React.ReactElement {
                   style={{
                     color:
                       status.usagePercent >= 95
-                        ? 'var(--destructive)'
+                        ? 'var(--status-danger)'
                         : status.usagePercent >= 80
                           ? 'var(--accent-amber)'
                           : 'var(--accent-green)',
@@ -216,7 +216,7 @@ export function StorageSettings(): React.ReactElement {
                     width: `${Math.min(status.usagePercent, 100)}%`,
                     backgroundColor:
                       status.usagePercent >= 95
-                        ? 'var(--destructive)'
+                        ? 'var(--status-danger)'
                         : status.usagePercent >= 80
                           ? 'var(--accent-amber)'
                           : 'var(--accent-green)',
@@ -470,7 +470,7 @@ export function StorageSettings(): React.ReactElement {
             </div>
 
             {saveError && (
-              <div className="rounded-lg border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 px-3 py-2 text-[13px] text-[var(--destructive)]">
+              <div className="rounded-lg border border-[var(--status-danger)]/20 bg-[var(--status-danger)]/5 px-3 py-2 text-[13px] text-[var(--status-danger)]">
                 {saveError}
               </div>
             )}
@@ -496,7 +496,7 @@ export function StorageSettings(): React.ReactElement {
             <button
               onClick={handleSaveSnapshot}
               disabled={!isSnapshotDirty || savingSnapshot}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3.5 py-1.5 text-[13px] font-medium text-[var(--accent-contrast)] shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3.5 py-1.5 text-[13px] font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {snapshotSuccess ? (
                 <>
@@ -601,7 +601,7 @@ export function StorageSettings(): React.ReactElement {
             </div>
 
             {snapshotError && (
-              <div className="rounded-lg border border-[var(--destructive)]/20 bg-[var(--destructive)]/5 px-3 py-2 text-[13px] text-[var(--destructive)]">
+              <div className="rounded-lg border border-[var(--status-danger)]/20 bg-[var(--status-danger)]/5 px-3 py-2 text-[13px] text-[var(--status-danger)]">
                 {snapshotError}
               </div>
             )}

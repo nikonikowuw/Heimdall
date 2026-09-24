@@ -176,7 +176,7 @@ export function Gb28181Settings(): React.ReactElement {
           </div>
           <button
             onClick={fetchConfig}
-            className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             {tc('actions.refresh')}
@@ -215,11 +215,11 @@ export function Gb28181Settings(): React.ReactElement {
                 type="text"
                 value={sipId}
                 onChange={(e) => setSipId(e.target.value)}
-                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
               />
               <button
                 onClick={() => copyToClipboard(sipId, 'sipId')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
                 title={tc('actions.copy')}
               >
                 {copiedField === 'sipId' ? (
@@ -241,11 +241,11 @@ export function Gb28181Settings(): React.ReactElement {
                 type="text"
                 value={sipDomain}
                 onChange={(e) => setSipDomain(e.target.value)}
-                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
               />
               <button
                 onClick={() => copyToClipboard(sipDomain, 'sipDomain')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
                 title={tc('actions.copy')}
               >
                 {copiedField === 'sipDomain' ? (
@@ -266,7 +266,7 @@ export function Gb28181Settings(): React.ReactElement {
               type="number"
               value={sipPort}
               onChange={(e) => setSipPort(Number(e.target.value))}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
             />
           </div>
 
@@ -281,7 +281,7 @@ export function Gb28181Settings(): React.ReactElement {
                   type={showPassword ? 'text' : 'password'}
                   value={sipPassword}
                   onChange={(e) => setSipPassword(e.target.value)}
-                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 pr-9 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 pr-9 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
                 />
                 <button
                   type="button"
@@ -293,7 +293,7 @@ export function Gb28181Settings(): React.ReactElement {
               </div>
               <button
                 onClick={() => copyToClipboard(sipPassword, 'password')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
                 title={tc('actions.copy')}
               >
                 {copiedField === 'password' ? (
@@ -314,7 +314,7 @@ export function Gb28181Settings(): React.ReactElement {
               type="number"
               value={heartbeatTimeout}
               onChange={(e) => setHeartbeatTimeout(Number(e.target.value))}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
             />
           </div>
         </div>
@@ -341,7 +341,7 @@ export function Gb28181Settings(): React.ReactElement {
               type="number"
               value={rtpStart}
               onChange={(e) => setRtpStart(Number(e.target.value))}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
             />
           </div>
           <div>
@@ -352,7 +352,7 @@ export function Gb28181Settings(): React.ReactElement {
               type="number"
               value={rtpEnd}
               onChange={(e) => setRtpEnd(Number(e.target.value))}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
             />
           </div>
         </div>
@@ -402,12 +402,12 @@ export function Gb28181Settings(): React.ReactElement {
       {/* 对接指导卡模态弹窗 */}
       <AnimatePresence>
         {showCardModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <div className="modal-backdrop">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="frosted-glass w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)] p-6 shadow-2xl"
+              className="modal-surface modal-surface--narrow p-6"
             >
               <div className="mb-4 flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
@@ -418,7 +418,7 @@ export function Gb28181Settings(): React.ReactElement {
                 </div>
                 <button
                   onClick={() => setShowCardModal(false)}
-                  className="rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  className="rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -438,7 +438,7 @@ export function Gb28181Settings(): React.ReactElement {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => setShowCardModal(false)}
-                  className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                  className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
                 >
                   {t('cancel', { defaultValue: '关闭' })}
                 </button>

@@ -33,7 +33,7 @@ function getStatusBadge(
     case 'offline':
       return {
         text: t('status.offline', { defaultValue: '离线/故障' }),
-        dotClass: 'bg-rose-500',
+        dotClass: 'bg-[var(--status-danger)]',
       }
     case 'unprobed':
     default:
@@ -65,7 +65,7 @@ export const BentoCameraCard = React.memo(function BentoCameraCard({
       }}
       className={`group flex flex-col overflow-hidden rounded-xl border bg-[var(--bg-secondary)] shadow-xs transition-colors duration-300 ${
         isAlarming
-          ? 'border-rose-500 shadow-lg ring-2 shadow-rose-500/40 ring-rose-500'
+          ? 'border-[var(--status-danger)] shadow-[var(--status-danger)]/40 shadow-lg ring-2 ring-[var(--status-danger)]'
           : 'border-[var(--border)] hover:border-[var(--accent)]/40 hover:shadow-md'
       }`}
     >
@@ -80,7 +80,7 @@ export const BentoCameraCard = React.memo(function BentoCameraCard({
             {camera.lastCodec ? camera.lastCodec.toUpperCase() : 'H264'}
           </span>
           {isAlarming && (
-            <span className="py-0.2 flex items-center gap-0.5 rounded bg-rose-500/15 px-1.5 font-mono text-[9px] font-bold text-rose-400">
+            <span className="py-0.2 flex items-center gap-0.5 rounded bg-[var(--status-danger-soft)] px-1.5 font-mono text-[9px] font-bold text-[var(--status-danger)]">
               <ShieldAlert className="h-2.5 w-2.5" />
               <span>ALARM</span>
             </span>
@@ -108,7 +108,7 @@ export const BentoCameraCard = React.memo(function BentoCameraCard({
           <button
             type="button"
             onClick={() => onDeleteCamera(camera)}
-            className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-secondary)] transition-colors hover:bg-rose-500/10 hover:text-rose-500"
+            className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-secondary)] transition-colors hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
             title={t('manage.deleteCamera')}
           >
             <Trash2 className="h-3 w-3" />

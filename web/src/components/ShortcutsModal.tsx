@@ -92,7 +92,7 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps): React.
           role="dialog"
           aria-modal="true"
           aria-label={t('shortcuts.title')}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          className="modal-backdrop modal-backdrop--top"
           onClick={(e) => {
             if (e.target === e.currentTarget) onClose()
           }}
@@ -102,7 +102,7 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps): React.
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-[26px] border border-[var(--border)] bg-white shadow-[0_24px_50px_-12px_rgba(0,0,0,0.28)] dark:bg-[var(--bg-surface-solid)]"
+            className="modal-surface modal-surface--medium max-h-[85vh]"
           >
             {/* Header */}
             <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">

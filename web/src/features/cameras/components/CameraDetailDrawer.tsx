@@ -56,7 +56,8 @@ const PIPELINE_STATUS_STYLES = {
   active: 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
   starting: 'text-amber-500 dark:text-amber-400 bg-amber-500/10 border-amber-500/20',
   degraded: 'text-amber-500 dark:text-amber-400 bg-amber-500/10 border-amber-500/20',
-  error: 'text-rose-500 dark:text-rose-400 bg-rose-500/10 border-rose-500/20',
+  error:
+    'text-[var(--status-danger)] bg-[var(--status-danger-soft)] border-[var(--status-danger-border)]',
   inactive: 'text-[var(--text-muted)] bg-[var(--bg-secondary)] border-[var(--border)]',
 } as const
 
@@ -202,7 +203,7 @@ export function CameraDetailDrawer({
       }}
     >
       {isOpen && currentCamera && derived && (
-        <div className="fixed inset-0 z-50 flex justify-end">
+        <div className="modal-layer modal-layer--drawer">
           {/* 背景遮罩 */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -210,7 +211,7 @@ export function CameraDetailDrawer({
             exit={{ opacity: 0 }}
             transition={{ duration: motionTokens.duration.fast }}
             onClick={onClose}
-            className="fixed inset-0 bg-black/60 backdrop-blur-xs"
+            className="modal-scrim"
             aria-hidden="true"
           />
 
@@ -223,7 +224,7 @@ export function CameraDetailDrawer({
             animate={{ x: 0 }}
             exit={reducedMotion ? { opacity: 0 } : { x: '100%' }}
             transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-            className="relative z-10 flex h-full w-full max-w-xl flex-col border-l border-[var(--border)] bg-white shadow-2xl dark:bg-[var(--bg-surface-solid)]"
+            className="modal-surface modal-surface--drawer modal-surface--drawer-medium"
           >
             {/* ── 1. 顶部标题栏 (紧凑高密度现代 SaaS 抽屉头) ── */}
             <header className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-5 py-3 sm:px-6">
@@ -331,7 +332,7 @@ export function CameraDetailDrawer({
                 <button
                   type="button"
                   onClick={() => onDelete(currentCamera)}
-                  className="flex min-h-8.5 items-center gap-1.5 rounded-xl px-2.5 text-xs font-medium text-rose-500 transition-colors hover:bg-rose-500/10 focus-visible:ring-2 focus-visible:ring-rose-500/40 focus-visible:outline-none"
+                  className="flex min-h-8.5 items-center gap-1.5 rounded-xl px-2.5 text-xs font-medium text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-soft)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/40 focus-visible:outline-none"
                 >
                   <Trash2 className="h-3.5 w-3.5 opacity-80" />
                   <span>{tc('actions.delete')}</span>

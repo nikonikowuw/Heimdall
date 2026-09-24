@@ -37,7 +37,7 @@ export function CropLightboxModal({
         duration: shouldReduce ? 0.1 : motionTokens.duration.fast,
         ease: motionTokens.easing.smooth,
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm select-none"
+      className="modal-backdrop select-none"
       onClick={onClose}
     >
       <motion.div
@@ -48,12 +48,12 @@ export function CropLightboxModal({
           duration: shouldReduce ? 0.1 : motionTokens.duration.normal,
           ease: motionTokens.easing.smooth,
         }}
-        className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-2xl"
+        className="modal-surface modal-surface--narrow max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-secondary)]/50 px-6 py-3.5">
           <div className="flex items-center gap-2">
-            <ShieldAlert className="h-5 w-5 text-rose-500" />
+            <ShieldAlert className="h-5 w-5 text-[var(--status-danger)]" />
             <h3 className="text-sm font-semibold text-[var(--text-primary)]">
               {t('modal.cropImage')} · {alarm.targetLabel}
             </h3>
