@@ -671,8 +671,9 @@ fn decode_face_embedding(encoded: &str) -> Result<FaceEmbedding, InferError> {
         });
     }
 
-    for chunk in bytes.chunks_exact(4) {
-        let val = f32::from_le_bytes(chunk.try_into().expect("4-byte slice"));
+    let (chunks, _) = bytes.as_chunks::<4>();
+    for chunk in chunks {
+        let val = f32::from_le_bytes(*chunk);
         if !val.is_finite() {
             return Err(InferError::JsonParse {
                 reason: "embedding 包含非有限浮点数 (NaN 或 Inf)".to_string(),

@@ -258,10 +258,9 @@ pub fn bytes_to_floats(bytes: &[u8]) -> Option<Vec<f32>> {
         return None;
     }
     let mut floats = Vec::with_capacity(bytes.len() / 4);
-    for chunk in bytes.chunks_exact(4) {
-        floats.push(f32::from_le_bytes(
-            chunk.try_into().expect("4-byte chunk conversion"),
-        ));
+    let (chunks, _) = bytes.as_chunks::<4>();
+    for chunk in chunks {
+        floats.push(f32::from_le_bytes(*chunk));
     }
     Some(floats)
 }

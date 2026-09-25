@@ -347,6 +347,11 @@ impl PipelineManager {
         &self.snapshot_engine
     }
 
+    /// 证据存储根目录
+    pub fn base_evidence_dir(&self) -> &std::path::Path {
+        self.snapshot_engine.base_evidence_dir()
+    }
+
     /// 获取全局 VPU 快照信号量句柄 (供测试与外部配额状态观察)
     pub fn snapshot_semaphore(&self) -> &tokio::sync::Semaphore {
         &self.snapshot_semaphore

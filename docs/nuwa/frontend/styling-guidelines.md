@@ -25,8 +25,15 @@
 
 - 创建/编辑表单统一使用 [ModalFormHeader](../../../web/src/components/ui/ModalFormHeader.tsx) 与 `.modal-surface--form`。表单面板使用实体 `--bg-surface-solid`；遮罩可保留单层轻模糊，不叠加 `.modal-surface--glass`，标题、滚动内容、底部操作分别使用 `.modal-form-header`、`.modal-form-content`、`.modal-form-footer`。
 - 文本输入、选择框和文本域复用 `.modal-form-field`；标签使用 `.modal-form-label`，操作按钮使用 `.modal-form-button` 的次要/主要变体。业务分组和选择项可保留各自布局，不重复定义弹窗外壳的尺寸、滚动与页脚间距。
-- 表单说明、徽标、关闭控件和字段占位文字使用 `--text-secondary`；`--text-muted` 只用于非关键元数据。主操作按钮使用 `--accent` 背景和 `--bg-surface-solid` 前景，让亮暗主题分别采用高对比文字色；避免在调用处强制 `text-white`。
+- 表单说明、徽标、关闭控件和字段占位文字使用 `--text-secondary`；`--text-muted` 只用于非关键元数据。主操作按钮使用 `--accent` 背景与高对比白色文字（`.modal-form-button--primary` 已内置固定双主题高对比前景）；操作按钮统一复用 `.modal-form-button` 的主要/次要/危险（`--danger`）变体。
 - 验证键盘焦点、字段错误、内容溢出及亮暗主题；窄视口下标题和说明允许换行，不能遮挡关闭按钮。
+
+## 页面工具栏与操作按钮
+
+- 页面头部和工具栏操作统一复用全局 `.page-action-btn` 体系，高度固定为 `2.25rem`（36px），圆角 `0.75rem`（12px），内边距 `0 0.875rem`（图标按钮为等宽高 `.page-action-btn--icon`）。
+- **主要操作按钮**使用 `.page-action-btn--primary`：`--accent` 背景搭配固定高对比白色前景 `#ffffff` 与 `var(--shadow-xs)`。
+- **状态报告徽章与业务入口**：柔和状态使用 `.page-action-btn--soft-info`、`.page-action-btn--soft-success` 或 `.page-action-btn--soft-warning`，用于轻量报告入口或运行中反馈。
+- **分区规范**：只读状态指示（如算法就绪、离线告警）必须与可交互操作按钮建立清晰的视觉分区（状态区使用高度 `2rem`（32px）的小胶囊，与右侧 `36px` 高度的操作按钮群通过竖线分隔），杜绝“状态胶囊伪装为按钮”或“按钮层级混杂”。
 
 ## 排印
 

@@ -3,7 +3,6 @@ import {
   AlertCircle,
   Archive,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -20,8 +19,9 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { personnelApi } from '@/lib/api'
+import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { personnelApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import { formatTimestamp } from '@/lib/time'
 import { copyToClipboard } from '@/lib/utils'
@@ -52,13 +52,6 @@ export interface PersonnelImportModalProps {
 }
 
 type ModalMode = 'upload' | 'progress' | 'report'
-
-const FOOTER_BUTTON_CLASS =
-  'inline-flex h-9 items-center justify-center gap-2 rounded-xl px-4 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50'
-
-const GHOST_BUTTON_CLASS = `${FOOTER_BUTTON_CLASS} border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]`
-
-const PRIMARY_BUTTON_CLASS = `${FOOTER_BUTTON_CLASS} bg-[var(--accent)] font-semibold text-white shadow-xs hover:opacity-90 active:scale-95`
 
 /** 失败归因 → i18n 标签键 */
 const FAILURE_KIND_LABEL_KEY: Record<ImportFailureKind, string> = {
@@ -96,7 +89,7 @@ function FailureRow({
   translate: (key: string, options?: Record<string, unknown>) => string
 }): React.ReactElement {
   return (
-    <div className="rounded-xl border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 p-2.5">
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-2.5">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-[11px] font-semibold text-[var(--text-primary)]">
           {item.name || '-'}
@@ -119,7 +112,7 @@ function FailureRow({
           </span>
         )}
       </div>
-      <p className="mt-1 text-[11px] leading-relaxed text-[var(--status-warning)]">{item.reason}</p>
+      <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-secondary)]">{item.reason}</p>
     </div>
   )
 }
@@ -145,6 +138,7 @@ export function PersonnelImportModal({
   const { t, i18n } = useTranslation(['personnel', 'common'])
   const reduceMotion = useReducedMotion()
   const titleId = useId()
+  const descriptionId = useId()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [mode, setMode] = useState<ModalMode>(initialMode)
@@ -160,8 +154,6 @@ export function PersonnelImportModal({
   const failures = useMemo(() => progress?.failures ?? [], [progress])
 
   // 打开时按外部模式重置本地视图状态。
-  // 失败明细默认展开：报告视图的全部价值就是让操作员立刻看清谁失败、为什么失败，
-  // 折叠在二级交互之后会把「补拍名单」这一核心产出藏起来。
   useEffect(() => {
     if (!isOpen) return
     setLocalError(null)
@@ -186,7 +178,7 @@ export function PersonnelImportModal({
   }, [isOpen, terminal, mode])
 
   // 运行中按 ESC / 点击遮罩 = 后台运行（不中断任务）
-  useDismissStack(isOpen, onClose, { lockScroll: true })
+  useDismissStack(isOpen, onClose, { disabled: isStarting || isCancelling })
 
   const pickFile = useCallback(
     (file: File | null): void => {
@@ -194,6 +186,10 @@ export function PersonnelImportModal({
       if (!file) return
       if (!isSupportedArchiveName(file.name)) {
         setLocalError(t('import.dropzoneHint', { maxMb: maxArchiveMb }))
+        return
+      }
+      if (file.size > maxArchiveMb * 1024 * 1024) {
+        setLocalError(t('import.archiveTooLarge', { maxMb: maxArchiveMb }))
         return
       }
       setSelectedFile(file)
@@ -219,7 +215,9 @@ export function PersonnelImportModal({
       document.body.appendChild(anchor)
       anchor.click()
       document.body.removeChild(anchor)
-      URL.revokeObjectURL(url)
+      setTimeout(() => {
+        URL.revokeObjectURL(url)
+      }, 1000)
     } catch (err: unknown) {
       setLocalError(err instanceof Error ? err.message : t('import.templateFailed'))
     }
@@ -262,27 +260,16 @@ export function PersonnelImportModal({
   // ── 报告标题/描述按终态分支 ──
   let reportTitle = t('import.reportTitleCompleted')
   let reportDesc = t('import.reportDescCompleted', { total })
-  let reportTone =
-    'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
-  let ReportIcon = CheckCircle2
 
   if (progress?.status === 'cancelled') {
     reportTitle = t('import.reportTitleCancelled')
     reportDesc = t('import.reportDescCancelled', { processed })
-    reportTone = 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
-    ReportIcon = Info
   } else if (progress?.status === 'failed') {
     reportTitle = t('import.reportTitleFailed')
     reportDesc = progress.errorMessage || t('import.reportDescFailed', { total })
-    reportTone =
-      'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
-    ReportIcon = AlertCircle
   } else if (failed > 0) {
     reportTitle = t('import.reportTitlePartial')
     reportDesc = t('import.reportDescPartial', { total, succeeded, failed })
-    reportTone =
-      'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
-    ReportIcon = AlertCircle
   }
 
   const renderUploadBody = (): React.ReactElement => (
@@ -307,16 +294,16 @@ export function PersonnelImportModal({
         className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-5 py-8 text-center transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
           isDragging
             ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-            : 'border-[var(--border)] bg-[var(--bg-secondary)]/40 hover:border-[var(--accent)]/50'
+            : 'border-[var(--border)] bg-[var(--bg-secondary)] hover:border-[var(--accent)]/50'
         }`}
       >
         <div className="mb-2.5 flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)]">
-          <UploadCloud className="h-5 w-5" aria-hidden="true" />
+          <UploadCloud className="h-6 w-6" aria-hidden="true" />
         </div>
-        <p className="text-xs font-medium text-[var(--text-primary)]">
+        <p className="text-xs font-semibold text-[var(--text-primary)]">
           {isDragging ? t('import.dropzoneActive') : t('import.dropzoneText')}
         </p>
-        <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+        <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
           {t('import.dropzoneHint', { maxMb: maxArchiveMb })}
         </p>
       </div>
@@ -333,7 +320,7 @@ export function PersonnelImportModal({
       />
 
       {selectedFile && (
-        <div className="flex items-center gap-2.5 rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 px-3 py-2.5">
+        <div className="flex items-center gap-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-3.5 py-2.5">
           <Archive className="h-4 w-4 shrink-0 text-[var(--accent)]" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <p className="text-[10px] text-[var(--text-muted)]">{t('import.selectedFile')}</p>
@@ -344,51 +331,51 @@ export function PersonnelImportModal({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+            className="inline-flex h-7 shrink-0 items-center justify-center rounded-lg border border-[var(--accent)]/30 bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/15 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
           >
             {t('import.changeFile')}
           </button>
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/30 px-3 py-2.5">
-        <p className="min-w-0 flex-1 text-[11px] leading-relaxed text-[var(--text-muted)]">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-3.5 py-2.5">
+        <p className="min-w-0 flex-1 text-[11px] leading-relaxed text-[var(--text-secondary)]">
           {t('import.templateHint')}
         </p>
         <button
           type="button"
           onClick={() => void handleDownloadTemplate()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface-solid)] px-3 text-xs font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]/40 hover:bg-[var(--bg-secondary)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
         >
-          <Download className="h-3 w-3" aria-hidden="true" />
-          {t('import.downloadTemplate')}
+          <Download className="h-3.5 w-3.5" aria-hidden="true" />
+          <span>{t('import.downloadTemplate')}</span>
         </button>
       </div>
 
       <div className="grid gap-2.5 sm:grid-cols-2">
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/30 p-3">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
           <p className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]">
             <FileText className="h-3.5 w-3.5 text-[var(--accent)]" aria-hidden="true" />
             {t('import.guideManifestTitle')}
           </p>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
+          <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
             {t('import.guideManifestDesc')}
           </p>
         </div>
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/30 p-3">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
           <p className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]">
             <Archive className="h-3.5 w-3.5 text-[var(--accent)]" aria-hidden="true" />
             {t('import.guideConventionTitle')}
           </p>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
+          <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
             {t('import.guideConventionDesc')}
           </p>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/30 p-3">
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
         <p className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]">
-          <Info className="h-3.5 w-3.5 text-[var(--info)]" aria-hidden="true" />
+          <Info className="h-3.5 w-3.5 text-[var(--status-info)]" aria-hidden="true" />
           {t('import.guideTipsTitle')}
         </p>
         <ul className="mt-2 space-y-1.5">
@@ -401,7 +388,7 @@ export function PersonnelImportModal({
           ].map((tip) => (
             <li
               key={tip}
-              className="flex gap-1.5 text-[11px] leading-relaxed text-[var(--text-muted)]"
+              className="flex gap-1.5 text-[11px] leading-relaxed text-[var(--text-secondary)]"
             >
               <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[var(--text-muted)]" />
               <span>{tip}</span>
@@ -421,7 +408,9 @@ export function PersonnelImportModal({
       <div className="space-y-2">
         <div className="flex items-center justify-between text-[11px] text-[var(--text-secondary)]">
           <span>{t('import.processedRatio', { processed, total })}</span>
-          <span className="font-data font-semibold tabular-nums">{percent}%</span>
+          <span className="font-data font-semibold text-[var(--text-primary)] tabular-nums">
+            {percent}%
+          </span>
         </div>
         <div
           role="progressbar"
@@ -440,18 +429,15 @@ export function PersonnelImportModal({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2.5">
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
-          <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
-            <Users className="h-3 w-3" aria-hidden="true" />
-            <span>{t('import.processedCount')}</span>
-          </div>
+      <div className="grid grid-cols-3 gap-2.5 text-center">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
+          <p className="text-[10px] text-[var(--text-muted)]">{t('import.processedCount')}</p>
           <p className="font-data mt-1 text-base font-bold text-[var(--text-primary)] tabular-nums">
             {processed}
             <span className="text-xs font-normal text-[var(--text-muted)]"> / {total}</span>
           </p>
         </div>
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
           <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
             <Check className="h-3 w-3 text-[var(--status-success)]" aria-hidden="true" />
             <span>{t('import.successCount')}</span>
@@ -460,7 +446,7 @@ export function PersonnelImportModal({
             {succeeded}
           </p>
         </div>
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
           <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
             <AlertCircle className="h-3 w-3 text-[var(--status-warning)]" aria-hidden="true" />
             <span>{t('import.failedCount')}</span>
@@ -476,7 +462,7 @@ export function PersonnelImportModal({
       </div>
 
       {progress?.currentName && (
-        <p className="font-data flex items-center gap-1.5 truncate text-[11px] text-[var(--text-muted)]">
+        <p className="font-data flex items-center gap-1.5 truncate text-[11px] text-[var(--text-secondary)]">
           <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden="true" />
           {t('import.currentProcessing')}: {progress.currentName}
         </p>
@@ -489,7 +475,7 @@ export function PersonnelImportModal({
       <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{reportDesc}</p>
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
           <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
             <Users className="h-3 w-3" aria-hidden="true" />
             <span>{t('pagination.totalCount')}</span>
@@ -498,7 +484,7 @@ export function PersonnelImportModal({
             {total}
           </p>
         </div>
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
           <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
             <Check className="h-3 w-3 text-[var(--status-success)]" aria-hidden="true" />
             <span>{t('import.successCount')}</span>
@@ -507,7 +493,7 @@ export function PersonnelImportModal({
             {succeeded}
           </p>
         </div>
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
           <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
             <Percent className="h-3 w-3 text-[var(--status-info)]" aria-hidden="true" />
             <span>{t('import.successRate')}</span>
@@ -516,7 +502,7 @@ export function PersonnelImportModal({
             {successRate}%
           </p>
         </div>
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
           <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
             <Clock className="h-3 w-3" aria-hidden="true" />
             <span>{t('import.duration')}</span>
@@ -534,13 +520,13 @@ export function PersonnelImportModal({
       )}
 
       {failures.length > 0 ? (
-        <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/30 p-3">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
               onClick={() => setShowFailures((prev) => !prev)}
               aria-expanded={showFailures}
-              className="flex items-center gap-1.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+              className="flex items-center gap-1.5 rounded-lg text-xs font-semibold text-[var(--text-primary)] transition-colors hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
             >
               <AlertCircle
                 className="h-3.5 w-3.5 text-[var(--status-warning)]"
@@ -557,12 +543,12 @@ export function PersonnelImportModal({
             <button
               type="button"
               onClick={() => void handleCopyFailures()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+              className="inline-flex h-7.5 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface-solid)] px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)]/40 hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
             >
               {copied ? (
-                <Check className="h-3 w-3 text-[var(--status-success)]" aria-hidden="true" />
+                <Check className="h-3.5 w-3.5 text-[var(--status-success)]" aria-hidden="true" />
               ) : (
-                <Copy className="h-3 w-3" aria-hidden="true" />
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
               )}
               {copied ? t('import.copiedFailures') : t('import.copyFailures')}
             </button>
@@ -572,15 +558,15 @@ export function PersonnelImportModal({
             <div className="mt-2.5 space-y-2.5">
               {availableKinds.length > 1 && (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <ListFilter className="h-3 w-3 text-[var(--text-muted)]" aria-hidden="true" />
+                  <ListFilter className="h-3.5 w-3.5 text-[var(--text-muted)]" aria-hidden="true" />
                   <button
                     type="button"
                     onClick={() => setKindFilter('all')}
                     aria-pressed={kindFilter === 'all'}
-                    className={`rounded-lg border px-2 py-0.5 text-[10px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
+                    className={`inline-flex h-6 items-center rounded-md border px-2 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
                       kindFilter === 'all'
                         ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)] text-[var(--accent)]'
-                        : 'border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                        : 'border-[var(--border)] bg-[var(--bg-surface-solid)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
                     }`}
                   >
                     {t('import.failuresFilterAll')}
@@ -591,10 +577,10 @@ export function PersonnelImportModal({
                       type="button"
                       onClick={() => setKindFilter(kind)}
                       aria-pressed={kindFilter === kind}
-                      className={`rounded-lg border px-2 py-0.5 text-[10px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
+                      className={`inline-flex h-6 items-center rounded-md border px-2 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
                         kindFilter === kind
                           ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)] text-[var(--accent)]'
-                          : 'border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                          : 'border-[var(--border)] bg-[var(--bg-surface-solid)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
                       }`}
                     >
                       {t(FAILURE_KIND_LABEL_KEY[kind])}
@@ -616,7 +602,7 @@ export function PersonnelImportModal({
           )}
         </div>
       ) : (
-        <p className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/30 px-3 py-3 text-center text-[11px] text-[var(--text-muted)]">
+        <p className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-3 text-center text-[11px] text-[var(--text-muted)]">
           {t('import.failuresEmpty')}
         </p>
       )}
@@ -624,61 +610,39 @@ export function PersonnelImportModal({
   )
 
   const renderBody = (): React.ReactElement => {
-    if (error || localError) {
-      return (
-        <div
-          role="alert"
-          className="flex items-start gap-2.5 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3.5 text-xs text-[var(--status-danger)]"
-        >
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <span className="leading-relaxed">{error || localError}</span>
-        </div>
-      )
-    }
-    if (mode === 'progress') return renderProgressBody()
-    if (mode === 'report') return renderReportBody()
-    return renderUploadBody()
-  }
-
-  const headerIcon = ((): React.ReactNode => {
-    if (error || localError) {
-      return (
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs">
-          <AlertCircle className="h-5 w-5" aria-hidden="true" />
-        </div>
-      )
-    }
-    if (mode === 'report') {
-      return (
-        <div
-          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border shadow-xs ${reportTone}`}
-        >
-          <ReportIcon className="h-5 w-5" aria-hidden="true" />
-        </div>
-      )
-    }
-    if (mode === 'progress') {
-      return (
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info)] shadow-xs">
-          <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
-        </div>
-      )
-    }
     return (
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs">
-        <UploadCloud className="h-5 w-5" aria-hidden="true" />
+      <div className="modal-form-content space-y-4">
+        {error || localError ? (
+          <div
+            role="alert"
+            className="flex items-start gap-2.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3.5 text-xs text-[var(--status-danger)]"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="leading-relaxed">{error || localError}</span>
+          </div>
+        ) : null}
+        {mode === 'progress' && renderProgressBody()}
+        {mode === 'report' && renderReportBody()}
+        {mode === 'upload' && renderUploadBody()}
       </div>
     )
-  })()
+  }
 
   let headerTitle = t('import.title')
-  let headerSubtitle: string | null = t('import.subtitle')
+  let headerSubtitle = t('import.subtitle')
+  let headerBadge = 'IMPORT'
+  let HeaderIcon = UploadCloud
+
   if (error || localError) {
     headerTitle = t('import.errorTitle')
-    headerSubtitle = null
+    headerSubtitle = error || localError || ''
+    headerBadge = 'ERROR'
+    HeaderIcon = AlertCircle
   } else if (mode === 'report') {
     headerTitle = reportTitle
     headerSubtitle = t('import.reportTitleCompleted')
+    headerBadge = 'REPORT'
+    HeaderIcon = FileText
     if (progress?.status === 'cancelled') {
       headerSubtitle = t('import.reportTitleCancelled')
     } else if (failed > 0) {
@@ -687,32 +651,27 @@ export function PersonnelImportModal({
   } else if (mode === 'progress') {
     headerTitle = t('import.runningShort')
     headerSubtitle = t('import.processedRatio', { processed, total })
+    headerBadge = 'RUNNING'
+    HeaderIcon = UploadCloud
   }
 
   const renderFooter = (): React.ReactElement => {
-    const escHint = (
-      <div className="hidden items-center gap-1 text-[11px] text-[var(--text-muted)] sm:flex">
-        <span>{t('modal.escHintPrefix')}</span>
-        <kbd className="rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] shadow-xs">
-          ESC
-        </kbd>
-        <span>{t('modal.escHintSuffix')}</span>
-      </div>
-    )
-
     if (mode === 'progress' && !error && !localError) {
       return (
-        <>
-          {escHint}
-          <div className="flex items-center gap-2.5">
-            <button type="button" onClick={onClose} className={GHOST_BUTTON_CLASS}>
+        <div className="modal-form-footer">
+          <div className="modal-form-actions">
+            <button
+              type="button"
+              onClick={onClose}
+              className="modal-form-button modal-form-button--secondary"
+            >
               {t('import.runInBackground')}
             </button>
             <button
               type="button"
               onClick={onCancelTask}
               disabled={isCancelling}
-              className={`${FOOTER_BUTTON_CLASS} border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] hover:bg-[var(--status-danger-soft)]`}
+              className="modal-form-button modal-form-button--danger"
             >
               {isCancelling ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -722,35 +681,43 @@ export function PersonnelImportModal({
               {isCancelling ? t('import.cancelling') : t('import.cancelImport')}
             </button>
           </div>
-        </>
+        </div>
       )
     }
 
     if (mode === 'upload') {
       return (
-        <>
-          {escHint}
-          <button
-            type="button"
-            onClick={() => selectedFile && onStart(selectedFile)}
-            disabled={!selectedFile || isStarting}
-            className={PRIMARY_BUTTON_CLASS}
-          >
-            {isStarting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-            ) : (
-              <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
-            {t('import.startImport')}
-          </button>
-        </>
+        <div className="modal-form-footer">
+          <div className="modal-form-actions">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isStarting}
+              className="modal-form-button modal-form-button--secondary"
+            >
+              {t('common:cancel')}
+            </button>
+            <button
+              type="button"
+              onClick={() => selectedFile && onStart(selectedFile)}
+              disabled={!selectedFile || isStarting}
+              className="modal-form-button modal-form-button--primary"
+            >
+              {isStarting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              {t('import.startImport')}
+            </button>
+          </div>
+        </div>
       )
     }
 
     return (
-      <>
-        {escHint}
-        <div className="flex items-center gap-2.5">
+      <div className="modal-form-footer">
+        <div className="modal-form-actions">
           <button
             type="button"
             onClick={() => {
@@ -758,15 +725,19 @@ export function PersonnelImportModal({
               setLocalError(null)
               setMode('upload')
             }}
-            className={GHOST_BUTTON_CLASS}
+            className="modal-form-button modal-form-button--secondary"
           >
             {t('import.importAgain')}
           </button>
-          <button type="button" onClick={onClose} className={PRIMARY_BUTTON_CLASS}>
+          <button
+            type="button"
+            onClick={onClose}
+            className="modal-form-button modal-form-button--primary"
+          >
             {t('import.close')}
           </button>
         </div>
-      </>
+      </div>
     )
   }
 
@@ -775,14 +746,17 @@ export function PersonnelImportModal({
       {isOpen && (
         <div
           onClick={(event) => {
-            if (event.target === event.currentTarget) onClose()
+            if (event.target === event.currentTarget && !isStarting && !isCancelling) {
+              onClose()
+            }
           }}
-          className="modal-backdrop modal-backdrop--raised"
+          className="modal-backdrop"
         >
           <motion.div
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
+            aria-describedby={descriptionId}
             initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 12 }}
@@ -790,43 +764,23 @@ export function PersonnelImportModal({
               duration: motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="modal-surface modal-surface--narrow modal-surface--glass max-h-[92vh]"
+            className="modal-surface modal-surface--form max-w-xl"
           >
-            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border)]/70 px-5 py-4">
-              <div className="flex min-w-0 items-center gap-3.5">
-                {headerIcon}
-                <div className="min-w-0">
-                  <h3
-                    id={titleId}
-                    className="truncate text-base font-bold tracking-tight text-[var(--text-primary)]"
-                  >
-                    {headerTitle}
-                  </h3>
-                  {headerSubtitle && (
-                    <p
-                      className={`mt-0.5 truncate text-xs ${error || localError ? 'text-[var(--status-danger)]' : 'text-[var(--text-muted)]'}`}
-                    >
-                      {headerSubtitle}
-                    </p>
-                  )}
-                </div>
-              </div>
+            <ModalFormHeader
+              icon={HeaderIcon}
+              title={headerTitle}
+              titleId={titleId}
+              description={headerSubtitle}
+              descriptionId={descriptionId}
+              badge={headerBadge}
+              closeLabel={t('common:close')}
+              onClose={onClose}
+              closeDisabled={isStarting || isCancelling}
+            />
 
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label={t('common:close')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-              >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
+            {renderBody()}
 
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">{renderBody()}</div>
-
-            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--border)]/70 px-5 py-4">
-              {renderFooter()}
-            </div>
+            {renderFooter()}
           </motion.div>
         </div>
       )}

@@ -39,6 +39,17 @@ pub use sandbox::{
 
 use enrollment::import_single_candidate;
 
+/// 人员批量导入任务执行上下文（封装后台 Worker 所需的系统依赖）
+#[derive(Debug)]
+pub struct ImportTaskContext {
+    pub db: DatabaseConnection,
+    pub evidence_base_dir: PathBuf,
+    pub algo_registry: Arc<AlgoRegistry>,
+    pub gallery_index: Arc<FaceFeatureIndex>,
+    pub maintenance_guard: MaintenanceGuard,
+    pub event_broadcaster: broadcast::Sender<WsBroadcastEvent>,
+}
+
 /// 进度广播的节流间隔（毫秒）：避免逐人广播在数百人批次中产生 WS 风暴，
 /// 但始终保证「处理完成」一帧必达。
 pub const PROGRESS_BROADCAST_THROTTLE_MS: u64 = 900;
@@ -138,19 +149,22 @@ impl PersonnelImportManager {
     /// 调用方需已完成解压解析（`prepare_candidates`）、持有底库重型任务闸门
     /// （`MaintenanceGate::acquire`）并把沙箱所有权移交进来；
     /// 沙箱与闸门守卫都随 Worker 结束（含取消与 panic）自动释放。
-    #[allow(clippy::too_many_arguments)]
     pub async fn start_task(
         &self,
         task_id: String,
         sandbox: TempImportSandbox,
         candidates: Vec<ImportCandidate>,
-        db: DatabaseConnection,
-        evidence_base_dir: PathBuf,
-        algo_registry: Arc<AlgoRegistry>,
-        gallery_index: Arc<FaceFeatureIndex>,
-        maintenance_guard: MaintenanceGuard,
-        event_broadcaster: broadcast::Sender<WsBroadcastEvent>,
+        ctx: ImportTaskContext,
     ) -> Result<PersonnelImportProgressDto, ApiError> {
+        let ImportTaskContext {
+            db,
+            evidence_base_dir,
+            algo_registry,
+            gallery_index,
+            maintenance_guard,
+            event_broadcaster,
+        } = ctx;
+
         if !algo_registry.is_face_extraction_ready().await {
             return Err(ApiError::FaceAlgorithmNotLoaded(
                 "人脸识别算法包未就绪，无法提取特征，请先部署/激活人脸算法".to_string(),

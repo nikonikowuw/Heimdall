@@ -334,4 +334,9 @@ impl AppState {
             .map(|guard| guard.clone())
             .unwrap_or_default()
     }
+
+    /// 获取证据存储根目录路径
+    pub fn base_evidence_dir(&self) -> std::path::PathBuf {
+        self.pipeline.base_evidence_dir().to_path_buf()
+    }
 }

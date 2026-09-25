@@ -11,6 +11,7 @@ use types::{
 
 use crate::error::ApiError;
 use crate::personnel_import::manager::{MAX_IMPORT_ARCHIVE_BYTES, MAX_IMPORT_REQUEST_BYTES};
+use crate::personnel_import::ImportTaskContext;
 use crate::personnel_maintenance::MaintenanceTaskKind;
 use crate::personnel_service::PersonnelService;
 use crate::response::ApiResponse;
@@ -252,11 +253,7 @@ async fn set_primary_personnel_face(
 async fn start_reextract_all_faces(
     State(state): State<AppState>,
 ) -> Result<ApiResponse<ReextractProgressDto>, ApiError> {
-    let evidence_base_dir = state
-        .pipeline
-        .snapshot_engine()
-        .base_evidence_dir()
-        .to_path_buf();
+    let evidence_base_dir = state.base_evidence_dir();
     let maintenance_guard = state
         .maintenance_gate
         .acquire(MaintenanceTaskKind::Reextract)?;
@@ -366,11 +363,7 @@ async fn start_personnel_import(
     }
 
     let total = candidates.len() as u64;
-    let evidence_base_dir = state
-        .pipeline
-        .snapshot_engine()
-        .base_evidence_dir()
-        .to_path_buf();
+    let evidence_base_dir = state.base_evidence_dir();
 
     let progress = state
         .import_manager
@@ -378,12 +371,14 @@ async fn start_personnel_import(
             task_id.clone(),
             sandbox,
             candidates,
-            state.db.clone(),
-            evidence_base_dir,
-            state.algo_registry.clone(),
-            state.gallery_index.clone(),
-            maintenance_guard,
-            state.event_broadcaster.clone(),
+            ImportTaskContext {
+                db: state.db.clone(),
+                evidence_base_dir,
+                algo_registry: state.algo_registry.clone(),
+                gallery_index: state.gallery_index.clone(),
+                maintenance_guard,
+                event_broadcaster: state.event_broadcaster.clone(),
+            },
         )
         .await?;
 

@@ -302,7 +302,9 @@ export function CamerasPage(): React.ReactElement {
             type="button"
             onClick={loadData}
             disabled={isLoading}
-            className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-50"
+            aria-label={tc('actions.refresh')}
+            title={tc('actions.refresh')}
+            className="page-action-btn"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             <span>{tc('actions.refresh')}</span>
@@ -313,9 +315,9 @@ export function CamerasPage(): React.ReactElement {
               setCameraToEdit(null)
               setIsCameraModalOpen(true)
             }}
-            className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95"
+            className="page-action-btn page-action-btn--primary"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-4 w-4" />
             <span>{t('manage.addCamera', { defaultValue: '接入设备' })}</span>
           </button>
         </div>
@@ -349,7 +351,7 @@ export function CamerasPage(): React.ReactElement {
             <button
               type="button"
               onClick={() => setIsBatchImportOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition-all hover:bg-cyan-500 active:scale-95"
+              className="page-action-btn page-action-btn--soft-info h-8 rounded-lg !px-3 text-xs"
             >
               {t('discovery.batchImport', { defaultValue: '批量纳管通道' })}
             </button>
@@ -527,7 +529,7 @@ export function CamerasPage(): React.ReactElement {
                 setCameraToEdit(null)
                 setIsCameraModalOpen(true)
               }}
-              className="mt-5 flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95"
+              className="page-action-btn page-action-btn--primary mt-5"
             >
               <Plus className="h-4 w-4" />
               <span>{t('manage.addFirstCamera', { defaultValue: '接入首路摄像头' })}</span>

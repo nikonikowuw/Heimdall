@@ -7,4 +7,4 @@ pub mod candidate;
 pub mod manager;
 
 pub use candidate::parse_candidates;
-pub use manager::{PersonnelImportManager, TempImportSandbox};
+pub use manager::{ImportTaskContext, PersonnelImportManager, TempImportSandbox};

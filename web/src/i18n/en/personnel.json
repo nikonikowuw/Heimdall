@@ -230,6 +230,7 @@
     "viewReportTooltip": "View the result report and failure details of the latest bulk import",
     "dropzoneText": "Click or drag an archive here",
     "dropzoneHint": "Supports .zip / .tar.gz / .tar, up to {{maxMb}} MB per archive",
+    "archiveTooLarge": "Archive size exceeds the limit ({{maxMb}} MB). Please split and import in batches.",
     "dropzoneActive": "Release to start importing",
     "dropzoneMore": "Supports .zip / .tar.gz / .tar",
     "selectedFile": "Selected",

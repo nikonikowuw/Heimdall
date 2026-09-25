@@ -48,9 +48,18 @@ export function LoginPage(): React.ReactElement {
   const setupRequired = initializationStatus === 'setup-required'
   const canAuthenticate = initializationStatus === 'ready' || setupRequired
 
-  useEffect(() => {
-    if (formError) formErrorRef.current?.focus()
-  }, [formError])
+  const reportFieldError = (
+    message: string,
+    inputRef: React.RefObject<HTMLInputElement | null>,
+  ) => {
+    setFormError(message)
+    inputRef.current?.focus()
+  }
+
+  const reportGeneralError = (message: string) => {
+    setFormError(message)
+    setTimeout(() => formErrorRef.current?.focus(), 0)
+  }
 
   const handleAuthSuccess = (accessToken: string, authUsername: string) => {
     setIsSuccess(true)
@@ -99,6 +108,7 @@ export function LoginPage(): React.ReactElement {
           return
         }
       }
+      if (e.metaKey || e.ctrlKey || e.altKey) return
       if (e.key === 't' || e.key === 'T') {
         toggleTheme()
       }
@@ -113,30 +123,25 @@ export function LoginPage(): React.ReactElement {
 
     const trimmedUsername = username.trim()
     if (!trimmedUsername) {
-      setFormError(t('usernameRequired'))
-      usernameInputRef.current?.focus()
+      reportFieldError(t('usernameRequired'), usernameInputRef)
       return
     }
     if (!password) {
-      setFormError(t('passwordRequired'))
-      passwordInputRef.current?.focus()
+      reportFieldError(t('passwordRequired'), passwordInputRef)
       return
     }
 
     if (setupRequired) {
       if (password.length < 6) {
-        setFormError(t('passwordLengthError'))
-        passwordInputRef.current?.focus()
+        reportFieldError(t('passwordLengthError'), passwordInputRef)
         return
       }
       if (!confirmPassword) {
-        setFormError(t('confirmPasswordRequired'))
-        confirmPasswordInputRef.current?.focus()
+        reportFieldError(t('confirmPasswordRequired'), confirmPasswordInputRef)
         return
       }
       if (password !== confirmPassword) {
-        setFormError(t('passwordMismatch'))
-        confirmPasswordInputRef.current?.focus()
+        reportFieldError(t('passwordMismatch'), confirmPasswordInputRef)
         return
       }
 
@@ -150,7 +155,7 @@ export function LoginPage(): React.ReactElement {
         handleAuthSuccess(res.accessToken, res.username)
       } catch (err: unknown) {
         setLoading(false)
-        setFormError(err instanceof Error ? err.message : t('loginError'))
+        reportGeneralError(err instanceof Error ? err.message : t('loginError'))
       }
       return
     }
@@ -164,7 +169,7 @@ export function LoginPage(): React.ReactElement {
       handleAuthSuccess(res.accessToken, res.username)
     } catch (err: unknown) {
       setLoading(false)
-      setFormError(err instanceof Error ? err.message : t('loginError'))
+      reportGeneralError(err instanceof Error ? err.message : t('loginError'))
     }
   }
 

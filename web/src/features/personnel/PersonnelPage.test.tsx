@@ -301,4 +301,23 @@ describe('Personnel bulk import modal', () => {
     expect(html).toContain('role="alert"')
     expect(html).toContain('当前有底库维护任务正在执行')
   })
+
+  it('surfaces an error when archive size exceeds the limit', () => {
+    const html = renderToString(
+      <PersonnelImportModal
+        isOpen
+        progress={null}
+        isStarting={false}
+        isCancelling={false}
+        error="导入归档体积超出上限 (100 MB)，请拆分后分批导入"
+        maxArchiveMb={100}
+        onClose={() => {}}
+        onStart={() => {}}
+        onCancelTask={() => {}}
+      />,
+    )
+
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('100 MB')
+  })
 })

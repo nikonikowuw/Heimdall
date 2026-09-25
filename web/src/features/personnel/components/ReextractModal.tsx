@@ -1,4 +1,4 @@
-import { useState, useEffect, useId } from 'react'
+import React, { useState, useEffect, useId } from 'react'
 import {
   AlertCircle,
   Check,
@@ -8,10 +8,10 @@ import {
   Clock,
   Percent,
   RefreshCw,
-  X,
 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { motionTokens } from '@/lib/motionTokens'
 import { formatTimestamp } from '@/lib/time'
@@ -29,13 +29,6 @@ export interface ReextractModalProps {
   onClose: () => void
   onConfirm: () => void
 }
-
-const FOOTER_BUTTON_CLASS =
-  'inline-flex h-9 items-center justify-center gap-2 rounded-xl px-4 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50'
-
-const GHOST_BUTTON_CLASS = `${FOOTER_BUTTON_CLASS} border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]`
-
-const PRIMARY_BUTTON_CLASS = `${FOOTER_BUTTON_CLASS} bg-[var(--accent)] font-semibold text-white shadow-xs hover:opacity-90 active:scale-95`
 
 function formatFailureReason(
   reason: string,
@@ -89,12 +82,13 @@ export function ReextractModal({
   error,
   onClose,
   onConfirm,
-}: ReextractModalProps) {
+}: ReextractModalProps): React.ReactElement {
   const { t, i18n } = useTranslation(['personnel', 'common'])
   const reduceMotion = useReducedMotion()
   const [showFailures, setShowFailures] = useState(false)
   const [currentMode, setCurrentMode] = useState<'confirm' | 'progress' | 'report'>('confirm')
   const titleId = useId()
+  const descriptionId = useId()
   const failuresId = useId()
 
   // 状态判定
@@ -130,6 +124,7 @@ export function ReextractModal({
   // ESC 浮层栈支持（执行中可按 ESC 关闭弹窗转入后台运行）
   // Enter 仅在确认阶段触发重提（与底部主按钮一致，进行中/报告阶段不响应）
   useDismissStack(isOpen, onClose, {
+    disabled: isStarting,
     onConfirm: currentMode === 'confirm' ? onConfirm : undefined,
   })
 
@@ -149,16 +144,6 @@ export function ReextractModal({
       ? ((progress.finishedAt - progress.startedAt) / 1000).toFixed(1)
       : null
 
-  let completedBadgeClass =
-    'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
-  if (isTaskFailed) {
-    completedBadgeClass =
-      'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
-  } else if (isAllSuccess) {
-    completedBadgeClass =
-      'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
-  }
-
   let completedTitle = t('reextract.successTitle')
   if (isTaskFailed) {
     completedTitle = t('reextract.failedTitle')
@@ -171,46 +156,26 @@ export function ReextractModal({
     completedDesc = t('reextract.successDesc', { total })
   }
 
-  let headerIconNode: React.ReactNode
-  if (error) {
-    headerIconNode = (
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs">
-        <AlertCircle className="h-5 w-5" aria-hidden="true" />
-      </div>
-    )
-  } else if (currentMode === 'report') {
-    headerIconNode = (
-      <div
-        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border shadow-xs ${completedBadgeClass}`}
-      >
-        {isAllSuccess ? (
-          <CheckCircle2 className="h-5 w-5" aria-hidden="true" />
-        ) : (
-          <AlertCircle className="h-5 w-5" aria-hidden="true" />
-        )}
-      </div>
-    )
-  } else {
-    headerIconNode = (
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-xs">
-        <RefreshCw className={`h-5 w-5 ${isRunning ? 'animate-spin' : ''}`} aria-hidden="true" />
-      </div>
-    )
-  }
-
   let headerTitle = t('reextract.title')
-  let headerSubtitle: string | null = null
+  let headerSubtitle = isGlobal ? '' : (targetName ?? '')
+  let headerBadge = 'FEATURE'
+  let HeaderIcon = RefreshCw
+
   if (error) {
     headerTitle = t('errors.reextractFailed')
     headerSubtitle = error
+    headerBadge = 'ERROR'
+    HeaderIcon = AlertCircle
   } else if (currentMode === 'report') {
     headerTitle = completedTitle
-    headerSubtitle = targetName ?? null
+    headerSubtitle = targetName ?? ''
+    headerBadge = isTaskFailed ? 'FAILED' : isAllSuccess ? 'SUCCESS' : 'REPORT'
+    HeaderIcon = isAllSuccess ? CheckCircle2 : AlertCircle
   } else if (isRunning || currentMode === 'progress') {
     headerTitle = t('actions.reextracting')
     headerSubtitle = t('reextract.processedRatio', { processed, total, percent })
-  } else if (!isGlobal && targetName) {
-    headerSubtitle = targetName
+    headerBadge = 'RUNNING'
+    HeaderIcon = RefreshCw
   }
 
   const renderModalBody = (): React.ReactElement => {
@@ -218,7 +183,7 @@ export function ReextractModal({
       return (
         <div
           role="alert"
-          className="flex items-start gap-2.5 rounded-2xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3.5 text-xs text-[var(--status-danger)]"
+          className="flex items-start gap-2.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3.5 text-xs text-[var(--status-danger)]"
         >
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="leading-relaxed">{error}</span>
@@ -232,7 +197,7 @@ export function ReextractModal({
           <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{completedDesc}</p>
 
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-            <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
                 <Check className="h-3 w-3 text-[var(--status-success)]" aria-hidden="true" />
                 <span>{t('reextract.successCount')}</span>
@@ -243,7 +208,7 @@ export function ReextractModal({
               </p>
             </div>
 
-            <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
                 <Percent className="h-3 w-3 text-[var(--status-info)]" aria-hidden="true" />
                 <span>{t('reextract.successRate')}</span>
@@ -253,7 +218,7 @@ export function ReextractModal({
               </p>
             </div>
 
-            <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
                 <AlertCircle className="h-3 w-3 text-[var(--status-warning)]" aria-hidden="true" />
                 <span>{t('reextract.failedCount')}</span>
@@ -267,7 +232,7 @@ export function ReextractModal({
               </p>
             </div>
 
-            <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5 text-center">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5 text-center">
               <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
                 <Clock className="h-3 w-3" aria-hidden="true" />
                 <span>{t('reextract.duration')}</span>
@@ -286,13 +251,13 @@ export function ReextractModal({
           )}
 
           {failures.length > 0 && (
-            <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/30 p-3">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
               <button
                 type="button"
                 onClick={() => setShowFailures((prev) => !prev)}
                 aria-expanded={showFailures}
                 aria-controls={failuresId}
-                className="flex w-full items-center justify-between rounded-lg text-xs font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                className="flex w-full items-center justify-between rounded-lg text-xs font-semibold text-[var(--text-primary)] transition-colors hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
               >
                 <span className="flex items-center gap-1.5">
                   <AlertCircle
@@ -316,13 +281,13 @@ export function ReextractModal({
                   {failures.map((item) => (
                     <div
                       key={item.faceId}
-                      className="rounded-xl border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 p-2 text-[11px]"
+                      className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-2.5 text-[11px]"
                     >
                       <div className="flex flex-col gap-0.5 text-[var(--text-muted)]">
                         <span className="font-data break-all">Face: {item.faceId}</span>
                         <span className="font-data break-all">Subj: {item.subjectId}</span>
                       </div>
-                      <p className="mt-1 text-[var(--status-warning)]">
+                      <p className="mt-1 leading-relaxed text-[var(--text-secondary)]">
                         {formatFailureReason(item.reason, t)}
                       </p>
                     </div>
@@ -339,7 +304,7 @@ export function ReextractModal({
       return (
         <>
           <div className="flex items-end justify-between gap-3">
-            <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+            <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
               {t('reextract.inProgress')}
             </p>
             <span className="font-data text-xl font-bold text-[var(--accent)] tabular-nums">
@@ -355,39 +320,50 @@ export function ReextractModal({
             aria-label={t('actions.reextracting')}
             className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-secondary)]"
           >
-            <div
-              className="h-full bg-[var(--accent)] transition-all duration-300 ease-out"
-              style={{ width: `${percent}%` }}
+            <motion.div
+              className="h-full rounded-full bg-[var(--accent)]"
+              initial={false}
+              animate={{ width: `${percent}%` }}
+              transition={{
+                duration: motionTokens.duration.fast,
+                ease: motionTokens.easing.smooth,
+              }}
             />
           </div>
 
           <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
-            <div className="rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-2.5">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5">
               <p className="text-[10px] text-[var(--text-muted)]">{t('stats.totalFaces')}</p>
               <p className="font-data mt-0.5 text-sm font-bold text-[var(--text-primary)] tabular-nums">
                 {processed} / {total}
               </p>
             </div>
-            <div className="rounded-2xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] p-2.5">
-              <p className="text-[10px] text-[var(--status-success)]">
-                {t('reextract.successCount')}
-              </p>
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5">
+              <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
+                <Check className="h-3 w-3 text-[var(--status-success)]" aria-hidden="true" />
+                <span>{t('reextract.successCount')}</span>
+              </div>
               <p className="font-data mt-0.5 text-sm font-bold text-[var(--status-success)] tabular-nums">
                 {succeeded}
               </p>
             </div>
-            <div className="rounded-2xl border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] p-2.5">
-              <p className="text-[10px] text-[var(--status-warning)]">
-                {t('reextract.failedCount')}
-              </p>
-              <p className="font-data mt-0.5 text-sm font-bold text-[var(--status-warning)] tabular-nums">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-2.5">
+              <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--text-muted)]">
+                <AlertCircle className="h-3 w-3 text-[var(--status-warning)]" aria-hidden="true" />
+                <span>{t('reextract.failedCount')}</span>
+              </div>
+              <p
+                className={`font-data mt-0.5 text-sm font-bold tabular-nums ${
+                  failed > 0 ? 'text-[var(--status-warning)]' : 'text-[var(--text-muted)]'
+                }`}
+              >
                 {failed}
               </p>
             </div>
           </div>
 
           {progress?.currentFaceId && (
-            <p className="font-data truncate text-[10px] text-[var(--text-muted)]">
+            <p className="font-data truncate text-[11px] text-[var(--text-secondary)]">
               {t('reextract.currentProcessing')}: {progress.currentFaceId}
             </p>
           )}
@@ -403,37 +379,30 @@ export function ReextractModal({
   }
 
   const renderModalFooter = (): React.ReactElement => {
-    const escHint = (
-      <div className="hidden items-center gap-1 text-[11px] text-[var(--text-muted)] sm:flex">
-        <span>{t('modal.escHintPrefix')}</span>
-        <kbd className="rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] shadow-xs">
-          ESC
-        </kbd>
-        <span>{t('modal.escHintSuffix')}</span>
-      </div>
-    )
-
     if (currentMode === 'progress' && !error) {
       return (
-        <>
-          {escHint}
-          <button type="button" onClick={onClose} className={GHOST_BUTTON_CLASS}>
-            {t('reextract.runInBackground')}
-          </button>
-        </>
+        <div className="modal-form-footer">
+          <div className="modal-form-actions">
+            <button
+              type="button"
+              onClick={onClose}
+              className="modal-form-button modal-form-button--secondary"
+            >
+              {t('reextract.runInBackground')}
+            </button>
+          </div>
+        </div>
       )
     }
 
     return (
-      <>
-        {escHint}
-
-        <div className="flex items-center gap-2.5">
+      <div className="modal-form-footer">
+        <div className="modal-form-actions">
           {currentMode === 'report' && isGlobal && (
             <button
               type="button"
               onClick={() => setCurrentMode('confirm')}
-              className={GHOST_BUTTON_CLASS}
+              className="modal-form-button modal-form-button--secondary"
             >
               {t('reextract.reextractAgain')}
             </button>
@@ -441,10 +410,18 @@ export function ReextractModal({
 
           {error && (
             <>
-              <button type="button" onClick={onClose} className={GHOST_BUTTON_CLASS}>
+              <button
+                type="button"
+                onClick={onClose}
+                className="modal-form-button modal-form-button--secondary"
+              >
                 {t('actions.cancel')}
               </button>
-              <button type="button" onClick={onConfirm} className={PRIMARY_BUTTON_CLASS}>
+              <button
+                type="button"
+                onClick={onConfirm}
+                className="modal-form-button modal-form-button--primary"
+              >
                 <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                 {t('actions.retry')}
               </button>
@@ -452,19 +429,36 @@ export function ReextractModal({
           )}
 
           {!error && currentMode === 'confirm' && (
-            <button type="button" onClick={onConfirm} className={PRIMARY_BUTTON_CLASS}>
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-              {t('actions.reextractShort')}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                className="modal-form-button modal-form-button--secondary"
+              >
+                {t('actions.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={onConfirm}
+                className="modal-form-button modal-form-button--primary"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                {t('actions.reextractShort')}
+              </button>
+            </>
           )}
 
           {!error && currentMode === 'report' && (
-            <button type="button" onClick={onClose} className={PRIMARY_BUTTON_CLASS}>
+            <button
+              type="button"
+              onClick={onClose}
+              className="modal-form-button modal-form-button--primary"
+            >
               {t('actions.confirm')}
             </button>
           )}
         </div>
-      </>
+      </div>
     )
   }
 
@@ -473,14 +467,15 @@ export function ReextractModal({
       {isOpen && (
         <div
           onClick={(e) => {
-            if (e.target === e.currentTarget) onClose()
+            if (e.target === e.currentTarget && !isStarting) onClose()
           }}
-          className="modal-backdrop modal-backdrop--raised"
+          className="modal-backdrop"
         >
           <motion.div
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
+            aria-describedby={descriptionId}
             initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 12 }}
@@ -488,47 +483,23 @@ export function ReextractModal({
               duration: motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="modal-surface modal-surface--narrow modal-surface--glass max-h-[92vh]"
+            className="modal-surface modal-surface--form max-w-xl"
           >
-            {/* 头部 */}
-            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border)]/70 px-5 py-4">
-              <div className="flex min-w-0 items-center gap-3.5">
-                {headerIconNode}
-                <div className="min-w-0">
-                  <h3
-                    id={titleId}
-                    className="truncate text-base font-bold tracking-tight text-[var(--text-primary)]"
-                  >
-                    {headerTitle}
-                  </h3>
-                  {headerSubtitle && (
-                    <p
-                      className={`mt-0.5 truncate text-xs ${error ? 'text-[var(--status-danger)]' : 'text-[var(--text-muted)]'}`}
-                    >
-                      {headerSubtitle}
-                    </p>
-                  )}
-                </div>
-              </div>
+            <ModalFormHeader
+              icon={HeaderIcon}
+              title={headerTitle}
+              titleId={titleId}
+              description={headerSubtitle}
+              descriptionId={descriptionId}
+              badge={headerBadge}
+              closeLabel={t('common:close')}
+              onClose={onClose}
+              closeDisabled={isStarting}
+            />
 
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label={t('common:close')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+            <div className="modal-form-content space-y-4">{renderModalBody()}</div>
 
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
-              {renderModalBody()}
-            </div>
-
-            {/* 吸底操作栏 */}
-            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--border)]/70 px-5 py-4">
-              {renderModalFooter()}
-            </div>
+            {renderModalFooter()}
           </motion.div>
         </div>
       )}

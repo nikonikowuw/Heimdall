@@ -230,6 +230,7 @@
     "viewReportTooltip": "查看最近一次人员批量导入的结果报告与失败明细",
     "dropzoneText": "点击或拖拽压缩包至此处",
     "dropzoneHint": "支持 .zip / .tar.gz / .tar，单包不超过 {{maxMb}} MB",
+    "archiveTooLarge": "导入归档体积超出上限 ({{maxMb}} MB)，请拆分后分批导入",
     "dropzoneActive": "松开即可开始导入",
     "dropzoneMore": "支持 .zip / .tar.gz / .tar",
     "selectedFile": "已选择",

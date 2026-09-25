@@ -221,11 +221,7 @@ function CameraListStatus({ state, onRetry }: CameraListStatusProps): React.Reac
       role="alert"
     >
       <span className="text-sm text-[var(--text-secondary)]">{t('live.cameraListLoadFailed')}</span>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="flex min-h-11 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--accent-soft)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-      >
+      <button type="button" onClick={onRetry} className="page-action-btn">
         <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
         <span>{t('live.retryLoad')}</span>
       </button>
@@ -636,16 +632,11 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
 
         <div className="flex items-center gap-2">
           {/* 智能追焦开关 */}
-          <motion.button
+          <button
             type="button"
-            whileTap={{ scale: 0.96 }}
             onClick={() => setAutoSpotlight((enabled) => !enabled)}
             aria-pressed={autoSpotlight}
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
-              autoSpotlight
-                ? 'border border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-400'
-                : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
-            }`}
+            className={`page-action-btn ${autoSpotlight ? 'page-action-btn--soft-info' : ''}`}
             title={t('live.autoSpotlightDesc')}
           >
             <Sparkles className="h-3.5 w-3.5" />
@@ -655,20 +646,20 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                 autoSpotlight ? 'bg-cyan-400' : 'bg-gray-500'
               }`}
             />
-          </motion.button>
+          </button>
 
           {/* 视图布局模式切换 (Motion layoutId Pill) */}
-          <div className="flex items-center rounded-lg border border-[var(--border)] p-0.5">
+          <div className="flex h-9 items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-0.5 shadow-2xs">
             <button
               type="button"
               onClick={() => setViewMode('hero_rail')}
               aria-pressed={viewMode === 'hero_rail'}
-              className="relative flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+              className="relative flex h-7.5 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
             >
               {viewMode === 'hero_rail' && (
                 <motion.div
                   layoutId="live-view-mode-pill"
-                  className="absolute inset-0 rounded-md bg-[var(--accent)] shadow-xs"
+                  className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-xs"
                   transition={{
                     type: 'spring',
                     stiffness: 480,
@@ -677,9 +668,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                 />
               )}
               <span
-                className={`relative z-10 flex items-center gap-1 ${
+                className={`relative z-10 flex items-center gap-1.5 ${
                   viewMode === 'hero_rail'
-                    ? 'text-white'
+                    ? 'font-semibold text-[var(--accent-contrast)]'
                     : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                 }`}
               >
@@ -691,12 +682,12 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               type="button"
               onClick={() => setViewMode('bento_grid')}
               aria-pressed={viewMode === 'bento_grid'}
-              className="relative flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+              className="relative flex h-7.5 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
             >
               {viewMode === 'bento_grid' && (
                 <motion.div
                   layoutId="live-view-mode-pill"
-                  className="absolute inset-0 rounded-md bg-[var(--accent)] shadow-xs"
+                  className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-xs"
                   transition={{
                     type: 'spring',
                     stiffness: 480,
@@ -705,9 +696,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                 />
               )}
               <span
-                className={`relative z-10 flex items-center gap-1 ${
+                className={`relative z-10 flex items-center gap-1.5 ${
                   viewMode === 'bento_grid'
-                    ? 'text-white'
+                    ? 'font-semibold text-[var(--accent-contrast)]'
                     : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                 }`}
               >
@@ -718,19 +709,17 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           </div>
 
           {/* 添加摄像头按钮 */}
-          <motion.button
+          <button
             type="button"
-            whileTap={{ scale: 0.96 }}
-            whileHover={{ scale: 1.02 }}
             onClick={() => {
               setCameraToEdit(null)
               setIsCameraModalOpen(true)
             }}
-            className="flex min-h-11 items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+            className="page-action-btn page-action-btn--primary"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-4 w-4" />
             <span>{t('live.addCamera')}</span>
-          </motion.button>
+          </button>
         </div>
       </div>
 
@@ -775,9 +764,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                     <button
                       type="button"
                       onClick={() => handleSelectHero(cameras[0].cameraId)}
-                      className="mt-1 flex min-h-11 items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white shadow-xs hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                      className="page-action-btn page-action-btn--primary mt-3"
                     >
-                      <Eye className="h-3.5 w-3.5" />
+                      <Eye className="h-4 w-4" />
                       <span>{t('live.startHeroPreview')}</span>
                     </button>
                   )}

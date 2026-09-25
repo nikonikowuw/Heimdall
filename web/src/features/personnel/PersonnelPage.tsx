@@ -44,9 +44,6 @@ const PAGE_SIZE_OPTIONS = [12, 24, 48, 96]
 /** 归档单包上限（MB）。与后端 MAX_IMPORT_ARCHIVE_BYTES 保持一致，仅在 UI 侧做前置提示。 */
 const MAX_IMPORT_ARCHIVE_MB = 100
 
-const HEADER_ACTION_CLASS =
-  'inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border text-xs font-medium transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95 disabled:cursor-not-allowed disabled:opacity-40'
-
 const PAGER_CLASS =
   'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-40 disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-secondary)]'
 
@@ -288,6 +285,7 @@ export function PersonnelPage(): React.ReactElement {
   // 订阅 WebSocket 完成广播通知
   useEffect(() => {
     const unsub = wsClient.subscribe<ReextractProgress>('personnel.reextract.finished', (data) => {
+      lastStatusRef.current = data.status
       setReextractProgress(data)
       loadData()
       const built = buildReextractNotice(data)
@@ -624,6 +622,7 @@ export function PersonnelPage(): React.ReactElement {
     const unsub = wsClient.subscribe<PersonnelImportProgress>(
       'personnel.import.finished',
       (data) => {
+        lastImportStatusRef.current = data.status
         setImportProgress(data)
         loadData()
         const built = buildImportNotice(data)
@@ -637,7 +636,10 @@ export function PersonnelPage(): React.ReactElement {
   useEffect(() => {
     personnelApi
       .getImportStatus()
-      .then((res) => setImportProgress(res))
+      .then((res) => {
+        setImportProgress(res)
+        lastImportStatusRef.current = res.status
+      })
       .catch(() => {})
   }, [])
 
@@ -800,150 +802,151 @@ export function PersonnelPage(): React.ReactElement {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* 算法就绪状态 */}
-            <span
-              title={t('stats.algoStatus')}
-              className={`hidden max-w-[15rem] items-center gap-1.5 truncate rounded-xl border px-2.5 py-1.5 text-[11px] font-medium lg:inline-flex ${
-                !hasStats
-                  ? 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]'
-                  : stats.algoReady
-                    ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
-                    : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
-              }`}
-            >
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* 状态与报告徽标组 */}
+            <div className="flex items-center gap-2">
+              {/* 算法就绪状态 */}
               <span
-                aria-hidden="true"
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                title={t('stats.algoStatus')}
+                className={`hidden h-8 max-w-[15rem] items-center gap-2 truncate rounded-lg border px-2.5 text-[11px] font-medium lg:inline-flex ${
                   !hasStats
-                    ? 'bg-[var(--text-muted)]'
+                    ? 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]'
                     : stats.algoReady
-                      ? 'bg-[var(--status-success)] shadow-[0_0_6px_var(--status-success-soft)]'
-                      : 'bg-[var(--status-warning)]'
-                }`}
-              />
-              <span className="truncate">
-                {!hasStats
-                  ? t('stats.algoUnknown')
-                  : stats.algoReady
-                    ? t('stats.algoReady')
-                    : t('stats.algoNotReady')}
-              </span>
-            </span>
-
-            {/* 最近一次重提任务报告入口 */}
-            {hasReport && reextractProgress && (
-              <button
-                type="button"
-                onClick={handleOpenReport}
-                title={t('reextract.viewReportTooltip')}
-                className={`${HEADER_ACTION_CLASS} ${
-                  reextractProgress.failed > 0
-                    ? 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)] hover:bg-[var(--status-warning-soft)]'
-                    : 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] hover:bg-[var(--status-success-soft)]'
+                      ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
+                      : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
                 }`}
               >
-                <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="hidden sm:inline">
-                  {t('reextract.lastReportBadge', {
-                    succeeded: reextractProgress.succeeded,
-                    failed: reextractProgress.failed,
-                  })}
+                <span
+                  aria-hidden="true"
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    !hasStats
+                      ? 'bg-[var(--text-muted)]'
+                      : stats.algoReady
+                        ? 'bg-[var(--status-success)] shadow-[0_0_6px_var(--status-success)]'
+                        : 'bg-[var(--status-warning)]'
+                  }`}
+                />
+                <span className="truncate">
+                  {!hasStats
+                    ? t('stats.algoUnknown')
+                    : stats.algoReady
+                      ? t('stats.algoReady')
+                      : t('stats.algoNotReady')}
                 </span>
-                <span className="sm:hidden">{t('reextract.viewReport')}</span>
-              </button>
-            )}
-
-            {/* 一键重新提取人脸特征 */}
-            <button
-              type="button"
-              onClick={isTaskRunning ? handleOpenReport : handleOpenReextract}
-              disabled={(!stats.algoReady || stats.totalFaces === 0) && !isTaskRunning}
-              title={reextractTooltip}
-              aria-label={reextractTooltip}
-              className={`${HEADER_ACTION_CLASS} ${
-                isTaskRunning
-                  ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] hover:bg-[var(--status-success-soft)]'
-                  : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]'
-              }`}
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${isTaskRunning ? 'animate-spin' : ''}`}
-                aria-hidden="true"
-              />
-              <span className="hidden sm:inline">
-                {isTaskRunning
-                  ? t('reextract.runningBadge', { percent: reextractPercent })
-                  : t('actions.reextractShort', { defaultValue: t('actions.reextractFeatures') })}
               </span>
-            </button>
 
-            {/* 刷新 */}
-            <button
-              type="button"
-              onClick={() => loadData()}
-              disabled={isLoading}
-              aria-label={t('actions.refresh')}
-              title={t('actions.refresh')}
-              className={`${HEADER_ACTION_CLASS} w-9 border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]`}
-            >
-              <RotateCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            </button>
+              {/* 最近一次重提任务报告入口 */}
+              {hasReport && reextractProgress && (
+                <button
+                  type="button"
+                  onClick={handleOpenReport}
+                  title={t('reextract.viewReportTooltip')}
+                  className={`page-action-btn h-8 rounded-lg !px-2.5 text-[11px] ${
+                    reextractProgress.failed > 0
+                      ? 'page-action-btn--soft-warning'
+                      : 'page-action-btn--soft-success'
+                  }`}
+                >
+                  <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">
+                    {t('reextract.lastReportBadge', {
+                      succeeded: reextractProgress.succeeded,
+                      failed: reextractProgress.failed,
+                    })}
+                  </span>
+                  <span className="sm:hidden">{t('reextract.viewReport')}</span>
+                </button>
+              )}
 
-            {/* 批量导入（运行中切换为进度入口） */}
-            <button
-              type="button"
-              onClick={handleOpenImport}
-              disabled={!stats.algoReady && !isImportRunning && hasStats}
-              title={isImportRunning ? t('import.runningShort') : t('import.entry')}
-              aria-label={isImportRunning ? t('import.runningShort') : t('import.entry')}
-              className={`${HEADER_ACTION_CLASS} ${
-                isImportRunning
-                  ? 'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info)] hover:bg-[var(--status-info-soft)]'
-                  : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]'
-              }`}
-            >
-              <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="hidden sm:inline">
-                {isImportRunning
-                  ? t('import.runningBadge', { percent: importPercent })
-                  : t('import.entry')}
-              </span>
-            </button>
+              {/* 最近一次导入报告入口 */}
+              {hasImportReport && importProgress && (
+                <button
+                  type="button"
+                  onClick={handleOpenImportReport}
+                  title={t('import.viewReportTooltip')}
+                  className={`page-action-btn h-8 rounded-lg !px-2.5 text-[11px] ${
+                    importProgress.failed > 0
+                      ? 'page-action-btn--soft-warning'
+                      : 'page-action-btn--soft-success'
+                  }`}
+                >
+                  <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">
+                    {t('import.lastReportBadge', {
+                      succeeded: importProgress.succeeded,
+                      failed: importProgress.failed,
+                    })}
+                  </span>
+                  <span className="sm:hidden">{t('import.viewReport')}</span>
+                </button>
+              )}
+            </div>
 
-            {/* 最近一次导入报告入口 */}
-            {hasImportReport && importProgress && (
+            {/* 视觉分割线 */}
+            <div className="hidden h-4 w-px bg-[var(--border)] sm:block" />
+
+            {/* 操作按钮组 */}
+            <div className="flex items-center gap-2">
+              {/* 刷新 */}
               <button
                 type="button"
-                onClick={handleOpenImportReport}
-                title={t('import.viewReportTooltip')}
-                className={`${HEADER_ACTION_CLASS} ${
-                  importProgress.failed > 0
-                    ? 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)] hover:bg-[var(--status-warning-soft)]'
-                    : 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] hover:bg-[var(--status-success-soft)]'
-                }`}
+                onClick={() => loadData()}
+                disabled={isLoading}
+                aria-label={t('actions.refresh')}
+                title={t('actions.refresh')}
+                className="page-action-btn page-action-btn--icon"
               >
-                <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="hidden sm:inline">
-                  {t('import.lastReportBadge', {
-                    succeeded: importProgress.succeeded,
-                    failed: importProgress.failed,
-                  })}
-                </span>
-                <span className="sm:hidden">{t('import.viewReport')}</span>
+                <RotateCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
               </button>
-            )}
 
-            {/* 录入新人员 */}
-            <button
-              type="button"
-              onClick={handleOpenRegister}
-              title={t('actions.register')}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-[var(--accent)] px-3.5 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95"
-            >
-              <UserPlus className="h-4 w-4" aria-hidden="true" />
-              <span>{t('actions.register')}</span>
-            </button>
+              {/* 一键重新提取人脸特征 */}
+              <button
+                type="button"
+                onClick={isTaskRunning ? handleOpenReport : handleOpenReextract}
+                disabled={(!stats.algoReady || stats.totalFaces === 0) && !isTaskRunning}
+                title={reextractTooltip}
+                aria-label={reextractTooltip}
+                className={`page-action-btn ${isTaskRunning ? 'page-action-btn--soft-info' : ''}`}
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${isTaskRunning ? 'animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
+                <span className="hidden sm:inline">
+                  {isTaskRunning
+                    ? t('reextract.runningBadge', { percent: reextractPercent })
+                    : t('actions.reextractShort', { defaultValue: t('actions.reextractFeatures') })}
+                </span>
+              </button>
+
+              {/* 批量导入（运行中切换为进度入口） */}
+              <button
+                type="button"
+                onClick={handleOpenImport}
+                disabled={!stats.algoReady && !isImportRunning && hasStats}
+                title={isImportRunning ? t('import.runningShort') : t('import.entry')}
+                aria-label={isImportRunning ? t('import.runningShort') : t('import.entry')}
+                className={`page-action-btn ${isImportRunning ? 'page-action-btn--soft-info' : ''}`}
+              >
+                <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="hidden sm:inline">
+                  {isImportRunning
+                    ? t('import.runningBadge', { percent: importPercent })
+                    : t('import.entry')}
+                </span>
+              </button>
+
+              {/* 录入新人员 */}
+              <button
+                type="button"
+                onClick={handleOpenRegister}
+                title={t('actions.register')}
+                className="page-action-btn page-action-btn--primary"
+              >
+                <UserPlus className="h-4 w-4" aria-hidden="true" />
+                <span>{t('actions.register')}</span>
+              </button>
+            </div>
           </div>
         </motion.header>
 

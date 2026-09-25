@@ -176,15 +176,15 @@ export function AlgoFilterBar({
           disabled={isLoading}
           aria-label={t('filter.refresh')}
           title={t('filter.refresh')}
-          className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden disabled:opacity-50"
+          className="page-action-btn page-action-btn--icon"
         >
-          <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
 
         <button
           type="button"
           onClick={onOpenUpload}
-          className="flex h-9 items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3.5 text-xs font-semibold text-white shadow-md transition-all hover:opacity-90 active:scale-95"
+          className="page-action-btn page-action-btn--primary"
         >
           <Upload className="h-4 w-4" />
           <span>{t('actions.uploadPackage')}</span>

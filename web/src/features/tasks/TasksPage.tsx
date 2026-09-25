@@ -160,9 +160,9 @@ export function TasksPage({
           className="flex h-full flex-col gap-4 text-[var(--text-primary)]"
         >
           {/* 顶部状态与操作栏：现代 SaaS 磨砂中枢 */}
-          <div className="flex shrink-0 flex-col gap-4 rounded-2xl border border-black/5 bg-white/75 p-4 shadow-sm backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between dark:border-white/10 dark:bg-[#0b0e14]/75">
+          <div className="frosted-glass flex shrink-0 flex-col gap-4 rounded-2xl p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3.5">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-blue-500/25 bg-gradient-to-br from-blue-500/15 to-indigo-500/15 text-[var(--accent)] shadow-sm">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs">
                 <Sliders className="h-5 w-5" />
               </div>
               <div>
@@ -170,20 +170,17 @@ export function TasksPage({
                   {t('title', { defaultValue: 'AI 任务与空间布防' })}
                 </h2>
                 <div className="mt-1 flex items-center gap-2 text-xs">
-                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-black/5 bg-black/[0.03] px-2.5 py-1 font-mono text-[11px] text-[var(--text-secondary)] dark:border-white/10 dark:bg-white/[0.03]">
+                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 font-mono text-[11px] text-[var(--text-secondary)]">
                     <span>{t('channelCount', { defaultValue: '任务总数' })}:</span>
                     <strong className="font-semibold text-[var(--text-primary)]">
                       {camerasWithTasks.length}
                     </strong>
                   </span>
-                  <span
-                    aria-hidden="true"
-                    className="hidden text-black/20 sm:inline dark:text-white/20"
-                  >
+                  <span aria-hidden="true" className="hidden text-[var(--text-muted)] sm:inline">
                     ·
                   </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 font-mono text-[11px] text-emerald-500">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2.5 py-1 font-mono text-[11px] text-[var(--status-success)]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--status-success)]" />
                     <span>{t('armedCount', { defaultValue: '已布防' })}:</span>
                     <strong className="font-semibold">{totalArmed}</strong>
                   </span>
@@ -196,7 +193,9 @@ export function TasksPage({
                 type="button"
                 onClick={loadData}
                 disabled={isLoading}
-                className="flex items-center gap-1.5 rounded-xl border border-black/10 bg-black/5 px-3 py-2 text-xs font-medium text-[var(--text-secondary)] transition-all hover:border-black/20 hover:bg-black/10 hover:text-[var(--text-primary)] disabled:opacity-50 dark:border-white/10 dark:bg-white/5 dark:hover:border-white/20 dark:hover:bg-white/10"
+                aria-label={tc('actions.refresh')}
+                title={tc('actions.refresh')}
+                className="page-action-btn"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
                 <span>{tc('actions.refresh')}</span>
@@ -204,9 +203,9 @@ export function TasksPage({
               <button
                 type="button"
                 onClick={() => setIsCreateTaskModalOpen(true)}
-                className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-[0_2px_12px_rgba(59,130,246,0.35)] transition-all hover:opacity-95 hover:shadow-[0_4px_16px_rgba(59,130,246,0.5)] active:scale-95"
+                className="page-action-btn page-action-btn--primary"
               >
-                <Plus className="h-3.5 w-3.5 stroke-[2.5]" />
+                <Plus className="h-4 w-4" />
                 <span>{t('createTask', { defaultValue: '新建布防任务' })}</span>
               </button>
             </div>
@@ -232,7 +231,7 @@ export function TasksPage({
                   <button
                     type="button"
                     onClick={onNavigateToCameras}
-                    className="mt-4 flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95"
+                    className="page-action-btn page-action-btn--primary mt-4"
                   >
                     <Plus className="h-4 w-4" />
                     <span>{t('goToCameras', { defaultValue: '前往设备管理' })}</span>
@@ -254,7 +253,7 @@ export function TasksPage({
                 <button
                   type="button"
                   onClick={() => setIsCreateTaskModalOpen(true)}
-                  className="mt-4 flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:opacity-90 active:scale-95"
+                  className="page-action-btn page-action-btn--primary mt-4"
                 >
                   <Plus className="h-4 w-4" />
                   <span>{t('createFirstTask', { defaultValue: '创建首个布防任务' })}</span>
