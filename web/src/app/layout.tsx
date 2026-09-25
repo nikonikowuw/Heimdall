@@ -364,7 +364,7 @@ export function Layout(): React.ReactElement {
                       data-user-menu
                       role="menu"
                       aria-label={t('auth:accountMenu', { defaultValue: '账号菜单' })}
-                      className="lens-glass animate-in fade-in slide-in-from-left-2 absolute bottom-0 left-full z-50 ml-3 min-w-[210px] overflow-hidden rounded-2xl border border-[var(--border)] p-2 shadow-2xl duration-150"
+                      className="lens-glass absolute bottom-0 left-full z-50 ml-3 min-w-[210px] overflow-hidden rounded-2xl border border-[var(--border)] p-2 shadow-2xl duration-150"
                     >
                       {/* 用户档案信息标牌 */}
                       <div className="flex items-center gap-3 p-2">

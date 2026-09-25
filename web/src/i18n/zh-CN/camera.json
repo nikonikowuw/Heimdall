@@ -1,6 +1,7 @@
 {
   "live": {
     "title": "边缘智能监控大屏",
+    "subtitle": "多路低延迟原生流媒体分发与实时视觉推理",
     "protocolBadge": "HTTP-FLV · MSE",
     "aneAccelerator": "Apple ANE 加速",
     "focusMode": "指挥舱",

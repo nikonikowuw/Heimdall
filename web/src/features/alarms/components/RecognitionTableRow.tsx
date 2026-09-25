@@ -96,7 +96,7 @@ function PureThumb({
         className="h-full w-full object-cover transition-transform duration-200 group-hover/thumb:scale-110"
       />
       {/* 仅在鼠标 hover 时显示半透明居中放大镜，平时图片全貌绝对零遮挡 */}
-      <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
+      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
         <ZoomIn className="h-3.5 w-3.5 text-white" />
       </div>
     </div>

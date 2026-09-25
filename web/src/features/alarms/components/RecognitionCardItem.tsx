@@ -104,7 +104,7 @@ function AvatarBox({
               }`}
             />
             {/* 悬浮查看大图毛玻璃遮罩 */}
-            <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/avatar:opacity-100">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/avatar:opacity-100">
               <span className="flex items-center gap-1.5 rounded-xl border border-white/20 bg-black/70 px-2.5 py-1 text-[11px] font-medium text-white shadow-lg backdrop-blur-md">
                 <ZoomIn className="h-3.5 w-3.5" />
                 <span>{viewHdText}</span>

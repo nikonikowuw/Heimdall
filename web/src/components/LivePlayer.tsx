@@ -1072,9 +1072,7 @@ export const LivePlayer = memo(function LivePlayer({
       aria-label={cameraName || cameraId}
     >
       {/* 抓拍快门瞬间白色闪光遮罩 */}
-      {isFlashing && (
-        <div className="animate-out fade-out pointer-events-none absolute inset-0 z-40 bg-white/70 duration-200" />
-      )}
+      {isFlashing && <div className="pointer-events-none absolute inset-0 z-40 bg-white/70" />}
       {/* 抓拍成功微型横幅 (Motion AnimatePresence) */}
       <AnimatePresence mode="wait">
         {snapshotBannerVisible && (
@@ -1260,7 +1258,7 @@ export const LivePlayer = memo(function LivePlayer({
           </span>
           <span className="text-white/40">|</span>
           <span
-            className={`py-0.2 rounded px-1.5 text-[9px] font-bold tracking-wider ${
+            className={`rounded px-1.5 text-[9px] font-bold tracking-wider ${
               activeProtocol === 'webcodecs'
                 ? 'bg-cyan-500/25 text-cyan-300'
                 : 'bg-emerald-500/25 text-emerald-300'

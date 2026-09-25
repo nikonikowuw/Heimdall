@@ -293,7 +293,7 @@ export function LoginPage(): React.ReactElement {
       {/* 核心双栏架构：左侧边缘管线拓扑遥测 + 右侧先锋悬浮控制吊舱 */}
       <div className="pointer-events-none relative z-20 flex min-h-dvh w-full flex-col items-center justify-between px-6 pt-20 pb-6 sm:px-10 sm:pb-8 lg:flex-row lg:px-12 lg:pt-24">
         {/* 左侧：完全通透，把视觉舞台全部还给 Gargantua 物理黑洞 */}
-        <div className="auth-stage hidden min-h-[38vh] w-full flex-col justify-between lg:flex lg:min-h-[calc(100dvh-8rem)] lg:flex-1">
+        <div className="hidden min-h-[38vh] w-full flex-col justify-between lg:flex lg:min-h-[calc(100dvh-8rem)] lg:flex-1">
           <div className="auth-stage-label hidden lg:flex">
             <span className="auth-stage-label__line" />
             <span>{t('terminal')}</span>
@@ -500,7 +500,6 @@ export function LoginPage(): React.ReactElement {
                             disabled={loading || isSuccess}
                             checked={remember}
                             onChange={(e) => setRemember(e.target.checked)}
-                            className="auth-checkbox"
                           />
                           <span>{t('remember')}</span>
                         </label>

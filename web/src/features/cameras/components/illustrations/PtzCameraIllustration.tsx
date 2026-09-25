@@ -18,7 +18,7 @@ export function PtzCameraIllustration({
       viewBox="0 0 240 160"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className={`camera-svg-root ${isOffline ? 'camera-svg-offline' : ''} overflow-visible select-none ${className}`}
+      className={`${isOffline ? 'camera-svg-offline' : ''} overflow-visible select-none ${className}`}
       style={{ width, height }}
       role="img"
       data-camera-status={status}

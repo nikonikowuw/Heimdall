@@ -382,7 +382,7 @@ export function CameraDetailDrawer({
                     status={derived.operationalStatus}
                     aiActive={derived.aiRuntime.isActive}
                     camera={currentCamera ?? undefined}
-                    className="camera-illustration h-full max-h-[150px] w-auto max-w-[260px]"
+                    className="h-full max-h-[150px] w-auto max-w-[260px]"
                     ariaLabel={t('tile.illustrationLabel', {
                       type: typeLabel,
                       defaultValue: `${typeLabel} illustration`,
@@ -503,7 +503,7 @@ export function CameraDetailDrawer({
                         <span className="font-semibold text-[var(--text-primary)]">
                           {t('tile.mainStream', { defaultValue: '主码流' })}
                         </span>
-                        <span className="py-0.2 rounded-sm bg-[var(--accent-soft)] px-1 text-[10px] font-semibold text-[var(--accent)]">
+                        <span className="rounded-sm bg-[var(--accent-soft)] px-1 text-[10px] font-semibold text-[var(--accent)]">
                           MAIN
                         </span>
                       </div>
@@ -535,7 +535,7 @@ export function CameraDetailDrawer({
                         <span className="font-semibold text-[var(--text-primary)]">
                           {t('tile.subStream', { defaultValue: '子码流' })}
                         </span>
-                        <span className="py-0.2 rounded-sm bg-[var(--bg-secondary)] px-1 text-[10px] font-semibold text-[var(--text-muted)]">
+                        <span className="rounded-sm bg-[var(--bg-secondary)] px-1 text-[10px] font-semibold text-[var(--text-muted)]">
                           SUB
                         </span>
                       </div>

@@ -8,11 +8,11 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  ShieldAlert,
   UserCheck,
   Volume2,
   VolumeX,
   X,
+  type LucideIcon,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -20,6 +20,7 @@ import { DateTimeRangePicker } from '@/components/DateTimeRangePicker'
 import { useDebounce } from '@/hooks/use-debounce'
 import { alarmApi, cameraApi, evidenceApi } from '@/lib/api'
 import { resolveEffectiveTimeRange, type DateTimeRangeValue } from '@/lib/dateRange'
+import { cn } from '@/lib/utils'
 import { wsClient } from '@/lib/wsClient'
 import {
   type AlarmRecord,
@@ -42,10 +43,62 @@ import { CropLightboxModal } from './components/CropLightboxModal'
 import { RealtimeAlarmBanner } from './components/RealtimeAlarmBanner'
 import { RecognitionContent } from './components/RecognitionContent'
 import { RecognitionReviewModal } from './components/RecognitionReviewModal'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { isAlarmSoundEnabled, playAlarmAlertSound, setAlarmSoundEnabled } from './sound'
 import { matchesSearchTerm } from './utils'
 
 type EvidenceTab = 'recognition' | 'alarms' | 'captures'
+
+interface EvidenceTabSpec {
+  key: EvidenceTab
+  labelKey: `tabs.${EvidenceTab}`
+  /**
+   * Tab 图标：标题栏与药丸共用同一个。
+   * 违规告警用 AlertCircle 对齐左侧全局导航栏的页面身份；
+   * ShieldAlert 在本仓已归属「屏蔽遮罩」绘图工具与告警状态徽标，不复用为页面/Tab 身份。
+   */
+  icon: LucideIcon
+  /** 激活态边框/底色/文字三件套，同时用于标题栏图标外壳与药丸 Tab */
+  activeClass: string
+  /** 图标随状态着色（未激活时也保留语义色） */
+  iconClass: string
+  /** 激活态计数徽章底色 */
+  badgeClass: string
+}
+
+/**
+ * 证据三支柱的统一定义。图标、配色与激活样式只在此声明一次，
+ * 标题栏与药丸 Tab 共用，避免同一套条件分支在两处各写一遍。
+ */
+const EVIDENCE_TABS: readonly EvidenceTabSpec[] = [
+  {
+    key: 'recognition',
+    labelKey: 'tabs.recognition',
+    icon: UserCheck,
+    activeClass:
+      'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-xs',
+    iconClass: 'text-[var(--status-success)]',
+    badgeClass: 'bg-[var(--status-success-soft)] text-[var(--status-success)]',
+  },
+  {
+    key: 'alarms',
+    labelKey: 'tabs.alarms',
+    icon: AlertCircle,
+    activeClass:
+      'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs',
+    iconClass: 'text-[var(--status-danger)]',
+    badgeClass: 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]',
+  },
+  {
+    key: 'captures',
+    labelKey: 'tabs.captures',
+    icon: CameraIcon,
+    activeClass:
+      'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info)] shadow-xs',
+    iconClass: 'text-[var(--status-info)]',
+    badgeClass: 'bg-[var(--status-info-soft)] text-[var(--status-info)]',
+  },
+]
 
 function getInitialTodayRange(): DateTimeRangeValue {
   const todayStart = new Date()
@@ -801,10 +854,83 @@ export function AlarmsPage(): React.ReactElement {
   }
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+  // EVIDENCE_TABS 覆盖全部 EvidenceTab，回退分支仅为满足类型收窄
+  const activeTabSpec = EVIDENCE_TABS.find((tab) => tab.key === activeTab) ?? EVIDENCE_TABS[0]
 
   return (
-    <div className="flex h-full flex-col gap-3 text-[var(--text-primary)] select-none">
-      {/* 实时新告警浮条 */}
+    <div className="flex h-full min-h-0 flex-col gap-3 text-[var(--text-primary)] select-none">
+      {/* 顶部控制栏与三重视图切换 */}
+      <PageHeader
+        icon={activeTabSpec.icon}
+        iconClassName={cn('transition-colors duration-200', activeTabSpec.activeClass)}
+        title={t('title')}
+        subtitle={`${t(activeTabSpec.labelKey)} · ${t('subtitleSuffix')}`}
+        actions={
+          <>
+            {/* 声音告警开关 */}
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.96 }}
+              onClick={handleToggleSound}
+              className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-all ${
+                soundEnabled
+                  ? 'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs'
+                  : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              }`}
+              title={soundEnabled ? t('sound.enabled') : t('sound.disabled')}
+              aria-label={t('sound.toggleAlert')}
+            >
+              {soundEnabled ? (
+                <Volume2 className="h-3.5 w-3.5 text-[var(--status-danger)]" />
+              ) : (
+                <VolumeX className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">
+                {soundEnabled ? t('sound.enabled') : t('sound.disabled')}
+              </span>
+            </motion.button>
+
+            {/* 证据分类 Tab 切换器 (顺序: 识别对账 -> 违规告警 -> 轨迹抓拍) */}
+            <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
+              {EVIDENCE_TABS.map((tab) => {
+                const Icon = tab.icon
+                const isActive = activeTab === tab.key
+                const badgeCount = tabCounts[tab.key]
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => handleSwitchTab(tab.key)}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-medium transition-colors duration-150',
+                      isActive
+                        ? tab.activeClass
+                        : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+                    )}
+                  >
+                    <Icon className={cn('h-3.5 w-3.5', tab.iconClass)} />
+                    <span>{t(tab.labelKey)}</span>
+                    {badgeCount > 0 && (
+                      <span
+                        className={cn(
+                          'ml-1 rounded-full px-1.5 font-mono text-[10px] font-bold tabular-nums',
+                          isActive
+                            ? tab.badgeClass
+                            : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]',
+                        )}
+                      >
+                        {badgeCount}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        }
+      />
+
+      {/* 实时新告警浮条（置于标题栏下方，不推动顶部锚定位置） */}
       <RealtimeAlarmBanner
         count={unreadRealtimeCount}
         onViewNew={() => {
@@ -814,125 +940,6 @@ export function AlarmsPage(): React.ReactElement {
         onDismiss={() => setUnreadRealtimeCount(0)}
         t={t}
       />
-
-      {/* 顶部控制栏与三重视图切换 */}
-      <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl p-3 shadow-xs">
-        <div className="flex items-center gap-3">
-          <div
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-xs transition-colors duration-200 ${
-              activeTab === 'recognition'
-                ? 'bg-[var(--status-success-soft)] text-[var(--status-success)]'
-                : activeTab === 'captures'
-                  ? 'bg-[var(--status-info-soft)] text-[var(--status-info)]'
-                  : 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
-            }`}
-          >
-            {activeTab === 'recognition' ? (
-              <UserCheck className="h-5 w-5" />
-            ) : activeTab === 'captures' ? (
-              <CameraIcon className="h-5 w-5" />
-            ) : (
-              <ShieldAlert className="h-5 w-5" />
-            )}
-          </div>
-          <div className="min-w-[170px]">
-            <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('title')}</h2>
-            <p className="text-xs text-[var(--text-muted)]">
-              {t(`tabs.${activeTab}`)} · {t('subtitleSuffix')}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {/* 声音告警开关 */}
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.96 }}
-            onClick={handleToggleSound}
-            className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-all ${
-              soundEnabled
-                ? 'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs'
-                : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-            }`}
-            title={soundEnabled ? t('sound.enabled') : t('sound.disabled')}
-            aria-label={t('sound.toggleAlert')}
-          >
-            {soundEnabled ? (
-              <Volume2 className="h-3.5 w-3.5 text-[var(--status-danger)]" />
-            ) : (
-              <VolumeX className="h-3.5 w-3.5" />
-            )}
-            <span className="hidden sm:inline">
-              {soundEnabled ? t('sound.enabled') : t('sound.disabled')}
-            </span>
-          </motion.button>
-
-          {/* 证据分类 Tab 切换器 (顺序: 识别对账 -> 违规告警 -> 轨迹抓拍) */}
-          <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
-            {(
-              [
-                {
-                  key: 'recognition' as const,
-                  label: t('tabs.recognition'),
-                  icon: UserCheck,
-                  activeClass:
-                    'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] shadow-xs',
-                  iconColor: 'text-[var(--status-success)]',
-                  badgeBg: 'bg-[var(--status-success-soft)] text-[var(--status-success)]',
-                  badgeCount: tabCounts.recognition,
-                },
-                {
-                  key: 'alarms' as const,
-                  label: t('tabs.alarms'),
-                  icon: AlertCircle,
-                  activeClass:
-                    'border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] text-[var(--status-danger)] shadow-xs',
-                  iconColor: 'text-[var(--status-danger)]',
-                  badgeBg: 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]',
-                  badgeCount: tabCounts.alarms,
-                },
-                {
-                  key: 'captures' as const,
-                  label: t('tabs.captures'),
-                  icon: CameraIcon,
-                  activeClass:
-                    'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info)] shadow-xs',
-                  iconColor: 'text-[var(--status-info)]',
-                  badgeBg: 'bg-[var(--status-info-soft)] text-[var(--status-info)]',
-                  badgeCount: tabCounts.captures,
-                },
-              ] as const
-            ).map((tab) => {
-              const Icon = tab.icon
-              const isActive = activeTab === tab.key
-              return (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => handleSwitchTab(tab.key)}
-                  className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-medium transition-colors duration-150 ${
-                    isActive
-                      ? tab.activeClass
-                      : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  <Icon className={`h-3.5 w-3.5 ${tab.iconColor}`} />
-                  <span>{tab.label}</span>
-                  {tab.badgeCount > 0 && (
-                    <span
-                      className={`py-0.2 ml-1 rounded-full px-1.5 font-mono text-[10px] font-bold tabular-nums ${
-                        isActive ? tab.badgeBg : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'
-                      }`}
-                    >
-                      {tab.badgeCount}
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      </div>
 
       {/* 现代毛玻璃搜索与筛选控制工作台 (零抖动单行无缝排布) */}
       <div className="frosted-glass relative z-20 flex min-h-[52px] items-center justify-between gap-3 rounded-2xl p-2.5 shadow-xs">
@@ -970,7 +977,7 @@ export function AlarmsPage(): React.ReactElement {
                 <X className="h-3 w-3" />
               </button>
             ) : (
-              <kbd className="py-0.2 pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded-md border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1.5 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
+              <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded-md border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1.5 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
                 /
               </kbd>
             )}
@@ -1239,7 +1246,7 @@ export function AlarmsPage(): React.ReactElement {
             >
               <RotateCcw className="h-3 w-3" />
               <span>{t('filter.reset')}</span>
-              <span className="py-0.2 rounded-full bg-[var(--status-danger-soft)] px-1.5 font-mono text-[10px] font-bold text-[var(--status-danger)]">
+              <span className="rounded-full bg-[var(--status-danger-soft)] px-1.5 font-mono text-[10px] font-bold text-[var(--status-danger)]">
                 {activeFilterCount}
               </span>
             </motion.button>

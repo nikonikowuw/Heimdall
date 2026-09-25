@@ -37,6 +37,7 @@ import {
 import { AuxCameraCard } from './components/AuxCameraCard'
 import { BentoCameraCard } from './components/BentoCameraCard'
 import { LivePlayer } from '@/components/LivePlayer'
+import { PageHeader } from '@/components/ui/PageHeader'
 
 function playAlarmChime() {
   try {
@@ -547,7 +548,119 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   )
 
   return (
-    <div className="relative flex h-full flex-col gap-3">
+    <div className="relative flex h-full min-h-0 flex-col gap-3 text-[var(--text-primary)] select-none">
+      {/* 顶部智能监控控制台 HUD 工具栏（首个子节点，锚定标题栏位置与 DOM 顺序一致） */}
+      <PageHeader
+        icon={CameraIcon}
+        title={t('live.title')}
+        badges={
+          <>
+            <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+              <Radio className="h-2.5 w-2.5" />
+              <span>{t('live.webcodecsBadge')}</span>
+            </span>
+            <span className="flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-700 dark:text-cyan-400">
+              <Zap className="h-2.5 w-2.5" />
+              <span>{hwLabel || t('live.hwAcceleratorReady')}</span>
+            </span>
+          </>
+        }
+        subtitle={t('live.subtitle')}
+        actions={
+          <>
+            {/* 智能追焦开关 */}
+            <button
+              type="button"
+              onClick={() => setAutoSpotlight((enabled) => !enabled)}
+              aria-pressed={autoSpotlight}
+              className={`page-action-btn ${autoSpotlight ? 'page-action-btn--soft-info' : ''}`}
+              title={t('live.autoSpotlightDesc')}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>{t('live.autoSpotlight')}</span>
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  autoSpotlight ? 'bg-cyan-400' : 'bg-gray-500'
+                }`}
+              />
+            </button>
+
+            {/* 视图布局模式切换 (Motion layoutId Pill) */}
+            <div className="flex h-9 items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-0.5 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setViewMode('hero_rail')}
+                aria-pressed={viewMode === 'hero_rail'}
+                className="relative flex h-7.5 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+              >
+                {viewMode === 'hero_rail' && (
+                  <motion.div
+                    layoutId="live-view-mode-pill"
+                    className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-xs"
+                    transition={{
+                      type: 'spring',
+                      stiffness: 480,
+                      damping: 36,
+                    }}
+                  />
+                )}
+                <span
+                  className={`relative z-10 flex items-center gap-1.5 ${
+                    viewMode === 'hero_rail'
+                      ? 'font-semibold text-[var(--accent-contrast)]'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <Compass className="h-3.5 w-3.5" />
+                  <span>{t('live.focusMode')}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('bento_grid')}
+                aria-pressed={viewMode === 'bento_grid'}
+                className="relative flex h-7.5 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+              >
+                {viewMode === 'bento_grid' && (
+                  <motion.div
+                    layoutId="live-view-mode-pill"
+                    className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-xs"
+                    transition={{
+                      type: 'spring',
+                      stiffness: 480,
+                      damping: 36,
+                    }}
+                  />
+                )}
+                <span
+                  className={`relative z-10 flex items-center gap-1.5 ${
+                    viewMode === 'bento_grid'
+                      ? 'font-semibold text-[var(--accent-contrast)]'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <Grid className="h-3.5 w-3.5" />
+                  <span>{t('live.bentoMode')}</span>
+                </span>
+              </button>
+            </div>
+
+            {/* 添加摄像头按钮 */}
+            <button
+              type="button"
+              onClick={() => {
+                setCameraToEdit(null)
+                setIsCameraModalOpen(true)
+              }}
+              className="page-action-btn page-action-btn--primary"
+            >
+              <Plus className="h-4 w-4" />
+              <span>{t('live.addCamera')}</span>
+            </button>
+          </>
+        }
+      />
+
       {/* 实时告警低噪稀疏弹窗浮层 (AnimatePresence) */}
       <AnimatePresence mode="popLayout">
         {activeAlarm && (
@@ -575,7 +688,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               duration: reducedMotion ? motionTokens.duration.fast : motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="absolute top-14 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full border border-cyan-500/40 bg-black/85 px-4 py-1.5 text-xs text-white shadow-2xl backdrop-blur-md"
+            className="absolute top-[76px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full border border-cyan-500/40 bg-black/85 px-4 py-1.5 text-xs text-white shadow-2xl backdrop-blur-md"
           >
             <div className="flex items-center gap-1.5 font-medium text-cyan-300">
               <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
@@ -606,122 +719,6 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* 顶部智能监控控制台 HUD 工具栏 */}
-      <div className="frosted-glass flex items-center justify-between rounded-xl px-4 py-2.5">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)]/10 text-[var(--accent)]">
-            <CameraIcon className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-[var(--text-primary)]">
-                {t('live.title')}
-              </span>
-              <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                <Radio className="h-2.5 w-2.5" />
-                <span>{t('live.webcodecsBadge')}</span>
-              </span>
-              <span className="flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-700 dark:text-cyan-400">
-                <Zap className="h-2.5 w-2.5" />
-                <span>{hwLabel || t('live.hwAcceleratorReady')}</span>
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* 智能追焦开关 */}
-          <button
-            type="button"
-            onClick={() => setAutoSpotlight((enabled) => !enabled)}
-            aria-pressed={autoSpotlight}
-            className={`page-action-btn ${autoSpotlight ? 'page-action-btn--soft-info' : ''}`}
-            title={t('live.autoSpotlightDesc')}
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>{t('live.autoSpotlight')}</span>
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                autoSpotlight ? 'bg-cyan-400' : 'bg-gray-500'
-              }`}
-            />
-          </button>
-
-          {/* 视图布局模式切换 (Motion layoutId Pill) */}
-          <div className="flex h-9 items-center rounded-xl border border-[var(--border)] bg-[var(--bg-surface-solid)] p-0.5 shadow-2xs">
-            <button
-              type="button"
-              onClick={() => setViewMode('hero_rail')}
-              aria-pressed={viewMode === 'hero_rail'}
-              className="relative flex h-7.5 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-            >
-              {viewMode === 'hero_rail' && (
-                <motion.div
-                  layoutId="live-view-mode-pill"
-                  className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-xs"
-                  transition={{
-                    type: 'spring',
-                    stiffness: 480,
-                    damping: 36,
-                  }}
-                />
-              )}
-              <span
-                className={`relative z-10 flex items-center gap-1.5 ${
-                  viewMode === 'hero_rail'
-                    ? 'font-semibold text-[var(--accent-contrast)]'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <Compass className="h-3.5 w-3.5" />
-                <span>{t('live.focusMode')}</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('bento_grid')}
-              aria-pressed={viewMode === 'bento_grid'}
-              className="relative flex h-7.5 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-            >
-              {viewMode === 'bento_grid' && (
-                <motion.div
-                  layoutId="live-view-mode-pill"
-                  className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-xs"
-                  transition={{
-                    type: 'spring',
-                    stiffness: 480,
-                    damping: 36,
-                  }}
-                />
-              )}
-              <span
-                className={`relative z-10 flex items-center gap-1.5 ${
-                  viewMode === 'bento_grid'
-                    ? 'font-semibold text-[var(--accent-contrast)]'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <Grid className="h-3.5 w-3.5" />
-                <span>{t('live.bentoMode')}</span>
-              </span>
-            </button>
-          </div>
-
-          {/* 添加摄像头按钮 */}
-          <button
-            type="button"
-            onClick={() => {
-              setCameraToEdit(null)
-              setIsCameraModalOpen(true)
-            }}
-            className="page-action-btn page-action-btn--primary"
-          >
-            <Plus className="h-4 w-4" />
-            <span>{t('live.addCamera')}</span>
-          </button>
-        </div>
-      </div>
 
       {/* 主视口布局容器 */}
       {viewMode === 'hero_rail' ? (

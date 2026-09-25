@@ -80,7 +80,7 @@ export const BentoCameraCard = React.memo(function BentoCameraCard({
             {camera.lastCodec ? camera.lastCodec.toUpperCase() : 'H264'}
           </span>
           {isAlarming && (
-            <span className="py-0.2 flex items-center gap-0.5 rounded bg-[var(--status-danger-soft)] px-1.5 font-mono text-[9px] font-bold text-[var(--status-danger)]">
+            <span className="flex items-center gap-0.5 rounded bg-[var(--status-danger-soft)] px-1.5 font-mono text-[9px] font-bold text-[var(--status-danger)]">
               <ShieldAlert className="h-2.5 w-2.5" />
               <span>ALARM</span>
             </span>

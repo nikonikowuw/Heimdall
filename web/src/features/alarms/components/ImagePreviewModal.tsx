@@ -209,7 +209,7 @@ export function ImagePreviewModal({
               className="pointer-events-none absolute border-2 border-cyan-400 bg-cyan-400/10 shadow-[0_0_12px_rgba(6,182,212,0.5)]"
               style={getBBoxStyle(targetBBoxes.body, imgRect)}
             >
-              <span className="py-0.2 absolute -top-4 left-0 rounded bg-cyan-500 px-1 font-mono text-[8px] font-bold text-white shadow-xs">
+              <span className="absolute -top-4 left-0 rounded bg-cyan-500 px-1 font-mono text-[8px] font-bold text-white shadow-xs">
                 BODY
               </span>
             </div>

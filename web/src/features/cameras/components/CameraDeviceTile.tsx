@@ -366,7 +366,7 @@ export function CameraDeviceTile({
             status={operationalStatus}
             aiActive={aiRuntime.isActive}
             camera={camera}
-            className="camera-illustration h-28 w-auto max-w-[180px] sm:h-32"
+            className="h-28 w-auto max-w-[180px] sm:h-32"
             ariaLabel={t('tile.illustrationLabel', {
               type: handleModelLabel,
               defaultValue: `${handleModelLabel} illustration`,

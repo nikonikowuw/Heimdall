@@ -9,6 +9,7 @@ import { CreateTaskModal } from './components/CreateTaskModal'
 import { DeleteTaskModal } from './components/DeleteTaskModal'
 import { LiveRulesStudio } from './components/LiveRulesStudio'
 import { TaskCameraCard } from './components/TaskCameraCard'
+import { PageHeader } from '@/components/ui/PageHeader'
 
 export interface TasksPageProps {
   onNavigateToCameras?: () => void
@@ -157,59 +158,52 @@ export function TasksPage({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
-          className="flex h-full flex-col gap-4 text-[var(--text-primary)]"
+          className="flex h-full min-h-0 flex-col gap-3 text-[var(--text-primary)] select-none"
         >
           {/* 顶部状态与操作栏：现代 SaaS 磨砂中枢 */}
-          <div className="frosted-glass flex shrink-0 flex-col gap-4 rounded-2xl p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3.5">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs">
-                <Sliders className="h-5 w-5" />
+          <PageHeader
+            icon={Sliders}
+            title={t('title', { defaultValue: 'AI 任务与空间布防' })}
+            subtitle={
+              <div className="flex items-center gap-3 font-mono text-xs">
+                <span className="flex items-center gap-1 text-[var(--text-muted)]">
+                  <span>{t('channelCount', { defaultValue: '任务总数' })}:</span>
+                  <strong className="font-semibold text-[var(--text-primary)]">
+                    {camerasWithTasks.length}
+                  </strong>
+                </span>
+                <span className="text-[var(--border-strong)]">/</span>
+                <span className="flex items-center gap-1 text-emerald-500">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                  <span>{t('armedCount', { defaultValue: '已布防' })}:</span>
+                  <strong className="font-semibold">{totalArmed}</strong>
+                </span>
               </div>
-              <div>
-                <h2 className="text-base font-bold tracking-tight text-[var(--text-primary)]">
-                  {t('title', { defaultValue: 'AI 任务与空间布防' })}
-                </h2>
-                <div className="mt-1 flex items-center gap-2 text-xs">
-                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 font-mono text-[11px] text-[var(--text-secondary)]">
-                    <span>{t('channelCount', { defaultValue: '任务总数' })}:</span>
-                    <strong className="font-semibold text-[var(--text-primary)]">
-                      {camerasWithTasks.length}
-                    </strong>
-                  </span>
-                  <span aria-hidden="true" className="hidden text-[var(--text-muted)] sm:inline">
-                    ·
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2.5 py-1 font-mono text-[11px] text-[var(--status-success)]">
-                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--status-success)]" />
-                    <span>{t('armedCount', { defaultValue: '已布防' })}:</span>
-                    <strong className="font-semibold">{totalArmed}</strong>
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={loadData}
-                disabled={isLoading}
-                aria-label={tc('actions.refresh')}
-                title={tc('actions.refresh')}
-                className="page-action-btn"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-                <span>{tc('actions.refresh')}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsCreateTaskModalOpen(true)}
-                className="page-action-btn page-action-btn--primary"
-              >
-                <Plus className="h-4 w-4" />
-                <span>{t('createTask', { defaultValue: '新建布防任务' })}</span>
-              </button>
-            </div>
-          </div>
+            }
+            actions={
+              <>
+                <button
+                  type="button"
+                  onClick={loadData}
+                  disabled={isLoading}
+                  aria-label={tc('actions.refresh')}
+                  title={tc('actions.refresh')}
+                  className="page-action-btn"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                  <span>{tc('actions.refresh')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsCreateTaskModalOpen(true)}
+                  className="page-action-btn page-action-btn--primary"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>{t('createTask', { defaultValue: '新建布防任务' })}</span>
+                </button>
+              </>
+            }
+          />
 
           {/* AI 任务卡片矩阵 */}
           <div className="min-h-0 flex-1 overflow-auto pt-1">

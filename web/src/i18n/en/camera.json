@@ -1,6 +1,7 @@
 {
   "live": {
     "title": "Edge AI Live Console",
+    "subtitle": "Low-latency stream distribution and real-time vision inference",
     "protocolBadge": "HTTP-FLV · MSE",
     "aneAccelerator": "Apple ANE Accelerated",
     "focusMode": "Command Deck",

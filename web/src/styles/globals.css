@@ -714,14 +714,6 @@
   -webkit-backdrop-filter: none;
 }
 
-/* ── 微米工程标定网格 ── */
-.calibration-grid {
-  background-image:
-    linear-gradient(to right, var(--border) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
-  background-size: 32px 32px;
-}
-
 /* ── 登录页深空控制台网格（沿用全局 32px 校准节奏） ── */
 .auth-grid {
   background-image:
@@ -1681,56 +1673,6 @@
 .auth-panel__copyright {
   color: var(--auth-muted);
   white-space: nowrap;
-}
-
-.auth-toast {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  border: 1px solid var(--auth-panel-border);
-  border-radius: 0.875rem;
-  background: var(--auth-panel);
-  padding: 0.875rem 1rem;
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-}
-
-.auth-toast--success {
-  border-color: var(--status-success-border);
-}
-
-.auth-toast--error {
-  border-color: var(--status-danger-border);
-}
-
-.auth-toast--info {
-  border-color: var(--status-info-border);
-}
-
-.auth-toast__title {
-  color: var(--auth-ink);
-  font-size: 0.8125rem;
-  font-weight: 700;
-}
-
-.auth-toast--success .auth-toast__title {
-  color: var(--status-success);
-}
-
-.auth-toast--error .auth-toast__title {
-  color: var(--status-danger);
-}
-
-.auth-toast--info .auth-toast__title {
-  color: var(--auth-accent-strong);
-}
-
-.auth-toast__message {
-  margin-top: 0.25rem;
-  color: var(--auth-copy);
-  font-size: 0.75rem;
-  line-height: 1.55;
 }
 
 @media (min-width: 640px) {

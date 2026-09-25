@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { Fragment, useEffect, useMemo, useState } from 'react'
 import { Plus, Radio, RefreshCw, Search, Video, X } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { cameraApi, gb28181Api, taskApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { toast } from '@/stores/toast'
 import type { Camera, Gb28181Device, TaskSummaryDto } from '@/types'
 import { normalizeProbeStatus } from './cameraStatus'
@@ -11,6 +12,7 @@ import { CameraDeviceTile } from './components/CameraDeviceTile'
 import { CameraDetailDrawer } from './components/CameraDetailDrawer'
 import { DeleteCameraModal } from './components/DeleteCameraModal'
 import { BatchImportGbModal } from './components/BatchImportGbModal'
+import { PageHeader } from '@/components/ui/PageHeader'
 import type { CameraModelType } from './components/illustrations/types'
 
 export type CamerasPageProps = Record<string, never>
@@ -195,6 +197,42 @@ export function CamerasPage(): React.ReactElement {
     [cameras],
   )
 
+  // 标题栏遥测行：总数始终展示，其余状态仅在非零时出现（顺序固定，避免数字跳动）
+  const statusMetrics = [
+    {
+      key: 'total',
+      label: t('manage.totalDevices', { defaultValue: '设备总数' }),
+      value: totalCount,
+      dotClass: null,
+      labelClass: 'text-[var(--text-muted)]',
+      valueClass: 'text-[var(--text-primary)]',
+    },
+    {
+      key: 'online',
+      label: t('manage.onlineDevices', { defaultValue: '在线' }),
+      value: onlineCount,
+      dotClass: 'bg-emerald-500 animate-pulse',
+      labelClass: 'text-emerald-500',
+      valueClass: 'text-emerald-500',
+    },
+    {
+      key: 'degraded',
+      label: t('manage.degradedDevices', { defaultValue: '抖动' }),
+      value: degradedCount,
+      dotClass: null,
+      labelClass: 'text-amber-500',
+      valueClass: 'text-amber-500',
+    },
+    {
+      key: 'offline',
+      label: t('manage.offlineDevices', { defaultValue: '离线' }),
+      value: offlineCount,
+      dotClass: null,
+      labelClass: 'text-[var(--status-danger)]',
+      valueClass: 'text-[var(--status-danger)]',
+    },
+  ].filter((metric) => metric.key === 'total' || metric.value > 0)
+
   // 筛选过滤
   const filteredCameras = useMemo(() => {
     const q = searchQuery.toLowerCase().trim()
@@ -253,75 +291,54 @@ export function CamerasPage(): React.ReactElement {
   }, [gbDevices])
 
   return (
-    <div className="flex h-full flex-col gap-4 bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] select-none">
+    <div className="flex h-full min-h-0 flex-col gap-3 text-[var(--text-primary)] select-none">
       {/* 顶部操作工具栏 */}
-      <div className="frosted-glass flex items-center justify-between rounded-2xl p-3.5 shadow-xs">
-        <div className="flex items-center gap-3.5">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] shadow-2xs">
-            <Video className="h-5 w-5" />
+      <PageHeader
+        icon={Video}
+        title={t('manage.title', { defaultValue: '视频流设备管理' })}
+        subtitle={
+          <div className="flex items-center gap-3 font-mono text-xs">
+            {statusMetrics.map((metric, index) => (
+              <Fragment key={metric.key}>
+                {index > 0 && <span className="text-[var(--border-strong)]">/</span>}
+                <span className={cn('flex items-center gap-1', metric.labelClass)}>
+                  {metric.dotClass && (
+                    <span className={cn('h-1.5 w-1.5 rounded-full', metric.dotClass)} />
+                  )}
+                  <span>{metric.label}:</span>
+                  <strong className={cn('font-semibold', metric.valueClass)}>{metric.value}</strong>
+                </span>
+              </Fragment>
+            ))}
           </div>
-          <div>
-            <h2 className="text-base font-bold text-[var(--text-primary)]">
-              {t('manage.title', { defaultValue: '视频流设备管理' })}
-            </h2>
-            <div className="mt-0.5 flex items-center gap-3 font-mono text-xs">
-              <span className="flex items-center gap-1 text-[var(--text-muted)]">
-                <span>{t('manage.totalDevices', { defaultValue: '设备总数' })}:</span>
-                <strong className="font-semibold text-[var(--text-primary)]">{totalCount}</strong>
-              </span>
-              <span className="text-[var(--border-strong)]">/</span>
-              <span className="flex items-center gap-1 text-emerald-500">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-                <span>{t('manage.onlineDevices', { defaultValue: '在线' })}:</span>
-                <strong className="font-semibold">{onlineCount}</strong>
-              </span>
-              {degradedCount > 0 && (
-                <>
-                  <span className="text-[var(--border-strong)]">/</span>
-                  <span className="flex items-center gap-1 text-amber-500">
-                    <span>{t('manage.degradedDevices', { defaultValue: '抖动' })}:</span>
-                    <strong className="font-semibold">{degradedCount}</strong>
-                  </span>
-                </>
-              )}
-              {offlineCount > 0 && (
-                <>
-                  <span className="text-[var(--border-strong)]">/</span>
-                  <span className="flex items-center gap-1 text-[var(--status-danger)]">
-                    <span>{t('manage.offlineDevices', { defaultValue: '离线' })}:</span>
-                    <strong className="font-semibold">{offlineCount}</strong>
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={loadData}
-            disabled={isLoading}
-            aria-label={tc('actions.refresh')}
-            title={tc('actions.refresh')}
-            className="page-action-btn"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>{tc('actions.refresh')}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCameraToEdit(null)
-              setIsCameraModalOpen(true)
-            }}
-            className="page-action-btn page-action-btn--primary"
-          >
-            <Plus className="h-4 w-4" />
-            <span>{t('manage.addCamera', { defaultValue: '接入设备' })}</span>
-          </button>
-        </div>
-      </div>
+        }
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={loadData}
+              disabled={isLoading}
+              aria-label={tc('actions.refresh')}
+              title={tc('actions.refresh')}
+              className="page-action-btn"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              <span>{tc('actions.refresh')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCameraToEdit(null)
+                setIsCameraModalOpen(true)
+              }}
+              className="page-action-btn page-action-btn--primary"
+            >
+              <Plus className="h-4 w-4" />
+              <span>{t('manage.addCamera', { defaultValue: '接入设备' })}</span>
+            </button>
+          </>
+        }
+      />
 
       {/* 国标新通道发现提示横幅 */}
       {unmanagedChannels.length > 0 && !bannerDismissed && (

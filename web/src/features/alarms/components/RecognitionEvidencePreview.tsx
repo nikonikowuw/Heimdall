@@ -63,7 +63,7 @@ export function RecognitionEvidencePreview({
   }
 
   const isInteractive = Boolean(src && onPreview)
-  const commonClassName = `group/evidence relative flex items-center justify-center overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs ${className} ${isInteractive ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md' : ''}`
+  const commonClassName = `relative flex items-center justify-center overflow-hidden rounded-xl border border-[var(--border)] bg-black shadow-xs ${className} ${isInteractive ? 'cursor-pointer hover:border-[var(--accent)] hover:shadow-md' : ''}`
 
   return (
     <div

@@ -118,7 +118,7 @@ export function ActivityZonesSection({
                     })
                   : t('studio.startDrawingHint', { defaultValue: '在画面上单击开始绘制' })
               }`}
-              className={`group/action relative flex h-8 min-w-0 items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-semibold whitespace-nowrap transition-all ${
+              className={`relative flex h-8 min-w-0 items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-semibold whitespace-nowrap transition-all ${
                 isActive
                   ? 'border border-[var(--border)] bg-[var(--bg-surface-solid)] font-bold text-[var(--text-primary)] shadow-sm'
                   : 'text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-secondary)]'

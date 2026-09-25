@@ -83,7 +83,7 @@ function MiniAvatar({
               onError={() => setHasError(true)}
               className="h-full w-full object-cover transition-transform duration-300 group-hover/avatar:scale-105"
             />
-            <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/avatar:opacity-100">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover/avatar:opacity-100">
               <span className="flex items-center gap-1 rounded-xl border border-white/20 bg-black/70 px-2 py-1 text-[10px] font-medium text-white shadow-lg backdrop-blur-md">
                 <ZoomIn className="h-3 w-3" />
                 <span>{viewHdText}</span>
@@ -385,7 +385,7 @@ export function RecognitionReviewModal({
                       <div
                         key={cand.faceId || idx}
                         onClick={() => setSelectedCandidate(cand)}
-                        className={`group/cand relative flex cursor-pointer items-center justify-between gap-3.5 rounded-2xl border p-3 shadow-xs backdrop-blur-md transition-all duration-200 ${
+                        className={`relative flex cursor-pointer items-center justify-between gap-3.5 rounded-2xl border p-3 shadow-xs backdrop-blur-md transition-all duration-200 ${
                           isSelected
                             ? 'border-[var(--accent)] bg-[var(--accent-soft)]/20 shadow-md ring-1 ring-[var(--accent)]/30'
                             : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/50 hover:border-[var(--accent)]/50 hover:bg-[var(--bg-surface)]'
@@ -431,7 +431,7 @@ export function RecognitionReviewModal({
                                   decoding="async"
                                   className="h-full w-full object-cover transition-transform duration-200 group-hover/thumb:scale-105"
                                 />
-                                <div className="backdrop-blur-2xs absolute inset-0 flex items-center justify-center bg-[var(--overlay-scrim)] opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
+                                <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-scrim)] opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
                                   <ZoomIn className="h-3 w-3 text-white" />
                                 </div>
                               </>

@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Cpu } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { PageHeader } from '@/components/ui/PageHeader'
 import type { AlgorithmItem } from '@/types'
 import {
   collectAlgorithmTypes,
@@ -183,64 +185,63 @@ export function AlgorithmsPage({ onNavigateToTask }: AlgorithmsPageProps): React
     : []
 
   return (
-    <div className="flex h-full w-full flex-col gap-5 overflow-y-auto pr-1 text-[var(--text-primary)]">
+    <div className="flex h-full min-h-0 flex-col gap-3 text-[var(--text-primary)] select-none">
       {/* 顶部标题与宿主平台：设备维度只出现一次，不占用统计网格 */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-xl font-bold tracking-tight text-[var(--text-primary)]">
-            {t('title')}
-          </h1>
-          <p className="text-xs text-[var(--text-muted)]">{t('subtitle')}</p>
-        </div>
-        <HostPlatformBadge platform={hostPlatform} />
-      </div>
+      <PageHeader
+        icon={Cpu}
+        title={t('title')}
+        subtitle={t('subtitle')}
+        actions={<HostPlatformBadge platform={hostPlatform} />}
+      />
 
-      <AlgoStatsHeader stats={stats} isLoading={isLoadingStats} error={statsError} />
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        <AlgoStatsHeader stats={stats} isLoading={isLoadingStats} error={statsError} />
 
-      <div className="space-y-3">
-        <AlgoFilterBar
-          query={query}
-          onQueryChange={handleQueryChange}
-          typeOptions={typeOptions}
-          platformOptions={platformOptions}
-          hasActiveFilters={hasActiveFilters(query)}
-          onClearFilters={handleClearFilters}
-          onRefresh={handleRefresh}
-          onOpenUpload={() => setIsUploadModalOpen(true)}
-          isLoading={isLoading}
-        />
-
-        {/* 内容为空时计数行交给缺失态表达，避免「共 0 项」与空态重复 */}
-        {listState === 'ready' || (visibleAlgorithms.length === 0 && hasMore) ? (
-          <AlgoListStatus
-            total={total}
-            loaded={algorithms.length}
-            visible={visibleAlgorithms.length}
-            hasMore={hasMore}
-            isLoadingMore={isLoadingMore}
-            loadMoreError={loadMoreError}
-            onLoadMore={loadMore}
+        <div className="space-y-3">
+          <AlgoFilterBar
+            query={query}
+            onQueryChange={handleQueryChange}
+            typeOptions={typeOptions}
+            platformOptions={platformOptions}
+            hasActiveFilters={hasActiveFilters(query)}
+            onClearFilters={handleClearFilters}
+            onRefresh={handleRefresh}
+            onOpenUpload={() => setIsUploadModalOpen(true)}
+            isLoading={isLoading}
           />
-        ) : null}
 
-        {/* 刷新失败但仍有旧数据：以横幅提示，不清空可用清单 */}
-        {listError !== null && listState === 'ready' && (
-          <p role="status" className="text-[11px] text-[var(--accent-amber)]">
-            {listError || t('empty.errorDesc')}
-          </p>
-        )}
+          {/* 内容为空时计数行交给缺失态表达，避免「共 0 项」与空态重复 */}
+          {listState === 'ready' || (visibleAlgorithms.length === 0 && hasMore) ? (
+            <AlgoListStatus
+              total={total}
+              loaded={algorithms.length}
+              visible={visibleAlgorithms.length}
+              hasMore={hasMore}
+              isLoadingMore={isLoadingMore}
+              loadMoreError={loadMoreError}
+              onLoadMore={loadMore}
+            />
+          ) : null}
 
-        <AlgoCardGrid
-          algorithms={visibleAlgorithms}
-          state={listState}
-          errorMessage={listError}
-          usageByAlgorithm={usageByAlgorithm}
-          onManageVersions={handleManageVersions}
-          onViewSchema={handleViewSchema}
-          onRetry={handleRefresh}
-          onUpload={() => setIsUploadModalOpen(true)}
-          onClearFilters={handleClearFilters}
-        />
+          {/* 刷新失败但仍有旧数据：以横幅提示，不清空可用清单 */}
+          {listError !== null && listState === 'ready' && (
+            <p role="status" className="text-[11px] text-[var(--accent-amber)]">
+              {listError || t('empty.errorDesc')}
+            </p>
+          )}
+
+          <AlgoCardGrid
+            algorithms={visibleAlgorithms}
+            state={listState}
+            errorMessage={listError}
+            usageByAlgorithm={usageByAlgorithm}
+            onManageVersions={handleManageVersions}
+            onViewSchema={handleViewSchema}
+            onRetry={handleRefresh}
+            onUpload={() => setIsUploadModalOpen(true)}
+            onClearFilters={handleClearFilters}
+          />
+        </div>
       </div>
 
       <VersionsDrawer

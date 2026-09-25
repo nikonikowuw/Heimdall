@@ -14,10 +14,8 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { personnelApi } from '@/lib/api'
-import { motionTokens } from '@/lib/motionTokens'
 import { wsClient } from '@/lib/wsClient'
 import type {
   PersonnelDetail,
@@ -33,6 +31,7 @@ import { PersonnelCard, PersonnelCardSkeleton } from './components/PersonnelCard
 import { PersonnelDetailDrawer } from './components/PersonnelDetailDrawer'
 import { PersonnelImportModal } from './components/PersonnelImportModal'
 import { PersonnelModal } from './components/PersonnelModal'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { PersonnelStatsGrid } from './components/PersonnelStatsGrid'
 import { PersonnelTable, PersonnelTableSkeleton } from './components/PersonnelTable'
 import { toast } from '@/stores/toast'
@@ -47,13 +46,18 @@ const MAX_IMPORT_ARCHIVE_MB = 100
 const PAGER_CLASS =
   'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-40 disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-secondary)]'
 
+/** 标题栏「最近一次任务报告」入口按钮：有失败项走 warning 色调，全成功走 success */
+function reportEntryClass(failed: number): string {
+  const tone = failed > 0 ? 'page-action-btn--soft-warning' : 'page-action-btn--soft-success'
+  return `page-action-btn h-8 rounded-lg !px-2.5 text-[11px] ${tone}`
+}
+
 type ViewMode = 'grid' | 'table'
 type SampleFilter = 'all' | 'saturated' | 'incomplete' | 'empty'
 type SortBy = 'createdDesc' | 'createdAsc' | 'nameAsc' | 'faceCountDesc' | 'faceCountAsc'
 
 export function PersonnelPage(): React.ReactElement {
   const { t } = useTranslation(['personnel', 'common'])
-  const reduceMotion = useReducedMotion()
 
   const [items, setItems] = useState<PersonnelItem[]>([])
   const [total, setTotal] = useState<number>(0)
@@ -518,6 +522,28 @@ export function PersonnelPage(): React.ReactElement {
     [pushNotice],
   )
 
+  // 算法引擎就绪度：文案与配色在此一次性定夺，供标题栏徽标配用
+  let algoStatus = {
+    label: t('stats.algoUnknown'),
+    chipClass: 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]',
+    dotClass: 'bg-[var(--text-muted)]',
+  }
+  if (hasStats && stats.algoReady) {
+    algoStatus = {
+      label: t('stats.algoReady'),
+      chipClass:
+        'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]',
+      dotClass: 'bg-[var(--status-success)] shadow-[0_0_6px_var(--status-success)]',
+    }
+  } else if (hasStats) {
+    algoStatus = {
+      label: t('stats.algoNotReady'),
+      chipClass:
+        'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]',
+      dotClass: 'bg-[var(--status-warning)]',
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / limit))
 
   useEffect(() => {
@@ -690,7 +716,6 @@ export function PersonnelPage(): React.ReactElement {
       }
       return <PersonnelTableSkeleton />
     }
-
     if (displayItems.length === 0) {
       const hasFilterOrSearch = Boolean(searchKeyword || sampleFilter !== 'all')
       let emptyTitle = t('empty.title')
@@ -774,311 +799,263 @@ export function PersonnelPage(): React.ReactElement {
   }
 
   return (
-    <div className="relative flex h-full flex-col gap-4 text-[var(--text-primary)] select-none">
-      <div className="shrink-0 space-y-3.5">
-        {/* ── 1. 紧凑型 SaaS 指挥台：标题 + 遥测状态 + 全局操作 ── */}
-        <motion.header
-          initial={reduceMotion ? false : { opacity: 0, y: motionTokens.distance.sm }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
-          className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl p-3.5 shadow-xs"
-        >
-          <div className="flex min-w-0 items-center gap-3.5">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] text-[var(--accent)] shadow-xs">
-              <Users className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2.5">
-                <h1 className="truncate text-base font-bold tracking-tight text-[var(--text-primary)] sm:text-lg">
-                  {t('title')}
-                </h1>
-                {/* 紧凑型遥测标签 */}
-                <span className="font-data hidden items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-secondary)]/80 px-2 py-0.5 text-[11px] font-medium text-[var(--text-secondary)] sm:inline-flex">
-                  <span className="text-[var(--text-muted)]">{t('pagination.totalCount')}:</span>
-                  <strong className="text-[var(--text-primary)]">{total}</strong>
-                </span>
-              </div>
-              <p className="mt-0.5 truncate text-xs text-[var(--text-muted)]">{t('subtitle')}</p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* 状态与报告徽标组 */}
-            <div className="flex items-center gap-2">
-              {/* 算法就绪状态 */}
+    <div className="flex h-full min-h-0 flex-col gap-3 text-[var(--text-primary)] select-none">
+      {/* ── 1. 紧凑型 SaaS 指挥台：标题 + 遥测状态 + 全局操作 ── */}
+      <PageHeader
+        icon={Users}
+        title={t('title')}
+        badges={
+          <>
+            <span className="font-data hidden items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-secondary)]/80 px-2 py-0.5 text-[11px] font-medium text-[var(--text-secondary)] sm:inline-flex">
+              <span className="text-[var(--text-muted)]">{t('pagination.totalCount')}:</span>
+              <strong className="text-[var(--text-primary)]">{total}</strong>
+            </span>
+            <span
+              title={t('stats.algoStatus')}
+              className={`hidden h-6 items-center gap-1.5 rounded-md border px-2 text-[10px] font-medium sm:inline-flex ${algoStatus.chipClass}`}
+            >
               <span
-                title={t('stats.algoStatus')}
-                className={`hidden h-8 max-w-[15rem] items-center gap-2 truncate rounded-lg border px-2.5 text-[11px] font-medium lg:inline-flex ${
-                  !hasStats
-                    ? 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)]'
-                    : stats.algoReady
-                      ? 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)]'
-                      : 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
-                }`}
+                aria-hidden="true"
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${algoStatus.dotClass}`}
+              />
+              <span>{algoStatus.label}</span>
+            </span>
+          </>
+        }
+        subtitle={t('subtitle')}
+        actions={
+          <div className="flex items-center gap-2">
+            {/* 最近一次重提/导入报告入口 */}
+            {hasReport && reextractProgress && (
+              <button
+                type="button"
+                onClick={handleOpenReport}
+                title={t('reextract.viewReportTooltip')}
+                className={reportEntryClass(reextractProgress.failed)}
               >
-                <span
-                  aria-hidden="true"
-                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                    !hasStats
-                      ? 'bg-[var(--text-muted)]'
-                      : stats.algoReady
-                        ? 'bg-[var(--status-success)] shadow-[0_0_6px_var(--status-success)]'
-                        : 'bg-[var(--status-warning)]'
-                  }`}
-                />
-                <span className="truncate">
-                  {!hasStats
-                    ? t('stats.algoUnknown')
-                    : stats.algoReady
-                      ? t('stats.algoReady')
-                      : t('stats.algoNotReady')}
+                <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="hidden xl:inline">
+                  {t('reextract.lastReportBadge', {
+                    succeeded: reextractProgress.succeeded,
+                    failed: reextractProgress.failed,
+                  })}
                 </span>
-              </span>
-
-              {/* 最近一次重提任务报告入口 */}
-              {hasReport && reextractProgress && (
-                <button
-                  type="button"
-                  onClick={handleOpenReport}
-                  title={t('reextract.viewReportTooltip')}
-                  className={`page-action-btn h-8 rounded-lg !px-2.5 text-[11px] ${
-                    reextractProgress.failed > 0
-                      ? 'page-action-btn--soft-warning'
-                      : 'page-action-btn--soft-success'
-                  }`}
-                >
-                  <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="hidden sm:inline">
-                    {t('reextract.lastReportBadge', {
-                      succeeded: reextractProgress.succeeded,
-                      failed: reextractProgress.failed,
-                    })}
-                  </span>
-                  <span className="sm:hidden">{t('reextract.viewReport')}</span>
-                </button>
-              )}
-
-              {/* 最近一次导入报告入口 */}
-              {hasImportReport && importProgress && (
-                <button
-                  type="button"
-                  onClick={handleOpenImportReport}
-                  title={t('import.viewReportTooltip')}
-                  className={`page-action-btn h-8 rounded-lg !px-2.5 text-[11px] ${
-                    importProgress.failed > 0
-                      ? 'page-action-btn--soft-warning'
-                      : 'page-action-btn--soft-success'
-                  }`}
-                >
-                  <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="hidden sm:inline">
-                    {t('import.lastReportBadge', {
-                      succeeded: importProgress.succeeded,
-                      failed: importProgress.failed,
-                    })}
-                  </span>
-                  <span className="sm:hidden">{t('import.viewReport')}</span>
-                </button>
-              )}
-            </div>
-
-            {/* 视觉分割线 */}
-            <div className="hidden h-4 w-px bg-[var(--border)] sm:block" />
-
-            {/* 操作按钮组 */}
-            <div className="flex items-center gap-2">
-              {/* 刷新 */}
-              <button
-                type="button"
-                onClick={() => loadData()}
-                disabled={isLoading}
-                aria-label={t('actions.refresh')}
-                title={t('actions.refresh')}
-                className="page-action-btn page-action-btn--icon"
-              >
-                <RotateCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                <span className="xl:hidden">{t('reextract.viewReport')}</span>
               </button>
+            )}
 
-              {/* 一键重新提取人脸特征 */}
+            {/* 最近一次导入报告入口 */}
+            {hasImportReport && importProgress && (
               <button
                 type="button"
-                onClick={isTaskRunning ? handleOpenReport : handleOpenReextract}
-                disabled={(!stats.algoReady || stats.totalFaces === 0) && !isTaskRunning}
-                title={reextractTooltip}
-                aria-label={reextractTooltip}
-                className={`page-action-btn ${isTaskRunning ? 'page-action-btn--soft-info' : ''}`}
+                onClick={handleOpenImportReport}
+                title={t('import.viewReportTooltip')}
+                className={reportEntryClass(importProgress.failed)}
               >
-                <RefreshCw
-                  className={`h-3.5 w-3.5 ${isTaskRunning ? 'animate-spin' : ''}`}
-                  aria-hidden="true"
-                />
-                <span className="hidden sm:inline">
-                  {isTaskRunning
-                    ? t('reextract.runningBadge', { percent: reextractPercent })
-                    : t('actions.reextractShort', { defaultValue: t('actions.reextractFeatures') })}
+                <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="hidden xl:inline">
+                  {t('import.lastReportBadge', {
+                    succeeded: importProgress.succeeded,
+                    failed: importProgress.failed,
+                  })}
                 </span>
+                <span className="xl:hidden">{t('import.viewReport')}</span>
               </button>
+            )}
 
-              {/* 批量导入（运行中切换为进度入口） */}
-              <button
-                type="button"
-                onClick={handleOpenImport}
-                disabled={!stats.algoReady && !isImportRunning && hasStats}
-                title={isImportRunning ? t('import.runningShort') : t('import.entry')}
-                aria-label={isImportRunning ? t('import.runningShort') : t('import.entry')}
-                className={`page-action-btn ${isImportRunning ? 'page-action-btn--soft-info' : ''}`}
-              >
-                <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="hidden sm:inline">
-                  {isImportRunning
-                    ? t('import.runningBadge', { percent: importPercent })
-                    : t('import.entry')}
-                </span>
-              </button>
+            {/* 刷新 */}
+            <button
+              type="button"
+              onClick={() => loadData()}
+              disabled={isLoading}
+              aria-label={t('actions.refresh')}
+              title={t('actions.refresh')}
+              className="page-action-btn page-action-btn--icon"
+            >
+              <RotateCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
 
-              {/* 录入新人员 */}
-              <button
-                type="button"
-                onClick={handleOpenRegister}
-                title={t('actions.register')}
-                className="page-action-btn page-action-btn--primary"
-              >
-                <UserPlus className="h-4 w-4" aria-hidden="true" />
-                <span>{t('actions.register')}</span>
-              </button>
-            </div>
-          </div>
-        </motion.header>
-
-        {/* ── 2. 底库指标卡 ── */}
-        <PersonnelStatsGrid stats={stats} hasData={hasStats} error={statsError} />
-
-        {/* ── 3. 现代化 SaaS 一体化操作检索工具栏 ── */}
-        <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl p-2.5 shadow-xs">
-          <div className="flex flex-1 flex-wrap items-center gap-2.5 sm:flex-nowrap">
-            {/* 搜索框 */}
-            <div className="group/search relative min-w-[200px] flex-1 sm:max-w-xs">
-              <Search
-                className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]"
+            {/* 一键重新提取人脸特征 */}
+            <button
+              type="button"
+              onClick={isTaskRunning ? handleOpenReport : handleOpenReextract}
+              disabled={(!stats.algoReady || stats.totalFaces === 0) && !isTaskRunning}
+              title={reextractTooltip}
+              aria-label={reextractTooltip}
+              className={`page-action-btn ${isTaskRunning ? 'page-action-btn--soft-info' : ''}`}
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${isTaskRunning ? 'animate-spin' : ''}`}
                 aria-hidden="true"
               />
-              <input
-                ref={searchInputRef}
-                type="text"
-                data-search-input="true"
-                value={searchKeyword}
-                onChange={(e) => {
-                  setSearchKeyword(e.target.value)
+              <span className="hidden sm:inline">
+                {isTaskRunning
+                  ? t('reextract.runningBadge', { percent: reextractPercent })
+                  : t('actions.reextractShort', {
+                      defaultValue: t('actions.reextractFeatures'),
+                    })}
+              </span>
+            </button>
+
+            {/* 批量导入（运行中切换为进度入口） */}
+            <button
+              type="button"
+              onClick={handleOpenImport}
+              disabled={!stats.algoReady && !isImportRunning && hasStats}
+              title={isImportRunning ? t('import.runningShort') : t('import.entry')}
+              aria-label={isImportRunning ? t('import.runningShort') : t('import.entry')}
+              className={`page-action-btn ${isImportRunning ? 'page-action-btn--soft-info' : ''}`}
+            >
+              <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">
+                {isImportRunning
+                  ? t('import.runningBadge', { percent: importPercent })
+                  : t('import.entry')}
+              </span>
+            </button>
+
+            {/* 录入新人员 */}
+            <button
+              type="button"
+              onClick={handleOpenRegister}
+              title={t('actions.register')}
+              className="page-action-btn page-action-btn--primary"
+            >
+              <UserPlus className="h-4 w-4" aria-hidden="true" />
+              <span>{t('actions.register')}</span>
+            </button>
+          </div>
+        }
+      />
+
+      {/* ── 2. 底库指标卡 ── */}
+      <PersonnelStatsGrid stats={stats} hasData={hasStats} error={statsError} />
+
+      {/* ── 3. 现代化 SaaS 一体化操作检索工具栏 ── */}
+      <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl p-2.5 shadow-xs">
+        <div className="flex flex-1 flex-wrap items-center gap-2.5 sm:flex-nowrap">
+          {/* 搜索框 */}
+          <div className="group/search relative min-w-[200px] flex-1 sm:max-w-xs">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]"
+              aria-hidden="true"
+            />
+            <input
+              ref={searchInputRef}
+              type="text"
+              data-search-input="true"
+              value={searchKeyword}
+              onChange={(e) => {
+                setSearchKeyword(e.target.value)
+                setPage(1)
+              }}
+              placeholder={t('actions.searchPlaceholder')}
+              aria-label={t('actions.searchPlaceholder')}
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/70 py-1.5 pr-8 pl-8 text-xs text-[var(--text-primary)] backdrop-blur-md transition-all select-text placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface)] focus:ring-2 focus:ring-[var(--accent-soft)] focus:outline-none"
+            />
+            {searchKeyword ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchKeyword('')
                   setPage(1)
                 }}
-                placeholder={t('actions.searchPlaceholder')}
-                aria-label={t('actions.searchPlaceholder')}
-                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/70 py-1.5 pr-8 pl-8 text-xs text-[var(--text-primary)] backdrop-blur-md transition-all select-text placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface)] focus:ring-2 focus:ring-[var(--accent-soft)] focus:outline-none"
-              />
-              {searchKeyword ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchKeyword('')
-                    setPage(1)
-                  }}
-                  aria-label={t('actions.clearSearch')}
-                  title={t('actions.clearSearch')}
-                  className="absolute top-1/2 right-2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              ) : (
-                <kbd className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
-                  /
-                </kbd>
-              )}
-            </div>
-
-            {/* 样本健康度分段筛选胶囊 (Segmented Pills) */}
-            <div className="hidden items-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/60 p-0.5 xl:flex">
-              {(
-                [
-                  { id: 'all', label: t('filters.all') },
-                  { id: 'saturated', label: t('filters.saturated') },
-                  { id: 'incomplete', label: t('filters.incomplete') },
-                  { id: 'empty', label: t('filters.empty') },
-                ] as const
-              ).map((filter) => (
-                <button
-                  key={filter.id}
-                  type="button"
-                  onClick={() => setSampleFilter(filter.id)}
-                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all ${
-                    sampleFilter === filter.id
-                      ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs'
-                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  {filter.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 右侧：排序 + 视图切换 + 加载/计数 */}
-          <div className="flex items-center gap-2">
-            {/* 排序选择器 */}
-            <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/50 px-2 py-1 text-[11px] text-[var(--text-secondary)]">
-              <ArrowUpDown className="h-3 w-3 text-[var(--text-muted)]" />
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as SortBy)}
-                aria-label={t('sort.label')}
-                className="bg-transparent text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
+                aria-label={t('actions.clearSearch')}
+                title={t('actions.clearSearch')}
+                className="absolute top-1/2 right-2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
               >
-                <option value="createdDesc">{t('sort.createdDesc')}</option>
-                <option value="createdAsc">{t('sort.createdAsc')}</option>
-                <option value="nameAsc">{t('sort.nameAsc')}</option>
-                <option value="faceCountDesc">{t('sort.faceCountDesc')}</option>
-                <option value="faceCountAsc">{t('sort.faceCountAsc')}</option>
-              </select>
-            </div>
-
-            {/* 视图模式切换：Grid / Table */}
-            <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/60 p-0.5">
-              <button
-                type="button"
-                onClick={() => handleSetViewMode('grid')}
-                title={t('viewMode.grid')}
-                aria-label={t('viewMode.grid')}
-                className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
-                  viewMode === 'grid'
-                    ? 'bg-[var(--bg-surface)] text-[var(--accent)] shadow-xs'
-                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
+                <X className="h-3 w-3" />
               </button>
-              <button
-                type="button"
-                onClick={() => handleSetViewMode('table')}
-                title={t('viewMode.table')}
-                aria-label={t('viewMode.table')}
-                className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
-                  viewMode === 'table'
-                    ? 'bg-[var(--bg-surface)] text-[var(--accent)] shadow-xs'
-                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <List className="h-3.5 w-3.5" />
-              </button>
-            </div>
-
-            {isLoading && (
-              <span className="flex items-center gap-1 text-[11px] text-[var(--text-muted)]">
-                <RotateCw className="h-3 w-3 animate-spin" aria-hidden="true" />
-              </span>
+            ) : (
+              <kbd className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
+                /
+              </kbd>
             )}
-            <span className="font-data text-[11px] text-[var(--text-muted)] tabular-nums">
-              {t('pagination.total', { total })}
-            </span>
           </div>
+
+          {/* 样本健康度分段筛选胶囊 (Segmented Pills) */}
+          <div className="hidden items-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/60 p-0.5 xl:flex">
+            {(
+              [
+                { id: 'all', label: t('filters.all') },
+                { id: 'saturated', label: t('filters.saturated') },
+                { id: 'incomplete', label: t('filters.incomplete') },
+                { id: 'empty', label: t('filters.empty') },
+              ] as const
+            ).map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                onClick={() => setSampleFilter(filter.id)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all ${
+                  sampleFilter === filter.id
+                    ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 右侧：排序 + 视图切换 + 加载/计数 */}
+        <div className="flex items-center gap-2">
+          {/* 排序选择器 */}
+          <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/50 px-2 py-1 text-[11px] text-[var(--text-secondary)]">
+            <ArrowUpDown className="h-3 w-3 text-[var(--text-muted)]" />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortBy)}
+              aria-label={t('sort.label')}
+              className="bg-transparent text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
+            >
+              <option value="createdDesc">{t('sort.createdDesc')}</option>
+              <option value="createdAsc">{t('sort.createdAsc')}</option>
+              <option value="nameAsc">{t('sort.nameAsc')}</option>
+              <option value="faceCountDesc">{t('sort.faceCountDesc')}</option>
+              <option value="faceCountAsc">{t('sort.faceCountAsc')}</option>
+            </select>
+          </div>
+
+          {/* 视图模式切换：Grid / Table */}
+          <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/60 p-0.5">
+            <button
+              type="button"
+              onClick={() => handleSetViewMode('grid')}
+              title={t('viewMode.grid')}
+              aria-label={t('viewMode.grid')}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+                viewMode === 'grid'
+                  ? 'bg-[var(--bg-surface)] text-[var(--accent)] shadow-xs'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSetViewMode('table')}
+              title={t('viewMode.table')}
+              aria-label={t('viewMode.table')}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+                viewMode === 'table'
+                  ? 'bg-[var(--bg-surface)] text-[var(--accent)] shadow-xs'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <List className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {isLoading && (
+            <span className="flex items-center gap-1 text-[11px] text-[var(--text-muted)]">
+              <RotateCw className="h-3 w-3 animate-spin" aria-hidden="true" />
+            </span>
+          )}
+          <span className="font-data text-[11px] text-[var(--text-muted)] tabular-nums">
+            {t('pagination.total', { total })}
+          </span>
         </div>
       </div>
 

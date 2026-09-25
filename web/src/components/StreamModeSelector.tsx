@@ -66,7 +66,7 @@ export function StreamModeSelector({
               )}
               <span className="text-xs">{opt.label}</span>
               <span
-                className={`py-0.2 mt-0.5 rounded-sm px-1 font-mono text-[10px] ${
+                className={`mt-0.5 rounded-sm px-1 font-mono text-[10px] ${
                   isSelected
                     ? 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-200'
                     : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'

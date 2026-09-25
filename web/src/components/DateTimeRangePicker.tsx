@@ -476,7 +476,7 @@ export function DateTimeRangePicker({
           <div
             ref={dropdownRef}
             style={popoverStyle}
-            className="animate-in fade-in-0 zoom-in-95 flex w-[600px] max-w-[calc(100vw-32px)] overflow-hidden rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface)]/95 shadow-2xl backdrop-blur-2xl duration-150"
+            className="flex w-[600px] max-w-[calc(100vw-32px)] overflow-hidden rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-surface)]/95 shadow-2xl backdrop-blur-2xl duration-150"
           >
             {/* 左侧一栏：高频快捷区间 */}
             <div className="flex w-[140px] shrink-0 flex-col justify-between border-r border-[var(--border)] bg-[var(--bg-secondary)]/40 p-3">
