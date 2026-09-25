@@ -351,6 +351,7 @@ void main() {
 
 export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsUpdate }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const staticRenderRef = useRef<(() => void) | null>(null)
   const isDarkRef = useRef(isDark)
   isDarkRef.current = isDark
 
@@ -470,10 +471,10 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       }
       gl.uniform2f(uResolutionLoc, w, h)
       updateSingularityCenterTarget()
+      scheduleRender()
     }
 
     window.addEventListener('resize', resize)
-    resize()
 
     let targetMx = 0,
       targetMy = 0
@@ -489,23 +490,29 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
     window.addEventListener('pointermove', onPointerMove, { passive: true })
 
     const startTime = performance.now()
+    const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
+    let shouldAnimate = !motionPreference.matches
     let currentTheme = isDarkRef.current ? 1.0 : 0.0
     let animId = 0
     let frames = 0
     let lastFpsTime = performance.now()
 
-    const render = () => {
-      const now = performance.now()
-      const elapsed = (now - startTime) * 0.001
+    const draw = (now: number) => {
+      const elapsed = shouldAnimate ? (now - startTime) * 0.001 : 0
 
-      curMx += (targetMx - curMx) * 0.04
-      curMy += (targetMy - curMy) * 0.04
-
-      const targetTheme = isDarkRef.current ? 1.0 : 0.0
-      currentTheme += (targetTheme - currentTheme) * 0.075
-
-      curSingX += (targetSingX - curSingX) * 0.05
-      curSingY += (targetSingY - curSingY) * 0.05
+      if (shouldAnimate) {
+        curMx += (targetMx - curMx) * 0.04
+        curMy += (targetMy - curMy) * 0.04
+        currentTheme += ((isDarkRef.current ? 1.0 : 0.0) - currentTheme) * 0.075
+        curSingX += (targetSingX - curSingX) * 0.05
+        curSingY += (targetSingY - curSingY) * 0.05
+      } else {
+        curMx = 0
+        curMy = 0
+        currentTheme = isDarkRef.current ? 1.0 : 0.0
+        curSingX = targetSingX
+        curSingY = targetSingY
+      }
 
       gl.uniform1f(uTimeLoc, elapsed)
       gl.uniform1f(uThemeLoc, currentTheme)
@@ -513,36 +520,62 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       gl.uniform2f(uSingularityCenterLoc, curSingX, curSingY)
       gl.drawArrays(gl.TRIANGLES, 0, 3)
 
-      frames++
-      if (now - lastFpsTime >= 1000) {
-        if (onFpsUpdate) {
-          onFpsUpdate(Math.round((frames * 1000) / (now - lastFpsTime)))
+      if (shouldAnimate) {
+        frames++
+        if (now - lastFpsTime >= 1000) {
+          onFpsUpdate?.(Math.round((frames * 1000) / (now - lastFpsTime)))
+          frames = 0
+          lastFpsTime = now
         }
-        frames = 0
-        lastFpsTime = now
+      } else {
+        onFpsUpdate?.(0)
       }
-
-      animId = requestAnimationFrame(render)
     }
 
-    animId = requestAnimationFrame(render)
+    const render = () => {
+      animId = 0
+      draw(performance.now())
+      if (shouldAnimate) {
+        animId = requestAnimationFrame(render)
+      }
+    }
 
-    // 智能休眠（Page Visibility API）：切入后台标签页时立即暂停 WebGL RAF，GPU 占用瞬间降至 0%
+    const scheduleRender = () => {
+      if (!animId && !document.hidden) {
+        animId = requestAnimationFrame(render)
+      }
+    }
+
+    resize()
+    staticRenderRef.current = () => {
+      if (!shouldAnimate && !document.hidden) draw(performance.now())
+    }
+    scheduleRender()
+
+    const onMotionPreferenceChange = () => {
+      shouldAnimate = !motionPreference.matches
+      if (animId) cancelAnimationFrame(animId)
+      animId = 0
+      frames = 0
+      lastFpsTime = performance.now()
+      scheduleRender()
+    }
+    motionPreference.addEventListener('change', onMotionPreferenceChange)
+
     const onVisibilityChange = () => {
       if (document.hidden) {
         if (animId) {
           cancelAnimationFrame(animId)
           animId = 0
         }
-      } else if (!animId) {
+      } else {
         lastFpsTime = performance.now()
         frames = 0
-        animId = requestAnimationFrame(render)
+        scheduleRender()
       }
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
 
-    // 处理 WebGL 上下文丢失防护（如系统休眠唤醒），防止上下文彻底报废
     const onContextLost = (e: Event) => {
       e.preventDefault()
       if (animId) {
@@ -556,6 +589,8 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       if (animId) {
         cancelAnimationFrame(animId)
       }
+      staticRenderRef.current = null
+      motionPreference.removeEventListener('change', onMotionPreferenceChange)
       canvas.removeEventListener('webglcontextlost', onContextLost)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('resize', resize)
@@ -566,6 +601,12 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       gl.deleteBuffer(buf)
     }
   }, [onFpsUpdate])
+
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      staticRenderRef.current?.()
+    }
+  }, [isDark])
 
   return (
     <canvas

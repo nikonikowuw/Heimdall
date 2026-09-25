@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Globe } from 'lucide-react'
 import { useLocale } from '@/hooks/use-locale'
 import { type Locale, SUPPORTED_LOCALES } from '@/i18n'
+import { cn } from '@/lib/utils'
 
 const LOCALE_LABELS: Record<Locale, string> = {
   'zh-CN': '简体中文',
@@ -13,6 +14,7 @@ interface LocaleDropdownProps {
   placement?: 'bottom-right' | 'top-right' | 'right-bottom'
   compact?: boolean
   variant?: 'pill' | 'icon'
+  triggerClassName?: string
   /** 侧栏展开态：图标与语言缩写改为整行布局，与同一列的其他入口对齐 */
   expanded?: boolean
 }
@@ -21,6 +23,7 @@ export const LocaleDropdown: React.FC<LocaleDropdownProps> = ({
   placement = 'bottom-right',
   compact = false,
   variant = 'pill',
+  triggerClassName = '',
 }) => {
   const { locale, setLocale } = useLocale()
   const [open, setOpen] = useState(false)
@@ -75,7 +78,11 @@ export const LocaleDropdown: React.FC<LocaleDropdownProps> = ({
           aria-expanded={open}
           aria-haspopup="listbox"
           aria-label={LOCALE_LABELS[locale]}
-          className={`nav-btn${open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : ''}`}
+          className={cn(
+            'nav-btn',
+            open && 'bg-[var(--accent-soft)] text-[var(--accent)]',
+            triggerClassName,
+          )}
         >
           <Globe className="h-4 w-4" />
           <span className="font-mono text-[9px] font-bold uppercase">{shortLabel}</span>
@@ -89,10 +96,13 @@ export const LocaleDropdown: React.FC<LocaleDropdownProps> = ({
           onClick={() => setOpen((prev) => !prev)}
           aria-expanded={open}
           aria-haspopup="listbox"
-          title="选择界面语言 / Select Language"
-          className={`flex items-center gap-1.5 rounded-full border border-black/5 bg-white/60 px-3 py-1 font-mono text-[10px] font-bold text-slate-700 shadow-sm backdrop-blur-md transition-all hover:bg-[var(--accent-soft)] focus:outline-none dark:border-white/10 dark:bg-black/40 dark:text-slate-300 ${
-            open ? 'ring-2 ring-[var(--ring)]' : ''
-          }`}
+          aria-label={LOCALE_LABELS[locale]}
+          title={LOCALE_LABELS[locale]}
+          className={cn(
+            'flex items-center gap-1.5 rounded-full border border-black/5 bg-white/60 px-3 py-1 font-mono text-[10px] font-bold text-slate-700 shadow-sm backdrop-blur-md transition-all hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)] dark:border-white/10 dark:bg-black/40 dark:text-slate-300',
+            open && 'ring-2 ring-[var(--ring)]',
+            triggerClassName,
+          )}
         >
           <Globe className="h-3.5 w-3.5 text-[var(--accent)]" />
           <span>{compact ? shortLabel : LOCALE_LABELS[locale]}</span>
