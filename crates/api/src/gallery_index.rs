@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use types::FaceCandidateItem;
 
 use db::{DatabaseConnection, DbError, GalleryFaceRepo, PersonnelRepo};
@@ -116,11 +116,26 @@ impl RegisteredFace {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrossSubjectFaceMatch {
+    pub subject_id: String,
+    pub subject_name: String,
+    pub face_id: String,
+    pub raw_cosine: f32,
+}
+
 /// 人脸底库特征向量检索索引（支持 C ABI 共享底库委托与宿主无状态回退）
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FaceFeatureIndex {
     faces: Arc<RwLock<Vec<RegisteredFace>>>,
     algo_gallery: Arc<RwLock<Option<Arc<RawAlgoGallery>>>>,
+    enrollment_semaphore: Arc<Semaphore>,
+}
+
+impl Default for FaceFeatureIndex {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FaceFeatureIndex {
@@ -128,7 +143,17 @@ impl FaceFeatureIndex {
         Self {
             faces: Arc::new(RwLock::new(Vec::new())),
             algo_gallery: Arc::new(RwLock::new(None)),
+            enrollment_semaphore: Arc::new(Semaphore::new(1)),
         }
+    }
+
+    /// 串行化人员录入，避免两个并发请求都在对方入库前通过冲撞检查。
+    pub async fn acquire_enrollment_permit(&self) -> Result<OwnedSemaphorePermit, String> {
+        self.enrollment_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|err| format!("获取人员录入许可失败: {err}"))
     }
 
     /// 绑定或解绑底层 C ABI 算法包共享底库句柄
@@ -453,6 +478,144 @@ impl FaceFeatureIndex {
             .collect()
     }
 
+    /// 返回 query 与不同主体底库样本之间 raw cosine 最大的一项。
+    ///
+    /// 算法包 C ABI 可用时，比较由算法包执行，宿主只读取 raw_score；
+    /// 无 C ABI 时沿用现有 FP32 特征回退路径。异常特征或索引不一致时失败，
+    /// 让录入方拒绝未完成校验的样本，而不是静默放行。
+    pub async fn most_similar_cross_subject(
+        &self,
+        query_bytes: &[u8],
+        excluded_subject_id: Option<&str>,
+    ) -> Result<Option<CrossSubjectFaceMatch>, String> {
+        if query_bytes.is_empty() {
+            return Err("待校验的人脸特征为空".to_string());
+        }
+
+        let metadata: HashMap<u64, (String, String, String)> = {
+            let faces = self.faces.read().await;
+            faces
+                .iter()
+                .map(|face| {
+                    (
+                        face.id,
+                        (
+                            face.subject_id.clone(),
+                            face.subject_name.clone(),
+                            face.face_id.clone(),
+                        ),
+                    )
+                })
+                .collect()
+        };
+        let algo_gallery = self.algo_gallery.read().await.clone();
+        if let Some(gallery) = algo_gallery {
+            let query = query_bytes.to_vec();
+            let (gallery_count, candidates) = tokio::task::spawn_blocking(
+                move || -> Result<(usize, Vec<infer::RawFaceCandidate>), String> {
+                    let count = gallery.count().map_err(|err| err.to_string())? as usize;
+                    if count == 0 {
+                        return Ok((count, Vec::new()));
+                    }
+                    let top_k = count.min(256) as u32;
+                    let candidates = gallery
+                        .search(&query, top_k, -1.0)
+                        .map_err(|err| err.to_string())?;
+                    Ok((count, candidates))
+                },
+            )
+            .await
+            .map_err(|err| format!("底库冲撞检索任务失败: {err}"))??;
+
+            if gallery_count != metadata.len() {
+                return Err(format!(
+                    "算法底库与宿主索引样本数不一致: algorithm={gallery_count}, host={}",
+                    metadata.len()
+                ));
+            }
+            if gallery_count == 0 {
+                return Ok(None);
+            }
+            if candidates.is_empty() {
+                return Err("算法底库未返回候选，无法完成冲撞校验".to_string());
+            }
+
+            let mut best: Option<CrossSubjectFaceMatch> = None;
+            for candidate in candidates {
+                if !candidate.raw_score.is_finite() {
+                    return Err("算法底库返回了非有限 raw_score".to_string());
+                }
+                let Some((subject_id, subject_name, face_id)) = metadata.get(&candidate.id) else {
+                    return Err(format!(
+                        "算法底库返回了宿主索引中不存在的样本 ID: {}",
+                        candidate.id
+                    ));
+                };
+                if excluded_subject_id == Some(subject_id.as_str()) {
+                    continue;
+                }
+
+                if best
+                    .as_ref()
+                    .is_none_or(|current| candidate.raw_score > current.raw_cosine)
+                {
+                    best = Some(CrossSubjectFaceMatch {
+                        subject_id: subject_id.clone(),
+                        subject_name: subject_name.clone(),
+                        face_id: face_id.clone(),
+                        raw_cosine: candidate.raw_score,
+                    });
+                }
+            }
+            return Ok(best);
+        }
+
+        let query = bytes_to_floats(query_bytes)
+            .filter(|query| !query.is_empty())
+            .ok_or_else(|| "待校验的人脸特征不是有效 FP32 字节流".to_string())?;
+        let snapshots = {
+            let faces = self.faces.read().await;
+            faces
+                .iter()
+                .filter(|face| excluded_subject_id != Some(face.subject_id.as_str()))
+                .map(|face| {
+                    (
+                        face.id,
+                        face.subject_id.clone(),
+                        face.subject_name.clone(),
+                        face.face_id.clone(),
+                        face.feature_bytes.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        tokio::task::spawn_blocking(move || {
+            let mut best: Option<CrossSubjectFaceMatch> = None;
+            for (id, subject_id, subject_name, face_id, feature_bytes) in snapshots {
+                let feature = bytes_to_floats(&feature_bytes)
+                    .filter(|feature| !feature.is_empty())
+                    .ok_or_else(|| format!("底库样本 {id} 不是有效 FP32 字节流"))?;
+                let raw_cosine = normalized_cosine(&query, &feature)
+                    .ok_or_else(|| format!("底库样本 {id} 无法计算 raw cosine"))?;
+                if best
+                    .as_ref()
+                    .is_none_or(|current| raw_cosine > current.raw_cosine)
+                {
+                    best = Some(CrossSubjectFaceMatch {
+                        subject_id,
+                        subject_name,
+                        face_id,
+                        raw_cosine,
+                    });
+                }
+            }
+            Ok(best)
+        })
+        .await
+        .map_err(|err| format!("底库冲撞回退检索任务失败: {err}"))?
+    }
+
     /// 浮点切片向后兼容检索入口
     pub async fn search_top_k_floats(
         &self,
@@ -486,6 +649,31 @@ impl FaceFeatureIndex {
         }
         self.faces.read().await.len()
     }
+}
+
+fn normalized_cosine(left: &[f32], right: &[f32]) -> Option<f32> {
+    if left.is_empty() || left.len() != right.len() {
+        return None;
+    }
+
+    let mut dot = 0.0f64;
+    let mut left_norm = 0.0f64;
+    let mut right_norm = 0.0f64;
+    for (&a, &b) in left.iter().zip(right) {
+        if !a.is_finite() || !b.is_finite() {
+            return None;
+        }
+        let a = f64::from(a);
+        let b = f64::from(b);
+        dot += a * b;
+        left_norm += a * a;
+        right_norm += b * b;
+    }
+    let denominator = (left_norm * right_norm).sqrt();
+    if !denominator.is_finite() || denominator <= f64::EPSILON {
+        return None;
+    }
+    Some((dot / denominator).clamp(-1.0, 1.0) as f32)
 }
 
 /// 尝试从算法包创建并绑定 C ABI 底库句柄，并全量同步当前数据库底库
@@ -583,5 +771,45 @@ mod tests {
         assert_eq!(top_after_del_subj.len(), 1);
         assert_eq!(top_after_del_subj[0].subject_id, "subj_1");
         assert_eq!(top_after_del_subj[0].face_id, "face_1a");
+    }
+
+    #[tokio::test]
+    async fn test_cross_subject_match_uses_cosine_and_excludes_same_subject() {
+        let index = FaceFeatureIndex::new();
+        let query = make_test_vector(2.0);
+        let mut same_subject = make_test_vector(3.0);
+        same_subject[1] = 4.0;
+        let mut other_subject = [0.0f32; 512];
+        other_subject[0] = 6.0 * 0.48;
+        other_subject[1] = 6.0 * (1.0f32 - 0.48f32.powi(2)).sqrt();
+
+        index
+            .upsert_faces(vec![
+                RegisteredFace::from_512(
+                    "subject-a".into(),
+                    "Alice".into(),
+                    "face-a".into(),
+                    String::new(),
+                    same_subject,
+                ),
+                RegisteredFace::from_512(
+                    "subject-b".into(),
+                    "Bob".into(),
+                    "face-b".into(),
+                    String::new(),
+                    other_subject,
+                ),
+            ])
+            .await;
+
+        let match_result = index
+            .most_similar_cross_subject(&embedding_to_le_bytes(&query), Some("subject-a"))
+            .await
+            .expect("cross-subject lookup should succeed")
+            .expect("a different subject should be returned");
+
+        assert_eq!(match_result.subject_id, "subject-b");
+        assert_eq!(match_result.face_id, "face-b");
+        assert!((match_result.raw_cosine - 0.48).abs() < 1e-5);
     }
 }

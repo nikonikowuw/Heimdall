@@ -61,6 +61,9 @@ pub enum ApiError {
     #[error("人脸特征提取任务冲突: {0}")]
     FaceExtractionConflict(String),
 
+    #[error("人脸底库模板冲撞: {0}")]
+    FaceTemplateCollision(String),
+
     #[error("任务配置已被其他会话修改（本地版本 {expected}，当前版本 {actual}）")]
     ConfigRevisionConflict { expected: i64, actual: i64 },
 
@@ -151,6 +154,7 @@ impl IntoResponse for ApiError {
             Self::FaceAlgorithmNotLoaded(m) => (StatusCode::SERVICE_UNAVAILABLE, 50301, m.clone()),
             Self::FaceQualityRejected(m) => (StatusCode::BAD_REQUEST, 40002, m.clone()),
             Self::FaceExtractionConflict(m) => (StatusCode::CONFLICT, 40902, m.clone()),
+            Self::FaceTemplateCollision(m) => (StatusCode::CONFLICT, 40904, m.clone()),
             Self::ConfigRevisionConflict { .. } => (
                 StatusCode::CONFLICT,
                 40903,
@@ -198,6 +202,20 @@ impl From<sea_orm::DbErr> for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn test_face_template_collision_uses_conflict_code() {
+        let response =
+            ApiError::FaceTemplateCollision("raw cosine 0.51".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], 40904);
+        assert!(body["data"].is_null());
+    }
 
     #[test]
     fn test_api_error_code_mapping() {

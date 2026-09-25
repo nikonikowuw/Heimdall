@@ -13,6 +13,12 @@ pub const STATIC_MESSAGES: &[StaticMessage] = &[
         zh_tw: "當前有全量底庫特徵重新擷取任務正在背景執行中，請稍候再試",
         en: "A gallery face feature re-extraction task is currently running in the background, please try again later.",
     },
+    StaticMessage {
+        code: 40904,
+        zh_cn: "上传的人脸与已登记人员模板高度相似，录入已拒绝，请人工核验身份",
+        zh_tw: "上傳的人臉與已登記人員模板高度相似，錄入已拒絕，請人工核驗身份",
+        en: "The uploaded face is highly similar to an enrolled person. Enrollment was rejected; verify the identity manually.",
+    },
 ];
 
 pub fn translate_personnel(code: u32, original_msg: &str, locale: Locale) -> Option<String> {

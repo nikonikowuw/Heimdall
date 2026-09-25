@@ -19,6 +19,10 @@ use crate::gallery_index::{
 use crate::personnel_reextract::PersonnelReextractManager;
 use crate::state::AppState;
 
+/// 当前实机底库观测到跨主体最大 raw cosine 为 0.4019；0.49 作为保守录入拦截点，
+/// 仍需用带身份标注的数据集验证后再视为正式标定值。
+pub const ENROLLMENT_CLASH_RAW_COSINE_THRESHOLD: f32 = 0.49;
+
 /// 磁盘写操作异常回滚守卫（RAII：若在提交前发生异常或 panic，自动销毁孤儿临时文件）
 struct DiskRollbackGuard {
     paths: Vec<PathBuf>,
@@ -296,6 +300,45 @@ impl PersonnelService {
         })
     }
 
+    async fn reject_cross_subject_clashes(
+        &self,
+        subject_id: &str,
+        faces: &[ExtractedFaceMeta],
+    ) -> Result<(), ApiError> {
+        for (index, face) in faces.iter().enumerate() {
+            let clash = self
+                .gallery_index
+                .most_similar_cross_subject(&face.feature_bytes, Some(subject_id))
+                .await
+                .map_err(|err| {
+                    tracing::error!(error = %err, "无法完成新注册人脸的跨主体冲撞校验");
+                    ApiError::Internal("无法完成底库冲撞校验，本次录入已中止".to_string())
+                })?;
+
+            if let Some(clash) = clash
+                .filter(|candidate| candidate.raw_cosine >= ENROLLMENT_CLASH_RAW_COSINE_THRESHOLD)
+            {
+                tracing::warn!(
+                    subject_id,
+                    face_index = index + 1,
+                    matched_subject_id = %clash.subject_id,
+                    matched_face_id = %clash.face_id,
+                    raw_cosine = clash.raw_cosine,
+                    threshold = ENROLLMENT_CLASH_RAW_COSINE_THRESHOLD,
+                    "跨主体人脸模板冲撞，拒绝录入"
+                );
+                return Err(ApiError::FaceTemplateCollision(format!(
+                    "第 {} 张上传照片与底库人员「{}」样本高度相似: raw cosine {:.4} >= {:.2}",
+                    index + 1,
+                    clash.subject_name,
+                    clash.raw_cosine,
+                    ENROLLMENT_CLASH_RAW_COSINE_THRESHOLD
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// 一步式原子录入人员与 1~5 张人脸照片
     pub async fn create(
         &self,
@@ -320,6 +363,12 @@ impl PersonnelService {
                 "单个人员最多支持上传 5 张人脸照片".to_string(),
             ));
         }
+
+        let _enrollment_permit = self
+            .gallery_index
+            .acquire_enrollment_permit()
+            .await
+            .map_err(ApiError::Internal)?;
 
         let subject_id = match custom_subject_id.take().map(|s| s.trim().to_string()) {
             Some(s) if !s.is_empty() => {
@@ -363,6 +412,9 @@ impl PersonnelService {
             }
             extracted_metas.push(meta);
         }
+
+        self.reject_cross_subject_clashes(&subject_id, &extracted_metas)
+            .await?;
 
         // 2. 数据库事务原子写入人员表与人脸表
         let now = chrono::Utc::now();
@@ -520,6 +572,11 @@ impl PersonnelService {
             .await?
             .ok_or_else(|| ApiError::NotFound(format!("人员不存在: {subject_id}")))?;
 
+        let _enrollment_permit = self
+            .gallery_index
+            .acquire_enrollment_permit()
+            .await
+            .map_err(ApiError::Internal)?;
         let current_count = GalleryFaceRepo::count_by_subject_id(&self.db, subject_id).await?;
         if raw_images.is_empty() {
             return Err(ApiError::BadRequest("未选择要追加的照片".to_string()));
@@ -546,6 +603,9 @@ impl PersonnelService {
                 .await?;
             extracted_metas.push(meta);
         }
+
+        self.reject_cross_subject_clashes(subject_id, &extracted_metas)
+            .await?;
 
         let now = chrono::Utc::now();
         let txn = self.db.begin().await.map_err(ApiError::from)?;
@@ -815,6 +875,48 @@ pub(crate) async fn ensure_jpeg_bytes_async(raw: Vec<u8>) -> Result<Vec<u8>, Api
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_cross_subject_clash_above_threshold_rejects_enrollment() {
+        let index = Arc::new(FaceFeatureIndex::new());
+        let mut registered = [0.0f32; 512];
+        registered[0] = 0.5;
+        registered[1] = (1.0f32 - 0.5f32.powi(2)).sqrt();
+        index
+            .upsert_faces(vec![RegisteredFace::from_512(
+                "existing-subject".into(),
+                "Existing Person".into(),
+                "existing-face".into(),
+                String::new(),
+                registered,
+            )])
+            .await;
+
+        let service = PersonnelService::new(
+            db::init_test_db().await.unwrap(),
+            PathBuf::new(),
+            Arc::new(infer::package::AlgoRegistry::new()),
+            index,
+            Arc::new(PersonnelReextractManager::new()),
+        );
+        let mut query = [0.0f32; 512];
+        query[0] = 1.0;
+        let candidate = ExtractedFaceMeta {
+            face_id: "new-face".to_string(),
+            photo_rel_path: String::new(),
+            aligned_rel_path: String::new(),
+            feature_bytes: embedding_to_le_bytes(&query),
+            vector: query,
+            quality_score: 1.0,
+            detection_score: 1.0,
+            is_primary: true,
+        };
+
+        let result = service
+            .reject_cross_subject_clashes("new-subject", &[candidate])
+            .await;
+        assert!(matches!(result, Err(ApiError::FaceTemplateCollision(_))));
+    }
 
     #[tokio::test]
     async fn test_ensure_jpeg_bytes_async_with_jpeg() {

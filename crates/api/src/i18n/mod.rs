@@ -242,6 +242,14 @@ mod tests {
             localize_api_message(40902, "当前有全量底库特征重新提取任务正在后台执行中，请稍候再试", Locale::En),
             "A gallery face feature re-extraction task is currently running in the background, please try again later."
         );
+        assert_eq!(
+            localize_api_message(40904, "人脸底库模板冲撞", Locale::ZhTw),
+            "上傳的人臉與已登記人員模板高度相似，錄入已拒絕，請人工核驗身份"
+        );
+        assert_eq!(
+            localize_api_message(40904, "人脸底库模板冲撞", Locale::En),
+            "The uploaded face is highly similar to an enrolled person. Enrollment was rejected; verify the identity manually."
+        );
 
         // Resource Not Found 40401
         assert_eq!(
