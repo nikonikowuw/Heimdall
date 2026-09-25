@@ -352,6 +352,20 @@ export function LiveRulesStudio({
   // 拖拽结束后紧接着的 click 不应被当作“点空白取消选中”
   const suppressClickRef = useRef(false)
   const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null)
+  const [previewVideoSize, setPreviewVideoSize] = useState<{
+    width: number
+    height: number
+  } | null>(null)
+
+  const handlePreviewVideoSizeChange = useCallback((width: number, height: number) => {
+    setPreviewVideoSize((previous) =>
+      previous?.width === width && previous.height === height ? previous : { width, height },
+    )
+  }, [])
+
+  useEffect(() => {
+    setPreviewVideoSize(null)
+  }, [camera.cameraId, effectivePreviewStream])
 
   // 真实遥测：活跃航迹与运动门控状态由后端 WS 推送
   const telemetry = useSyncExternalStore(
@@ -377,8 +391,9 @@ export function LiveRulesStudio({
 
       if (availableW <= 0 || availableH <= 0) return
 
-      const targetAspect =
-        camera.lastWidth && camera.lastHeight ? camera.lastWidth / camera.lastHeight : 16 / 9
+      const targetWidth = previewVideoSize?.width || camera.lastWidth
+      const targetHeight = previewVideoSize?.height || camera.lastHeight
+      const targetAspect = targetWidth && targetHeight ? targetWidth / targetHeight : 16 / 9
 
       if (availableW / availableH > targetAspect) {
         // 容器空间更宽：高度撑满可用垂直空间，宽度按比例缩放
@@ -399,7 +414,7 @@ export function LiveRulesStudio({
     const ro = new ResizeObserver(updateSize)
     ro.observe(container)
     return () => ro.disconnect()
-  }, [camera.lastWidth, camera.lastHeight])
+  }, [camera.lastWidth, camera.lastHeight, previewVideoSize?.width, previewVideoSize?.height])
 
   // 1. 加载系统入库与激活的算法列表
   useEffect(() => {
@@ -1469,6 +1484,7 @@ export function LiveRulesStudio({
                 videoCodec={camera.lastCodec}
                 stream={effectivePreviewStream}
                 fitMode="contain"
+                onVideoSizeChange={handlePreviewVideoSizeChange}
                 className="pointer-events-none h-full w-full rounded-none border-0"
               />
 

@@ -91,7 +91,8 @@ export const BentoCameraCard = React.memo(function BentoCameraCard({
           <button
             type="button"
             onClick={() => onFocusHero(camera.cameraId)}
-            className="flex h-6 items-center gap-1 rounded px-1.5 text-[10px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+            className="flex min-h-11 items-center gap-1 rounded px-2 text-[10px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:h-6 sm:min-h-0"
+            aria-label={t('live.focusHero')}
             title={t('live.focusHero')}
           >
             <Eye className="h-3 w-3" />
@@ -100,7 +101,8 @@ export const BentoCameraCard = React.memo(function BentoCameraCard({
           <button
             type="button"
             onClick={() => onEditCamera(camera)}
-            className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+            className="min-h-11 min-w-11 rounded text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:h-6 sm:min-h-0 sm:min-w-0"
+            aria-label={t('manage.editCamera')}
             title={t('manage.editCamera')}
           >
             <Pencil className="h-3 w-3" />
@@ -108,7 +110,8 @@ export const BentoCameraCard = React.memo(function BentoCameraCard({
           <button
             type="button"
             onClick={() => onDeleteCamera(camera)}
-            className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-secondary)] transition-colors hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
+            className="min-h-11 min-w-11 rounded text-[var(--text-secondary)] transition-colors hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:h-6 sm:min-h-0 sm:min-w-0"
+            aria-label={t('manage.deleteCamera')}
             title={t('manage.deleteCamera')}
           >
             <Trash2 className="h-3 w-3" />

@@ -21,9 +21,6 @@ function getResolutionBadge(cam: Camera): string {
   if (cam.lastWidth > 0 && cam.lastHeight > 0) {
     return `${cam.lastHeight}P`
   }
-  if (normalizeProbeStatus(cam.lastProbeStatus) === 'healthy') {
-    return '1080P'
-  }
   return '--'
 }
 
@@ -75,7 +72,6 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
 
   return (
     <motion.div
-      onClick={() => onSelectHero(camera.cameraId)}
       whileHover={reducedMotion ? undefined : { y: -2 }}
       whileTap={reducedMotion ? undefined : { scale: 0.985 }}
       transition={{
@@ -90,6 +86,16 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
             : 'border-[var(--border)] hover:border-cyan-500/50 hover:shadow-cyan-500/10'
       }`}
     >
+      <button
+        type="button"
+        onClick={() => onSelectHero(camera.cameraId)}
+        aria-label={t('live.focusCamera', { name: camera.name })}
+        aria-pressed={isFocused}
+        className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none focus-visible:ring-inset"
+      >
+        <span className="sr-only">{t('live.focusCamera', { name: camera.name })}</span>
+      </button>
+
       {/* 告警中微型指示标签 */}
       {isAlarming && (
         <div className="absolute top-2 left-2 z-20 flex items-center gap-1 rounded-md bg-[var(--status-danger-solid)] px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md">
@@ -101,14 +107,15 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
       {/* 微缩播放器视口 */}
       <div className="relative aspect-video w-full">
         {/* 悬停快捷操作组 */}
-        <div className="on-dark-surface absolute top-2 right-2 z-20 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="on-dark-surface absolute top-2 right-2 z-20 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation()
               onEditCamera(camera)
             }}
-            className="rounded p-1 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+            className="min-h-11 min-w-11 rounded p-1 text-white/80 transition-colors hover:bg-white/20 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+            aria-label={t('manage.editCamera')}
             title={t('manage.editCamera')}
           >
             <Pencil className="h-3 w-3" />
@@ -119,7 +126,8 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
               e.stopPropagation()
               onDeleteCamera(camera)
             }}
-            className="rounded p-1 text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white"
+            className="min-h-11 min-w-11 rounded p-1 text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+            aria-label={t('manage.deleteCamera')}
             title={t('manage.deleteCamera')}
           >
             <Trash2 className="h-3 w-3" />
@@ -130,10 +138,10 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
           <div className="flex h-full w-full flex-col items-center justify-center bg-black/80 p-2 text-center">
             <div className="flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-400">
               <Eye className="h-3 w-3" />
-              <span>主屏呈现中</span>
+              <span>{t('live.focusedOnHero')}</span>
             </div>
             <span className="mt-1.5 text-[10px] text-[var(--text-muted)]">
-              辅流已休眠，专注主屏渲染
+              {t('live.auxStreamSleeping')}
             </span>
           </div>
         ) : (
@@ -179,14 +187,16 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
           <div className="flex items-center gap-2 font-mono">
             <span
               className="flex items-center gap-0.5 text-cyan-700 dark:text-cyan-400"
-              title={t('live.targetCount', { count: telemetry?.personCount ?? 0 })}
+              title={
+                telemetry ? t('live.targetCount', { count: telemetry.personCount }) : undefined
+              }
             >
               <User className="h-3 w-3" />
-              <span>{telemetry ? telemetry.personCount : 0}</span>
+              <span>{telemetry ? telemetry.personCount : '--'}</span>
             </span>
             <span className="flex items-center gap-0.5 text-amber-700 dark:text-amber-400">
               <Car className="h-3 w-3" />
-              <span>{telemetry ? telemetry.carCount : 0}</span>
+              <span>{telemetry ? telemetry.carCount : '--'}</span>
             </span>
           </div>
 

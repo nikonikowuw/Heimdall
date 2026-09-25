@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Camera as CameraIcon,
   ChevronLeft,
@@ -7,10 +7,12 @@ import {
   CornerUpLeft,
   Eye,
   Grid,
+  LoaderCircle,
   MonitorPlay,
   Pencil,
   Plus,
   Radio,
+  RefreshCw,
   Search,
   ShieldAlert,
   Sparkles,
@@ -188,6 +190,49 @@ function LiveAlarmToastItem({
 
 export type BentoGridSplit = 1 | 4 | 9 | 'all'
 
+const ALL_CAMERAS_PAGE_SIZE = 50
+
+type CameraListLoadState = 'loading' | 'error'
+
+interface CameraListStatusProps {
+  state: CameraListLoadState
+  onRetry: () => void
+}
+
+function CameraListStatus({ state, onRetry }: CameraListStatusProps): React.ReactElement {
+  const { t } = useTranslation('camera')
+
+  if (state === 'loading') {
+    return (
+      <div
+        className="flex h-full min-h-48 flex-col items-center justify-center gap-2 text-sm text-[var(--text-secondary)]"
+        role="status"
+        aria-live="polite"
+      >
+        <LoaderCircle className="h-5 w-5 animate-spin text-[var(--accent)]" aria-hidden="true" />
+        <span>{t('live.loadingCameras')}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className="flex h-full min-h-48 flex-col items-center justify-center gap-3 text-center"
+      role="alert"
+    >
+      <span className="text-sm text-[var(--text-secondary)]">{t('live.cameraListLoadFailed')}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="flex min-h-11 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--accent-soft)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+      >
+        <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+        <span>{t('live.retryLoad')}</span>
+      </button>
+    </div>
+  )
+}
+
 export interface LivePageProps {
   onNavigateToAlarms?: () => void
 }
@@ -197,6 +242,10 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   const reducedMotion = useReducedMotion()
 
   const [cameras, setCameras] = useState<Camera[]>([])
+  const camerasRef = useRef(cameras)
+  camerasRef.current = cameras
+  const [cameraLoadState, setCameraLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [cameraLoadAttempt, setCameraLoadAttempt] = useState(0)
   const [selectedHeroId, setSelectedHeroId] = useState<string>('')
   const [heroStream, setHeroStream] = useState<'main' | 'sub'>('main')
   const [heroAudioEnabled, setHeroAudioEnabled] = useState<boolean>(false)
@@ -218,10 +267,17 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
 
   // 硬件与系统信息
   const [hwLabel, setHwLabel] = useState<string>('')
-  const [heroLatency, setHeroLatency] = useState<number>(128)
+  const [heroLatency, setHeroLatency] = useState<{
+    value: number
+    kind: 'renderLag' | 'bufferLag'
+  } | null>(null)
 
-  const handleHeroLatencyChange = useCallback((lat: number) => {
-    setHeroLatency(lat)
+  const handleHeroLatencyChange = useCallback((value: number, kind: 'renderLag' | 'bufferLag') => {
+    setHeroLatency({ value, kind })
+  }, [])
+
+  const handleRetryCameraLoad = useCallback(() => {
+    setCameraLoadAttempt((attempt) => attempt + 1)
   }, [])
 
   const handleToggleHeroAudio = useCallback(() => {
@@ -233,6 +289,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   }, [])
 
   const handleSwitchHeroStream = useCallback((s: 'main' | 'sub') => {
+    setHeroLatency(null)
     setHeroStream(s)
   }, [])
 
@@ -275,24 +332,39 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
     return () => clearInterval(interval)
   }, [])
 
-  // 加载摄像头列表与系统硬件环境信息
   useEffect(() => {
+    setHeroLatency(null)
+  }, [selectedHeroId, heroStream])
+
+  useEffect(() => {
+    let cancelled = false
+
     async function loadInitialData() {
+      setCameraLoadState('loading')
       try {
         const list = await cameraApi.list()
+        if (cancelled) return
         if (list && list.length > 0) {
           const sorted = sortCamerasByHealth(list)
           setCameras(sorted)
-          setSelectedHeroId((prev) => (prev ? prev : sorted[0].cameraId))
+          setSelectedHeroId((prev) =>
+            sorted.some((camera) => camera.cameraId === prev) ? prev : sorted[0].cameraId,
+          )
         } else {
           setCameras([])
+          setSelectedHeroId('')
         }
+        setCameraLoadState('ready')
       } catch {
-        setCameras([])
+        if (!cancelled) {
+          setCameras([])
+          setCameraLoadState('error')
+        }
       }
 
       try {
         const overview = await systemApi.getOverview()
+        if (cancelled) return
         if (overview) {
           if (overview.deviceModel && overview.deviceModel.length > 0) {
             setHwLabel(overview.deviceModel)
@@ -306,7 +378,10 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
     }
 
     void loadInitialData()
-  }, [])
+    return () => {
+      cancelled = true
+    }
+  }, [cameraLoadAttempt])
 
   // 监听全网 WebSocket 广播事件（探活更新、告警触发、告警状态变更）
   useEffect(() => {
@@ -375,7 +450,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       if (autoSpotlight && targetCamId) {
         setSelectedHeroId((currentHero) => {
           if (currentHero !== targetCamId) {
-            const targetCam = cameras.find((c) => c.cameraId === targetCamId)
+            const targetCam = camerasRef.current.find((c) => c.cameraId === targetCamId)
             setSpotlightBanner({
               cameraName: targetCam?.name || targetCamId,
               revertId: currentHero || null,
@@ -408,7 +483,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       unAlarm()
       unAlarmStatus()
     }
-  }, [autoSpotlight, cameras])
+  }, [autoSpotlight])
 
   // 过滤后的辅流摄像头列表
   const filteredAuxCameras = useMemo(() => {
@@ -428,23 +503,52 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
     return list
   }, [cameras, auxSearch, auxFilter, recentAlarms])
 
-  // Bento 网格分页切片
-  const bentoPageSize = gridSplit === 'all' ? cameras.length : gridSplit
-  const totalBentoPages = Math.max(1, Math.ceil(cameras.length / (bentoPageSize || 1)))
+  // Bento 网格分页切片；全景模式每页最多挂载 50 路播放器。
+  const bentoPageSize = gridSplit === 'all' ? ALL_CAMERAS_PAGE_SIZE : gridSplit
+  const totalBentoPages = Math.max(1, Math.ceil(cameras.length / bentoPageSize))
   const currentBentoPage = Math.min(gridPage, totalBentoPages)
   const paginatedBentoCameras = useMemo(() => {
-    if (gridSplit === 'all') return cameras
-    const start = (currentBentoPage - 1) * gridSplit
-    return cameras.slice(start, start + gridSplit)
-  }, [cameras, gridSplit, currentBentoPage])
+    const start = (currentBentoPage - 1) * bentoPageSize
+    return cameras.slice(start, start + bentoPageSize)
+  }, [cameras, currentBentoPage, bentoPageSize])
 
   const heroCamera = cameras.find((c) => c.cameraId === selectedHeroId)
+  let auxiliaryEmptyMessageKey = 'live.noAuxStreams'
+  if (cameraLoadState === 'loading') {
+    auxiliaryEmptyMessageKey = 'live.loadingCameras'
+  } else if (cameraLoadState === 'error') {
+    auxiliaryEmptyMessageKey = 'live.cameraListLoadFailed'
+  } else if (auxSearch || auxFilter !== 'all') {
+    auxiliaryEmptyMessageKey = 'live.noFilteredCameras'
+  }
+
+  let heroLatencyLabelKey = 'live.latency'
+  if (heroLatency?.kind === 'renderLag') heroLatencyLabelKey = 'live.renderLag'
+  if (heroLatency?.kind === 'bufferLag') heroLatencyLabelKey = 'live.bufferLag'
 
   // 切换追焦机位
   const handleSelectHero = useCallback((cameraId: string) => {
+    setHeroLatency(null)
     setSelectedHeroId(cameraId)
     setSpotlightBanner(null)
   }, [])
+
+  const handleEditCamera = useCallback((camera: Camera) => {
+    setCameraToEdit(camera)
+    setIsCameraModalOpen(true)
+  }, [])
+
+  const handleDeleteCamera = useCallback((camera: Camera) => {
+    setCameraToDelete(camera)
+  }, [])
+
+  const handleFocusHeroFromGrid = useCallback(
+    (cameraId: string) => {
+      handleSelectHero(cameraId)
+      setViewMode('hero_rail')
+    },
+    [handleSelectHero],
+  )
 
   return (
     <div className="relative flex h-full flex-col gap-3">
@@ -535,8 +639,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           <motion.button
             type="button"
             whileTap={{ scale: 0.96 }}
-            onClick={() => setAutoSpotlight(!autoSpotlight)}
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all ${
+            onClick={() => setAutoSpotlight((enabled) => !enabled)}
+            aria-pressed={autoSpotlight}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
               autoSpotlight
                 ? 'border border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-400'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--accent-soft)]'
@@ -557,7 +662,8 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             <button
               type="button"
               onClick={() => setViewMode('hero_rail')}
-              className="relative flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors"
+              aria-pressed={viewMode === 'hero_rail'}
+              className="relative flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
             >
               {viewMode === 'hero_rail' && (
                 <motion.div
@@ -584,7 +690,8 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             <button
               type="button"
               onClick={() => setViewMode('bento_grid')}
-              className="relative flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors"
+              aria-pressed={viewMode === 'bento_grid'}
+              className="relative flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
             >
               {viewMode === 'bento_grid' && (
                 <motion.div
@@ -619,7 +726,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               setCameraToEdit(null)
               setIsCameraModalOpen(true)
             }}
-            className="flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90"
+            className="flex min-h-11 items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
           >
             <Plus className="h-3.5 w-3.5" />
             <span>{t('live.addCamera')}</span>
@@ -633,7 +740,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           {/* 左侧沉浸式 Hero Stage (占据 8.5 / 12 列) */}
           <div className="col-span-12 flex flex-col gap-2 overflow-hidden lg:col-span-8 xl:col-span-9">
             <div className="relative flex-1 overflow-hidden rounded-xl border border-[var(--border)] bg-black/40">
-              {heroCamera ? (
+              {cameraLoadState !== 'ready' ? (
+                <CameraListStatus state={cameraLoadState} onRetry={handleRetryCameraLoad} />
+              ) : heroCamera ? (
                 <LivePlayer
                   key={`${heroCamera.cameraId}:${heroStream}`}
                   cameraId={heroCamera.cameraId}
@@ -656,22 +765,20 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   </div>
                   <div>
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">
-                      {cameras.length > 0 ? '主屏预览已关闭' : t('live.noCameras')}
+                      {cameras.length > 0 ? t('live.previewClosed') : t('live.noCameras')}
                     </h4>
                     <p className="mt-1 max-w-sm text-xs text-[var(--text-secondary)]">
-                      {cameras.length > 0
-                        ? '右侧子码流正在持续低功耗运行，点击任意视频卡片即可一键切入高清大屏'
-                        : '请点击右上角接入 RTSP 视频流设备'}
+                      {cameras.length > 0 ? t('live.previewClosedDesc') : t('live.emptyCameraDesc')}
                     </p>
                   </div>
                   {cameras.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setSelectedHeroId(cameras[0].cameraId)}
-                      className="mt-1 flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white shadow-xs hover:opacity-90"
+                      onClick={() => handleSelectHero(cameras[0].cameraId)}
+                      className="mt-1 flex min-h-11 items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white shadow-xs hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                     >
                       <Eye className="h-3.5 w-3.5" />
-                      <span>开启主屏预览</span>
+                      <span>{t('live.startHeroPreview')}</span>
                     </button>
                   )}
                 </div>
@@ -695,21 +802,20 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                 <span>
                   {t('live.fps')}:{' '}
                   <strong className="text-emerald-600 dark:text-emerald-400">
-                    {heroCamera?.lastFps ? heroCamera.lastFps.toFixed(1) : '25.0'} FPS
+                    {heroCamera?.lastFps ? heroCamera.lastFps.toFixed(1) : '--'} FPS
                   </strong>
                 </span>
                 <span>
-                  {t('live.latency')}:{' '}
-                  <strong className="text-cyan-700 dark:text-cyan-400">{heroLatency} ms</strong>
+                  {t(heroLatencyLabelKey)}:{' '}
+                  <strong className="text-cyan-700 dark:text-cyan-400">
+                    {heroLatency ? `${heroLatency.value} ms` : '--'}
+                  </strong>
                 </span>
                 {heroCamera && (
                   <div className="flex items-center gap-1.5 border-l border-[var(--border)] pl-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        setCameraToEdit(heroCamera)
-                        setIsCameraModalOpen(true)
-                      }}
+                      onClick={() => handleEditCamera(heroCamera)}
                       className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
                       title={t('manage.editCamera')}
                     >
@@ -718,7 +824,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                     </button>
                     <button
                       type="button"
-                      onClick={() => setCameraToDelete(heroCamera)}
+                      onClick={() => handleDeleteCamera(heroCamera)}
                       className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
                       title={t('manage.deleteCamera')}
                     >
@@ -749,27 +855,35 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                     type="text"
                     value={auxSearch}
                     onChange={(e) => setAuxSearch(e.target.value)}
+                    aria-label={t('live.searchPlaceholder')}
                     placeholder={t('live.searchPlaceholder')}
-                    className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] pr-2 pl-7 text-[11px] text-[var(--text-primary)] outline-none placeholder:text-slate-400 focus:border-cyan-500"
+                    className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] pr-2 pl-7 text-[11px] text-[var(--text-primary)] outline-none placeholder:text-slate-400 focus:border-cyan-500 focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
                   />
                   {auxSearch && (
                     <button
                       type="button"
                       onClick={() => setAuxSearch('')}
-                      className="absolute top-1/2 right-1.5 -translate-y-1/2 text-slate-400 hover:text-white"
+                      className="absolute top-1/2 right-1.5 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                      aria-label={t('live.clearSearch')}
+                      title={t('live.clearSearch')}
                     >
                       <X className="h-3 w-3" />
                     </button>
                   )}
                 </div>
 
-                <div className="flex items-center rounded-md border border-[var(--border)] p-0.5 text-[10px]">
+                <div
+                  className="flex items-center rounded-md border border-[var(--border)] p-0.5 text-[10px]"
+                  role="group"
+                  aria-label={t('live.filterCameras')}
+                >
                   {(['all', 'healthy', 'alarm'] as const).map((filter) => (
                     <button
                       key={filter}
                       type="button"
                       onClick={() => setAuxFilter(filter)}
-                      className="relative rounded px-1.5 py-0.5"
+                      aria-pressed={auxFilter === filter}
+                      className="relative min-h-11 rounded px-1.5 py-0.5 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0"
                     >
                       {auxFilter === filter && (
                         <motion.div
@@ -826,18 +940,15 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                     isFocused={isFocused}
                     isAlarming={isAlarming}
                     onSelectHero={handleSelectHero}
-                    onEditCamera={(c) => {
-                      setCameraToEdit(c)
-                      setIsCameraModalOpen(true)
-                    }}
-                    onDeleteCamera={(c) => setCameraToDelete(c)}
+                    onEditCamera={handleEditCamera}
+                    onDeleteCamera={handleDeleteCamera}
                   />
                 )
               })}
 
               {filteredAuxCameras.length === 0 && (
                 <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-8 text-center text-xs text-[var(--text-muted)]">
-                  <span>{auxSearch ? '未搜索到匹配设备' : t('live.noAuxStreams')}</span>
+                  <span>{t(auxiliaryEmptyMessageKey)}</span>
                 </div>
               )}
             </div>
@@ -847,8 +958,8 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
         /* 全景 Bento 网格视图 (支持 1 / 4 / 9 宫格与分页) */
         <div className="flex flex-1 flex-col gap-2 overflow-hidden">
           {/* Bento 工具栏：分屏选择与分页控制 */}
-          <div className="flex items-center justify-between px-1">
-            <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs">
+          <div className="flex flex-col items-start gap-2 px-1 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-0.5 text-xs">
               {([1, 4, 9, 'all'] as const).map((split) => (
                 <button
                   key={split}
@@ -857,7 +968,8 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                     setGridSplit(split)
                     setGridPage(1)
                   }}
-                  className="relative rounded px-2.5 py-1 text-[11px] font-medium transition-colors"
+                  aria-pressed={gridSplit === split}
+                  className="relative rounded px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                 >
                   {gridSplit === split && (
                     <motion.div
@@ -884,7 +996,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             </div>
 
             {/* 分页控制器 */}
-            {gridSplit !== 'all' && totalBentoPages > 1 && (
+            {totalBentoPages > 1 && (
               <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
                 <span>
                   {t('live.pageIndicator', {
@@ -896,8 +1008,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   <button
                     type="button"
                     disabled={currentBentoPage <= 1}
-                    onClick={() => setGridPage((p) => Math.max(1, p - 1))}
-                    className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-30"
+                    onClick={() => setGridPage(Math.max(1, currentBentoPage - 1))}
+                    className="flex h-11 w-11 items-center justify-center rounded border border-[var(--border)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-30 sm:h-6 sm:w-6"
+                    aria-label={t('live.prevPage')}
                     title={t('live.prevPage')}
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
@@ -905,8 +1018,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   <button
                     type="button"
                     disabled={currentBentoPage >= totalBentoPages}
-                    onClick={() => setGridPage((p) => Math.min(totalBentoPages, p + 1))}
-                    className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-30"
+                    onClick={() => setGridPage(Math.min(totalBentoPages, currentBentoPage + 1))}
+                    className="flex h-11 w-11 items-center justify-center rounded border border-[var(--border)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-30 sm:h-6 sm:w-6"
+                    aria-label={t('live.nextPage')}
                     title={t('live.nextPage')}
                   >
                     <ChevronRight className="h-3.5 w-3.5" />
@@ -938,22 +1052,20 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                   key={cam.cameraId}
                   camera={cam}
                   isAlarming={isAlarming}
-                  onFocusHero={(id) => {
-                    setSelectedHeroId(id)
-                    setViewMode('hero_rail')
-                  }}
-                  onEditCamera={(c) => {
-                    setCameraToEdit(c)
-                    setIsCameraModalOpen(true)
-                  }}
-                  onDeleteCamera={(c) => setCameraToDelete(c)}
+                  onFocusHero={handleFocusHeroFromGrid}
+                  onEditCamera={handleEditCamera}
+                  onDeleteCamera={handleDeleteCamera}
                 />
               )
             })}
 
             {cameras.length === 0 && (
               <div className="col-span-full flex items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-12 text-center text-xs text-[var(--text-muted)]">
-                <span>{t('live.noCameras')}</span>
+                {cameraLoadState === 'ready' ? (
+                  <span>{t('live.noCameras')}</span>
+                ) : (
+                  <CameraListStatus state={cameraLoadState} onRetry={handleRetryCameraLoad} />
+                )}
               </div>
             )}
           </div>
@@ -976,6 +1088,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               : [...prev, saved]
             return sortCamerasByHealth(updated)
           })
+          setCameraLoadState('ready')
           if (!selectedHeroId) {
             setSelectedHeroId(saved.cameraId)
           }

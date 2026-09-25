@@ -113,6 +113,7 @@ export interface WebCodecsPlayerOptions {
   preferredCodec?: 'h264' | 'h265'
   preferredCodecMime?: string
   onPlaying?: (latencyMs: number) => void
+  onVideoSizeChange?: (width: number, height: number) => void
   onError?: (err: Error) => void
   onClose?: () => void
 }
@@ -131,6 +132,7 @@ export class WebCodecsPlayer {
   private options: WebCodecsPlayerOptions
   private hasRenderedFirstFrame = false
   private currentPtsMs: number | null = null
+  private lastVideoSize: { width: number; height: number } | null = null
 
   constructor(options: WebCodecsPlayerOptions) {
     this.options = options
@@ -306,6 +308,11 @@ export class WebCodecsPlayer {
     try {
       const w = frame.displayWidth || frame.codedWidth
       const h = frame.displayHeight || frame.codedHeight
+
+      if (this.lastVideoSize?.width !== w || this.lastVideoSize.height !== h) {
+        this.lastVideoSize = { width: w, height: h }
+        this.options.onVideoSizeChange?.(w, h)
+      }
 
       if (this.canvas.width !== w || this.canvas.height !== h) {
         this.canvas.width = w

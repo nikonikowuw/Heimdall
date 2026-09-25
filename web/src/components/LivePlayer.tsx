@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Activity,
   Camera,
@@ -29,12 +29,14 @@ import { cameraApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import { telemetryStore } from '@/lib/telemetryStore'
 import { trackStore } from '@/lib/trackStore'
+import { getVideoContentRect } from '@/lib/videoContentRect'
 import { findSupportedCodecProfile, WebCodecsPlayer } from '@/lib/webcodecs'
 import { useAuthStore } from '@/stores/auth'
 import type { CameraTelemetry, TrackedBBox } from '@/types'
 
 type ConnectionStatus =
   'connecting' | 'connected' | 'reconnecting' | 'failed' | 'paused' | 'standby'
+type LatencyKind = 'renderLag' | 'bufferLag'
 
 function getStatusIndicatorClass(status: ConnectionStatus): string {
   // 连接态只用颜色区分，不启用循环脉冲/闪烁。
@@ -73,7 +75,8 @@ export interface LivePlayerProps {
   onSwitchStream?: (stream: 'main' | 'sub') => void
   onToggleOsd?: () => void
   onToggleFitMode?: () => void
-  onLatencyChange?: (latencyMs: number) => void
+  onLatencyChange?: (latencyMs: number, kind: LatencyKind) => void
+  onVideoSizeChange?: (width: number, height: number) => void
   onSnapshot?: (blob: Blob) => void
   /** 是否允许离开视口自动休眠拉流以节省边缘计算与网络资源 (默认仅辅流卡片生效) */
   enableAutoStandby?: boolean
@@ -89,6 +92,7 @@ const VIDEO_MEDIA_EVENTS = [
   'loadedmetadata',
   'loadeddata',
   'canplay',
+  'resize',
   'play',
   'playing',
   'timeupdate',
@@ -170,7 +174,7 @@ function estimateVideoPts({
   return latestPts != null && latestPts > 0 ? Math.round(latestPts - smoothLag) : null
 }
 
-export function LivePlayer({
+export const LivePlayer = memo(function LivePlayer({
   cameraId,
   cameraName,
   className = '',
@@ -190,6 +194,7 @@ export function LivePlayer({
   onToggleOsd,
   onToggleFitMode,
   onLatencyChange,
+  onVideoSizeChange,
   onSnapshot,
   enableAutoStandby = true,
   audioEnabled,
@@ -213,8 +218,9 @@ export function LivePlayer({
   // 视口与全屏控制
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false)
   const [isControlsVisible, setIsControlsVisible] = useState<boolean>(true)
+  const [isControlsFocused, setIsControlsFocused] = useState<boolean>(false)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [isInView, setIsInView] = useState<boolean>(true)
+  const [isInView, setIsInView] = useState<boolean>(!enableAutoStandby || isHero)
 
   // 快照与微动效
   const [isFlashing, setIsFlashing] = useState<boolean>(false)
@@ -270,7 +276,9 @@ export function LivePlayer({
   )
   const [activeProtocol, setActiveProtocol] = useState<'webcodecs' | 'flv'>('flv')
   activeProtocolRef.current = activeProtocol
-  const [latencyMs, setLatencyMs] = useState<number>(128)
+  const [latencyMs, setLatencyMs] = useState<number | null>(null)
+  const [latencyKind, setLatencyKind] = useState<LatencyKind>('renderLag')
+  const [sourceSize, setSourceSize] = useState<{ width: number; height: number } | null>(null)
   const [retryKey, setRetryKey] = useState<number>(0)
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryAttemptRef = useRef<number>(0)
@@ -282,24 +290,47 @@ export function LivePlayer({
   // 保持外部回调引用最新，避免将其作为流重连依赖项导致重连风暴
   const onLatencyChangeRef = useRef(onLatencyChange)
   onLatencyChangeRef.current = onLatencyChange
+  const onVideoSizeChangeRef = useRef(onVideoSizeChange)
+  onVideoSizeChangeRef.current = onVideoSizeChange
+  const lastReportedVideoSizeRef = useRef<{ width: number; height: number } | null>(null)
+
+  const reportVideoSize = useCallback((width: number, height: number) => {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return
+    const previous = lastReportedVideoSizeRef.current
+    if (previous?.width === width && previous.height === height) return
+    lastReportedVideoSizeRef.current = { width, height }
+    setSourceSize({ width, height })
+    onVideoSizeChangeRef.current?.(width, height)
+  }, [])
 
   // 当前会话中 WebCodecs 是否不可用或已降级（避免在 WebSocket 连接失败后进入重连死循环）
   const webCodecsFailedRef = useRef<boolean>(false)
   useEffect(() => {
     webCodecsFailedRef.current = false
     lastLatencyReportTimeRef.current = 0
+    lastReportedVideoSizeRef.current = null
+    setLatencyMs(null)
+    setSourceSize(null)
   }, [cameraId, streamType])
 
   // 延迟遥测上报时间节流（限频 800ms，防高频 React 状态重绘与外部回调颠簸；首帧无延迟立即上报）
   const lastLatencyReportTimeRef = useRef<number>(0)
-  const reportLatency = useCallback((lat: number) => {
+  const reportLatency = useCallback((lat: number, kind: LatencyKind) => {
     const now = performance.now()
     if (lastLatencyReportTimeRef.current === 0 || now - lastLatencyReportTimeRef.current >= 800) {
       lastLatencyReportTimeRef.current = now
       setLatencyMs(lat)
-      onLatencyChangeRef.current?.(lat)
+      setLatencyKind(kind)
+      onLatencyChangeRef.current?.(lat, kind)
     }
   }, [])
+
+  useEffect(
+    () => () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+    },
+    [],
+  )
 
   // 视口可见性检测 (非 Hero 辅流在移出视口时休眠)
   useEffect(() => {
@@ -333,25 +364,50 @@ export function LivePlayer({
     return () => document.removeEventListener('fullscreenchange', handleFsChange)
   }, [])
 
-  // 鼠标无操作自动淡出控制栏 (仅在 Hero 模式下启用，闲置 3.5s 后渐隐)
-  const handleMouseMove = useCallback(() => {
-    setIsControlsVisible(true)
-    if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
-    if (isHero) {
+  const handlePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      setIsControlsVisible(true)
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+      if (!isHero || event.pointerType === 'touch') return
       idleTimerRef.current = setTimeout(() => {
-        if (!effectivePaused && connectionStatus === 'connected') {
+        if (!effectivePaused && connectionStatus === 'connected' && !isControlsFocused) {
           setIsControlsVisible(false)
         }
       }, 3500)
-    }
-  }, [isHero, effectivePaused, connectionStatus])
+    },
+    [isHero, effectivePaused, connectionStatus, isControlsFocused],
+  )
 
-  const handleMouseLeave = useCallback(() => {
-    if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
-    if (isHero && !effectivePaused && connectionStatus === 'connected') {
-      setIsControlsVisible(false)
+  const handlePointerLeave = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+      if (event.pointerType === 'touch') return
+      if (isHero && !effectivePaused && connectionStatus === 'connected' && !isControlsFocused) {
+        setIsControlsVisible(false)
+      }
+    },
+    [isHero, effectivePaused, connectionStatus, isControlsFocused],
+  )
+
+  const handleFocusCapture = useCallback(() => {
+    setIsControlsFocused(true)
+    setIsControlsVisible(true)
+  }, [])
+
+  const handleBlurCapture = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsControlsFocused(false)
     }
-  }, [isHero, effectivePaused, connectionStatus])
+  }, [])
+
+  const controlsVisible = isControlsVisible || isControlsFocused || connectionStatus !== 'connected'
+  let displayedLatencyKind = latencyKind
+  if (latencyMs === null) {
+    displayedLatencyKind = activeProtocol === 'webcodecs' ? 'renderLag' : 'bufferLag'
+  }
+  const latencyLabelKey = displayedLatencyKind === 'bufferLag' ? 'live.bufferLag' : 'live.renderLag'
+  const latencyShortLabelKey =
+    displayedLatencyKind === 'bufferLag' ? 'live.bufferLagShort' : 'live.renderLagShort'
 
   const handleToggleFullscreen = useCallback(() => {
     const el = containerRef.current
@@ -562,7 +618,7 @@ export function LivePlayer({
         if (videoEl && videoEl.buffered.length > 0) {
           const bufferedEnd = videoEl.buffered.end(videoEl.buffered.length - 1)
           const latency = Math.max(0, Math.round((bufferedEnd - videoEl.currentTime) * 1000))
-          reportLatency(latency)
+          reportLatency(latency, 'bufferLag')
           smoothLagMsRef.current = latency
           lastLagSampleTimeRef.current = performance.now()
         }
@@ -667,12 +723,13 @@ export function LivePlayer({
           canvas: videoCanvas,
           preferredCodec: preferredVideoCodec,
           preferredCodecMime,
+          onVideoSizeChange: reportVideoSize,
           onPlaying: (lat) => {
             if (isCancelled) return
             hasPlayed = true
             setActiveProtocol('webcodecs')
             setConnectionStatus('connected')
-            reportLatency(lat)
+            reportLatency(lat, 'renderLag')
             if (!stableTimerRef.current) {
               stableTimerRef.current = setTimeout(() => {
                 retryAttemptRef.current = 0
@@ -748,6 +805,15 @@ export function LivePlayer({
     }
 
     const handleVideoEvent = (e: Event) => {
+      if (
+        videoEl &&
+        (e.type === 'loadedmetadata' ||
+          e.type === 'loadeddata' ||
+          e.type === 'canplay' ||
+          e.type === 'resize')
+      ) {
+        reportVideoSize(videoEl.videoWidth, videoEl.videoHeight)
+      }
       if (e.type === 'playing' || e.type === 'loadeddata' || e.type === 'timeupdate') {
         handlePlaying()
       }
@@ -809,6 +875,7 @@ export function LivePlayer({
     retryKey,
     preferredVideoCodec,
     reportLatency,
+    reportVideoSize,
   ])
 
   // Canvas 2D 离屏 60fps 绘制循环（包含 Retina 高分屏物理像素锐化）
@@ -832,6 +899,21 @@ export function LivePlayer({
         const dpr = Math.max(1, window.devicePixelRatio || 1)
         const logicalW = canvas.width / dpr
         const logicalH = canvas.height / dpr
+        const sourceWidth =
+          activeProtocolRef.current === 'webcodecs'
+            ? (videoCanvasRef.current?.width ?? 0)
+            : (videoRef.current?.videoWidth ?? 0)
+        const sourceHeight =
+          activeProtocolRef.current === 'webcodecs'
+            ? (videoCanvasRef.current?.height ?? 0)
+            : (videoRef.current?.videoHeight ?? 0)
+        const contentRect = getVideoContentRect(
+          logicalW,
+          logicalH,
+          sourceWidth,
+          sourceHeight,
+          currentFitMode,
+        )
 
         // 动态推导当前画面呈现时刻的源帧绝对 PTS (毫秒)
         const currentVideoPts = estimateVideoPts({
@@ -842,6 +924,15 @@ export function LivePlayer({
           smoothLagMsRef,
           lastLagSampleTimeRef,
         })
+
+        if (!contentRect) {
+          if (paintedLastFrame) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            paintedLastFrame = false
+          }
+          animId = requestAnimationFrame(render)
+          return
+        }
 
         const tracks =
           externalTracksRef.current ??
@@ -860,18 +951,24 @@ export function LivePlayer({
 
         for (const item of tracks) {
           const [nx1, ny1, nx2, ny2] = item.bbox
-          const x = nx1 * logicalW
-          const y = ny1 * logicalH
-          const boxW = (nx2 - nx1) * logicalW
-          const boxH = (ny2 - ny1) * logicalH
+          const x = contentRect.x + nx1 * contentRect.width
+          const y = contentRect.y + ny1 * contentRect.height
+          const boxW = (nx2 - nx1) * contentRect.width
+          const boxH = (ny2 - ny1) * contentRect.height
 
           // 1. 绘制历史轨迹线条
           if (item.trajectory && item.trajectory.length > 1) {
             ctx.beginPath()
             const pts = item.trajectory
-            ctx.moveTo(pts[0][0] * logicalW, pts[0][1] * logicalH)
+            ctx.moveTo(
+              contentRect.x + pts[0][0] * contentRect.width,
+              contentRect.y + pts[0][1] * contentRect.height,
+            )
             for (let i = 1; i < pts.length; i++) {
-              ctx.lineTo(pts[i][0] * logicalW, pts[i][1] * logicalH)
+              ctx.lineTo(
+                contentRect.x + pts[i][0] * contentRect.width,
+                contentRect.y + pts[i][1] * contentRect.height,
+              )
             }
             ctx.strokeStyle = 'rgba(6, 182, 212, 0.45)'
             ctx.lineWidth = isHero ? 2.5 : 1.5
@@ -894,10 +991,10 @@ export function LivePlayer({
           // 2.1 结构化人脸框高亮
           if (item.face) {
             const [fx1, fy1, fx2, fy2] = item.face.bbox
-            const fx = fx1 * logicalW
-            const fy = fy1 * logicalH
-            const fboxW = (fx2 - fx1) * logicalW
-            const fboxH = (fy2 - fy1) * logicalH
+            const fx = contentRect.x + fx1 * contentRect.width
+            const fy = contentRect.y + fy1 * contentRect.height
+            const fboxW = (fx2 - fx1) * contentRect.width
+            const fboxH = (fy2 - fy1) * contentRect.height
 
             ctx.save()
             ctx.strokeStyle = '#a855f7'
@@ -946,7 +1043,7 @@ export function LivePlayer({
 
     animId = requestAnimationFrame(render)
     return () => cancelAnimationFrame(animId)
-  }, [cameraId, isHero, effectivePaused, currentShowOsd])
+  }, [cameraId, isHero, effectivePaused, currentShowOsd, currentFitMode])
 
   // 监听画布尺寸自适应并适配 DPR
   useEffect(() => {
@@ -966,15 +1063,18 @@ export function LivePlayer({
   return (
     <div
       ref={containerRef}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
+      onFocusCapture={handleFocusCapture}
+      onBlurCapture={handleBlurCapture}
       className={`group on-dark-surface relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--video-surface)] ${className}`}
+      role="group"
+      aria-label={cameraName || cameraId}
     >
       {/* 抓拍快门瞬间白色闪光遮罩 */}
       {isFlashing && (
         <div className="animate-out fade-out pointer-events-none absolute inset-0 z-40 bg-white/70 duration-200" />
       )}
-
       {/* 抓拍成功微型横幅 (Motion AnimatePresence) */}
       <AnimatePresence mode="wait">
         {snapshotBannerVisible && (
@@ -994,7 +1094,6 @@ export function LivePlayer({
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* 底层 WebCodecs 零拷贝低延迟渲染画布 */}
       <canvas
         ref={videoCanvasRef}
@@ -1008,10 +1107,8 @@ export function LivePlayer({
           activeProtocol === 'webcodecs' && connectionStatus === 'connected' ? 'block' : 'hidden'
         }`}
       />
-
       {/* H.265 WebCodecs fallback 使用隐藏的独立 AAC FLV 音频元素 */}
       <audio ref={audioRef} autoPlay aria-hidden="true" className="hidden" />
-
       {/* 底层硬件解码视频渲染层 (FLV / MSE 兼容通道) */}
       <video
         ref={videoRef}
@@ -1026,10 +1123,12 @@ export function LivePlayer({
               : 'object-contain'
         } ${activeProtocol === 'flv' || connectionStatus !== 'connected' ? 'block' : 'hidden'}`}
       />
-
       {/* 顶层透明 Canvas 2D 识别框图层 */}
-      <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" />
-
+      <canvas
+        ref={canvasRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-10 h-full w-full"
+      />
       {/* 状态遮罩层 (Motion AnimatePresence 丝滑状态切换) */}
       <AnimatePresence mode="wait">
         {connectionStatus === 'standby' && (
@@ -1065,7 +1164,8 @@ export function LivePlayer({
               <button
                 type="button"
                 onClick={onTogglePause}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg transition-transform hover:scale-105 active:scale-95"
+                className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95"
+                aria-label={t('live.clickToPlay')}
                 title={t('live.clickToPlay')}
               >
                 <Play className="ml-0.5 h-5 w-5 fill-current" />
@@ -1128,7 +1228,8 @@ export function LivePlayer({
                 setConnectionStatus('connecting')
                 setRetryKey((k) => k + 1)
               }}
-              className="mt-3 flex items-center gap-1.5 rounded-md bg-white/10 px-3 py-1 text-xs font-medium text-white transition hover:bg-white/20 active:scale-95"
+              className="mt-3 flex min-h-11 items-center gap-1.5 rounded-md bg-white/10 px-3 py-1 text-xs font-medium text-white transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95"
+              aria-label={t('live.retry')}
             >
               <RefreshCw className="h-3.5 w-3.5" />
               <span>{t('live.retry')}</span>
@@ -1136,16 +1237,13 @@ export function LivePlayer({
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* 顶部/左上角沉浸式科技 HUD 面板 (专业视频 OSD 深色防眩光底盘，杜绝亮色模式下白底白字低对比度问题) */}
       {showHud && (
         <div
           // 刻意不用 backdrop-filter：本 HUD 悬浮于实时视频之上，视频帧变化时会重复采样，
           // 且 bg-black/75 下模糊效果几乎不可见。
-          className={`absolute top-2.5 left-2.5 z-20 flex items-center gap-2 rounded-lg border border-white/15 bg-black/75 px-2.5 py-1 font-mono text-[11px] text-white/90 shadow-lg transition-opacity duration-300 ${
-            isControlsVisible || connectionStatus !== 'connected'
-              ? 'opacity-100'
-              : 'pointer-events-none opacity-0'
+          className={`absolute top-2.5 left-2.5 z-20 flex max-w-[calc(100%-1.25rem)] flex-wrap items-center gap-2 rounded-lg border border-white/15 bg-black/75 px-2.5 py-1 font-mono text-[11px] text-white/90 shadow-lg transition-opacity duration-300 ${
+            controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
           }`}
         >
           <span className={`h-2 w-2 rounded-full ${getStatusIndicatorClass(connectionStatus)}`} />
@@ -1154,10 +1252,12 @@ export function LivePlayer({
           </span>
           <span className="text-white/40">|</span>
           <span className="text-emerald-400">
-            {streamType === 'main' ? '4K/1080P' : '720P/360P'}
+            {sourceSize ? `${sourceSize.width}×${sourceSize.height}` : '--'}
           </span>
           <span className="text-white/40">|</span>
-          <span className="text-cyan-300">{latencyMs}ms</span>
+          <span className="text-cyan-300" title={t(latencyLabelKey)}>
+            {t(latencyShortLabelKey)} {latencyMs === null ? '--' : `${latencyMs}ms`}
+          </span>
           <span className="text-white/40">|</span>
           <span
             className={`py-0.2 rounded px-1.5 text-[9px] font-bold tracking-wider ${
@@ -1188,146 +1288,153 @@ export function LivePlayer({
           )}
         </div>
       )}
-
       {/* 顶部右上角控制组：抓拍、AI 标注切换、视口适应、码流、音频、全屏等 (支持闲置淡出) */}
-      <div
-        className={`absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 transition-opacity duration-300 ${
-          isControlsVisible || connectionStatus !== 'connected'
-            ? 'opacity-100'
-            : 'pointer-events-none opacity-0'
-        }`}
-      >
-        {/* 即时抓拍快照 */}
-        <button
-          type="button"
-          onClick={handleCaptureSnapshot}
-          className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-cyan-500/80 hover:text-white"
-          title={t('live.snapshot')}
-        >
-          <Camera className="h-3.5 w-3.5" />
-        </button>
-
-        {/* AI 标注图层切换 (OSD) */}
-        <button
-          type="button"
-          onClick={handleToggleOsdInternal}
-          className={`rounded-md p-1 transition-colors ${
-            currentShowOsd
-              ? 'bg-black/60 text-cyan-300 hover:bg-black/80 hover:text-white'
-              : 'bg-black/60 text-white/40 hover:bg-black/80 hover:text-white'
+      {showHud && (
+        <div
+          className={`absolute top-14 right-2.5 z-20 flex max-w-[calc(100%-1.25rem)] flex-wrap items-center justify-end gap-1.5 transition-opacity duration-300 sm:top-2.5 ${
+            controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
           }`}
-          title={currentShowOsd ? t('live.toggleOsdShow') : t('live.toggleOsdHide')}
         >
-          {currentShowOsd ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-        </button>
-
-        {/* 画面适应模式切换 (Contain vs Cover) */}
-        {isHero && (
+          {/* 即时抓拍快照 */}
           <button
             type="button"
-            onClick={handleToggleFitModeInternal}
-            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white"
-            title={currentFitMode === 'contain' ? t('live.fitCover') : t('live.fitContain')}
+            onClick={handleCaptureSnapshot}
+            className="min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-cyan-500/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+            aria-label={t('live.snapshot')}
+            title={t('live.snapshot')}
           >
-            {currentFitMode === 'contain' ? (
-              <Maximize2 className="h-3.5 w-3.5" />
-            ) : (
-              <Minimize2 className="h-3.5 w-3.5" />
-            )}
+            <Camera className="h-3.5 w-3.5" />
           </button>
-        )}
 
-        {/* 码流切换 */}
-        {onSwitchStream && (
+          {/* AI 标注图层切换 (OSD) */}
           <button
             type="button"
-            onClick={() => onSwitchStream(streamType === 'main' ? 'sub' : 'main')}
-            className="flex items-center gap-1 rounded-md bg-black/60 px-2 py-1 text-[10px] font-medium text-white/90 transition-colors hover:bg-black/80 hover:text-white"
-            title={streamType === 'main' ? t('live.subStream') : t('live.mainStream')}
-          >
-            <Layers className="h-3 w-3 text-cyan-400" />
-            <span>{streamType === 'main' ? 'MAIN' : 'SUB'}</span>
-          </button>
-        )}
-
-        {/* 暂停/播放 */}
-        {onTogglePause && (
-          <button
-            type="button"
-            onClick={onTogglePause}
-            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white"
-            title={isPaused ? t('live.openPreview') : t('live.closePreview')}
-          >
-            {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-          </button>
-        )}
-
-        {/* 音频切换 */}
-        {(onToggleAudio || isHero || showHud) && (
-          <button
-            type="button"
-            onClick={handleToggleAudio}
-            className={`rounded-md p-1 transition-colors ${
-              isAudioActive
-                ? 'bg-[var(--accent)] text-white shadow-xs'
-                : 'bg-black/60 text-white/90 hover:bg-black/80 hover:text-white'
+            onClick={handleToggleOsdInternal}
+            aria-pressed={currentShowOsd}
+            className={`min-h-11 min-w-11 rounded-md p-1 transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0 ${
+              currentShowOsd
+                ? 'bg-black/60 text-cyan-300 hover:bg-black/80 hover:text-white'
+                : 'bg-black/60 text-white/40 hover:bg-black/80 hover:text-white'
             }`}
-            title={isAudioActive ? t('live.muteAudio') : t('live.enableAudio')}
+            aria-label={currentShowOsd ? t('live.toggleOsdShow') : t('live.toggleOsdHide')}
+            title={currentShowOsd ? t('live.toggleOsdShow') : t('live.toggleOsdHide')}
           >
-            {isAudioActive ? (
-              <Volume2 className="h-3.5 w-3.5" />
+            {currentShowOsd ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+          </button>
+
+          {/* 画面适应模式切换 (Contain vs Cover) */}
+          {isHero && (
+            <button
+              type="button"
+              onClick={handleToggleFitModeInternal}
+              className="min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+              aria-label={currentFitMode === 'contain' ? t('live.fitCover') : t('live.fitContain')}
+              title={currentFitMode === 'contain' ? t('live.fitCover') : t('live.fitContain')}
+            >
+              {currentFitMode === 'contain' ? (
+                <Maximize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Minimize2 className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
+
+          {/* 码流切换 */}
+          {onSwitchStream && (
+            <button
+              type="button"
+              onClick={() => onSwitchStream(streamType === 'main' ? 'sub' : 'main')}
+              className="min-h-11 min-w-11 rounded-md bg-black/60 px-2 py-1 text-[10px] font-medium text-white/90 transition-colors hover:bg-black/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+              aria-label={streamType === 'main' ? t('live.subStream') : t('live.mainStream')}
+              title={streamType === 'main' ? t('live.subStream') : t('live.mainStream')}
+            >
+              <Layers className="h-3 w-3 text-cyan-400" />
+              <span>{streamType === 'main' ? 'MAIN' : 'SUB'}</span>
+            </button>
+          )}
+
+          {/* 暂停/播放 */}
+          {onTogglePause && (
+            <button
+              type="button"
+              onClick={onTogglePause}
+              className="min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+              aria-label={isPaused ? t('live.openPreview') : t('live.closePreview')}
+              title={isPaused ? t('live.openPreview') : t('live.closePreview')}
+            >
+              {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+            </button>
+          )}
+
+          {/* 音频切换 */}
+          {(onToggleAudio || isHero || showHud) && (
+            <button
+              type="button"
+              onClick={handleToggleAudio}
+              aria-pressed={isAudioActive}
+              className={`min-h-11 min-w-11 rounded-md p-1 transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0 ${
+                isAudioActive
+                  ? 'bg-[var(--accent)] text-white shadow-xs'
+                  : 'bg-black/60 text-white/90 hover:bg-black/80 hover:text-white'
+              }`}
+              aria-label={isAudioActive ? t('live.muteAudio') : t('live.enableAudio')}
+              title={isAudioActive ? t('live.muteAudio') : t('live.enableAudio')}
+            >
+              {isAudioActive ? (
+                <Volume2 className="h-3.5 w-3.5" />
+              ) : (
+                <VolumeX className="h-3.5 w-3.5 opacity-50" />
+              )}
+            </button>
+          )}
+
+          {/* 聚焦到主大屏 */}
+          {onSpotlight && !isHero && (
+            <button
+              type="button"
+              onClick={onSpotlight}
+              className="min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-cyan-500/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+              aria-label={t('live.focusHero')}
+              title={t('live.focusHero')}
+            >
+              <Eye className="h-3.5 w-3.5" />
+            </button>
+          )}
+
+          {/* 全屏切换 */}
+          <button
+            type="button"
+            onClick={handleToggleFullscreen}
+            className="min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+            aria-label={isFullscreen ? t('live.exitFullscreen') : t('live.fullscreen')}
+            title={isFullscreen ? t('live.exitFullscreen') : t('live.fullscreen')}
+          >
+            {isFullscreen ? (
+              <Minimize className="h-3.5 w-3.5" />
             ) : (
-              <VolumeX className="h-3.5 w-3.5 opacity-50" />
+              <Maximize className="h-3.5 w-3.5" />
             )}
           </button>
-        )}
 
-        {/* 聚焦到主大屏 */}
-        {onSpotlight && !isHero && (
-          <button
-            type="button"
-            onClick={onSpotlight}
-            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-cyan-500/80 hover:text-white"
-            title={t('live.focusHero')}
-          >
-            <Eye className="h-3.5 w-3.5" />
-          </button>
-        )}
-
-        {/* 全屏切换 */}
-        <button
-          type="button"
-          onClick={handleToggleFullscreen}
-          className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-black/80 hover:text-white"
-          title={isFullscreen ? t('live.exitFullscreen') : t('live.fullscreen')}
-        >
-          {isFullscreen ? (
-            <Minimize className="h-3.5 w-3.5" />
-          ) : (
-            <Maximize className="h-3.5 w-3.5" />
+          {/* 关闭按钮 */}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-[var(--status-danger-solid)]/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+              aria-label={t('live.close')}
+              title={t('live.close')}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           )}
-        </button>
-
-        {/* 关闭按钮 */}
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-[var(--status-danger-solid)]/80 hover:text-white"
-            title={t('live.close')}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-
+        </div>
+      )}
       {/* 底部遥测状态栏 (仅在主大屏展示，支持闲置淡出) */}
       {isHero && displayTelemetry && (
         <div
           className={`absolute right-2.5 bottom-2.5 left-2.5 z-20 flex items-center justify-between rounded-lg bg-black/60 px-3 py-1.5 font-mono text-[11px] text-white/80 transition-opacity duration-300 ${
-            isControlsVisible || connectionStatus !== 'connected'
-              ? 'opacity-100'
-              : 'pointer-events-none opacity-0'
+            controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
           }`}
         >
           <div className="flex items-center gap-4">
@@ -1360,4 +1467,4 @@ export function LivePlayer({
       )}
     </div>
   )
-}
+})
