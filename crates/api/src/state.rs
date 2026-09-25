@@ -221,6 +221,9 @@ pub struct AppState {
     pub storage_cleaner: Option<Arc<pipeline::storage_cleaner::StorageCleaner>>,
     pub gallery_index: Arc<crate::gallery_index::FaceFeatureIndex>,
     pub reextract_manager: Arc<crate::personnel_reextract::PersonnelReextractManager>,
+    pub import_manager: Arc<crate::personnel_import::PersonnelImportManager>,
+    /// 人员底库重型任务（批量导入 / 特征重提取）互斥闸门
+    pub maintenance_gate: crate::personnel_maintenance::MaintenanceGate,
     pub gb28181_sip_server: Arc<media::gb28181::Gb28181SipServer>,
 }
 
@@ -238,6 +241,7 @@ impl AppState {
         let (shutdown_tx, _) = broadcast::channel(16);
         let reextract_manager =
             Arc::new(crate::personnel_reextract::PersonnelReextractManager::new());
+        let import_manager = Arc::new(crate::personnel_import::PersonnelImportManager::new());
         let stream_hub = Arc::new(StreamHub::new());
         let algo_registry = Arc::new(AlgoRegistry::new());
         let gallery_index = Arc::new(crate::gallery_index::FaceFeatureIndex::new());
@@ -283,6 +287,8 @@ impl AppState {
             storage_cleaner: None,
             gallery_index,
             reextract_manager,
+            import_manager,
+            maintenance_gate: crate::personnel_maintenance::MaintenanceGate::new(),
             gb28181_sip_server,
         }
     }

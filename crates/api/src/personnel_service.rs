@@ -24,24 +24,24 @@ use crate::state::AppState;
 pub const ENROLLMENT_CLASH_RAW_COSINE_THRESHOLD: f32 = 0.49;
 
 /// 磁盘写操作异常回滚守卫（RAII：若在提交前发生异常或 panic，自动销毁孤儿临时文件）
-struct DiskRollbackGuard {
+pub(crate) struct DiskRollbackGuard {
     paths: Vec<PathBuf>,
     disarmed: bool,
 }
 
 impl DiskRollbackGuard {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             paths: Vec::new(),
             disarmed: false,
         }
     }
 
-    fn track(&mut self, path: PathBuf) {
+    pub(crate) fn track(&mut self, path: PathBuf) {
         self.paths.push(path);
     }
 
-    fn disarm(mut self) {
+    pub(crate) fn disarm(mut self) {
         self.disarmed = true;
     }
 }
@@ -63,6 +63,24 @@ pub(crate) enum FacePipelineError {
     NoFaceDetected,
     ExtractionFailed(String),
     QualityLow(f32),
+}
+
+impl FacePipelineError {
+    /// 统一收敛为 API 错误语义，在线录入与批量导入共用同一套归因文案
+    pub(crate) fn into_api_error(self) -> ApiError {
+        match self {
+            Self::Transcode(message) => ApiError::BadRequest(format!("照片转码失败: {message}")),
+            Self::NoFaceDetected => ApiError::FaceQualityRejected(
+                "未在上传照片中检测到有效人脸，请上传正面清晰免冠照".to_string(),
+            ),
+            Self::ExtractionFailed(message) => {
+                ApiError::FaceQualityRejected(format!("人脸特征提取失败: {message}"))
+            }
+            Self::QualityLow(score) => ApiError::FaceQualityRejected(format!(
+                "人脸质量评分过低 ({score:.2})，未满足 0.50 门禁要求，请上传光线充足的正面照片"
+            )),
+        }
+    }
 }
 
 /// 人脸对齐与特征提取产物
@@ -179,15 +197,140 @@ pub(crate) async fn reextract_face_sample(
 }
 
 /// 内部处理产出的人脸特征及磁盘文件元数据
-struct ExtractedFaceMeta {
-    face_id: String,
-    photo_rel_path: String,
-    aligned_rel_path: String,
-    feature_bytes: Vec<u8>,
-    vector: [f32; 512],
-    quality_score: f32,
-    detection_score: f32,
+pub(crate) struct ExtractedFaceMeta {
+    pub(crate) face_id: String,
+    pub(crate) photo_rel_path: String,
+    pub(crate) aligned_rel_path: String,
+    pub(crate) feature_bytes: Vec<u8>,
+    pub(crate) vector: [f32; 512],
+    pub(crate) quality_score: f32,
+    pub(crate) detection_score: f32,
+    pub(crate) is_primary: bool,
+}
+
+/// 跨主体人脸模板冲撞命中详情
+pub(crate) struct CrossSubjectClash {
+    pub(crate) subject_name: String,
+    pub(crate) raw_cosine: f32,
+}
+
+/// 检测单张新特征是否与**其它主体**底库样本高度相似
+///
+/// 在线录入与批量导入共用此判定；检索失败时向上抛出，由调用方 fail closed，
+/// 绝不把索引异常静默降级为「校验通过」。
+pub(crate) async fn detect_cross_subject_clash(
+    gallery_index: &FaceFeatureIndex,
+    subject_id: &str,
+    feature_bytes: &[u8],
+) -> Result<Option<CrossSubjectClash>, String> {
+    let clash = gallery_index
+        .most_similar_cross_subject(feature_bytes, Some(subject_id))
+        .await
+        .map_err(|err| err.to_string())?;
+
+    Ok(clash
+        .filter(|candidate| candidate.raw_cosine >= ENROLLMENT_CLASH_RAW_COSINE_THRESHOLD)
+        .map(|candidate| CrossSubjectClash {
+            subject_name: candidate.subject_name,
+            raw_cosine: candidate.raw_cosine,
+        }))
+}
+
+pub(crate) fn validate_personnel_subject_id(subject_id: &str) -> Result<(), &'static str> {
+    let mut components = Path::new(subject_id).components();
+    let is_single_normal_component =
+        matches!(components.next(), Some(std::path::Component::Normal(_)))
+            && components.next().is_none();
+
+    if subject_id.trim().is_empty()
+        || subject_id.trim() != subject_id
+        || subject_id
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | '\0'))
+        || !is_single_normal_component
+    {
+        return Err("人员编号必须是单一路径组件，不能包含路径分隔符");
+    }
+    Ok(())
+}
+
+/// 人脸特征提取 + 质量门禁 + 原图与对齐切片落盘（不写数据库）。
+/// 所有照片路径在写入前都受主体编号约束，并确认落盘目录位于证据根目录下。
+/// 事务提交后调用方 disarm 守卫；提前返回时由 Drop 删除已写入文件。
+pub(crate) async fn process_and_save_face_bytes(
+    evidence_base_dir: &Path,
+    algo_registry: &infer::package::AlgoRegistry,
+    subject_id: &str,
+    face_id: &str,
+    raw_img: Vec<u8>,
     is_primary: bool,
+    rollback_guard: &mut DiskRollbackGuard,
+) -> Result<ExtractedFaceMeta, ApiError> {
+    validate_personnel_subject_id(subject_id)
+        .map_err(|reason| ApiError::BadRequest(reason.to_string()))?;
+
+    let face_data = extract_face_pipeline(algo_registry, raw_img)
+        .await
+        .map_err(FacePipelineError::into_api_error)?;
+
+    let galleries_path = evidence_base_dir.join("galleries");
+    tokio::fs::create_dir_all(&galleries_path)
+        .await
+        .map_err(|e| ApiError::Internal(format!("创建底库存储目录失败: {e}")))?;
+    let canonical_evidence_dir = tokio::fs::canonicalize(evidence_base_dir)
+        .await
+        .map_err(|e| ApiError::Internal(format!("规范化证据目录失败: {e}")))?;
+    let canonical_galleries_dir = tokio::fs::canonicalize(&galleries_path)
+        .await
+        .map_err(|e| ApiError::Internal(format!("规范化人脸底库存储目录失败: {e}")))?;
+    if !canonical_galleries_dir.starts_with(&canonical_evidence_dir) {
+        return Err(ApiError::Internal(
+            "人脸底库存储目录超出证据根目录".to_string(),
+        ));
+    }
+
+    // 目录规划: var/data/evidence/galleries/{subject_id}/
+    let subject_dir = galleries_path.join(subject_id);
+    tokio::fs::create_dir_all(&subject_dir)
+        .await
+        .map_err(|e| ApiError::Internal(format!("创建底库存储目录失败: {e}")))?;
+    let canonical_subject_dir = tokio::fs::canonicalize(&subject_dir)
+        .await
+        .map_err(|e| ApiError::Internal(format!("规范化人员底库存储目录失败: {e}")))?;
+    if canonical_subject_dir != canonical_galleries_dir.join(subject_id) {
+        return Err(ApiError::Internal(
+            "人员底库存储目录不能是符号链接".to_string(),
+        ));
+    }
+
+    let photo_rel_path = format!("galleries/{subject_id}/original_{face_id}.jpg");
+    let aligned_rel_path = format!("galleries/{subject_id}/aligned_{face_id}.jpg");
+
+    let photo_abs = canonical_subject_dir.join(format!("original_{face_id}.jpg"));
+    let aligned_abs = canonical_subject_dir.join(format!("aligned_{face_id}.jpg"));
+
+    // 在写入前登记路径，即使文件写入发生短写或磁盘错误也能由守卫清除残留。
+    rollback_guard.track(photo_abs.clone());
+    tokio::fs::write(&photo_abs, &face_data.jpeg_bytes)
+        .await
+        .map_err(|e| ApiError::Internal(format!("写入原始照片失败: {e}")))?;
+
+    // 写入 112x112 对齐切片
+    rollback_guard.track(aligned_abs.clone());
+    tokio::fs::write(&aligned_abs, &face_data.aligned_jpeg)
+        .await
+        .map_err(|e| ApiError::Internal(format!("写入对齐人脸切片失败: {e}")))?;
+
+    Ok(ExtractedFaceMeta {
+        face_id: face_id.to_string(),
+        photo_rel_path,
+        aligned_rel_path,
+        feature_bytes: face_data.feature_bytes,
+        vector: face_data.vector,
+        quality_score: face_data.quality_score,
+        detection_score: face_data.detection_score,
+        is_primary,
+    })
 }
 
 /// 人员底库与人脸特征领域服务
@@ -306,23 +449,19 @@ impl PersonnelService {
         faces: &[ExtractedFaceMeta],
     ) -> Result<(), ApiError> {
         for (index, face) in faces.iter().enumerate() {
-            let clash = self
-                .gallery_index
-                .most_similar_cross_subject(&face.feature_bytes, Some(subject_id))
-                .await
-                .map_err(|err| {
-                    tracing::error!(error = %err, "无法完成新注册人脸的跨主体冲撞校验");
-                    ApiError::Internal("无法完成底库冲撞校验，本次录入已中止".to_string())
-                })?;
+            let clash =
+                detect_cross_subject_clash(&self.gallery_index, subject_id, &face.feature_bytes)
+                    .await
+                    .map_err(|err| {
+                        tracing::error!(error = %err, "无法完成新注册人脸的跨主体冲撞校验");
+                        ApiError::Internal("无法完成底库冲撞校验，本次录入已中止".to_string())
+                    })?;
 
-            if let Some(clash) = clash
-                .filter(|candidate| candidate.raw_cosine >= ENROLLMENT_CLASH_RAW_COSINE_THRESHOLD)
-            {
+            if let Some(clash) = clash {
                 tracing::warn!(
                     subject_id,
                     face_index = index + 1,
-                    matched_subject_id = %clash.subject_id,
-                    matched_face_id = %clash.face_id,
+                    matched_subject_name = %clash.subject_name,
                     raw_cosine = clash.raw_cosine,
                     threshold = ENROLLMENT_CLASH_RAW_COSINE_THRESHOLD,
                     "跨主体人脸模板冲撞，拒绝录入"
@@ -382,6 +521,8 @@ impl PersonnelService {
             }
             _ => uuid::Uuid::now_v7().to_string(),
         };
+        validate_personnel_subject_id(&subject_id)
+            .map_err(|reason| ApiError::BadRequest(reason.to_string()))?;
 
         if !self.algo_registry.is_face_extraction_ready().await {
             return Err(ApiError::FaceAlgorithmNotLoaded(
@@ -791,7 +932,7 @@ impl PersonnelService {
         })
     }
 
-    /// 提取单张人脸特征并落盘
+    /// 提取单张人脸特征并落盘（在线录入与批量导入共用同一实现）
     async fn process_and_save_face(
         &self,
         subject_id: &str,
@@ -800,57 +941,16 @@ impl PersonnelService {
         is_primary: bool,
         rollback_guard: &mut DiskRollbackGuard,
     ) -> Result<ExtractedFaceMeta, ApiError> {
-        let face_data = extract_face_pipeline(&self.algo_registry, raw_img)
-            .await
-            .map_err(|err| match err {
-                FacePipelineError::Transcode(e) => {
-                    ApiError::BadRequest(format!("照片转码失败: {e}"))
-                }
-                FacePipelineError::NoFaceDetected => ApiError::FaceQualityRejected(
-                    "未在上传照片中检测到有效人脸，请上传正面清晰免冠照".to_string(),
-                ),
-                FacePipelineError::ExtractionFailed(msg) => {
-                    ApiError::FaceQualityRejected(format!("人脸特征提取失败: {msg}"))
-                }
-                FacePipelineError::QualityLow(score) => ApiError::FaceQualityRejected(format!(
-                    "人脸质量评分过低 ({score:.2})，未满足 0.50 门禁要求，请上传光线充足的正面照片"
-                )),
-            })?;
-
-        // 目录规划: var/data/evidence/galleries/{subject_id}/
-        let subject_dir = self.evidence_base_dir.join("galleries").join(subject_id);
-        tokio::fs::create_dir_all(&subject_dir)
-            .await
-            .map_err(|e| ApiError::Internal(format!("创建底库存储目录失败: {e}")))?;
-
-        let photo_rel_path = format!("galleries/{subject_id}/original_{face_id}.jpg");
-        let aligned_rel_path = format!("galleries/{subject_id}/aligned_{face_id}.jpg");
-
-        let photo_abs = self.evidence_base_dir.join(&photo_rel_path);
-        let aligned_abs = self.evidence_base_dir.join(&aligned_rel_path);
-
-        // 写入原始 JPEG 并纳入回滚保护
-        tokio::fs::write(&photo_abs, &face_data.jpeg_bytes)
-            .await
-            .map_err(|e| ApiError::Internal(format!("写入原始照片失败: {e}")))?;
-        rollback_guard.track(photo_abs);
-
-        // 写入 112x112 对齐切片
-        tokio::fs::write(&aligned_abs, &face_data.aligned_jpeg)
-            .await
-            .map_err(|e| ApiError::Internal(format!("写入对齐人脸切片失败: {e}")))?;
-        rollback_guard.track(aligned_abs);
-
-        Ok(ExtractedFaceMeta {
-            face_id: face_id.to_string(),
-            photo_rel_path,
-            aligned_rel_path,
-            feature_bytes: face_data.feature_bytes,
-            vector: face_data.vector,
-            quality_score: face_data.quality_score,
-            detection_score: face_data.detection_score,
+        process_and_save_face_bytes(
+            &self.evidence_base_dir,
+            &self.algo_registry,
+            subject_id,
+            face_id,
+            raw_img,
             is_primary,
-        })
+            rollback_guard,
+        )
+        .await
     }
 }
 
@@ -916,6 +1016,43 @@ mod tests {
             .reject_cross_subject_clashes("new-subject", &[candidate])
             .await;
         assert!(matches!(result, Err(ApiError::FaceTemplateCollision(_))));
+    }
+
+    #[test]
+    fn subject_id_must_be_a_single_safe_path_component() {
+        assert!(validate_personnel_subject_id("EMP001").is_ok());
+        assert!(validate_personnel_subject_id("工号 001").is_ok());
+        for invalid in ["", ".", "..", "../escape", "a/b", "a\\b", "bad\0id"] {
+            assert!(
+                validate_personnel_subject_id(invalid).is_err(),
+                "should reject {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn disk_rollback_guard_removes_files_unless_committed() {
+        let root = std::env::temp_dir().join(format!(
+            "heimdall_disk_rollback_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let rolled_back = root.join("rolled_back.jpg");
+        std::fs::write(&rolled_back, b"photo").unwrap();
+        let mut guard = DiskRollbackGuard::new();
+        guard.track(rolled_back.clone());
+        drop(guard);
+        assert!(!rolled_back.exists());
+
+        let committed = root.join("committed.jpg");
+        std::fs::write(&committed, b"photo").unwrap();
+        let mut guard = DiskRollbackGuard::new();
+        guard.track(committed.clone());
+        guard.disarm();
+        assert!(committed.exists());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

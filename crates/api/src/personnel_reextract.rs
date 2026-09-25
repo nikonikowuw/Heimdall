@@ -13,6 +13,7 @@ use types::{ReextractFaceFailureDetail, ReextractProgressDto, ReextractTaskStatu
 
 use crate::error::ApiError;
 use crate::gallery_index::FaceFeatureIndex;
+use crate::personnel_maintenance::MaintenanceGuard;
 use crate::personnel_service::reextract_face_sample;
 use crate::state::WsBroadcastEvent;
 
@@ -52,6 +53,7 @@ impl PersonnelReextractManager {
         evidence_base_dir: PathBuf,
         algo_registry: Arc<AlgoRegistry>,
         gallery_index: Arc<FaceFeatureIndex>,
+        maintenance_guard: MaintenanceGuard,
         event_broadcaster: broadcast::Sender<WsBroadcastEvent>,
     ) -> Result<ReextractProgressDto, ApiError> {
         if !algo_registry.is_face_extraction_ready().await {
@@ -94,6 +96,8 @@ impl PersonnelReextractManager {
         // 启动后台异步 Worker 处理
         let progress_ref = self.progress.clone();
         tokio::spawn(async move {
+            // 全程持有底库重型任务闸门，避免与批量导入争抢 NPU
+            let _maintenance_guard = maintenance_guard;
             let mut succeeded_count = 0u64;
 
             for face in faces {
@@ -139,7 +143,7 @@ impl PersonnelReextractManager {
             };
 
             let _ = event_broadcaster.send(WsBroadcastEvent {
-                topic: "personnel.reextract.finished".to_string(),
+                topic: types::TOPIC_PERSONNEL_REEXTRACT_FINISHED.to_string(),
                 payload: serde_json::to_value(&final_snapshot).unwrap_or_default(),
                 timestamp: chrono::Utc::now().timestamp_millis(),
             });

@@ -11,14 +11,15 @@ export interface PersonnelNotice {
   title: string
   message: string
   type: PersonnelNoticeType
-  /** 仅在特征重提任务收尾时出现「查看提取报告」行动项 */
-  action?: 'report'
+  /** 后台任务收尾时的「查看报告」行动项；两类任务分别指向各自的报告视图 */
+  action?: 'report' | 'importReport'
 }
 
 export interface PersonnelToastProps {
   notice: PersonnelNotice | null
   onDismiss: () => void
   onOpenReport: () => void
+  onOpenImportReport?: () => void
 }
 
 /**
@@ -28,10 +29,32 @@ export function PersonnelToast({
   notice,
   onDismiss,
   onOpenReport,
+  onOpenImportReport,
 }: PersonnelToastProps): React.ReactElement | null {
   const { t } = useTranslation(['personnel', 'common'])
 
   if (!notice) return null
+
+  let action: ToastItem['action']
+  if (notice.action === 'report') {
+    action = {
+      label: t('reextract.viewReport', { defaultValue: '查看提取报告' }),
+      onClick: () => {
+        onDismiss()
+        onOpenReport()
+      },
+      primary: true,
+    }
+  } else if (notice.action === 'importReport') {
+    action = {
+      label: t('import.viewReport', { defaultValue: '查看导入报告' }),
+      onClick: () => {
+        onDismiss()
+        onOpenImportReport?.()
+      },
+      primary: true,
+    }
+  }
 
   const item: ToastItem = {
     id: String(notice.id),
@@ -40,17 +63,7 @@ export function PersonnelToast({
     message: notice.message,
     category: t('common:nav.personnel', { defaultValue: '人员底库' }),
     duration: 0,
-    action:
-      notice.action === 'report'
-        ? {
-            label: t('reextract.viewReport', { defaultValue: '查看报告' }),
-            onClick: () => {
-              onDismiss()
-              onOpenReport()
-            },
-            primary: true,
-          }
-        : undefined,
+    action,
     createdAt: notice.id,
   }
 

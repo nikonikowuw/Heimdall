@@ -9,6 +9,8 @@ pub mod i18n;
 pub mod metrics;
 pub mod middleware;
 pub mod network_service;
+pub mod personnel_import;
+pub mod personnel_maintenance;
 pub mod personnel_reextract;
 pub mod personnel_service;
 pub mod response;
@@ -29,6 +31,11 @@ pub use gallery_index::{
     RegisteredFace,
 };
 pub use network_service::NetworkService;
+pub use personnel_import::{
+    candidate::{ImportCandidate, ParseError},
+    parse_candidates, PersonnelImportManager, TempImportSandbox,
+};
+pub use personnel_maintenance::{MaintenanceGate, MaintenanceGuard, MaintenanceTaskKind};
 pub use personnel_reextract::PersonnelReextractManager;
 pub use personnel_service::PersonnelService;
 pub use response::ApiResponse;

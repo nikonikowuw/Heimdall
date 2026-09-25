@@ -57,6 +57,24 @@
 
 特征提取阶段写入的照片受 `DiskRollbackGuard` 管理；冲撞拒绝发生在 DB 事务前，失败路径不保留照片文件或人员记录。人员录入经容量为 1 的 admission semaphore 串行化，避免并发新建/追加都在对方写入索引前通过检查。
 
+## 人员批量导入
+
+批量建档走「归档上传 → 后台任务 → 轮询/WS 观测终态报告」异步模型，与全量底库特征重提取共用同一把单许可闸门
+（[MaintenanceGate](../../../crates/api/src/personnel_maintenance.rs)），二者不可并行；闸门被占时返回 `409` + `40902`。
+
+| 入口 | 语义 | 载荷 |
+| --- | --- | --- |
+| `POST /api/v1/personnel/import` | 上传归档并启动任务，成功返回 `202` + `taskId` | `multipart/form-data`，压缩包上限 100 MiB（解压后 512 MiB / 20,000 条目） |
+| `GET /api/v1/personnel/import/status` | 读取当前任务进度快照（含终态报告） | 无参；空闲时 `status` 为 `idle` |
+| `POST /api/v1/personnel/import/cancel` | 请求取消；在当前候选处理完成后收敛为 `cancelled` | 无参；空闲时返回 `400` |
+| `GET /api/v1/personnel/import/template` | 下载带 UTF-8 BOM 的 CSV 模板 | 返回 `text/csv` 附件 |
+
+- **输入自适应**：归档根目录存在 `manifest.csv` / `personnel.csv` 时按清单字段映射（表头接受中英文别名，编码在 UTF-8 BOM 与 GB18030 间自适应）；否则按目录名 / 文件名（`姓名.jpg`、`工号_姓名.jpg`、`姓名/01.jpg`）聚合推断。两种模式都过滤 `__MACOSX`、`Thumbs.db`、`.` 开头文件与非图片，单人照片按文件名升序截取前 5 张。清单照片仅能引用沙箱内路径，人员编号拒绝路径分隔符。
+- **逐人原子**：每名候选独立 DB 事务 + `DiskRollbackGuard`，成功即提交并增量 `upsert` 进 `FaceFeatureIndex`，因此同批次内后续候选能拦截前序候选造成的跨主体撞脸；单点失败（包括缺少照片）只记入报告，不中断整批。已存在的 `subjectId` 按冲突跳过，不覆盖既有档案。
+- **并发度为 1**：解析与逐人提取在单个后台 Worker 内严格串行，避免与常驻视频流推理争抢 NPU，并消除准入校验竞态。
+- **沙箱生命周期**：归档流式落盘至 `var/tmp/personnel_import/{task_id}/`，解压限制为 512 MiB / 20,000 条目并拒绝 TAR 链接或特殊文件；由 `TempImportSandbox` 的 `Drop` 在完成、失败、取消与 panic 路径统一物理清理；进程启动时 `sweep_orphan_sandboxes` 回收残留目录。解压复用 [archive.rs](../../../crates/api/src/algo/archive.rs) 的 Zip/Tar-Slip 防护。
+- 进度经 `personnel.import.progress` / `personnel.import.finished` 两个 WS topic 广播，广播按 900ms 节流以防百人级批次刷爆 WS；前端可在断线后由 `status` 接口重新绑定任务，不依赖事件回放。
+
 ## 告警与证据
 
 告警成立、目标坐标、事件幂等与证据生成状态遵循 [检测结果、告警与证据契约](./detection-alarm-contract.md)。

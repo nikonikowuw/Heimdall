@@ -5,7 +5,9 @@ import { BatchDeleteModal } from './components/BatchDeleteModal'
 import { DeleteConfirmModal } from './components/DeleteConfirmModal'
 import { PersonnelBatchBar } from './components/PersonnelBatchBar'
 import { PersonnelCard } from './components/PersonnelCard'
+import { PersonnelImportModal } from './components/PersonnelImportModal'
 import { PersonnelModal } from './components/PersonnelModal'
+import { isSupportedArchiveName, isTerminalImportStatus } from './components/personnelImport'
 import { PersonnelTable } from './components/PersonnelTable'
 import { PersonnelToast } from './components/PersonnelToast'
 import { ReextractModal } from './components/ReextractModal'
@@ -170,5 +172,133 @@ describe('Personnel floating layers', () => {
     expect(html).toContain('role="alertdialog"')
     expect(html).toContain('张三')
     expect(html).toContain('#S-001')
+  })
+})
+
+describe('Personnel bulk import modal', () => {
+  it('accepts archives by naming convention and rejects other file types', () => {
+    expect(isSupportedArchiveName('staff.zip')).toBe(true)
+    expect(isSupportedArchiveName('STAFF.ZIP')).toBe(true)
+    expect(isSupportedArchiveName('staff.tar.gz')).toBe(true)
+    expect(isSupportedArchiveName('staff.tgz')).toBe(true)
+    expect(isSupportedArchiveName('staff.tar')).toBe(true)
+    expect(isSupportedArchiveName('staff.rar')).toBe(false)
+    expect(isSupportedArchiveName('manifest.csv')).toBe(false)
+  })
+
+  it('treats only completed/failed/cancelled as terminal states', () => {
+    expect(isTerminalImportStatus('idle')).toBe(false)
+    expect(isTerminalImportStatus('running')).toBe(false)
+    expect(isTerminalImportStatus('completed')).toBe(true)
+    expect(isTerminalImportStatus('failed')).toBe(true)
+    expect(isTerminalImportStatus('cancelled')).toBe(true)
+  })
+
+  it('guides the operator through both packaging styles before uploading', () => {
+    const html = renderToString(
+      <PersonnelImportModal
+        isOpen
+        progress={null}
+        isStarting={false}
+        isCancelling={false}
+        maxArchiveMb={100}
+        onClose={() => {}}
+        onStart={() => {}}
+        onCancelTask={() => {}}
+      />,
+    )
+
+    expect(html).toContain('role="dialog"')
+    expect(html).toContain('aria-modal="true"')
+    expect(html).toContain('aria-labelledby=')
+    expect(html).toContain('100')
+    expect(html).toContain('manifest.csv')
+    expect(html).not.toMatch(/(?:emerald|rose|amber)-\d+/)
+  })
+
+  it('reports running progress through an accessible progressbar with live counters', () => {
+    const html = renderToString(
+      <PersonnelImportModal
+        isOpen
+        initialMode="progress"
+        progress={{
+          taskId: 'task-1',
+          status: 'running',
+          total: 8,
+          processed: 2,
+          succeeded: 1,
+          failed: 1,
+          currentName: '张三',
+          failures: [],
+        }}
+        isStarting={false}
+        isCancelling={false}
+        maxArchiveMb={100}
+        onClose={() => {}}
+        onStart={() => {}}
+        onCancelTask={() => {}}
+      />,
+    )
+
+    expect(html).toContain('role="progressbar"')
+    expect(html).toContain('aria-valuenow="25"')
+    expect(html).toContain('张三')
+  })
+
+  it('lists per-person failure reasons with their attribution tags in the report', () => {
+    const html = renderToString(
+      <PersonnelImportModal
+        isOpen
+        initialMode="report"
+        progress={{
+          taskId: 'task-2',
+          status: 'completed',
+          total: 3,
+          processed: 3,
+          succeeded: 2,
+          failed: 1,
+          failures: [
+            {
+              name: '李四',
+              subjectId: 'EMP002',
+              kind: 'clash',
+              reason: '与底库人员「王五」样本高度相似',
+              skippedPhotos: 2,
+            },
+          ],
+        }}
+        isStarting={false}
+        isCancelling={false}
+        maxArchiveMb={100}
+        onClose={() => {}}
+        onStart={() => {}}
+        onCancelTask={() => {}}
+      />,
+    )
+
+    expect(html).toContain('李四')
+    expect(html).toContain('EMP002')
+    expect(html).toContain('与底库人员「王五」样本高度相似')
+    // 失败明细默认展开按钮可达，且复制行动项存在
+    expect(html).toContain('aria-expanded')
+  })
+
+  it('surfaces a start failure inline rather than silently returning to upload', () => {
+    const html = renderToString(
+      <PersonnelImportModal
+        isOpen
+        progress={null}
+        isStarting={false}
+        isCancelling={false}
+        error="当前有底库维护任务正在执行，请稍后再试"
+        maxArchiveMb={100}
+        onClose={() => {}}
+        onStart={() => {}}
+        onCancelTask={() => {}}
+      />,
+    )
+
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('当前有底库维护任务正在执行')
   })
 })

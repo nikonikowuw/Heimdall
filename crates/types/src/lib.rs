@@ -30,7 +30,9 @@ pub use error::{FrameError, TypeError};
 pub use event::{
     TOPIC_ALARM_STATUS_CHANGED, TOPIC_ALARM_TRIGGERED, TOPIC_ALGORITHM_UPLOAD_PROGRESS,
     TOPIC_CAMERA_PROBE_UPDATED, TOPIC_CAMERA_TELEMETRY, TOPIC_CAMERA_TRACKS,
-    TOPIC_RECOGNITION_MATCHED, TOPIC_RECOGNITION_STATUS_CHANGED,
+    TOPIC_PERSONNEL_IMPORT_FINISHED, TOPIC_PERSONNEL_IMPORT_PROGRESS,
+    TOPIC_PERSONNEL_REEXTRACT_FINISHED, TOPIC_RECOGNITION_MATCHED,
+    TOPIC_RECOGNITION_STATUS_CHANGED,
 };
 pub use evidence::{EvidenceImageSource, EvidenceImageStream};
 pub use frame::{FrameHandle, FrameRef, PixelFormat, StrideInfo};
@@ -41,7 +43,8 @@ pub use gb28181::{
 };
 pub use oplog::{OpEvent, OperationLog};
 pub use personnel::{
-    FaceCandidateItem, FaceMatchResult, GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto,
+    FaceCandidateItem, FaceMatchResult, GalleryFaceDto, ImportFailureDetail, ImportFailureKind,
+    ImportTaskStatus, PersonnelDetailDto, PersonnelImportProgressDto, PersonnelItemDto,
     PersonnelStatsDto, RecognitionStatus, ReextractFaceFailureDetail,
     ReextractFaceFeaturesReportDto, ReextractProgressDto, ReextractTaskStatus,
     UpdatePersonnelRequest,

@@ -14,6 +14,31 @@ pub enum ArchiveFormat {
     Tar,
 }
 
+pub const DEFAULT_ARCHIVE_MAX_ENTRIES: usize = 100_000;
+pub const DEFAULT_ARCHIVE_MAX_UNCOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveExtractionLimits {
+    pub max_entries: usize,
+    pub max_uncompressed_bytes: u64,
+}
+
+impl ArchiveExtractionLimits {
+    pub const fn bounded_default() -> Self {
+        Self {
+            max_entries: DEFAULT_ARCHIVE_MAX_ENTRIES,
+            max_uncompressed_bytes: DEFAULT_ARCHIVE_MAX_UNCOMPRESSED_BYTES,
+        }
+    }
+
+    pub const fn unlimited() -> Self {
+        Self {
+            max_entries: usize::MAX,
+            max_uncompressed_bytes: u64::MAX,
+        }
+    }
+}
+
 pub fn detect_archive_format(
     bytes: &[u8],
     filename: Option<&str>,
@@ -42,11 +67,29 @@ pub fn detect_archive_format(
     Err("不支持的归档格式，仅支持 .zip、.tar.gz (.tgz) 与 .tar 格式".to_string())
 }
 
-pub fn extract_archive_package_from_file(
+/// 解压归档到目标目录，仅做格式识别与路径穿透防护，不校验任何包内清单。
+///
+/// 人员批量导入使用此入口：人员包没有 `manifest.json`，但仍需复用同一套
+/// Zip Slip / Tar Slip 安全解压原语。
+pub fn extract_archive_to_dir(
     archive_path: &Path,
     filename: Option<&str>,
     dest_dir: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<(), String> {
+    extract_archive_to_dir_with_limits(
+        archive_path,
+        filename,
+        dest_dir,
+        ArchiveExtractionLimits::bounded_default(),
+    )
+}
+
+pub fn extract_archive_to_dir_with_limits(
+    archive_path: &Path,
+    filename: Option<&str>,
+    dest_dir: &Path,
+    limits: ArchiveExtractionLimits,
+) -> Result<(), String> {
     let mut header_file = std::fs::File::open(archive_path)
         .map_err(|e| format!("打开上传归档失败 {}: {e}", archive_path.display()))?;
     let mut header = [0u8; 512];
@@ -58,27 +101,44 @@ pub fn extract_archive_package_from_file(
         ArchiveFormat::Zip => {
             let file =
                 std::fs::File::open(archive_path).map_err(|e| format!("打开 ZIP 归档失败: {e}"))?;
-            extract_zip(file, dest_dir)?;
+            extract_zip(file, dest_dir, limits)?;
         }
         ArchiveFormat::TarGz => {
             let file = std::fs::File::open(archive_path)
                 .map_err(|e| format!("打开 GZIP 归档失败: {e}"))?;
             let gz = flate2::read::GzDecoder::new(file);
-            extract_tar(gz, dest_dir)?;
+            extract_tar(gz, dest_dir, limits)?;
         }
         ArchiveFormat::Tar => {
             let file =
                 std::fs::File::open(archive_path).map_err(|e| format!("打开 TAR 归档失败: {e}"))?;
-            extract_tar(file, dest_dir)?;
+            extract_tar(file, dest_dir, limits)?;
         }
     }
 
+    Ok(())
+}
+
+pub fn extract_archive_package_from_file(
+    archive_path: &Path,
+    filename: Option<&str>,
+    dest_dir: &Path,
+) -> Result<PathBuf, String> {
+    extract_archive_to_dir(archive_path, filename, dest_dir)?;
     find_extracted_package_root(dest_dir)
 }
 
-fn extract_zip<R: std::io::Read + std::io::Seek>(reader: R, dest_dir: &Path) -> Result<(), String> {
+fn extract_zip<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    dest_dir: &Path,
+    limits: ArchiveExtractionLimits,
+) -> Result<(), String> {
     let mut zip = zip::ZipArchive::new(reader).map_err(|e| format!("解析 ZIP 文件失败: {e}"))?;
+    if zip.len() > limits.max_entries {
+        return Err(format!("ZIP 条目数量超出上限 ({})", limits.max_entries));
+    }
 
+    let mut total_uncompressed = 0u64;
     for i in 0..zip.len() {
         let mut file = zip
             .by_index(i)
@@ -96,21 +156,57 @@ fn extract_zip<R: std::io::Read + std::io::Seek>(reader: R, dest_dir: &Path) -> 
             std::fs::create_dir_all(&out_path)
                 .map_err(|e| format!("创建目录失败 {}: {e}", out_path.display()))?;
         } else {
-            if let Some(p) = out_path.parent().filter(|p| !p.exists()) {
-                std::fs::create_dir_all(p)
-                    .map_err(|e| format!("创建父目录失败 {}: {e}", p.display()))?;
+            let projected_size = total_uncompressed
+                .checked_add(file.size())
+                .ok_or_else(|| "ZIP 解压体积溢出".to_string())?;
+            if projected_size > limits.max_uncompressed_bytes {
+                return Err(format!(
+                    "ZIP 解压体积超出上限 ({} bytes)",
+                    limits.max_uncompressed_bytes
+                ));
+            }
+
+            if let Some(parent) = out_path.parent().filter(|p| !p.exists()) {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建父目录失败 {}: {e}", parent.display()))?;
             }
             let mut outfile = std::fs::File::create(&out_path)
                 .map_err(|e| format!("创建文件失败 {}: {e}", out_path.display()))?;
-            std::io::copy(&mut file, &mut outfile)
-                .map_err(|e| format!("写入文件内容失败 {}: {e}", out_path.display()))?;
+            let mut file_uncompressed = 0u64;
+            let mut buffer = [0u8; 16 * 1024];
+            loop {
+                let read = std::io::Read::read(&mut file, &mut buffer)
+                    .map_err(|e| format!("读取 ZIP 条目失败 {}: {e}", out_path.display()))?;
+                if read == 0 {
+                    break;
+                }
+                file_uncompressed = file_uncompressed
+                    .checked_add(read as u64)
+                    .ok_or_else(|| "ZIP 解压体积溢出".to_string())?;
+                let actual_total = total_uncompressed
+                    .checked_add(file_uncompressed)
+                    .ok_or_else(|| "ZIP 解压体积溢出".to_string())?;
+                if actual_total > limits.max_uncompressed_bytes {
+                    return Err(format!(
+                        "ZIP 解压体积超出上限 ({} bytes)",
+                        limits.max_uncompressed_bytes
+                    ));
+                }
+                std::io::Write::write_all(&mut outfile, &buffer[..read])
+                    .map_err(|e| format!("写入文件内容失败 {}: {e}", out_path.display()))?;
+            }
+            total_uncompressed = total_uncompressed
+                .checked_add(file_uncompressed)
+                .ok_or_else(|| "ZIP 解压体积溢出".to_string())?;
 
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 if let Some(mode) = file.unix_mode() {
-                    let _ =
-                        std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode));
+                    let _ = std::fs::set_permissions(
+                        &out_path,
+                        std::fs::Permissions::from_mode(mode & 0o777),
+                    );
                 }
             }
         }
@@ -118,20 +214,32 @@ fn extract_zip<R: std::io::Read + std::io::Seek>(reader: R, dest_dir: &Path) -> 
     Ok(())
 }
 
-fn extract_tar<R: std::io::Read>(reader: R, dest_dir: &Path) -> Result<(), String> {
+fn extract_tar<R: std::io::Read>(
+    reader: R,
+    dest_dir: &Path,
+    limits: ArchiveExtractionLimits,
+) -> Result<(), String> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive
         .entries()
         .map_err(|e| format!("读取 TAR 条目失败: {e}"))?;
 
-    for entry_res in entries {
+    let mut total_uncompressed = 0u64;
+    for (index, entry_res) in entries.enumerate() {
+        if index >= limits.max_entries {
+            return Err(format!("TAR 条目数量超出上限 ({})", limits.max_entries));
+        }
         let mut entry = entry_res.map_err(|e| format!("解压 TAR 条目异常: {e}"))?;
+        let entry_type = entry.header().entry_type();
+        if !entry_type.is_dir() && !entry_type.is_file() && !entry_type.is_contiguous() {
+            return Err("TAR 包含链接或特殊文件条目，已拒绝解压".to_string());
+        }
+
         let path = entry
             .path()
             .map_err(|e| format!("读取 TAR 路径失败: {e}"))?
             .into_owned();
 
-        // 强安全校验：严禁绝对路径及 ParentDir / RootDir 路径穿透组件
         if path.is_absolute() {
             return Err("TAR 中包含非法绝对路径 (Tar Slip 攻击防护拦截)".to_string());
         }
@@ -152,18 +260,24 @@ fn extract_tar<R: std::io::Read>(reader: R, dest_dir: &Path) -> Result<(), Strin
             return Err("TAR 条目解压路径超出目标沙箱目录 (Tar Slip 攻击防护拦截)".to_string());
         }
 
-        if entry.header().entry_type().is_dir() {
-            std::fs::create_dir_all(&out_path)
-                .map_err(|e| format!("创建目录失败 {}: {e}", out_path.display()))?;
-        } else {
-            if let Some(parent) = out_path.parent().filter(|p| !p.exists()) {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("创建父目录失败 {}: {e}", parent.display()))?;
-            }
-            entry
-                .unpack(&out_path)
-                .map_err(|e| format!("解压文件失败 {}: {e}", out_path.display()))?;
+        let entry_size = if entry_type.is_dir() { 0 } else { entry.size() };
+        let projected_size = total_uncompressed
+            .checked_add(entry_size)
+            .ok_or_else(|| "TAR 解压体积溢出".to_string())?;
+        if projected_size > limits.max_uncompressed_bytes {
+            return Err(format!(
+                "TAR 解压体积超出上限 ({} bytes)",
+                limits.max_uncompressed_bytes
+            ));
         }
+
+        let unpacked = entry
+            .unpack_in(dest_dir)
+            .map_err(|e| format!("安全解压 TAR 条目失败 {}: {e}", out_path.display()))?;
+        if !unpacked {
+            return Err(format!("TAR 条目解压路径不安全: {}", out_path.display()));
+        }
+        total_uncompressed = projected_size;
     }
     Ok(())
 }
@@ -383,7 +497,7 @@ mod tests {
         }
 
         let cursor = std::io::Cursor::new(&tar_bytes);
-        let res = extract_tar(cursor, &temp);
+        let res = extract_tar(cursor, &temp, ArchiveExtractionLimits::unlimited());
         assert!(res.is_err(), "Must reject tar with absolute path");
         assert!(
             res.unwrap_err().contains("Tar Slip"),
@@ -406,12 +520,138 @@ mod tests {
         }
 
         let cursor = std::io::Cursor::new(&tar_bytes_slip);
-        let res_slip = extract_tar(cursor, &temp);
+        let res_slip = extract_tar(cursor, &temp, ArchiveExtractionLimits::unlimited());
         assert!(
             res_slip.is_err(),
             "Must reject tar with parent dir component"
         );
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_tar_rejects_links_before_writing_outside_destination() {
+        let root = std::env::temp_dir().join(format!(
+            "test_heimdall_tar_link_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let temp = root.join("sandbox");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut link_header = tar::Header::new_gnu();
+            link_header.set_entry_type(tar::EntryType::symlink());
+            link_header.set_size(0);
+            link_header.set_mode(0o777);
+            builder
+                .append_link(&mut link_header, "escape", &outside)
+                .unwrap();
+
+            let content = b"outside write";
+            let mut file_header = tar::Header::new_gnu();
+            file_header.set_path("escape/escaped.jpg").unwrap();
+            file_header.set_size(content.len() as u64);
+            file_header.set_mode(0o644);
+            file_header.set_cksum();
+            builder.append(&file_header, &content[..]).unwrap();
+            builder.finish().unwrap();
+        }
+
+        let error = extract_tar(
+            std::io::Cursor::new(tar_bytes),
+            &temp,
+            ArchiveExtractionLimits::unlimited(),
+        )
+        .unwrap_err();
+        assert!(error.contains("链接或特殊文件"));
+        assert!(!outside.exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_tar_extraction_enforces_uncompressed_size_limit() {
+        let root = std::env::temp_dir().join(format!(
+            "test_heimdall_tar_limits_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let sandbox = root.join("sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let content = [b'x'; 64];
+            let mut header = tar::Header::new_gnu();
+            header.set_path("person.jpg").unwrap();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append(&header, &content[..]).unwrap();
+            builder.finish().unwrap();
+        }
+
+        let error = extract_tar(
+            std::io::Cursor::new(tar_bytes),
+            &sandbox,
+            ArchiveExtractionLimits {
+                max_entries: 10,
+                max_uncompressed_bytes: 32,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("解压体积超出上限"));
+        assert!(!sandbox.join("person.jpg").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_zip_extraction_enforces_uncompressed_size_and_entry_limits() {
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "test_heimdall_zip_limits_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut archive = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut archive));
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            writer.start_file("person.jpg", options).unwrap();
+            writer.write_all(&[b'x'; 64]).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let size_error = extract_zip(
+            std::io::Cursor::new(archive.clone()),
+            &root,
+            ArchiveExtractionLimits {
+                max_entries: 10,
+                max_uncompressed_bytes: 32,
+            },
+        )
+        .unwrap_err();
+        assert!(size_error.contains("解压体积超出上限"));
+        assert!(!root.join("person.jpg").exists());
+
+        let entry_error = extract_zip(
+            std::io::Cursor::new(archive),
+            &root,
+            ArchiveExtractionLimits {
+                max_entries: 0,
+                max_uncompressed_bytes: 1024,
+            },
+        )
+        .unwrap_err();
+        assert!(entry_error.contains("条目数量超出上限"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

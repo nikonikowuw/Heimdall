@@ -45,6 +45,8 @@ export const WS_TOPICS = {
   RECOGNITION_MATCHED: 'recognition.matched',
   RECOGNITION_STATUS_CHANGED: 'recognition.status_changed',
   ALGORITHM_UPLOAD_PROGRESS: 'algorithm.upload.progress',
+  PERSONNEL_IMPORT_PROGRESS: 'personnel.import.progress',
+  PERSONNEL_IMPORT_FINISHED: 'personnel.import.finished',
 } as const
 
 export type WsTopic = (typeof WS_TOPICS)[keyof typeof WS_TOPICS]
@@ -410,6 +412,42 @@ export interface PersonnelDetail {
   faces: GalleryFace[]
   createdAt: number
   updatedAt: number
+}
+
+/** 批量导入单个候选人员的失败归因分类 */
+export type ImportFailureKind =
+  'transcode' | 'no_face' | 'quality_low' | 'clash' | 'conflict' | 'no_photo' | 'internal'
+
+/** 批量导入单个候选人员的失败明细 */
+export interface ImportFailureDetail {
+  name: string
+  subjectId: string
+  kind: ImportFailureKind
+  reason: string
+  skippedPhotos: number
+}
+
+export type ImportTaskStatus = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+/** 批量导入任务实时进度与终态报告 */
+export interface PersonnelImportProgress {
+  taskId: string
+  status: ImportTaskStatus
+  total: number
+  processed: number
+  succeeded: number
+  failed: number
+  currentName?: string | null
+  startedAt?: number | null
+  finishedAt?: number | null
+  failures: ImportFailureDetail[]
+  errorMessage?: string | null
+}
+
+export interface PersonnelImportAccepted {
+  taskId: string
+  total: number
+  progress: PersonnelImportProgress
 }
 
 export interface PersonnelStats {

@@ -320,3 +320,316 @@ async fn test_reextract_features_endpoints() {
     assert_eq!(json["code"], 0);
     assert_eq!(json["data"]["status"], "idle");
 }
+
+// ============================================================================
+// 人员批量导入
+// ============================================================================
+
+/// 构造 multipart 归档上传请求体
+fn multipart_archive_body(boundary: &str, filename: &str, payload: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(payload);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+/// 构造一个含指定文件的 ZIP 归档字节流
+fn build_zip_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut buffer = Vec::new();
+    {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, content) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(content).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+    buffer
+}
+
+fn import_request(token: &str, body: Vec<u8>, boundary: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/v1/personnel/import")
+        .header("Authorization", format!("Bearer {token}"))
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_import_status_starts_idle_with_empty_task_id() {
+    let (app, _state, token) = setup_test_app().await;
+
+    let req = Request::builder()
+        .uri("/api/v1/personnel/import/status")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 0);
+    assert_eq!(json["data"]["status"], "idle");
+    assert_eq!(json["data"]["taskId"], "");
+    assert_eq!(json["data"]["total"], 0);
+}
+
+#[tokio::test]
+async fn test_import_template_downloads_utf8_bom_csv() {
+    let (app, _state, token) = setup_test_app().await;
+
+    let req = Request::builder()
+        .uri("/api/v1/personnel/import/template")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get("content-type").unwrap(),
+        "text/csv; charset=utf-8"
+    );
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    // BOM 必须存在，否则 Windows Excel 打开会中文乱码
+    assert_eq!(&body[..3], &[0xEF, 0xBB, 0xBF]);
+    let text = std::str::from_utf8(&body[3..]).unwrap();
+    assert!(text.starts_with("name,subjectId,idCard,remark,photos"));
+}
+
+#[tokio::test]
+async fn test_import_rejects_unsupported_archive_format() {
+    let (app, _state, token) = setup_test_app().await;
+
+    let boundary = "----heimdall-import-bad";
+    let body = multipart_archive_body(boundary, "notes.txt", b"this is not an archive");
+    let res = app
+        .oneshot(import_request(&token, body, boundary))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 40001);
+    assert!(json["data"].is_null());
+}
+
+#[tokio::test]
+async fn test_import_accepts_multipart_body_larger_than_axum_default_limit() {
+    let (app, _state, token) = setup_test_app().await;
+
+    let payload = vec![b'x'; 3 * 1024 * 1024];
+    let boundary = "----heimdall-import-over-2mib";
+    let body = multipart_archive_body(boundary, "large.zip", &payload);
+    let res = app
+        .oneshot(import_request(&token, body, boundary))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 40001);
+    assert!(json["data"].is_null());
+}
+
+#[tokio::test]
+async fn test_import_rejects_archive_without_usable_content() {
+    let (app, _state, token) = setup_test_app().await;
+
+    let archive = build_zip_archive(&[("readme.txt", b"no images here")]);
+    let boundary = "----heimdall-import-empty";
+    let body = multipart_archive_body(boundary, "bundle.zip", &archive);
+    let res = app
+        .oneshot(import_request(&token, body, boundary))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 40001);
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("未找到可用的图片"),
+        "应给出可执行的解析失败提示, got {}",
+        json["message"]
+    );
+}
+
+#[tokio::test]
+async fn test_import_rejects_manifest_missing_name_column() {
+    let (app, _state, token) = setup_test_app().await;
+
+    let archive = build_zip_archive(&[
+        ("manifest.csv", b"idCard,remark\nID-1,bad header\n"),
+        ("a.jpg", b"fake"),
+    ]);
+    let boundary = "----heimdall-import-badheader";
+    let body = multipart_archive_body(boundary, "bundle.zip", &archive);
+    let res = app
+        .oneshot(import_request(&token, body, boundary))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["message"].as_str().unwrap().contains("name"));
+}
+
+#[tokio::test]
+async fn test_import_without_algorithm_package_reports_not_loaded() {
+    let (app, _state, token) = setup_test_app().await;
+
+    // 归档本身合法，但系统未加载人脸算法包 → 503，且不得预占维护闸门
+    let archive = build_zip_archive(&[("张三.jpg", b"fake-image")]);
+    let boundary = "----heimdall-import-noalgo";
+    let body = multipart_archive_body(boundary, "bundle.zip", &archive);
+    let res = app
+        .oneshot(import_request(&token, body, boundary))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 50301);
+}
+
+#[tokio::test]
+async fn test_import_cancel_without_running_task_is_rejected() {
+    let (app, _state, token) = setup_test_app().await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/personnel/import/cancel")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 40001);
+}
+
+#[tokio::test]
+async fn test_import_is_mutually_exclusive_with_reextract() {
+    let (app, state, token) = setup_test_app().await;
+
+    // 模拟全量特征重提取已持有维护闸门（绕过算法就绪前置条件）
+    let guard = state
+        .maintenance_gate
+        .acquire(api::MaintenanceTaskKind::Reextract)
+        .unwrap();
+
+    let archive = build_zip_archive(&[("张三.jpg", b"fake-image")]);
+    let boundary = "----heimdall-import-exclusive";
+    let body = multipart_archive_body(boundary, "bundle.zip", &archive);
+    let res = app
+        .oneshot(import_request(&token, body, boundary))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 40902);
+    // 冲突信息需指明当前占用者，避免管理员无从判断该等谁
+    assert!(json["message"].as_str().unwrap().contains("特征重新提取"));
+
+    drop(guard);
+}
+
+#[tokio::test]
+async fn test_import_zip_slip_payload_is_rejected() {
+    let (app, _state, token) = setup_test_app().await;
+
+    // 构造带 ../ 穿透的 ZIP：解压必须被安全原语拦截
+    let mut buffer = Vec::new();
+    {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        writer.start_file("../escaped.jpg", options).unwrap();
+        writer.write_all(b"evil").unwrap();
+        writer.finish().unwrap();
+    }
+
+    let boundary = "----heimdall-import-zipslip";
+    let body = multipart_archive_body(boundary, "evil.zip", &buffer);
+    let res = app
+        .oneshot(import_request(&token, body, boundary))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["message"].as_str().unwrap().contains("Slip"),
+        "应明确报告路径穿透拦截, got {}",
+        json["message"]
+    );
+}
+
+#[tokio::test]
+async fn test_import_release_gate_after_rejected_request() {
+    let (app, state, token) = setup_test_app().await;
+
+    let archive = build_zip_archive(&[("readme.txt", b"nothing")]);
+    let boundary = "----heimdall-import-gate-release";
+    let body = multipart_archive_body(boundary, "bundle.zip", &archive);
+    let res = app
+        .oneshot(import_request(&token, body, boundary))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // 被拒绝的请求必须释放闸门，否则后续导入/重提取将永久被阻塞
+    assert_eq!(
+        state.maintenance_gate.current(),
+        None,
+        "解析失败路径不得残留维护闸门占用"
+    );
+}

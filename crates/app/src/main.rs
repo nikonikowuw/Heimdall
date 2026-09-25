@@ -309,6 +309,9 @@ async fn main() -> Result<()> {
         tracing::warn!(error = %e, "冷启动加载人脸底库内存索引失败");
     }
 
+    // 清理非正常掉电遗留的人员导入临时沙箱（任务不可接续，整体回收是安全的）
+    api::personnel_import::manager::sweep_orphan_sandboxes(state.import_manager.sandbox_root());
+
     // 启动后台航迹实时流分发与节流工作线程
     let track_svc = Arc::new(api::TrackDispatchService::from_state(&state));
     track_svc.start_worker();

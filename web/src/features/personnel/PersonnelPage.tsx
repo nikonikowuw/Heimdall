@@ -9,6 +9,7 @@ import {
   RefreshCw,
   RotateCw,
   Search,
+  UploadCloud,
   UserPlus,
   Users,
   X,
@@ -18,12 +19,19 @@ import { useTranslation } from 'react-i18next'
 import { personnelApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import { wsClient } from '@/lib/wsClient'
-import type { PersonnelDetail, PersonnelItem, PersonnelStats, ReextractProgress } from '@/types'
+import type {
+  PersonnelDetail,
+  PersonnelImportProgress,
+  PersonnelItem,
+  PersonnelStats,
+  ReextractProgress,
+} from '@/types'
 import { BatchDeleteModal } from './components/BatchDeleteModal'
 import { DeleteConfirmModal } from './components/DeleteConfirmModal'
 import { PersonnelBatchBar } from './components/PersonnelBatchBar'
 import { PersonnelCard, PersonnelCardSkeleton } from './components/PersonnelCard'
 import { PersonnelDetailDrawer } from './components/PersonnelDetailDrawer'
+import { PersonnelImportModal } from './components/PersonnelImportModal'
 import { PersonnelModal } from './components/PersonnelModal'
 import { PersonnelStatsGrid } from './components/PersonnelStatsGrid'
 import { PersonnelTable, PersonnelTableSkeleton } from './components/PersonnelTable'
@@ -32,6 +40,9 @@ import type { PersonnelNotice } from './components/PersonnelToast'
 import { ReextractModal } from './components/ReextractModal'
 
 const PAGE_SIZE_OPTIONS = [12, 24, 48, 96]
+
+/** 归档单包上限（MB）。与后端 MAX_IMPORT_ARCHIVE_BYTES 保持一致，仅在 UI 侧做前置提示。 */
+const MAX_IMPORT_ARCHIVE_MB = 100
 
 const HEADER_ACTION_CLASS =
   'inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border text-xs font-medium transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none active:scale-95 disabled:cursor-not-allowed disabled:opacity-40'
@@ -106,7 +117,16 @@ export function PersonnelPage(): React.ReactElement {
   // 是否拿到过至少一次有效统计：决定数值卡显示真实值还是占位符
   const [hasStats, setHasStats] = useState(false)
 
+  // 批量导入任务状态
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
+  const [importModalMode, setImportModalMode] = useState<'upload' | 'progress' | 'report'>('upload')
+  const [importProgress, setImportProgress] = useState<PersonnelImportProgress | null>(null)
+  const [isStartingImport, setIsStartingImport] = useState(false)
+  const [isCancellingImport, setIsCancellingImport] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
+
   const lastStatusRef = useRef<string | null>(null)
+  const lastImportStatusRef = useRef<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const closeDetailDrawer = useCallback(() => {
@@ -121,6 +141,19 @@ export function PersonnelPage(): React.ReactElement {
     setIsReextractModalOpen(true)
   }, [closeDetailDrawer])
 
+  const handleOpenImport = useCallback(() => {
+    closeDetailDrawer()
+    setImportError(null)
+    setImportModalMode(importProgress?.status === 'running' ? 'progress' : 'upload')
+    setIsImportModalOpen(true)
+  }, [closeDetailDrawer, importProgress?.status])
+
+  const handleOpenImportReport = useCallback(() => {
+    setImportError(null)
+    setImportModalMode('report')
+    setIsImportModalOpen(true)
+  }, [])
+
   const pushNotice = useCallback(
     (
       type: PersonnelNotice['type'],
@@ -128,23 +161,31 @@ export function PersonnelPage(): React.ReactElement {
       message: string,
       action?: PersonnelNotice['action'],
     ) => {
+      let toastAction
+      if (action === 'report') {
+        toastAction = {
+          label: t('reextract.viewReport', { defaultValue: '查看提取报告' }),
+          onClick: handleOpenReport,
+          primary: true,
+        }
+      } else if (action === 'importReport') {
+        toastAction = {
+          label: t('import.viewReport', { defaultValue: '查看导入报告' }),
+          onClick: handleOpenImportReport,
+          primary: true,
+        }
+      }
+
       toast.show({
         type,
         category: t('common:nav.personnel', { defaultValue: '人员底库' }),
         title,
         message,
         duration: 5000,
-        action:
-          action === 'report'
-            ? {
-                label: t('reextract.viewReport', { defaultValue: '查看报告' }),
-                onClick: handleOpenReport,
-                primary: true,
-              }
-            : undefined,
+        action: toastAction,
       })
     },
-    [handleOpenReport, t],
+    [handleOpenReport, handleOpenImportReport, t],
   )
 
   const handleSetViewMode = (mode: ViewMode) => {
@@ -508,6 +549,132 @@ export function PersonnelPage(): React.ReactElement {
     (reextractProgress.status === 'completed' || reextractProgress.status === 'failed') &&
     !isTaskRunning
 
+  // ── 批量导入：任务生命周期接入 ──────────────────────────────────────────
+
+  const handleCloseImportModal = useCallback(() => {
+    setIsImportModalOpen(false)
+    setImportError(null)
+  }, [])
+
+  const handleStartImport = useCallback(
+    async (file: File) => {
+      setIsStartingImport(true)
+      setImportError(null)
+      lastImportStatusRef.current = 'running'
+      try {
+        const accepted = await personnelApi.startImport(file)
+        setImportProgress(accepted.progress)
+        setImportModalMode('progress')
+      } catch (err: unknown) {
+        setImportError(err instanceof Error ? err.message : t('import.startFailed'))
+      } finally {
+        setIsStartingImport(false)
+      }
+    },
+    [t],
+  )
+
+  const handleCancelImport = useCallback(async () => {
+    setIsCancellingImport(true)
+    setImportError(null)
+    try {
+      const snapshot = await personnelApi.cancelImport()
+      setImportProgress(snapshot)
+    } catch (err: unknown) {
+      setImportError(err instanceof Error ? err.message : t('import.cancelFailed'))
+    } finally {
+      setIsCancellingImport(false)
+    }
+  }, [t])
+
+  // 终态提示由页面统一构造，保证首屏恢复与 WebSocket 推送两条路径文案一致
+  const buildImportNotice = useCallback(
+    (
+      data: PersonnelImportProgress,
+    ): { type: PersonnelNotice['type']; title: string; message: string } => {
+      if (data.status === 'cancelled') {
+        return {
+          type: 'info',
+          title: t('import.cancelledToastTitle'),
+          message: t('import.cancelledToastDesc', { succeeded: data.succeeded }),
+        }
+      }
+      if (data.status === 'failed') {
+        return {
+          type: 'error',
+          title: t('import.failedToastTitle'),
+          message: data.errorMessage || t('import.failedToastDesc'),
+        }
+      }
+      return {
+        type: data.failed > 0 ? 'warning' : 'success',
+        title: t('import.completedToastTitle'),
+        message: t('import.completedToastDesc', {
+          total: data.total,
+          succeeded: data.succeeded,
+          failed: data.failed,
+        }),
+      }
+    },
+    [t],
+  )
+
+  // 订阅导入任务终态广播；与轮询互补，保证后台运行也能即时通知
+  useEffect(() => {
+    const unsub = wsClient.subscribe<PersonnelImportProgress>(
+      'personnel.import.finished',
+      (data) => {
+        setImportProgress(data)
+        loadData()
+        const built = buildImportNotice(data)
+        pushNotice(built.type, built.title, built.message, 'importReport')
+      },
+    )
+    return unsub
+  }, [loadData, pushNotice, buildImportNotice])
+
+  // 首屏探测一次导入任务状态（支持刷新页面后恢复进度绑定）
+  useEffect(() => {
+    personnelApi
+      .getImportStatus()
+      .then((res) => setImportProgress(res))
+      .catch(() => {})
+  }, [])
+
+  // 运行中任务轮询（WebSocket 断线时仍能推进进度）
+  const isImportRunning = importProgress?.status === 'running'
+  useEffect(() => {
+    if (!isImportRunning) return
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await personnelApi.getImportStatus()
+        setImportProgress(res)
+        if (lastImportStatusRef.current === 'running' && res.status !== 'running') {
+          loadData()
+          const built = buildImportNotice(res)
+          pushNotice(built.type, built.title, built.message, 'importReport')
+        }
+        lastImportStatusRef.current = res.status
+      } catch {
+        // 轮询容错：下一次 tick 继续尝试
+      }
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [isImportRunning, loadData, pushNotice, buildImportNotice])
+
+  const importPercent = useMemo(() => {
+    if (!importProgress || importProgress.total <= 0) return 0
+    return Math.min(100, Math.round((importProgress.processed / importProgress.total) * 100))
+  }, [importProgress])
+
+  const hasImportReport =
+    importProgress !== null &&
+    (importProgress.status === 'completed' ||
+      importProgress.status === 'failed' ||
+      importProgress.status === 'cancelled') &&
+    !isImportRunning
+
   const renderListContent = (): React.ReactElement => {
     if (isLoading && items.length === 0) {
       if (viewMode === 'grid') {
@@ -722,6 +889,50 @@ export function PersonnelPage(): React.ReactElement {
             >
               <RotateCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
+
+            {/* 批量导入（运行中切换为进度入口） */}
+            <button
+              type="button"
+              onClick={handleOpenImport}
+              disabled={!stats.algoReady && !isImportRunning && hasStats}
+              title={isImportRunning ? t('import.runningShort') : t('import.entry')}
+              aria-label={isImportRunning ? t('import.runningShort') : t('import.entry')}
+              className={`${HEADER_ACTION_CLASS} ${
+                isImportRunning
+                  ? 'border-[var(--status-info-border)] bg-[var(--status-info-soft)] text-[var(--status-info)] hover:bg-[var(--status-info-soft)]'
+                  : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]'
+              }`}
+            >
+              <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">
+                {isImportRunning
+                  ? t('import.runningBadge', { percent: importPercent })
+                  : t('import.entry')}
+              </span>
+            </button>
+
+            {/* 最近一次导入报告入口 */}
+            {hasImportReport && importProgress && (
+              <button
+                type="button"
+                onClick={handleOpenImportReport}
+                title={t('import.viewReportTooltip')}
+                className={`${HEADER_ACTION_CLASS} ${
+                  importProgress.failed > 0
+                    ? 'border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] text-[var(--status-warning)] hover:bg-[var(--status-warning-soft)]'
+                    : 'border-[var(--status-success-border)] bg-[var(--status-success-soft)] text-[var(--status-success)] hover:bg-[var(--status-success-soft)]'
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="hidden sm:inline">
+                  {t('import.lastReportBadge', {
+                    succeeded: importProgress.succeeded,
+                    failed: importProgress.failed,
+                  })}
+                </span>
+                <span className="sm:hidden">{t('import.viewReport')}</span>
+              </button>
+            )}
 
             {/* 录入新人员 */}
             <button
@@ -988,6 +1199,19 @@ export function PersonnelPage(): React.ReactElement {
         error={reextractError}
         onClose={handleCloseReextractModal}
         onConfirm={handleConfirmReextract}
+      />
+
+      <PersonnelImportModal
+        isOpen={isImportModalOpen}
+        progress={importProgress}
+        isStarting={isStartingImport}
+        isCancelling={isCancellingImport}
+        error={importError}
+        maxArchiveMb={MAX_IMPORT_ARCHIVE_MB}
+        initialMode={importModalMode}
+        onClose={handleCloseImportModal}
+        onStart={(file) => void handleStartImport(file)}
+        onCancelTask={() => void handleCancelImport()}
       />
     </div>
   )

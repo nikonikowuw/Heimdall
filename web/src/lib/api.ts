@@ -28,6 +28,8 @@ import type {
   OperationalLogQuery,
   PaginatedAlgorithms,
   PersonnelDetail,
+  PersonnelImportAccepted,
+  PersonnelImportProgress,
   PersonnelItem,
   PersonnelStats,
   RecognitionRecord,
@@ -539,6 +541,63 @@ export const personnelApi = {
       {},
     )
   },
+
+  /** 上传归档包并启动批量导入后台任务 */
+  startImport(file: File): Promise<PersonnelImportAccepted> {
+    const formData = new FormData()
+    formData.append('file', file)
+    return postFormData<PersonnelImportAccepted>('/personnel/import', formData)
+  },
+
+  /** 查询当前或最近一次批量导入任务的进度与报告 */
+  getImportStatus(): Promise<PersonnelImportProgress> {
+    return api.get<PersonnelImportProgress>('/personnel/import/status')
+  },
+
+  /** 中止正在执行的批量导入任务 */
+  cancelImport(): Promise<PersonnelImportProgress> {
+    return api.post<PersonnelImportProgress>('/personnel/import/cancel', {})
+  },
+
+  /** 下载标准人员清单模板（带鉴权的 blob 下载） */
+  downloadImportTemplate(): Promise<Blob> {
+    return requestBlob('/personnel/import/template')
+  },
+}
+
+/**
+ * 需要鉴权的二进制下载；失败时按共享错误信封解析出可读原因。
+ *
+ * 与 `request` 分离是因为下载响应体是文件流而非 JSON 信封，
+ * 但 401 登出与错误归一化必须与其余端点保持一致。
+ */
+async function requestBlob(endpoint: string): Promise<Blob> {
+  const token = useAuthStore.getState().token
+  const lang = (i18n && i18n.language) || 'zh-CN'
+  const headers: Record<string, string> = { 'Accept-Language': lang }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  const response = await fetch(`${BASE_URL}${endpoint}`, { headers })
+
+  if (response.status === 401) {
+    useAuthStore.getState().logout()
+  }
+
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '')
+    let message = `下载失败 (HTTP ${response.status})`
+    try {
+      const parsed = JSON.parse(raw) as { message?: string }
+      if (parsed.message) message = parsed.message
+    } catch {
+      // 非 JSON 响应体保留默认提示
+    }
+    throw new ApiError(message, response.status)
+  }
+
+  return response.blob()
 }
 
 function postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
@@ -561,10 +620,14 @@ function postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
       // 网络响应只在 API 边界解析一次，避免先 json() 后 text() 消费同一个 body。
       data = JSON.parse(raw) as { code: number; message?: string; data: T }
     } catch {
-      throw new Error(raw || `Request failed with status ${res.status} (${res.statusText})`)
+      throw new ApiError(
+        raw || `Request failed with status ${res.status} (${res.statusText})`,
+        res.status,
+      )
     }
     if (!res.ok || data.code !== 0) {
-      throw new Error(data.message || 'Request failed')
+      // 携带业务码，调用方按码分支而非匹配消息文本
+      throw new ApiError(data.message || 'Request failed', data.code)
     }
     return data.data
   })

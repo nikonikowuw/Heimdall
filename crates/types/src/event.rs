@@ -25,3 +25,12 @@ pub const TOPIC_RECOGNITION_STATUS_CHANGED: &str = "recognition.status_changed";
 
 /// 算法包上传沙箱自检的逐步进度广播事件
 pub const TOPIC_ALGORITHM_UPLOAD_PROGRESS: &str = "algorithm.upload.progress";
+
+/// 人员批量导入任务的实时进度广播事件（运行中稀疏节流）
+pub const TOPIC_PERSONNEL_IMPORT_PROGRESS: &str = "personnel.import.progress";
+
+/// 人员批量导入任务抵达终态（完成/失败/中止）的广播事件
+pub const TOPIC_PERSONNEL_IMPORT_FINISHED: &str = "personnel.import.finished";
+
+/// 全量底库人脸特征重新提取任务抵达终态的广播事件
+pub const TOPIC_PERSONNEL_REEXTRACT_FINISHED: &str = "personnel.reextract.finished";
