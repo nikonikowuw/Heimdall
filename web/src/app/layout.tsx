@@ -11,6 +11,7 @@ import {
   Settings,
   Sliders,
   Sun,
+  UserCog,
   Users,
   Video,
 } from 'lucide-react'
@@ -22,7 +23,9 @@ import { LocaleDropdown } from '@/components/LocaleDropdown'
 import { ShortcutsModal } from '@/components/ShortcutsModal'
 import { Toaster } from '@/components/ui/Toast'
 import { RouteFallback } from '@/components/ui/RouteFallback'
+import { RailButton } from '@/components/ui/RailButton'
 import { LoginPage } from '@/features/auth/LoginPage'
+import { AccountPanelDrawer } from '@/features/auth/AccountPanelDrawer'
 import {
   AlarmsPage,
   AlgorithmsPage,
@@ -88,17 +91,29 @@ export function Layout(): React.ReactElement {
   const [currentTab, setCurrentTab] = useState<NavTab>('live')
   const [targetTaskCameraId, setTargetTaskCameraId] = useState<string | null>(null)
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
+  const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false)
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement | null>(null)
+  const userButtonRef = useRef<HTMLButtonElement | null>(null)
   const { isDark, toggleTheme } = useTheme()
   const reducedMotion = useReducedMotion()
 
-  useDismissStack(userMenuOpen, () => setUserMenuOpen(false), { priority: 5 })
+  // 菜单关闭后把焦点归还到触发按钮，形成键盘闭环（WCAG 2.2 Focus Not Obscured）；
+  // 点击他处不夺还焦点，用户已把意图指向别处。
+  const closeUserMenu = (restoreFocus = false) => {
+    setUserMenuOpen(false)
+    if (restoreFocus) {
+      userButtonRef.current?.focus({ preventScroll: true })
+    }
+  }
+
+  useDismissStack(userMenuOpen, () => closeUserMenu(true), { priority: 5 })
 
   useEffect(() => {
     if (!userMenuOpen) return
     const handleClickOutside = (e: MouseEvent) => {
+      // 点击他处关闭时不抢焦点：用户已把意图指向别处
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
         setUserMenuOpen(false)
       }
@@ -107,6 +122,42 @@ export function Layout(): React.ReactElement {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside)
     }
+  }, [userMenuOpen])
+
+  // 菜单打开后将焦点送入首项，并监听方向键 / Home / End 兑现 role="menu" 的键盘契约
+  useEffect(() => {
+    if (!userMenuOpen) return
+    const panel = userMenuRef.current?.querySelector<HTMLElement>('[data-user-menu]')
+    if (!panel) return
+    const items = [...panel.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    items[0]?.focus({ preventScroll: true })
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (items.length === 0) return
+      const current = items.indexOf(document.activeElement as HTMLElement)
+      let next = current
+      switch (event.key) {
+        case 'ArrowDown':
+          next = current < 0 ? 0 : (current + 1) % items.length
+          break
+        case 'ArrowUp':
+          next = current <= 0 ? items.length - 1 : current - 1
+          break
+        case 'Home':
+          next = 0
+          break
+        case 'End':
+          next = items.length - 1
+          break
+        default:
+          return
+      }
+      event.preventDefault()
+      items[next]?.focus({ preventScroll: true })
+    }
+
+    panel.addEventListener('keydown', handleKeyDown)
+    return () => panel.removeEventListener('keydown', handleKeyDown)
   }, [userMenuOpen])
 
   // 鉴权通过后预取默认落地页，让工作区入场动画期间完成 chunk 下载，
@@ -163,7 +214,7 @@ export function Layout(): React.ReactElement {
       case 'oplog':
         return <OplogPage />
       case 'system':
-        return <SettingsPage onOpenPasswordModal={() => setIsPasswordModalOpen(true)} />
+        return <SettingsPage />
     }
   }
 
@@ -221,7 +272,7 @@ export function Layout(): React.ReactElement {
                   type="button"
                   onClick={() => setCurrentTab('live')}
                   title="Heimdall"
-                  className="flex h-10 w-10 items-center justify-center rounded-xl transition-transform hover:scale-105 focus:outline-none active:scale-95"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] active:scale-95"
                 >
                   <img
                     src={isDark ? '/favicon-dark.svg' : '/favicon-light.svg'}
@@ -231,23 +282,23 @@ export function Layout(): React.ReactElement {
                 </button>
 
                 {/* 导航菜单 */}
-                <nav className="flex flex-col gap-1.5">
+                <nav
+                  aria-label={t('common:nav.primary', { defaultValue: '主导航' })}
+                  className="flex flex-col gap-1.5"
+                >
                   {NAV_ITEMS.map(({ tab, icon: Icon, labelKey }) => {
                     const isActive = currentTab === tab
                     return (
-                      <button
+                      <RailButton
                         key={tab}
                         onClick={() => setCurrentTab(tab)}
-                        title={t(labelKey, { defaultValue: tab })}
-                        className={`nav-btn relative ${
-                          isActive
-                            ? 'text-white'
-                            : 'text-[var(--text-secondary)] hover:text-[var(--accent)]'
-                        }`}
-                      >
-                        {isActive && <NavActiveIndicator reducedMotion={reducedMotion} />}
-                        <Icon className="relative z-10 h-5 w-5" />
-                      </button>
+                        active={isActive}
+                        icon={<Icon className="h-5 w-5" />}
+                        label={t(labelKey, { defaultValue: tab })}
+                        activeIndicator={
+                          isActive ? <NavActiveIndicator reducedMotion={reducedMotion} /> : null
+                        }
+                      />
                     )
                   })}
                 </nav>
@@ -257,47 +308,47 @@ export function Layout(): React.ReactElement {
               <div className="flex flex-col items-center gap-2">
                 <LocaleDropdown variant="icon" placement="right-bottom" />
 
-                <button
+                <RailButton
                   onClick={toggleTheme}
-                  title={isDark ? t('theme.toLight') : t('theme.toDark')}
-                  className="nav-btn"
-                >
-                  {isDark ? (
-                    <Sun className="h-5 w-5 text-amber-400" />
-                  ) : (
-                    <Moon className="h-5 w-5" />
-                  )}
-                </button>
+                  icon={
+                    isDark ? (
+                      <Sun className="h-5 w-5 text-amber-400" />
+                    ) : (
+                      <Moon className="h-5 w-5" />
+                    )
+                  }
+                  label={isDark ? t('theme.toLight') : t('theme.toDark')}
+                />
 
-                <button
+                <RailButton
                   onClick={() => setIsShortcutsOpen(true)}
-                  title={`${t('shortcuts.title')} (?)`}
-                  className="nav-btn"
-                >
-                  <Keyboard className="h-5 w-5" />
-                </button>
+                  icon={<Keyboard className="h-5 w-5" />}
+                  label={t('shortcuts.title')}
+                />
 
                 <div className="my-1 h-px w-5 bg-[var(--border)]" />
 
-                <button
+                <RailButton
                   onClick={() => setCurrentTab('system')}
-                  title={t('nav.system', { defaultValue: '系统设置' })}
-                  className={`nav-btn relative ${
-                    currentTab === 'system'
-                      ? 'text-white'
-                      : 'text-[var(--text-secondary)] hover:text-[var(--accent)]'
-                  }`}
-                >
-                  {currentTab === 'system' && <NavActiveIndicator reducedMotion={reducedMotion} />}
-                  <Settings className="relative z-10 h-5 w-5" />
-                </button>
+                  active={currentTab === 'system'}
+                  icon={<Settings className="h-5 w-5" />}
+                  label={t('nav.system', { defaultValue: '系统设置' })}
+                  activeIndicator={
+                    currentTab === 'system' ? (
+                      <NavActiveIndicator reducedMotion={reducedMotion} />
+                    ) : null
+                  }
+                />
 
-                {/* 用户身份与快捷控制胶囊 */}
+                {/* 用户身份与账号菜单胶囊（用户域） */}
                 <div className="relative shrink-0" ref={userMenuRef}>
                   <button
+                    ref={userButtonRef}
                     type="button"
                     onClick={() => setUserMenuOpen((open) => !open)}
-                    aria-label={t('auth:logoutTooltip', { username: username || 'admin' })}
+                    aria-label={t('auth:accountMenu', { defaultValue: '账号菜单' })}
+                    aria-expanded={userMenuOpen}
+                    aria-haspopup="menu"
                     title={username || 'admin'}
                     className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--accent-soft)] to-[var(--bg-secondary)] font-mono text-xs font-bold text-[var(--text-primary)] shadow-2xs transition-all hover:border-[var(--accent)] hover:shadow-xs focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                   >
@@ -310,7 +361,9 @@ export function Layout(): React.ReactElement {
 
                   {userMenuOpen && (
                     <div
+                      data-user-menu
                       role="menu"
+                      aria-label={t('auth:accountMenu', { defaultValue: '账号菜单' })}
                       className="lens-glass animate-in fade-in slide-in-from-left-2 absolute bottom-0 left-full z-50 ml-3 min-w-[210px] overflow-hidden rounded-2xl border border-[var(--border)] p-2 shadow-2xl duration-150"
                     >
                       {/* 用户档案信息标牌 */}
@@ -333,31 +386,31 @@ export function Layout(): React.ReactElement {
 
                       <div className="my-1 border-t border-[var(--border)]" />
 
-                      {/* 快捷操作 */}
+                      {/* 快捷操作：账号域三项（账号面板 / 改密 / 退出） */}
                       <button
                         type="button"
                         role="menuitem"
                         onClick={() => {
-                          setUserMenuOpen(false)
-                          setIsPasswordModalOpen(true)
+                          closeUserMenu()
+                          setIsAccountPanelOpen(true)
                         }}
-                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                       >
-                        <KeyRound className="h-3.5 w-3.5 opacity-70" />
-                        <span>{t('auth:changePassword', { defaultValue: '修改密码' })}</span>
+                        <UserCog className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                        <span>{t('auth:accountMenuPanel', { defaultValue: '账号管理' })}</span>
                       </button>
 
                       <button
                         type="button"
                         role="menuitem"
                         onClick={() => {
-                          setUserMenuOpen(false)
-                          setCurrentTab('system')
+                          closeUserMenu()
+                          setIsPasswordModalOpen(true)
                         }}
-                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                       >
-                        <Settings className="h-3.5 w-3.5 opacity-70" />
-                        <span>{t('nav.system', { defaultValue: '系统设置' })}</span>
+                        <KeyRound className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                        <span>{t('auth:changePassword', { defaultValue: '修改密码' })}</span>
                       </button>
 
                       <div className="my-1 border-t border-[var(--border)]" />
@@ -366,10 +419,10 @@ export function Layout(): React.ReactElement {
                         type="button"
                         role="menuitem"
                         onClick={() => {
-                          setUserMenuOpen(false)
+                          closeUserMenu()
                           handleLogout()
                         }}
-                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-soft)]"
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-soft)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                       >
                         <LogOut className="h-3.5 w-3.5 opacity-80" />
                         <span>
@@ -402,6 +455,12 @@ export function Layout(): React.ReactElement {
             <ChangePasswordModal
               isOpen={isPasswordModalOpen}
               onClose={() => setIsPasswordModalOpen(false)}
+            />
+            {/* 账号面板抽屉（用户域唯一入口） */}
+            <AccountPanelDrawer
+              isOpen={isAccountPanelOpen}
+              onClose={() => setIsAccountPanelOpen(false)}
+              onOpenPasswordModal={() => setIsPasswordModalOpen(true)}
             />
             {/* 快捷键速查面板 */}
             <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />

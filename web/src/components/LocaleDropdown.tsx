@@ -13,6 +13,8 @@ interface LocaleDropdownProps {
   placement?: 'bottom-right' | 'top-right' | 'right-bottom'
   compact?: boolean
   variant?: 'pill' | 'icon'
+  /** 侧栏展开态：图标与语言缩写改为整行布局，与同一列的其他入口对齐 */
+  expanded?: boolean
 }
 
 export const LocaleDropdown: React.FC<LocaleDropdownProps> = ({
@@ -72,13 +74,14 @@ export const LocaleDropdown: React.FC<LocaleDropdownProps> = ({
           onClick={() => setOpen((prev) => !prev)}
           aria-expanded={open}
           aria-haspopup="listbox"
-          title={`当前语言: ${LOCALE_LABELS[locale]} (点击切换)`}
-          className={`flex h-10 w-10 flex-col items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] focus:outline-none ${
-            open ? 'bg-[var(--accent-soft)] text-[var(--accent)] ring-1 ring-[var(--ring)]' : ''
-          }`}
+          aria-label={LOCALE_LABELS[locale]}
+          className={`nav-btn${open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : ''}`}
         >
           <Globe className="h-4 w-4" />
           <span className="font-mono text-[9px] font-bold uppercase">{shortLabel}</span>
+          <span className="nav-tooltip" aria-hidden="true">
+            {LOCALE_LABELS[locale]}
+          </span>
         </button>
       ) : (
         <button

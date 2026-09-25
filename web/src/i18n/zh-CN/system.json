@@ -9,7 +9,6 @@
   "loading": "加载中...",
   "tabs": {
     "overview": "系统概览",
-    "account": "账号与安全",
     "network": "网络/服务",
     "storage": "存储策略",
     "time": "对时服务",
@@ -173,16 +172,6 @@
       "board": "主板",
       "other": "其他"
     }
-  },
-  "account": {
-    "title": "账号与安全",
-    "currentAccount": "当前账号",
-    "username": "用户名",
-    "createdAt": "创建时间",
-    "updatedAt": "更新时间",
-    "changePassword": "修改密码",
-    "activeSession": "在线会话活跃",
-    "subtitle": "管理当前管理员账号"
   },
   "storage": {
     "title": "存储与保留策略",

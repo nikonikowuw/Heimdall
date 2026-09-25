@@ -21,16 +21,23 @@ export const TAB_SHORTCUT_MAP: Record<string, NavTab> = {
   '8': 'system',
 }
 
+/**
+ * 输入类控件标签判定。
+ *
+ * 按 tagName 结构判定而非 `instanceof`：后者依赖全局构造函数，
+ * 在无 HTMLElement 全局的测试环境（node）会抛 ReferenceError，
+ * 且跨 realm（如 iframe）元素会误判为不可编辑。
+ * 同一策略见 use-dismiss-stack.ts 的 editableFocusTarget。
+ */
+const EDITABLE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
+
 function isEditableElement(element: Element | null): boolean {
   if (!element) return false
-  if (
-    element instanceof HTMLInputElement ||
-    element instanceof HTMLTextAreaElement ||
-    element instanceof HTMLSelectElement
-  ) {
+  const tagName = (element as { tagName?: unknown }).tagName
+  if (typeof tagName === 'string' && EDITABLE_TAGS.has(tagName.toUpperCase())) {
     return true
   }
-  return element instanceof HTMLElement && element.isContentEditable
+  return (element as HTMLElement).isContentEditable === true
 }
 
 /**

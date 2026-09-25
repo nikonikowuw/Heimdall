@@ -7,7 +7,8 @@
     "personnel": "人員底庫",
     "alarms": "告警事件",
     "oplog": "日誌中心",
-    "system": "系統設定"
+    "system": "系統設定",
+    "primary": "主導覽"
   },
   "shortcuts": {
     "title": "鍵盤快捷鍵",

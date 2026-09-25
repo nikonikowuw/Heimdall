@@ -7,7 +7,8 @@
     "personnel": "人员底库",
     "alarms": "告警事件",
     "oplog": "日志中心",
-    "system": "系统设置"
+    "system": "系统设置",
+    "primary": "主导航"
   },
   "shortcuts": {
     "title": "键盘快捷键",

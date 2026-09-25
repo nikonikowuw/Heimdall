@@ -9,7 +9,6 @@
   "loading": "Loading...",
   "tabs": {
     "overview": "Overview",
-    "account": "Account",
     "network": "Network",
     "storage": "Storage",
     "time": "Time Sync",
@@ -121,16 +120,6 @@
       "board": "Board",
       "other": "Other"
     }
-  },
-  "account": {
-    "title": "Account & Security",
-    "currentAccount": "Current Account",
-    "username": "Username",
-    "createdAt": "Created At",
-    "updatedAt": "Updated At",
-    "changePassword": "Change Password",
-    "activeSession": "Active Session",
-    "subtitle": "Manage the current administrator account"
   },
   "network": {
     "title": "Network / Service",

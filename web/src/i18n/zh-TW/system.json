@@ -9,7 +9,6 @@
   "loading": "載入中...",
   "tabs": {
     "overview": "系統概覽",
-    "account": "帳號與安全",
     "network": "網路/服務",
     "storage": "儲存策略",
     "time": "對時服務",
@@ -47,16 +46,6 @@
     "subtitle": "設備運行狀態與資源概覽",
     "thermal": "溫度狀態",
     "topProcesses": "行程資源佔用排行"
-  },
-  "account": {
-    "title": "帳號與安全",
-    "currentAccount": "目前帳號",
-    "username": "使用者名稱",
-    "createdAt": "建立時間",
-    "updatedAt": "更新時間",
-    "changePassword": "修改密碼",
-    "activeSession": "在線會話活躍",
-    "subtitle": "管理目前管理員帳號"
   },
   "network": {
     "title": "網路/服務",

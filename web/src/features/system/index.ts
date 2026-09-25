@@ -1,6 +1,5 @@
 export { SettingsPage } from './SettingsPage'
 export { SystemOverview } from './SystemOverview'
-export { AccountSecurity } from './AccountSecurity'
 export { NetworkSettings } from './NetworkSettings'
 export { StorageSettings } from './StorageSettings'
 export { TimeSettings } from './TimeSettings'

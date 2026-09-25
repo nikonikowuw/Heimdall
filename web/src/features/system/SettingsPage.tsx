@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import {
   Settings,
-  User,
   Wifi,
   HardDrive,
   Clock,
@@ -13,13 +12,12 @@ import {
   Radio,
 } from 'lucide-react'
 import { SystemOverview } from './SystemOverview'
-import { AccountSecurity } from './AccountSecurity'
 import { NetworkSettings } from './NetworkSettings'
 import { StorageSettings } from './StorageSettings'
 import { TimeSettings } from './TimeSettings'
 import { Gb28181Settings } from './Gb28181Settings'
 
-type SettingsTab = 'overview' | 'account' | 'network' | 'storage' | 'time' | 'gb28181'
+type SettingsTab = 'overview' | 'network' | 'storage' | 'time' | 'gb28181'
 
 const TABS: {
   key: SettingsTab
@@ -33,18 +31,13 @@ const TABS: {
     labelKey: 'tabs.overview',
     descKey: 'tabs.overviewDesc',
   },
-  { key: 'account', icon: User, labelKey: 'tabs.account', descKey: 'tabs.accountDesc' },
   { key: 'network', icon: Wifi, labelKey: 'tabs.network', descKey: 'tabs.networkDesc' },
   { key: 'storage', icon: HardDrive, labelKey: 'tabs.storage', descKey: 'tabs.storageDesc' },
   { key: 'time', icon: Clock, labelKey: 'tabs.time', descKey: 'tabs.timeDesc' },
   { key: 'gb28181', icon: Radio, labelKey: 'tabs.gb28181', descKey: 'tabs.gb28181Desc' },
 ]
 
-interface SettingsPageProps {
-  onOpenPasswordModal?: () => void
-}
-
-export function SettingsPage({ onOpenPasswordModal }: SettingsPageProps): React.ReactElement {
+export function SettingsPage(): React.ReactElement {
   const { t } = useTranslation('system')
   const [activeTab, setActiveTab] = useState<SettingsTab>('overview')
 
@@ -103,7 +96,6 @@ export function SettingsPage({ onOpenPasswordModal }: SettingsPageProps): React.
       <main className="flex-1 overflow-y-auto pr-1">
         <div className="pb-8">
           {activeTab === 'overview' && <SystemOverview />}
-          {activeTab === 'account' && <AccountSecurity onOpenPasswordModal={onOpenPasswordModal} />}
           {activeTab === 'network' && <NetworkSettings />}
           {activeTab === 'storage' && <StorageSettings />}
           {activeTab === 'time' && <TimeSettings />}
