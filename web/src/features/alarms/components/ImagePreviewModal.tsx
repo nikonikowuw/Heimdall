@@ -4,6 +4,7 @@ import { Download, ExternalLink, Maximize2, X } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { useFocusTrap } from '@/hooks/use-focus-trap'
 import { motionTokens } from '@/lib/motionTokens'
 import { useImageZoomPan } from '../hooks/useImageZoomPan'
 import { ZoomControls } from './ZoomControls'
@@ -49,9 +50,13 @@ export function ImagePreviewModal({
 }: ImagePreviewModalProps): React.ReactElement | null {
   const { t } = useTranslation('alarm')
   const shouldReduce = useReducedMotion()
+  const rootRef = useRef<HTMLDivElement>(null)
 
   // 设定优先级 20，确保在复核弹窗等其他 Modal 之上优先响应 ESC 退出
   useDismissStack(true, onClose, { priority: 20 })
+
+  // 灯箱需要焦点约束，否则 Tab 会穿透到背后的告警列表
+  useFocusTrap(true, rootRef)
 
   const downloadFilename = useMemo(
     () => deriveDownloadFilename(src, filename, title),
@@ -110,6 +115,11 @@ export function ImagePreviewModal({
 
   return createPortal(
     <motion.div
+      ref={rootRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title || t('modal.fullImage')}
+      tabIndex={-1}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -182,7 +192,7 @@ export function ImagePreviewModal({
             onClick={onClose}
             className="rounded-xl border border-white/10 bg-white/5 p-1.5 text-[var(--text-secondary)] transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
             title={`${t('modal.close')} (Esc)`}
-            aria-label="Close"
+            aria-label={t('modal.close', { defaultValue: '关闭' })}
           >
             <X className="h-4 w-4" />
           </button>

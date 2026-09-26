@@ -56,5 +56,9 @@
   "confirm": "Confirm",
   "refresh": "Refresh",
   "copy": "Copy",
-  "save": "Save"
+  "save": "Save",
+  "modal": {
+    "enterHintPrefix": "Press",
+    "enterHintSuffix": "to confirm"
+  }
 }

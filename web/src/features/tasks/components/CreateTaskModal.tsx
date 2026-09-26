@@ -3,7 +3,7 @@ import { AlertCircle, Check, Cpu, Loader2, Plus, Sliders, Sparkles, Video } from
 import { useTranslation } from 'react-i18next'
 import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { SearchInput } from '@/components/ui/SearchInput'
-import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
 import type { AlgorithmItem, Camera, TaskConfigDto } from '@/types'
 import { extractTargetClasses } from '../algoMetadata'
@@ -158,8 +158,6 @@ export function CreateTaskModal({
       setTaskName(formatDefaultTaskName(defaultCam))
     }
   }
-
-  useDismissStack(isOpen, onClose, { disabled: isSubmitting })
 
   if (!isOpen) return null
 
@@ -561,37 +559,31 @@ export function CreateTaskModal({
   }
 
   return (
-    <div
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !isSubmitting) {
-          onClose()
-        }
-      }}
-      className="modal-backdrop"
+    <ModalOverlay
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel={tc('createTaskTitle', { defaultValue: '创建布防任务' })}
+      ariaLabelledBy="create-task-title"
+      ariaDescribedBy="create-task-description"
+      surface="solid"
+      closeDisabled={isSubmitting}
+      panelClassName="modal-surface--form p-0"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-task-title"
-        aria-describedby="create-task-description"
-        className="modal-surface modal-surface--form"
-      >
-        <ModalFormHeader
-          icon={Sliders}
-          title={t('createTaskTitle', { defaultValue: '创建 AI 分析与布防任务' })}
-          titleId="create-task-title"
-          description={t('quickCreateSubtitle', {
-            defaultValue: '选择通道与算法即可建立任务，防区与识别参数稍后在布防工作台中微调。',
-          })}
-          descriptionId="create-task-description"
-          closeLabel={tc('close')}
-          onClose={onClose}
-          closeDisabled={isSubmitting}
-        />
+      <ModalFormHeader
+        icon={Sliders}
+        title={t('createTaskTitle', { defaultValue: '创建 AI 分析与布防任务' })}
+        titleId="create-task-title"
+        description={t('quickCreateSubtitle', {
+          defaultValue: '选择通道与算法即可建立任务，防区与识别参数稍后在布防工作台中微调。',
+        })}
+        descriptionId="create-task-description"
+        closeLabel={tc('close')}
+        onClose={onClose}
+        closeDisabled={isSubmitting}
+      />
 
-        {/* 正文 */}
-        {renderBody()}
-      </div>
-    </div>
+      {/* 正文 */}
+      {renderBody()}
+    </ModalOverlay>
   )
 }

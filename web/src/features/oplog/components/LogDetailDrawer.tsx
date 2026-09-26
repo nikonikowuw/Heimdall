@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { Camera, Check, Clock, Copy, Globe, Layers, Terminal, User, X } from 'lucide-react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { Camera, Check, Clock, Copy, Globe, Layers, Terminal, User } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
+import { CloseIconButton } from '@/components/ui/CloseIconButton'
 import { formatTimestamp } from '@/lib/time'
 import { copyToClipboard } from '@/lib/utils'
 import type { OperationLog, OperationalLog } from '@/types'
@@ -43,14 +43,10 @@ function parseQueryParams(queryStr?: string | null): Array<{ key: string; value:
 
 export function LogDetailDrawer({ log, onClose }: LogDetailDrawerProps): ReactElement {
   const { t, i18n } = useTranslation('oplog')
-  const reducedMotion = useReducedMotion()
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isOpen = Boolean(log)
-
-  // 浮层关闭统一走 dismiss 栈，避免裸监听穿透关闭外层弹层
-  useDismissStack(isOpen, onClose)
 
   // 复制反馈定时器只负责自身清理，与抽屉开关解耦
   useEffect(() => {
@@ -76,124 +72,98 @@ export function LogDetailDrawer({ log, onClose }: LogDetailDrawerProps): ReactEl
   }
 
   return (
-    <AnimatePresence>
-      {isOpen && log && (
-        <div className="modal-layer modal-layer--drawer">
-          {/* 背景遮罩 */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18 }}
-            onClick={onClose}
-            className="modal-scrim"
-            aria-hidden="true"
-          />
-
-          {/* 侧滑抽屉主体 */}
-          <motion.div
-            role="dialog"
-            aria-modal="true"
-            aria-label={t('inspector.title')}
-            initial={reducedMotion ? false : { x: '100%' }}
-            animate={{ x: 0 }}
-            exit={reducedMotion ? undefined : { x: '100%' }}
-            transition={{ type: 'spring', damping: 30, stiffness: 350 }}
-            className="modal-surface modal-surface--drawer modal-surface--drawer-wide"
-          >
-            {/* 抽屉顶部 Header */}
-            <header className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                  <Terminal className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2 className="truncate text-sm font-semibold text-[var(--text-primary)]">
-                      {log.kind === 'operation'
-                        ? t('inspector.operationAudit')
-                        : t('inspector.operationalEvent')}
-                    </h2>
-                    <span className="font-data rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
-                      #{log.data.id}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-                    {t('inspector.subtitle')}
-                  </p>
-                </div>
+    <ModalOverlay
+      isOpen={isOpen && Boolean(log)}
+      onClose={onClose}
+      ariaLabel={t('inspector.title')}
+      variant="drawer"
+      panelClassName="modal-surface--drawer-wide"
+    >
+      {log && (
+        <>
+          {/* 抽屉顶部 Header */}
+          <header className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                <Terminal className="h-4 w-4" />
               </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleCopy('all', JSON.stringify(log.data, null, 2))}
-                  aria-label={t('inspector.copyAll')}
-                  className="reticle-target flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-2.5 text-xs font-medium text-[var(--text-secondary)] shadow-xs transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                  title={t('inspector.copyAll')}
-                >
-                  {copiedKey === 'all' ? (
-                    <>
-                      <Check className="h-3.5 w-3.5 text-[var(--status-success)]" />
-                      <span className="text-[var(--status-success)]">
-                        {t('inspector.copiedAll')}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3.5 w-3.5" />
-                      <span>{t('inspector.copyAll')}</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onClose}
-                  aria-label={t('inspector.close')}
-                  className="reticle-target flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                    {log.kind === 'operation'
+                      ? t('inspector.operationAudit')
+                      : t('inspector.operationalEvent')}
+                  </h2>
+                  <span className="font-data rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
+                    #{log.data.id}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
+                  {t('inspector.subtitle')}
+                </p>
               </div>
-            </header>
-
-            {/* 抽屉内容滚动区域 */}
-            <div className="min-h-0 flex-1 overflow-y-auto p-5">
-              {log.kind === 'operation' ? (
-                <OperationLogInspector
-                  log={log.data}
-                  copiedKey={copiedKey}
-                  onCopy={handleCopy}
-                  lang={i18n.language}
-                />
-              ) : (
-                <OperationalLogInspector
-                  log={log.data}
-                  copiedKey={copiedKey}
-                  onCopy={handleCopy}
-                  lang={i18n.language}
-                />
-              )}
             </div>
 
-            {/* 底部 Footer */}
-            <footer className="flex shrink-0 items-center justify-between border-t border-[var(--border)] bg-[var(--bg-secondary)]/50 px-5 py-3">
-              <span className="text-[11px] text-[var(--text-muted)]">
-                {t('inspector.generalInfo')}
-              </span>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={onClose}
-                className="reticle-target rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-4 py-1.5 text-xs font-medium text-[var(--text-primary)] shadow-xs transition-colors hover:border-[var(--accent)]"
+                onClick={() => void handleCopy('all', JSON.stringify(log.data, null, 2))}
+                aria-label={t('inspector.copyAll')}
+                className="reticle-target flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-2.5 text-xs font-medium text-[var(--text-secondary)] shadow-xs transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                title={t('inspector.copyAll')}
               >
-                {t('inspector.close')}
+                {copiedKey === 'all' ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-[var(--status-success)]" />
+                    <span className="text-[var(--status-success)]">{t('inspector.copiedAll')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3.5 w-3.5" />
+                    <span>{t('inspector.copyAll')}</span>
+                  </>
+                )}
               </button>
-            </footer>
-          </motion.div>
-        </div>
+
+              <CloseIconButton onClick={onClose} label={t('inspector.close')} />
+            </div>
+          </header>
+
+          {/* 抽屉内容滚动区域 */}
+          <div className="min-h-0 flex-1 overflow-y-auto p-5">
+            {log.kind === 'operation' ? (
+              <OperationLogInspector
+                log={log.data}
+                copiedKey={copiedKey}
+                onCopy={handleCopy}
+                lang={i18n.language}
+              />
+            ) : (
+              <OperationalLogInspector
+                log={log.data}
+                copiedKey={copiedKey}
+                onCopy={handleCopy}
+                lang={i18n.language}
+              />
+            )}
+          </div>
+
+          {/* 底部 Footer */}
+          <footer className="flex shrink-0 items-center justify-between border-t border-[var(--border)] bg-[var(--bg-secondary)]/50 px-5 py-3">
+            <span className="text-[11px] text-[var(--text-muted)]">
+              {t('inspector.generalInfo')}
+            </span>
+            <button
+              type="button"
+              onClick={onClose}
+              className="reticle-target rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-4 py-1.5 text-xs font-medium text-[var(--text-primary)] shadow-xs transition-colors hover:border-[var(--accent)]"
+            >
+              {t('inspector.close')}
+            </button>
+          </footer>
+        </>
       )}
-    </AnimatePresence>
+    </ModalOverlay>
   )
 }
 

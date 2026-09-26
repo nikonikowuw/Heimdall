@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, Trash2, Check, RotateCcw } from 'lucide-reac
 import { systemApi } from '@/lib/system-api'
 import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
-import { ConfirmDialog } from './components/ConfirmDialog'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { MountBadge } from './components/MountBadge'
 import type { StorageConfig, StorageStatus, SnapshotSystemConfig } from '@/types/system'
 
@@ -613,15 +613,17 @@ export function StorageSettings(): React.ReactElement {
       </SettingsSection>
 
       <ConfirmDialog
-        open={showCleanupConfirm}
+        isOpen={showCleanupConfirm}
         title={t('storage.cleanupConfirmTitle', { defaultValue: '手动清理' })}
-        message={t('storage.cleanupConfirmMessage', {
+        description={t('storage.cleanupConfirmMessage', {
           defaultValue: '将按当前保留策略立即执行一次清理，删除过期的证据图片。此操作不可撤销。',
         })}
         confirmLabel={t('storage.cleanupNow', { defaultValue: '立即清理' })}
+        cancelLabel={t('common:cancel')}
         variant="warning"
+        showKeyboardHint
         onConfirm={handleCleanup}
-        onCancel={() => setShowCleanupConfirm(false)}
+        onClose={() => setShowCleanupConfirm(false)}
       />
     </div>
   )

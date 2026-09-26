@@ -8,6 +8,19 @@
 - 暴露给依赖数组或 memo 组件的函数用 `useCallback`，对象/数组按需用 `useMemo` 稳定。
 - hook 返回数据和行为，不返回 JSX；请求复用 [API client](../../../web/src/lib/api.ts)，不散落 URL。
 
+## 焦点与键盘职责划分
+
+浮层的横切关注点必须拆给两个共享 hook，不在业务组件里手写：
+
+| 关注点 | 归属 | 覆盖内容 |
+| --- | --- | --- |
+| 键盘语义与滚动锁 | [use-dismiss-stack](../../../web/src/hooks/use-dismiss-stack.ts) | ESC 按 LIFO + `priority` 弹栈、栈顶 `onConfirm` 接管 Enter、输入态让行、body 滚动锁 |
+| 焦点几何 | [use-focus-trap](../../../web/src/hooks/use-focus-trap.ts) | Tab 循环限制在容器内、首帧聚焦（可选推迟）、关闭后焦点归还 |
+
+- 只声明了 `aria-modal="true"` 而没有焦点陷阱，对屏幕阅读器与键盘用户是**虚假承诺**：Tab 会走到浮层背后。用 [ModalOverlay](../../../web/src/components/ui/ModalOverlay.tsx) 即可同时获得两者。
+- 焦点集合由 `FOCUSABLE_SELECTOR` 单点定义，不在调用点各写一份 `querySelectorAll`：选择器不一致会让「哪些元素参与循环」随组件漂移。
+- 焦点管理属横切能力，不得散落在应用外壳、菜单、弹窗等多处各写一套；需要新场景时扩展这两个 hook，而不是新增第三份实现。
+
 ## 副作用与清理
 
 | 建立的资源      | 必须执行的清理                                  |

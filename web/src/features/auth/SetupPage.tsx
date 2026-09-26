@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { ArrowRight, KeyRound, ShieldCheck, User, Wand2 } from 'lucide-react'
+import { FormErrorAlert } from '@/components/ui/FormErrorAlert'
 import { useTranslation } from 'react-i18next'
 import { authApi } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
@@ -67,11 +68,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
         </p>
       </div>
 
-      {errorMsg && (
-        <div className="mb-4 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3 text-xs text-[var(--status-danger)]">
-          {errorMsg}
-        </div>
-      )}
+      {errorMsg && <FormErrorAlert message={errorMsg} className="mb-4" />}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>

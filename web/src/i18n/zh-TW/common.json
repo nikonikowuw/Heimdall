@@ -56,5 +56,9 @@
   "confirm": "確定",
   "refresh": "刷新",
   "copy": "複製",
-  "save": "儲存"
+  "save": "儲存",
+  "modal": {
+    "enterHintPrefix": "按",
+    "enterHintSuffix": "確認"
+  }
 }

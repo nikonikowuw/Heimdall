@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback, useId } from 'react'
 import { AlertCircle, Image as ImageIcon, Loader2, Star, UploadCloud, X } from 'lucide-react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
-import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { useLatestRef } from '@/hooks/use-latest-ref'
 import { personnelApi } from '@/lib/api'
-import { motionTokens } from '@/lib/motionTokens'
 import type { PersonnelItem, PersonnelDetail } from '@/types'
 
 export interface PersonnelModalProps {
@@ -36,7 +34,6 @@ export function PersonnelModal({
   onManagePhotos,
 }: PersonnelModalProps): React.ReactElement {
   const { t } = useTranslation(['personnel', 'common'])
-  const reduceMotion = useReducedMotion()
   const isEdit = Boolean(editTarget)
 
   const [name, setName] = useState('')
@@ -110,8 +107,6 @@ export function PersonnelModal({
     setSelectedImages([])
     setErrorMessage(null)
   }
-
-  useDismissStack(isOpen, handleClose, { disabled: isSubmitting })
 
   const appendFiles = (files: File[]) => {
     if (!files.length) return
@@ -245,303 +240,283 @@ export function PersonnelModal({
   }
 
   return (
-    <AnimatePresence onExitComplete={handleExitComplete}>
-      {isOpen && (
-        <div
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isSubmitting) {
-              handleClose()
-            }
-          }}
-          className="modal-backdrop"
-        >
-          <motion.div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            aria-describedby={descriptionId}
-            initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 12 }}
-            transition={{
-              duration: motionTokens.duration.normal,
-              ease: motionTokens.easing.smooth,
-            }}
-            className="modal-surface modal-surface--form"
-          >
-            <ModalFormHeader
-              icon={ImageIcon}
-              title={isEdit ? t('modal.editTitle') : t('modal.registerTitle')}
-              titleId={titleId}
-              description={
-                isEdit && editTarget
-                  ? `${editTarget.name} · ${editTarget.subjectId}`
-                  : t('modal.subjectIdPlaceholder')
-              }
-              descriptionId={descriptionId}
-              badge={isEdit ? 'EDIT' : 'NEW'}
-              closeLabel={t('common:close')}
-              onClose={handleClose}
-              closeDisabled={isSubmitting}
-            />
+    <ModalOverlay
+      isOpen={isOpen}
+      onClose={handleClose}
+      ariaLabel={isEdit ? t('modal.editTitle') : t('modal.registerTitle')}
+      ariaLabelledBy={titleId}
+      ariaDescribedBy={descriptionId}
+      surface="solid"
+      closeDisabled={isSubmitting}
+      panelClassName="modal-surface--form p-0"
+      onExitComplete={handleExitComplete}
+    >
+      <ModalFormHeader
+        icon={ImageIcon}
+        title={isEdit ? t('modal.editTitle') : t('modal.registerTitle')}
+        titleId={titleId}
+        description={
+          isEdit && editTarget
+            ? `${editTarget.name} · ${editTarget.subjectId}`
+            : t('modal.subjectIdPlaceholder')
+        }
+        descriptionId={descriptionId}
+        badge={isEdit ? 'EDIT' : 'NEW'}
+        closeLabel={t('common:close')}
+        onClose={handleClose}
+        closeDisabled={isSubmitting}
+      />
 
-            {/* ── 2. 表单 ── */}
-            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-              <div className="modal-form-content space-y-4">
-                {errorMessage && (
-                  <div
-                    role="alert"
-                    className="flex items-start gap-2.5 rounded-xl border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10 p-3 text-xs text-[var(--status-danger)]"
-                  >
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                    <span className="leading-relaxed">{errorMessage}</span>
-                  </div>
-                )}
+      {/* ── 2. 表单 ── */}
+      <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+        <div className="modal-form-content space-y-4">
+          {errorMessage && (
+            <div
+              role="alert"
+              className="flex items-start gap-2.5 rounded-xl border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/10 p-3 text-xs text-[var(--status-danger)]"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="leading-relaxed">{errorMessage}</span>
+            </div>
+          )}
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor={nameId} className={LABEL_CLASS}>
-                      {t('modal.name')} <span className="text-[var(--status-danger)]">*</span>
-                    </label>
-                    <input
-                      id={nameId}
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder={t('modal.namePlaceholder')}
-                      className={FIELD_CLASS}
-                      required
-                    />
-                  </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor={nameId} className={LABEL_CLASS}>
+                {t('modal.name')} <span className="text-[var(--status-danger)]">*</span>
+              </label>
+              <input
+                id={nameId}
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t('modal.namePlaceholder')}
+                className={FIELD_CLASS}
+                required
+              />
+            </div>
 
-                  <div>
-                    <label htmlFor={subjectIdFieldId} className={LABEL_CLASS}>
-                      {t('modal.subjectId')}
-                    </label>
-                    <input
-                      id={subjectIdFieldId}
-                      type="text"
-                      value={subjectId}
-                      onChange={(e) => setSubjectId(e.target.value)}
-                      placeholder={t('modal.subjectIdPlaceholder')}
-                      disabled={isEdit}
-                      className={`${FIELD_CLASS} font-data`}
-                    />
-                  </div>
+            <div>
+              <label htmlFor={subjectIdFieldId} className={LABEL_CLASS}>
+                {t('modal.subjectId')}
+              </label>
+              <input
+                id={subjectIdFieldId}
+                type="text"
+                value={subjectId}
+                onChange={(e) => setSubjectId(e.target.value)}
+                placeholder={t('modal.subjectIdPlaceholder')}
+                disabled={isEdit}
+                className={`${FIELD_CLASS} font-data`}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor={idCardFieldId} className={LABEL_CLASS}>
+                {t('modal.idCard')}
+              </label>
+              <input
+                id={idCardFieldId}
+                type="text"
+                value={idCard}
+                onChange={(e) => setIdCard(e.target.value)}
+                placeholder={t('modal.idCardPlaceholder')}
+                className={FIELD_CLASS}
+              />
+            </div>
+
+            <div>
+              <label htmlFor={remarkFieldId} className={LABEL_CLASS}>
+                {t('modal.remark')}
+              </label>
+              <input
+                id={remarkFieldId}
+                type="text"
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+                placeholder={t('modal.remarkPlaceholder')}
+                className={FIELD_CLASS}
+              />
+            </div>
+          </div>
+
+          {/* 编辑模式下的人脸样本库入口提示与快捷追加 */}
+          {isEdit && editTarget && (
+            <div className="flex flex-col gap-2.5 rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] p-3.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-2.5">
+                <ImageIcon
+                  className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]"
+                  aria-hidden="true"
+                />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-[var(--text-primary)]">
+                    {t('modal.faceSampleManagement')} ({editTarget.faceCount}/{MAX_PHOTOS})
+                  </p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
+                    {t('modal.faceSampleManagementDesc')}
+                  </p>
                 </div>
+              </div>
+              {onManagePhotos && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleClose()
+                    onManagePhotos(editTarget)
+                  }}
+                  className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/15 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                >
+                  <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t('actions.manageOrAddFaces')}
+                </button>
+              )}
+            </div>
+          )}
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor={idCardFieldId} className={LABEL_CLASS}>
-                      {t('modal.idCard')}
-                    </label>
-                    <input
-                      id={idCardFieldId}
-                      type="text"
-                      value={idCard}
-                      onChange={(e) => setIdCard(e.target.value)}
-                      placeholder={t('modal.idCardPlaceholder')}
-                      className={FIELD_CLASS}
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor={remarkFieldId} className={LABEL_CLASS}>
-                      {t('modal.remark')}
-                    </label>
-                    <input
-                      id={remarkFieldId}
-                      type="text"
-                      value={remark}
-                      onChange={(e) => setRemark(e.target.value)}
-                      placeholder={t('modal.remarkPlaceholder')}
-                      className={FIELD_CLASS}
-                    />
-                  </div>
+          {/* 注册模式下的多图上传区 */}
+          {!isEdit && (
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`rounded-2xl border p-3 transition-colors ${
+                isDragging
+                  ? 'border-[var(--accent)]/60 bg-[var(--accent-soft)]'
+                  : 'border-[var(--border)]/70 bg-[var(--bg-secondary)]/25'
+              }`}
+            >
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-medium text-[var(--text-secondary)]">
+                    {t('modal.photoUploadTitle')}{' '}
+                    <span className="text-[var(--status-danger)]">*</span>
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
+                    {t('modal.photoUploadDesc')}
+                  </p>
                 </div>
+                <span className="font-data shrink-0 rounded-full border border-[var(--border)]/70 bg-[var(--bg-surface-solid)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">
+                  {t('modal.photoCounter', {
+                    current: selectedImages.length,
+                    max: MAX_PHOTOS,
+                  })}
+                </span>
+              </div>
 
-                {/* 编辑模式下的人脸样本库入口提示与快捷追加 */}
-                {isEdit && editTarget && (
-                  <div className="flex flex-col gap-2.5 rounded-2xl border border-[var(--accent)]/20 bg-[var(--accent-soft)] p-3.5 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex min-w-0 items-start gap-2.5">
-                      <ImageIcon
-                        className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]"
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-[var(--text-primary)]">
-                          {t('modal.faceSampleManagement')} ({editTarget.faceCount}/{MAX_PHOTOS})
-                        </p>
-                        <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
-                          {t('modal.faceSampleManagementDesc')}
-                        </p>
-                      </div>
-                    </div>
-                    {onManagePhotos && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleClose()
-                          onManagePhotos(editTarget)
-                        }}
-                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/15 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-                      >
-                        <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
-                        {t('actions.manageOrAddFaces')}
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* 注册模式下的多图上传区 */}
-                {!isEdit && (
+              <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-5">
+                {selectedImages.map((img, idx) => (
                   <div
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    className={`rounded-2xl border p-3 transition-colors ${
-                      isDragging
-                        ? 'border-[var(--accent)]/60 bg-[var(--accent-soft)]'
-                        : 'border-[var(--border)]/70 bg-[var(--bg-secondary)]/25'
+                    key={img.previewUrl}
+                    className={`group relative aspect-square overflow-hidden rounded-xl border bg-[var(--video-surface)] shadow-xs ${
+                      primaryIndex === idx
+                        ? 'border-[var(--accent)]/70 ring-2 ring-[var(--ring)]'
+                        : 'border-[var(--border)]'
                     }`}
                   >
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-medium text-[var(--text-secondary)]">
-                          {t('modal.photoUploadTitle')}{' '}
-                          <span className="text-[var(--status-danger)]">*</span>
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-                          {t('modal.photoUploadDesc')}
-                        </p>
-                      </div>
-                      <span className="font-data shrink-0 rounded-full border border-[var(--border)]/70 bg-[var(--bg-surface-solid)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">
-                        {t('modal.photoCounter', {
-                          current: selectedImages.length,
-                          max: MAX_PHOTOS,
-                        })}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-5">
-                      {selectedImages.map((img, idx) => (
-                        <div
-                          key={img.previewUrl}
-                          className={`group relative aspect-square overflow-hidden rounded-xl border bg-[var(--video-surface)] shadow-xs ${
-                            primaryIndex === idx
-                              ? 'border-[var(--accent)]/70 ring-2 ring-[var(--ring)]'
-                              : 'border-[var(--border)]'
-                          }`}
-                        >
-                          <img
-                            src={img.previewUrl}
-                            alt={`${t('modal.photoUploadTitle')} ${idx + 1}`}
-                            className="h-full w-full object-cover"
-                          />
-
-                          {/* 主头像标识 / 切换按钮 */}
-                          <button
-                            type="button"
-                            onClick={() => setPrimaryIndex(idx)}
-                            aria-pressed={primaryIndex === idx}
-                            aria-label={
-                              primaryIndex === idx
-                                ? t('modal.primaryBadge')
-                                : t('modal.setAsPrimary')
-                            }
-                            title={
-                              primaryIndex === idx
-                                ? t('modal.primaryBadge')
-                                : t('modal.setAsPrimary')
-                            }
-                            className={`absolute top-1 left-1 flex h-6 w-6 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
-                              primaryIndex === idx
-                                ? 'bg-[var(--accent)] text-white shadow-xs'
-                                : 'bg-[var(--overlay-scrim)] text-white/70 hover:text-[var(--accent)]'
-                            }`}
-                          >
-                            <Star
-                              className={`h-3.5 w-3.5 ${primaryIndex === idx ? 'fill-current' : ''}`}
-                              aria-hidden="true"
-                            />
-                          </button>
-
-                          {/* 删除单张按钮 */}
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveImage(idx)}
-                            aria-label={t('modal.removePhoto')}
-                            title={t('modal.removePhoto')}
-                            className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded-md bg-[var(--overlay-scrim)] text-white/70 transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-                          >
-                            <X className="h-3.5 w-3.5" aria-hidden="true" />
-                          </button>
-                        </div>
-                      ))}
-
-                      {/* 添加更多按钮 */}
-                      {selectedImages.length < MAX_PHOTOS && (
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          className={`flex aspect-square flex-col items-center justify-center rounded-xl border-2 border-dashed p-2 text-center transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
-                            isDragging
-                              ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                              : 'border-[var(--border)] bg-[var(--bg-secondary)]/40 text-[var(--text-muted)] hover:border-[var(--accent)]/50 hover:text-[var(--accent)]'
-                          }`}
-                        >
-                          <UploadCloud className="mb-1 h-6 w-6" aria-hidden="true" />
-                          <span className="text-[10px] leading-tight font-medium">
-                            {isDragging
-                              ? t('modal.dropzoneActive')
-                              : selectedImages.length === 0
-                                ? t('modal.dropzoneText')
-                                : t('modal.dropzoneMore', {
-                                    remaining: MAX_PHOTOS - selectedImages.length,
-                                  })}
-                          </span>
-                        </button>
-                      )}
-                    </div>
-
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      multiple
-                      className="hidden"
-                      aria-label={t('modal.photoUploadTitle')}
-                      onChange={handleImageSelect}
+                    <img
+                      src={img.previewUrl}
+                      alt={`${t('modal.photoUploadTitle')} ${idx + 1}`}
+                      className="h-full w-full object-cover"
                     />
+
+                    {/* 主头像标识 / 切换按钮 */}
+                    <button
+                      type="button"
+                      onClick={() => setPrimaryIndex(idx)}
+                      aria-pressed={primaryIndex === idx}
+                      aria-label={
+                        primaryIndex === idx ? t('modal.primaryBadge') : t('modal.setAsPrimary')
+                      }
+                      title={
+                        primaryIndex === idx ? t('modal.primaryBadge') : t('modal.setAsPrimary')
+                      }
+                      className={`absolute top-1 left-1 flex h-6 w-6 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
+                        primaryIndex === idx
+                          ? 'bg-[var(--accent)] text-white shadow-xs'
+                          : 'bg-[var(--overlay-scrim)] text-white/70 hover:text-[var(--accent)]'
+                      }`}
+                    >
+                      <Star
+                        className={`h-3.5 w-3.5 ${primaryIndex === idx ? 'fill-current' : ''}`}
+                        aria-hidden="true"
+                      />
+                    </button>
+
+                    {/* 删除单张按钮 */}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveImage(idx)}
+                      aria-label={t('modal.removePhoto')}
+                      title={t('modal.removePhoto')}
+                      className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded-md bg-[var(--overlay-scrim)] text-white/70 transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
                   </div>
+                ))}
+
+                {/* 添加更多按钮 */}
+                {selectedImages.length < MAX_PHOTOS && (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`flex aspect-square flex-col items-center justify-center rounded-xl border-2 border-dashed p-2 text-center transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
+                      isDragging
+                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                        : 'border-[var(--border)] bg-[var(--bg-secondary)]/40 text-[var(--text-muted)] hover:border-[var(--accent)]/50 hover:text-[var(--accent)]'
+                    }`}
+                  >
+                    <UploadCloud className="mb-1 h-6 w-6" aria-hidden="true" />
+                    <span className="text-[10px] leading-tight font-medium">
+                      {isDragging
+                        ? t('modal.dropzoneActive')
+                        : selectedImages.length === 0
+                          ? t('modal.dropzoneText')
+                          : t('modal.dropzoneMore', {
+                              remaining: MAX_PHOTOS - selectedImages.length,
+                            })}
+                    </span>
+                  </button>
                 )}
               </div>
 
-              {/* ── 3. 吸底操作栏 ── */}
-              <div className="modal-form-footer">
-                <div className="modal-form-actions">
-                  <button
-                    type="button"
-                    onClick={handleClose}
-                    disabled={isSubmitting}
-                    className="modal-form-button modal-form-button--secondary"
-                  >
-                    {t('actions.cancel')}
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="modal-form-button modal-form-button--primary"
-                  >
-                    {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                    <span>{submitButtonText}</span>
-                  </button>
-                </div>
-              </div>
-            </form>
-          </motion.div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                className="hidden"
+                aria-label={t('modal.photoUploadTitle')}
+                onChange={handleImageSelect}
+              />
+            </div>
+          )}
         </div>
-      )}
-    </AnimatePresence>
+
+        {/* ── 3. 吸底操作栏 ── */}
+        <div className="modal-form-footer">
+          <div className="modal-form-actions">
+            <button
+              type="button"
+              onClick={handleClose}
+              disabled={isSubmitting}
+              className="modal-form-button modal-form-button--secondary"
+            >
+              {t('actions.cancel')}
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="modal-form-button modal-form-button--primary"
+            >
+              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              <span>{submitButtonText}</span>
+            </button>
+          </div>
+        </div>
+      </form>
+    </ModalOverlay>
   )
 }

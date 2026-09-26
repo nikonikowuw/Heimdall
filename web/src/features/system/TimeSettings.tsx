@@ -6,7 +6,7 @@ import { systemApi } from '@/lib/system-api'
 import { formatTimestamp } from '@/lib/time'
 import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
-import { ConfirmDialog } from './components/ConfirmDialog'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { TimeStatus, TimeConfig } from '@/types/system'
 
 const TIMEZONES = [
@@ -401,16 +401,17 @@ export function TimeSettings(): React.ReactElement {
       </SettingsSection>
 
       <ConfirmDialog
-        open={showTimeConfirm}
+        isOpen={showTimeConfirm}
         title={t('time.confirmTitle', { defaultValue: '手动设置系统时间' })}
-        message={t('time.confirmMessage', {
+        description={t('time.confirmMessage', {
           defaultValue:
             '此操作将修改系统时钟，可能导致视频时间戳跳变，影响录像回放连续性和检测日志时间连续性。建议优先使用 NTP 自动同步。',
         })}
         confirmLabel={t('time.confirmSet', { defaultValue: '确认设置' })}
+        cancelLabel={t('common:cancel')}
         variant="warning"
         onConfirm={handleManualTime}
-        onCancel={() => setShowTimeConfirm(false)}
+        onClose={() => setShowTimeConfirm(false)}
       />
     </div>
   )

@@ -17,10 +17,10 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
-import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { personnelApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import { formatTimestamp } from '@/lib/time'
@@ -136,7 +136,6 @@ export function PersonnelImportModal({
   initialMode = 'upload',
 }: PersonnelImportModalProps): React.ReactElement {
   const { t, i18n } = useTranslation(['personnel', 'common'])
-  const reduceMotion = useReducedMotion()
   const titleId = useId()
   const descriptionId = useId()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -182,7 +181,6 @@ export function PersonnelImportModal({
   }, [isOpen, terminal])
 
   // 运行中按 ESC / 点击遮罩 = 后台运行（不中断任务）
-  useDismissStack(isOpen, onClose, { disabled: isStarting || isCancelling })
 
   const pickFile = useCallback(
     (file: File | null): void => {
@@ -746,48 +744,31 @@ export function PersonnelImportModal({
   }
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div
-          onClick={(event) => {
-            if (event.target === event.currentTarget && !isStarting && !isCancelling) {
-              onClose()
-            }
-          }}
-          className="modal-backdrop"
-        >
-          <motion.div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            aria-describedby={descriptionId}
-            initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 12 }}
-            transition={{
-              duration: motionTokens.duration.normal,
-              ease: motionTokens.easing.smooth,
-            }}
-            className="modal-surface modal-surface--form max-w-xl"
-          >
-            <ModalFormHeader
-              icon={HeaderIcon}
-              title={headerTitle}
-              titleId={titleId}
-              description={headerSubtitle}
-              descriptionId={descriptionId}
-              badge={headerBadge}
-              closeLabel={t('common:close')}
-              onClose={onClose}
-              closeDisabled={isStarting || isCancelling}
-            />
+    <ModalOverlay
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel={headerTitle}
+      ariaLabelledBy={titleId}
+      ariaDescribedBy={descriptionId}
+      surface="solid"
+      closeDisabled={isStarting || isCancelling}
+      panelClassName="modal-surface--form max-w-xl p-0"
+    >
+      <ModalFormHeader
+        icon={HeaderIcon}
+        title={headerTitle}
+        titleId={titleId}
+        description={headerSubtitle}
+        descriptionId={descriptionId}
+        badge={headerBadge}
+        closeLabel={t('common:close')}
+        onClose={onClose}
+        closeDisabled={isStarting || isCancelling}
+      />
 
-            {renderBody()}
+      {renderBody()}
 
-            {renderFooter()}
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+      {renderFooter()}
+    </ModalOverlay>
   )
 }

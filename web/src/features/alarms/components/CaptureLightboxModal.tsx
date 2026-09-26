@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { useFocusTrap } from '@/hooks/use-focus-trap'
 import { evidenceApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import type { CaptureRecord } from '@/types'
@@ -93,6 +94,9 @@ export function CaptureLightboxModal({
   // ESC 键栈退出 (仅当未处于浏览器全屏时触发关闭，全屏时 ESC 会先退出全屏)
   useDismissStack(!isFullscreen, onClose)
 
+  // 沉浸式查看器同样需要焦点约束：把 Tab 限制在浮层内并在关闭后归还焦点
+  useFocusTrap(true, rootRef)
+
   // 监听浏览器全屏变化事件
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -155,6 +159,9 @@ export function CaptureLightboxModal({
   return (
     <motion.div
       ref={rootRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${t('modal.fullImage')}: ${capture.targetLabel}`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -240,7 +247,7 @@ export function CaptureLightboxModal({
             onClick={onClose}
             className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-[var(--text-primary)] transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]"
             title={`${t('modal.close')} (Esc)`}
-            aria-label="Close"
+            aria-label={t('modal.close', { defaultValue: '关闭' })}
           >
             <X className="h-5 w-5" />
           </button>

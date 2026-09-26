@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { motion, AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { RefreshButton } from '@/components/RefreshButton'
 import {
@@ -14,6 +13,7 @@ import {
   CheckCircle2,
   X,
 } from 'lucide-react'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { gb28181Api } from '@/lib/api'
 import type { Gb28181ConfigResponse } from '@/types'
@@ -406,66 +406,60 @@ export function Gb28181Settings(): React.ReactElement {
       </div>
 
       {/* 对接指导卡模态弹窗 */}
-      <AnimatePresence>
-        {showCardModal && (
-          <div className="modal-backdrop">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="modal-surface modal-surface--narrow p-6"
-            >
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <FileText className="h-5 w-5 text-[var(--accent)]" />
-                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-                    {t('gb28181.cardTitle', { defaultValue: 'IPC / NVR 现场对接指导卡' })}
-                  </h3>
-                </div>
-                <button
-                  onClick={() => setShowCardModal(false)}
-                  className="rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              <p className="mb-3 text-xs text-[var(--text-secondary)]">
-                {t('gb28181.cardDesc', {
-                  defaultValue:
-                    '登录海康、大华、宇视等摄像机 Web 管理后台，进入「网络」-「高级配置」-「平台接入」选 28181 填写：',
-                })}
-              </p>
-
-              <pre className="mb-5 overflow-x-auto rounded-xl border border-[var(--border)] bg-black/40 p-4 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)]">
-                {generateIpcCardText()}
-              </pre>
-
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setShowCardModal(false)}
-                  className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
-                >
-                  {t('cancel', { defaultValue: '关闭' })}
-                </button>
-                <button
-                  onClick={handleCopyCard}
-                  className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-medium text-white hover:opacity-90"
-                >
-                  {cardCopied ? (
-                    <Check className="text-status-success h-4 w-4" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                  {cardCopied
-                    ? t('saved', { defaultValue: '已复制全量参数' })
-                    : t('gb28181.copyAll', { defaultValue: '复制全量参数文本' })}
-                </button>
-              </div>
-            </motion.div>
+      <ModalOverlay
+        isOpen={showCardModal}
+        onClose={() => setShowCardModal(false)}
+        ariaLabel={t('gb28181.cardTitle', { defaultValue: 'IPC / NVR 现场对接指导卡' })}
+        panelClassName="modal-surface--narrow"
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <FileText className="h-5 w-5 text-[var(--accent)]" />
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+              {t('gb28181.cardTitle', { defaultValue: 'IPC / NVR 现场对接指导卡' })}
+            </h3>
           </div>
-        )}
-      </AnimatePresence>
+          <button
+            onClick={() => setShowCardModal(false)}
+            className="rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <p className="mb-3 text-xs text-[var(--text-secondary)]">
+          {t('gb28181.cardDesc', {
+            defaultValue:
+              '登录海康、大华、宇视等摄像机 Web 管理后台，进入「网络」-「高级配置」-「平台接入」选 28181 填写：',
+          })}
+        </p>
+
+        <pre className="mb-5 overflow-x-auto rounded-xl border border-[var(--border)] bg-black/40 p-4 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)]">
+          {generateIpcCardText()}
+        </pre>
+
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setShowCardModal(false)}
+            className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
+          >
+            {t('cancel', { defaultValue: '关闭' })}
+          </button>
+          <button
+            onClick={handleCopyCard}
+            className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-medium text-white hover:opacity-90"
+          >
+            {cardCopied ? (
+              <Check className="text-status-success h-4 w-4" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+            {cardCopied
+              ? t('saved', { defaultValue: '已复制全量参数' })
+              : t('gb28181.copyAll', { defaultValue: '复制全量参数文本' })}
+          </button>
+        </div>
+      </ModalOverlay>
     </div>
   )
 }

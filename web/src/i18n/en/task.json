@@ -44,6 +44,7 @@
   "deleteTask": "Delete Task",
   "deleteTaskTitle": "Confirm Task Deletion",
   "deleteTaskMessage": "Are you sure you want to delete task \"{{name}}\"?",
+  "deleteTaskCameraId": "Camera ID",
   "deleteTaskWarning": "This will remove the task pipeline from NPU inference. The underlying camera stream and evidence history will remain untouched.",
   "confirmDeleteTask": "Delete Task",
   "deletingTask": "Deleting...",

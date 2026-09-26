@@ -44,6 +44,7 @@
   "deleteTask": "删除任务",
   "deleteTaskTitle": "删除布防任务确认",
   "deleteTaskMessage": "确定要删除布防任务「{{name}}」吗？",
+  "deleteTaskCameraId": "摄像头 ID",
   "deleteTaskWarning": "此操作仅从 AI 调度管线中移除该任务并释放算力，不会删除底层的摄像头设备与历史告警记录。",
   "confirmDeleteTask": "确认删除任务",
   "deletingTask": "正在删除...",

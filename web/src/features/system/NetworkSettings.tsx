@@ -4,7 +4,7 @@ import { Wifi, WifiOff, Shield, Pencil, Check, X, Cable, Network, Globe, Radio }
 import { systemApi } from '@/lib/system-api'
 import { RefreshButton } from '@/components/RefreshButton'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
-import { ConfirmDialog } from './components/ConfirmDialog'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { NetworkTrialBanner } from './components/NetworkTrialBanner'
 import { NetworkConflictModal } from './components/NetworkConflictModal'
 import { useNetworkTrial } from './hooks/use-network-trial'
@@ -293,16 +293,18 @@ export function NetworkSettings(): React.ReactElement {
       </SettingsSection>
 
       <ConfirmDialog
-        open={showConfirm}
+        isOpen={showConfirm}
         title={t('network.confirmTitle', { defaultValue: '修改管理网卡 IP（开启试运行安全保护）' })}
-        message={t('network.confirmMessage', {
+        description={t('network.confirmMessage', {
           defaultValue:
             '您正在修改承载 Web 控制台的管理网卡。系统将开启 60 秒试运行模式并启动看门狗保护。若修改后无法连接新 IP，系统将在倒计时结束后无条件自动回滚至原配置，杜绝设备失联。',
         })}
         confirmLabel={t('network.confirmApply', { defaultValue: '开启试运行并应用' })}
+        cancelLabel={t('common:cancel')}
         variant="warning"
+        showKeyboardHint
         onConfirm={handleConfirmManagement}
-        onCancel={() => {
+        onClose={() => {
           setShowConfirm(false)
           setPendingIface(null)
         }}

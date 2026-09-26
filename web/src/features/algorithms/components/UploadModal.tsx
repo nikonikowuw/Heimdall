@@ -9,6 +9,7 @@ import {
   Upload,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { FormErrorAlert } from '@/components/ui/FormErrorAlert'
 import { algorithmApi } from '@/lib/api'
 import { isAlgorithmUploadProgress } from '@/lib/uploadProgress'
 import { cn } from '@/lib/utils'
@@ -326,15 +327,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
           </div>
         )}
 
-        {rejectionMessage && !isUploading && (
-          <div
-            role="alert"
-            className="flex items-start gap-2.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3 text-xs text-[var(--status-danger)]"
-          >
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p className="leading-relaxed">{rejectionMessage}</p>
-          </div>
-        )}
+        {rejectionMessage && !isUploading && <FormErrorAlert message={rejectionMessage} alignTop />}
 
         {extraFilesNotice && !isUploading && (
           <p role="status" className="text-[11px] text-[var(--text-secondary)]">
@@ -422,15 +415,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
           </section>
         )}
 
-        {errorMsg && (
-          <div
-            role="alert"
-            className="flex items-start gap-2.5 rounded-xl border border-[var(--status-danger-border)] bg-[var(--status-danger-soft)] p-3 text-xs text-[var(--status-danger)]"
-          >
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p className="leading-relaxed">{errorMsg}</p>
-          </div>
-        )}
+        {errorMsg && <FormErrorAlert message={errorMsg} alignTop />}
 
         {uploadResult?.passed && uploadResult.version && (
           <div className="flex items-center gap-3 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] p-3.5 text-xs text-[var(--status-success)]">

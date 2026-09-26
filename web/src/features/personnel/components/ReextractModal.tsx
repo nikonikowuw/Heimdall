@@ -9,10 +9,10 @@ import {
   Percent,
   RefreshCw,
 } from 'lucide-react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
-import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { motionTokens } from '@/lib/motionTokens'
 import { formatTimestamp } from '@/lib/time'
 import type { ReextractProgress, ReextractFaceFeaturesReport } from '@/types'
@@ -84,7 +84,6 @@ export function ReextractModal({
   onConfirm,
 }: ReextractModalProps): React.ReactElement {
   const { t, i18n } = useTranslation(['personnel', 'common'])
-  const reduceMotion = useReducedMotion()
   const [showFailures, setShowFailures] = useState(false)
   const [currentMode, setCurrentMode] = useState<'confirm' | 'progress' | 'report'>('confirm')
   const titleId = useId()
@@ -127,10 +126,6 @@ export function ReextractModal({
 
   // ESC 浮层栈支持（执行中可按 ESC 关闭弹窗转入后台运行）
   // Enter 仅在确认阶段触发重提（与底部主按钮一致，进行中/报告阶段不响应）
-  useDismissStack(isOpen, onClose, {
-    disabled: isStarting,
-    onConfirm: currentMode === 'confirm' ? onConfirm : undefined,
-  })
 
   // 汇总结算数据
   const total = isGlobal ? (progress?.total ?? 0) : (singleReport?.total ?? 0)
@@ -467,46 +462,33 @@ export function ReextractModal({
   }
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isStarting) onClose()
-          }}
-          className="modal-backdrop"
-        >
-          <motion.div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            aria-describedby={descriptionId}
-            initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 12 }}
-            transition={{
-              duration: motionTokens.duration.normal,
-              ease: motionTokens.easing.smooth,
-            }}
-            className="modal-surface modal-surface--form max-w-xl"
-          >
-            <ModalFormHeader
-              icon={HeaderIcon}
-              title={headerTitle}
-              titleId={titleId}
-              description={headerSubtitle}
-              descriptionId={descriptionId}
-              badge={headerBadge}
-              closeLabel={t('common:close')}
-              onClose={onClose}
-              closeDisabled={isStarting}
-            />
+    <ModalOverlay
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel={headerTitle}
+      ariaLabelledBy={titleId}
+      ariaDescribedBy={descriptionId}
+      surface="solid"
+      closeDisabled={isStarting}
+      priority={5}
+      onConfirm={currentMode === 'confirm' ? onConfirm : undefined}
+      panelClassName="modal-surface--form max-w-xl p-0"
+    >
+      <ModalFormHeader
+        icon={HeaderIcon}
+        title={headerTitle}
+        titleId={titleId}
+        description={headerSubtitle}
+        descriptionId={descriptionId}
+        badge={headerBadge}
+        closeLabel={t('common:close')}
+        onClose={onClose}
+        closeDisabled={isStarting}
+      />
 
-            <div className="modal-form-content space-y-4">{renderModalBody()}</div>
+      <div className="modal-form-content space-y-4">{renderModalBody()}</div>
 
-            {renderModalFooter()}
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+      {renderModalFooter()}
+    </ModalOverlay>
   )
 }
