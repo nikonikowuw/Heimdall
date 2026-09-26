@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModuleFilter, StatusFilter } from '@/features/oplog/logFilters'
 import { DEFAULT_LOG_PAGE_SIZE } from '@/features/oplog/logPaging'
 import { oplogApi } from '@/lib/api'
+import { buildQuerySignature } from '@/lib/utils'
 import type { OperationLog } from '@/types'
 import { getErrorMessage } from './helpers'
 
@@ -40,9 +41,15 @@ export function useOplogs(
   const { module, status, keyword, fromMs, toMs } = filters
 
   const [logs, setLogs] = useState<OperationLog[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // 已落定的查询签名；与当前查询签名不一致即为加载中。
+  //
+  // 不再用 `setIsLoading(true)` 开头：effect 内同步 setState 会在每次筛选/翻页时
+  // 多触发一轮渲染（先提交 loading，再提交结果），而「是否在加载」完全可由
+  // 「请求签名是否已落定」派生。错误同样按签名归属，筛选一变即自动失效，
+  // 无需在 effect 开头手动清零。
+  const [settledQuery, setSettledQuery] = useState<string | null>(null)
+  const [failure, setFailure] = useState<{ query: string; message: string } | null>(null)
   const [hasMore, setHasMore] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const generationRef = useRef(0)
 
@@ -51,13 +58,24 @@ export function useOplogs(
   const trimmedKeyword = keyword?.trim()
   const keywordFilter = trimmedKeyword ? trimmedKeyword : undefined
 
+  // 请求签名：即下方 effect 的依赖集合，用于派生 isLoading 与错误归属
+  const query = buildQuerySignature(
+    moduleFilter,
+    statusFilter,
+    keywordFilter,
+    fromMs,
+    toMs,
+    page,
+    pageSize,
+    refreshVersion,
+  )
+  const isLoading = settledQuery !== query
+  const error = failure && failure.query === query ? failure.message : null
+
   useEffect(() => {
     const generation = generationRef.current + 1
     generationRef.current = generation
     const controller = new AbortController()
-
-    setIsLoading(true)
-    setError(null)
 
     void oplogApi
       .list(
@@ -76,15 +94,13 @@ export function useOplogs(
         if (generationRef.current !== generation) return
         setLogs(nextLogs)
         setHasMore(nextLogs.length === pageSize)
+        setFailure(null)
+        setSettledQuery(query)
       })
       .catch((requestError: unknown) => {
         if (controller.signal.aborted || generationRef.current !== generation) return
-        setError(getErrorMessage(requestError))
-      })
-      .finally(() => {
-        if (generationRef.current === generation) {
-          setIsLoading(false)
-        }
+        setFailure({ query, message: getErrorMessage(requestError) })
+        setSettledQuery(query)
       })
 
     return () => {
@@ -93,7 +109,17 @@ export function useOplogs(
         generationRef.current += 1
       }
     }
-  }, [moduleFilter, statusFilter, keywordFilter, fromMs, toMs, page, pageSize, refreshVersion])
+  }, [
+    moduleFilter,
+    statusFilter,
+    keywordFilter,
+    fromMs,
+    toMs,
+    page,
+    pageSize,
+    refreshVersion,
+    query,
+  ])
 
   const refresh = useCallback(() => {
     setRefreshVersion((version) => version + 1)

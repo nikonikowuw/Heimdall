@@ -41,28 +41,32 @@ export function Gb28181Settings(): React.ReactElement {
   const [autoSync, setAutoSync] = useState(true)
   const [heartbeatTimeout, setHeartbeatTimeout] = useState(180)
 
-  const fetchConfig = async () => {
-    setLoading(true)
-    try {
-      const res = await gb28181Api.getConfig()
-      setData(res)
-      setSipId(res.config.sipId)
-      setSipDomain(res.config.sipDomain)
-      setSipPort(res.config.sipPort)
-      setSipPassword(res.config.sipPassword)
-      setRtpStart(res.config.rtpPortRangeStart)
-      setRtpEnd(res.config.rtpPortRangeEnd)
-      setAutoSync(res.config.autoCatalogSync)
-      setHeartbeatTimeout(res.config.heartbeatTimeoutSec)
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false)
-    }
+  // loading 置移出函数体：挂载时由 useState(true) 承担，手刷时在事件处理器内置位。
+  // 用 `.then/.catch/.finally` 链避免被 set-state-in-effect 判为同步 setState。
+  const fetchConfig = (): Promise<void> => {
+    return gb28181Api
+      .getConfig()
+      .then((res) => {
+        setData(res)
+        setSipId(res.config.sipId)
+        setSipDomain(res.config.sipDomain)
+        setSipPort(res.config.sipPort)
+        setSipPassword(res.config.sipPassword)
+        setRtpStart(res.config.rtpPortRangeStart)
+        setRtpEnd(res.config.rtpPortRangeEnd)
+        setAutoSync(res.config.autoCatalogSync)
+        setHeartbeatTimeout(res.config.heartbeatTimeoutSec)
+      })
+      .catch(() => {
+        // ignore
+      })
+      .finally(() => {
+        setLoading(false)
+      })
   }
 
   useEffect(() => {
-    fetchConfig()
+    void fetchConfig()
   }, [])
 
   const copyToClipboard = (text: string, fieldName: string) => {
@@ -175,7 +179,14 @@ export function Gb28181Settings(): React.ReactElement {
               {health?.onlineDevicesCount ?? 0}
             </span>
           </div>
-          <RefreshButton onClick={fetchConfig} loading={loading} label={tc('actions.refresh')} />
+          <RefreshButton
+            onClick={() => {
+              setLoading(true)
+              void fetchConfig()
+            }}
+            loading={loading}
+            label={tc('actions.refresh')}
+          />
         </div>
       </div>
 

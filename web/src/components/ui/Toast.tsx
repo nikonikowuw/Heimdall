@@ -61,7 +61,9 @@ export function ToastItemView({ item, onDismiss }: ToastItemViewProps): React.Re
   const reducedMotion = useReducedMotion()
   const [isPaused, setIsPaused] = useState(false)
   const remainingTimeRef = useRef<number>(item.duration)
-  const startTimeRef = useRef<number>(Date.now())
+  // 计时起点：由下方 effect 在每次重新计时前写入，渲染期不读也不写。
+  // `null` 表示尚未开始计时，用于防住「effect 未跑就读起点」的边界。
+  const startTimeRef = useRef<number | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const tone = TONES[item.type] || TONES.info
@@ -94,7 +96,9 @@ export function ToastItemView({ item, onDismiss }: ToastItemViewProps): React.Re
 
   const handleMouseEnter = () => {
     if (item.duration <= 0) return
-    const elapsed = Date.now() - startTimeRef.current
+    const startedAt = startTimeRef.current
+    if (startedAt === null) return
+    const elapsed = Date.now() - startedAt
     remainingTimeRef.current = Math.max(0, remainingTimeRef.current - elapsed)
     setIsPaused(true)
   }

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react'
+import { useLatestRef } from '@/hooks/use-latest-ref'
 
 interface GargantuaCanvasProps {
   isDark: boolean
@@ -352,8 +353,7 @@ void main() {
 export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsUpdate }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const staticRenderRef = useRef<(() => void) | null>(null)
-  const isDarkRef = useRef(isDark)
-  isDarkRef.current = isDark
+  const isDarkRef = useLatestRef(isDark)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -600,7 +600,7 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       gl.deleteShader(fs)
       gl.deleteBuffer(buf)
     }
-  }, [onFpsUpdate])
+  }, [onFpsUpdate, isDarkRef])
 
   useEffect(() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {

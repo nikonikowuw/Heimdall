@@ -17,7 +17,7 @@
 
 ## 播放器生命周期
 
-实现入口：[LivePlayer](../../../web/src/features/live/components/LivePlayer.tsx)、[WebCodecs 能力与协议](../../../web/src/lib/webcodecs.ts)。
+实现入口：[LivePlayer](../../../web/src/components/LivePlayer.tsx)、[WebCodecs 能力与协议](../../../web/src/lib/webcodecs.ts)。
 
 - **音视频解耦与伴生音频架构**：
   - **主视频通道纯净度**：主视频播放器（WebCodecs Canvas 或 mpegts.js `<video>`）必须严格保持纯视频模式（`hasAudio: false, hasVideo: true`，视频元素 `muted = true`），彻底杜绝安防摄像头无音频或非 AAC 格式造成浏览器 MSE SourceBuffer 饥饿而永久死锁挂起；

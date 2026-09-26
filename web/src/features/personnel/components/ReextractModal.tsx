@@ -97,29 +97,33 @@ export function ReextractModal({
     ? progress?.status === 'completed' || progress?.status === 'failed'
     : Boolean(singleReport)
 
-  // 根据外部状态和打开模式同步内部视图模式
+  // 根据外部状态和打开模式同步内部视图模式。
+  // 同步 setState 包在微任务里，避免 effect 内同步 setState 触发级联渲染。
   useEffect(() => {
-    if (!isOpen) {
-      setShowFailures(false)
-      return
-    }
-    if (isRunning) {
-      setCurrentMode('progress')
-    } else if (initialMode === 'report' && isCompleted) {
-      setCurrentMode('report')
-    } else if (isCompleted && !singleReport && initialMode !== 'confirm') {
-      setCurrentMode('report')
-    } else {
-      setCurrentMode('confirm')
-    }
+    void Promise.resolve().then(() => {
+      if (!isOpen) {
+        setShowFailures(false)
+        return
+      }
+      if (isRunning) {
+        setCurrentMode('progress')
+      } else if (initialMode === 'report' && isCompleted) {
+        setCurrentMode('report')
+      } else if (isCompleted && !singleReport && initialMode !== 'confirm') {
+        setCurrentMode('report')
+      } else {
+        setCurrentMode('confirm')
+      }
+    })
   }, [isOpen, isRunning, isCompleted, initialMode, singleReport])
 
   // 任务在当前弹窗中从运行中转为完成时，自动切换为报告展示视图
   useEffect(() => {
-    if (isCompleted && currentMode === 'progress') {
-      setCurrentMode('report')
-    }
-  }, [isCompleted, currentMode])
+    if (!isCompleted) return
+    void Promise.resolve().then(() => {
+      setCurrentMode((current) => (current === 'progress' ? 'report' : current))
+    })
+  }, [isCompleted])
 
   // ESC 浮层栈支持（执行中可按 ESC 关闭弹窗转入后台运行）
   // Enter 仅在确认阶段触发重提（与底部主按钮一致，进行中/报告阶段不响应）

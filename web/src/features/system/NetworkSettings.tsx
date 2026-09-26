@@ -181,7 +181,12 @@ export function NetworkSettings(): React.ReactElement {
 
       {/* 试运行防失联全屏横幅 */}
       {pendingOp && pendingOp.status === 'pending_confirm' && (
-        <NetworkTrialBanner operation={pendingOp} onConfirm={confirmTrial} onCancel={cancelTrial} />
+        <NetworkTrialBanner
+          key={pendingOp.id}
+          operation={pendingOp}
+          onConfirm={confirmTrial}
+          onCancel={cancelTrial}
+        />
       )}
 
       {(error || trialError) && (

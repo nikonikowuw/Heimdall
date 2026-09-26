@@ -77,7 +77,8 @@ export function LoginPage(): React.ReactElement {
 
   useEffect(() => {
     let mounted = true
-    setInitializationStatus('checking')
+    // 不在此处同步 setInitializationStatus('checking')：
+    // 首次挂载时 useState 初始值已经是 'checking'，重试用下方按钮在事件处理器内重置。
     authApi
       .getInitStatus()
       .then((status) => {
@@ -372,7 +373,10 @@ export function LoginPage(): React.ReactElement {
                     <button
                       type="button"
                       className="auth-retry"
-                      onClick={() => setStatusRetryKey((previous) => previous + 1)}
+                      onClick={() => {
+                        setInitializationStatus('checking')
+                        setStatusRetryKey((previous) => previous + 1)
+                      }}
                     >
                       <RefreshCw className="mr-2 h-4 w-4" />
                       {t('retryStatus')}

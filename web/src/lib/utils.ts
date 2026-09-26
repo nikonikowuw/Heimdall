@@ -63,3 +63,13 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * 构造稳定的查询签名，用于 Hook 请求派生加载态与错误归属。
+ * 使用统一不可见分隔符 (\u001f 单元分隔符 Unit Separator)，杜绝用户输入内容中的分隔符碰撞。
+ */
+export function buildQuerySignature(
+  ...parts: (string | number | boolean | null | undefined)[]
+): string {
+  return parts.map((p) => (p === null || p === undefined ? '' : String(p))).join('\u001f')
+}

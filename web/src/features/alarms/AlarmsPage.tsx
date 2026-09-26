@@ -20,7 +20,7 @@ import { SelectField } from '@/components/ui/SelectField'
 import { useDebounce } from '@/hooks/use-debounce'
 import { alarmApi, cameraApi, evidenceApi } from '@/lib/api'
 import { resolveEffectiveTimeRange, type DateTimeRangeValue } from '@/lib/dateRange'
-import { cn } from '@/lib/utils'
+import { cn, buildQuerySignature } from '@/lib/utils'
 import { wsClient } from '@/lib/wsClient'
 import {
   type AlarmRecord,
@@ -208,7 +208,8 @@ export function AlarmsPage(): React.ReactElement {
   const liveFilterRef = useRef<LiveFilterSnapshot>({ searchQuery: '', cameraNameMap: {} })
 
   // 界面状态
-  const [isLoading, setIsLoading] = useState(false)
+  const [refreshVersion, setRefreshVersion] = useState(0)
+  const [settledQuery, setSettledQuery] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   // 模态框灯箱
@@ -289,6 +290,24 @@ export function AlarmsPage(): React.ReactElement {
    */
   const activeStatusFilter = activeTab === 'alarms' ? alarmStatus : recognitionStatus
 
+  const query = buildQuerySignature(
+    activeTab,
+    selectedCameraId,
+    selectedTargetLabel,
+    selectedRuleType,
+    selectedSeverity,
+    activeStatusFilter,
+    selectedTrackId,
+    timeRange.quickPreset,
+    timeRange.startTime,
+    timeRange.endTime,
+    debouncedSearchQuery,
+    page,
+    pageSize,
+    refreshVersion,
+  )
+  const isLoading = settledQuery !== query
+
   const activeFilterCount = useMemo(() => {
     let count = 0
     if (searchQuery.trim()) count++
@@ -363,8 +382,9 @@ export function AlarmsPage(): React.ReactElement {
     setPage(1)
   }
 
-  // 数据加载函数
-  const loadData = useCallback(async () => {
+  // 数据加载函数：通过已落定签名派生 isLoading，不在函数体开头同步 setIsLoading(true)。
+  // 使用 .then/.catch/.finally 链使 setState 均位于异步微任务中，彻底消除 effect 级联渲染假阳性判定。
+  const loadData = useCallback((): Promise<void> => {
     // 代次 + AbortController 只保留一套机制：控制器身份即「本次请求是否为当前请求」，
     // 被新请求接管（ref 换成新控制器）或已 abort 时一律不再写状态。
     dataAbortControllerRef.current?.abort()
@@ -374,131 +394,143 @@ export function AlarmsPage(): React.ReactElement {
     const isCurrentRequest = (): boolean =>
       dataAbortControllerRef.current === controller && !signal.aborted
 
-    setIsLoading(true)
-    setErrorMessage(null)
-    try {
-      const camId = selectedCameraId || undefined
-      const targetLbl = selectedTargetLabel || undefined
-      const ruleTypeParam = selectedRuleType === FILTER_ALL ? undefined : selectedRuleType
-      const severityParam = selectedSeverity === FILTER_ALL ? undefined : selectedSeverity
-      const statusParam = activeStatusFilter === FILTER_ALL ? undefined : activeStatusFilter
-      const keyword = debouncedSearchQuery.trim() || undefined
-      const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
-      const offset = (page - 1) * pageSize
+    const camId = selectedCameraId || undefined
+    const targetLbl = selectedTargetLabel || undefined
+    const ruleTypeParam = selectedRuleType === FILTER_ALL ? undefined : selectedRuleType
+    const severityParam = selectedSeverity === FILTER_ALL ? undefined : selectedSeverity
+    const statusParam = activeStatusFilter === FILTER_ALL ? undefined : activeStatusFilter
+    const keyword = debouncedSearchQuery.trim() || undefined
+    const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
+    const offset = (page - 1) * pageSize
 
-      // 各分支只负责取数与投放本页数据；总数与徽标在同处结算，避免三份重复守卫
-      let refreshedTotal: number | null = null
+    let requestPromise: Promise<{
+      alarmsList?: AlarmRecord[]
+      capturesList?: CaptureRecord[]
+      recognitionsList?: RecognitionRecord[]
+      refreshedTotal: number
+    }>
 
-      if (activeTab === 'alarms') {
-        const [list, countRes] = await Promise.all([
-          alarmApi.list(
-            {
-              cameraId: camId,
-              status: statusParam,
-              targetLabel: targetLbl,
-              ruleType: ruleTypeParam,
-              severity: severityParam,
-              q: keyword,
-              startTime: startMs,
-              endTime: endMs,
-              limit: pageSize,
-              offset,
-            },
-            signal,
-          ),
-          alarmApi.count(
-            {
-              cameraId: camId,
-              status: statusParam,
-              targetLabel: targetLbl,
-              ruleType: ruleTypeParam,
-              severity: severityParam,
-              q: keyword,
-              startTime: startMs,
-              endTime: endMs,
-            },
-            signal,
-          ),
-        ])
-        if (!isCurrentRequest()) return
-        setAlarms(list)
-        refreshedTotal = countRes.total
-      } else if (activeTab === 'captures') {
-        const [list, countRes] = await Promise.all([
-          evidenceApi.listCaptures(
-            {
-              cameraId: camId,
-              targetLabel: targetLbl,
-              q: keyword,
-              trackId: selectedTrackId ?? undefined,
-              startTime: startMs,
-              endTime: endMs,
-              limit: pageSize,
-              offset,
-            },
-            signal,
-          ),
-          evidenceApi.countCaptures(
-            {
-              cameraId: camId,
-              targetLabel: targetLbl,
-              q: keyword,
-              trackId: selectedTrackId ?? undefined,
-              startTime: startMs,
-              endTime: endMs,
-            },
-            signal,
-          ),
-        ])
-        if (!isCurrentRequest()) return
-        setCaptures(list)
-        refreshedTotal = countRes.total
-      } else if (activeTab === 'recognition') {
-        const [list, countRes] = await Promise.all([
-          evidenceApi.listRecognitions(
-            {
-              cameraId: camId,
-              status: statusParam,
-              q: keyword,
-              startTime: startMs,
-              endTime: endMs,
-              limit: pageSize,
-              offset,
-            },
-            signal,
-          ),
-          evidenceApi.countRecognitions(
-            {
-              cameraId: camId,
-              status: statusParam,
-              q: keyword,
-              startTime: startMs,
-              endTime: endMs,
-            },
-            signal,
-          ),
-        ])
-        if (!isCurrentRequest()) return
-        setRecognitions(list)
-        refreshedTotal = countRes.total
-      }
-      if (refreshedTotal === null) return
-      setTotalCount(refreshedTotal)
-      // 关键字生效时 totalCount 是筛选命中数，不得污染「未筛选总数」徽标
-      if (!keyword) {
-        setTabCounts((prev) => ({ ...prev, [activeTab]: refreshedTotal }))
-      }
-      setSelectedAlarmIds(new Set())
-    } catch (err) {
-      if (!isCurrentRequest() || isAbortError(err)) return
-      setErrorMessage(err instanceof Error ? err.message : String(err))
-    } finally {
-      // 仅当前请求能结束加载态：被接管的请求在到达这里前已将 ref 交给新控制器
-      if (dataAbortControllerRef.current === controller) {
-        dataAbortControllerRef.current = null
-        setIsLoading(false)
-      }
+    if (activeTab === 'alarms') {
+      requestPromise = Promise.all([
+        alarmApi.list(
+          {
+            cameraId: camId,
+            status: statusParam,
+            targetLabel: targetLbl,
+            ruleType: ruleTypeParam,
+            severity: severityParam,
+            q: keyword,
+            startTime: startMs,
+            endTime: endMs,
+            limit: pageSize,
+            offset,
+          },
+          signal,
+        ),
+        alarmApi.count(
+          {
+            cameraId: camId,
+            status: statusParam,
+            targetLabel: targetLbl,
+            ruleType: ruleTypeParam,
+            severity: severityParam,
+            q: keyword,
+            startTime: startMs,
+            endTime: endMs,
+          },
+          signal,
+        ),
+      ]).then(([list, countRes]) => ({
+        alarmsList: list,
+        refreshedTotal: countRes.total,
+      }))
+    } else if (activeTab === 'captures') {
+      requestPromise = Promise.all([
+        evidenceApi.listCaptures(
+          {
+            cameraId: camId,
+            targetLabel: targetLbl,
+            q: keyword,
+            trackId: selectedTrackId ?? undefined,
+            startTime: startMs,
+            endTime: endMs,
+            limit: pageSize,
+            offset,
+          },
+          signal,
+        ),
+        evidenceApi.countCaptures(
+          {
+            cameraId: camId,
+            targetLabel: targetLbl,
+            q: keyword,
+            trackId: selectedTrackId ?? undefined,
+            startTime: startMs,
+            endTime: endMs,
+          },
+          signal,
+        ),
+      ]).then(([list, countRes]) => ({
+        capturesList: list,
+        refreshedTotal: countRes.total,
+      }))
+    } else {
+      requestPromise = Promise.all([
+        evidenceApi.listRecognitions(
+          {
+            cameraId: camId,
+            status: statusParam,
+            q: keyword,
+            startTime: startMs,
+            endTime: endMs,
+            limit: pageSize,
+            offset,
+          },
+          signal,
+        ),
+        evidenceApi.countRecognitions(
+          {
+            cameraId: camId,
+            status: statusParam,
+            q: keyword,
+            startTime: startMs,
+            endTime: endMs,
+          },
+          signal,
+        ),
+      ]).then(([list, countRes]) => ({
+        recognitionsList: list,
+        refreshedTotal: countRes.total,
+      }))
     }
+
+    return requestPromise
+      .then(({ alarmsList, capturesList, recognitionsList, refreshedTotal }) => {
+        if (!isCurrentRequest()) return
+        if (alarmsList) setAlarms(alarmsList)
+        if (capturesList) setCaptures(capturesList)
+        if (recognitionsList) setRecognitions(recognitionsList)
+
+        setTotalCount(refreshedTotal)
+        // 关键字生效时 totalCount 是筛选命中数，不得污染「未筛选总数」徽标
+        if (!keyword) {
+          setTabCounts((prev) => ({ ...prev, [activeTab]: refreshedTotal }))
+        }
+        setSelectedAlarmIds(new Set())
+        setErrorMessage(null)
+        setSettledQuery(query)
+      })
+      .catch((err: unknown) => {
+        if (!isCurrentRequest() || isAbortError(err)) return
+        setErrorMessage(err instanceof Error ? err.message : String(err))
+        setSettledQuery(query)
+      })
+      .finally(() => {
+        // 仅当前请求能结束加载态：被接管的请求在到达这里前已将 ref 交给新控制器
+        if (dataAbortControllerRef.current === controller) {
+          dataAbortControllerRef.current = null
+        }
+      })
   }, [
     activeTab,
     selectedCameraId,
@@ -511,6 +543,7 @@ export function AlarmsPage(): React.ReactElement {
     debouncedSearchQuery,
     page,
     pageSize,
+    query,
   ])
 
   useEffect(() => {
@@ -735,7 +768,7 @@ export function AlarmsPage(): React.ReactElement {
 
   // 显式点击刷新处理
   const handleRefresh = useCallback(() => {
-    void loadData()
+    setRefreshVersion((v) => v + 1)
 
     const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
     const camId = selectedCameraId || undefined
@@ -780,7 +813,6 @@ export function AlarmsPage(): React.ReactElement {
       }))
     })
   }, [
-    loadData,
     timeRange,
     selectedCameraId,
     selectedTargetLabel,

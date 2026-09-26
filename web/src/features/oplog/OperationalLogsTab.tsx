@@ -54,10 +54,13 @@ export function OperationalLogsTab(): ReactElement {
   const [cameraIdInput, setCameraIdInput] = useState('')
   const debouncedCameraId = useDebounce(cameraIdInput.trim(), 250)
 
-  // 摄像头筛选变动重置回第 1 页
-  useEffect(() => {
+  // 摄像头筛选变动重置回第 1 页：用渲染期状态调整而非 effect，
+  // 避免「先查错页再纠正」的两次请求（理由同 OperationLogsTab）。
+  const [syncedCameraId, setSyncedCameraId] = useState(debouncedCameraId)
+  if (debouncedCameraId !== syncedCameraId) {
+    setSyncedCameraId(debouncedCameraId)
     setPage(1)
-  }, [debouncedCameraId])
+  }
 
   // 交互控制
   const [density, setDensity] = useState<LogDensity>('comfortable')

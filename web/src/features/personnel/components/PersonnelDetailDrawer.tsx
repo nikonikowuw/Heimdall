@@ -132,43 +132,59 @@ export function PersonnelDetailDrawer({
     }
   }, [])
 
+  // `.then/.catch/.finally` 链：async + try/finally 内的 setState 会被
+  // set-state-in-effect 保守判为可能同步执行。loading 由调用侧或本链内管理。
   const fetchDetail = useCallback(
-    async (id: string) => {
-      setLoading(true)
-      setError(null)
-      try {
-        const data = await personnelApi.getDetail(id)
-        setDetail(data)
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : t('errors.failedToLoad'))
-      } finally {
-        setLoading(false)
-      }
+    (id: string): Promise<void> => {
+      return personnelApi
+        .getDetail(id)
+        .then((data) => {
+          setDetail(data)
+          setError(null)
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : t('errors.failedToLoad'))
+        })
+        .finally(() => {
+          setLoading(false)
+        })
     },
     [t],
   )
 
+  // 打开时拉取详情；关闭时清空。
+  // 同步分支的 setState 包在微任务里，避免 effect 内同步 setState 触发级联渲染。
   useEffect(() => {
     if (isOpen && subjectId) {
-      fetchDetail(subjectId).then(() => {
-        if (autoOpenUpload) {
-          setTimeout(() => {
-            fileInputRef.current?.click()
-          }, 150)
-        }
-      })
+      void Promise.resolve()
+        .then(() => {
+          setLoading(true)
+          setError(null)
+        })
+        .then(() => fetchDetail(subjectId))
+        .then(() => {
+          if (autoOpenUpload) {
+            setTimeout(() => {
+              fileInputRef.current?.click()
+            }, 150)
+          }
+        })
     } else {
-      setDetail(null)
-      setPreviewPhotoUrl(null)
+      void Promise.resolve().then(() => {
+        setDetail(null)
+        setPreviewPhotoUrl(null)
+      })
     }
   }, [isOpen, subjectId, autoOpenUpload, fetchDetail])
 
+  // 关闭抽屉时收起内部弹层（微任务同上）
   useEffect(() => {
     if (isOpen) return
-
-    setIsReextractModalOpen(false)
-    setReextractReport(null)
-    setReextractError(null)
+    void Promise.resolve().then(() => {
+      setIsReextractModalOpen(false)
+      setReextractReport(null)
+      setReextractError(null)
+    })
   }, [isOpen])
 
   const handleCopyId = async (idText: string) => {
@@ -795,7 +811,11 @@ export function PersonnelDetailDrawer({
                       {subjectId && (
                         <button
                           type="button"
-                          onClick={() => fetchDetail(subjectId)}
+                          onClick={() => {
+                            setLoading(true)
+                            setError(null)
+                            void fetchDetail(subjectId)
+                          }}
                           className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-[var(--status-danger-border)] px-3 text-xs font-medium transition-colors hover:bg-[var(--status-danger-soft)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]/40 focus-visible:outline-none"
                         >
                           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />

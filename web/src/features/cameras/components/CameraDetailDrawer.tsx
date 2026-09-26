@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useState } from 'react'
+import React, { useId, useMemo, useState } from 'react'
 import {
   Check,
   Clock3,
@@ -34,9 +34,8 @@ import {
 import { CameraIllustration } from './illustrations/CameraIllustration'
 import {
   getCameraTypeLabel,
-  getSavedCameraModelType,
-  resolveCameraModelType,
   saveCameraModelType,
+  useCameraModelType,
 } from './illustrations/cameraModelType'
 import type { CameraModelType, CameraOperationalStatus } from './illustrations/types'
 
@@ -115,28 +114,40 @@ export function CameraDetailDrawer({
   const reducedMotion = useReducedMotion()
   const titleId = useId()
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
-  const [modelType, setModelType] = useState<CameraModelType>('bullet')
   const [activeCamera, setActiveCamera] = useState<Camera | null>(camera)
   const [activeTask, setActiveTask] = useState<CameraTaskRuntimeView | null | undefined>(task)
 
   const isOpen = Boolean(camera)
   useDismissStack(isOpen, onClose)
 
-  useEffect(() => {
+  // 切换摄像头或任务数据更新时同步展示数据：用渲染期状态调整而非 effect，
+  // 否则会先渲染一帧上一路摄像头的名称再被覆盖。
+  //
+  // 以 (camera, task) 的整体快照做标记而非只比 cameraId：task 的引用由父层
+  // taskMap 重建，刷新后会换新对象，仅比 id 会漏掉这类更新。
+  const [syncedView, setSyncedView] = useState<{
+    camera: Camera | null
+    task: CameraDetailDrawerProps['task']
+  }>({
+    camera,
+    task,
+  })
+  if (camera !== syncedView.camera || task !== syncedView.task) {
+    setSyncedView({ camera, task })
     if (camera) {
       setActiveCamera(camera)
       setActiveTask(task)
-      const saved = getSavedCameraModelType(camera.cameraId)
-      setModelType(saved ?? resolveCameraModelType(camera))
       setCopiedKey(null)
     }
-  }, [camera, task])
+  }
 
   const currentCamera = camera ?? activeCamera
   const currentTask = camera ? task : (activeTask ?? task)
+  // 形态配置通过 useSyncExternalStore 响应式订阅外部存储与系统事件，
+  // 杜绝渲染期读取 localStorage 的纯度违规。
+  const modelType = useCameraModelType(currentCamera)
 
   const handleModelSelect = (nextType: CameraModelType) => {
-    setModelType(nextType)
     if (currentCamera) {
       saveCameraModelType(currentCamera.cameraId, nextType)
       onModelTypeChange?.(currentCamera.cameraId, nextType)

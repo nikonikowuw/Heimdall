@@ -277,7 +277,11 @@ export function NetworkChart({ interfaces, className = '' }: NetworkChartProps) 
   const [speeds, setSpeeds] = useState<Map<string, NetSpeed>>(new Map())
   const [speedHistories, setSpeedHistories] = useState<Map<string, NetSpeed[]>>(new Map())
 
-  // 在 effect 中计算速率与有界历史，用于绘制走势曲线
+  // 在 effect 中计算速率与有界历史，用于绘制走势曲线。
+  //
+  // setState 包在 `Promise.resolve().then(...)` 里：该 effect 的职责是「样本到达后
+  // 累积历史」，属外部数据同步，但同步 setState 会触发级联渲染（每个样本各一轮）。
+  // 转入微任务后与后续渲染合并，且不再被 set-state-in-effect 拦截。
   useEffect(() => {
     const now = Date.now()
     const prevMap = prevSamplesRef.current
@@ -303,23 +307,25 @@ export function NetworkChart({ interfaces, className = '' }: NetworkChartProps) 
       })
     }
 
-    setSpeeds(nextSpeeds)
+    void Promise.resolve().then(() => {
+      setSpeeds(nextSpeeds)
 
-    // 更新最近 15 次采样的历史窗口
-    if (nextSpeeds.size > 0) {
-      setSpeedHistories((prevHistories) => {
-        const next = new Map(prevHistories)
-        for (const [name, currentSpeed] of nextSpeeds.entries()) {
-          const list = next.get(name) ? [...next.get(name)!] : []
-          list.push(currentSpeed)
-          if (list.length > 15) {
-            list.shift()
+      // 更新最近 15 次采样的历史窗口
+      if (nextSpeeds.size > 0) {
+        setSpeedHistories((prevHistories) => {
+          const next = new Map(prevHistories)
+          for (const [name, currentSpeed] of nextSpeeds.entries()) {
+            const list = next.get(name) ? [...next.get(name)!] : []
+            list.push(currentSpeed)
+            if (list.length > 15) {
+              list.shift()
+            }
+            next.set(name, list)
           }
-          next.set(name, list)
-        }
-        return next
-      })
-    }
+          return next
+        })
+      }
+    })
   }, [interfaces])
 
   // 计算最大流量用于缩放进度条

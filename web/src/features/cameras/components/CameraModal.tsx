@@ -66,9 +66,13 @@ export function CameraModal({
   const [selectedGbChannel, setSelectedGbChannel] = useState<string>('')
   const [isLanScanOpen, setIsLanScanOpen] = useState(false)
 
-  // 当弹窗打开或切换目标 camera 时，重置/初始化表单数据
+  // 当弹窗打开或切换目标 camera 时，重置/初始化表单数据。
+  //
+  // 整个 effect 体包在微任务里：重置与拉取设备树会多次 setState，同步执行会触发
+  // 级联渲染（打开弹窗时可见闪烁）；转微任务后与后续渲染合并。
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) return
+    void Promise.resolve().then(() => {
       if (camera) {
         setProtocol(camera.protocol === 'gb28181' ? 'gb28181' : 'rtsp')
         setName(camera.name || '')
@@ -92,7 +96,7 @@ export function CameraModal({
       setErrorMsg(null)
 
       // 拉取 GB28181 设备树
-      gb28181Api
+      return gb28181Api
         .listDevices()
         .then((devs) => {
           setGbDevices(devs)
@@ -104,7 +108,7 @@ export function CameraModal({
           }
         })
         .catch(() => {})
-    }
+    })
   }, [isOpen, camera])
 
   // 当 GB28181 设备或通道选择变化时自动构造 URL

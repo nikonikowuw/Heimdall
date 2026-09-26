@@ -124,22 +124,40 @@ export function CreateTaskModal({
     }
   }, [isOpen])
 
-  // 打开弹窗时初始化：候选通道中优先选中预设通道，其次首个未配置通道
-  useEffect(() => {
-    if (!isOpen) return
-    setErrorMsg(null)
-    setChannelQuery('')
-    setIsSubmitting(false)
-    setDesiredEnabled(false)
+  // 打开弹窗时初始化：候选通道中优先选中预设通道，其次首个未配置通道。
+  //
+  // 区分「弹窗打开重置」与「机位选定」：
+  // 1. 打开弹窗时清空上一次填写的草稿、错误信息与提交中标记；
+  // 2. 当候选机位就绪（creatable.length > 0）且尚未选定机位时，自动选定预设或首个通道；
+  //    若打开时候选列表异步拉取中（creatable 为空），不将标记锁死为 __none__，确保数据到达后能正确补选。
+  const [syncedOpen, setSyncedOpen] = useState(false)
+  const [initializedCameraId, setInitializedCameraId] = useState<string | null>(null)
 
+  if (isOpen !== syncedOpen) {
+    setSyncedOpen(isOpen)
+    if (isOpen) {
+      setErrorMsg(null)
+      setChannelQuery('')
+      setIsSubmitting(false)
+      setDesiredEnabled(false)
+      setSelectedCameraId('')
+      setTaskName('')
+      setIsNameEdited(false)
+      setInitializedCameraId(null)
+    }
+  }
+
+  if (isOpen && initializedCameraId === null && creatable.length > 0) {
     const preselected = preselectedCameraId
       ? creatable.find((c) => c.cameraId === preselectedCameraId)
       : undefined
     const defaultCam = preselected ?? creatable[0]
-    setSelectedCameraId(defaultCam?.cameraId ?? '')
-    setTaskName(formatDefaultTaskName(defaultCam))
-    setIsNameEdited(false)
-  }, [isOpen, creatable, preselectedCameraId])
+    if (defaultCam) {
+      setInitializedCameraId(defaultCam.cameraId)
+      setSelectedCameraId(defaultCam.cameraId)
+      setTaskName(formatDefaultTaskName(defaultCam))
+    }
+  }
 
   useDismissStack(isOpen, onClose, { disabled: isSubmitting })
 

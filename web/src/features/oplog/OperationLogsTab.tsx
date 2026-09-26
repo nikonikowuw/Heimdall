@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useMemo, useRef, useState, type ReactElement } from 'react'
 import { Filter, Layers, RefreshCw, RotateCcw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { SearchInput } from '@/components/ui/SearchInput'
@@ -51,10 +51,16 @@ export function OperationLogsTab(): ReactElement {
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebounce(searchInput.trim(), 250)
 
-  // 关键词变动重置回第 1 页
-  useEffect(() => {
+  // 关键词变动重置回第 1 页：用渲染期状态调整而非 effect。
+  //
+  // 旧写法会在筛选变化时先用「旧页码 + 新关键字」发起一次请求，再由 effect 回写页码
+  // 触发第二次请求 —— 即 useOplogs 文档里提到的「先查错页再纠正」。
+  // 渲染期重置后，首次提交给 hook 的就是 (page=1, 新关键字)。
+  const [syncedSearch, setSyncedSearch] = useState(debouncedSearch)
+  if (debouncedSearch !== syncedSearch) {
+    setSyncedSearch(debouncedSearch)
     setPage(1)
-  }, [debouncedSearch])
+  }
 
   // 显示控制
   const [density, setDensity] = useState<LogDensity>('comfortable')

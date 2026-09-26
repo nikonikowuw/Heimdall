@@ -125,7 +125,9 @@ export function AlarmLightboxModal({
         img.naturalHeight,
       ),
     )
-  }, [])
+    // setImgRect 来自 useState，引用稳定；显式列入依赖是 React Compiler 的要求 ——
+    // 它依推断出的依赖必须出现在源码依赖数组中，否则整个组件会被跳过优化。
+  }, [setImgRect])
 
   useEffect(() => {
     const container = containerRef.current

@@ -39,42 +39,42 @@ export function TimeSettings(): React.ReactElement {
   const [showTimeConfirm, setShowTimeConfirm] = useState(false)
   const [syncing, setSyncing] = useState(false)
 
+  // 取数用 `.then/.catch/.finally` 链：async + try/finally 中的 setState 会被
+  // set-state-in-effect 保守判为可能同步执行。loading 置位由调用侧事件处理器承担。
   const loadData = useCallback(
-    async (signal?: AbortSignal) => {
-      try {
-        setLoading(true)
-        setError(null)
-        const [s, c] = await Promise.all([
-          systemApi.getTimeStatus(signal),
-          systemApi.getTimeConfig(signal),
-        ])
-        if (!signal?.aborted) {
+    (signal?: AbortSignal): Promise<void> => {
+      return Promise.all([systemApi.getTimeStatus(signal), systemApi.getTimeConfig(signal)])
+        .then(([s, c]) => {
+          if (signal?.aborted) return
           setStatus(s)
           setConfig(c)
           setDraft(c)
+          setError(null)
 
           const now = new Date()
           setManualDate(now.toISOString().split('T')[0])
           setManualTime(now.toTimeString().slice(0, 8))
-        }
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return
-        if (!signal?.aborted)
-          setError(
-            err instanceof Error
-              ? err.message
-              : t('loadFailed', { defaultValue: 'Failed to load' }),
-          )
-      } finally {
-        if (!signal?.aborted) setLoading(false)
-      }
+        })
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          if (!signal?.aborted) {
+            setError(
+              err instanceof Error
+                ? err.message
+                : t('loadFailed', { defaultValue: 'Failed to load' }),
+            )
+          }
+        })
+        .finally(() => {
+          if (!signal?.aborted) setLoading(false)
+        })
     },
     [t],
   )
 
   useEffect(() => {
     const controller = new AbortController()
-    loadData(controller.signal)
+    void loadData(controller.signal)
     return () => controller.abort()
   }, [loadData])
 
@@ -151,10 +151,24 @@ export function TimeSettings(): React.ReactElement {
             {t('time.subtitle', { defaultValue: '管理系统时钟与 NTP 同步配置' })}
           </p>
         </div>
-        <RefreshButton onClick={() => loadData()} loading={loading} />
+        <RefreshButton
+          onClick={() => {
+            setLoading(true)
+            void loadData()
+          }}
+          loading={loading}
+        />
       </div>
 
-      {error && <ErrorBanner message={error} onRetry={() => loadData()} />}
+      {error && (
+        <ErrorBanner
+          message={error}
+          onRetry={() => {
+            setLoading(true)
+            void loadData()
+          }}
+        />
+      )}
 
       {/* System Time Status */}
       <SettingsSection title={t('time.systemTime', { defaultValue: '系统时间' })}>

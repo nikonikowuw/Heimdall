@@ -63,6 +63,8 @@ import {
   ToolMode,
 } from './rulesStudioTypes'
 
+const EMPTY_ALGO_PARAMS: Record<string, unknown> = {}
+
 /** 保存反馈：已生效仅作瞬时提示；未收敛必须保留到用户重试或改配置；请求失败是另一类问题 */
 type SaveFeedback =
   | { kind: 'applied' }
@@ -363,9 +365,16 @@ export function LiveRulesStudio({
     )
   }, [])
 
-  useEffect(() => {
+  // 摄像头或预览码流切换时清空上一路的分辨率：渲染期状态调整，
+  // 避免 effect 先渲染一帧旧尺寸造成叠加层错位。
+  const [previewSizeKey, setPreviewSizeKey] = useState(
+    `${camera.cameraId}|${effectivePreviewStream}`,
+  )
+  const currentPreviewSizeKey = `${camera.cameraId}|${effectivePreviewStream}`
+  if (currentPreviewSizeKey !== previewSizeKey) {
+    setPreviewSizeKey(currentPreviewSizeKey)
     setPreviewVideoSize(null)
-  }, [camera.cameraId, effectivePreviewStream])
+  }
 
   // 真实遥测：活跃航迹与运动门控状态由后端 WS 推送
   const telemetry = useSyncExternalStore(
@@ -1999,7 +2008,9 @@ export function LiveRulesStudio({
         }
         onFpsChange={handleFpsChange}
         params={
-          paramDrawerAlgo ? (activeInstances[paramDrawerAlgo.algorithmId]?.algoParams ?? {}) : {}
+          paramDrawerAlgo
+            ? (activeInstances[paramDrawerAlgo.algorithmId]?.algoParams ?? EMPTY_ALGO_PARAMS)
+            : EMPTY_ALGO_PARAMS
         }
         onSaveParams={handleSaveDrawerParams}
         onClose={() => setParamDrawerAlgo(null)}

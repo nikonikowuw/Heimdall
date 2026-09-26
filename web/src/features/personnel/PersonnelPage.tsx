@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { personnelApi } from '@/lib/api'
+import { buildQuerySignature } from '@/lib/utils'
 import { wsClient } from '@/lib/wsClient'
 import type {
   PersonnelDetail,
@@ -94,9 +95,12 @@ export function PersonnelPage(): React.ReactElement {
   const [sortBy, setSortBy] = useState<SortBy>('createdDesc')
 
   const [searchKeyword, setSearchKeyword] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(24)
+  const [refreshVersion, setRefreshVersion] = useState(0)
+  const [settledQuery, setSettledQuery] = useState<string | null>(null)
+  const query = buildQuerySignature(searchKeyword.trim(), page, limit, refreshVersion)
+  const isLoading = settledQuery !== query
 
   // 多选与批量操作
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -209,35 +213,38 @@ export function PersonnelPage(): React.ReactElement {
     }
   }
 
-  const loadData = useCallback(async () => {
-    setIsLoading(true)
-    try {
-      const [listRes, statsRes] = await Promise.all([
-        personnelApi.list({
-          keyword: searchKeyword.trim() || undefined,
-          limit,
-          offset: (page - 1) * limit,
-        }),
-        personnelApi.getStats().catch(() => null),
-      ])
-      setItems(listRes.items)
-      setTotal(listRes.total)
-      if (statsRes) {
-        setStats(statsRes)
-        setHasStats(true)
-        setStatsError(null)
-      } else {
-        setStatsError(t('stats.loadFailed'))
-      }
-    } catch {
-      // 列表失败保持上次结果，由空状态与刷新按钮承载重试
-    } finally {
-      setIsLoading(false)
-    }
-  }, [searchKeyword, page, limit, t])
+  // 取数函数通过已落定签名派生 isLoading，不在函数开头同步 setIsLoading(true)。
+  // 使用 .then/.catch 链保证全部 setState 位于 Promise 微任务中。
+  const loadData = useCallback((): Promise<void> => {
+    const currentQuery = buildQuerySignature(searchKeyword.trim(), page, limit, refreshVersion)
+    return Promise.all([
+      personnelApi.list({
+        keyword: searchKeyword.trim() || undefined,
+        limit,
+        offset: (page - 1) * limit,
+      }),
+      personnelApi.getStats().catch(() => null),
+    ])
+      .then(([listRes, statsRes]) => {
+        setItems(listRes.items)
+        setTotal(listRes.total)
+        if (statsRes) {
+          setStats(statsRes)
+          setHasStats(true)
+          setStatsError(null)
+        } else {
+          setStatsError(t('stats.loadFailed'))
+        }
+        setSettledQuery(currentQuery)
+      })
+      .catch(() => {
+        // 列表失败保持上次结果，由空状态与刷新按钮承载重试
+        setSettledQuery(currentQuery)
+      })
+  }, [searchKeyword, page, limit, refreshVersion, t])
 
   useEffect(() => {
-    loadData()
+    void loadData()
   }, [loadData])
 
   // 初次加载探测一次后台任务状态
@@ -557,11 +564,8 @@ export function PersonnelPage(): React.ReactElement {
 
   const totalPages = Math.max(1, Math.ceil(total / limit))
 
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages)
-    }
-  }, [page, totalPages])
+  // 安全页码：渲染期派生，避免越界页空白与 effect 回写的级联渲染
+  const safePage = Math.min(page, totalPages)
 
   let reextractTooltip = t('actions.reextractFeatures')
   if (!hasStats && statsError === null) {
@@ -876,7 +880,7 @@ export function PersonnelPage(): React.ReactElement {
 
             {/* 刷新 */}
             <RefreshButton
-              onClick={() => loadData()}
+              onClick={() => setRefreshVersion((v) => v + 1)}
               loading={isLoading}
               label={t('actions.refresh')}
             />
@@ -1083,8 +1087,8 @@ export function PersonnelPage(): React.ReactElement {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={page <= 1 || isLoading}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={safePage <= 1 || isLoading}
+            onClick={() => setPage(Math.max(1, safePage - 1))}
             aria-label={t('pagination.prev')}
             className={PAGER_CLASS}
           >
@@ -1092,12 +1096,12 @@ export function PersonnelPage(): React.ReactElement {
             <span className="hidden sm:inline">{t('pagination.prev')}</span>
           </button>
           <span className="font-data px-1.5 font-semibold text-[var(--text-primary)] tabular-nums">
-            {page} / {totalPages}
+            {safePage} / {totalPages}
           </span>
           <button
             type="button"
-            disabled={page >= totalPages || isLoading}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={safePage >= totalPages || isLoading}
+            onClick={() => setPage(Math.min(totalPages, safePage + 1))}
             aria-label={t('pagination.next')}
             className={PAGER_CLASS}
           >

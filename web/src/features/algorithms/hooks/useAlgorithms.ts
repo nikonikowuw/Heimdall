@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDebounce } from '@/hooks/use-debounce'
 import { algorithmApi } from '@/lib/api'
+import { buildQuerySignature } from '@/lib/utils'
 import type { AlgorithmItem, AlgorithmStats, HostPlatformInfo } from '@/types'
 import { ALGO_LIST_PAGE_SIZE, mergeAlgorithmPages, type AlgoOriginFilter } from '../algoFilters'
 
@@ -59,14 +60,18 @@ export function useAlgorithms(params: UseAlgorithmsParams): UseAlgorithmsResult 
 
   const [algorithms, setAlgorithms] = useState<AlgorithmItem[]>([])
   const [total, setTotal] = useState(0)
-  const [isLoading, setIsLoading] = useState(true)
-  const [isLoadingMore, setIsLoadingMore] = useState(false)
-  const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
-  const [listError, setListError] = useState<string | null>(null)
+  // 已落定的列表/统计查询签名，与当前签名不一致即为加载中（派生，不在 effect 内开字 setLoading）
+  const [settledListQuery, setSettledListQuery] = useState<string | null>(null)
+  const [settledStatsQuery, setSettledStatsQuery] = useState<string | null>(null)
+  const [isLoadingMoreFor, setIsLoadingMoreFor] = useState<string | null>(null)
+  const [loadMoreFailure, setLoadMoreFailure] = useState<{
+    scope: string
+    message: string
+  } | null>(null)
+  const [listFailure, setListFailure] = useState<{ query: string; message: string } | null>(null)
 
   const [stats, setStats] = useState<AlgorithmStats | null>(null)
-  const [isLoadingStats, setIsLoadingStats] = useState(true)
-  const [statsError, setStatsError] = useState<string | null>(null)
+  const [statsFailure, setStatsFailure] = useState<{ query: string; message: string } | null>(null)
 
   const [hostPlatform, setHostPlatform] = useState<HostPlatformInfo | null>(null)
   const [page, setPage] = useState(1)
@@ -79,6 +84,17 @@ export function useAlgorithms(params: UseAlgorithmsParams): UseAlgorithmsResult 
   const statsGenerationRef = useRef(0)
   const loadMoreControllerRef = useRef<AbortController | null>(null)
 
+  // 查询签名：分别对应下方两个 effect 的依赖集合
+  const listQuery = buildQuerySignature(scope, refreshVersion)
+  const statsQuery = buildQuerySignature(refreshVersion)
+  const isLoading = settledListQuery !== listQuery
+  const isLoadingStats = settledStatsQuery !== statsQuery
+  // 分页态按作用域归属：作用域一变即自动失效，无需在 effect 内重置
+  const isLoadingMore = isLoadingMoreFor === scope
+  const loadMoreError = loadMoreFailure?.scope === scope ? loadMoreFailure.message : null
+  const listError = listFailure && listFailure.query === listQuery ? listFailure.message : null
+  const statsError = statsFailure && statsFailure.query === statsQuery ? statsFailure.message : null
+
   let isBuiltin: boolean | undefined
   if (origin === 'builtin') {
     isBuiltin = true
@@ -90,15 +106,10 @@ export function useAlgorithms(params: UseAlgorithmsParams): UseAlgorithmsResult 
     scopeRef.current = scope
     loadMoreControllerRef.current?.abort()
     loadMoreControllerRef.current = null
-    setIsLoadingMore(false)
-    setLoadMoreError(null)
 
     const generation = listGenerationRef.current + 1
     listGenerationRef.current = generation
     const controller = new AbortController()
-
-    setIsLoading(true)
-    setListError(null)
 
     void algorithmApi
       .list(
@@ -116,13 +127,13 @@ export function useAlgorithms(params: UseAlgorithmsParams): UseAlgorithmsResult 
         setAlgorithms(data.items)
         setTotal(data.total)
         setPage(1)
+        setListFailure(null)
+        setSettledListQuery(listQuery)
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || listGenerationRef.current !== generation) return
-        setListError(toErrorMessage(error))
-      })
-      .finally(() => {
-        if (listGenerationRef.current === generation) setIsLoading(false)
+        setListFailure({ query: listQuery, message: toErrorMessage(error) })
+        setSettledListQuery(listQuery)
       })
 
     return () => {
@@ -131,16 +142,13 @@ export function useAlgorithms(params: UseAlgorithmsParams): UseAlgorithmsResult 
       loadMoreControllerRef.current = null
       if (listGenerationRef.current === generation) listGenerationRef.current += 1
     }
-  }, [debouncedKeyword, algorithmType, isBuiltin, refreshVersion, scope])
+  }, [debouncedKeyword, algorithmType, isBuiltin, refreshVersion, scope, listQuery])
 
   // 统计与宿主平台与筛选无关，不随关键字变化重取
   useEffect(() => {
     const generation = statsGenerationRef.current + 1
     statsGenerationRef.current = generation
     const controller = new AbortController()
-
-    setIsLoadingStats(true)
-    setStatsError(null)
 
     void Promise.all([
       algorithmApi.getStats(),
@@ -149,21 +157,20 @@ export function useAlgorithms(params: UseAlgorithmsParams): UseAlgorithmsResult 
       .then(([statsData, hostData]) => {
         if (controller.signal.aborted || statsGenerationRef.current !== generation) return
         setStats(statsData)
-        setStatsError(null)
+        setStatsFailure(null)
+        setSettledStatsQuery(statsQuery)
         if (hostData) setHostPlatform(hostData)
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || statsGenerationRef.current !== generation) return
-        setStatsError(toErrorMessage(error))
-      })
-      .finally(() => {
-        if (statsGenerationRef.current === generation) setIsLoadingStats(false)
+        setStatsFailure({ query: statsQuery, message: toErrorMessage(error) })
+        setSettledStatsQuery(statsQuery)
       })
 
     return () => {
       controller.abort()
     }
-  }, [refreshVersion])
+  }, [refreshVersion, statsQuery])
 
   const hasMore = page * ALGO_LIST_PAGE_SIZE < total
 
@@ -175,8 +182,7 @@ export function useAlgorithms(params: UseAlgorithmsParams): UseAlgorithmsResult 
     loadMoreControllerRef.current?.abort()
     const controller = new AbortController()
     loadMoreControllerRef.current = controller
-    setIsLoadingMore(true)
-    setLoadMoreError(null)
+    setIsLoadingMoreFor(scope)
 
     void algorithmApi
       .list(
@@ -198,15 +204,15 @@ export function useAlgorithms(params: UseAlgorithmsParams): UseAlgorithmsResult 
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || scopeRef.current !== requestScope) return
-        setLoadMoreError(toErrorMessage(error))
+        setLoadMoreFailure({ scope: requestScope, message: toErrorMessage(error) })
       })
       .finally(() => {
         if (loadMoreControllerRef.current === controller) {
           loadMoreControllerRef.current = null
-          setIsLoadingMore(false)
+          setIsLoadingMoreFor(null)
         }
       })
-  }, [algorithmType, debouncedKeyword, hasMore, isBuiltin, isLoading, isLoadingMore, page])
+  }, [algorithmType, debouncedKeyword, hasMore, isBuiltin, isLoading, isLoadingMore, page, scope])
 
   return {
     algorithms,

@@ -5,8 +5,9 @@
  * 网络流量、温度和存储使用情况。
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useLatestRef } from '@/hooks/use-latest-ref'
 import type { LucideIcon } from 'lucide-react'
 import {
   Server,
@@ -106,8 +107,7 @@ export function SystemOverview(): React.ReactElement {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const dataRef = useRef<SystemOverviewData | null>(null)
-  dataRef.current = data
+  const dataRef = useLatestRef(data)
 
   const loadData = useCallback(
     async (isManual = false, signal?: AbortSignal) => {
@@ -139,7 +139,7 @@ export function SystemOverview(): React.ReactElement {
         }
       }
     },
-    [t],
+    [t, dataRef],
   )
 
   // 定时 2s 轮询采集，并在页面隐藏时挂起节能（防重叠与防 AbortController 泄露）

@@ -30,59 +30,72 @@ export function TasksPage({
   const [cameras, setCameras] = useState<Camera[]>([])
   const [taskConfigs, setTaskConfigs] = useState<Record<string, TaskConfigDto>>({})
   const [selectedCameraForConfig, setSelectedCameraForConfig] = useState<Camera | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
 
   // 任务创建与删除模态框状态
   const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false)
   const [taskToDelete, setTaskToDelete] = useState<{ cameraId: string; name: string } | null>(null)
 
-  const loadData = useCallback(async (): Promise<void> => {
-    setIsLoading(true)
-    try {
-      const [cams, tasks] = await Promise.all([cameraApi.list(), taskApi.list()])
-      setCameras(cams)
+  // 取数不碰 loading：挂载时由 useState(true) 承担，刷新时在事件处理器内置位。
+  // 用 `.then/.catch/.finally` 链，理由同 CamerasPage（async + try/finally 会被
+  // set-state-in-effect 保守判为同步 setState）。
+  const loadData = useCallback((): Promise<void> => {
+    return Promise.all([cameraApi.list(), taskApi.list()])
+      .then(([cams, tasks]) => {
+        setCameras(cams)
 
-      const configs: Record<string, TaskConfigDto> = {}
-      for (const item of tasks) {
-        configs[item.cameraId] = {
-          cameraId: item.cameraId,
-          name: item.name,
-          desiredEnabled: item.desiredEnabled,
-          algorithmId: item.algorithmId,
-          analysisFps: item.analysisFps,
-          algoParams: item.algoParams,
-          actualStatus: item.actualStatus,
-          statusMessage: item.statusMessage,
-          algorithmInstances: item.algorithmInstances,
-          rules: item.rules || [],
-          motionGate: item.motionGate,
-          configRevision: item.configRevision,
+        const configs: Record<string, TaskConfigDto> = {}
+        for (const item of tasks) {
+          configs[item.cameraId] = {
+            cameraId: item.cameraId,
+            name: item.name,
+            desiredEnabled: item.desiredEnabled,
+            algorithmId: item.algorithmId,
+            analysisFps: item.analysisFps,
+            algoParams: item.algoParams,
+            actualStatus: item.actualStatus,
+            statusMessage: item.statusMessage,
+            algorithmInstances: item.algorithmInstances,
+            rules: item.rules || [],
+            motionGate: item.motionGate,
+            configRevision: item.configRevision,
+          }
         }
-      }
-      setTaskConfigs(configs)
-    } catch {
-      // 优雅降级处理
-    } finally {
-      setIsLoading(false)
-    }
+        setTaskConfigs(configs)
+      })
+      .catch(() => {
+        // 优雅降级处理
+      })
+      .finally(() => {
+        setIsLoading(false)
+      })
   }, [])
 
   useEffect(() => {
-    loadData()
+    void loadData()
   }, [loadData])
 
-  // 联动初始要配置的摄像头 ID
-  useEffect(() => {
-    if (!initialConfigCameraId || cameras.length === 0) return
+  // 联动初始要配置的摄像头 ID：外部传入时打开对应配置。
+  //
+  // 用渲染期状态调整 + 「已处理标记」而非 effect：effect 会在弹窗打开后再多渲染一轮，
+  // 且需额外维护依赖数组。标记保证同一个 id 只联动一次，不会因 cameras/taskConfigs
+  // 刷新而反复抢焦点。
+  const [handledConfigCameraId, setHandledConfigCameraId] = useState<string | null>(null)
+  if (
+    initialConfigCameraId &&
+    initialConfigCameraId !== handledConfigCameraId &&
+    cameras.length > 0
+  ) {
     const targetCam = cameras.find((c) => c.cameraId === initialConfigCameraId)
     if (targetCam) {
+      setHandledConfigCameraId(initialConfigCameraId)
       if (taskConfigs[targetCam.cameraId]) {
         setSelectedCameraForConfig(targetCam)
       } else {
         setIsCreateTaskModalOpen(true)
       }
     }
-  }, [initialConfigCameraId, cameras, taskConfigs])
+  }
 
   async function handleToggleArm(camera: Camera): Promise<void> {
     const currentCfg = taskConfigs[camera.cameraId]

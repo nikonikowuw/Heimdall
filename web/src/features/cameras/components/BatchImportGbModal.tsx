@@ -46,27 +46,41 @@ export function BatchImportGbModal({
     return list
   }, [devices])
 
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => {
-    return new Set(
-      unmanagedList.map((item) => getChannelKey(item.device.deviceId, item.channel.channelId)),
-    )
-  })
+  // 全部可选通道 key（unmanagedList 的唯一真源派生）
+  const allKeys = useMemo(
+    () => unmanagedList.map((item) => getChannelKey(item.device.deviceId, item.channel.channelId)),
+    [unmanagedList],
+  )
+
+  // 默认全选；用户在本次打开期间取消的选择记在 `deselectedKeys` 里。
+  //
+  // 不用「effect 内 setSelectedKeys(全选)」同步 unmanagedList：那会在通道列表刷新时
+  // 静默抹掉用户的勾选。改为存储「用户取消项」，新出现的通道自然成为已勾选。
+  const [deselectedKeys, setDeselectedKeys] = useState<Set<string>>(() => new Set())
+  const selectedKeys = useMemo(
+    () => new Set(allKeys.filter((key) => !deselectedKeys.has(key))),
+    [allKeys, deselectedKeys],
+  )
   const [streamModes, setStreamModes] = useState<Record<string, StreamMode>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
+  // 弹窗打开时重置本地会话状态（取消项清空默认全选、清空提交态与报错），保证每次打开均为全新会话
+  const [syncedOpen, setSyncedOpen] = useState(isOpen)
+  if (isOpen !== syncedOpen) {
+    setSyncedOpen(isOpen)
+    if (isOpen) {
+      setDeselectedKeys(new Set())
+      setStreamModes({})
+      setErrorMsg(null)
+      setIsSubmitting(false)
+    }
+  }
+
   useDismissStack(isOpen, onClose, { disabled: isSubmitting })
 
-  React.useEffect(() => {
-    setSelectedKeys(
-      new Set(
-        unmanagedList.map((item) => getChannelKey(item.device.deviceId, item.channel.channelId)),
-      ),
-    )
-  }, [unmanagedList])
-
   const toggleSelect = (key: string) => {
-    setSelectedKeys((prev) => {
+    setDeselectedKeys((prev) => {
       const next = new Set(prev)
       if (next.has(key)) {
         next.delete(key)
@@ -78,14 +92,12 @@ export function BatchImportGbModal({
   }
 
   const toggleSelectAll = () => {
+    // 全选 = 清空取消项；取消全选 = 把当前全部可选 key 记为取消项。
+    // 只操作「用户取消集合」，与 unmanagedList 的派生结果保持一致。
     if (selectedKeys.size === unmanagedList.length) {
-      setSelectedKeys(new Set())
+      setDeselectedKeys(new Set(allKeys))
     } else {
-      setSelectedKeys(
-        new Set(
-          unmanagedList.map((item) => getChannelKey(item.device.deviceId, item.channel.channelId)),
-        ),
-      )
+      setDeselectedKeys(new Set())
     }
   }
 

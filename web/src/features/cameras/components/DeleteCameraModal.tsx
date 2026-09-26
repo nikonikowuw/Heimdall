@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { AlertCircle, AlertTriangle, Loader2, Trash2, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -24,11 +24,13 @@ export function DeleteCameraModal({
 
   const [isDeleting, setIsDeleting] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  // 记住最后一次非空的 camera：关闭弹窗时 props 会被置空，而退出动画期间仍需保留名称。
+  // 用渲染期状态调整（而非 effect 回写）：effect 会把「新 camera 已到但 activeCamera
+  // 还是旧值」的中间态提交一帧，弹窗内容会闪一下上一条记录。
   const [activeCamera, setActiveCamera] = useState<Camera | null>(camera)
-
-  useEffect(() => {
-    if (camera) setActiveCamera(camera)
-  }, [camera])
+  if (camera && camera !== activeCamera) {
+    setActiveCamera(camera)
+  }
 
   const currentCamera = camera ?? activeCamera
 

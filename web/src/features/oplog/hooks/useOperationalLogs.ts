@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { EventFilter, LevelFilter, TargetFilter } from '@/features/oplog/logFilters'
 import { DEFAULT_LOG_PAGE_SIZE } from '@/features/oplog/logPaging'
 import { operationalLogApi } from '@/lib/api'
+import { buildQuerySignature } from '@/lib/utils'
 import type { OperationalLog } from '@/types'
 import { getErrorMessage, normalizeOperationalLog } from './helpers'
 
@@ -42,9 +43,13 @@ export function useOperationalLogs(
   const { level, target, event, cameraId, fromMs, toMs } = filters
 
   const [logs, setLogs] = useState<OperationalLog[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // 已落定的查询签名；与当前签名不一致即为加载中。
+  //
+  // 派生而非在 effect 内 `setIsLoading(true)`：后者每次筛选/翻页多一轮渲染，
+  // 且错误需手动清零。按签名归属后，筛选一变错误自动失效。
+  const [settledQuery, setSettledQuery] = useState<string | null>(null)
+  const [failure, setFailure] = useState<{ query: string; message: string } | null>(null)
   const [hasMore, setHasMore] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const generationRef = useRef(0)
 
@@ -59,9 +64,20 @@ export function useOperationalLogs(
   const trimmedCameraId = cameraId?.trim()
   const cameraFilter = trimmedCameraId ? trimmedCameraId : undefined
 
-  const cursorScope = `${levelFilter ?? ''}|${targetFilter ?? ''}|${eventFilter ?? ''}|${
-    cameraFilter ?? ''
-  }|${fromMs ?? ''}|${toMs ?? ''}|${pageSize}`
+  const cursorScope = buildQuerySignature(
+    levelFilter,
+    targetFilter,
+    eventFilter,
+    cameraFilter,
+    fromMs,
+    toMs,
+    pageSize,
+  )
+
+  // 请求签名：即下方 effect 的依赖集合，用于派生 isLoading 与错误归属
+  const query = buildQuerySignature(cursorScope, page, refreshVersion)
+  const isLoading = settledQuery !== query
+  const error = failure && failure.query === query ? failure.message : null
 
   useEffect(() => {
     // 筛选范围或页容量变化时历史游标不再对应当前结果集，回到第 1 页由调用方负责
@@ -73,9 +89,6 @@ export function useOperationalLogs(
     const generation = generationRef.current + 1
     generationRef.current = generation
     const controller = new AbortController()
-
-    setIsLoading(true)
-    setError(null)
 
     void operationalLogApi
       .list(
@@ -95,6 +108,8 @@ export function useOperationalLogs(
         if (generationRef.current !== generation) return
         setLogs(pageData.items.map(normalizeOperationalLog))
         setHasMore(pageData.hasMore)
+        setFailure(null)
+        setSettledQuery(query)
 
         // 记录下一页所需的游标
         if (pageData.nextBefore !== null && pageData.nextBefore !== undefined) {
@@ -103,12 +118,8 @@ export function useOperationalLogs(
       })
       .catch((requestError: unknown) => {
         if (controller.signal.aborted || generationRef.current !== generation) return
-        setError(getErrorMessage(requestError))
-      })
-      .finally(() => {
-        if (generationRef.current === generation) {
-          setIsLoading(false)
-        }
+        setFailure({ query, message: getErrorMessage(requestError) })
+        setSettledQuery(query)
       })
 
     return () => {
@@ -128,6 +139,7 @@ export function useOperationalLogs(
     pageSize,
     cursorScope,
     refreshVersion,
+    query,
   ])
 
   // 保留游标历史，刷新当前页仍取同一游标，避免翻页后刷新退化成第 1 页数据

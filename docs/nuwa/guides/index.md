@@ -43,7 +43,7 @@
 | [目录与 i18n](../frontend/directory-structure.md) | 新文件、feature 边界、翻译资源 |
 | [组件](../frontend/component-guidelines.md) | 组件接口、播放器、Canvas、交互 |
 | [样式](../frontend/styling-guidelines.md) | 主题、token、排印、响应式叠加 |
-| [Hook](../frontend/hook-guidelines.md) | 逻辑复用、订阅、清理与依赖 |
+| [Hook](../frontend/hook-guidelines.md) | 逻辑复用、订阅、清理、依赖、ref 快照与 effect setState |
 | [状态](../frontend/state-management.md) | Zustand、服务端资源、WS 增量 |
 | [错误处理](../frontend/error-handling.md) | API 错误、401、渲染隔离与重连 |
 | [类型与时间](../frontend/type-safety.md) | DTO、边界校验、联合类型、时间显示 |

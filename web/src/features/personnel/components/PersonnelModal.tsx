@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
+import { useLatestRef } from '@/hooks/use-latest-ref'
 import { personnelApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import type { PersonnelItem, PersonnelDetail } from '@/types'
@@ -57,46 +58,51 @@ export function PersonnelModal({
   const remarkFieldId = useId()
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const previewsRef = useRef<ImageFilePreview[]>([])
-  previewsRef.current = selectedImages
+  const previewsRef = useLatestRef(selectedImages)
 
   const cleanupPreviews = useCallback(() => {
     previewsRef.current.forEach((img) => {
       URL.revokeObjectURL(img.previewUrl)
     })
-  }, [])
+  }, [previewsRef])
 
   useEffect(() => {
     return () => {
       cleanupPreviews()
     }
-  }, [cleanupPreviews])
+  }, [cleanupPreviews, previewsRef])
 
   const handleClose = () => {
     onClose()
   }
 
   // 打开时重置表单状态；关闭后的清理交给退出动画结束回调，
-  // 避免面板还在淡出时预览图先被回收而闪出碎图
+  // 避免面板还在淡出时预览图先被回收而闪出碎图。
+  //
+  // 包在微任务里：重置会多次 setState，同步执行会触发级联渲染；
+  // 不采用「渲染期状态调整」：重置需同时调用 cleanupPreviews() 回收 object URL，
+  // 那是副作用，不能移到渲染期（改用 `key` 重建组件又会重置退出动画）。
   useEffect(() => {
     if (!isOpen) return
-    setErrorMessage(null)
-    setIsDragging(false)
-    cleanupPreviews()
-    if (editTarget) {
-      setName(editTarget.name)
-      setSubjectId(editTarget.subjectId)
-      setIdCard(editTarget.idCard)
-      setRemark(editTarget.remark)
-      setSelectedImages([])
-    } else {
-      setName('')
-      setSubjectId('')
-      setIdCard('')
-      setRemark('')
-      setSelectedImages([])
-      setPrimaryIndex(0)
-    }
+    void Promise.resolve().then(() => {
+      setErrorMessage(null)
+      setIsDragging(false)
+      cleanupPreviews()
+      if (editTarget) {
+        setName(editTarget.name)
+        setSubjectId(editTarget.subjectId)
+        setIdCard(editTarget.idCard)
+        setRemark(editTarget.remark)
+        setSelectedImages([])
+      } else {
+        setName('')
+        setSubjectId('')
+        setIdCard('')
+        setRemark('')
+        setSelectedImages([])
+        setPrimaryIndex(0)
+      }
+    })
   }, [isOpen, editTarget, cleanupPreviews])
 
   const handleExitComplete = () => {

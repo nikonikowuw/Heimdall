@@ -155,28 +155,32 @@ export function DateTimeRangePicker({
     (value.startTime ? new Date(value.startTime) : new Date()).getMonth(),
   )
 
-  // 打开弹窗时将外部状态同步到草稿
+  // 打开弹窗时将外部状态同步到草稿。
+  //
+  // 包在微任务里：同步体需要调用 `new Date()`（不纯函数，不能在渲染期执行），
+  // 而 effect 内直接同步 setState 会被 set-state-in-effect 判为级联渲染。
   useEffect(() => {
     if (!isOpen) return
+    void Promise.resolve().then(() => {
+      const s = value.startTime ? new Date(value.startTime) : new Date(Date.now() - 3600 * 1000)
+      const e = value.endTime ? new Date(value.endTime) : new Date()
 
-    const s = value.startTime ? new Date(value.startTime) : new Date(Date.now() - 3600 * 1000)
-    const e = value.endTime ? new Date(value.endTime) : new Date()
+      setRangeStart(s)
+      setRangeEnd(e)
+      setHoverDate(null)
+      setDraftPreset(value.quickPreset)
 
-    setRangeStart(s)
-    setRangeEnd(e)
-    setHoverDate(null)
-    setDraftPreset(value.quickPreset)
+      setStartHour(pad(s.getHours()))
+      setStartMin(pad(s.getMinutes()))
+      setStartSec(pad(s.getSeconds()))
 
-    setStartHour(pad(s.getHours()))
-    setStartMin(pad(s.getMinutes()))
-    setStartSec(pad(s.getSeconds()))
+      setEndHour(pad(e.getHours()))
+      setEndMin(pad(e.getMinutes()))
+      setEndSec(pad(e.getSeconds()))
 
-    setEndHour(pad(e.getHours()))
-    setEndMin(pad(e.getMinutes()))
-    setEndSec(pad(e.getSeconds()))
-
-    setViewYear(s.getFullYear())
-    setViewMonth(s.getMonth())
+      setViewYear(s.getFullYear())
+      setViewMonth(s.getMonth())
+    })
   }, [isOpen, value])
 
   // 计算并更新浮层视口坐标（自适应防溢出与上下翻转）

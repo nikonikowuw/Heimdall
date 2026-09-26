@@ -1,4 +1,4 @@
-import React, { Fragment, useEffect, useMemo, useState } from 'react'
+import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus, Radio, Search, Video, X } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -25,7 +25,7 @@ export function CamerasPage(): React.ReactElement {
 
   const [cameras, setCameras] = useState<Camera[]>([])
   const [tasks, setTasks] = useState<TaskSummaryDto[]>([])
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [protocolFilter, setProtocolFilter] = useState<'all' | 'rtsp' | 'gb28181'>('all')
@@ -44,27 +44,34 @@ export function CamerasPage(): React.ReactElement {
   const [cameraToDelete, setCameraToDelete] = useState<Camera | null>(null)
   const [probeFeedback, setProbeFeedback] = useState<Record<string, 'success' | 'failed'>>({})
 
-  const loadData = async (): Promise<void> => {
-    setIsLoading(true)
-    try {
-      const [cams, devs, taskList] = await Promise.all([
-        cameraApi.list(),
-        gb28181Api.listDevices().catch(() => [] as Gb28181Device[]),
-        taskApi.list().catch(() => [] as TaskSummaryDto[]),
-      ])
-      setCameras(cams)
-      setGbDevices(devs)
-      setTasks(taskList)
-    } catch {
-      // 优雅降级
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  // 取数函数不碰 loading：
+  // 挂载时由 useState(true) 初始值承担，刷新时在事件处理器内置位。
+  //
+  // 用 `.then/.catch/.finally` 链而非 `async` + `try/finally`：后者的 setState 会被
+  // react-hooks/set-state-in-effect 保守判为「可能同步执行」（数组字面量求值阶段
+  // 抛错时确实会同步进入 catch），否则挂载 effect 调用它会多出一轮渲染。
+  const loadData = useCallback((): Promise<void> => {
+    return Promise.all([
+      cameraApi.list(),
+      gb28181Api.listDevices().catch(() => [] as Gb28181Device[]),
+      taskApi.list().catch(() => [] as TaskSummaryDto[]),
+    ])
+      .then(([cams, devs, taskList]) => {
+        setCameras(cams)
+        setGbDevices(devs)
+        setTasks(taskList)
+      })
+      .catch(() => {
+        // 优雅降级
+      })
+      .finally(() => {
+        setIsLoading(false)
+      })
+  }, [])
 
   useEffect(() => {
-    loadData()
-  }, [])
+    void loadData()
+  }, [loadData])
 
   const handleManualProbe = async (camera: Camera) => {
     if (probingCameraId) return
@@ -261,18 +268,16 @@ export function CamerasPage(): React.ReactElement {
   // 分页切片计算
   const totalPages = Math.max(1, Math.ceil(filteredCameras.length / pageSize))
 
-  // 安全页码截断（防止删除最后一条记录后停留在空白越界页）
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages)
-    }
-  }, [page, totalPages])
+  // 安全页码：渲染期派生而非用 effect 回写 state。
+  // 删除末页最后一条后，记录数减少可能使 page 越界；派生出的 safePage 立刻收敛，
+  // 既不会多渲染一帧空白页，也没有「effect 回写 → 再渲染」的级联开销。
+  const safePage = Math.min(page, totalPages)
 
   const paginatedCameras = useMemo(() => {
     if (pageSize >= 999) return filteredCameras
-    const start = (page - 1) * pageSize
+    const start = (safePage - 1) * pageSize
     return filteredCameras.slice(start, start + pageSize)
-  }, [filteredCameras, page, pageSize])
+  }, [filteredCameras, safePage, pageSize])
 
   // 聚合统计国标设备未纳管通道与全量纳管指标
   const { unmanagedChannels, totalChannelsCount, importedChannelsCount } = useMemo(() => {
@@ -316,7 +321,14 @@ export function CamerasPage(): React.ReactElement {
         }
         actions={
           <>
-            <RefreshButton onClick={loadData} loading={isLoading} label={tc('actions.refresh')} />
+            <RefreshButton
+              onClick={() => {
+                setIsLoading(true)
+                void loadData()
+              }}
+              loading={isLoading}
+              label={tc('actions.refresh')}
+            />
             <button
               type="button"
               onClick={() => {
@@ -572,7 +584,7 @@ export function CamerasPage(): React.ReactElement {
       {/* 分页控制栏 (常驻吸底工规条，支持每页条数选择) */}
       <div className="frosted-glass flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
         <div className="flex items-center gap-3">
-          <span>{t('pagination.page', { current: page })}</span>
+          <span>{t('pagination.page', { current: safePage })}</span>
           {searchQuery || statusFilter !== 'all' || protocolFilter !== 'all' ? (
             <span className="text-status-success font-mono font-semibold">
               ({t('pagination.pageFiltered', { count: filteredCameras.length })})
@@ -610,19 +622,19 @@ export function CamerasPage(): React.ReactElement {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={page <= 1 || isLoading}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={safePage <= 1 || isLoading}
+            onClick={() => setPage(Math.max(1, safePage - 1))}
             className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
           >
             {t('pagination.prev')}
           </button>
           <span className="px-1 font-mono font-semibold text-[var(--text-primary)]">
-            {page} / {totalPages}
+            {safePage} / {totalPages}
           </span>
           <button
             type="button"
-            disabled={page >= totalPages || isLoading}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={safePage >= totalPages || isLoading}
+            onClick={() => setPage(Math.min(totalPages, safePage + 1))}
             className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
           >
             {t('pagination.next')}
@@ -673,7 +685,7 @@ export function CamerasPage(): React.ReactElement {
       <BatchImportGbModal
         isOpen={isBatchImportOpen}
         onClose={() => setIsBatchImportOpen(false)}
-        onSuccess={loadData}
+        onSuccess={() => void loadData()}
         devices={gbDevices}
       />
     </div>

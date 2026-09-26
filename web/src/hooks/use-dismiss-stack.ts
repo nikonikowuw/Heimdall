@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId } from 'react'
+import { useLatestRef } from './use-latest-ref'
 
 export interface DismissOptions {
   /** 是否禁用 ESC 响应（如正在提交、删除或加载中） */
@@ -190,14 +191,9 @@ export function useDismissStack(
   const { disabled = false, priority = 0, lockScroll = true, onConfirm } = options
   const id = useId()
 
-  const onDismissRef = useRef(onDismiss)
-  onDismissRef.current = onDismiss
-
-  const onConfirmRef = useRef(onConfirm)
-  onConfirmRef.current = onConfirm
-
-  const disabledRef = useRef(disabled)
-  disabledRef.current = disabled
+  const onDismissRef = useLatestRef(onDismiss)
+  const onConfirmRef = useLatestRef(onConfirm)
+  const disabledRef = useLatestRef(disabled)
 
   useEffect(() => {
     ensureGlobalListener()
@@ -212,5 +208,5 @@ export function useDismissStack(
       priority,
       lockScroll,
     })
-  }, [isOpen, id, priority, lockScroll])
+  }, [isOpen, id, priority, lockScroll, disabledRef, onConfirmRef, onDismissRef])
 }

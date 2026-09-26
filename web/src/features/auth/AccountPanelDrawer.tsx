@@ -41,25 +41,31 @@ export function AccountPanelDrawer({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // 取数用 `.then/.catch/.finally` 链而非 `async` + `try/finally`：后者的 setState
+  // 会被 react-hooks/set-state-in-effect 保守判为「可能同步执行」，导致打开抽屉时
+  // 多出一轮渲染。`.then` 链的 setState 均明确位于微任务内。
   const loadUser = useCallback(
-    async (signal?: AbortSignal) => {
-      try {
-        setLoading(true)
-        setError(null)
-        const me = await authApi.getMe(signal)
-        if (!signal?.aborted) setUser(me)
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return
-        if (!signal?.aborted) {
-          setError(err instanceof Error ? err.message : t('loadFailed'))
-        }
-      } finally {
-        if (!signal?.aborted) setLoading(false)
-      }
+    (signal?: AbortSignal): Promise<void> => {
+      return authApi
+        .getMe(signal)
+        .then((me) => {
+          if (!signal?.aborted) setUser(me)
+        })
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          if (!signal?.aborted) {
+            setError(err instanceof Error ? err.message : t('loadFailed'))
+          }
+        })
+        .finally(() => {
+          if (!signal?.aborted) setLoading(false)
+        })
     },
     [t],
   )
 
+  // 打开面板时取用户信息。loading 置位放在事件处理器侧（见下方重试按钮），
+  // effect 内不再同步 setState。
   useEffect(() => {
     if (!isOpen) return
     const controller = new AbortController()
@@ -109,7 +115,11 @@ export function AccountPanelDrawer({
             <div className="min-w-0 flex-1 leading-relaxed">{error}</div>
             <button
               type="button"
-              onClick={() => void loadUser()}
+              onClick={() => {
+                setLoading(true)
+                setError(null)
+                void loadUser()
+              }}
               className="inline-flex shrink-0 items-center gap-1.5 font-medium hover:underline focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden"
             >
               <RefreshCw className="h-3 w-3" aria-hidden="true" />

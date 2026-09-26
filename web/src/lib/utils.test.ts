@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cn, copyToClipboard } from './utils'
+import { cn, copyToClipboard, buildQuerySignature } from './utils'
 
 describe('cn utility function', () => {
   it('should merge class names correctly', () => {
@@ -114,5 +114,24 @@ describe('copyToClipboard', () => {
 
     const success = await copyToClipboard('rtsp://192.168.1.10:554/stream1')
     expect(success).toBe(false)
+  })
+})
+
+describe('buildQuerySignature', () => {
+  it('should join parts with unit separator and normalize null/undefined', () => {
+    const signature = buildQuerySignature('camera-1', null, 1, undefined, false)
+    expect(signature).toBe('camera-1\u001f\u001f1\u001f\u001ffalse')
+  })
+
+  it('should return identical signatures for identical query values', () => {
+    const s1 = buildQuerySignature('dev', 'online', 1, 20)
+    const s2 = buildQuerySignature('dev', 'online', 1, 20)
+    expect(s1).toBe(s2)
+  })
+
+  it('should return different signatures when any parameter differs', () => {
+    const s1 = buildQuerySignature('dev', 'online', 1, 20)
+    const s2 = buildQuerySignature('dev', 'online', 2, 20)
+    expect(s1).not.toBe(s2)
   })
 })

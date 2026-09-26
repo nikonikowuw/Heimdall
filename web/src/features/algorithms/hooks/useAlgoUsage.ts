@@ -18,26 +18,28 @@ export interface UseAlgoUsageResult {
  */
 export function useAlgoUsage(refreshVersion: number): UseAlgoUsageResult {
   const [tasks, setTasks] = useState<TaskSummaryDto[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // 已落定的请求版本；与当前 refreshVersion 不一致即为加载中。
+  // 不用 `setIsLoading(true)` 开头：那会在 effect 内同步触发一次额外渲染，
+  // 而「是否在加载」完全可由版本号比对派生。
+  const [settledVersion, setSettledVersion] = useState<number | null>(null)
   const [hasError, setHasError] = useState(false)
+  const isLoading = settledVersion !== refreshVersion
 
   useEffect(() => {
     let alive = true
-    setIsLoading(true)
-    setHasError(false)
     void taskApi
       .list()
       .then((list) => {
         if (!alive) return
         setTasks(list)
         setHasError(false)
+        setSettledVersion(refreshVersion)
       })
       .catch(() => {
         // 保留上次成功快照，但未知期间必须锁定卸载，不能把空映射误认为安全。
-        if (alive) setHasError(true)
-      })
-      .finally(() => {
-        if (alive) setIsLoading(false)
+        if (!alive) return
+        setHasError(true)
+        setSettledVersion(refreshVersion)
       })
     return () => {
       alive = false

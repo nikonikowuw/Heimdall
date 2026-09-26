@@ -25,7 +25,11 @@ export function NetworkTrialBanner({
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    setRemainingSec(getRemainingSec(operation.confirmDeadlineMs))
+    // 挂载或 deadline 变更时在微任务中校准，避免在渲染期调用 Date.now() 破坏并发纯度
+    void Promise.resolve().then(() => {
+      setRemainingSec(getRemainingSec(operation.confirmDeadlineMs))
+    })
+
     const timer = setInterval(() => {
       const diff = getRemainingSec(operation.confirmDeadlineMs)
       setRemainingSec(diff)

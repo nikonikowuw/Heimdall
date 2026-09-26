@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { CameraModal, DeleteCameraModal, normalizeProbeStatus } from '@/features/cameras'
 import { cameraApi, evidenceApi } from '@/lib/api'
+import { useLatestRef } from '@/hooks/use-latest-ref'
 import { motionTokens } from '@/lib/motionTokens'
 import { systemApi } from '@/lib/system-api'
 import { wsClient } from '@/lib/wsClient'
@@ -241,8 +242,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   const reducedMotion = useReducedMotion()
 
   const [cameras, setCameras] = useState<Camera[]>([])
-  const camerasRef = useRef(cameras)
-  camerasRef.current = cameras
+  const camerasRef = useLatestRef(cameras)
   const [cameraLoadState, setCameraLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [cameraLoadAttempt, setCameraLoadAttempt] = useState(0)
   const [selectedHeroId, setSelectedHeroId] = useState<string>('')
@@ -254,7 +254,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
     cameraName: string
     revertId: string | null
   } | null>(null)
-  const [recentAlarms, setRecentAlarms] = useState<Record<string, number>>({})
+  const [recentAlarms, setRecentAlarms] = useState<Record<string, true>>({})
+  // 各机位告警高亮的到期时刻（UTC 毫秒）。渲染不读它，仅由清理定时器与写入点维护。
+  const alarmExpiryRef = useRef<Record<string, number>>({})
 
   // Bento 网格分屏与分页
   const [gridSplit, setGridSplit] = useState<BentoGridSplit>(4)
@@ -313,27 +315,37 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
   }, [spotlightBanner])
 
   // 定期清理过期的近期告警状态 (8 秒后移除高亮发光)
+  //
+  // 到期时间放在 ref 中而非 state：渲染只需知道「是否告警中」，不需要时间戳。
+  // 若 state 存时间戳，渲染就必须调 Date.now() 判定过期 —— 那是渲染期副作用，
+  // 会破坏并发渲染的可重放性（同一 props 可能渲染出不同结果）。
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now()
+      const expired: string[] = []
+      for (const [id, exp] of Object.entries<number>(alarmExpiryRef.current)) {
+        if (exp <= now) expired.push(id)
+      }
+      if (expired.length === 0) return
+
+      for (const id of expired) delete alarmExpiryRef.current[id]
       setRecentAlarms((prev) => {
-        let changed = false
         const next = { ...prev }
-        for (const [id, exp] of Object.entries(next)) {
-          if (exp <= now) {
-            delete next[id]
-            changed = true
-          }
-        }
-        return changed ? next : prev
+        for (const id of expired) delete next[id]
+        return next
       })
     }, 2000)
     return () => clearInterval(interval)
   }, [])
 
-  useEffect(() => {
+  // 切换主屏机位/码流时清空延迟显示：用渲染期状态调整而非 effect，
+  // 避免先展示上一路的延迟数值再清零。
+  const [syncedHeroKey, setSyncedHeroKey] = useState(`${selectedHeroId}|${heroStream}`)
+  const currentHeroKey = `${selectedHeroId}|${heroStream}`
+  if (currentHeroKey !== syncedHeroKey) {
+    setSyncedHeroKey(currentHeroKey)
     setHeroLatency(null)
-  }, [selectedHeroId, heroStream])
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -440,10 +452,11 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       })
 
       // 记录近期告警机位 (激活呼吸发光框持续 8 秒)
-      setRecentAlarms((prev) => ({
-        ...prev,
-        [targetCamId]: Date.now() + 8000,
-      }))
+      //
+      // 到期时间只写入 ref（供清理定时器与后续刷新判定），state 仅存「告警中」标记；
+      // 重复告警会覆盖到期时间，保持「最后一次告警起算 8 秒」的语义。
+      alarmExpiryRef.current[targetCamId] = Date.now() + 8000
+      setRecentAlarms((prev) => (prev[targetCamId] ? prev : { ...prev, [targetCamId]: true }))
 
       // 智能追焦真正闭环联动
       if (autoSpotlight && targetCamId) {
@@ -482,7 +495,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       unAlarm()
       unAlarmStatus()
     }
-  }, [autoSpotlight])
+  }, [autoSpotlight, camerasRef])
 
   // 过滤后的辅流摄像头列表
   const filteredAuxCameras = useMemo(() => {
@@ -496,8 +509,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
     if (auxFilter === 'healthy') {
       list = list.filter((c) => normalizeProbeStatus(c.lastProbeStatus) === 'healthy')
     } else if (auxFilter === 'alarm') {
-      const now = Date.now()
-      list = list.filter((c) => (recentAlarms[c.cameraId] ?? 0) > now)
+      list = list.filter((c) => recentAlarms[c.cameraId] === true)
     }
     return list
   }, [cameras, auxSearch, auxFilter, recentAlarms])
@@ -903,9 +915,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             <div className="flex flex-1 flex-col gap-3 overflow-y-auto pr-0.5">
               {filteredAuxCameras.map((cam) => {
                 const isFocused = cam.cameraId === selectedHeroId
-                const isAlarming = Boolean(
-                  recentAlarms[cam.cameraId] && recentAlarms[cam.cameraId] > Date.now(),
-                )
+                const isAlarming = recentAlarms[cam.cameraId] === true
 
                 return (
                   <AuxCameraCard
@@ -1017,9 +1027,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             }`}
           >
             {paginatedBentoCameras.map((cam) => {
-              const isAlarming = Boolean(
-                recentAlarms[cam.cameraId] && recentAlarms[cam.cameraId] > Date.now(),
-              )
+              const isAlarming = recentAlarms[cam.cameraId] === true
 
               return (
                 <BentoCameraCard

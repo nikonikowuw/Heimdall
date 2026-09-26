@@ -154,28 +154,32 @@ export function PersonnelImportModal({
   const failures = useMemo(() => progress?.failures ?? [], [progress])
 
   // 打开时按外部模式重置本地视图状态。
+  // 包在微任务里：重置涉及多个 setState，同步执行会触发级联渲染。
   useEffect(() => {
     if (!isOpen) return
-    setLocalError(null)
-    setIsDragging(false)
-    setCopied(false)
-    setKindFilter('all')
-    setShowFailures(failures.length > 0)
-    if (initialMode === 'upload' && !active && !terminal) {
-      setMode('upload')
-    } else if (active) {
-      setMode('progress')
-    } else {
-      setMode('report')
-    }
+    void Promise.resolve().then(() => {
+      setLocalError(null)
+      setIsDragging(false)
+      setCopied(false)
+      setKindFilter('all')
+      setShowFailures(failures.length > 0)
+      if (initialMode === 'upload' && !active && !terminal) {
+        setMode('upload')
+      } else if (active) {
+        setMode('progress')
+      } else {
+        setMode('report')
+      }
+    })
   }, [isOpen, initialMode, active, terminal, failures.length])
 
   // 任务由运行转入终态时自动切入报告视图
   useEffect(() => {
-    if (isOpen && terminal && mode === 'progress') {
-      setMode('report')
-    }
-  }, [isOpen, terminal, mode])
+    if (!isOpen || !terminal) return
+    void Promise.resolve().then(() => {
+      setMode((current) => (current === 'progress' ? 'report' : current))
+    })
+  }, [isOpen, terminal])
 
   // 运行中按 ESC / 点击遮罩 = 后台运行（不中断任务）
   useDismissStack(isOpen, onClose, { disabled: isStarting || isCancelling })

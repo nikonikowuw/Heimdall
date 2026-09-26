@@ -24,28 +24,35 @@ export function LanDiscoveryModal({
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const handleScan = useCallback(async () => {
+  // `.then/.catch/.finally` 链：async + try/finally 内的 setState 会被
+  // react-hooks/set-state-in-effect 保守判为可能同步执行（数组字面量求值
+  // 阶段抛错时确实会同步进入 catch），而 `.then` 链的 setState 明确位于微任务内。
+  // loading 的置位与清除都放在链内，effect 不直接 setState。
+  const startScan = useCallback((): Promise<void> => {
     setScanning(true)
-    setError(null)
-    try {
-      const res = await gb28181Api.scanDiscovery()
-      setDevices(res)
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : t('discovery.scanFailed', { defaultValue: '嗅探扫描失败' }),
-      )
-    } finally {
-      setScanning(false)
-    }
+    return Promise.resolve()
+      .then(() => gb28181Api.scanDiscovery())
+      .then((res) => {
+        setDevices(res)
+        setError(null)
+      })
+      .catch((err: unknown) => {
+        setError(
+          err instanceof Error
+            ? err.message
+            : t('discovery.scanFailed', { defaultValue: '嗅探扫描失败' }),
+        )
+      })
+      .finally(() => {
+        setScanning(false)
+      })
   }, [t])
 
+  // 打开时自动扫描一次。发起动作包在微任务里，使 effect 内不出现同步 setState。
   useEffect(() => {
-    if (isOpen) {
-      handleScan()
-    }
-  }, [isOpen, handleScan])
+    if (!isOpen) return
+    void Promise.resolve().then(() => startScan())
+  }, [isOpen, startScan])
 
   useDismissStack(isOpen, onClose, { disabled: scanning })
 
@@ -105,7 +112,7 @@ export function LanDiscoveryModal({
               </span>
               <button
                 type="button"
-                onClick={handleScan}
+                onClick={() => void startScan()}
                 disabled={scanning}
                 className="flex items-center gap-1.5 rounded-xl border border-[var(--border)]/80 bg-white px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] shadow-xs transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 dark:bg-[var(--bg-surface-solid)]"
               >

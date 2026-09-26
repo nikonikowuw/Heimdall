@@ -72,15 +72,29 @@ export function AlgoParamDrawer({
   const [numberDrafts, setNumberDrafts] = useState<Record<string, string>>({})
   const [arraySearches, setArraySearches] = useState<Record<string, string>>({})
 
-  // 当弹窗打开时，同步外界属性
-  React.useEffect(() => {
-    if (isOpen) {
+  // 以 (isOpen, algo?.algorithmId) 标识当前调优抽屉的会话。
+  // 仅在打开抽屉或切换目标算法时初始化草稿；在同一会话中严禁因父组件重渲染（如 WS 遥测到达）
+  // 而抹掉用户正在编辑的草稿。
+  const [activeSession, setActiveSession] = useState<{
+    isOpen: boolean
+    algoId: string | null
+  }>({
+    isOpen: false,
+    algoId: null,
+  })
+
+  const currentAlgoId = isOpen && algo ? algo.algorithmId : null
+  const sessionChanged = isOpen !== activeSession.isOpen || currentAlgoId !== activeSession.algoId
+
+  if (sessionChanged) {
+    setActiveSession({ isOpen, algoId: currentAlgoId })
+    if (isOpen && algo) {
       setLocalFps(fps)
       setLocalParams({ ...params })
       setNumberDrafts({})
       setArraySearches({})
     }
-  }, [isOpen, fps, params])
+  }
 
   const schemaObj = useMemo(() => {
     return (algo?.configSchema as Record<string, unknown>) || {}

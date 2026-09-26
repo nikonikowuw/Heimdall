@@ -1,3 +1,4 @@
+import { useCallback, useSyncExternalStore } from 'react'
 import type { Camera } from '@/types'
 import type { CameraModelType } from './types'
 
@@ -25,6 +26,11 @@ export function saveCameraModelType(cameraId: string, type: CameraModelType): vo
   if (typeof window === 'undefined') return
   try {
     localStorage.setItem(`heimdall_cam_model_${cameraId}`, type)
+    window.dispatchEvent(
+      new CustomEvent<CameraModelChangeEventDetail>(CAMERA_MODEL_CHANGE_EVENT, {
+        detail: { cameraId, type },
+      }),
+    )
   } catch {
     // 忽略在无权限或配额超限下的 Storage 异常
   }
@@ -106,4 +112,39 @@ export function resolveCameraModelType(
 
   // 4. 默认安防标准网络摄像头一律呈现通用枪机形态，绝不胡乱分配为云台球机
   return 'bullet'
+}
+
+/**
+ * 响应式订阅摄像头形态配置（基于 localStorage 与系统广播事件）。
+ * 遵循 useSyncExternalStore 规范，杜绝渲染期直接读取 localStorage 的纯度违规。
+ */
+export function useCameraModelType(camera?: Partial<Camera> | null): CameraModelType {
+  const cameraId = camera?.cameraId
+  const defaultType = resolveCameraModelType(camera)
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (typeof window === 'undefined') return () => {}
+      const handler = (e: Event) => {
+        const detail = (e as CustomEvent<CameraModelChangeEventDetail>).detail
+        if (!cameraId || !detail || detail.cameraId === cameraId) {
+          onStoreChange()
+        }
+      }
+      window.addEventListener(CAMERA_MODEL_CHANGE_EVENT, handler)
+      window.addEventListener('storage', onStoreChange)
+      return () => {
+        window.removeEventListener(CAMERA_MODEL_CHANGE_EVENT, handler)
+        window.removeEventListener('storage', onStoreChange)
+      }
+    },
+    [cameraId],
+  )
+
+  const getSnapshot = useCallback(() => {
+    if (!cameraId) return defaultType
+    return getSavedCameraModelType(cameraId) ?? defaultType
+  }, [cameraId, defaultType])
+
+  return useSyncExternalStore(subscribe, getSnapshot, () => defaultType)
 }

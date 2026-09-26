@@ -31,40 +31,43 @@ export function StorageSettings(): React.ReactElement {
   const [snapshotSuccess, setSnapshotSuccess] = useState(false)
 
   const loadData = useCallback(
-    async (signal?: AbortSignal) => {
-      try {
-        setLoading(true)
-        setError(null)
-        const [s, c, snap] = await Promise.all([
-          systemApi.getStorageStatus(signal),
-          systemApi.getStorageConfig(signal),
-          systemApi.getSnapshotConfig(signal),
-        ])
-        if (!signal?.aborted) {
+    (signal?: AbortSignal): Promise<void> => {
+      // `.then/.catch/.finally` 链：async + try/finally 内的 setState 会被
+      // set-state-in-effect 判为可能同步执行；loading 置位由调用侧事件处理器承担。
+      return Promise.all([
+        systemApi.getStorageStatus(signal),
+        systemApi.getStorageConfig(signal),
+        systemApi.getSnapshotConfig(signal),
+      ])
+        .then(([s, c, snap]) => {
+          if (signal?.aborted) return
           setStatus(s)
           setConfig(c)
           setDraft(c)
           setSnapshotConfig(snap)
           setSnapshotDraft(snap)
-        }
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return
-        if (!signal?.aborted)
-          setError(
-            err instanceof Error
-              ? err.message
-              : t('loadFailed', { defaultValue: 'Failed to load' }),
-          )
-      } finally {
-        if (!signal?.aborted) setLoading(false)
-      }
+          setError(null)
+        })
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          if (!signal?.aborted) {
+            setError(
+              err instanceof Error
+                ? err.message
+                : t('loadFailed', { defaultValue: 'Failed to load' }),
+            )
+          }
+        })
+        .finally(() => {
+          if (!signal?.aborted) setLoading(false)
+        })
     },
     [t],
   )
 
   useEffect(() => {
     const controller = new AbortController()
-    loadData(controller.signal)
+    void loadData(controller.signal)
     return () => controller.abort()
   }, [loadData])
 
@@ -761,9 +764,14 @@ function NumericInput({
   const [inputValue, setInputValue] = useState(() => String(value))
   const [isEditing, setIsEditing] = useState(false)
 
-  useEffect(() => {
-    if (!isEditing) setInputValue(String(value))
-  }, [isEditing, value])
+  // 非编辑态同步外部值：用渲染期状态调整而非 effect。
+  // effect 会先渲染一帧旧值再覆盖（外部值变化时表现为输入框闪一下），
+  // 渲染期调整在本次渲染内直接收敛。编辑中刻意不同步，避免打断用户输入。
+  const [syncedValue, setSyncedValue] = useState(value)
+  if (!isEditing && value !== syncedValue) {
+    setSyncedValue(value)
+    setInputValue(String(value))
+  }
 
   const handleBlur = () => {
     setIsEditing(false)

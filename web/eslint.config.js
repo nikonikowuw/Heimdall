@@ -27,7 +27,30 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      /*
+       * React Compiler 1.0 的编译期规则集（react-hooks v7 起并入 hooks 插件）。
+       *
+       * 用 `recommended-latest`：在 `recommended` 基础上多一条 `void-use-memo`。
+       * 关键规则与本地约定：
+       * - `refs`：禁止渲染期读写 ref。仓库统一用 `hooks/use-latest-ref.ts`
+       *   把「最新值快照」交给 effect 同步，不要在组件里写 `ref.current = value`。
+       * - `set-state-in-effect`：effect 内同步 setState 会多一轮渲染。
+       *   取数类改「查询签名派生 + `.then` 链」，
+       *   重置类改「渲染期状态调整」，难以拆解的用微任务包裹，
+       *   详见 docs/nuwa/frontend/hook-guidelines.md#effect-内不要同步-setstate。
+       * - `purity`/`immutability`/`globals`：渲染期禁调不纯函数（如 `Date.now()`）。
+       *   实测：`async` + `try/finally` 会被判为同步 setState，等价 `.then` 链不会；
+       *   effect 内写 ref 允许，渲染期读写 ref 报错。
+       * - `preserve-manual-memoization`：已有 memo 的依赖必须与其推断一致，
+       *   否则整个组件被编译器跳过优化。
+       *
+       * 注意：逐帧数据（检测框/遥测/PTS）不走 React 渲染，编译器管不到，
+       * 仍必须保持 ref/Canvas/外部 store，见同文档「逐帧路径不走编译器」。
+       *
+       * 本次仅升级插件与规则，未启用 React Compiler 本体（babel-plugin-react-compiler）；
+       * 启用前应先让这些规则全绿，并测量编译后包体与运行时收益。
+       */
+      ...reactHooks.configs['recommended-latest'].rules,
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
