@@ -5,6 +5,7 @@ import { RefreshCw, Clock, Globe, AlertTriangle, Check } from 'lucide-react'
 import { systemApi } from '@/lib/system-api'
 import { formatTimestamp } from '@/lib/time'
 import { RefreshButton } from '@/components/RefreshButton'
+import { SystemSettingsHeader } from './components/SystemSettingsHeader'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { TimeStatus, TimeConfig } from '@/types/system'
@@ -141,24 +142,19 @@ export function TimeSettings(): React.ReactElement {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-[var(--text-primary)]">
-            {t('time.title', { defaultValue: '对时服务' })}
-          </h2>
-          <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-            {t('time.subtitle', { defaultValue: '管理系统时钟与 NTP 同步配置' })}
-          </p>
-        </div>
-        <RefreshButton
-          onClick={() => {
-            setLoading(true)
-            void loadData()
-          }}
-          loading={loading}
-        />
-      </div>
+      <SystemSettingsHeader
+        title={t('time.title', { defaultValue: '对时服务' })}
+        description={t('time.subtitle', { defaultValue: '管理系统时钟与 NTP 同步配置' })}
+        actions={
+          <RefreshButton
+            onClick={() => {
+              setLoading(true)
+              void loadData()
+            }}
+            loading={loading}
+          />
+        }
+      />
 
       {error && (
         <ErrorBanner

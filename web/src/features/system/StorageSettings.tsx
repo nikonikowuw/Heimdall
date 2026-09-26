@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, Trash2, Check, RotateCcw } from 'lucide-react'
 import { systemApi } from '@/lib/system-api'
 import { RefreshButton } from '@/components/RefreshButton'
+import { SystemSettingsHeader } from './components/SystemSettingsHeader'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { MountBadge } from './components/MountBadge'
@@ -170,18 +171,11 @@ export function StorageSettings(): React.ReactElement {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-[var(--text-primary)]">
-            {t('storage.title', { defaultValue: '存储与保留策略' })}
-          </h2>
-          <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-            {t('storage.subtitle', { defaultValue: '管理磁盘配额、保留策略与自动清理' })}
-          </p>
-        </div>
-        <RefreshButton onClick={() => loadData()} loading={loading} />
-      </div>
+      <SystemSettingsHeader
+        title={t('storage.title', { defaultValue: '存储与保留策略' })}
+        description={t('storage.subtitle', { defaultValue: '管理磁盘配额、保留策略与自动清理' })}
+        actions={<RefreshButton onClick={() => loadData()} loading={loading} />}
+      />
 
       {error && <ErrorBanner message={error} onRetry={() => loadData()} />}
       {cleanupError && <ErrorBanner message={cleanupError} onRetry={() => handleCleanup()} />}

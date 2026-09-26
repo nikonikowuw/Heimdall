@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { RefreshButton } from '@/components/RefreshButton'
 import {
-  Radio,
   Copy,
   Check,
   Eye,
@@ -17,6 +16,7 @@ import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { gb28181Api } from '@/lib/api'
 import type { Gb28181ConfigResponse } from '@/types'
+import { SystemSettingsHeader } from './components/SystemSettingsHeader'
 
 export function Gb28181Settings(): React.ReactElement {
   const { t } = useTranslation('system')
@@ -124,45 +124,24 @@ export function Gb28181Settings(): React.ReactElement {
     setTimeout(() => setCardCopied(false), 2000)
   }
 
-  if (loading && !data) {
-    return (
-      <div className="space-y-6">
-        <div className="h-24 animate-pulse rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)]" />
-        <div className="h-48 animate-pulse rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)]" />
-      </div>
-    )
-  }
-
   const health = data?.health
-
-  return (
-    <div className="space-y-6">
-      {/* 1. 服务运行状态横幅 */}
-      <div className="frosted-glass flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[var(--border)] p-5">
-        <div className="flex items-center gap-3.5">
-          <div className="bg-status-success/10 text-status-success flex h-11 w-11 items-center justify-center rounded-xl">
-            <Radio className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-[var(--text-primary)]">
-                {t('gb28181.serviceTitle', { defaultValue: '国标 GB/T 28181 原生服务' })}
-              </span>
-              <span className="bg-status-success/10 text-status-success inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium">
-                <span className="bg-status-success h-1.5 w-1.5 animate-pulse rounded-full" />
-                {t('gb28181.statusOnline', { defaultValue: '运行中' })}
-              </span>
-            </div>
-            <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-              {t('gb28181.serviceDesc', {
-                defaultValue:
-                  '单二进制内嵌 SIP UAS 注册服务与 MPEG-PS 流式解复用引擎，无需外部流媒体中间件',
-              })}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-6 text-xs text-[var(--text-secondary)]">
+  const pageHeader = (
+    <SystemSettingsHeader
+      title={
+        <>
+          {t('gb28181.serviceTitle', { defaultValue: '国标 GB/T 28181 原生服务' })}
+          <span className="text-status-success inline-flex items-center gap-1.5 text-xs font-medium">
+            <span className="bg-status-success h-1.5 w-1.5 rounded-full" />
+            {t('gb28181.statusOnline', { defaultValue: '运行中' })}
+          </span>
+        </>
+      }
+      description={t('gb28181.serviceDesc', {
+        defaultValue:
+          '单二进制内嵌 SIP UAS 注册服务与 MPEG-PS 流式解复用引擎，无需外部流媒体中间件',
+      })}
+      actions={
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-[var(--text-secondary)]">
           <div>
             <span className="text-[var(--text-muted)]">
               {t('gb28181.listenPort', { defaultValue: '监听端口' })}:{' '}
@@ -188,8 +167,22 @@ export function Gb28181Settings(): React.ReactElement {
             label={tc('actions.refresh')}
           />
         </div>
-      </div>
+      }
+    />
+  )
 
+  if (loading && !data) {
+    return (
+      <div className="space-y-5">
+        {pageHeader}
+        <div className="h-48 animate-pulse rounded-2xl border border-[var(--border)] bg-[var(--bg-surface-solid)]" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      {pageHeader}
       {/* 2. 本机 SIP 平台参数 */}
       <div className="frosted-glass rounded-2xl border border-[var(--border)] p-5">
         <div className="mb-4 flex items-center justify-between">

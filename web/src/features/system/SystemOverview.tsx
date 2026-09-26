@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { systemApi } from '@/lib/system-api'
 import { RefreshButton } from '@/components/RefreshButton'
+import { SystemSettingsHeader } from './components/SystemSettingsHeader'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import type { SystemOverview as SystemOverviewData } from '@/types/system'
 
@@ -203,29 +204,24 @@ export function SystemOverview(): React.ReactElement {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-[var(--text-primary)]">
-            {t('overview.title', { defaultValue: '系统概览' })}
-          </h2>
-          <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-            {t('overview.subtitle', {
-              defaultValue: '设备运行状态与资源概览',
-            })}
-          </p>
-        </div>
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-[11px] text-[var(--text-muted)]">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--status-success)] opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--status-success)]" />
-            </span>
-            <span>{t('overview.live', { defaultValue: 'Live (2s)' })}</span>
+      <SystemSettingsHeader
+        title={t('overview.title', { defaultValue: '系统概览' })}
+        description={t('overview.subtitle', {
+          defaultValue: '设备运行状态与资源概览',
+        })}
+        actions={
+          <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-[11px] text-[var(--text-muted)]">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--status-success)] opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--status-success)]" />
+              </span>
+              <span>{t('overview.live', { defaultValue: 'Live (2s)' })}</span>
+            </div>
+            <RefreshButton onClick={() => loadData(true)} loading={refreshing} />
           </div>
-          <RefreshButton onClick={() => loadData(true)} loading={refreshing} />
-        </div>
-      </div>
+        }
+      />
 
       {error && <ErrorBanner message={error} onRetry={() => loadData(true)} />}
 
