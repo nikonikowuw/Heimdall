@@ -40,24 +40,24 @@ export function AlgoStatsHeader({
       label: t('stats.activeVersions'),
       value: stats?.totalActiveVersions,
       icon: Layers,
-      color: 'text-emerald-500',
-      bgColor: 'bg-emerald-500/10',
+      color: 'text-status-success',
+      bgColor: 'bg-status-success/10',
     },
     {
       id: 'builtin',
       label: t('stats.builtinModels'),
       value: stats?.builtinAlgorithms,
       icon: ShieldCheck,
-      color: 'text-indigo-400',
-      bgColor: 'bg-indigo-500/10',
+      color: 'text-status-info',
+      bgColor: 'bg-status-info/10',
     },
     {
       id: 'custom',
       label: t('stats.customModels'),
       value: stats?.customAlgorithms,
       icon: Box,
-      color: 'text-amber-400',
-      bgColor: 'bg-amber-500/10',
+      color: 'text-status-warning',
+      bgColor: 'bg-status-warning/10',
     },
   ]
 
@@ -98,7 +98,7 @@ export function AlgoStatsHeader({
       </div>
 
       {error !== null && error !== undefined && (
-        <p role="status" className="text-[11px] text-[var(--accent-amber)]">
+        <p role="status" className="text-[11px] text-[var(--status-warning)]">
           {error || t('stats.loadFailed')}
         </p>
       )}

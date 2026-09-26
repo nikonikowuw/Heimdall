@@ -39,7 +39,7 @@ export function ZoomControls({
         type="button"
         onClick={onZoomOut}
         disabled={zoom <= minZoom}
-        className="rounded p-1 text-zinc-300 transition-colors hover:bg-white/15 hover:text-white disabled:opacity-30"
+        className="rounded p-1 text-[var(--text-primary)] transition-colors hover:bg-white/15 hover:text-white disabled:opacity-30"
         title={t('modal.zoomOut')}
         aria-label={t('modal.zoomOut')}
       >
@@ -52,7 +52,7 @@ export function ZoomControls({
         type="button"
         onClick={onZoomIn}
         disabled={zoom >= maxZoom}
-        className="rounded p-1 text-zinc-300 transition-colors hover:bg-white/15 hover:text-white disabled:opacity-30"
+        className="rounded p-1 text-[var(--text-primary)] transition-colors hover:bg-white/15 hover:text-white disabled:opacity-30"
         title={t('modal.zoomIn')}
         aria-label={t('modal.zoomIn')}
       >
@@ -62,7 +62,7 @@ export function ZoomControls({
         <button
           type="button"
           onClick={onResetZoom}
-          className="ml-1 border-l border-white/20 pl-1 text-zinc-300 transition-colors hover:text-white"
+          className="ml-1 border-l border-white/20 pl-1 text-[var(--text-primary)] transition-colors hover:text-white"
           title={t('modal.zoomReset')}
           aria-label={t('modal.zoomReset')}
         >

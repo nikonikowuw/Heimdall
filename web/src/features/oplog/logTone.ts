@@ -39,18 +39,20 @@ const TONE_CLASSES: Record<LogTone, LogToneClasses> = {
     text: 'text-[var(--accent)]',
   },
   success: {
-    badge: 'border-[var(--accent-green)]/30 bg-[var(--accent-green)]/10 text-[var(--accent-green)]',
-    chip: 'bg-[var(--accent-green)]/10 text-[var(--accent-green)]',
-    dot: 'bg-[var(--accent-green)]',
-    solid: 'bg-[var(--accent-green)] text-white',
-    text: 'text-[var(--accent-green)]',
+    badge:
+      'border-[var(--status-success)]/30 bg-[var(--status-success)]/10 text-[var(--status-success)]',
+    chip: 'bg-[var(--status-success)]/10 text-[var(--status-success)]',
+    dot: 'bg-[var(--status-success)]',
+    solid: 'bg-[var(--status-success-solid)] text-white',
+    text: 'text-[var(--status-success)]',
   },
   warning: {
-    badge: 'border-[var(--accent-amber)]/30 bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]',
-    chip: 'bg-[var(--accent-amber)]/10 text-[var(--accent-amber)]',
-    dot: 'bg-[var(--accent-amber)]',
-    solid: 'bg-[var(--accent-amber)] text-white',
-    text: 'text-[var(--accent-amber)]',
+    badge:
+      'border-[var(--status-warning)]/30 bg-[var(--status-warning)]/10 text-[var(--status-warning)]',
+    chip: 'bg-[var(--status-warning)]/10 text-[var(--status-warning)]',
+    dot: 'bg-[var(--status-warning)]',
+    solid: 'bg-[var(--status-warning-solid)] text-white',
+    text: 'text-[var(--status-warning)]',
   },
   danger: {
     badge:

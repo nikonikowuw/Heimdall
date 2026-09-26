@@ -145,13 +145,13 @@ export function StorageSettings(): React.ReactElement {
   const healthConfig: Record<string, { label: string; color: string; bg: string }> = {
     normal: {
       label: t('storage.healthLevel.normal', { defaultValue: '正常' }),
-      color: 'var(--accent-green)',
-      bg: 'var(--accent-green)',
+      color: 'var(--status-success)',
+      bg: 'var(--status-success)',
     },
     evicting: {
       label: t('storage.healthLevel.evicting', { defaultValue: '淘汰中' }),
-      color: 'var(--accent-amber)',
-      bg: 'var(--accent-amber)',
+      color: 'var(--status-warning)',
+      bg: 'var(--status-warning)',
     },
     emergency: {
       label: t('storage.healthLevel.emergency', { defaultValue: '紧急' }),
@@ -202,8 +202,8 @@ export function StorageSettings(): React.ReactElement {
                       status.usagePercent >= 95
                         ? 'var(--status-danger)'
                         : status.usagePercent >= 80
-                          ? 'var(--accent-amber)'
-                          : 'var(--accent-green)',
+                          ? 'var(--status-warning)'
+                          : 'var(--status-success)',
                   }}
                 >
                   {status.usagePercent.toFixed(1)}%
@@ -218,8 +218,8 @@ export function StorageSettings(): React.ReactElement {
                       status.usagePercent >= 95
                         ? 'var(--status-danger)'
                         : status.usagePercent >= 80
-                          ? 'var(--accent-amber)'
-                          : 'var(--accent-green)',
+                          ? 'var(--status-warning)'
+                          : 'var(--status-success)',
                   }}
                 />
               </div>
@@ -268,7 +268,7 @@ export function StorageSettings(): React.ReactElement {
                   label={t('storage.alarms', { defaultValue: '告警图' })}
                   count={status.alarmCount}
                   size={status.alarmSizeMb}
-                  color="var(--accent-amber)"
+                  color="var(--status-warning)"
                 />
                 <EvidenceStat
                   label={t('storage.recognitions', { defaultValue: '识别图' })}
@@ -280,7 +280,7 @@ export function StorageSettings(): React.ReactElement {
                   label={t('storage.captures', { defaultValue: '抓拍图' })}
                   count={status.captureCount}
                   size={status.captureSizeMb}
-                  color="var(--accent-green)"
+                  color="var(--status-success)"
                 />
               </div>
             </div>
@@ -306,7 +306,7 @@ export function StorageSettings(): React.ReactElement {
               disabled={saving || !isDirty}
               className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-[13px] font-medium text-white transition-all active:scale-[0.97] disabled:opacity-50 ${
                 saveSuccess
-                  ? 'bg-[var(--accent-green)] shadow-[var(--accent-green)]/20 shadow-lg'
+                  ? 'bg-[var(--status-success)] shadow-[var(--status-success)]/20 shadow-lg'
                   : 'bg-[var(--accent)] shadow-[var(--accent)]/20 shadow-lg hover:bg-[var(--accent)]/90'
               }`}
             >

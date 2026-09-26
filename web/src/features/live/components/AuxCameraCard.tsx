@@ -32,14 +32,14 @@ function getStatusBadge(
     case 'healthy':
       return {
         text: t('status.online', { defaultValue: '在线' }),
-        dotClass: 'bg-emerald-400',
-        statusColor: 'text-emerald-400',
+        dotClass: 'bg-status-success',
+        statusColor: 'text-status-success',
       }
     case 'degraded':
       return {
         text: t('status.degraded', { defaultValue: '网络波动' }),
-        dotClass: 'bg-amber-400',
-        statusColor: 'text-amber-400',
+        dotClass: 'bg-status-warning',
+        statusColor: 'text-status-warning',
       }
     case 'offline':
       return {
@@ -51,8 +51,8 @@ function getStatusBadge(
     default:
       return {
         text: t('status.unprobed', { defaultValue: '待探测' }),
-        dotClass: 'bg-gray-400',
-        statusColor: 'text-gray-400',
+        dotClass: 'bg-[var(--text-muted)]',
+        statusColor: 'text-[var(--text-muted)]',
       }
   }
 }
@@ -82,8 +82,8 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
         isAlarming
           ? 'border-[var(--status-danger)] shadow-[var(--status-danger)]/40 shadow-lg ring-2 ring-[var(--status-danger)]'
           : isFocused
-            ? 'border-cyan-500 ring-1 shadow-cyan-500/20 ring-cyan-500'
-            : 'border-[var(--border)] hover:border-cyan-500/50 hover:shadow-cyan-500/10'
+            ? 'border-status-info shadow-status-info/20 ring-status-info ring-1'
+            : 'hover:border-status-info/50 hover:shadow-status-info/10 border-[var(--border)]'
       }`}
     >
       <button
@@ -136,7 +136,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
 
         {isFocused ? (
           <div className="flex h-full w-full flex-col items-center justify-center bg-black/80 p-2 text-center">
-            <div className="flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-400">
+            <div className="border-status-info/30 bg-status-info/10 text-status-info flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs">
               <Eye className="h-3 w-3" />
               <span>{t('live.focusedOnHero')}</span>
             </div>
@@ -165,8 +165,8 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
               isAlarming
                 ? 'text-[var(--status-danger)]'
                 : isFocused
-                  ? 'text-cyan-700 dark:text-cyan-400'
-                  : 'text-[var(--text-primary)] group-hover:text-cyan-700 dark:group-hover:text-cyan-400'
+                  ? 'text-status-info'
+                  : 'group-hover:text-status-info text-[var(--text-primary)]'
             }`}
           >
             {camera.name}
@@ -174,7 +174,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
           <span
             className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
               normalizeProbeStatus(camera.lastProbeStatus) === 'healthy'
-                ? 'bg-emerald-500/10 text-emerald-400'
+                ? 'bg-status-success/10 text-status-success'
                 : 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
             }`}
           >
@@ -186,7 +186,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
           {/* 真实目标遥测指标 (对齐 telemetryStore，兼容亮色/暗色高对比度) */}
           <div className="flex items-center gap-2 font-mono">
             <span
-              className="flex items-center gap-0.5 text-cyan-700 dark:text-cyan-400"
+              className="text-status-info flex items-center gap-0.5"
               title={
                 telemetry ? t('live.targetCount', { count: telemetry.personCount }) : undefined
               }
@@ -194,7 +194,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
               <User className="h-3 w-3" />
               <span>{telemetry ? telemetry.personCount : '--'}</span>
             </span>
-            <span className="flex items-center gap-0.5 text-amber-700 dark:text-amber-400">
+            <span className="text-status-warning flex items-center gap-0.5">
               <Car className="h-3 w-3" />
               <span>{telemetry ? telemetry.carCount : '--'}</span>
             </span>

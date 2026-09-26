@@ -94,6 +94,7 @@ export function AlgoSettingsSidebar({
           <select
             value={selectedAlgoId}
             onChange={(e) => onAlgoChange(e.target.value)}
+            aria-label={t('studio.selectAlgo', { defaultValue: '当前运行算法模型' })}
             className="w-full cursor-pointer rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-2 font-medium text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
           >
             {availableAlgos.map((algo) => (
@@ -360,6 +361,7 @@ export function AlgoSettingsSidebar({
                       <select
                         value={String(val ?? '')}
                         onChange={(e) => onCustomAlgoParamChange?.(key, e.target.value)}
+                        aria-label={title}
                         className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                       >
                         {enumItems.map((opt) => (

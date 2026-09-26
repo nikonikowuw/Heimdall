@@ -66,6 +66,14 @@ export type ProbeStatus = 'never' | 'healthy' | 'success' | 'degraded' | 'reconn
 
 export type StreamMode = 'auto' | 'main' | 'sub'
 
+/**
+ * 分析码流选择的全量取值。
+ *
+ * 与类型同处声明，供 `isMemberOf` 在原生 `<select>` 边界做运行时收窄：
+ * 没有这张表，调用点就只能写 `as StreamMode`，而断言在选项与类型漂移时会静默放行。
+ */
+export const STREAM_MODES = ['auto', 'main', 'sub'] as const satisfies readonly StreamMode[]
+
 export interface Camera {
   id: number
   cameraId: string

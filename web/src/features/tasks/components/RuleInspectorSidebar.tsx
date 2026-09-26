@@ -105,9 +105,11 @@ export function RuleInspectorSidebar({
                       style={{ backgroundColor: theme.stroke }}
                     />
                   )}
-                  {rule.role === 'line' && <Slash className="h-4 w-4 text-emerald-500" />}
-                  {rule.role === 'mask' && <ShieldAlert className="h-4 w-4 text-slate-400" />}
-                  {rule.role === 'precrop' && <Crop className="h-4 w-4 text-lime-400" />}
+                  {rule.role === 'line' && <Slash className="text-status-success h-4 w-4" />}
+                  {rule.role === 'mask' && (
+                    <ShieldAlert className="h-4 w-4 text-[var(--text-secondary)]" />
+                  )}
+                  {rule.role === 'precrop' && <Crop className="text-status-success h-4 w-4" />}
                   <span className="max-w-[140px] truncate text-xs font-semibold">{rule.name}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -153,7 +155,7 @@ export function RuleInspectorSidebar({
             <span
               className={`rounded-lg border px-2 py-0.5 font-mono text-[10px] font-bold uppercase ${
                 selectedRule.role === 'precrop'
-                  ? 'border-lime-500/30 bg-lime-500/10 text-lime-400'
+                  ? 'border-status-success/30 bg-status-success/10 text-status-success'
                   : 'border-[var(--accent)]/30 bg-[var(--accent-soft)] text-[var(--accent)]'
               }`}
             >
@@ -184,7 +186,7 @@ export function RuleInspectorSidebar({
 
             {/* 特写取景专属说明卡片 */}
             {selectedRule.role === 'precrop' && (
-              <div className="rounded-xl border border-lime-500/30 bg-lime-500/10 p-3 text-xs text-lime-400 backdrop-blur-md">
+              <div className="border-status-success/30 bg-status-success/10 text-status-success rounded-xl border p-3 text-xs backdrop-blur-md">
                 <p className="font-semibold">
                   {t('inspector.precropTitle', { defaultValue: '局部特写取景' })}
                 </p>

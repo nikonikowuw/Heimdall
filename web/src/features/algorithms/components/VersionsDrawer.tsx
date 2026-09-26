@@ -138,7 +138,7 @@ export function VersionsDrawer({
       {errorMsg && (
         <div
           role="alert"
-          className="mt-4 flex items-start gap-2.5 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-400"
+          className="border-status-danger/20 bg-status-danger/10 text-status-danger mt-4 flex items-start gap-2.5 rounded-xl border p-3 text-xs"
         >
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <p className="leading-relaxed">{errorMsg}</p>
@@ -158,7 +158,7 @@ export function VersionsDrawer({
       {usageError && (
         <div
           role="alert"
-          className="mt-4 flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-400"
+          className="border-status-warning/20 bg-status-warning/10 text-status-warning mt-4 flex items-start gap-2.5 rounded-xl border p-3 text-xs"
         >
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="min-w-0 flex-1">
@@ -177,7 +177,7 @@ export function VersionsDrawer({
 
       {/* 占用汇总：卸载保护的前置说明，点击可跳转任务页处理 */}
       {isInUse && (
-        <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-400">
+        <div className="border-status-warning/20 bg-status-warning/10 text-status-warning mt-4 rounded-xl border p-3 text-xs">
           <div className="flex items-center gap-2 font-semibold">
             <Radio className="h-3.5 w-3.5" />
             <span>{t('drawer.inUseTitle', { count: blockingUsage.length })}</span>
@@ -237,13 +237,13 @@ export function VersionsDrawer({
                       v{version.version}
                     </span>
                     {isActive && (
-                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
+                      <span className="bg-status-success/10 text-status-success inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold">
                         <CheckCircle2 className="h-3 w-3" />
                         {t('actions.active')}
                       </span>
                     )}
                     {version.isBuiltin && (
-                      <span className="inline-flex items-center gap-1 rounded-md bg-indigo-500/10 px-1.5 py-0.5 text-[11px] font-medium text-indigo-400">
+                      <span className="bg-status-info/10 text-status-info inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium">
                         <ShieldCheck className="h-3 w-3" />
                         {t('card.builtinTag')}
                       </span>
@@ -251,8 +251,8 @@ export function VersionsDrawer({
                     <span
                       className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
                         version.compatibleWithHost
-                          ? 'bg-emerald-500/10 text-emerald-400'
-                          : 'bg-amber-500/10 text-amber-400'
+                          ? 'bg-status-success/10 text-status-success'
+                          : 'bg-status-warning/10 text-status-warning'
                       }`}
                     >
                       {!version.compatibleWithHost && <TriangleAlert className="h-3 w-3" />}
@@ -312,7 +312,7 @@ export function VersionsDrawer({
                     onClick={() => setVersionToUninstall(version)}
                     aria-label={t('actions.uninstall')}
                     title={uninstallTitle}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-red-500/10 hover:text-red-400 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--text-muted)]"
+                    className="hover:bg-status-danger/10 hover:text-status-danger flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--text-muted)]"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -339,8 +339,8 @@ export function VersionsDrawer({
 
               {/* 卸载确认就近展开在被操作的版本行下方，避免确认按钮与目标行脱节 */}
               {isConfirming && (
-                <div className="mt-3 rounded-xl border border-red-500/20 bg-red-500/10 p-3">
-                  <h4 className="text-xs font-bold text-red-400">
+                <div className="border-status-danger/20 bg-status-danger/10 mt-3 rounded-xl border p-3">
+                  <h4 className="text-status-danger text-xs font-bold">
                     {t('drawer.confirmUninstallTitle')}
                   </h4>
                   <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
@@ -361,7 +361,7 @@ export function VersionsDrawer({
                       type="button"
                       disabled={isOperating}
                       onClick={() => handleUninstall(version)}
-                      className="flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                      className="bg-status-danger-solid flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                     >
                       {isOperating && <Loader2 className="h-3 w-3 animate-spin" />}
                       <span>{t('actions.uninstall')}</span>

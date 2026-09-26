@@ -177,14 +177,14 @@ export function AlarmLightboxModal({
       <div className="absolute inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/10 bg-gradient-to-b from-black/85 via-black/50 to-transparent px-6 py-3.5 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <ShieldAlert
-            className={`h-5 w-5 ${isCritical ? 'animate-pulse text-[var(--status-danger)]' : 'text-amber-500'}`}
+            className={`h-5 w-5 ${isCritical ? 'animate-pulse text-[var(--status-danger)]' : 'text-status-warning'}`}
           />
           <div className="flex flex-wrap items-center gap-2">
             <span
               className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
                 isCritical
                   ? 'animate-pulse bg-[var(--status-danger-solid)] text-white'
-                  : 'bg-amber-500/90 text-white'
+                  : 'bg-[var(--status-warning-solid)]/90 text-white'
               }`}
             >
               {alarm.severity || 'WARNING'}
@@ -192,7 +192,7 @@ export function AlarmLightboxModal({
             <h3 className="text-sm font-semibold tracking-wide text-white">
               {alarm.targetLabel} · {getRuleTypeLabel(alarm.ruleType, t)}
             </h3>
-            <span className="hidden rounded-md border border-white/10 bg-black/40 px-2 py-0.5 font-mono text-xs text-zinc-400 sm:inline-block">
+            <span className="hidden rounded-md border border-white/10 bg-black/40 px-2 py-0.5 font-mono text-xs text-[var(--text-secondary)] sm:inline-block">
               {alarm.eventId}
             </span>
           </div>
@@ -217,7 +217,7 @@ export function AlarmLightboxModal({
               download={`alarm_${alarm.eventId}.jpg`}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-zinc-200 transition-all hover:bg-white/15 hover:text-white"
+              className="flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all hover:bg-white/15 hover:text-white"
               title={t('viewImage')}
               aria-label={t('modal.fullImage')}
             >
@@ -230,7 +230,7 @@ export function AlarmLightboxModal({
           <button
             type="button"
             onClick={toggleBrowserFullscreen}
-            className="flex items-center gap-1 rounded-xl border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs text-zinc-200 transition-all hover:bg-white/15 hover:text-white"
+            className="flex items-center gap-1 rounded-xl border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs text-[var(--text-primary)] transition-all hover:bg-white/15 hover:text-white"
             title={isFullscreen ? t('modal.exitFullscreen') : t('modal.enterFullscreen')}
             aria-label={isFullscreen ? t('modal.exitFullscreen') : t('modal.enterFullscreen')}
           >
@@ -245,7 +245,7 @@ export function AlarmLightboxModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]"
+            className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-[var(--text-primary)] transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]"
             title={`${t('modal.close')} (Esc)`}
             aria-label="Close"
           >
@@ -269,13 +269,13 @@ export function AlarmLightboxModal({
               className="max-h-[60%] max-w-[60%] rounded-2xl object-contain opacity-75 shadow-2xl transition-opacity duration-150"
             />
             {isFullLoading && (
-              <div className="absolute bottom-16 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-1.5 text-xs text-zinc-200 shadow-lg backdrop-blur-md">
+              <div className="absolute bottom-16 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-1.5 text-xs text-[var(--text-primary)] shadow-lg backdrop-blur-md">
                 <Loader2 className="h-4 w-4 animate-spin text-[var(--status-danger)]" />
                 <span>{t('modal.loadingFullHd')}</span>
               </div>
             )}
             {isFullError && (
-              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-black/80 px-4 py-2 text-xs text-zinc-200 shadow-lg">
+              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-black/80 px-4 py-2 text-xs text-[var(--text-primary)] shadow-lg">
                 <span>{t('modal.fullImageLoadFailed')}</span>
                 {retryButton}
               </div>
@@ -290,7 +290,7 @@ export function AlarmLightboxModal({
         )}
 
         {isFullError && !alarm.cropImageRelPath && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-xs text-zinc-200">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-xs text-[var(--text-primary)]">
             <span>{t('modal.fullImageLoadFailed')}</span>
             {retryButton}
           </div>
@@ -331,17 +331,17 @@ export function AlarmLightboxModal({
             {/* 目标人脸 BBox 框 */}
             {faceBBox && imgRect && isFullLoaded && (
               <div
-                className="pointer-events-none absolute border-2 border-dashed border-purple-400 bg-purple-500/15 shadow-[0_0_12px_rgba(168,85,247,0.5)] transition-all"
+                className="border-marker-border bg-marker-soft pointer-events-none absolute border-2 border-dashed shadow-[0_0_12px_rgba(var(--marker-rgb),0.5)] transition-all"
                 style={getBBoxStyle(faceBBox, imgRect)}
               >
-                <span className="absolute -top-4.5 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-md">
+                <span className="bg-marker-solid absolute -top-4.5 left-0 rounded px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-md">
                   {formatFaceBBoxLabel(targetBBoxes?.face)}
                 </span>
               </div>
             )}
           </div>
         ) : !alarm.cropImageRelPath ? (
-          <div className="flex h-full w-full items-center justify-center font-mono text-sm text-zinc-500">
+          <div className="flex h-full w-full items-center justify-center font-mono text-sm text-[var(--text-muted)]">
             {t('modal.noImage')}
           </div>
         ) : null}
@@ -359,16 +359,16 @@ export function AlarmLightboxModal({
         className="absolute inset-x-0 bottom-5 z-40 mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/15 bg-black/75 px-5 py-2.5 shadow-2xl backdrop-blur-xl"
       >
         <div className="flex items-center gap-4 text-xs">
-          <div className="font-mono text-zinc-300">
-            <span className="text-zinc-500">{t('modal.channel')}:</span>{' '}
+          <div className="font-mono text-[var(--text-primary)]">
+            <span className="text-[var(--text-muted)]">{t('modal.channel')}:</span>{' '}
             <span className="font-semibold text-white">{cameraName || alarm.cameraId}</span>
           </div>
-          <div className="font-mono text-zinc-300">
-            <span className="text-zinc-500">{t('modal.trackId')}:</span>{' '}
+          <div className="font-mono text-[var(--text-primary)]">
+            <span className="text-[var(--text-muted)]">{t('modal.trackId')}:</span>{' '}
             <span>#{alarm.trackId}</span>
           </div>
-          <div className="font-mono text-zinc-300">
-            <span className="text-zinc-500">{t('modal.time')}:</span>{' '}
+          <div className="font-mono text-[var(--text-primary)]">
+            <span className="text-[var(--text-muted)]">{t('modal.time')}:</span>{' '}
             <span>{formatTimestamp(alarm.occurredAt)}</span>
           </div>
 
@@ -376,7 +376,7 @@ export function AlarmLightboxModal({
             <button
               type="button"
               onClick={onSelectCrop}
-              className="flex items-center gap-1.5 rounded-xl border border-purple-500/30 bg-purple-500/15 px-2.5 py-1 font-mono text-xs font-medium text-purple-300 shadow-xs transition-all hover:bg-purple-500/25 hover:text-purple-200"
+              className="border-marker/30 bg-marker-soft text-marker hover:bg-marker/25 hover:text-marker flex items-center gap-1.5 rounded-xl border px-2.5 py-1 font-mono text-xs font-medium shadow-xs transition-all"
               title={t('modal.cropImage')}
             >
               <ExternalLink className="h-3 w-3" />
@@ -393,7 +393,7 @@ export function AlarmLightboxModal({
             onClick={onToggleStatus}
             className={`flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold shadow-md transition-all ${
               isProcessed
-                ? 'border border-emerald-500/30 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                ? 'border-status-success/30 bg-status-success/20 text-status-success hover:bg-status-success/30 border'
                 : 'border border-[var(--status-danger)]/30 bg-[var(--status-danger)]/20 text-[var(--status-danger)] hover:bg-[var(--status-danger-soft)]'
             }`}
           >
@@ -413,7 +413,7 @@ export function AlarmLightboxModal({
       </motion.div>
 
       {/* 底部轻量提示 */}
-      <div className="pointer-events-none absolute bottom-1.5 left-1/2 z-40 -translate-x-1/2 font-mono text-[10px] text-zinc-500">
+      <div className="pointer-events-none absolute bottom-1.5 left-1/2 z-40 -translate-x-1/2 font-mono text-[10px] text-[var(--text-muted)]">
         {t('modal.escHint')} · {t('modal.zoomHint')} · {t('modal.toggleStatusShort')} ·{' '}
         {t('modal.fullscreenShort')}
       </div>

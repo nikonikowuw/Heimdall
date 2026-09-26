@@ -140,7 +140,7 @@ export function AccountPanelDrawer({
                   </span>
                   <span
                     aria-hidden="true"
-                    className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-[var(--bg-surface-solid)] bg-emerald-500"
+                    className="bg-status-success absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-[var(--bg-surface-solid)]"
                   />
                 </div>
                 <div className="min-w-0">

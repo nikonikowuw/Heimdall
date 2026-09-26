@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { RefreshButton } from '@/components/RefreshButton'
 import {
   Radio,
   Copy,
@@ -100,13 +101,13 @@ export function Gb28181Settings(): React.ReactElement {
     const hostIp = window.location.hostname
     return [
       '==========================================',
-      `     ${t('gb28181.cardHeaderTitle', { defaultValue: 'Heimdall GB28181 摄像机对接指导卡' })}`,
+      ` ${t('gb28181.cardHeaderTitle', { defaultValue: 'Heimdall GB28181 摄像机对接指导卡' })}`,
       '==========================================',
-      `${t('gb28181.cardServerIp', { defaultValue: 'SIP 服务器 IP' })}:    ${hostIp}`,
-      `${t('gb28181.cardServerPort', { defaultValue: 'SIP 服务器端口' })}:   ${sipPort}`,
-      `${t('gb28181.cardServerId', { defaultValue: 'SIP 服务器编码' })}:   ${sipId}`,
-      `${t('gb28181.cardServerDomain', { defaultValue: 'SIP 服务器域' })}:     ${sipDomain}`,
-      `${t('gb28181.cardPassword', { defaultValue: '接入鉴权密码' })}:     ${sipPassword}`,
+      `${t('gb28181.cardServerIp', { defaultValue: 'SIP 服务器 IP' })}: ${hostIp}`,
+      `${t('gb28181.cardServerPort', { defaultValue: 'SIP 服务器端口' })}: ${sipPort}`,
+      `${t('gb28181.cardServerId', { defaultValue: 'SIP 服务器编码' })}: ${sipId}`,
+      `${t('gb28181.cardServerDomain', { defaultValue: 'SIP 服务器域' })}: ${sipDomain}`,
+      `${t('gb28181.cardPassword', { defaultValue: '接入鉴权密码' })}: ${sipPassword}`,
       `${t('gb28181.cardHeartbeat', { timeout: heartbeatTimeout, defaultValue: `心跳间隔建议: 60 秒 (超时时间: ${heartbeatTimeout} 秒)` })}`,
       `${t('gb28181.cardStreamMode', { defaultValue: '流传输模式建议: TCP 被动 (推荐) 或 UDP' })}`,
       '==========================================',
@@ -135,7 +136,7 @@ export function Gb28181Settings(): React.ReactElement {
       {/* 1. 服务运行状态横幅 */}
       <div className="frosted-glass flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[var(--border)] p-5">
         <div className="flex items-center gap-3.5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
+          <div className="bg-status-success/10 text-status-success flex h-11 w-11 items-center justify-center rounded-xl">
             <Radio className="h-5 w-5" />
           </div>
           <div>
@@ -143,8 +144,8 @@ export function Gb28181Settings(): React.ReactElement {
               <span className="text-sm font-semibold text-[var(--text-primary)]">
                 {t('gb28181.serviceTitle', { defaultValue: '国标 GB/T 28181 原生服务' })}
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-500">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+              <span className="bg-status-success/10 text-status-success inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium">
+                <span className="bg-status-success h-1.5 w-1.5 animate-pulse rounded-full" />
                 {t('gb28181.statusOnline', { defaultValue: '运行中' })}
               </span>
             </div>
@@ -174,13 +175,7 @@ export function Gb28181Settings(): React.ReactElement {
               {health?.onlineDevicesCount ?? 0}
             </span>
           </div>
-          <button
-            onClick={fetchConfig}
-            className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            {tc('actions.refresh')}
-          </button>
+          <RefreshButton onClick={fetchConfig} loading={loading} label={tc('actions.refresh')} />
         </div>
       </div>
 
@@ -223,7 +218,7 @@ export function Gb28181Settings(): React.ReactElement {
                 title={tc('actions.copy')}
               >
                 {copiedField === 'sipId' ? (
-                  <Check className="h-4 w-4 text-emerald-500" />
+                  <Check className="text-status-success h-4 w-4" />
                 ) : (
                   <Copy className="h-4 w-4" />
                 )}
@@ -249,7 +244,7 @@ export function Gb28181Settings(): React.ReactElement {
                 title={tc('actions.copy')}
               >
                 {copiedField === 'sipDomain' ? (
-                  <Check className="h-4 w-4 text-emerald-500" />
+                  <Check className="text-status-success h-4 w-4" />
                 ) : (
                   <Copy className="h-4 w-4" />
                 )}
@@ -297,7 +292,7 @@ export function Gb28181Settings(): React.ReactElement {
                 title={tc('actions.copy')}
               >
                 {copiedField === 'password' ? (
-                  <Check className="h-4 w-4 text-emerald-500" />
+                  <Check className="text-status-success h-4 w-4" />
                 ) : (
                   <Copy className="h-4 w-4" />
                 )}
@@ -447,7 +442,7 @@ export function Gb28181Settings(): React.ReactElement {
                   className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-medium text-white hover:opacity-90"
                 >
                   {cardCopied ? (
-                    <Check className="h-4 w-4 text-emerald-400" />
+                    <Check className="text-status-success h-4 w-4" />
                   ) : (
                     <Copy className="h-4 w-4" />
                   )}

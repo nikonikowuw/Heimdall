@@ -43,7 +43,10 @@ export function BulletCameraIllustration({
       )}
 
       {/* ── 1. 极简 T 型金属支架 ── */}
-      <g stroke="currentColor" className="text-slate-800 dark:text-slate-200">
+      <g
+        stroke="currentColor"
+        className="text-[var(--text-primary)] dark:text-[var(--text-primary)]"
+      >
         <line x1="120" y1="106" x2="120" y2="130" strokeWidth="2.5" strokeLinecap="round" />
         <line x1="98" y1="130" x2="142" y2="130" strokeWidth="2.5" strokeLinecap="round" />
       </g>
@@ -55,7 +58,7 @@ export function BulletCameraIllustration({
         width="104"
         height="74"
         rx="26"
-        className="fill-white stroke-slate-800 dark:fill-slate-900 dark:stroke-slate-200"
+        className="fill-white stroke-[var(--text-secondary)] dark:fill-[var(--text-primary)] dark:stroke-[var(--text-muted)]"
         strokeWidth="2.5"
       />
 

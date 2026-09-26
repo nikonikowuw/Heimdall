@@ -1,17 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import {
-  AlertCircle,
-  Check,
-  Cpu,
-  Loader2,
-  Plus,
-  Search,
-  Sliders,
-  Sparkles,
-  Video,
-} from 'lucide-react'
+import { AlertCircle, Check, Cpu, Loader2, Plus, Sliders, Sparkles, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
 import type { AlgorithmItem, Camera, TaskConfigDto } from '@/types'
@@ -267,25 +258,20 @@ export function CreateTaskModal({
               <span className="ml-1 text-[var(--status-danger)]">*</span>
             </legend>
 
-            <div className="relative mb-2">
-              <Search
-                className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]"
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                value={channelQuery}
-                onChange={(e) => setChannelQuery(e.target.value)}
-                placeholder={t('channelSearchPlaceholder', {
-                  defaultValue: '搜索通道名称 / ID',
-                })}
-                aria-label={t('channelSearchPlaceholder', {
-                  defaultValue: '搜索通道名称 / ID',
-                })}
-                disabled={isSubmitting}
-                className="modal-form-field pl-8"
-              />
-            </div>
+            <SearchInput
+              sizeVariant="form"
+              value={channelQuery}
+              onChange={setChannelQuery}
+              onClear={() => setChannelQuery('')}
+              placeholder={t('channelSearchPlaceholder', {
+                defaultValue: '搜索通道名称 / ID',
+              })}
+              aria-label={t('channelSearchPlaceholder', {
+                defaultValue: '搜索通道名称 / ID',
+              })}
+              disabled={isSubmitting}
+              containerClassName="mb-2"
+            />
 
             {visibleCameras.length === 0 ? (
               <p className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-surface)] p-3 text-[11px] text-[var(--text-muted)]">

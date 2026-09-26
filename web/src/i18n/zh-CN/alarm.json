@@ -2,9 +2,9 @@
   "title": "实时与历史告警中心",
   "subtitleSuffix": "1080P/4K 全链路原子闭环",
   "search": {
-    "placeholderRecognition": "按目标姓名、编号或通道搜索... (/ 聚焦)",
-    "placeholderAlarms": "按事件 ID、类别或通道搜索... (/ 聚焦)",
-    "placeholderCaptures": "按抓拍 ID、类别或通道搜索... (/ 聚焦)",
+    "placeholderRecognition": "按姓名、编号或摄像头搜索...",
+    "placeholderAlarms": "按事件 ID、类别或摄像头搜索...",
+    "placeholderCaptures": "按抓拍 ID、类别或摄像头搜索...",
     "clear": "清空搜索",
     "noMatch": "未找到与 \"{{query}}\" 相关的记录",
     "clearQuery": "清空搜索"

@@ -2,9 +2,9 @@
   "title": "Real-time & Historical Alarm Center",
   "subtitleSuffix": "1080P/4K End-to-End Atomic Evidence Pipeline",
   "search": {
-    "placeholderRecognition": "Search by name, ID, or camera... (/ to focus)",
-    "placeholderAlarms": "Search by event ID, class, or camera... (/ to focus)",
-    "placeholderCaptures": "Search by capture ID, class, or camera... (/ to focus)",
+    "placeholderRecognition": "Search by name, ID, or camera...",
+    "placeholderAlarms": "Search by event ID, class, or camera...",
+    "placeholderCaptures": "Search by capture ID, class, or camera...",
     "clear": "Clear search",
     "noMatch": "No records found matching \"{{query}}\"",
     "clearQuery": "Clear search"

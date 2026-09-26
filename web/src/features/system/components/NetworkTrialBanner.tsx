@@ -55,10 +55,10 @@ export function NetworkTrialBanner({
   }
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-[var(--accent-amber)]/40 bg-[var(--accent-amber)]/10 p-4.5 shadow-md">
+    <div className="relative overflow-hidden rounded-xl border border-[var(--status-warning)]/40 bg-[var(--status-warning)]/10 p-4.5 shadow-md">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--accent-amber)]/20 text-[var(--accent-amber)]">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--status-warning)]/20 text-[var(--status-warning)]">
             <ShieldAlert className="h-5 w-5" />
           </div>
           <div>
@@ -66,7 +66,7 @@ export function NetworkTrialBanner({
               <h3 className="text-[14px] font-semibold text-[var(--text-primary)]">
                 {t('network.trialActiveTitle', { defaultValue: '网络变更试运行保护中' })}
               </h3>
-              <span className="flex items-center gap-1 rounded-full bg-[var(--accent-amber)]/20 px-2 py-0.5 font-mono text-[12px] font-bold text-[var(--accent-amber)]">
+              <span className="flex items-center gap-1 rounded-full bg-[var(--status-warning)]/20 px-2 py-0.5 font-mono text-[12px] font-bold text-[var(--status-warning)]">
                 <AlertTriangle className="h-3 w-3" />
                 {remainingSec}s {t('network.autoRollback', { defaultValue: '后自动回滚' })}
               </span>

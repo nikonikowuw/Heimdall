@@ -23,12 +23,12 @@ function getStatusBadge(
     case 'healthy':
       return {
         text: t('status.online', { defaultValue: '在线' }),
-        dotClass: 'bg-emerald-400',
+        dotClass: 'bg-status-success',
       }
     case 'degraded':
       return {
         text: t('status.degraded', { defaultValue: '网络波动' }),
-        dotClass: 'bg-amber-400',
+        dotClass: 'bg-status-warning',
       }
     case 'offline':
       return {
@@ -39,7 +39,7 @@ function getStatusBadge(
     default:
       return {
         text: t('status.unprobed', { defaultValue: '待探测' }),
-        dotClass: 'bg-gray-400',
+        dotClass: 'bg-[var(--text-muted)]',
       }
   }
 }

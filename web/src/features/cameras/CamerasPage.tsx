@@ -1,7 +1,10 @@
 import React, { Fragment, useEffect, useMemo, useState } from 'react'
-import { Plus, Radio, RefreshCw, Search, Video, X } from 'lucide-react'
+import { Plus, Radio, Search, Video, X } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { RefreshButton } from '@/components/RefreshButton'
+import { PageHeader } from '@/components/ui/PageHeader'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { cameraApi, gb28181Api, taskApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { toast } from '@/stores/toast'
@@ -12,7 +15,6 @@ import { CameraDeviceTile } from './components/CameraDeviceTile'
 import { CameraDetailDrawer } from './components/CameraDetailDrawer'
 import { DeleteCameraModal } from './components/DeleteCameraModal'
 import { BatchImportGbModal } from './components/BatchImportGbModal'
-import { PageHeader } from '@/components/ui/PageHeader'
 import type { CameraModelType } from './components/illustrations/types'
 
 export type CamerasPageProps = Record<string, never>
@@ -211,17 +213,17 @@ export function CamerasPage(): React.ReactElement {
       key: 'online',
       label: t('manage.onlineDevices', { defaultValue: '在线' }),
       value: onlineCount,
-      dotClass: 'bg-emerald-500 animate-pulse',
-      labelClass: 'text-emerald-500',
-      valueClass: 'text-emerald-500',
+      dotClass: 'bg-status-success animate-pulse',
+      labelClass: 'text-status-success',
+      valueClass: 'text-status-success',
     },
     {
       key: 'degraded',
       label: t('manage.degradedDevices', { defaultValue: '抖动' }),
       value: degradedCount,
       dotClass: null,
-      labelClass: 'text-amber-500',
-      valueClass: 'text-amber-500',
+      labelClass: 'text-status-warning',
+      valueClass: 'text-status-warning',
     },
     {
       key: 'offline',
@@ -314,17 +316,7 @@ export function CamerasPage(): React.ReactElement {
         }
         actions={
           <>
-            <button
-              type="button"
-              onClick={loadData}
-              disabled={isLoading}
-              aria-label={tc('actions.refresh')}
-              title={tc('actions.refresh')}
-              className="page-action-btn"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-              <span>{tc('actions.refresh')}</span>
-            </button>
+            <RefreshButton onClick={loadData} loading={isLoading} label={tc('actions.refresh')} />
             <button
               type="button"
               onClick={() => {
@@ -342,9 +334,9 @@ export function CamerasPage(): React.ReactElement {
 
       {/* 国标新通道发现提示横幅 */}
       {unmanagedChannels.length > 0 && !bannerDismissed && (
-        <div className="frosted-glass flex items-center justify-between gap-4 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3.5 shadow-xs">
+        <div className="frosted-glass border-status-info/30 bg-status-info/10 flex items-center justify-between gap-4 rounded-xl border p-3.5 shadow-xs">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400">
+            <div className="bg-status-info/20 text-status-info flex h-9 w-9 items-center justify-center rounded-lg">
               <Radio className="h-4.5 w-4.5" />
             </div>
             <div>
@@ -387,39 +379,26 @@ export function CamerasPage(): React.ReactElement {
       {/* 搜索与过滤筛选栏 */}
       {cameras.length > 0 && (
         <div className="frosted-glass flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 shadow-xs">
-          <div className="group/search relative flex flex-1 items-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/50 px-3 py-1.5 text-xs backdrop-blur-md transition-all focus-within:border-[var(--accent)] focus-within:bg-[var(--bg-surface)] focus-within:shadow-[0_0_16px_rgba(var(--accent-rgb),0.12)] focus-within:ring-2 focus-within:ring-[var(--accent)]/15 hover:border-[var(--border-strong)]">
-            <Search className="mr-2 h-3.5 w-3.5 shrink-0 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]" />
-            <input
-              type="text"
-              data-search-input="true"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value)
-                setPage(1)
-              }}
-              placeholder={t('manage.searchPlaceholder', {
-                defaultValue: '按设备名称、ID 或 RTSP 地址搜索...',
-              })}
-              className="w-full bg-transparent text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
-            />
-            {searchQuery ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery('')
-                  setPage(1)
-                }}
-                className="shrink-0 rounded-md p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)]"
-                title={t('manage.clearSearch')}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            ) : (
-              <kbd className="hidden shrink-0 rounded border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
-                /
-              </kbd>
-            )}
-          </div>
+          <SearchInput
+            showKbdHint
+            value={searchQuery}
+            onChange={(val) => {
+              setSearchQuery(val)
+              setPage(1)
+            }}
+            onClear={() => {
+              setSearchQuery('')
+              setPage(1)
+            }}
+            placeholder={t('manage.searchPlaceholder', {
+              defaultValue: '按设备名称、ID 或 RTSP 地址搜索...',
+            })}
+            aria-label={t('manage.searchPlaceholder', {
+              defaultValue: '按设备名称、ID 或 RTSP 地址搜索...',
+            })}
+            clearAriaLabel={t('manage.clearSearch')}
+            containerClassName="flex-1"
+          />
 
           <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
             <button
@@ -458,8 +437,8 @@ export function CamerasPage(): React.ReactElement {
               }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 protocolFilter === 'gb28181'
-                  ? 'bg-cyan-600 text-white shadow-xs'
-                  : 'text-[var(--text-secondary)] hover:text-cyan-400'
+                  ? 'bg-status-info-solid text-white shadow-xs'
+                  : 'hover:text-status-info text-[var(--text-secondary)]'
               }`}
             >
               {t('protocol.gb28181', { defaultValue: '国标 28181' })}
@@ -489,8 +468,8 @@ export function CamerasPage(): React.ReactElement {
               }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 statusFilter === 'online'
-                  ? 'bg-emerald-500 text-white shadow-xs'
-                  : 'text-[var(--text-secondary)] hover:text-emerald-500'
+                  ? 'bg-status-success-solid text-white shadow-xs'
+                  : 'hover:text-status-success text-[var(--text-secondary)]'
               }`}
             >
               {t('manage.onlineDevices', { defaultValue: '在线' })} ({onlineCount})
@@ -503,8 +482,8 @@ export function CamerasPage(): React.ReactElement {
               }}
               className={`rounded-lg px-2.5 py-1 font-medium transition-colors ${
                 statusFilter === 'degraded'
-                  ? 'bg-amber-500 text-white shadow-xs'
-                  : 'text-[var(--text-secondary)] hover:text-amber-500'
+                  ? 'bg-status-warning-solid text-white shadow-xs'
+                  : 'hover:text-status-warning text-[var(--text-secondary)]'
               }`}
             >
               {t('manage.degradedDevices', { defaultValue: '抖动' })} ({degradedCount})
@@ -595,7 +574,7 @@ export function CamerasPage(): React.ReactElement {
         <div className="flex items-center gap-3">
           <span>{t('pagination.page', { current: page })}</span>
           {searchQuery || statusFilter !== 'all' || protocolFilter !== 'all' ? (
-            <span className="font-mono font-semibold text-emerald-500">
+            <span className="text-status-success font-mono font-semibold">
               ({t('pagination.pageFiltered', { count: filteredCameras.length })})
             </span>
           ) : totalCount > 0 ? (
@@ -613,8 +592,9 @@ export function CamerasPage(): React.ReactElement {
                 setPageSize(next)
                 setPage(1)
               }}
-              className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--text-primary)] transition-all outline-none hover:border-[var(--accent)] focus:border-[var(--accent)]"
+              aria-label={t('pagination.pageSize')}
               title={t('pagination.pageSize')}
+              className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--text-primary)] transition-all outline-none hover:border-[var(--accent)] focus:border-[var(--accent)]"
             >
               {[6, 12, 24, 48, 999].map((size) => (
                 <option key={size} value={size}>

@@ -125,7 +125,7 @@ export function ChangePasswordModal({ isOpen, onClose }: ChangePasswordModalProp
                 </div>
               )}
               {successMsg && (
-                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-3.5 text-xs text-emerald-600 dark:text-emerald-400">
+                <div className="border-status-success/20 bg-status-success/10 text-status-success rounded-2xl border p-3.5 text-xs">
                   {successMsg}
                 </div>
               )}
@@ -195,7 +195,7 @@ export function ChangePasswordModal({ isOpen, onClose }: ChangePasswordModalProp
                   <button
                     type="submit"
                     disabled={loading}
-                    className="flex w-1/2 items-center justify-center gap-1.5 rounded-xl bg-slate-900 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:bg-slate-800 active:scale-95 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                    className="flex w-1/2 items-center justify-center gap-1.5 rounded-xl bg-[var(--surface-inverse)] py-2 text-xs font-semibold text-[var(--on-inverse)] shadow-xs transition-all hover:bg-[var(--surface-inverse-hover)] active:scale-95 disabled:opacity-50 dark:hover:bg-white"
                   >
                     {loading ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -208,7 +208,7 @@ export function ChangePasswordModal({ isOpen, onClose }: ChangePasswordModalProp
               </form>
 
               <div className="flex items-center justify-center gap-1.5 pt-1 text-[11px] text-[var(--text-muted)]">
-                <Lock className="h-3 w-3 text-emerald-500" />
+                <Lock className="text-status-success h-3 w-3" />
                 <span>{t('revokeNotice')}</span>
               </div>
             </div>

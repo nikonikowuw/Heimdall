@@ -91,7 +91,7 @@ function TrafficSparkline({ history, height = 38 }: { history: NetSpeed[]; heigh
         {/* RX 实时速率曲线 (绿) */}
         <polyline
           fill="none"
-          stroke="var(--accent-green)"
+          stroke="var(--status-success)"
           strokeWidth="1.75"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -138,7 +138,7 @@ function TrafficBar({
     <div className="flex h-2 w-full gap-1 overflow-hidden rounded-full bg-[var(--bg-secondary)]">
       {/* RX 流量 */}
       <div
-        className="rounded-full bg-[var(--accent-green)] transition-all duration-700 ease-out"
+        className="rounded-full bg-[var(--status-success)] transition-all duration-700 ease-out"
         style={{ width: `${rxPercent}%` }}
       />
       {/* TX 流量 */}
@@ -158,7 +158,7 @@ function ErrorIndicator({ errors, dropped }: { errors: number; dropped: number }
   }
 
   return (
-    <div className="flex items-center gap-1 text-[var(--accent-amber)]">
+    <div className="flex items-center gap-1 text-[var(--status-warning)]">
       <AlertTriangle className="h-3 w-3" />
       <span className="text-[10px]">
         {errors > 0 && `${errors} ${t('network.err', { defaultValue: 'err' })}`}
@@ -188,7 +188,7 @@ function InterfaceRow({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           {iface.linkUp ? (
-            <Wifi className="h-3.5 w-3.5 text-[var(--accent-green)]" />
+            <Wifi className="h-3.5 w-3.5 text-[var(--status-success)]" />
           ) : (
             <WifiOff className="h-3.5 w-3.5 text-[var(--text-muted)]" />
           )}
@@ -219,14 +219,14 @@ function InterfaceRow({
       <div className="grid grid-cols-2 gap-3 pt-0.5">
         {/* RX */}
         <div className="flex items-center gap-2">
-          <ArrowDown className="h-3.5 w-3.5 shrink-0 text-[var(--accent-green)]" />
+          <ArrowDown className="h-3.5 w-3.5 shrink-0 text-[var(--status-success)]" />
           <div className="min-w-0">
             <div className="flex items-baseline gap-1.5">
               <span className="text-[11px] text-[var(--text-muted)]">
                 {t('network.rx', { defaultValue: 'RX (Receive)' })}
               </span>
               {speed && speed.rxSpeed > 0 && (
-                <span className="text-xs font-bold text-[var(--accent-green)] tabular-nums">
+                <span className="text-xs font-bold text-[var(--status-success)] tabular-nums">
                   {formatSpeed(speed.rxSpeed)}
                 </span>
               )}
@@ -342,7 +342,7 @@ export function NetworkChart({ interfaces, className = '' }: NetworkChartProps) 
       <div className="flex items-center justify-between text-[11px]">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
-            <div className="h-2 w-2 rounded-full bg-[var(--accent-green)]" />
+            <div className="h-2 w-2 rounded-full bg-[var(--status-success)]" />
             <span className="text-[var(--text-muted)]">
               {t('network.rx', { defaultValue: 'RX (Receive)' })}
             </span>

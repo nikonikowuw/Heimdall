@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { Filter, Layers, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
+import { Filter, Layers, RefreshCw, RotateCcw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker'
 import { resolveEffectiveTimeRange, type DateTimeRangeValue } from '@/lib/dateRange'
 import { useDebounce } from '@/hooks/use-debounce'
@@ -12,7 +13,8 @@ import { LogTableSkeleton } from './components/LogTableSkeleton'
 import { OperationStatsCards } from './components/OperationStatsCards'
 import { OplogToolbar, type LogDensity } from './components/OplogToolbar'
 import { useOplogs } from './hooks/useOplogs'
-import { isMemberOf, MODULE_FILTERS, type ModuleFilter, type StatusFilter } from './logFilters'
+import { SelectField } from '@/components/ui/SelectField'
+import { MODULE_FILTERS, type ModuleFilter, type StatusFilter } from './logFilters'
 import {
   classifyHttpStatus,
   getToneClasses,
@@ -114,52 +116,34 @@ export function OperationLogsTab(): ReactElement {
       <section className="frosted-glass flex flex-wrap items-center justify-between gap-2.5 rounded-xl p-2.5">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           {/* 服务端关键字检索 */}
-          <div className="relative max-w-xs min-w-48 flex-1">
-            <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
-            <input
-              type="text"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              placeholder={t('toolbar.searchOperations')}
-              aria-label={t('toolbar.searchOperations')}
-              className="h-8 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] pr-7 pl-8 text-xs text-[var(--text-primary)] transition-colors outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--ring)]"
-            />
-            {searchInput && (
-              <button
-                type="button"
-                onClick={() => setSearchInput('')}
-                aria-label={t('toolbar.clearInput')}
-                title={t('toolbar.clearInput')}
-                className="reticle-target absolute top-1/2 right-2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+          <SearchInput
+            sizeVariant="compact"
+            value={searchInput}
+            onChange={setSearchInput}
+            onClear={() => setSearchInput('')}
+            placeholder={t('toolbar.searchOperations')}
+            aria-label={t('toolbar.searchOperations')}
+            clearAriaLabel={t('toolbar.clearInput')}
+            clearButtonClassName="reticle-target"
+            containerClassName="max-w-xs min-w-48 flex-1"
+          />
 
           {/* 模块选择下拉 */}
-          <div className="relative">
-            <select
-              id="oplog-module-filter"
-              value={moduleFilter}
-              onChange={(event) => {
-                const value = event.target.value
-                if (isMemberOf(MODULE_FILTERS, value)) {
-                  setModuleFilter(value)
-                  setPage(1)
-                }
-              }}
-              aria-label={t('toolbar.filterModule')}
-              className="h-8 appearance-none rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] pr-7 pl-2.5 text-xs text-[var(--text-primary)] transition-colors outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--ring)]"
-            >
-              {MODULE_FILTERS.map((module) => (
-                <option key={module} value={module}>
-                  {t(`modules.${module}`)}
-                </option>
-              ))}
-            </select>
-            <Filter className="pointer-events-none absolute top-1/2 right-2.5 h-3 w-3 -translate-y-1/2 text-[var(--text-muted)]" />
-          </div>
+          <SelectField<ModuleFilter>
+            id="oplog-module-filter"
+            label={t('toolbar.filterModule')}
+            sizeVariant="compact"
+            icon={Filter}
+            value={moduleFilter}
+            onChange={(module) => {
+              setModuleFilter(module)
+              setPage(1)
+            }}
+            options={MODULE_FILTERS.map((module) => ({
+              value: module,
+              label: t(`modules.${module}`),
+            }))}
+          />
 
           {/* 秒级精细时间范围选择器 */}
           <DateTimeRangePicker
@@ -280,7 +264,7 @@ export function OperationLogsTab(): ReactElement {
                       className="group cursor-pointer transition-colors hover:bg-[var(--accent-soft)]/45 focus-visible:bg-[var(--accent-soft)]/45 focus-visible:outline-none"
                       tabIndex={0}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
+                        if (e.key === 'Enter' || e.key === '') {
                           e.preventDefault()
                           setInspectingLog({ kind: 'operation', data: log })
                         }

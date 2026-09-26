@@ -3,8 +3,8 @@ import { cn, copyToClipboard } from './utils'
 
 describe('cn utility function', () => {
   it('should merge class names correctly', () => {
-    const result = cn('bg-red-500', 'text-white', { 'p-4': true, 'p-2': false })
-    expect(result).toBe('bg-red-500 text-white p-4')
+    const result = cn('bg-status-danger-solid', 'text-white', { 'p-4': true, 'p-2': false })
+    expect(result).toBe('bg-status-danger-solid text-white p-4')
   })
 
   it('should resolve tailwind conflict classes', () => {

@@ -26,7 +26,7 @@ describe('cameraStatus helper', () => {
     const healthyBadge = getProbeBadge('healthy')
     expect(healthyBadge.status).toBe('healthy')
     expect(healthyBadge.text).toBe('在线')
-    expect(healthyBadge.dotClass).toContain('bg-emerald-500')
+    expect(healthyBadge.dotClass).toContain('bg-status-success')
 
     const offlineBadge = getProbeBadge('offline')
     expect(offlineBadge.status).toBe('offline')

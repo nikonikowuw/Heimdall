@@ -68,11 +68,3 @@ export const EVENT_FILTERS = [
   'storage_eviction',
 ] as const
 export type EventFilter = (typeof EVENT_FILTERS)[number]
-
-/**
- * `<select>` 等原生控件的 value 只会给出 `string`，收窄回字面量联合必须靠运行时校验，
- * 不接受 `as` 断言。
- */
-export function isMemberOf<T extends string>(options: readonly T[], value: string): value is T {
-  return (options as readonly string[]).includes(value)
-}

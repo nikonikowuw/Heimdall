@@ -156,7 +156,7 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
             className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
               isCritical
                 ? 'bg-[var(--status-danger-solid)] text-white'
-                : 'bg-[var(--status-warning)] text-white'
+                : 'bg-[var(--status-warning-solid)] text-white'
             }`}
           >
             {alarm.severity || 'WARNING'}

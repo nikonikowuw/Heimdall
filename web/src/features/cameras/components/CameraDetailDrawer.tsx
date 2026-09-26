@@ -53,9 +53,9 @@ export interface CameraDetailDrawerProps {
 }
 
 const PIPELINE_STATUS_STYLES = {
-  active: 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
-  starting: 'text-amber-500 dark:text-amber-400 bg-amber-500/10 border-amber-500/20',
-  degraded: 'text-amber-500 dark:text-amber-400 bg-amber-500/10 border-amber-500/20',
+  active: 'text-status-info bg-status-info/10 border-status-info/20',
+  starting: 'text-status-warning bg-status-warning/10 border-status-warning/20',
+  degraded: 'text-status-warning bg-status-warning/10 border-status-warning/20',
   error:
     'text-[var(--status-danger)] bg-[var(--status-danger-soft)] border-[var(--status-danger-border)]',
   inactive: 'text-[var(--text-muted)] bg-[var(--bg-secondary)] border-[var(--border)]',
@@ -70,9 +70,10 @@ const PIPELINE_STATUS_FALLBACKS: Record<CameraAiRuntimeStatus, string> = {
 }
 
 const CONNECTION_STATUS_CLASSES: Record<CameraOperationalStatus, string> = {
-  online: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20',
-  warning: 'text-amber-500 bg-amber-500/10 border-amber-500/20',
-  offline: 'text-slate-500 bg-slate-500/10 border-slate-500/20',
+  online: 'text-status-success bg-status-success/10 border-status-success/20',
+  warning: 'text-status-warning bg-status-warning/10 border-status-warning/20',
+  offline:
+    'text-[var(--status-neutral)] bg-[var(--status-neutral-soft)] border-[var(--status-neutral-border)]',
 }
 
 function getPipelineStatusLabel(
@@ -264,7 +265,7 @@ export function CameraDetailDrawer({
                       </span>
                       <span className="font-semibold">{currentCamera.cameraId}</span>
                       {copiedKey === 'id' ? (
-                        <Check className="h-2.5 w-2.5 text-emerald-500" />
+                        <Check className="text-status-success h-2.5 w-2.5" />
                       ) : (
                         <Copy className="h-2.5 w-2.5 opacity-60 group-hover/id:opacity-100" />
                       )}
@@ -310,7 +311,7 @@ export function CameraDetailDrawer({
                   <button
                     type="button"
                     onClick={() => onEdit(currentCamera)}
-                    className="flex min-h-8.5 items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-slate-800 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                    className="flex min-h-8.5 items-center gap-1.5 rounded-xl bg-[var(--surface-inverse)] px-3.5 text-xs font-semibold text-[var(--on-inverse)] shadow-xs transition-colors hover:bg-[var(--surface-inverse-hover)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none dark:hover:bg-white"
                   >
                     <Pencil className="h-3.5 w-3.5" />
                     <span>{tc('actions.edit')}</span>
@@ -365,7 +366,7 @@ export function CameraDetailDrawer({
                         aria-pressed={modelType === type}
                         className={`min-h-7 rounded-lg px-2.5 text-[11px] font-medium transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
                           modelType === type
-                            ? 'bg-slate-900 text-white shadow-xs dark:bg-slate-100 dark:text-slate-900'
+                            ? 'bg-[var(--surface-inverse)] text-[var(--on-inverse)] shadow-xs'
                             : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                         }`}
                       >
@@ -443,7 +444,7 @@ export function CameraDetailDrawer({
                 </div>
 
                 {currentTask?.statusMessage && derived.aiRuntime.status !== 'active' && (
-                  <p className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+                  <p className="border-status-warning/30 bg-status-warning/10 text-status-warning mt-3 rounded-xl border p-2.5 text-xs leading-relaxed">
                     {currentTask.statusMessage}
                   </p>
                 )}
@@ -521,7 +522,7 @@ export function CameraDetailDrawer({
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)]/60 bg-white text-[var(--text-muted)] shadow-xs transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none dark:bg-[var(--bg-surface-solid)]"
                     >
                       {copiedKey === 'main' ? (
-                        <Check className="h-3.5 w-3.5 text-emerald-500" />
+                        <Check className="text-status-success h-3.5 w-3.5" />
                       ) : (
                         <Copy className="h-3.5 w-3.5" />
                       )}
@@ -555,7 +556,7 @@ export function CameraDetailDrawer({
                         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)]/60 bg-white text-[var(--text-muted)] shadow-xs transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none dark:bg-[var(--bg-surface-solid)]"
                       >
                         {copiedKey === 'sub' ? (
-                          <Check className="h-3.5 w-3.5 text-emerald-500" />
+                          <Check className="text-status-success h-3.5 w-3.5" />
                         ) : (
                           <Copy className="h-3.5 w-3.5" />
                         )}

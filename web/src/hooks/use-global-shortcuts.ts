@@ -136,10 +136,17 @@ export function handleGlobalShortcutEvent(
   return false
 }
 
+/**
+ * 把焦点移到当前页面的搜索框。
+ *
+ * 候选由 [SearchInput](../../components/ui/SearchInput.tsx) 统一输出的 `data-search-input`
+ * 标记定位，而不是靠 `placeholder` 文案匹配 —— 后者是 i18n 文案，改一句话就会静默失效。
+ * `input[type="search"]` 保留作为兜底，覆盖将来不经过该组件的原生搜索框。
+ */
 function tryFocusSearchInput(): boolean {
   if (typeof document === 'undefined') return false
   const searchInput = document.querySelector<HTMLInputElement>(
-    'input[type="search"], input[data-search="true"], input[placeholder*="搜索"], input[placeholder*="Search"], input[placeholder*="搜尋"]',
+    'input[data-search-input="true"], input[type="search"]',
   )
   if (searchInput && !searchInput.disabled) {
     searchInput.focus()

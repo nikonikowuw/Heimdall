@@ -36,9 +36,9 @@ export interface CameraDeviceTileProps {
 }
 
 const AI_STATUS_STYLES: Record<CameraAiRuntimeStatus, string> = {
-  active: 'text-slate-800 dark:text-slate-200',
-  starting: 'text-amber-500',
-  degraded: 'text-amber-500',
+  active: 'text-[var(--text-primary)] dark:text-[var(--text-primary)]',
+  starting: 'text-status-warning',
+  degraded: 'text-status-warning',
   error: 'text-[var(--status-danger)]',
   inactive: 'text-[var(--text-muted)]',
 }
@@ -149,7 +149,7 @@ export function CameraDeviceTile({
 
   const handleTileKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return
-    if ((!onEdit && !onClick && !onDetail) || (event.key !== 'Enter' && event.key !== ' ')) return
+    if ((!onEdit && !onClick && !onDetail) || (event.key !== 'Enter' && event.key !== '')) return
     event.preventDefault()
     handleTileClick()
   }
@@ -324,7 +324,7 @@ export function CameraDeviceTile({
                     className="flex min-h-9 w-full items-center gap-2 rounded-xl px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
                   >
                     {copied ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-500" />
+                      <Check className="text-status-success h-3.5 w-3.5" />
                     ) : (
                       <Copy className="h-3.5 w-3.5 opacity-70" />
                     )}

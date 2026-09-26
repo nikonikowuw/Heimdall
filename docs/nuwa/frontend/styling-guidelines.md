@@ -5,11 +5,19 @@
 ## 主题与材质
 
 - 亮色为 Clean-Room Minimal Industrial，暗色为 Dark Industrial；保留 32px 校准网格与低噪工业界面。
-- 色彩使用 CSS 变量或语义 Tailwind 类，不写硬编码色值、`bg-blue-500` 等具名色；不在组件用 `dark:` 重复配色。
+- 色彩使用 CSS 变量或语义 Tailwind 类，不写硬编码色值、`bg-blue-500` 等具名色；不在组件用 `dark:` 重复配色。此约束由 ESLint `no-restricted-syntax` 强制（含模板字符串与条件类名），唯一豁免见下文「矢量/分类色板」。
+  - **语义色**：`@theme` 已把状态色暴露为完整 utility 家族 —— `text-status-success`、`bg-status-warning/10`、`border-status-info/20`、`ring-status-danger/40`、`fill-`/`stroke-`/`from-`/`to-`/`divide-` 等，且**不透明度变体自动可用**（Tailwind v4 以 `color-mix` 实现）。取值是 `var(--status-*)` 的中转，所以主题与深底子树切换会自然跟随，**不要写 `dark:` 变体**。
+  - **五个状态槽**：`success` / `danger` / `warning` / `info` / `neutral`。`neutral` 用于离线、未启用、未知等不表达成败的状态。每槽各有基色、`-soft`（低位底）、`-border`（描边）、`-rgb`（拼 rgba 发光）与 `-solid`（实底）档。
+  - **不得新增与状态槽语义重叠的色 token**：历史上有 `--accent-green` / `--accent-amber`（表达「正常 / 需关注」，与 success / warning 完全重叠），已合并。它们亮色档为 `#10b981` / `#d97706`，对浅底仅 2.45:1 / 3.08:1 且未在深底子树覆写——重叠 token 会各自漂移出不同的取值与覆盖范围，合并后统一达到 5.30:1 / 4.86:1。需要新的视觉角色时新增独立状态槽，而不是复制现有槽的颜色。
+    - **大面积填充不为「轻」另立一套色**：进度条、状态点、mini 柱状图这类纯装饰性填充同样使用状态槽基色，不因「浅色看起来更轻」而复制一份浅色档。合并后亮色主题的填充色会更深（`#10b981` → `#047857`），这是有意接受的取舍：同一语义在文字、图标、描边、填充上取值一致，比按面积分裂两套色更重要。若将来确有按面积区分的需求，应新增**语义明确**的槽位（如 `-fill`）并同时给出对比度依据，而不是复用旧值。
   - **危险色角色**：`--status-danger` 及其 `-soft` / `-border` / `-rgb` 变体用于主题感知的状态文字、图标、提示底和描边。`--status-danger-solid` 是两主题固定的深红，仅用于危险实底配白字（白字对比度 6.47:1）；不要将亮色档 `--status-danger` 用作白字实底。
-  - **例外：矢量/分类色板**。画布描边、ROI 抽屉、类别徽标等需要在同一容器内**并列区分**的多色场景（如 `ROI_PALETTES`、`rulesStudioTypes` 的 role 色板）使用字面色。此类颜色不表达状态语义，套用语义 token 会破坏可区分性。状态色仍须走 token。
-- **恒定深底子树的状态色**：底色不随主题变化的区域（视频 OSD、灯箱）加 `.on-dark-surface`（灯箱容器 `.modal-backdrop--immersive` / `--lightbox` 已内置），它在该子树内把状态色固定为暗色档。原因：亮色档 `--status-danger` `#b91c1c` 在 `--video-surface` 上仅 2.99:1，不加作用域会不可读。不要在深底上直接写 rose-* 等具名色绕过这一机制。
+  - **实底必须用 `-solid` 档**：主题感知的 `--status-*` 在暗色主题下是浅色档（如 `#34d399` 对白字仅 1.92:1）。凡是「实底 + 白字」（按钮、徽标、反转面），一律用 `bg-status-{槽}-solid`。`surface-inverse` / `on-inverse` 同理成对使用：`--surface-inverse` 在暗色主题下会反转为浅面，必须搭配 `text-[var(--on-inverse)]` 而非 `text-white`。
+  - **例外：矢量/分类色板**。画布描边、ROI 抽屉、类别徽标等需要在同一容器内**并列区分**的多色场景（如 `ROI_COLOR_PALETTES`、`rulesStudioTypes` 的 role 色板）使用字面色。此类颜色不表达状态语义，套用语义 token 会破坏可区分性。状态色仍须走 token。该文件已在 ESLint 中单独豁免。
+- **恒定深底子树的状态色**：底色不随主题变化的区域（视频 OSD、灯箱）加 `.on-dark-surface`（灯箱容器 `.modal-backdrop--immersive` / `--lightbox` 已内置），它在该子树内把**全部五个状态色与三个文本色**固定为浅色档。文本三档须保持逐级变暗的相对层级
+（相邻档对比度差距 ≥1.5×；`--text-muted` 在视频底上不低于 4:1）——**不要直接照搬 `.dark` 的三档取值**，
+`.dark` 的 `--text-muted` (`#475569`) 在近黑视频底上仅 2.55:1，会低于被它替换的原始硬编码。原因：亮色档 `--status-danger` `#b91c1c` 在 `--video-surface` 上仅 2.99:1，不加作用域会不可读。不要在深底上直接写 rose-* 等具名色绕过这一机制。
 - 需要 rgba 三元组（发光阴影等）时用 `--*-rgb` token，如 `rgba(var(--status-danger-rgb), 0.6)`；不要写死 `rgba(244,63,94,…)`。
+- **Canvas 2D / WebGL 不参与 CSS 级联**：`ctx.fillStyle`、`ctx.strokeStyle`、`ctx.shadowColor` 与 shader 字符串里的 `var()` 是非法颜色串，会被**静默忽略**（绘制回退到上一个颜色），因此这些位置必须写字面色值，并由 `themeTokens.test.ts` 守护。
 - `.dark` 根类切换变量，初始主题及持久化以 [use-theme.ts](../../../web/src/hooks/use-theme.ts) 为准（当前默认 dark）。
 - 面板复用 `.frosted-glass` 等共享材质，卡片使用 16～24px 圆角，避免直角；不随意使用 `!important`。
 - 需要悬停/聚焦反馈的可点击面板用 `.frosted-glass-interactive`：它与 `.frosted-glass` 材质参数一致，但声明在 `@layer components`，因此 `hover:border-*`、`hover:shadow-*` 等 utilities 能正常覆盖。`.frosted-glass` 是 unlayered 规则，会压过 utilities 的 border/background/box-shadow，在这些属性上属于静默失效。
@@ -20,6 +28,22 @@
   - 视频/Canvas OSD 若背景已是高不透明度纯色，优先移除看不出效果的 `backdrop-filter`；加载骨架屏保留必要的加载动画，但不叠加无视觉收益的 `frosted-glass`。
   - 检测持续动画：`document.getAnimations().filter(a => a.effect?.getTiming().iterations === Infinity).length`。在持续渲染页面中逐项核对结果；非零项必须有明确的用户语义和实测预算。
 - `cn()` 组合类名，调用方 `className` 放末尾；工具类由格式化工具排序。
+
+## 工具栏输入控件
+
+高度、边框、圆角与聚焦环在同一工具栏内必须一致，否则一行控件会出现多种视觉语言。全仓由两套共享类族与对应组件承担，业务代码不自行拼样式：
+
+| 用途 | 类族 | 组件 |
+| --- | --- | --- |
+| 关键字检索 | `.search-field`（`--compact` / `--form`） | [SearchInput](../../../web/src/components/ui/SearchInput.tsx) |
+| 枚举选择 | `.select-field`（`--compact`） | [SelectField](../../../web/src/components/ui/SelectField.tsx) |
+
+- 尺寸基线：默认 `2.25rem`（36px）与 `.page-action-btn` 对齐；`--compact` 为 `2rem`（32px），用于日志类紧凑工具栏；`--form` 为 `2.5rem`，用于弹窗表单。
+- **可访问名称必填**：两个组件的 `label` / `aria-label` 都是必填属性，把「漏写导致屏幕阅读器只读“组合框”」从运行期缺陷变成编译期错误。
+- **焦点可见**：聚焦态由类族内的 `:focus-visible` 提供（`.search-field` 用 `:has()` 放大边框，`.select-field` 用 `outline` + `--ring`）。**不要用裸 `outline-none` 屏蔽焦点** —— Tailwind v4 下它只产出 `outline-style: none`，若不补 `focus:border-*` / `focus:ring-*`，键盘用户将完全看不到焦点位置。
+- 选择框重置原生 `appearance` 后必须渲染 `.select-field__caret`，否则不同平台的原生箭头会与图标体系冲突。
+- **强调态**：筛选维度已收敛当前视图（取值不等于「全部」）时传 `emphasis`，由 `.select-field--emphasis` 统一着色，不在调用点写条件模板串。
+- 原生下拉面板的 `option` 配色不受页面层叠影响，由 `.select-field option` 统一指定，避免暗色主题下亮出系统白底。
 
 ## 表单弹窗
 
@@ -56,3 +80,8 @@
 - 自定义光标的交互目标沿用 `.reticle-target`，保留原生键盘焦点和可访问性。
 
 验证双主题、32px 网格、三语溢出、等宽数字、视频多路负载和主题切换无残留硬编码颜色。
+
+色彩契约由 [themeTokens.test.ts](../../../web/src/styles/themeTokens.test.ts) 守护：token 完整性、深底子树覆盖、
+禁止复活已合并的重叠 token、`-solid` 与白字的搭配、canvas 禁用 `var()`、具名色仅限豁免色板；
+并由 ESLint `no-restricted-syntax`（具名色、模板字符串、条件类名）把关。
+新增状态语义时应扩充 `@theme` 槽位而非新增具名色，也不得复制现有槽的取值另立 token。

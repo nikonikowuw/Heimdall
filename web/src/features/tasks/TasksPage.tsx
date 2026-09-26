@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus, RefreshCw, ShieldAlert, Sliders, Video } from 'lucide-react'
+import { Plus, ShieldAlert, Sliders, Video } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { RefreshButton } from '@/components/RefreshButton'
 import { motionTokens } from '@/lib/motionTokens'
 import { cameraApi, taskApi } from '@/lib/api'
 import type { Camera, TaskConfigDto, StreamMode } from '@/types'
@@ -173,8 +174,8 @@ export function TasksPage({
                   </strong>
                 </span>
                 <span className="text-[var(--border-strong)]">/</span>
-                <span className="flex items-center gap-1 text-emerald-500">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                <span className="text-status-success flex items-center gap-1">
+                  <span className="bg-status-success h-1.5 w-1.5 animate-pulse rounded-full" />
                   <span>{t('armedCount', { defaultValue: '已布防' })}:</span>
                   <strong className="font-semibold">{totalArmed}</strong>
                 </span>
@@ -182,17 +183,11 @@ export function TasksPage({
             }
             actions={
               <>
-                <button
-                  type="button"
+                <RefreshButton
                   onClick={loadData}
-                  disabled={isLoading}
-                  aria-label={tc('actions.refresh')}
-                  title={tc('actions.refresh')}
-                  className="page-action-btn"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-                  <span>{tc('actions.refresh')}</span>
-                </button>
+                  loading={isLoading}
+                  label={tc('actions.refresh')}
+                />
                 <button
                   type="button"
                   onClick={() => setIsCreateTaskModalOpen(true)}

@@ -36,8 +36,8 @@ function calculateBalance(cores: NpuCoreMetrics[]): number {
 }
 
 function getBalanceClass(balance: number): string {
-  if (balance >= 80) return 'text-[var(--accent-green)]'
-  if (balance >= 60) return 'text-[var(--accent-amber)]'
+  if (balance >= 80) return 'text-[var(--status-success)]'
+  if (balance >= 60) return 'text-[var(--status-warning)]'
   return 'text-[var(--status-danger)]'
 }
 

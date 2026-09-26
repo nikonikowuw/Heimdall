@@ -58,11 +58,11 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
   return (
     <div className="flex min-h-full w-full flex-col justify-center">
       <div className="mb-5 space-y-1">
-        <h2 className="font-display flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          <Wand2 className="h-5 w-5 text-amber-500" />
+        <h2 className="font-display flex items-center gap-2 text-2xl font-bold tracking-tight text-[var(--text-primary)] dark:text-white">
+          <Wand2 className="text-status-warning h-5 w-5" />
           <span>{t('setupTitle')}</span>
         </h2>
-        <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+        <p className="text-xs leading-relaxed text-[var(--text-muted)] dark:text-[var(--text-secondary)]">
           {t('setupSubtitle')}
         </p>
       </div>
@@ -77,12 +77,12 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
         <div>
           <label
             htmlFor="setup-username"
-            className="mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300"
+            className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)] dark:text-[var(--text-primary)]"
           >
             {t('operatorId')}
           </label>
           <div className="relative">
-            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-[var(--text-secondary)]">
               <User className="h-4 w-4" />
             </div>
             <input
@@ -92,7 +92,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="admin"
-              className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-3.5 pl-10 text-sm text-[var(--text-primary)] focus:border-indigo-400 focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
+              className="focus:border-status-info w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-3.5 pl-10 text-sm text-[var(--text-primary)] focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
             />
           </div>
         </div>
@@ -100,12 +100,12 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
         <div>
           <label
             htmlFor="setup-password"
-            className="mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300"
+            className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)] dark:text-[var(--text-primary)]"
           >
             {t('newPassword')}
           </label>
           <div className="relative">
-            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-[var(--text-secondary)]">
               <KeyRound className="h-4 w-4" />
             </div>
             <input
@@ -115,7 +115,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-3.5 pl-10 text-sm text-[var(--text-primary)] focus:border-indigo-400 focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
+              className="focus:border-status-info w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-3.5 pl-10 text-sm text-[var(--text-primary)] focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
             />
           </div>
         </div>
@@ -123,12 +123,12 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
         <div>
           <label
             htmlFor="setup-confirm-password"
-            className="mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300"
+            className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)] dark:text-[var(--text-primary)]"
           >
             {t('confirmPassword')}
           </label>
           <div className="relative">
-            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-[var(--text-secondary)]">
               <ShieldCheck className="h-4 w-4" />
             </div>
             <input
@@ -138,7 +138,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-3.5 pl-10 text-sm text-[var(--text-primary)] focus:border-indigo-400 focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
+              className="focus:border-status-info w-full rounded-xl border border-black/10 bg-black/[0.03] py-2.5 pr-3.5 pl-10 text-sm text-[var(--text-primary)] focus:outline-none dark:border-white/10 dark:bg-white/[0.04]"
             />
           </div>
         </div>
@@ -146,7 +146,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onSuccess }) => {
         <button
           type="submit"
           disabled={loading}
-          className="font-display flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 via-indigo-600 to-cyan-500 px-4 py-3 text-xs font-bold tracking-wider text-white uppercase shadow-lg shadow-indigo-600/25 transition-all duration-200 hover:opacity-95 active:scale-[0.99] disabled:opacity-50"
+          className="font-display from-status-warning via-status-info to-status-info shadow-status-info/25 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r px-4 py-3 text-xs font-bold tracking-wider text-white uppercase shadow-lg transition-all duration-200 hover:opacity-95 active:scale-[0.99] disabled:opacity-50"
         >
           <ArrowRight className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           <span>{loading ? t('submitting') : t('setupSubmit')}</span>

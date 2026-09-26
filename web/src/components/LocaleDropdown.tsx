@@ -99,7 +99,7 @@ export const LocaleDropdown: React.FC<LocaleDropdownProps> = ({
           aria-label={LOCALE_LABELS[locale]}
           title={LOCALE_LABELS[locale]}
           className={cn(
-            'flex items-center gap-1.5 rounded-full border border-black/5 bg-white/60 px-3 py-1 font-mono text-[10px] font-bold text-slate-700 shadow-sm backdrop-blur-md transition-all hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)] dark:border-white/10 dark:bg-black/40 dark:text-slate-300',
+            'flex items-center gap-1.5 rounded-full border border-black/5 bg-white/60 px-3 py-1 font-mono text-[10px] font-bold text-[var(--text-secondary)] shadow-sm backdrop-blur-md transition-all hover:bg-[var(--accent-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)] dark:border-white/10 dark:bg-black/40 dark:text-[var(--text-primary)]',
             open && 'ring-2 ring-[var(--ring)]',
             triggerClassName,
           )}
@@ -107,7 +107,7 @@ export const LocaleDropdown: React.FC<LocaleDropdownProps> = ({
           <Globe className="h-3.5 w-3.5 text-[var(--accent)]" />
           <span>{compact ? shortLabel : LOCALE_LABELS[locale]}</span>
           <ChevronDown
-            className={`h-3 w-3 text-slate-400 transition-transform duration-200 ${
+            className={`h-3 w-3 text-[var(--text-secondary)] transition-transform duration-200 ${
               open ? 'rotate-180' : ''
             }`}
           />

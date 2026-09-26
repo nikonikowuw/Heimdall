@@ -55,12 +55,12 @@ export function StreamModeSelector({
               onClick={() => onChange(opt.id)}
               className={`relative flex flex-col items-center justify-center rounded-xl border p-2.5 text-center transition-all focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
                 isSelected
-                  ? 'border-emerald-500/60 bg-emerald-500/10 font-semibold text-emerald-700 shadow-xs dark:border-emerald-500/50 dark:bg-emerald-500/15 dark:text-emerald-300'
+                  ? 'border-status-success/60 bg-status-success/10 text-status-success font-semibold shadow-xs'
                   : 'border-[var(--border)]/80 bg-white text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] dark:bg-[var(--bg-surface-solid)]'
               } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
             >
               {isSelected && (
-                <div className="absolute top-1.5 right-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-white">
+                <div className="bg-status-success-solid absolute top-1.5 right-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-white">
                   <Check className="h-2.5 w-2.5 stroke-[3]" />
                 </div>
               )}
@@ -68,7 +68,7 @@ export function StreamModeSelector({
               <span
                 className={`mt-0.5 rounded-sm px-1 font-mono text-[10px] ${
                   isSelected
-                    ? 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-200'
+                    ? 'bg-status-success/20 text-status-success'
                     : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'
                 }`}
               >

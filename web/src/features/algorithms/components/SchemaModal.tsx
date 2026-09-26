@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react'
-import { Code2, Copy, FileJson, Search, X } from 'lucide-react'
+import { Code2, Copy, FileJson, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { ModalOverlay } from '@/components/ui/ModalOverlay'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { copyToClipboard } from '@/lib/utils'
 import type { AlgorithmItem } from '@/types'
 import { activeVersionItem } from '../algoFilters'
@@ -137,27 +138,16 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
 
         <div className="flex items-center gap-2">
           {!showRaw && properties.length > PROPERTY_SEARCH_THRESHOLD && (
-            <div className="group/search relative">
-              <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] group-focus-within/search:text-[var(--accent)]" />
-              <input
-                type="text"
-                value={propertyQuery}
-                onChange={(event) => setPropertyQuery(event.target.value)}
-                placeholder={t('schema.filterPlaceholder')}
-                aria-label={t('schema.filterPlaceholder')}
-                className="w-44 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] py-1.5 pr-8 pl-8 text-xs text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:outline-hidden"
-              />
-              {propertyQuery && (
-                <button
-                  type="button"
-                  onClick={() => setPropertyQuery('')}
-                  aria-label={t('filter.clearSearch')}
-                  className="absolute top-1/2 right-1 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
+            <SearchInput
+              sizeVariant="compact"
+              value={propertyQuery}
+              onChange={setPropertyQuery}
+              onClear={() => setPropertyQuery('')}
+              placeholder={t('schema.filterPlaceholder')}
+              aria-label={t('schema.filterPlaceholder')}
+              clearAriaLabel={t('filter.clearSearch')}
+              containerClassName="w-44"
+            />
           )}
 
           <button

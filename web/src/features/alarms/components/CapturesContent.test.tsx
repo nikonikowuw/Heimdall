@@ -83,6 +83,6 @@ describe('CaptureCardItem 抓拍卡片', () => {
       />,
     )
     expect(html).not.toContain('disabled')
-    expect(html).toContain('cursor-pointer hover:bg-cyan-400/90')
+    expect(html).toContain('cursor-pointer')
   })
 })

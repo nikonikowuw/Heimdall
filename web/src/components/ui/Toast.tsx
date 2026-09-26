@@ -18,11 +18,11 @@ interface ToneConfig {
 const TONES: Record<ToastType, ToneConfig> = {
   success: {
     icon: CheckCircle2,
-    iconClass: 'text-emerald-500',
-    iconBgClass: 'border-emerald-500/25 bg-emerald-500/10',
-    badgeClass: 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
-    dotClass: 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)]',
-    progressClass: 'bg-emerald-500',
+    iconClass: 'text-status-success',
+    iconBgClass: 'border-status-success/25 bg-status-success/10',
+    badgeClass: 'text-status-success bg-status-success/10 border-status-success/20',
+    dotClass: 'bg-status-success shadow-[0_0_8px_rgba(var(--status-success-rgb),0.7)]',
+    progressClass: 'bg-status-success',
   },
   error: {
     icon: AlertCircle,
@@ -35,11 +35,11 @@ const TONES: Record<ToastType, ToneConfig> = {
   },
   warning: {
     icon: AlertTriangle,
-    iconClass: 'text-amber-500',
-    iconBgClass: 'border-amber-500/25 bg-amber-500/10',
-    badgeClass: 'text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20',
-    dotClass: 'bg-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.7)]',
-    progressClass: 'bg-amber-500',
+    iconClass: 'text-status-warning',
+    iconBgClass: 'border-status-warning/25 bg-status-warning/10',
+    badgeClass: 'text-status-warning bg-status-warning/10 border-status-warning/20',
+    dotClass: 'bg-status-warning shadow-[0_0_8px_rgba(var(--status-warning-rgb),0.7)]',
+    progressClass: 'bg-status-warning',
   },
   info: {
     icon: Info,

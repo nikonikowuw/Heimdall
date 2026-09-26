@@ -138,7 +138,11 @@ export function ImagePreviewModal({
           </div>
           <div className="min-w-0">
             {title && <h4 className="truncate text-xs font-semibold text-white">{title}</h4>}
-            {subtitle && <p className="truncate font-mono text-[11px] text-zinc-400">{subtitle}</p>}
+            {subtitle && (
+              <p className="truncate font-mono text-[11px] text-[var(--text-secondary)]">
+                {subtitle}
+              </p>
+            )}
           </div>
         </div>
 
@@ -157,7 +161,7 @@ export function ImagePreviewModal({
           <button
             type="button"
             onClick={handleDownload}
-            className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-zinc-300 transition-all hover:bg-white/15 hover:text-white"
+            className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-[var(--text-primary)] transition-all hover:bg-white/15 hover:text-white"
             title={`${t('modal.download')} (${downloadFilename})`}
             aria-label={t('modal.download')}
           >
@@ -167,7 +171,7 @@ export function ImagePreviewModal({
             href={src}
             target="_blank"
             rel="noreferrer"
-            className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-zinc-300 transition-all hover:bg-white/15 hover:text-white"
+            className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-[var(--text-primary)] transition-all hover:bg-white/15 hover:text-white"
             title={t('modal.openOriginal')}
             aria-label={t('modal.openOriginal')}
           >
@@ -176,7 +180,7 @@ export function ImagePreviewModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-white/10 bg-white/5 p-1.5 text-zinc-400 transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
+            className="rounded-xl border border-white/10 bg-white/5 p-1.5 text-[var(--text-secondary)] transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)]"
             title={`${t('modal.close')} (Esc)`}
             aria-label="Close"
           >
@@ -206,20 +210,20 @@ export function ImagePreviewModal({
           />
           {imgRect && targetBBoxes?.body && (
             <div
-              className="pointer-events-none absolute border-2 border-cyan-400 bg-cyan-400/10 shadow-[0_0_12px_rgba(6,182,212,0.5)]"
+              className="border-status-info bg-status-info/10 pointer-events-none absolute border-2 shadow-[0_0_12px_rgba(var(--status-info-rgb),0.5)]"
               style={getBBoxStyle(targetBBoxes.body, imgRect)}
             >
-              <span className="absolute -top-4 left-0 rounded bg-cyan-500 px-1 font-mono text-[8px] font-bold text-white shadow-xs">
+              <span className="bg-status-info-solid absolute -top-4 left-0 rounded px-1 font-mono text-[8px] font-bold text-white shadow-xs">
                 BODY
               </span>
             </div>
           )}
           {imgRect && targetBBoxes?.face?.bbox && (
             <div
-              className="pointer-events-none absolute border-2 border-dashed border-purple-400 bg-purple-500/15 shadow-[0_0_12px_rgba(168,85,247,0.5)]"
+              className="border-marker-border bg-marker-soft pointer-events-none absolute border-2 border-dashed shadow-[0_0_12px_rgba(var(--marker-rgb),0.5)]"
               style={getBBoxStyle(targetBBoxes.face.bbox, imgRect)}
             >
-              <span className="absolute -top-4 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold text-white shadow-xs">
+              <span className="bg-marker-solid absolute -top-4 left-0 rounded px-1.5 py-0.5 font-mono text-[8px] font-bold text-white shadow-xs">
                 FACE{' '}
                 {targetBBoxes.face.confidence !== undefined
                   ? `${(targetBBoxes.face.confidence * 100).toFixed(0)}%`
@@ -231,7 +235,7 @@ export function ImagePreviewModal({
       </div>
 
       {/* 底部轻量提示 */}
-      <div className="pointer-events-none absolute bottom-4 left-1/2 z-50 -translate-x-1/2 font-mono text-[11px] text-zinc-500">
+      <div className="pointer-events-none absolute bottom-4 left-1/2 z-50 -translate-x-1/2 font-mono text-[11px] text-[var(--text-muted)]">
         {t('modal.escHint')} · {t('modal.zoomHint')}
       </div>
     </motion.div>,

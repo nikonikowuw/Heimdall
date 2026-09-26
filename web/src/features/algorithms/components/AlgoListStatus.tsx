@@ -43,7 +43,7 @@ export function AlgoListStatus({
           {hasMore && <span className="ml-2">{t('list.loadedOfTotal', { loaded, total })}</span>}
         </p>
         {loadMoreError !== null && (
-          <p role="alert" className="text-[11px] text-[var(--accent-amber)]">
+          <p role="alert" className="text-[11px] text-[var(--status-warning)]">
             {loadMoreError || t('list.loadMoreError')}
           </p>
         )}

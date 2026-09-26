@@ -37,12 +37,12 @@ const ROLE_BADGES: Record<
   roi: {
     label: 'ROI',
     labelKey: 'tools.roi',
-    badgeClass: 'border border-blue-500/25 bg-blue-500/15 text-[var(--accent)]',
+    badgeClass: 'border border-status-info/25 bg-status-info/15 text-[var(--accent)]',
   },
   line: {
     label: 'LINE',
     labelKey: 'tools.line',
-    badgeClass: 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-500',
+    badgeClass: 'border border-status-success/30 bg-status-success/15 text-status-success',
   },
   mask: {
     label: 'MASK',
@@ -53,7 +53,7 @@ const ROLE_BADGES: Record<
   precrop: {
     label: 'CROP',
     labelKey: 'tools.precrop',
-    badgeClass: 'border border-lime-400/30 bg-lime-500/15 text-lime-400',
+    badgeClass: 'border border-status-success/30 bg-status-success/15 text-status-success',
   },
 }
 
@@ -128,7 +128,7 @@ export function ActivityZonesSection({
               <span className="truncate">{label}</span>
               {hasPrecropRule && !isActive && (
                 <span
-                  className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-lime-400 shadow-[0_0_6px_#a3e635]"
+                  className="bg-status-success absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full shadow-[0_0_6px_#a3e635]"
                   title={t('studio.precropConfigured', { defaultValue: '已配置物理取景框' })}
                 />
               )}

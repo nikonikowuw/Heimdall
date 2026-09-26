@@ -312,7 +312,7 @@ export function Layout(): React.ReactElement {
                   onClick={toggleTheme}
                   icon={
                     isDark ? (
-                      <Sun className="h-5 w-5 text-amber-400" />
+                      <Sun className="text-status-warning h-5 w-5" />
                     ) : (
                       <Moon className="h-5 w-5" />
                     )
@@ -355,7 +355,7 @@ export function Layout(): React.ReactElement {
                     <span>{username ? username.charAt(0).toUpperCase() : 'A'}</span>
                     <span
                       aria-hidden="true"
-                      className="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-surface-solid)] bg-emerald-500 shadow-xs"
+                      className="bg-status-success absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--bg-surface-solid)] shadow-xs"
                     />
                   </button>
 
@@ -376,7 +376,7 @@ export function Layout(): React.ReactElement {
                             {username || 'admin'}
                           </p>
                           <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                            <span className="bg-status-success h-1.5 w-1.5 rounded-full" />
                             <span>
                               {t('auth:roleAdministrator', { defaultValue: 'Administrator' })}
                             </span>

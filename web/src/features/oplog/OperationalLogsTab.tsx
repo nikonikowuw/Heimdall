@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { Camera, Filter, Layers, Radio, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
+import { Camera, Layers, Radio, RefreshCw, RotateCcw, Tag } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { SelectField } from '@/components/ui/SelectField'
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker'
 import { resolveEffectiveTimeRange, type DateTimeRangeValue } from '@/lib/dateRange'
 import { useDebounce } from '@/hooks/use-debounce'
@@ -14,7 +16,6 @@ import { OplogToolbar, type LogDensity } from './components/OplogToolbar'
 import { useOperationalLogs } from './hooks/useOperationalLogs'
 import {
   EVENT_FILTERS,
-  isMemberOf,
   type EventFilter,
   type LevelFilter,
   type TargetFilter,
@@ -138,30 +139,27 @@ export function OperationalLogsTab(): ReactElement {
       {/* 现代智能控制栏 */}
       <section className="frosted-glass flex flex-wrap items-center justify-between gap-2.5 rounded-xl p-2.5">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          {/* 事件标记精确检索（服务端 event 参数） */}
-          <div className="relative min-w-44 flex-1 sm:max-w-xs">
-            <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
-            <select
-              id="operational-event-filter"
-              value={event}
-              onChange={(e) => {
-                const value = e.target.value
-                if (isMemberOf(EVENT_FILTERS, value)) {
-                  setEvent(value)
-                  setPage(1)
-                }
-              }}
-              aria-label={t('operational.filterEvent')}
-              className="h-8 w-full appearance-none rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] pr-7 pl-8 text-xs text-[var(--text-primary)] transition-colors outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--ring)]"
-            >
-              {EVENT_FILTERS.map((tag) => (
-                <option key={tag} value={tag}>
-                  {tag === 'all' ? t('operational.events.all') : tag}
-                </option>
-              ))}
-            </select>
-            <Filter className="pointer-events-none absolute top-1/2 right-2.5 h-3 w-3 -translate-y-1/2 text-[var(--text-muted)]" />
-          </div>
+          {/*
+ 事件标记精确检索（服务端 event 参数）。
+ 这是选择型控件而非搜索框：因此用 Tag 图标与 caret，不再沿用搜索框的放大镜
+ 与 max-w-xs 宽布局——那个组合会让用户误以为应该打字。
+ */}
+          <SelectField<EventFilter>
+            id="operational-event-filter"
+            label={t('operational.filterEvent')}
+            sizeVariant="compact"
+            icon={Tag}
+            value={event}
+            onChange={(nextEvent) => {
+              setEvent(nextEvent)
+              setPage(1)
+            }}
+            options={EVENT_FILTERS.map((tag) => ({
+              value: tag,
+              label: tag === 'all' ? t('operational.events.all') : tag,
+            }))}
+            containerClassName="min-w-36"
+          />
 
           {/* 级别快速切换分段器 */}
           <div
@@ -190,28 +188,21 @@ export function OperationalLogsTab(): ReactElement {
           </div>
 
           {/* 目标模块架构层 Target 下拉 */}
-          <div className="relative">
-            <select
-              id="operational-target-filter"
-              value={target}
-              onChange={(e) => {
-                const value = e.target.value
-                if (isMemberOf(TARGET_FILTERS, value)) {
-                  setTarget(value)
-                  setPage(1)
-                }
-              }}
-              aria-label={t('operational.filterTarget')}
-              className="h-8 appearance-none rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] pr-7 pl-2.5 text-xs text-[var(--text-primary)] transition-colors outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--ring)]"
-            >
-              {TARGET_FILTERS.map((opt) => (
-                <option key={opt} value={opt}>
-                  {t(`operational.targets.${opt}`)}
-                </option>
-              ))}
-            </select>
-            <Layers className="pointer-events-none absolute top-1/2 right-2.5 h-3 w-3 -translate-y-1/2 text-[var(--text-muted)]" />
-          </div>
+          <SelectField<TargetFilter>
+            id="operational-target-filter"
+            label={t('operational.filterTarget')}
+            sizeVariant="compact"
+            icon={Layers}
+            value={target}
+            onChange={(nextTarget) => {
+              setTarget(nextTarget)
+              setPage(1)
+            }}
+            options={TARGET_FILTERS.map((opt) => ({
+              value: opt,
+              label: t(`operational.targets.${opt}`),
+            }))}
+          />
 
           {/* 秒级精细时间范围选择器 */}
           <DateTimeRangePicker
@@ -224,28 +215,18 @@ export function OperationalLogsTab(): ReactElement {
           />
 
           {/* 摄像头 ID 过滤 */}
-          <div className="relative w-36">
-            <input
-              id="operational-camera-filter"
-              type="text"
-              value={cameraIdInput}
-              onChange={(e) => setCameraIdInput(e.target.value)}
-              placeholder={t('operational.cameraPlaceholder')}
-              aria-label={t('operational.filterCamera')}
-              className="h-8 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] pr-7 pl-2.5 text-xs text-[var(--text-primary)] transition-colors outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--ring)]"
-            />
-            {cameraIdInput && (
-              <button
-                type="button"
-                onClick={() => setCameraIdInput('')}
-                aria-label={t('toolbar.clearInput')}
-                title={t('toolbar.clearInput')}
-                className="reticle-target absolute top-1/2 right-2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+          <SearchInput
+            id="operational-camera-filter"
+            sizeVariant="compact"
+            value={cameraIdInput}
+            onChange={setCameraIdInput}
+            onClear={() => setCameraIdInput('')}
+            placeholder={t('operational.cameraPlaceholder')}
+            aria-label={t('operational.filterCamera')}
+            clearAriaLabel={t('toolbar.clearInput')}
+            clearButtonClassName="reticle-target"
+            containerClassName="w-44"
+          />
 
           {/* 重置筛选 */}
           {isFiltered && (
@@ -263,7 +244,7 @@ export function OperationalLogsTab(): ReactElement {
 
         {/* 右侧工具集：密度切换、手动刷新 */}
         {page === 1 && (
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--accent-green)]">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--status-success)]">
             <Radio className="h-3 w-3" />
             {t('logCenter.liveStatus')}
           </span>
@@ -334,7 +315,7 @@ export function OperationalLogsTab(): ReactElement {
                       className="group cursor-pointer transition-colors hover:bg-[var(--accent-soft)]/45 focus-visible:bg-[var(--accent-soft)]/45 focus-visible:outline-none"
                       tabIndex={0}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
+                        if (e.key === 'Enter' || e.key === '') {
                           e.preventDefault()
                           setInspectingLog({ kind: 'operational', data: log })
                         }

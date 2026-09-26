@@ -68,7 +68,7 @@ export function LanDiscoveryModal({
             {/* 头部 */}
             <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">
               <div className="flex items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 shadow-xs dark:text-emerald-400">
+                <div className="border-status-success/20 bg-status-success/10 text-status-success flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border shadow-xs">
                   <Radio className="h-5 w-5" />
                 </div>
                 <div>
@@ -130,7 +130,7 @@ export function LanDiscoveryModal({
                   {devices.map((dev, idx) => (
                     <div
                       key={`${dev.ip}-${dev.port}-${idx}`}
-                      className="flex items-center justify-between rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/25 p-4 transition-all hover:border-emerald-500/40 hover:bg-white dark:hover:bg-[var(--bg-surface-solid)]"
+                      className="hover:border-status-success/40 flex items-center justify-between rounded-2xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/25 p-4 transition-all hover:bg-white dark:hover:bg-[var(--bg-surface-solid)]"
                     >
                       <div>
                         <div className="flex items-center gap-2">
@@ -139,7 +139,7 @@ export function LanDiscoveryModal({
                               `${dev.manufacturer} ${dev.model}`.trim() ||
                               t('discovery.defaultCameraName', { defaultValue: '网络摄像头' })}
                           </span>
-                          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          <span className="bg-status-success/10 text-status-success rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold">
                             {dev.protocol.toUpperCase()}
                           </span>
                         </div>
@@ -174,7 +174,7 @@ export function LanDiscoveryModal({
                           onSelectDevice(dev)
                           onClose()
                         }}
-                        className="flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs transition-all hover:bg-slate-800 active:scale-95 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                        className="flex items-center gap-1.5 rounded-xl bg-[var(--surface-inverse)] px-3.5 py-1.5 text-xs font-semibold text-[var(--on-inverse)] shadow-xs transition-all hover:bg-[var(--surface-inverse-hover)] active:scale-95 dark:hover:bg-white"
                       >
                         <Check className="h-3.5 w-3.5" />
                         <span>{t('discovery.applyDevice', { defaultValue: '填入' })}</span>

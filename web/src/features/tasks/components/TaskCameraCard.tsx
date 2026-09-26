@@ -65,10 +65,10 @@ function getPipelineRuntimeStatus(
 }
 
 const ROI_PALETTES = [
-  { stroke: '#06b6d4', fill: 'rgba(6, 182, 212, 0.24)' },
-  { stroke: '#f59e0b', fill: 'rgba(245, 158, 11, 0.24)' },
+  { stroke: '#06b6d4', fill: 'rgba(var(--status-info-rgb), 0.24)' },
+  { stroke: '#f59e0b', fill: 'rgba(var(--status-warning-rgb), 0.24)' },
   { stroke: '#a855f7', fill: 'rgba(168, 85, 247, 0.24)' },
-  { stroke: '#f43f5e', fill: 'rgba(244, 63, 94, 0.24)' },
+  { stroke: '#f43f5e', fill: 'rgba(var(--status-danger-rgb), 0.24)' },
   { stroke: '#6366f1', fill: 'rgba(99, 102, 241, 0.24)' },
 ]
 
@@ -122,7 +122,7 @@ function renderPreviewRuleShape(
         key={idx}
         points={pts}
         fill={`url(#card-mask-hatch-${cameraId})`}
-        stroke="rgba(244, 63, 94, 0.85)"
+        stroke="rgba(var(--status-danger-rgb), 0.85)"
         strokeWidth="1.5"
         strokeDasharray="3 2"
         vectorEffect="non-scaling-stroke"
@@ -310,7 +310,7 @@ export function TaskCameraCard({
         whileHover={reduceMotion ? undefined : { scale: 1.005 }}
         whileTap={reduceMotion ? undefined : { scale: 0.99 }}
         aria-label={`${t('actions.configureRules', { defaultValue: '配置算法与布防规则' })} - ${camera.name || camera.cameraId}`}
-        className="group/canvas relative mt-3.5 aspect-video w-full overflow-hidden rounded-xl border border-black/10 bg-[#05070c] shadow-inner transition-all hover:border-[var(--accent)]/50 hover:shadow-[0_0_24px_rgba(59,130,246,0.18)] dark:border-white/10"
+        className="group/canvas relative mt-3.5 aspect-video w-full overflow-hidden rounded-xl border border-black/10 bg-[#05070c] shadow-inner transition-all hover:border-[var(--accent)]/50 hover:shadow-[0_0_24px_rgba(var(--status-info-rgb),0.18)] dark:border-white/10"
       >
         {/* 背景微米点阵 + 雷达网格 */}
         <span
@@ -345,7 +345,7 @@ export function TaskCameraCard({
                 y1="0"
                 x2="0"
                 y2="6"
-                stroke="rgba(244, 63, 94, 0.45)"
+                stroke="rgba(var(--status-danger-rgb), 0.45)"
                 strokeWidth="1.5"
               />
             </pattern>
@@ -416,7 +416,7 @@ export function TaskCameraCard({
                 </span>
               )}
               {lineCount > 0 && (
-                <span className="rounded-md border border-[var(--accent-green)]/30 bg-[var(--accent-green)]/15 px-1.5 py-0.5 font-semibold text-[var(--accent-green)] backdrop-blur-xs">
+                <span className="rounded-md border border-[var(--status-success)]/30 bg-[var(--status-success)]/15 px-1.5 py-0.5 font-semibold text-[var(--status-success)] backdrop-blur-xs">
                   {lineCount} LINE
                 </span>
               )}
@@ -426,7 +426,7 @@ export function TaskCameraCard({
                 </span>
               )}
               {precropCount > 0 && (
-                <span className="rounded-md border border-lime-400/30 bg-lime-500/15 px-1.5 py-0.5 font-semibold text-lime-400 backdrop-blur-xs">
+                <span className="border-status-success/30 bg-status-success/15 text-status-success rounded-md border px-1.5 py-0.5 font-semibold backdrop-blur-xs">
                   CROP
                 </span>
               )}

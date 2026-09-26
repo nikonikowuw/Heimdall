@@ -1527,7 +1527,7 @@ export function LiveRulesStudio({
                       y1="0"
                       x2="0"
                       y2="8"
-                      stroke="rgba(244, 63, 94, 0.45)"
+                      stroke="rgba(var(--status-danger-rgb), 0.45)"
                       strokeWidth="1.8"
                     />
                   </pattern>
@@ -1600,7 +1600,7 @@ export function LiveRulesStudio({
                           isSelected
                             ? theme.selectedStroke
                             : isMask
-                              ? 'rgba(244, 63, 94, 0.9)'
+                              ? 'rgba(var(--status-danger-rgb), 0.9)'
                               : theme.stroke
                         }
                         strokeWidth={isSelected ? '2.5' : '1.6'}

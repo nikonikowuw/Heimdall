@@ -225,7 +225,7 @@ export function AlgorithmsPage({ onNavigateToTask }: AlgorithmsPageProps): React
 
           {/* 刷新失败但仍有旧数据：以横幅提示，不清空可用清单 */}
           {listError !== null && listState === 'ready' && (
-            <p role="status" className="text-[11px] text-[var(--accent-amber)]">
+            <p role="status" className="text-[11px] text-[var(--status-warning)]">
               {listError || t('empty.errorDesc')}
             </p>
           )}

@@ -46,11 +46,11 @@ function MemoryBar({ memory }: { memory: MemoryMetrics }) {
           style={{ width: `${usedPercent}%` }}
         />
         <div
-          className="absolute top-0 left-0 h-full rounded-full bg-[var(--accent-green)] transition-all duration-500"
+          className="absolute top-0 left-0 h-full rounded-full bg-[var(--status-success)] transition-all duration-500"
           style={{ width: `${cachedPercent}%`, opacity: 0.45 }}
         />
         <div
-          className="absolute top-0 left-0 h-full rounded-full bg-[var(--accent-amber)] transition-all duration-500"
+          className="absolute top-0 left-0 h-full rounded-full bg-[var(--status-warning)] transition-all duration-500"
           style={{ width: `${bufferPercent}%`, opacity: 0.6 }}
         />
       </div>
@@ -65,7 +65,7 @@ function MemoryBar({ memory }: { memory: MemoryMetrics }) {
         </div>
         <div className="flex items-center gap-1.5">
           <div
-            className="h-2 w-2 rounded-full bg-[var(--accent-green)]"
+            className="h-2 w-2 rounded-full bg-[var(--status-success)]"
             style={{ opacity: 0.45 }}
           />
           <span className="text-[var(--text-muted)]">
@@ -73,7 +73,10 @@ function MemoryBar({ memory }: { memory: MemoryMetrics }) {
           </span>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className="h-2 w-2 rounded-full bg-[var(--accent-amber)]" style={{ opacity: 0.6 }} />
+          <div
+            className="h-2 w-2 rounded-full bg-[var(--status-warning)]"
+            style={{ opacity: 0.6 }}
+          />
           <span className="text-[var(--text-muted)]">
             {t('memoryMetrics.buffer', { defaultValue: 'Buffer' })}
           </span>
@@ -99,17 +102,17 @@ function MemoryStats({ memory }: { memory: MemoryMetrics }) {
     {
       label: t('memoryMetrics.available', { defaultValue: 'Available' }),
       value: formatMb(memory.availableMb),
-      color: 'var(--accent-green)',
+      color: 'var(--status-success)',
     },
     {
       label: t('memoryMetrics.cached', { defaultValue: 'Cached' }),
       value: formatMb(memory.cachedMb),
-      color: 'var(--accent-green)',
+      color: 'var(--status-success)',
     },
     {
       label: t('memoryMetrics.buffer', { defaultValue: 'Buffer' }),
       value: formatMb(memory.bufferMb),
-      color: 'var(--accent-amber)',
+      color: 'var(--status-warning)',
     },
   ]
 
@@ -152,7 +155,7 @@ function SwapInfo({ memory }: { memory: MemoryMetrics }) {
       </div>
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--bg-secondary)]">
         <div
-          className="h-full rounded-full bg-[var(--accent-amber)] transition-all duration-500"
+          className="h-full rounded-full bg-[var(--status-warning)] transition-all duration-500"
           style={{ width: `${swapUsedPercent}%` }}
         />
       </div>

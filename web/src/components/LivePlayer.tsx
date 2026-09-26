@@ -43,17 +43,17 @@ function getStatusIndicatorClass(status: ConnectionStatus): string {
   // 实测此前本页 5 个 6～12px 状态点在 1920×1080@2x 下合计占用约 9%。
   switch (status) {
     case 'connected':
-      return 'bg-emerald-400'
+      return 'bg-status-success'
     case 'reconnecting':
-      return 'bg-amber-400'
+      return 'bg-status-warning'
     case 'connecting':
-      return 'bg-cyan-400'
+      return 'bg-status-info'
     case 'paused':
-      return 'bg-amber-400'
+      return 'bg-status-warning'
     case 'failed':
       return 'bg-[var(--status-danger)]'
     case 'standby':
-      return 'bg-slate-400'
+      return 'bg-[var(--text-muted)]'
   }
 }
 
@@ -970,6 +970,8 @@ export const LivePlayer = memo(function LivePlayer({
                 contentRect.y + pts[i][1] * contentRect.height,
               )
             }
+            // Canvas 2D 不参与 CSS 级联，var() 在此是非法颜色串（会被静默忽略），
+            // 故此处必须用字面量。取值为原 --status-info 的暗色档 #06b6d4。
             ctx.strokeStyle = 'rgba(6, 182, 212, 0.45)'
             ctx.lineWidth = isHero ? 2.5 : 1.5
             ctx.stroke()
@@ -1009,6 +1011,7 @@ export const LivePlayer = memo(function LivePlayer({
                 : 'Face'
             ctx.font = '600 9px monospace'
             const faceWidth = ctx.measureText(faceText).width
+            // 同上：canvas 绘制需要字面颜色，取 --marker 的实底档 #a855f7。
             ctx.fillStyle = 'rgba(168, 85, 247, 0.9)'
             ctx.fillRect(fx, Math.max(0, fy - 12), faceWidth + 6, 11)
             ctx.fillStyle = '#ffffff'
@@ -1018,10 +1021,10 @@ export const LivePlayer = memo(function LivePlayer({
 
           // 3. 绘制目标标签与置信度胶囊
           ctx.fillStyle = isPerson
-            ? 'rgba(6, 182, 212, 0.85)'
+            ? 'rgba(var(--status-info-rgb), 0.85)'
             : isFace
               ? 'rgba(139, 92, 246, 0.85)'
-              : 'rgba(16, 185, 129, 0.85)'
+              : 'rgba(var(--status-success-rgb), 0.85)'
           const detPct = `${(item.confidence * 100).toFixed(0)}%`
           const faceQuality = item.face?.qualityScore ?? (isFace ? item.qualityScore : undefined)
           const labelText =
@@ -1085,9 +1088,9 @@ export const LivePlayer = memo(function LivePlayer({
               duration: reducedMotion ? motionTokens.duration.fast : motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-emerald-500/40 bg-black/80 px-3.5 py-1 text-xs font-medium text-emerald-300 shadow-xl backdrop-blur-md"
+            className="border-status-success/40 text-status-success absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border bg-black/80 px-3.5 py-1 text-xs font-medium shadow-xl backdrop-blur-md"
           >
-            <Check className="h-3.5 w-3.5 text-emerald-400" />
+            <Check className="text-status-success h-3.5 w-3.5" />
             <span>{t('live.snapshotSaved')}</span>
           </motion.div>
         )}
@@ -1139,10 +1142,10 @@ export const LivePlayer = memo(function LivePlayer({
             className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/75 backdrop-blur-xs"
           >
             <div className="flex flex-col items-center gap-2 p-4 text-center">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/5 text-slate-400">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/5 text-[var(--text-secondary)]">
                 <Eye className="h-5 w-5 opacity-70" />
               </div>
-              <span className="text-xs font-medium text-slate-300">
+              <span className="text-xs font-medium text-[var(--text-primary)]">
                 {t('live.outOfViewStandby')}
               </span>
             </div>
@@ -1200,7 +1203,7 @@ export const LivePlayer = memo(function LivePlayer({
             transition={{ duration: motionTokens.duration.fast }}
             className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/50"
           >
-            <div className="flex items-center gap-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs text-amber-400 backdrop-blur-md">
+            <div className="bg-status-warning/20 text-status-warning flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs backdrop-blur-md">
               <Wifi className="h-4 w-4" />
               <span>{t('live.reconnecting')}</span>
             </div>
@@ -1249,19 +1252,19 @@ export const LivePlayer = memo(function LivePlayer({
             {cameraName || cameraId}
           </span>
           <span className="text-white/40">|</span>
-          <span className="text-emerald-400">
+          <span className="text-status-success">
             {sourceSize ? `${sourceSize.width}×${sourceSize.height}` : '--'}
           </span>
           <span className="text-white/40">|</span>
-          <span className="text-cyan-300" title={t(latencyLabelKey)}>
+          <span className="text-status-info" title={t(latencyLabelKey)}>
             {t(latencyShortLabelKey)} {latencyMs === null ? '--' : `${latencyMs}ms`}
           </span>
           <span className="text-white/40">|</span>
           <span
             className={`rounded px-1.5 text-[9px] font-bold tracking-wider ${
               activeProtocol === 'webcodecs'
-                ? 'bg-cyan-500/25 text-cyan-300'
-                : 'bg-emerald-500/25 text-emerald-300'
+                ? 'bg-status-info/25 text-status-info'
+                : 'bg-status-success/25 text-status-success'
             }`}
           >
             {activeProtocol === 'webcodecs' ? 'WebCodecs' : 'FLV'}
@@ -1269,7 +1272,7 @@ export const LivePlayer = memo(function LivePlayer({
           {isAudioActive && (
             <>
               <span className="text-white/40">|</span>
-              <span className="flex items-center gap-1 text-emerald-400">
+              <span className="text-status-success flex items-center gap-1">
                 <Volume2 className="h-3 w-3" />
                 <span className="text-[9px] font-bold tracking-wider">AUDIO</span>
               </span>
@@ -1278,7 +1281,7 @@ export const LivePlayer = memo(function LivePlayer({
           {isHero && (
             <>
               <span className="text-white/40">|</span>
-              <span className="flex items-center gap-1 text-amber-300">
+              <span className="text-status-warning flex items-center gap-1">
                 <Zap className="h-3 w-3" />
                 <span>NPU HW</span>
               </span>
@@ -1297,7 +1300,7 @@ export const LivePlayer = memo(function LivePlayer({
           <button
             type="button"
             onClick={handleCaptureSnapshot}
-            className="min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-cyan-500/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+            className="hover:bg-status-info/80 min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
             aria-label={t('live.snapshot')}
             title={t('live.snapshot')}
           >
@@ -1311,7 +1314,7 @@ export const LivePlayer = memo(function LivePlayer({
             aria-pressed={currentShowOsd}
             className={`min-h-11 min-w-11 rounded-md p-1 transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0 ${
               currentShowOsd
-                ? 'bg-black/60 text-cyan-300 hover:bg-black/80 hover:text-white'
+                ? 'text-status-info bg-black/60 hover:bg-black/80 hover:text-white'
                 : 'bg-black/60 text-white/40 hover:bg-black/80 hover:text-white'
             }`}
             aria-label={currentShowOsd ? t('live.toggleOsdShow') : t('live.toggleOsdHide')}
@@ -1346,7 +1349,7 @@ export const LivePlayer = memo(function LivePlayer({
               aria-label={streamType === 'main' ? t('live.subStream') : t('live.mainStream')}
               title={streamType === 'main' ? t('live.subStream') : t('live.mainStream')}
             >
-              <Layers className="h-3 w-3 text-cyan-400" />
+              <Layers className="text-status-info h-3 w-3" />
               <span>{streamType === 'main' ? 'MAIN' : 'SUB'}</span>
             </button>
           )}
@@ -1391,7 +1394,7 @@ export const LivePlayer = memo(function LivePlayer({
             <button
               type="button"
               onClick={onSpotlight}
-              className="min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:bg-cyan-500/80 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
+              className="hover:bg-status-info/80 min-h-11 min-w-11 rounded-md bg-black/60 p-1 text-white/90 transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
               aria-label={t('live.focusHero')}
               title={t('live.focusHero')}
             >
@@ -1436,17 +1439,17 @@ export const LivePlayer = memo(function LivePlayer({
           }`}
         >
           <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1.5 text-emerald-400">
+            <span className="text-status-success flex items-center gap-1.5">
               <Activity className="h-3.5 w-3.5" />
               <span>
                 {t('live.tracks', 'TRACKS')}: {displayTelemetry.activeTracks}
               </span>
             </span>
-            <span className="flex items-center gap-1 text-cyan-300">
+            <span className="text-status-info flex items-center gap-1">
               <User className="h-3.5 w-3.5" />
               <span>{displayTelemetry.personCount}</span>
             </span>
-            <span className="flex items-center gap-1 text-amber-300">
+            <span className="text-status-warning flex items-center gap-1">
               <Car className="h-3.5 w-3.5" />
               <span>{displayTelemetry.carCount}</span>
             </span>
@@ -1456,7 +1459,7 @@ export const LivePlayer = memo(function LivePlayer({
             <span className="text-[10px] text-white/50">{t('live.motionHeat', 'MOTION HEAT')}</span>
             <div className="h-1.5 w-16 overflow-hidden rounded-full bg-white/20">
               <div
-                className="h-full bg-gradient-to-r from-emerald-400 to-cyan-400 transition-all duration-300"
+                className="from-status-success to-status-info h-full bg-gradient-to-r transition-all duration-300"
                 style={{ width: `${Math.min(100, displayTelemetry.motionScore * 100)}%` }}
               />
             </div>

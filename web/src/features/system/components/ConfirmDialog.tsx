@@ -64,13 +64,13 @@ export function ConfirmDialog({
   }, [open, handleKeyDown])
 
   const iconBg =
-    variant === 'danger' ? 'bg-[var(--status-danger)]/10' : 'bg-[var(--accent-amber)]/10'
+    variant === 'danger' ? 'bg-[var(--status-danger)]/10' : 'bg-[var(--status-warning)]/10'
   const iconColor =
-    variant === 'danger' ? 'text-[var(--status-danger)]' : 'text-[var(--accent-amber)]'
+    variant === 'danger' ? 'text-[var(--status-danger)]' : 'text-[var(--status-warning)]'
   const confirmBg =
     variant === 'danger'
       ? 'bg-[var(--status-danger-solid)] hover:bg-[var(--status-danger-solid)]/90 shadow-lg shadow-[var(--status-danger)]/20'
-      : 'bg-[var(--accent-amber)] hover:bg-[var(--accent-amber)]/90 shadow-lg shadow-[var(--accent-amber)]/20'
+      : 'bg-[var(--status-warning-solid)] hover:bg-[var(--status-warning-solid)]/90 shadow-lg shadow-[var(--status-warning)]/20'
 
   return (
     <AnimatePresence>

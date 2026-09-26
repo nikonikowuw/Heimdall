@@ -674,7 +674,7 @@ export function PersonnelDetailDrawer({
 
                                 {/* 主头像徽标 */}
                                 {face.isPrimary && (
-                                  <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 rounded-md bg-[var(--status-success)] px-1.5 py-0.5 text-[9px] font-bold text-white shadow-xs">
+                                  <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 rounded-md bg-[var(--status-success-solid)] px-1.5 py-0.5 text-[9px] font-bold text-white shadow-xs">
                                     <Sparkles className="h-2.5 w-2.5" />
                                     <span>{t('card.primary')}</span>
                                   </div>

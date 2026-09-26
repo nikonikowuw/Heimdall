@@ -125,9 +125,9 @@ export function ThermalStatus({ thermal, className = '' }: ThermalStatusProps) {
     <div className={`space-y-3 ${className}`}>
       {/* 降频警告 */}
       {thermal.throttleActive && (
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--accent-amber)]/30 bg-[var(--accent-amber)]/10 p-3">
-          <AlertTriangle className="h-4 w-4 text-[var(--accent-amber)]" />
-          <span className="text-[13px] font-medium text-[var(--accent-amber)]">
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--status-warning)]/30 bg-[var(--status-warning)]/10 p-3">
+          <AlertTriangle className="h-4 w-4 text-[var(--status-warning)]" />
+          <span className="text-[13px] font-medium text-[var(--status-warning)]">
             {t('thermal.throttling', {
               defaultValue: 'Thermal throttling active - Performance may be reduced',
             })}

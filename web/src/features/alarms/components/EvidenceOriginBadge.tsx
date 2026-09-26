@@ -15,7 +15,7 @@ const BADGE_CONFIG = {
     Icon: Star,
     labelKey: 'card.peakFrame',
     hintKey: 'card.peakFrameHint',
-    className: 'border-cyan-500/40 bg-cyan-500/15 text-cyan-400',
+    className: 'border-status-info/40 bg-status-info/15 text-status-info',
   },
   subStream: {
     Icon: Minimize2,

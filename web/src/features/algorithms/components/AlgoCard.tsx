@@ -84,12 +84,12 @@ export function AlgoCard({
           </div>
 
           {algorithm.isBuiltin ? (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-indigo-500/20 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-400">
+            <span className="border-status-info/20 bg-status-info/10 text-status-info inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-semibold">
               <ShieldCheck className="h-3 w-3" />
               {t('card.builtinTag')}
             </span>
           ) : (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-400">
+            <span className="border-status-warning/20 bg-status-warning/10 text-status-warning inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-semibold">
               {t('card.customTag')}
             </span>
           )}
@@ -102,7 +102,7 @@ export function AlgoCard({
         {/* 运行元信息：版本 / 平台 / 版本数 / 体积压成一行，扫读靠差异项而不是字段名 */}
         <div className="font-data flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--text-muted)] tabular-nums">
           <span className="inline-flex items-center gap-1">
-            <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+            <CheckCircle2 className="text-status-success h-3 w-3" />
             <span className="font-semibold text-[var(--text-primary)]">
               v{activeVersionLabel || t('card.versionUnknown')}
             </span>
@@ -127,7 +127,7 @@ export function AlgoCard({
         {(!isCompatible || isPartialCompatible || blockingUsage.length > 0) && (
           <div className="flex flex-wrap items-center gap-2">
             {!isCompatible && (
-              <span className="inline-flex items-center gap-1 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-400">
+              <span className="border-status-warning/20 bg-status-warning/10 text-status-warning inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-semibold">
                 <TriangleAlert className="h-3 w-3" />
                 {t('card.incompatible')}
               </span>

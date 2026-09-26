@@ -221,6 +221,7 @@
     "unselectAll": "取消全选",
     "importSelected": "导入选中的通道 ({{count}})",
     "importFailed": "批量导入失败",
+    "streamModeLabel": "分析码流选择",
     "streamModeAutoOption": "自动码流 (推荐)",
     "streamModeMainOption": "主码流分析",
     "streamModeSubOption": "子码流分析",

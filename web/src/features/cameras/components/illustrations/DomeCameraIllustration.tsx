@@ -49,14 +49,14 @@ export function DomeCameraIllustration({
         width="96"
         height="8"
         rx="4"
-        className="fill-white stroke-slate-800 dark:fill-slate-900 dark:stroke-slate-200"
+        className="fill-white stroke-[var(--text-secondary)] dark:fill-[var(--text-primary)] dark:stroke-[var(--text-muted)]"
         strokeWidth="2.5"
       />
 
       {/* ── 2. 半球型罩体 ── */}
       <path
         d="M 76 40 C 76 86 94 112 120 112 C 146 112 164 86 164 40 Z"
-        className="fill-white stroke-slate-800 dark:fill-slate-900 dark:stroke-slate-200"
+        className="fill-white stroke-[var(--text-secondary)] dark:fill-[var(--text-primary)] dark:stroke-[var(--text-muted)]"
         strokeWidth="2.5"
       />
 

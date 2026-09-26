@@ -57,7 +57,7 @@ export function RecognitionEvidencePreview({
   }, [updateImageRect])
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void {
-    if (!onPreview || (event.key !== 'Enter' && event.key !== ' ')) return
+    if (!onPreview || (event.key !== 'Enter' && event.key !== '')) return
     event.preventDefault()
     onPreview()
   }
@@ -86,16 +86,16 @@ export function RecognitionEvidencePreview({
           />
           {imgRect && targetBBoxes?.body && (
             <div
-              className="pointer-events-none absolute border-2 border-cyan-400 bg-cyan-400/10 shadow-[0_0_12px_rgba(6,182,212,0.5)]"
+              className="border-status-info bg-status-info/10 pointer-events-none absolute border-2 shadow-[0_0_12px_rgba(var(--status-info-rgb),0.5)]"
               style={getBBoxStyle(targetBBoxes.body, imgRect)}
             />
           )}
           {imgRect && targetBBoxes?.face && (
             <div
-              className="pointer-events-none absolute border-2 border-dashed border-purple-400 bg-purple-500/15 shadow-[0_0_12px_rgba(168,85,247,0.5)]"
+              className="border-marker-border bg-marker-soft pointer-events-none absolute border-2 border-dashed shadow-[0_0_12px_rgba(var(--marker-rgb),0.5)]"
               style={getBBoxStyle(targetBBoxes.face.bbox, imgRect)}
             >
-              <span className="absolute -top-4 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-xs">
+              <span className="bg-marker-solid absolute -top-4 left-0 rounded px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-xs">
                 {targetBBoxes.face.qualityScore !== undefined
                   ? `${faceLabel} ${(targetBBoxes.face.qualityScore * 100).toFixed(0)}%`
                   : faceLabel}
@@ -109,7 +109,7 @@ export function RecognitionEvidencePreview({
           )}
         </>
       ) : (
-        <span className="text-[10px] text-slate-500">{noImageText}</span>
+        <span className="text-[10px] text-[var(--text-muted)]">{noImageText}</span>
       )}
     </div>
   )

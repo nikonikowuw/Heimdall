@@ -13,7 +13,6 @@ import {
   Plus,
   Radio,
   RefreshCw,
-  Search,
   ShieldAlert,
   Sparkles,
   Trash2,
@@ -22,6 +21,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { CameraModal, DeleteCameraModal, normalizeProbeStatus } from '@/features/cameras'
 import { cameraApi, evidenceApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
@@ -147,9 +147,11 @@ function LiveAlarmToastItem({
           <span className="text-[10px] font-bold text-[var(--status-danger)] uppercase">
             {ruleTypeLabel}
           </span>
-          <span className="font-semibold text-slate-300">{cameraName || alarm.cameraId}</span>
+          <span className="font-semibold text-[var(--text-primary)]">
+            {cameraName || alarm.cameraId}
+          </span>
         </div>
-        <p className="font-medium text-slate-200">
+        <p className="font-medium text-[var(--text-primary)]">
           {t('alarm:toast.ruleTriggered', { target: alarm.targetLabel })}
         </p>
       </div>
@@ -160,7 +162,7 @@ function LiveAlarmToastItem({
             onClick={() => {
               onFocusCamera(alarm.cameraId)
             }}
-            className="rounded-lg bg-cyan-500/20 px-2.5 py-1 text-xs font-semibold text-cyan-300 transition-all hover:bg-cyan-500/30"
+            className="bg-status-info/20 text-status-info hover:bg-status-info/30 rounded-lg px-2.5 py-1 text-xs font-semibold transition-all"
           >
             {t('camera:live.focus')}
           </button>
@@ -180,7 +182,7 @@ function LiveAlarmToastItem({
         <button
           type="button"
           onClick={onClose}
-          className="p-1 text-slate-400 transition-colors hover:text-white"
+          className="p-1 text-[var(--text-secondary)] transition-colors hover:text-white"
         >
           <X className="h-4 w-4" />
         </button>
@@ -555,11 +557,11 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
         title={t('live.title')}
         badges={
           <>
-            <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+            <span className="bg-status-success/10 text-status-success flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium">
               <Radio className="h-2.5 w-2.5" />
               <span>{t('live.webcodecsBadge')}</span>
             </span>
-            <span className="flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-700 dark:text-cyan-400">
+            <span className="bg-status-info/10 text-status-info flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium">
               <Zap className="h-2.5 w-2.5" />
               <span>{hwLabel || t('live.hwAcceleratorReady')}</span>
             </span>
@@ -580,7 +582,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               <span>{t('live.autoSpotlight')}</span>
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
-                  autoSpotlight ? 'bg-cyan-400' : 'bg-gray-500'
+                  autoSpotlight ? 'bg-status-info' : 'bg-[var(--text-muted)]'
                 }`}
               />
             </button>
@@ -688,10 +690,10 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               duration: reducedMotion ? motionTokens.duration.fast : motionTokens.duration.normal,
               ease: motionTokens.easing.smooth,
             }}
-            className="absolute top-[76px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full border border-cyan-500/40 bg-black/85 px-4 py-1.5 text-xs text-white shadow-2xl backdrop-blur-md"
+            className="border-status-info/40 absolute top-[76px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full border bg-black/85 px-4 py-1.5 text-xs text-white shadow-2xl backdrop-blur-md"
           >
-            <div className="flex items-center gap-1.5 font-medium text-cyan-300">
-              <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+            <div className="text-status-info flex items-center gap-1.5 font-medium">
+              <Sparkles className="text-status-info h-3.5 w-3.5" />
               <span>{t('live.spotlightSwitchHint', { name: spotlightBanner.cameraName })}</span>
             </div>
             {spotlightBanner.revertId && (
@@ -703,7 +705,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                     setSpotlightBanner(null)
                   }
                 }}
-                className="flex items-center gap-1 rounded bg-white/10 px-2 py-0.5 text-[11px] font-medium text-slate-200 transition-colors hover:bg-white/20 hover:text-white"
+                className="flex items-center gap-1 rounded bg-white/10 px-2 py-0.5 text-[11px] font-medium text-[var(--text-primary)] transition-colors hover:bg-white/20 hover:text-white"
               >
                 <CornerUpLeft className="h-3 w-3" />
                 <span>{t('live.revertSpotlight')}</span>
@@ -712,7 +714,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             <button
               type="button"
               onClick={() => setSpotlightBanner(null)}
-              className="text-slate-400 hover:text-white"
+              className="text-[var(--text-secondary)] hover:text-white"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -774,10 +776,8 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             {/* Hero 下方实时遥测事件滚动胶囊 */}
             <div className="frosted-glass flex items-center justify-between rounded-lg px-3 py-1.5 text-xs text-[var(--text-secondary)]">
               <div className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="flex h-2 w-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
-                <span className="font-semibold text-cyan-700 dark:text-cyan-400">
-                  {t('live.liveTelemetry')}:
-                </span>
+                <span className="bg-status-info flex h-2 w-2 rounded-full" />
+                <span className="text-status-info font-semibold">{t('live.liveTelemetry')}:</span>
                 <span className="text-[var(--text-primary)]">
                   {heroCamera
                     ? `[${heroCamera.name}] ${heroCamera.lastCodec ? heroCamera.lastCodec.toUpperCase() : 'H264'} ${heroCamera.lastWidth ? `${heroCamera.lastWidth}x${heroCamera.lastHeight}` : ''}`
@@ -787,13 +787,13 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
               <div className="flex items-center gap-3 text-[11px]">
                 <span>
                   {t('live.fps')}:{' '}
-                  <strong className="text-emerald-600 dark:text-emerald-400">
+                  <strong className="text-status-success">
                     {heroCamera?.lastFps ? heroCamera.lastFps.toFixed(1) : '--'} FPS
                   </strong>
                 </span>
                 <span>
                   {t(heroLatencyLabelKey)}:{' '}
-                  <strong className="text-cyan-700 dark:text-cyan-400">
+                  <strong className="text-status-info">
                     {heroLatency ? `${heroLatency.value} ms` : '--'}
                   </strong>
                 </span>
@@ -835,28 +835,16 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
 
               {/* 搜索与过滤工具栏 */}
               <div className="flex items-center gap-1.5">
-                <div className="relative flex-1">
-                  <Search className="absolute top-1/2 left-2 h-3 w-3 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    value={auxSearch}
-                    onChange={(e) => setAuxSearch(e.target.value)}
-                    aria-label={t('live.searchPlaceholder')}
-                    placeholder={t('live.searchPlaceholder')}
-                    className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] pr-2 pl-7 text-[11px] text-[var(--text-primary)] outline-none placeholder:text-slate-400 focus:border-cyan-500 focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-                  />
-                  {auxSearch && (
-                    <button
-                      type="button"
-                      onClick={() => setAuxSearch('')}
-                      className="absolute top-1/2 right-1.5 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-                      aria-label={t('live.clearSearch')}
-                      title={t('live.clearSearch')}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  )}
-                </div>
+                <SearchInput
+                  sizeVariant="compact"
+                  value={auxSearch}
+                  onChange={setAuxSearch}
+                  onClear={() => setAuxSearch('')}
+                  placeholder={t('live.searchPlaceholder')}
+                  aria-label={t('live.searchPlaceholder')}
+                  clearAriaLabel={t('live.clearSearch')}
+                  containerClassName="min-w-0 flex-1"
+                />
 
                 <div
                   className="flex items-center rounded-md border border-[var(--border)] p-0.5 text-[10px]"
@@ -878,7 +866,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                             filter === 'all'
                               ? 'bg-[var(--accent)] shadow-xs'
                               : filter === 'healthy'
-                                ? 'bg-emerald-500/20'
+                                ? 'bg-status-success/20'
                                 : 'bg-[var(--status-danger)]/20'
                           }`}
                           transition={{
@@ -894,7 +882,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                             ? filter === 'all'
                               ? 'font-medium text-white'
                               : filter === 'healthy'
-                                ? 'font-medium text-emerald-700 dark:text-emerald-400'
+                                ? 'text-status-success font-medium'
                                 : 'font-medium text-[var(--status-danger)]'
                             : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                         }`}

@@ -118,7 +118,7 @@ export function PersonnelStatsGrid({
       {error !== null && (
         <p
           role="status"
-          className="flex items-center gap-1.5 text-[11px] text-[var(--accent-amber)]"
+          className="flex items-center gap-1.5 text-[11px] text-[var(--status-warning)]"
         >
           <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           {error}

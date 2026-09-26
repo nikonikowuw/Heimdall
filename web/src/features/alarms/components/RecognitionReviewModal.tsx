@@ -91,7 +91,7 @@ function MiniAvatar({
             </div>
           </>
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-slate-500">
+          <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-[var(--text-muted)]">
             <User className="h-6 w-6 opacity-30" />
             <span className="text-[10px] opacity-60">{noImageText}</span>
           </div>
@@ -494,7 +494,7 @@ export function RecognitionReviewModal({
                               e.stopPropagation()
                               onReview(recognition, 'confirmed', cand)
                             }}
-                            className="flex items-center gap-1 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2.5 py-1.5 text-xs font-semibold text-[var(--status-success)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-success)] hover:bg-[var(--status-success)] hover:text-white hover:shadow-[0_0_12px_var(--status-success-soft)] active:scale-95"
+                            className="flex items-center gap-1 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2.5 py-1.5 text-xs font-semibold text-[var(--status-success)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-success)] hover:bg-[var(--status-success-solid)] hover:text-white hover:shadow-[0_0_12px_var(--status-success-soft)] active:scale-95"
                             title={t('card.confirmCandidate')}
                           >
                             <Check className="h-3.5 w-3.5 stroke-[2.5]" />
@@ -536,7 +536,7 @@ export function RecognitionReviewModal({
                 type="button"
                 whileTap={{ scale: 0.96 }}
                 onClick={() => onReview(recognition, 'confirmed', activeCandidate)}
-                className="flex items-center gap-1.5 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success)] px-4.5 py-2 text-xs font-semibold text-white shadow-md transition-all hover:opacity-90"
+                className="flex items-center gap-1.5 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-solid)] px-4.5 py-2 text-xs font-semibold text-white shadow-md transition-all hover:opacity-90"
               >
                 <CheckCircle2 className="h-4 w-4 stroke-[2.5]" />
                 <span>

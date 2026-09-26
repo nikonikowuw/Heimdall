@@ -478,13 +478,13 @@ export function CameraModal({
                             <button
                               type="button"
                               onClick={() => setIsLanScanOpen(true)}
-                              className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+                              className="text-status-success inline-flex items-center gap-1 text-[11px] font-medium hover:underline"
                             >
                               <Radio className="h-3 w-3" />
                               <span>{t('discovery.scanLan', { defaultValue: '局域网嗅探' })}</span>
                             </button>
                             {isDeducing && (
-                              <span className="flex items-center gap-1 text-[10px] text-cyan-500">
+                              <span className="text-status-info flex items-center gap-1 text-[10px]">
                                 <Loader2 className="h-3 w-3 animate-spin" />
                                 <span>
                                   {t('discovery.deducing', { defaultValue: '推导中...' })}
@@ -527,7 +527,7 @@ export function CameraModal({
                             </span>
                           </label>
                           {subCandidates.length > 0 && (
-                            <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                            <span className="text-status-success flex items-center gap-1 text-[10px] font-medium">
                               <Sparkles className="h-3 w-3" />
                               <span>{t('manage.subCandidatesHint')}</span>
                             </span>
@@ -557,12 +557,12 @@ export function CameraModal({
                                   onClick={() => setSubUrl(c.subUrl)}
                                   className={`font-data flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] transition-all ${
                                     isSelected
-                                      ? 'border border-emerald-500/50 bg-emerald-500/15 font-semibold text-emerald-700 dark:text-emerald-300'
+                                      ? 'border-status-success/50 bg-status-success/15 text-status-success border font-semibold'
                                       : 'border border-[var(--border)]/80 bg-[var(--bg-surface-solid)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
                                   }`}
                                   title={c.description}
                                 >
-                                  {isSelected && <Check className="h-3 w-3 text-emerald-500" />}
+                                  {isSelected && <Check className="text-status-success h-3 w-3" />}
                                   <span>
                                     {c.brand}: {c.description}
                                   </span>

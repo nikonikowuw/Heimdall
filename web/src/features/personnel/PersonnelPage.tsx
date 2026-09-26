@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
-  ArrowUpDown,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -31,7 +30,10 @@ import { PersonnelCard, PersonnelCardSkeleton } from './components/PersonnelCard
 import { PersonnelDetailDrawer } from './components/PersonnelDetailDrawer'
 import { PersonnelImportModal } from './components/PersonnelImportModal'
 import { PersonnelModal } from './components/PersonnelModal'
+import { RefreshButton } from '@/components/RefreshButton'
 import { PageHeader } from '@/components/ui/PageHeader'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { SelectField } from '@/components/ui/SelectField'
 import { PersonnelStatsGrid } from './components/PersonnelStatsGrid'
 import { PersonnelTable, PersonnelTableSkeleton } from './components/PersonnelTable'
 import { toast } from '@/stores/toast'
@@ -55,6 +57,15 @@ function reportEntryClass(failed: number): string {
 type ViewMode = 'grid' | 'table'
 type SampleFilter = 'all' | 'saturated' | 'incomplete' | 'empty'
 type SortBy = 'createdDesc' | 'createdAsc' | 'nameAsc' | 'faceCountDesc' | 'faceCountAsc'
+
+/** 排序档位与可见文案的对应关系；作为收窄依据，也避免两处各写一份选项表 */
+const SORT_OPTIONS: readonly { value: SortBy; labelKey: string }[] = [
+  { value: 'createdDesc', labelKey: 'sort.createdDesc' },
+  { value: 'createdAsc', labelKey: 'sort.createdAsc' },
+  { value: 'nameAsc', labelKey: 'sort.nameAsc' },
+  { value: 'faceCountDesc', labelKey: 'sort.faceCountDesc' },
+  { value: 'faceCountAsc', labelKey: 'sort.faceCountAsc' },
+]
 
 export function PersonnelPage(): React.ReactElement {
   const { t } = useTranslation(['personnel', 'common'])
@@ -864,16 +875,11 @@ export function PersonnelPage(): React.ReactElement {
             )}
 
             {/* 刷新 */}
-            <button
-              type="button"
+            <RefreshButton
               onClick={() => loadData()}
-              disabled={isLoading}
-              aria-label={t('actions.refresh')}
-              title={t('actions.refresh')}
-              className="page-action-btn page-action-btn--icon"
-            >
-              <RotateCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            </button>
+              loading={isLoading}
+              label={t('actions.refresh')}
+            />
 
             {/* 一键重新提取人脸特征 */}
             <button
@@ -935,43 +941,23 @@ export function PersonnelPage(): React.ReactElement {
       <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl p-2.5 shadow-xs">
         <div className="flex flex-1 flex-wrap items-center gap-2.5 sm:flex-nowrap">
           {/* 搜索框 */}
-          <div className="group/search relative min-w-[200px] flex-1 sm:max-w-xs">
-            <Search
-              className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]"
-              aria-hidden="true"
-            />
-            <input
-              ref={searchInputRef}
-              type="text"
-              data-search-input="true"
-              value={searchKeyword}
-              onChange={(e) => {
-                setSearchKeyword(e.target.value)
-                setPage(1)
-              }}
-              placeholder={t('actions.searchPlaceholder')}
-              aria-label={t('actions.searchPlaceholder')}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/70 py-1.5 pr-8 pl-8 text-xs text-[var(--text-primary)] backdrop-blur-md transition-all select-text placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface)] focus:ring-2 focus:ring-[var(--accent-soft)] focus:outline-none"
-            />
-            {searchKeyword ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchKeyword('')
-                  setPage(1)
-                }}
-                aria-label={t('actions.clearSearch')}
-                title={t('actions.clearSearch')}
-                className="absolute top-1/2 right-2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            ) : (
-              <kbd className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
-                /
-              </kbd>
-            )}
-          </div>
+          <SearchInput
+            ref={searchInputRef}
+            showKbdHint
+            value={searchKeyword}
+            onChange={(val) => {
+              setSearchKeyword(val)
+              setPage(1)
+            }}
+            onClear={() => {
+              setSearchKeyword('')
+              setPage(1)
+            }}
+            placeholder={t('actions.searchPlaceholder')}
+            aria-label={t('actions.searchPlaceholder')}
+            clearAriaLabel={t('actions.clearSearch')}
+            containerClassName="min-w-[200px] flex-1 sm:max-w-xs"
+          />
 
           {/* 样本健康度分段筛选胶囊 (Segmented Pills) */}
           <div className="hidden items-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/60 p-0.5 xl:flex">
@@ -1002,21 +988,16 @@ export function PersonnelPage(): React.ReactElement {
         {/* 右侧：排序 + 视图切换 + 加载/计数 */}
         <div className="flex items-center gap-2">
           {/* 排序选择器 */}
-          <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/50 px-2 py-1 text-[11px] text-[var(--text-secondary)]">
-            <ArrowUpDown className="h-3 w-3 text-[var(--text-muted)]" />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortBy)}
-              aria-label={t('sort.label')}
-              className="bg-transparent text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
-            >
-              <option value="createdDesc">{t('sort.createdDesc')}</option>
-              <option value="createdAsc">{t('sort.createdAsc')}</option>
-              <option value="nameAsc">{t('sort.nameAsc')}</option>
-              <option value="faceCountDesc">{t('sort.faceCountDesc')}</option>
-              <option value="faceCountAsc">{t('sort.faceCountAsc')}</option>
-            </select>
-          </div>
+          <SelectField<SortBy>
+            label={t('sort.label')}
+            sizeVariant="compact"
+            value={sortBy}
+            onChange={setSortBy}
+            options={SORT_OPTIONS.map((option) => ({
+              value: option.value,
+              label: t(option.labelKey),
+            }))}
+          />
 
           {/* 视图模式切换：Grid / Table */}
           <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)]/60 p-0.5">
@@ -1087,6 +1068,7 @@ export function PersonnelPage(): React.ReactElement {
                 setLimit(Number(e.target.value))
                 setPage(1)
               }}
+              title={t('pagination.pageSize')}
               className="font-data h-8 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 text-xs text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:outline-none"
             >
               {PAGE_SIZE_OPTIONS.map((size) => (

@@ -47,7 +47,7 @@ export function PtzCameraIllustration({
         d="M 68 28 L 120 28 L 120 42"
         fill="none"
         stroke="currentColor"
-        className="text-slate-800 dark:text-slate-200"
+        className="text-[var(--text-primary)] dark:text-[var(--text-primary)]"
         strokeWidth="2.5"
         strokeLinecap="round"
       />
@@ -59,7 +59,7 @@ export function PtzCameraIllustration({
         width="48"
         height="12"
         rx="4"
-        className="fill-white stroke-slate-800 dark:fill-slate-900 dark:stroke-slate-200"
+        className="fill-white stroke-[var(--text-secondary)] dark:fill-[var(--text-primary)] dark:stroke-[var(--text-muted)]"
         strokeWidth="2.5"
       />
 
@@ -68,7 +68,7 @@ export function PtzCameraIllustration({
         cx="120"
         cy="86"
         r="32"
-        className="fill-white stroke-slate-800 dark:fill-slate-900 dark:stroke-slate-200"
+        className="fill-white stroke-[var(--text-secondary)] dark:fill-[var(--text-primary)] dark:stroke-[var(--text-muted)]"
         strokeWidth="2.5"
       />
 

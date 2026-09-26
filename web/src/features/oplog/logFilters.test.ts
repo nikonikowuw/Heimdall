@@ -1,27 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  EVENT_FILTERS,
-  isMemberOf,
-  LEVEL_FILTERS,
-  MODULE_FILTERS,
-  STATUS_FILTERS,
-  TARGET_FILTERS,
-} from './logFilters'
-
-describe('isMemberOf', () => {
-  it('accepts declared values and rejects everything else', () => {
-    expect(isMemberOf(STATUS_FILTERS, 'failed')).toBe(true)
-    expect(isMemberOf(STATUS_FILTERS, 'clientError')).toBe(false)
-    expect(isMemberOf(MODULE_FILTERS, 'all')).toBe(true)
-    expect(isMemberOf(MODULE_FILTERS, 'unknown-module')).toBe(false)
-    expect(isMemberOf(MODULE_FILTERS, '')).toBe(false)
-  })
-
-  it('is case sensitive, matching the exact wire values', () => {
-    expect(isMemberOf(EVENT_FILTERS, 'camera_offline')).toBe(true)
-    expect(isMemberOf(EVENT_FILTERS, 'CAMERA_OFFLINE')).toBe(false)
-  })
-})
+import { EVENT_FILTERS, LEVEL_FILTERS, TARGET_FILTERS } from './logFilters'
 
 describe('filter vocabularies', () => {
   it('offers an explicit unfiltered option in every vocabulary', () => {

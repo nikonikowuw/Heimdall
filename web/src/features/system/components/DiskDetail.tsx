@@ -93,7 +93,7 @@ function InodeStats({ disk }: { disk: DiskMetrics }) {
 
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--bg-secondary)]">
         <div
-          className="h-full rounded-full bg-[var(--accent-green)] transition-all duration-500"
+          className="h-full rounded-full bg-[var(--status-success)] transition-all duration-500"
           style={{ width: `${usedPercent}%` }}
         />
       </div>
@@ -141,7 +141,7 @@ export function DiskDetail({ disk, className = '' }: DiskDetailProps): React.Rea
           <p className="text-[11px] text-[var(--text-muted)]">
             {t('diskMetrics.available', { defaultValue: 'Available' })}
           </p>
-          <p className="text-sm font-bold text-[var(--accent-green)] tabular-nums">
+          <p className="text-sm font-bold text-[var(--status-success)] tabular-nums">
             {formatGb(disk.availableGb)}
           </p>
         </div>

@@ -31,8 +31,8 @@ export function AlgoEmptyState({
   const config = {
     error: {
       icon: TriangleAlert,
-      iconClass: 'text-red-400',
-      iconBgClass: 'bg-red-500/10',
+      iconClass: 'text-status-danger',
+      iconBgClass: 'bg-status-danger/10',
       title: t('empty.errorTitle'),
       description: errorMessage || t('empty.errorDesc'),
       action: (

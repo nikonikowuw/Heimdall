@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
-import { LayoutList, RefreshCw, Rows3 } from 'lucide-react'
+import { LayoutList, Rows3 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { RefreshButton } from '@/components/RefreshButton'
 
 export type LogDensity = 'comfortable' | 'compact'
 
@@ -62,17 +63,12 @@ export function OplogToolbar({
       </div>
 
       {/* 手动刷新主按钮 */}
-      <button
-        type="button"
+      <RefreshButton
         onClick={onRefresh}
-        disabled={isLoading}
-        aria-label={t('refreshStream')}
-        title={t('refreshStream')}
-        className="reticle-target flex h-8 items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
-      >
-        <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-        <span>{t('refreshStream')}</span>
-      </button>
+        loading={isLoading}
+        label={t('refreshStream')}
+        className="reticle-target"
+      />
     </div>
   )
 }

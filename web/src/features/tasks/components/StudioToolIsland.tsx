@@ -137,7 +137,7 @@ export function StudioToolIsland({
                   duration: reduceMotion ? 0 : motionTokens.duration.fast,
                   ease: motionTokens.easing.smooth,
                 }}
-                className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-[0_0_14px_rgba(59,130,246,0.55)] ring-1 ring-white/30"
+                className="absolute inset-0 rounded-lg bg-[var(--accent)] shadow-[0_0_14px_rgba(var(--status-info-rgb),0.55)] ring-1 ring-white/30"
               />
             )}
             <span className="relative z-10">{item.icon}</span>
@@ -161,13 +161,13 @@ export function StudioToolIsland({
         title={t('studio.snapMagnet', { defaultValue: '顶点自动磁吸 (S)' })}
         className={`group relative flex h-9 w-9 items-center justify-center rounded-lg transition-all duration-150 ${
           snapEnabled
-            ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/40 hover:bg-emerald-500/25'
+            ? 'bg-status-success/20 text-status-success ring-status-success/40 hover:bg-status-success/25 ring-1'
             : 'text-white/40 hover:bg-white/10 hover:text-white/70'
         }`}
       >
         <Magnet className="h-4 w-4" />
         {snapEnabled && (
-          <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
+          <span className="bg-status-success absolute top-1 right-1 h-1.5 w-1.5 rounded-full shadow-[0_0_6px_#34d399]" />
         )}
         <span className="pointer-events-none absolute right-0.5 bottom-0.5 font-mono text-[8px] font-bold opacity-60 select-none group-hover:opacity-90">
           S

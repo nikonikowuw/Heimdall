@@ -1,6 +1,7 @@
 import React from 'react'
-import { Check, Search, X } from 'lucide-react'
+import { Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { getLocalizedClassName } from './rulesStudioTypes'
 
 export interface EnumArrayFieldProps {
@@ -88,28 +89,17 @@ export function EnumArrayField({
       </div>
 
       {options.length > SEARCH_THRESHOLD && (
-        <div className="relative">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder={t('searchClassPlaceholder', {
-              defaultValue: '过滤候选项 (如: 人, 车, dog)...',
-            })}
-            aria-label={title}
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] py-1.5 pr-7 pl-8 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] backdrop-blur-sm transition-all outline-none focus:border-[var(--accent)] focus:bg-[var(--bg-surface-solid)] focus:ring-2 focus:ring-[var(--accent)]/20"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => onSearchChange('')}
-              className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
+        <SearchInput
+          sizeVariant="compact"
+          value={search}
+          onChange={onSearchChange}
+          onClear={() => onSearchChange('')}
+          placeholder={t('searchClassPlaceholder', {
+            defaultValue: '过滤候选项 (如: 人, 车, dog)...',
+          })}
+          aria-label={title}
+          clearAriaLabel={t('studio.clearAll', { defaultValue: '清空' })}
+        />
       )}
 
       <div className="grid max-h-52 grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">

@@ -22,6 +22,8 @@
 共享 DTO 放 `types/`，feature 私有类型放本域，Props 放组件附近。
 改字段同步 Rust DTO、共享 TS 类型、解码器和全部消费者；编译器不能自动发现后端单侧改名。
 
+**声明即校验，不要写未被消费的断言别名**：类似 `type X = Assert<A, B>` 的写法，若 `X` 从未被当作值或泛型约束消费，它不产生任何约束——是恒为真的空断言，还会让人误以为已有保护。把检查放在声明处（如 `defineFilters` 的实参位置），或让类型成为某个值的类型。
+
 ## 联合类型
 
 WS 消息用 `type` 判别联合，异步状态用互斥的 `idle/loading/success/error` 变体；新增变体时必须暴露遗漏分支。
@@ -33,6 +35,15 @@ return exhaustive;
 ```
 
 类型守卫、归一化、状态 reducer 和元数据投影由数据所有者维护，组件不另建 payload 契约。
+
+### 边界收窄必须走共享工具
+
+原生控件、WS payload 与配置解析拿到的都是宽泛 `string`，还原字面量联合必须做运行时校验，用 [lib/unionNarrowing.ts](../../../web/src/lib/unionNarrowing.ts) 的 `isMemberOf` / `narrowSelectValue`：
+
+- **不要写 `as SomeUnion`**。断言在选项表与类型不同步时会静默放行非法值；校验只会拒绝，差异在编译期和运行期都能暴露。
+- `narrowSelectValue` 用于选项数组即唯一真源的场景（接入 [SelectField](../../../web/src/components/ui/SelectField.tsx) 时由组件内部调用）；`isMemberOf` 用于取值域已在别处声明的校验，如 WS 载荷归一化。
+- **选项表与联合类型双向锁定**：仅用 `satisfies readonly ['all', ...T[]]` 只能拦住越界值，某个枚举成员从常量中被意外删除时它毫无异议 —— 而这正是下拉会静默丢选项的原因。用 [filters.ts](../../../web/src/features/alarms/filters.ts) 的 `defineFilters<TUnion>()([...])` 声明取值表：它内部用 `Exactly`（两个方向的 `Exclude` 都要求 `never`）把漏档与越界都变成**声明处**的编译错误。
+- 同一维度的取值域不得合并共享：语义不同但借住在同一 `string` state 的筛选项（如告警与识别的处理状态）会迫使调用点回写 `as` 断言，应拆成各自类型化的 state。
 
 ## 时间显示
 

@@ -4,7 +4,45 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ── Tailwind v4 Theme 扩展 ── */
+/*
+ * 语义色以 @theme 暴露，从而获得完整的 utility 家族与不透明度变体：
+ * text-status-success、bg-status-success/10、border-status-warning/20、
+ * ring-status-info/40、fill-/stroke-/from-/to- 等。
+ *
+ * 取值为 var(--status-*) 的中转，而非固化字面色：主题（.dark）与深底子树
+ * （.on-dark-surface）切换时，utility 输出的 var() 会自然跟随，无需任何 dark: 变体。
+ * 这正是「不在组件用 dark: 重复配色」得以成立的基础。
+ *
+ * 既有代码里的 [var(--status-danger)] 写法仍然有效（同为 var 引用），无需为此改写；
+ * 新增与迁移中的代码优先用 utility，可读性更好且自带不透明度支持。
+ */
 @theme {
+  --color-status-success: var(--status-success);
+  --color-status-success-soft: var(--status-success-soft);
+  --color-status-success-border: var(--status-success-border);
+  --color-status-success-solid: var(--status-success-solid);
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-soft: var(--status-danger-soft);
+  --color-status-danger-border: var(--status-danger-border);
+  --color-status-danger-solid: var(--status-danger-solid);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-soft: var(--status-warning-soft);
+  --color-status-warning-border: var(--status-warning-border);
+  --color-status-warning-solid: var(--status-warning-solid);
+  --color-status-info: var(--status-info);
+  --color-status-info-soft: var(--status-info-soft);
+  --color-status-info-border: var(--status-info-border);
+  --color-status-info-solid: var(--status-info-solid);
+  --color-status-neutral: var(--status-neutral);
+  --color-status-neutral-soft: var(--status-neutral-soft);
+  --color-status-neutral-border: var(--status-neutral-border);
+  --color-surface-inverse: var(--surface-inverse);
+  --color-on-inverse: var(--on-inverse);
+  --color-marker: var(--marker);
+  --color-marker-soft: var(--marker-soft);
+  --color-marker-border: var(--marker-border);
+  --color-marker-solid: var(--marker-solid);
+
   --font-display: 'Unbounded', 'Space Grotesk', 'Inter', -apple-system, sans-serif;
   --font-tech: 'Space Grotesk', 'Inter', -apple-system, sans-serif;
   --font-sans:
@@ -36,23 +74,60 @@
   --accent-rgb: 0, 82, 255;
   --accent-soft: rgba(0, 82, 255, 0.08);
   --accent-contrast: #ffffff;
-  --accent-green: #10b981;
-  --accent-amber: #d97706;
+  /*
+   * 原 --accent-green / --accent-amber 已并入 --status-success / --status-warning。
+   * 两组语义重叠（都表达「正常 / 需关注」），且旧值在浅底上对比度不足：
+   * #10b981 仅 2.45:1、#d97706 仅 3.08:1，均低于正文 4.5:1 门槛，且未在
+   * .on-dark-surface 覆写。统一走状态色后，两个主题与深底子树的取值均达标。
+   */
   --status-success: #047857;
   --status-success-soft: rgba(4, 120, 87, 0.1);
   --status-success-border: rgba(4, 120, 87, 0.24);
+  --status-success-rgb: 4, 120, 87;
   --status-danger: #b91c1c;
   --status-danger-soft: rgba(185, 28, 28, 0.1);
   --status-danger-border: rgba(185, 28, 28, 0.24);
   --status-danger-rgb: 185, 28, 28;
-  /* Fixed dark fill for danger surfaces with white foreground in either theme. */
-  --status-danger-solid: #b91c1c;
   --status-warning: #b45309;
   --status-warning-soft: rgba(180, 83, 9, 0.1);
   --status-warning-border: rgba(180, 83, 9, 0.24);
+  --status-warning-rgb: 180, 83, 9;
   --status-info: #0369a1;
   --status-info-soft: rgba(3, 105, 161, 0.1);
   --status-info-border: rgba(3, 105, 161, 0.24);
+  --status-info-rgb: 3, 105, 161;
+  /* 中性状态：离线 / 未启用 / 未知。不表达成败，故与四种状态色并列成组。 */
+  --status-neutral: #64748b;
+  --status-neutral-soft: rgba(100, 116, 139, 0.1);
+  --status-neutral-border: rgba(100, 116, 139, 0.24);
+  --status-neutral-rgb: 100, 116, 139;
+  /*
+   * 实底填充档：四种状态各固定一个深色值，专配白色前景。
+   * 主题感知的 --status-* 在暗色主题下是浅色档（如 #34d399 对白字仅 1.92:1），
+   * 拿它做实底 + 白字不可读；因此实底一律取亮色档值并跨主题固定。
+   */
+  --status-success-solid: #047857;
+  --status-danger-solid: #b91c1c;
+  --status-warning-solid: #b45309;
+  --status-info-solid: #0369a1;
+
+  /*
+   * 反转面：用于「深底浅字」的实心按钮与遮罩标签，需在亮色主题下也有足够对比。
+   * 亮色主题取深面 + 浅字，暗色主题反之，因此它不是状态色，而是材质对。
+   */
+  --surface-inverse: #0f172a;
+  --surface-inverse-hover: #1e293b;
+  --on-inverse: #ffffff;
+  /*
+   * 叠加标记（人脸 bbox 等画布型标注）：
+   * 只出现在图像/视频叠加层，且需与画面内容保持可辨识差异，故独立成组，
+   * 不并入状态色——它不表达成败，只表达「这是一类标注」。
+   */
+  --marker: #c084fc;
+  --marker-rgb: 192, 132, 252;
+  --marker-soft: rgba(168, 85, 247, 0.15);
+  --marker-border: #c084fc;
+  --marker-solid: #9333ea;
 
   --border: rgba(15, 23, 42, 0.08);
   --border-strong: rgba(15, 23, 42, 0.15);
@@ -80,11 +155,10 @@
   --accent-rgb: 59, 130, 246;
   --accent-soft: rgba(59, 130, 246, 0.12);
   --accent-contrast: #ffffff;
-  --accent-green: #34d399;
-  --accent-amber: #fbbf24;
   --status-success: #34d399;
   --status-success-soft: rgba(52, 211, 153, 0.12);
   --status-success-border: rgba(52, 211, 153, 0.26);
+  --status-success-rgb: 52, 211, 153;
   --status-danger: #f87171;
   --status-danger-soft: rgba(248, 113, 113, 0.12);
   --status-danger-border: rgba(248, 113, 113, 0.26);
@@ -92,9 +166,25 @@
   --status-warning: #fbbf24;
   --status-warning-soft: rgba(251, 191, 36, 0.12);
   --status-warning-border: rgba(251, 191, 36, 0.26);
+  --status-warning-rgb: 251, 191, 36;
   --status-info: #38bdf8;
   --status-info-soft: rgba(56, 189, 248, 0.12);
   --status-info-border: rgba(56, 189, 248, 0.26);
+  --status-info-rgb: 56, 189, 248;
+  --status-neutral: #94a3b8;
+  --status-neutral-soft: rgba(148, 163, 184, 0.12);
+  --status-neutral-border: rgba(148, 163, 184, 0.26);
+  --status-neutral-rgb: 148, 163, 184;
+  /* --status-*-solid 有意不在此覆写：实底 + 白字必须固定深色档。 */
+
+  --surface-inverse: #f1f5f9;
+  --surface-inverse-hover: #e2e8f0;
+  --on-inverse: #0b0f19;
+  --marker: #c084fc;
+  --marker-rgb: 192, 132, 252;
+  --marker-soft: rgba(168, 85, 247, 0.18);
+  --marker-border: #c084fc;
+  --marker-solid: #a855f7;
 
   --border: rgba(241, 245, 249, 0.08);
   --border-strong: rgba(241, 245, 249, 0.15);
@@ -288,18 +378,48 @@
   }
 
   /*
-   * 恒定深底子树：状态色固定为暗色档。
-   * 灯箱 / 视频 OSD 的底色恒为近黑（--video-surface），而亮色主题的
-   * --status-danger (#b91c1c) 在近黑底上仅 2.99:1，不可读；故在此类
-   * 子树上重定义为浅红 (#f87171，6.98:1)。同 .auth-accent 的作用域覆写思路。
+   * 恒定深底子树：状态色与文本色都固定为暗色档。
+   *
+   * 灯箱 / 视频 OSD 的底色恒为近黑（--video-surface），不随主题切换；而亮色主题下
+   * 状态色是深色档（--status-danger #b91c1c 在近黑底上仅 2.99:1，不可读），文本色
+   * 同样是深色前景。因此在这类子树上整体覆写为浅色档（取值见下方，非照搬 .dark）。
+   *
+   * 必须覆盖全部四种状态色与 neutral：此前只覆盖 danger，导致 success / warning /
+   * info 在深底上仍取亮色主题的深色调，这正是各处改用具名色（如 text-cyan-400）
+   * 绕过规范的根因。补齐后即可统一写作 text-[var(--status-info)]。
    */
   .on-dark-surface,
   .modal-backdrop--immersive,
   .modal-backdrop--lightbox {
+    --status-success: #34d399;
+    --status-success-rgb: 52, 211, 153;
+    --status-success-soft: rgba(52, 211, 153, 0.12);
+    --status-success-border: rgba(52, 211, 153, 0.26);
     --status-danger: #f87171;
     --status-danger-rgb: 248, 113, 113;
     --status-danger-soft: rgba(248, 113, 113, 0.12);
     --status-danger-border: rgba(248, 113, 113, 0.26);
+    --status-warning: #fbbf24;
+    --status-warning-rgb: 251, 191, 36;
+    --status-warning-soft: rgba(251, 191, 36, 0.12);
+    --status-warning-border: rgba(251, 191, 36, 0.26);
+    --status-info: #38bdf8;
+    --status-info-rgb: 56, 189, 248;
+    --status-info-soft: rgba(56, 189, 248, 0.12);
+    --status-info-border: rgba(56, 189, 248, 0.26);
+    --status-neutral: #94a3b8;
+    --status-neutral-rgb: 148, 163, 184;
+    --status-neutral-soft: rgba(148, 163, 184, 0.12);
+    --status-neutral-border: rgba(148, 163, 184, 0.26);
+    /*
+     * 文本三档，对齐原始硬编码（zinc-200/300、zinc-400、zinc-500）在视频底上的
+     * 相对层级，而非照搬 .dark：.dark 的 --text-muted (#475569) 在视频底上仅 2.55:1，
+     * 比原始 4.00 更差。这里取 slate-500 (#64748b, 4.06:1) 作为最低档，保持
+     * 「三个层级分别可辨」的同时不低于原实现的对比度。
+     */
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
   }
 
   .modal-backdrop--immersive {
@@ -443,6 +563,293 @@
   .modal-form-field:disabled {
     cursor: not-allowed;
     opacity: 0.6;
+  }
+
+  .search-field {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    height: 2.25rem;
+    align-items: center;
+    border: 1px solid var(--border-strong);
+    border-radius: 0.75rem;
+    background-color: var(--bg-surface-solid);
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  .search-field:hover:not(:focus-within) {
+    border-color: var(--text-muted);
+  }
+
+  .search-field:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--ring);
+  }
+
+  .search-field__icon {
+    position: absolute;
+    top: 50%;
+    left: 0.625rem;
+    transform: translateY(-50%);
+    width: 0.875rem;
+    height: 0.875rem;
+    color: var(--text-secondary);
+    pointer-events: none;
+    transition: color 150ms ease;
+  }
+
+  .search-field:focus-within .search-field__icon {
+    color: var(--accent);
+  }
+
+  .search-field__input {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    flex: 1 1 auto;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
+    padding: 0 2.25rem;
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    outline: none;
+    user-select: text;
+    caret-color: var(--accent);
+  }
+
+  .search-field__input::-webkit-search-decoration,
+  .search-field__input::-webkit-search-cancel-button,
+  .search-field__input::-webkit-search-results-button,
+  .search-field__input::-webkit-search-results-decoration {
+    -webkit-appearance: none;
+  }
+
+  .search-field__input::placeholder {
+    color: var(--text-secondary);
+    opacity: 1;
+  }
+
+  .search-field__input:focus {
+    outline: none;
+    box-shadow: none;
+  }
+
+  .search-field__input:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .search-field--compact {
+    height: 2rem;
+    border-radius: 0.5rem;
+  }
+
+  .search-field--compact .search-field__icon {
+    left: 0.5rem;
+  }
+
+  .search-field--compact .search-field__input {
+    padding-right: 1.75rem;
+    padding-left: 1.75rem;
+    font-size: 0.75rem;
+  }
+
+  .search-field--form {
+    height: 2.5rem;
+    border-radius: 0.75rem;
+  }
+
+  .search-field--form .search-field__icon {
+    left: 0.75rem;
+  }
+
+  .search-field--form .search-field__input {
+    padding-right: 2rem;
+    padding-left: 2.25rem;
+    font-size: 0.875rem;
+  }
+
+  .search-field__clear {
+    position: absolute;
+    top: 50%;
+    right: 0.25rem;
+    display: grid;
+    width: 1.5rem;
+    height: 1.5rem;
+    place-items: center;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 0.375rem;
+    background: transparent;
+    padding: 0;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
+  }
+
+  .search-field__clear:hover:not(:disabled) {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+  }
+
+  .search-field__clear:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .search-field__clear:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .search-field__hint {
+    position: absolute;
+    top: 50%;
+    right: 0.5rem;
+    transform: translateY(-50%);
+    border: 1px solid var(--border-strong);
+    border-radius: 0.25rem;
+    background-color: transparent;
+    padding: 0 0.3125rem;
+    color: var(--text-secondary);
+    font-family: var(--font-data);
+    font-size: 0.625rem;
+    line-height: 1rem;
+    pointer-events: none;
+  }
+
+  /* ── 选择框类族 ──
+   * 与 .search-field 同源的工具栏控件：高度、圆角、边框、聚焦环一致，
+   * 差异仅在左侧图标（可选）与右侧 caret 同时存在时的内边距分配。
+   * 重置原生外观是为自定义 caret 让位；键盘交互与下拉语义由 <select> 元素本身提供，
+   * 不依赖 appearance，因此必须额外补 :focus-visible 焦点环。
+   */
+  .select-field {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 2.25rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 0.625rem;
+    background-color: var(--bg-surface-solid);
+    padding: 0 2rem 0 0.75rem;
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease;
+  }
+
+  .select-field:hover:not(:disabled) {
+    border-color: var(--text-muted);
+  }
+
+  .select-field:focus-visible {
+    border-color: var(--accent);
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
+
+  .select-field:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .select-field--compact {
+    height: 2rem;
+    border-radius: 0.5rem;
+    padding-right: 1.75rem;
+    padding-left: 0.625rem;
+    font-size: 0.75rem;
+  }
+
+  /* 容器：承载绝对定位的 __icon 与 __caret，自身不产生盒子 */
+  .select-field-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .select-field-wrap .select-field {
+    width: 100%;
+  }
+
+  .select-field__icon {
+    position: absolute;
+    left: 0.625rem;
+    width: 0.875rem;
+    height: 0.875rem;
+    color: var(--text-secondary);
+    pointer-events: none;
+    transition: color 150ms ease;
+  }
+
+  .select-field-wrap:focus-within .select-field__icon {
+    color: var(--accent);
+  }
+
+  /* 有图标时给 select 预留左侧空间 */
+  .select-field-wrap--with-icon .select-field {
+    padding-left: 1.875rem;
+  }
+
+  .select-field-wrap--with-icon .select-field--compact {
+    padding-left: 1.625rem;
+  }
+
+  .select-field-wrap--with-icon .select-field__icon {
+    left: 0.5rem;
+  }
+
+  .select-field__caret {
+    position: absolute;
+    right: 0.5rem;
+    width: 0.75rem;
+    height: 0.75rem;
+    color: var(--text-muted);
+    pointer-events: none;
+    transition: color 150ms ease;
+  }
+
+  .select-field-wrap:hover .select-field__caret {
+    color: var(--text-secondary);
+  }
+
+  .select-field-wrap:focus-within .select-field__caret {
+    color: var(--accent);
+  }
+
+  /*
+   * 强调态：该维度已收敛当前视图时以 accent 提示，与「未筛选」态区分。
+   * 取值与原胶囊式筛选保持一致，避免同一工具栏出现两套「已选中」语言。
+   */
+  .select-field--emphasis,
+  .select-field--emphasis:hover:not(:disabled) {
+    border-color: color-mix(in oklab, var(--accent) 50%, transparent);
+    background-color: color-mix(in oklab, var(--accent-soft) 20%, transparent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* caret 跟随强调色，避免强调态下右侧仍是灰色而显得“未激活” */
+  .select-field-wrap--emphasis .select-field__caret {
+    color: var(--accent);
+  }
+
+  /* 原生下拉面板的配色不受页面层叠影响，需在 option 上显式指定，
+     否则暗色主题下会亮出系统白底。 */
+  .select-field option {
+    background-color: var(--bg-surface-solid);
+    color: var(--text-primary);
   }
 
   .modal-form-footer {

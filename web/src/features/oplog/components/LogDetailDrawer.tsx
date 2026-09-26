@@ -134,8 +134,10 @@ export function LogDetailDrawer({ log, onClose }: LogDetailDrawerProps): ReactEl
                 >
                   {copiedKey === 'all' ? (
                     <>
-                      <Check className="h-3.5 w-3.5 text-[var(--accent-green)]" />
-                      <span className="text-[var(--accent-green)]">{t('inspector.copiedAll')}</span>
+                      <Check className="h-3.5 w-3.5 text-[var(--status-success)]" />
+                      <span className="text-[var(--status-success)]">
+                        {t('inspector.copiedAll')}
+                      </span>
                     </>
                   ) : (
                     <>
@@ -255,7 +257,7 @@ function OperationLogInspector({
             aria-label={t('inspector.copyEndpoint')}
           >
             {copiedKey === 'path' ? (
-              <Check className="h-3.5 w-3.5 text-[var(--accent-green)]" />
+              <Check className="h-3.5 w-3.5 text-[var(--status-success)]" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}
@@ -356,8 +358,8 @@ function OperationLogInspector({
             >
               {copiedKey === 'body' ? (
                 <>
-                  <Check className="h-3 w-3 text-[var(--accent-green)]" />
-                  <span className="text-[var(--accent-green)]">{t('operational.copied')}</span>
+                  <Check className="h-3 w-3 text-[var(--status-success)]" />
+                  <span className="text-[var(--status-success)]">{t('operational.copied')}</span>
                 </>
               ) : (
                 <>
@@ -456,7 +458,7 @@ function OperationalLogInspector({
               aria-label={t('inspector.copyEvent')}
             >
               {copiedKey === 'event' ? (
-                <Check className="h-3.5 w-3.5 text-[var(--accent-green)]" />
+                <Check className="h-3.5 w-3.5 text-[var(--status-success)]" />
               ) : (
                 <Copy className="h-3.5 w-3.5" />
               )}
@@ -508,8 +510,8 @@ function OperationalLogInspector({
             >
               {copiedKey === 'extra' ? (
                 <>
-                  <Check className="h-3 w-3 text-[var(--accent-green)]" />
-                  <span className="text-[var(--accent-green)]">{t('operational.copied')}</span>
+                  <Check className="h-3 w-3 text-[var(--status-success)]" />
+                  <span className="text-[var(--status-success)]">{t('operational.copied')}</span>
                 </>
               ) : (
                 <>

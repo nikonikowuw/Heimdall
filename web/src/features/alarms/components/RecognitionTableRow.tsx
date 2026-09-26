@@ -68,7 +68,7 @@ function PureThumb({
   if (!src || hasError) {
     return (
       <div
-        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-black/60 text-slate-500"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-black/60 text-[var(--text-muted)]"
         title={title || alt}
       >
         <User className="h-4 w-4 opacity-40" />

@@ -113,15 +113,16 @@ export function getProbeBadge(
       return {
         status: norm,
         text: resolveText(['card.onlineStatus', 'status.online', 'status.healthy'], '在线'),
-        dotClass: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] animate-pulse',
-        badgeBg: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
+        dotClass:
+          'bg-status-success shadow-[0_0_8px_rgba(var(--status-success-rgb),0.6)] animate-pulse',
+        badgeBg: 'bg-status-success/10 text-status-success border-status-success/20',
       }
     case 'degraded':
       return {
         status: norm,
         text: resolveText(['card.degradedStatus', 'status.degraded'], '网络波动'),
-        dotClass: 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.5)]',
-        badgeBg: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
+        dotClass: 'bg-status-warning shadow-[0_0_6px_rgba(var(--status-warning-rgb),0.5)]',
+        badgeBg: 'bg-status-warning/10 text-status-warning border-status-warning/20',
       }
     case 'offline':
       return {
@@ -136,8 +137,9 @@ export function getProbeBadge(
       return {
         status: norm,
         text: resolveText(['card.unprobedStatus', 'status.unprobed'], '待探测'),
-        dotClass: 'bg-slate-400',
-        badgeBg: 'bg-slate-500/10 text-slate-400 border-slate-500/20',
+        dotClass: 'bg-[var(--status-neutral)]',
+        badgeBg:
+          'bg-[var(--status-neutral-soft)] text-[var(--status-neutral)] border-[var(--status-neutral-border)]',
       }
   }
 }

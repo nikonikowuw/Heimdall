@@ -106,7 +106,7 @@ export function DeleteCameraModal({
 
             {/* 内容警告区 */}
             <div className="space-y-3.5 p-6">
-              <div className="flex items-start gap-2.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-600 dark:text-amber-400">
+              <div className="border-status-warning/30 bg-status-warning/10 text-status-warning flex items-start gap-2.5 rounded-2xl border p-3.5 text-xs">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <div className="leading-relaxed">{t('manage.deleteWarning')}</div>
               </div>

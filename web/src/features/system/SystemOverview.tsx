@@ -95,8 +95,8 @@ function RingGauge({
 
 function getUsageColor(percent: number): string {
   if (percent >= 95) return 'var(--status-danger)'
-  if (percent >= 80) return 'var(--accent-amber)'
-  return 'var(--accent-green)'
+  if (percent >= 80) return 'var(--status-warning)'
+  return 'var(--status-success)'
 }
 
 export function SystemOverview(): React.ReactElement {
@@ -218,8 +218,8 @@ export function SystemOverview(): React.ReactElement {
         <div className="flex items-center gap-2.5">
           <div className="flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-[11px] text-[var(--text-muted)]">
             <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--accent-green)] opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--accent-green)]" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--status-success)] opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--status-success)]" />
             </span>
             <span>{t('overview.live', { defaultValue: 'Live (2s)' })}</span>
           </div>
@@ -393,13 +393,13 @@ export function SystemOverview(): React.ReactElement {
                 icon={Activity}
                 label={t('overview.activeTasks', { defaultValue: '活跃任务' })}
                 value={data.activeTasks}
-                color="var(--accent-green)"
+                color="var(--status-success)"
               />
               <StatTile
                 icon={AlertTriangle}
                 label={t('overview.todayAlarms', { defaultValue: '今日告警' })}
                 value={data.todayAlarms}
-                color="var(--accent-amber)"
+                color="var(--status-warning)"
               />
               <StatTile
                 icon={Camera}

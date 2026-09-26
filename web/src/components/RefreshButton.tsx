@@ -1,22 +1,42 @@
+import type { ReactElement } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 
-interface RefreshButtonProps {
+export interface RefreshButtonProps {
   onClick: () => void
   loading?: boolean
+  disabled?: boolean
+  label?: string
+  ariaLabel?: string
+  title?: string
+  className?: string
 }
 
-export function RefreshButton({ onClick, loading = false }: RefreshButtonProps) {
+export function RefreshButton({
+  onClick,
+  loading = false,
+  disabled = false,
+  label,
+  ariaLabel,
+  title,
+  className,
+}: RefreshButtonProps): ReactElement {
   const { t } = useTranslation()
+  const resolvedLabel = label ?? ariaLabel ?? title ?? t('refresh', { defaultValue: '刷新' })
+  const resolvedTitle = title ?? label ?? ariaLabel ?? resolvedLabel
+  const isButtonDisabled = disabled || loading
 
   return (
     <button
+      type="button"
       onClick={onClick}
-      disabled={loading}
-      className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-[13px] font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] active:scale-[0.97] disabled:opacity-50"
+      disabled={isButtonDisabled}
+      aria-label={resolvedLabel}
+      title={resolvedTitle}
+      className={cn('page-action-btn page-action-btn--icon', className)}
     >
-      <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-      {t('refresh', { defaultValue: '刷新' })}
+      <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} aria-hidden="true" />
     </button>
   )
 }

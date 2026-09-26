@@ -2,12 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Camera as CameraIcon,
-  ChevronDown,
   LayoutGrid,
   List,
-  RefreshCw,
   RotateCcw,
-  Search,
   UserCheck,
   Volume2,
   VolumeX,
@@ -17,6 +14,9 @@ import {
 import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker'
+import { RefreshButton } from '@/components/RefreshButton'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { SelectField } from '@/components/ui/SelectField'
 import { useDebounce } from '@/hooks/use-debounce'
 import { alarmApi, cameraApi, evidenceApi } from '@/lib/api'
 import { resolveEffectiveTimeRange, type DateTimeRangeValue } from '@/lib/dateRange'
@@ -44,6 +44,14 @@ import { RealtimeAlarmBanner } from './components/RealtimeAlarmBanner'
 import { RecognitionContent } from './components/RecognitionContent'
 import { RecognitionReviewModal } from './components/RecognitionReviewModal'
 import { PageHeader } from '@/components/ui/PageHeader'
+import {
+  FILTER_ALL,
+  type AlarmStatusFilter,
+  type RecognitionStatusFilter,
+  type RuleTypeFilter,
+  type SeverityFilter,
+  type TargetLabelFilter,
+} from './filters'
 import { isAlarmSoundEnabled, playAlarmAlertSound, setAlarmSoundEnabled } from './sound'
 import { matchesSearchTerm } from './utils'
 
@@ -149,9 +157,16 @@ export function AlarmsPage(): React.ReactElement {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selectedCameraId, setSelectedCameraId] = useState<string>('')
   const [selectedTargetLabel, setSelectedTargetLabel] = useState<string>('')
-  const [selectedRuleType, setSelectedRuleType] = useState<string>('all')
-  const [selectedSeverity, setSelectedSeverity] = useState<string>('all')
-  const [selectedStatus, setSelectedStatus] = useState<string>('all')
+  const [selectedRuleType, setSelectedRuleType] = useState<RuleTypeFilter>(FILTER_ALL)
+  const [selectedSeverity, setSelectedSeverity] = useState<SeverityFilter>(FILTER_ALL)
+  /*
+   * 告警与识别的处理状态分开持有。二者取值域无交集（`unprocessed`/`processed` vs
+   *`confirmed`/`pending_review`/`rejected`），共用一份 `string` state 会让
+   * 「识别状态下拉出现告警状态选项」成为可编译的写法，并迫使调用点用 `as` 断言
+   * 把 `string` 硬塞回字面量联合 —— 断言正是选项表与类型漂移时静默失效的入口。
+   */
+  const [alarmStatus, setAlarmStatus] = useState<AlarmStatusFilter>(FILTER_ALL)
+  const [recognitionStatus, setRecognitionStatus] = useState<RecognitionStatusFilter>(FILTER_ALL)
   // 轨道过滤：与机位联合生效（track_id 仅在单机位追踪器内唯一），用于回看同一个人的一次通行
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState<string>('')
@@ -247,9 +262,18 @@ export function AlarmsPage(): React.ReactElement {
     liveFilterRef.current = { searchQuery, cameraNameMap }
   }, [searchQuery, cameraNameMap])
 
-  // 动态汇聚已出现的所有目标标签 (消除硬编码)
+  /**
+   * 目标类别筛选的候选项。
+   *
+   * 后端没有 distinct 聚合接口，只能从当前页已加载的记录里汇聚；因此这个列表天然
+   * 随筛选与翻页而变。已选中的 `selectedTargetLabel` 必须并回候选项，否则它一旦
+   * 离开当前页就会被选不中，而请求仍带着该值 —— 筛选在生效、界面却看不到也清不掉。
+   * （SelectField 会在选项缺失时补占位 option，但它只能展示原始代号，补在这里
+   * 才能拿到 `filter.*` 的本地化文案。）
+   */
   const distinctTargetLabels = useMemo(() => {
     const set = new Set<string>(['person', 'face', 'car', 'bicycle'])
+    if (selectedTargetLabel) set.add(selectedTargetLabel)
     for (const a of alarms) {
       if (a.targetLabel?.trim()) set.add(a.targetLabel.trim())
     }
@@ -257,16 +281,24 @@ export function AlarmsPage(): React.ReactElement {
       if (c.targetLabel?.trim()) set.add(c.targetLabel.trim())
     }
     return Array.from(set)
-  }, [alarms, captures])
+  }, [alarms, captures, selectedTargetLabel])
+
+  /**
+   * 当前 Tab 生效的状态筛选。
+   * 两个 Tab 各自持有独立取值，此处只做投影，避免请求构造处再分流分支。
+   */
+  const activeStatusFilter = activeTab === 'alarms' ? alarmStatus : recognitionStatus
 
   const activeFilterCount = useMemo(() => {
     let count = 0
     if (searchQuery.trim()) count++
     if (selectedCameraId) count++
-    if (selectedTargetLabel) count++
-    if (activeTab === 'alarms' && selectedRuleType !== 'all') count++
-    if (activeTab === 'alarms' && selectedSeverity !== 'all') count++
-    if (selectedStatus !== 'all') count++
+    // 目标类别仅告警与抓拍两个 Tab 生效（与控件渲染条件一致）：识别请求不携带该参数，
+    // 若在此处无条件计数，会出现「重置角标显示 1 项筛选，界面上却找不到对应控件」。
+    if (activeTab !== 'recognition' && selectedTargetLabel) count++
+    if (activeTab === 'alarms' && selectedRuleType !== FILTER_ALL) count++
+    if (activeTab === 'alarms' && selectedSeverity !== FILTER_ALL) count++
+    if (activeStatusFilter !== FILTER_ALL) count++
     if (selectedTrackId !== null) count++
     if (timeRange.quickPreset !== 'today') count++
     return count
@@ -277,7 +309,7 @@ export function AlarmsPage(): React.ReactElement {
     activeTab,
     selectedRuleType,
     selectedSeverity,
-    selectedStatus,
+    activeStatusFilter,
     selectedTrackId,
     timeRange.quickPreset,
   ])
@@ -289,9 +321,10 @@ export function AlarmsPage(): React.ReactElement {
     setSearchQuery('')
     setSelectedCameraId('')
     setSelectedTargetLabel('')
-    setSelectedRuleType('all')
-    setSelectedSeverity('all')
-    setSelectedStatus('all')
+    setSelectedRuleType(FILTER_ALL)
+    setSelectedSeverity(FILTER_ALL)
+    setAlarmStatus(FILTER_ALL)
+    setRecognitionStatus(FILTER_ALL)
     setSelectedTrackId(null)
     setTimeRange(getInitialTodayRange())
     setPage(1)
@@ -319,9 +352,11 @@ export function AlarmsPage(): React.ReactElement {
 
   const handleSwitchTab = (tab: EvidenceTab) => {
     setActiveTab(tab)
-    setSelectedStatus('all')
+    // 状态筛选按 Tab 清空：告警与识别的取值域无交集，保留旧值只会让下一帧请求带上非法参数
+    setAlarmStatus(FILTER_ALL)
+    setRecognitionStatus(FILTER_ALL)
     setSelectedTrackId(null)
-    setSelectedRuleType('all')
+    setSelectedRuleType(FILTER_ALL)
     pendingAlarmsRef.current = []
     pendingCountRef.current = 0
     setTotalCount(tabCounts[tab] || 0)
@@ -344,9 +379,9 @@ export function AlarmsPage(): React.ReactElement {
     try {
       const camId = selectedCameraId || undefined
       const targetLbl = selectedTargetLabel || undefined
-      const ruleTypeParam = selectedRuleType === 'all' ? undefined : selectedRuleType
-      const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
-      const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
+      const ruleTypeParam = selectedRuleType === FILTER_ALL ? undefined : selectedRuleType
+      const severityParam = selectedSeverity === FILTER_ALL ? undefined : selectedSeverity
+      const statusParam = activeStatusFilter === FILTER_ALL ? undefined : activeStatusFilter
       const keyword = debouncedSearchQuery.trim() || undefined
       const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
       const offset = (page - 1) * pageSize
@@ -470,7 +505,7 @@ export function AlarmsPage(): React.ReactElement {
     selectedTargetLabel,
     selectedRuleType,
     selectedSeverity,
-    selectedStatus,
+    activeStatusFilter,
     selectedTrackId,
     timeRange,
     debouncedSearchQuery,
@@ -539,9 +574,9 @@ export function AlarmsPage(): React.ReactElement {
       // 若当前在第 1 页且无冲突筛选，入队批处理微缓冲池
       const matchesCamera = !selectedCameraId || selectedCameraId === p.cameraId
       const matchesTarget = !selectedTargetLabel || selectedTargetLabel === p.targetLabel
-      const matchesRule = selectedRuleType === 'all' || selectedRuleType === p.ruleType
-      const matchesSeverity = selectedSeverity === 'all' || selectedSeverity === p.severity
-      const matchesStatus = selectedStatus === 'all' || selectedStatus === 'unprocessed'
+      const matchesRule = selectedRuleType === FILTER_ALL || selectedRuleType === p.ruleType
+      const matchesSeverity = selectedSeverity === FILTER_ALL || selectedSeverity === p.severity
+      const matchesStatus = alarmStatus === FILTER_ALL || alarmStatus === 'unprocessed'
       const isLiveTime = matchesTimeRange(timeRange, p.occurredAt)
       const matchesSearch = matchesSearchTerm(liveFilterRef.current.searchQuery, [
         p.eventId,
@@ -629,7 +664,7 @@ export function AlarmsPage(): React.ReactElement {
         }
 
         const matchesCamera = !selectedCameraId || selectedCameraId === p.cameraId
-        const matchesStatus = selectedStatus === 'all' || selectedStatus === p.status
+        const matchesStatus = recognitionStatus === FILTER_ALL || recognitionStatus === p.status
         const isLiveTime = matchesTimeRange(timeRange, p.recognizedAt)
         const matchesSearch = matchesSearchTerm(liveFilterRef.current.searchQuery, [
           p.subjectName,
@@ -690,17 +725,13 @@ export function AlarmsPage(): React.ReactElement {
     selectedTargetLabel,
     selectedRuleType,
     selectedSeverity,
-    selectedStatus,
+    alarmStatus,
+    recognitionStatus,
     soundEnabled,
     timeRange,
     page,
     pageSize,
   ])
-
-  const handleFilterChange = (setter: (v: string) => void, val: string): void => {
-    setter(val)
-    setPage(1)
-  }
 
   // 显式点击刷新处理
   const handleRefresh = useCallback(() => {
@@ -709,9 +740,9 @@ export function AlarmsPage(): React.ReactElement {
     const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
     const camId = selectedCameraId || undefined
     const targetLbl = selectedTargetLabel || undefined
-    const ruleTypeParam = selectedRuleType === 'all' ? undefined : selectedRuleType
-    const severityParam = selectedSeverity === 'all' ? undefined : selectedSeverity
-    const statusParam = selectedStatus === 'all' ? undefined : selectedStatus
+    const ruleTypeParam = selectedRuleType === FILTER_ALL ? undefined : selectedRuleType
+    const severityParam = selectedSeverity === FILTER_ALL ? undefined : selectedSeverity
+    const statusParam = activeStatusFilter === FILTER_ALL ? undefined : activeStatusFilter
 
     Promise.all([
       alarmApi
@@ -755,7 +786,7 @@ export function AlarmsPage(): React.ReactElement {
     selectedTargetLabel,
     selectedRuleType,
     selectedSeverity,
-    selectedStatus,
+    activeStatusFilter,
   ])
 
   // 单条告警状态切换
@@ -766,14 +797,14 @@ export function AlarmsPage(): React.ReactElement {
         const updated = await alarmApi.updateStatus(alarm.id, nextStatus)
         setAlarms((prev) => prev.map((a) => (a.id === alarm.id ? updated : a)))
         setLightboxAlarm((prev) => (prev && prev.id === alarm.id ? updated : prev))
-        if (selectedStatus !== 'all') {
+        if (alarmStatus !== FILTER_ALL) {
           void loadData()
         }
       } catch (err) {
         setErrorMessage(err instanceof Error ? err.message : String(err))
       }
     },
-    [selectedStatus, loadData],
+    [alarmStatus, loadData],
   )
 
   // 批量选择处理
@@ -809,7 +840,7 @@ export function AlarmsPage(): React.ReactElement {
       const updatedMap = new Map(updatedList.map((item) => [item.id, item]))
       setAlarms((prev) => prev.map((a) => updatedMap.get(a.id) || a))
       setSelectedAlarmIds(new Set())
-      if (selectedStatus !== 'all') {
+      if (alarmStatus !== FILTER_ALL) {
         void loadData()
       }
     } catch (err) {
@@ -945,268 +976,158 @@ export function AlarmsPage(): React.ReactElement {
       <div className="frosted-glass relative z-20 flex min-h-[52px] items-center justify-between gap-3 rounded-2xl p-2.5 shadow-xs">
         <div className="flex flex-1 [scrollbar-width:none] items-center gap-2 overflow-x-auto text-xs [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
           {/* 全能搜索框 (Omni-Search Bar) */}
-          <div className="group/search relative flex min-w-[220px] flex-1 items-center sm:max-w-xs">
-            <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]" />
-            <input
-              type="text"
-              data-search-input="true"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value)
-                setPage(1)
-              }}
-              placeholder={
-                activeTab === 'recognition'
-                  ? t('search.placeholderRecognition')
-                  : activeTab === 'alarms'
-                    ? t('search.placeholderAlarms')
-                    : t('search.placeholderCaptures')
-              }
-              className="w-full rounded-xl border border-[var(--border)]/80 bg-[var(--bg-secondary)]/50 py-1.5 pr-8 pl-9 text-xs text-[var(--text-primary)] backdrop-blur-md transition-all outline-none placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface)] focus:shadow-[0_0_16px_rgba(var(--accent-rgb),0.12)] focus:ring-2 focus:ring-[var(--accent)]/15"
-            />
-            {searchQuery ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery('')
-                  setPage(1)
-                }}
-                className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
-                title={t('search.clear')}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            ) : (
-              <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded-md border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1.5 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
-                /
-              </kbd>
-            )}
-          </div>
+          <SearchInput
+            showKbdHint
+            value={searchQuery}
+            onChange={(val) => {
+              setSearchQuery(val)
+              setPage(1)
+            }}
+            onClear={() => {
+              setSearchQuery('')
+              setPage(1)
+            }}
+            placeholder={
+              activeTab === 'recognition'
+                ? t('search.placeholderRecognition')
+                : activeTab === 'alarms'
+                  ? t('search.placeholderAlarms')
+                  : t('search.placeholderCaptures')
+            }
+            clearAriaLabel={t('search.clear')}
+            containerClassName="min-w-[220px] flex-1 sm:max-w-xs"
+          />
 
           <div className="hidden h-4 w-px bg-[var(--border)]/60 sm:block" />
 
-          {/* 定制现代下拉筛选胶囊 */}
-          {/* 通道筛选 */}
-          <div className="group/sel relative inline-flex items-center">
-            <select
-              value={selectedCameraId}
-              onChange={(e) => {
-                handleFilterChange(setSelectedCameraId, e.target.value)
-                setSelectedTrackId(null)
-              }}
-              className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
-                selectedCameraId
-                  ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
-                  : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
-              }`}
-            >
-              <option value="" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                {t('filter.allCameras')}
-              </option>
-              {cameras.map((c) => (
-                <option
-                  key={c.id}
-                  value={c.cameraId}
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {c.name || c.cameraId}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
-                selectedCameraId
-                  ? 'text-[var(--accent)]'
-                  : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
-              }`}
-            />
-          </div>
+          {/* 筛选下拉：维度、选项与可访问名称由 SelectField 统一承载，
+ 强调态表示该维度已收敛当前视图 */}
+          <SelectField
+            label={t('filter.allCameras')}
+            value={selectedCameraId}
+            emphasis={Boolean(selectedCameraId)}
+            onChange={(cameraId) => {
+              setSelectedCameraId(cameraId)
+              // 轨道号仅在单机位追踪器内唯一，换通道后必须一并清除
+              setSelectedTrackId(null)
+              setPage(1)
+            }}
+            allOption={{ value: '', label: t('filter.allCameras') }}
+            options={cameras.map((camera) => ({
+              value: camera.cameraId,
+              label: camera.name || camera.cameraId,
+            }))}
+          />
 
-          {/* 动态目标类别筛选 */}
+          {/* 动态目标类别筛选。候选项由当前视图已出现的标签汇聚而来 */}
           {activeTab !== 'recognition' && (
-            <div className="group/sel relative inline-flex items-center">
-              <select
-                value={selectedTargetLabel}
-                onChange={(e) => handleFilterChange(setSelectedTargetLabel, e.target.value)}
-                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
-                  selectedTargetLabel
-                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
-                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <option value="" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                  {t('filter.allTargets')}
-                </option>
-                {distinctTargetLabels.map((lbl) => (
-                  <option
-                    key={lbl}
-                    value={lbl}
-                    className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                  >
-                    {t(`filter.${lbl}`, { defaultValue: lbl })}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
-                  selectedTargetLabel
-                    ? 'text-[var(--accent)]'
-                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
-                }`}
-              />
-            </div>
+            <SelectField<TargetLabelFilter>
+              label={t('filter.allTargets')}
+              value={selectedTargetLabel}
+              emphasis={Boolean(selectedTargetLabel)}
+              onChange={(label) => {
+                setSelectedTargetLabel(label)
+                setPage(1)
+              }}
+              allOption={{ value: '', label: t('filter.allTargets') }}
+              options={distinctTargetLabels.map((label) => ({
+                value: label,
+                label: t(`filter.${label}`, { defaultValue: label }),
+              }))}
+            />
           )}
 
           {/* 规则类型筛选 (仅违规告警生效) */}
           {activeTab === 'alarms' && (
-            <div className="group/sel relative inline-flex items-center">
-              <select
-                value={selectedRuleType}
-                onChange={(e) => handleFilterChange(setSelectedRuleType, e.target.value)}
-                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
-                  selectedRuleType !== 'all'
-                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
-                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                  {t('filter.allRuleTypes')}
-                </option>
-                <option value="roi" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                  {t('filter.ruleRoi')}
-                </option>
-                <option value="line" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                  {t('filter.ruleLine')}
-                </option>
-              </select>
-              <ChevronDown
-                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
-                  selectedRuleType !== 'all'
-                    ? 'text-[var(--accent)]'
-                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
-                }`}
-              />
-            </div>
+            <SelectField<RuleTypeFilter>
+              label={t('filter.allRuleTypes')}
+              value={selectedRuleType}
+              emphasis={selectedRuleType !== FILTER_ALL}
+              onChange={(ruleType) => {
+                setSelectedRuleType(ruleType)
+                setPage(1)
+              }}
+              options={[
+                { value: FILTER_ALL, label: t('filter.allRuleTypes') },
+                { value: 'roi', label: t('filter.ruleRoi') },
+                { value: 'line', label: t('filter.ruleLine') },
+              ]}
+            />
           )}
 
           {/* 严重级别筛选 */}
           {activeTab === 'alarms' && (
-            <div className="group/sel relative inline-flex items-center">
-              <select
-                value={selectedSeverity}
-                onChange={(e) => handleFilterChange(setSelectedSeverity, e.target.value)}
-                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
-                  selectedSeverity !== 'all'
-                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
-                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                  {t('filter.allSeverities')}
-                </option>
-                <option
-                  value="warning"
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {t('filter.severityWarning')}
-                </option>
-                <option
-                  value="critical"
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {t('filter.severityCritical')}
-                </option>
-              </select>
-              <ChevronDown
-                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
-                  selectedSeverity !== 'all'
-                    ? 'text-[var(--accent)]'
-                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
-                }`}
-              />
-            </div>
+            <SelectField<SeverityFilter>
+              label={t('filter.allSeverities')}
+              value={selectedSeverity}
+              emphasis={selectedSeverity !== FILTER_ALL}
+              onChange={(severity) => {
+                setSelectedSeverity(severity)
+                setPage(1)
+              }}
+              options={[
+                { value: FILTER_ALL, label: t('filter.allSeverities') },
+                { value: 'warning', label: t('filter.severityWarning') },
+                { value: 'critical', label: t('filter.severityCritical') },
+              ]}
+            />
           )}
 
-          {/* 告警状态筛选 */}
+          {/*
+ 处理状态筛选。告警与识别各自持有一份类型化 state，
+ 因此无需任何`as` 断言，也不可能把一侧的取值域泄露到另一侧。
+ */}
           {activeTab === 'alarms' && (
-            <div className="group/sel relative inline-flex items-center">
-              <select
-                value={selectedStatus}
-                onChange={(e) => handleFilterChange(setSelectedStatus, e.target.value)}
-                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
-                  selectedStatus !== 'all'
-                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
-                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                  {t('statusFilter.all')}
-                </option>
-                <option
-                  value="unprocessed"
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {t('statusFilter.unprocessed')}
-                </option>
-                <option
-                  value="processed"
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {t('statusFilter.processed')}
-                </option>
-              </select>
-              <ChevronDown
-                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
-                  selectedStatus !== 'all'
-                    ? 'text-[var(--accent)]'
-                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
-                }`}
-              />
-            </div>
+            <SelectField<AlarmStatusFilter>
+              label={t('statusFilter.all')}
+              value={alarmStatus}
+              emphasis={alarmStatus !== FILTER_ALL}
+              onChange={(status) => {
+                setAlarmStatus(status)
+                setPage(1)
+              }}
+              options={[
+                { value: FILTER_ALL, label: t('statusFilter.all') },
+                { value: 'unprocessed', label: t('statusFilter.unprocessed') },
+                { value: 'processed', label: t('statusFilter.processed') },
+              ]}
+            />
           )}
 
-          {/* 识别对账状态筛选 */}
           {activeTab === 'recognition' && (
-            <div className="group/sel relative inline-flex items-center">
-              <select
-                value={selectedStatus}
-                onChange={(e) => handleFilterChange(setSelectedStatus, e.target.value)}
-                className={`cursor-pointer appearance-none rounded-xl border py-1.5 pr-7 pl-3 text-xs font-medium backdrop-blur-md transition-all outline-none ${
-                  selectedStatus !== 'all'
-                    ? 'border-[var(--accent)]/50 bg-[var(--accent-soft)]/20 font-semibold text-[var(--accent)] shadow-2xs'
-                    : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/80 text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                <option value="all" className="bg-[var(--bg-surface)] text-[var(--text-primary)]">
-                  {t('statusFilter.all')}
-                </option>
-                <option
-                  value="confirmed"
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {t('statusFilter.confirmed')}
-                </option>
-                <option
-                  value="pending_review"
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {t('statusFilter.pendingReview')}
-                </option>
-                <option
-                  value="rejected"
-                  className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
-                >
-                  {t('statusFilter.rejected')}
-                </option>
-              </select>
-              <ChevronDown
-                className={`pointer-events-none absolute top-1/2 right-2 h-3 w-3 -translate-y-1/2 transition-colors ${
-                  selectedStatus !== 'all'
-                    ? 'text-[var(--accent)]'
-                    : 'text-[var(--text-muted)] group-hover/sel:text-[var(--text-primary)]'
-                }`}
-              />
-            </div>
+            <SelectField<RecognitionStatusFilter>
+              label={t('statusFilter.all')}
+              value={recognitionStatus}
+              emphasis={recognitionStatus !== FILTER_ALL}
+              onChange={(status) => {
+                setRecognitionStatus(status)
+                setPage(1)
+              }}
+              options={[
+                { value: FILTER_ALL, label: t('statusFilter.all') },
+                { value: 'confirmed', label: t('statusFilter.confirmed') },
+                { value: 'pending_review', label: t('statusFilter.pendingReview') },
+                { value: 'rejected', label: t('statusFilter.rejected') },
+              ]}
+            />
+          )}
+
+          {activeTab === 'recognition' && (
+            <SelectField<RecognitionStatusFilter>
+              label={t('statusFilter.all')}
+              value={recognitionStatus}
+              emphasis={recognitionStatus !== FILTER_ALL}
+              onChange={(status) => {
+                setRecognitionStatus(status)
+                setPage(1)
+              }}
+              options={[
+                { value: FILTER_ALL, label: t('statusFilter.all') },
+                { value: 'confirmed', label: t('statusFilter.confirmed') },
+                { value: 'pending_review', label: t('statusFilter.pendingReview') },
+                { value: 'rejected', label: t('statusFilter.rejected') },
+              ]}
+            />
           )}
 
           {/* 轨道筛选徽标：仅抓拍 Tab 会出现取值 */}
@@ -1284,15 +1205,7 @@ export function AlarmsPage(): React.ReactElement {
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handleRefresh}
-            disabled={isLoading}
-            className="flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>{t('filter.refresh')}</span>
-          </button>
+          <RefreshButton onClick={handleRefresh} loading={isLoading} label={t('filter.refresh')} />
         </div>
       </div>
 
@@ -1390,8 +1303,9 @@ export function AlarmsPage(): React.ReactElement {
                 setPageSize(next)
                 setPage(1)
               }}
-              className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--text-primary)] transition-all outline-none hover:border-[var(--accent)] focus:border-[var(--accent)]"
+              aria-label={t('pagination.pageSize')}
               title={t('pagination.pageSize')}
+              className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--text-primary)] transition-all outline-none hover:border-[var(--accent)] focus:border-[var(--accent)]"
             >
               {[12, 24, 48].map((size) => (
                 <option key={size} value={size}>

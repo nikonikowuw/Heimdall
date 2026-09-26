@@ -28,7 +28,7 @@ export function CaptureCardItem({
       onClick={onSelect}
       onPointerEnter={() => preloadImage(evidenceApi.getImageUrl(panoramaPath))}
       onTouchStart={() => preloadImage(evidenceApi.getImageUrl(panoramaPath))}
-      className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] transition-all duration-200 hover:border-cyan-500/50 hover:shadow-md"
+      className="group hover:border-status-info/50 relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] transition-all duration-200 hover:shadow-md"
     >
       <div className="relative aspect-square w-full overflow-hidden bg-black/90">
         {thumbPath ? (
@@ -40,7 +40,7 @@ export function CaptureCardItem({
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center font-mono text-xs text-slate-500">
+          <div className="flex h-full w-full items-center justify-center font-mono text-xs text-[var(--text-muted)]">
             {t('card.noImage')}
           </div>
         )}
@@ -54,8 +54,8 @@ export function CaptureCardItem({
             }}
             disabled={!onSelectTrack}
             title={t('trackFilter.byTrack')}
-            className={`rounded-md bg-cyan-500/80 px-2 py-0.5 font-mono text-[10px] font-bold text-white shadow-xs backdrop-blur-md transition-colors ${
-              onSelectTrack ? 'cursor-pointer hover:bg-cyan-400/90' : ''
+            className={`bg-status-info/80 rounded-md px-2 py-0.5 font-mono text-[10px] font-bold text-white shadow-xs backdrop-blur-md transition-colors ${
+              onSelectTrack ? 'hover:bg-status-info/90 cursor-pointer' : ''
             }`}
           >
             #{capture.trackId}
@@ -74,7 +74,7 @@ export function CaptureCardItem({
           >
             {cameraName || capture.cameraId}
           </span>
-          <span className="font-mono text-[11px] text-cyan-400">
+          <span className="text-status-info font-mono text-[11px]">
             {(capture.confidence * 100).toFixed(0)}%
           </span>
         </div>
@@ -185,7 +185,7 @@ export function CapturesContent({
                     />
                   </div>
                 </td>
-                <td className="px-3.5 py-2.5 font-mono text-xs font-semibold text-cyan-500">
+                <td className="text-status-info px-3.5 py-2.5 font-mono text-xs font-semibold">
                   <button
                     type="button"
                     onClick={(e) => {
@@ -195,7 +195,7 @@ export function CapturesContent({
                     disabled={!onSelectTrack}
                     title={t('trackFilter.byTrack')}
                     className={`transition-colors ${
-                      onSelectTrack ? 'cursor-pointer hover:text-cyan-300 hover:underline' : ''
+                      onSelectTrack ? 'hover:text-status-info cursor-pointer hover:underline' : ''
                     }`}
                   >
                     #{capture.trackId}
@@ -206,7 +206,7 @@ export function CapturesContent({
                     {capture.targetLabel}
                   </span>
                 </td>
-                <td className="px-3.5 py-2.5 font-mono text-xs font-semibold text-cyan-400">
+                <td className="text-status-info px-3.5 py-2.5 font-mono text-xs font-semibold">
                   {(capture.confidence * 100).toFixed(0)}%
                 </td>
                 <td className="px-3.5 py-2.5 text-xs text-[var(--text-primary)]">
@@ -216,7 +216,7 @@ export function CapturesContent({
                   {formatTimestamp(capture.capturedAt)}
                 </td>
                 <td className="px-3.5 py-2.5 text-right">
-                  <span className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-secondary)] shadow-2xs transition-all group-hover:border-cyan-500 group-hover:text-cyan-400">
+                  <span className="group-hover:border-status-info group-hover:text-status-info rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-secondary)] shadow-2xs transition-all">
                     {t('viewImage')}
                   </span>
                 </td>

@@ -1,5 +1,6 @@
 import { ApiError } from '@/lib/api'
-import { isMemberOf, LEVEL_VALUES } from '@/features/oplog/logFilters'
+import { isMemberOf } from '@/lib/unionNarrowing'
+import { LEVEL_VALUES } from '@/features/oplog/logFilters'
 import type { OperationalLog } from '@/types'
 
 /**

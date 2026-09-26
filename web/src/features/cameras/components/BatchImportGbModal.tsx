@@ -4,7 +4,14 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { gb28181Api } from '@/lib/api'
-import type { Gb28181Channel, Gb28181Device, ImportGbChannelItem } from '@/types'
+import { isMemberOf } from '@/lib/unionNarrowing'
+import {
+  STREAM_MODES,
+  type Gb28181Channel,
+  type Gb28181Device,
+  type ImportGbChannelItem,
+  type StreamMode,
+} from '@/types'
 
 export interface BatchImportGbModalProps {
   isOpen: boolean
@@ -44,7 +51,7 @@ export function BatchImportGbModal({
       unmanagedList.map((item) => getChannelKey(item.device.deviceId, item.channel.channelId)),
     )
   })
-  const [streamModes, setStreamModes] = useState<Record<string, 'auto' | 'main' | 'sub'>>({})
+  const [streamModes, setStreamModes] = useState<Record<string, StreamMode>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
@@ -134,7 +141,7 @@ export function BatchImportGbModal({
             {/* Header */}
             <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">
               <div className="flex items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-500/20 bg-cyan-500/10 text-cyan-600 shadow-xs dark:text-cyan-400">
+                <div className="border-status-info/20 bg-status-info/10 text-status-info flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border shadow-xs">
                   <Radio className="h-5 w-5" />
                 </div>
                 <div>
@@ -168,7 +175,7 @@ export function BatchImportGbModal({
                 <div
                   className={`flex h-4 w-4 items-center justify-center rounded-md border transition-colors ${
                     selectedKeys.size === unmanagedList.length && unmanagedList.length > 0
-                      ? 'border-cyan-600 bg-cyan-600 text-white dark:border-cyan-500 dark:bg-cyan-500'
+                      ? 'border-status-info bg-status-info-solid text-white'
                       : 'border-[var(--border)] bg-white dark:bg-[var(--bg-surface-solid)]'
                   }`}
                 >
@@ -211,7 +218,7 @@ export function BatchImportGbModal({
                         onClick={() => toggleSelect(key)}
                         className={`flex cursor-pointer items-center justify-between rounded-2xl border p-4 transition-all ${
                           isChecked
-                            ? 'border-cyan-500/50 bg-cyan-500/10'
+                            ? 'border-status-info/50 bg-status-info/10'
                             : 'border-[var(--border)]/70 bg-[var(--bg-secondary)]/25 hover:border-[var(--border-strong)] hover:bg-white dark:hover:bg-[var(--bg-surface-solid)]'
                         }`}
                       >
@@ -219,7 +226,7 @@ export function BatchImportGbModal({
                           <div
                             className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-md border transition-colors ${
                               isChecked
-                                ? 'border-cyan-600 bg-cyan-600 text-white dark:border-cyan-500 dark:bg-cyan-500'
+                                ? 'border-status-info bg-status-info-solid text-white'
                                 : 'border-[var(--border)] bg-white dark:bg-[var(--bg-surface-solid)]'
                             }`}
                           >
@@ -234,8 +241,8 @@ export function BatchImportGbModal({
                               <span
                                 className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold ${
                                   channel.status === 'ON'
-                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                                    : 'bg-slate-500/10 text-[var(--text-muted)]'
+                                    ? 'bg-status-success/10 text-status-success'
+                                    : 'bg-[var(--status-neutral-soft)] text-[var(--status-neutral)]'
                                 }`}
                               >
                                 {channel.status || 'ON'}
@@ -266,10 +273,14 @@ export function BatchImportGbModal({
                           <select
                             value={currentMode}
                             onChange={(e) => {
-                              const val = e.target.value as 'auto' | 'main' | 'sub'
+                              const val = e.target.value
+                              if (!isMemberOf(STREAM_MODES, val)) return
                               setStreamModes((prev) => ({ ...prev, [key]: val }))
                             }}
-                            className="rounded-xl border border-[var(--border)]/80 bg-white px-3 py-1.5 font-mono text-xs text-[var(--text-secondary)] shadow-xs outline-none focus:border-cyan-500 dark:bg-[var(--bg-surface-solid)]"
+                            aria-label={t('discovery.streamModeLabel', {
+                              defaultValue: '分析码流选择',
+                            })}
+                            className="rounded-xl border border-[var(--border)]/80 bg-white px-3 py-1.5 font-mono text-xs text-[var(--text-secondary)] shadow-xs outline-none focus:border-[var(--accent)] dark:bg-[var(--bg-surface-solid)]"
                           >
                             <option value="auto">
                               {t('discovery.streamModeAutoOption', {
@@ -311,7 +322,7 @@ export function BatchImportGbModal({
                 type="button"
                 onClick={handleImport}
                 disabled={isSubmitting || selectedKeys.size === 0}
-                className="flex min-h-9 items-center gap-2 rounded-xl bg-cyan-600 px-5 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:bg-cyan-700 active:scale-95 disabled:opacity-50"
+                className="bg-status-info-solid bg-status-info-solid flex min-h-9 items-center gap-2 rounded-xl px-5 py-2 text-xs font-semibold text-white shadow-xs transition-all active:scale-95 disabled:opacity-50"
               >
                 {isSubmitting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

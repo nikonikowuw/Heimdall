@@ -1,16 +1,15 @@
 import React from 'react'
-import {
-  ArrowDownWideNarrow,
-  ArrowUpDown,
-  ListFilter,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  Upload,
-  X,
-} from 'lucide-react'
+import { ArrowDownWideNarrow, ArrowUpDown, ListFilter, RotateCcw, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { AlgoListQuery, AlgoOriginFilter, AlgoSortKey } from '../algoFilters'
+import { RefreshButton } from '@/components/RefreshButton'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { SelectField } from '@/components/ui/SelectField'
+import {
+  DEFAULT_ALGO_QUERY,
+  type AlgoListQuery,
+  type AlgoOriginFilter,
+  type AlgoSortKey,
+} from '../algoFilters'
 
 export interface AlgoFilterBarProps {
   query: AlgoListQuery
@@ -28,9 +27,6 @@ export interface AlgoFilterBarProps {
 
 const ORIGIN_OPTIONS: AlgoOriginFilter[] = ['all', 'builtin', 'custom']
 const SORT_OPTIONS: AlgoSortKey[] = ['default', 'name', 'updated', 'versions']
-
-const SELECT_CLASS =
-  'rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-2 text-xs font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:outline-hidden'
 
 /**
  * 搜索与筛选工具栏。
@@ -54,66 +50,45 @@ export function AlgoFilterBar({
   return (
     <div className="frosted-glass flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border)] p-3">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2.5">
-        <div className="group/search relative min-w-[220px] flex-1 sm:max-w-xs">
-          <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)] transition-colors group-focus-within/search:text-[var(--accent)]" />
-          <input
-            type="text"
-            data-search-input="true"
-            value={query.keyword}
-            onChange={(event) => onQueryChange({ keyword: event.target.value })}
-            placeholder={t('filter.searchPlaceholder')}
-            aria-label={t('filter.searchPlaceholder')}
-            className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] py-2 pr-9 pl-9 text-xs text-[var(--text-primary)] backdrop-blur-md transition-all placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:bg-[var(--bg-surface)] focus:ring-2 focus:ring-[var(--accent)]/15 focus:outline-hidden"
-          />
-          {query.keyword ? (
-            <button
-              type="button"
-              onClick={() => onQueryChange({ keyword: '' })}
-              aria-label={t('filter.clearSearch')}
-              className="absolute top-1/2 right-2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-1 font-mono text-[10px] text-[var(--text-muted)] shadow-2xs sm:inline-block">
-              /
-            </kbd>
-          )}
-        </div>
+        <SearchInput
+          showKbdHint
+          value={query.keyword}
+          onChange={(val) => onQueryChange({ keyword: val })}
+          onClear={() => onQueryChange({ keyword: '' })}
+          placeholder={t('filter.searchPlaceholder')}
+          aria-label={t('filter.searchPlaceholder')}
+          clearAriaLabel={t('filter.clearSearch')}
+          containerClassName="min-w-[220px] flex-1 sm:max-w-xs"
+        />
 
-        <div className="relative">
-          <ListFilter className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
-          <select
-            value={query.algorithmType}
-            onChange={(event) => onQueryChange({ algorithmType: event.target.value })}
-            aria-label={t('filter.typeLabel')}
-            className={`${SELECT_CLASS} pl-8`}
-          >
-            <option value="all">{t('filter.typeAll')}</option>
-            {typeOptions.map((type) => (
-              <option key={type} value={type}>
-                {t(`filter.types.${type}`, { defaultValue: type })}
-              </option>
-            ))}
-          </select>
-        </div>
+        <SelectField<string>
+          label={t('filter.typeLabel')}
+          sizeVariant="compact"
+          icon={ListFilter}
+          value={query.algorithmType}
+          emphasis={query.algorithmType !== DEFAULT_ALGO_QUERY.algorithmType}
+          onChange={(algorithmType) => onQueryChange({ algorithmType })}
+          options={[
+            { value: DEFAULT_ALGO_QUERY.algorithmType, label: t('filter.typeAll') },
+            ...typeOptions.map((type) => ({
+              value: type,
+              label: t(`filter.types.${type}`, { defaultValue: type }),
+            })),
+          ]}
+        />
 
-        <div className="relative">
-          <ArrowUpDown className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
-          <select
-            value={query.platform}
-            onChange={(event) => onQueryChange({ platform: event.target.value })}
-            aria-label={t('filter.platformLabel')}
-            className={`${SELECT_CLASS} pl-8 font-mono`}
-          >
-            <option value="all">{t('filter.platformAll')}</option>
-            {platformOptions.map((platform) => (
-              <option key={platform} value={platform}>
-                {platform}
-              </option>
-            ))}
-          </select>
-        </div>
+        <SelectField<string>
+          label={t('filter.platformLabel')}
+          sizeVariant="compact"
+          icon={ArrowUpDown}
+          value={query.platform}
+          emphasis={query.platform !== DEFAULT_ALGO_QUERY.platform}
+          onChange={(platform) => onQueryChange({ platform })}
+          options={[
+            { value: DEFAULT_ALGO_QUERY.platform, label: t('filter.platformAll') },
+            ...platformOptions.map((platform) => ({ value: platform, label: platform })),
+          ]}
+        />
 
         <div
           role="group"
@@ -141,21 +116,18 @@ export function AlgoFilterBar({
           ))}
         </div>
 
-        <div className="relative">
-          <ArrowDownWideNarrow className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
-          <select
-            value={query.sortKey}
-            onChange={(event) => onQueryChange({ sortKey: event.target.value as AlgoSortKey })}
-            aria-label={t('filter.sortLabel')}
-            className={`${SELECT_CLASS} pl-8`}
-          >
-            {SORT_OPTIONS.map((option) => (
-              <option key={option} value={option}>
-                {t(`filter.sort.${option}`)}
-              </option>
-            ))}
-          </select>
-        </div>
+        <SelectField<AlgoSortKey>
+          label={t('filter.sortLabel')}
+          sizeVariant="compact"
+          icon={ArrowDownWideNarrow}
+          value={query.sortKey}
+          emphasis={query.sortKey !== DEFAULT_ALGO_QUERY.sortKey}
+          onChange={(sortKey) => onQueryChange({ sortKey })}
+          options={SORT_OPTIONS.map((option) => ({
+            value: option,
+            label: t(`filter.sort.${option}`),
+          }))}
+        />
 
         {hasActiveFilters && (
           <button
@@ -170,16 +142,7 @@ export function AlgoFilterBar({
       </div>
 
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={isLoading}
-          aria-label={t('filter.refresh')}
-          title={t('filter.refresh')}
-          className="page-action-btn page-action-btn--icon"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-        </button>
+        <RefreshButton onClick={onRefresh} loading={isLoading} label={t('filter.refresh')} />
 
         <button
           type="button"

@@ -167,17 +167,17 @@ export function CaptureLightboxModal({
       {/* 顶部悬浮磨砂指挥条 */}
       <div className="absolute inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/10 bg-gradient-to-b from-black/85 via-black/50 to-transparent px-6 py-3.5 backdrop-blur-md">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-cyan-500/20 text-cyan-400 shadow-sm">
+          <div className="bg-status-info/20 text-status-info flex h-8 w-8 items-center justify-center rounded-xl shadow-sm">
             <CameraIcon className="h-4 w-4" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold tracking-wide text-white">
               {capture.targetLabel}
             </h3>
-            <span className="rounded-md border border-white/15 bg-white/10 px-2 py-0.5 font-mono text-xs text-zinc-300">
+            <span className="rounded-md border border-white/15 bg-white/10 px-2 py-0.5 font-mono text-xs text-[var(--text-primary)]">
               Track #{capture.trackId}
             </span>
-            <span className="hidden rounded-md border border-white/10 bg-black/40 px-2 py-0.5 font-mono text-xs text-zinc-400 sm:inline-block">
+            <span className="hidden rounded-md border border-white/10 bg-black/40 px-2 py-0.5 font-mono text-xs text-[var(--text-secondary)] sm:inline-block">
               {capture.captureId}
             </span>
           </div>
@@ -210,7 +210,7 @@ export function CaptureLightboxModal({
                 download={`capture_${capture.captureId}_${item.suffix}.jpg`}
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-zinc-200 transition-all hover:bg-white/15 hover:text-white"
+                className="flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-[var(--text-primary)] transition-all hover:bg-white/15 hover:text-white"
                 title={`${t('modal.download')} - ${item.label}`}
                 aria-label={`${t('modal.download')} - ${item.label}`}
               >
@@ -223,7 +223,7 @@ export function CaptureLightboxModal({
           <button
             type="button"
             onClick={toggleBrowserFullscreen}
-            className="flex items-center gap-1 rounded-xl border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs text-zinc-200 transition-all hover:bg-white/15 hover:text-white"
+            className="flex items-center gap-1 rounded-xl border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs text-[var(--text-primary)] transition-all hover:bg-white/15 hover:text-white"
             title={isFullscreen ? t('modal.exitFullscreen') : t('modal.enterFullscreen')}
             aria-label={isFullscreen ? t('modal.exitFullscreen') : t('modal.enterFullscreen')}
           >
@@ -238,7 +238,7 @@ export function CaptureLightboxModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]"
+            className="rounded-xl border border-white/15 bg-white/5 p-1.5 text-[var(--text-primary)] transition-all hover:bg-[var(--status-danger-soft)] hover:text-[var(--status-danger)] focus-visible:ring-2 focus-visible:ring-[var(--status-danger)]"
             title={`${t('modal.close')} (Esc)`}
             aria-label="Close"
           >
@@ -262,13 +262,13 @@ export function CaptureLightboxModal({
               className="max-h-[60%] max-w-[60%] rounded-2xl object-contain opacity-75 shadow-2xl transition-opacity duration-150"
             />
             {isFullLoading && (
-              <div className="absolute bottom-16 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-1.5 text-xs text-zinc-200 shadow-lg backdrop-blur-md">
-                <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
+              <div className="absolute bottom-16 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-1.5 text-xs text-[var(--text-primary)] shadow-lg backdrop-blur-md">
+                <Loader2 className="text-status-info h-4 w-4 animate-spin" />
                 <span>{t('modal.loadingFullHd')}</span>
               </div>
             )}
             {isFullError && (
-              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-black/80 px-4 py-2 text-xs text-zinc-200 shadow-lg">
+              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-black/80 px-4 py-2 text-xs text-[var(--text-primary)] shadow-lg">
                 <span>{t('modal.fullImageLoadFailed')}</span>
                 {retryButton}
               </div>
@@ -278,12 +278,12 @@ export function CaptureLightboxModal({
 
         {isFullLoading && !previewPath && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <Loader2 className="h-10 w-10 animate-spin text-cyan-400 opacity-70" />
+            <Loader2 className="text-status-info h-10 w-10 animate-spin opacity-70" />
           </div>
         )}
 
         {isFullError && !previewPath && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-xs text-zinc-200">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-xs text-[var(--text-primary)]">
             <span>{t('modal.fullImageLoadFailed')}</span>
             {retryButton}
           </div>
@@ -311,10 +311,10 @@ export function CaptureLightboxModal({
             {/* 目标人体 BBox 框 */}
             {bodyBBox && imgRect && isFullLoaded && (
               <div
-                className="pointer-events-none absolute border-2 border-cyan-500 bg-cyan-500/15 shadow-[0_0_15px_rgba(6,182,212,0.6)] transition-all"
+                className="border-status-info bg-status-info/15 pointer-events-none absolute border-2 shadow-[0_0_15px_rgba(var(--status-info-rgb),0.6)] transition-all"
                 style={getBBoxStyle(bodyBBox, imgRect)}
               >
-                <span className="absolute -top-5.5 left-0 rounded bg-cyan-500 px-1.5 py-0.5 font-mono text-[9px] font-bold whitespace-nowrap text-white shadow-md">
+                <span className="bg-status-info-solid absolute -top-5.5 left-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold whitespace-nowrap text-white shadow-md">
                   #{capture.trackId} {capture.targetLabel} (
                   {((capture.confidence ?? 0) * 100).toFixed(0)}%)
                 </span>
@@ -324,10 +324,10 @@ export function CaptureLightboxModal({
             {/* 目标人脸 BBox 框 */}
             {faceBBox && imgRect && isFullLoaded && (
               <div
-                className="pointer-events-none absolute border-2 border-dashed border-purple-400 bg-purple-500/15 shadow-[0_0_12px_rgba(168,85,247,0.5)] transition-all"
+                className="border-marker-border bg-marker-soft pointer-events-none absolute border-2 border-dashed shadow-[0_0_12px_rgba(var(--marker-rgb),0.5)] transition-all"
                 style={getBBoxStyle(faceBBox, imgRect)}
               >
-                <span className="absolute -top-4.5 left-0 rounded bg-purple-600 px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-md">
+                <span className="bg-marker-solid absolute -top-4.5 left-0 rounded px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-md">
                   {formatFaceBBoxLabel(targetBBoxes?.face)}
                 </span>
               </div>
@@ -336,7 +336,7 @@ export function CaptureLightboxModal({
         )}
 
         {!capture.imageRelPath && !previewPath && (
-          <div className="flex h-full w-full items-center justify-center font-mono text-sm text-zinc-500">
+          <div className="flex h-full w-full items-center justify-center font-mono text-sm text-[var(--text-muted)]">
             {t('modal.noImage')}
           </div>
         )}
@@ -354,34 +354,34 @@ export function CaptureLightboxModal({
         className="absolute inset-x-0 bottom-5 z-40 mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/15 bg-black/75 px-5 py-2.5 shadow-2xl backdrop-blur-xl"
       >
         <div className="flex items-center gap-4 text-xs">
-          <div className="font-mono text-zinc-300">
-            <span className="text-zinc-500">{t('modal.channel')}:</span>{' '}
+          <div className="font-mono text-[var(--text-primary)]">
+            <span className="text-[var(--text-muted)]">{t('modal.channel')}:</span>{' '}
             <span className="font-semibold text-white">{cameraName || capture.cameraId}</span>
           </div>
-          <div className="font-mono text-zinc-300">
-            <span className="text-zinc-500">{t('modal.trackId')}:</span>{' '}
+          <div className="font-mono text-[var(--text-primary)]">
+            <span className="text-[var(--text-muted)]">{t('modal.trackId')}:</span>{' '}
             <span>#{capture.trackId}</span>
           </div>
-          <div className="font-mono text-zinc-300">
-            <span className="text-zinc-500">{t('modal.time')}:</span>{' '}
+          <div className="font-mono text-[var(--text-primary)]">
+            <span className="text-[var(--text-muted)]">{t('modal.time')}:</span>{' '}
             <span>{formatTimestamp(capture.capturedAt)}</span>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           {faceBBox && (
-            <span className="rounded-xl border border-purple-500/30 bg-purple-500/15 px-2.5 py-1 font-mono text-xs font-semibold text-purple-300">
+            <span className="border-marker/30 bg-marker-soft text-marker rounded-xl border px-2.5 py-1 font-mono text-xs font-semibold">
               {formatFaceBBoxLabel(targetBBoxes?.face)}
             </span>
           )}
-          <span className="rounded-xl border border-cyan-500/30 bg-cyan-500/15 px-2.5 py-1 font-mono text-xs font-semibold text-cyan-300">
+          <span className="border-status-info/30 bg-status-info/15 text-status-info rounded-xl border px-2.5 py-1 font-mono text-xs font-semibold">
             {capture.targetLabel} ({((capture.confidence ?? 0) * 100).toFixed(0)}%)
           </span>
         </div>
       </motion.div>
 
       {/* 底部轻量提示 */}
-      <div className="pointer-events-none absolute bottom-1.5 left-1/2 z-40 -translate-x-1/2 font-mono text-[10px] text-zinc-500">
+      <div className="pointer-events-none absolute bottom-1.5 left-1/2 z-40 -translate-x-1/2 font-mono text-[10px] text-[var(--text-muted)]">
         {t('modal.escHint')} · {t('modal.zoomHint')} · {t('modal.fullscreenShort')}
       </div>
     </motion.div>

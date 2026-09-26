@@ -199,10 +199,10 @@ export function TimeSettings(): React.ReactElement {
                   </p>
                   <div className="mt-0.5 flex items-center gap-1.5">
                     <div
-                      className={`h-2 w-2 rounded-full ${status.ntpSynced ? 'bg-[var(--accent-green)]' : 'bg-[var(--accent-amber)]'}`}
+                      className={`h-2 w-2 rounded-full ${status.ntpSynced ? 'bg-[var(--status-success)]' : 'bg-[var(--status-warning)]'}`}
                     />
                     <span
-                      className={`text-[13px] font-medium ${status.ntpSynced ? 'text-[var(--accent-green)]' : 'text-[var(--accent-amber)]'}`}
+                      className={`text-[13px] font-medium ${status.ntpSynced ? 'text-[var(--status-success)]' : 'text-[var(--status-warning)]'}`}
                     >
                       {status.ntpSynced
                         ? t('time.synced', { defaultValue: '已同步' })
@@ -244,7 +244,7 @@ export function TimeSettings(): React.ReactElement {
             disabled={saving || !isDirty}
             className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-[13px] font-medium text-white transition-all active:scale-[0.97] disabled:opacity-50 ${
               saveSuccess
-                ? 'bg-[var(--accent-green)] shadow-[var(--accent-green)]/20 shadow-lg'
+                ? 'bg-[var(--status-success)] shadow-[var(--status-success)]/20 shadow-lg'
                 : 'bg-[var(--accent)] shadow-[var(--accent)]/20 shadow-lg hover:bg-[var(--accent)]/90'
             }`}
           >
@@ -265,10 +265,14 @@ export function TimeSettings(): React.ReactElement {
           <div className="space-y-4">
             {/* Timezone selector */}
             <div>
-              <label className="mb-1.5 block text-[13px] font-medium text-[var(--text-primary)]">
+              <label
+                htmlFor="time-timezone"
+                className="mb-1.5 block text-[13px] font-medium text-[var(--text-primary)]"
+              >
                 {t('time.timezoneLabel', { defaultValue: '时区' })}
               </label>
               <select
+                id="time-timezone"
                 value={draft.timezone}
                 onChange={(e) => setDraft({ ...draft, timezone: e.target.value })}
                 className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2.5 text-[13px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none"
@@ -288,7 +292,7 @@ export function TimeSettings(): React.ReactElement {
                   {t('time.ntpEnabled', { defaultValue: 'NTP 自动同步' })}
                 </p>
                 {!draft.ntpEnabled && (
-                  <p className="mt-0.5 flex items-center gap-1 text-[12px] text-[var(--accent-amber)]">
+                  <p className="mt-0.5 flex items-center gap-1 text-[12px] text-[var(--status-warning)]">
                     <AlertTriangle className="h-3 w-3" />
                     {t('time.ntpDisabledWarning', { defaultValue: '禁用后系统时间可能漂移' })}
                   </p>
@@ -374,7 +378,7 @@ export function TimeSettings(): React.ReactElement {
           <button
             onClick={() => setShowTimeConfirm(true)}
             disabled={saving || !manualDate || !manualTime}
-            className="flex items-center gap-2 rounded-xl border border-[var(--accent-amber)]/30 bg-[var(--accent-amber)]/10 px-4 py-2.5 text-[13px] font-medium text-[var(--accent-amber)] transition-all hover:bg-[var(--accent-amber)]/20 active:scale-[0.97] disabled:opacity-50"
+            className="flex items-center gap-2 rounded-xl border border-[var(--status-warning)]/30 bg-[var(--status-warning)]/10 px-4 py-2.5 text-[13px] font-medium text-[var(--status-warning)] transition-all hover:bg-[var(--status-warning)]/20 active:scale-[0.97] disabled:opacity-50"
           >
             <Clock className="h-3.5 w-3.5" />
             {t('time.setTime', { defaultValue: '立即设置' })}

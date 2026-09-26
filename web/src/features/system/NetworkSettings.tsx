@@ -193,7 +193,7 @@ export function NetworkSettings(): React.ReactElement {
         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3.5">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-green)]/10 text-[var(--accent-green)]">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--status-success)]/10 text-[var(--status-success)]">
                 <Radio className="h-5 w-5 animate-pulse" />
               </div>
               <div>
@@ -204,8 +204,8 @@ export function NetworkSettings(): React.ReactElement {
                   <span className="font-mono text-[14px] font-semibold text-[var(--text-primary)]">
                     {currentAccessIface.name}
                   </span>
-                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-green)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-green)]">
-                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-green)]" />
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--status-success)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--status-success)]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--status-success)]" />
                     {t('network.online', { defaultValue: '在线通信中' })}
                   </span>
                 </div>
@@ -348,7 +348,7 @@ function NetworkCard({
         isEditing
           ? 'border-[var(--accent)]/30 bg-[var(--accent)]/5'
           : isCurrentAccess
-            ? 'border-[var(--accent-green)]/40 bg-[var(--bg-surface)] hover:border-[var(--accent-green)]/60'
+            ? 'border-[var(--status-success)]/40 bg-[var(--bg-surface)] hover:border-[var(--status-success)]/60'
             : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]'
       }`}
     >
@@ -357,17 +357,17 @@ function NetworkCard({
         <div className="flex items-center gap-3.5">
           <div
             className={`flex h-10 w-10 items-center justify-center rounded-xl ${
-              isUp ? 'bg-[var(--accent-green)]/10' : 'bg-[var(--bg-secondary)]'
+              isUp ? 'bg-[var(--status-success)]/10' : 'bg-[var(--bg-secondary)]'
             }`}
           >
             {iface.type === 'wifi' ? (
               isUp ? (
-                <Wifi className="h-5 w-5 text-[var(--accent-green)]" />
+                <Wifi className="h-5 w-5 text-[var(--status-success)]" />
               ) : (
                 <WifiOff className="h-5 w-5 text-[var(--text-muted)]" />
               )
             ) : isUp ? (
-              <Network className="h-5 w-5 text-[var(--accent-green)]" />
+              <Network className="h-5 w-5 text-[var(--status-success)]" />
             ) : (
               <Network className="h-5 w-5 text-[var(--text-muted)] opacity-50" />
             )}
@@ -381,13 +381,13 @@ function NetworkCard({
                 {iface.type}
               </span>
               {isCurrentAccess && (
-                <span className="flex items-center gap-1 rounded-md bg-[var(--accent-green)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-green)]">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-green)]" />
+                <span className="flex items-center gap-1 rounded-md bg-[var(--status-success)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--status-success)]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--status-success)]" />
                   {t('network.currentAccess', { defaultValue: '当前访问口' })}
                 </span>
               )}
               {isMgmt && (
-                <span className="flex items-center gap-1 rounded-md bg-[var(--accent-amber)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-amber)]">
+                <span className="flex items-center gap-1 rounded-md bg-[var(--status-warning)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--status-warning)]">
                   <Shield className="h-3 w-3" />
                   {t('network.management', { defaultValue: '管理网卡' })}
                 </span>
@@ -397,7 +397,7 @@ function NetworkCard({
                 <span
                   className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ${
                     iface.carrier
-                      ? 'bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
+                      ? 'bg-[var(--status-success)]/10 text-[var(--status-success)]'
                       : 'bg-[var(--text-muted)]/10 text-[var(--text-muted)]'
                   }`}
                 >
@@ -448,7 +448,7 @@ function NetworkCard({
               <span
                 className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${
                   iface.ipv4.method === 'dhcp'
-                    ? 'bg-[var(--accent-green)]/10 text-[var(--accent-green)]'
+                    ? 'bg-[var(--status-success)]/10 text-[var(--status-success)]'
                     : 'bg-[var(--accent)]/10 text-[var(--accent)]'
                 }`}
               >

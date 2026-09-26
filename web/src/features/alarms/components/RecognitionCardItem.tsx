@@ -87,7 +87,7 @@ function AvatarBox({
         {/* 渐变加载骨架屏。刻意不动画：本元素位于卡片 backdrop-filter 子树内，
             动画会反复更新该卡片的 backdrop 表面；加载状态由占位图本身表达。 */}
         {!isLoaded && !hasError && src && (
-          <div className="absolute inset-0 bg-gradient-to-br from-slate-800 to-slate-900" />
+          <div className="absolute inset-0 bg-gradient-to-br from-[var(--surface-inverse)] to-[var(--surface-inverse)]" />
         )}
 
         {src && !hasError ? (
@@ -112,7 +112,7 @@ function AvatarBox({
             </div>
           </>
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-1.5 p-2 text-slate-500">
+          <div className="flex h-full flex-col items-center justify-center gap-1.5 p-2 text-[var(--text-muted)]">
             <User className="h-7 w-7 opacity-30" />
             <span className="text-[10px] opacity-60">{noImageText}</span>
           </div>

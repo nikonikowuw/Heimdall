@@ -221,6 +221,7 @@
     "unselectAll": "Deselect All",
     "importSelected": "Import Selected Channels ({{count}})",
     "importFailed": "Batch import failed",
+    "streamModeLabel": "Analysis stream selection",
     "streamModeAutoOption": "Auto (Recommended)",
     "streamModeMainOption": "Main Stream",
     "streamModeSubOption": "Sub Stream",
