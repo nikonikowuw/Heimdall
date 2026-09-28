@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  AlertCircle,
   ArrowRight,
   Check,
   Eye,
@@ -16,7 +17,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { LocaleDropdown } from '@/components/LocaleDropdown'
 import { useTheme } from '@/hooks/use-theme'
-import { authApi } from '@/lib/api'
+import { authApi, RequestTimeoutError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getRememberedUser, useAuthStore } from '@/stores/auth'
 import { toast } from '@/stores/toast'
@@ -25,6 +26,27 @@ import { GargantuaCanvas } from './components/GargantuaCanvas'
 import { Starfield } from './components/Starfield'
 
 type InitializationStatus = 'checking' | 'ready' | 'setup-required' | 'unavailable'
+
+/**
+ * 把提交失败归一化为可展示的文案。
+ *
+ * 服务端已按 `Accept-Language` 本地化业务错误，因此优先直接使用其 message；
+ * 但传输层故障（超时、断网）没有业务消息，必须回落到本地文案，
+ * 否则用户会看到浏览器的原生 abort 提示。
+ */
+function authErrorMessage(error: unknown, t: (key: string) => string): string {
+  if (error instanceof RequestTimeoutError) {
+    return t('requestTimeout')
+  }
+  if (error instanceof TypeError) {
+    // fetch 在网络层失败时抛 TypeError（无 message 语义可用）
+    return t('networkError')
+  }
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+  return t('loginError')
+}
 
 export function LoginPage(): React.ReactElement {
   const { t } = useTranslation('auth')
@@ -36,7 +58,9 @@ export function LoginPage(): React.ReactElement {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [remember, setRemember] = useState(() => Boolean(getRememberedUser()))
+  // 「记住我」默认不勾选。默认勾选意味着共享终端上任何一次登录都会把操作员 ID
+  // 留在下一次打开的页面里；需要跨会话预填的用户主动勾选即可。
+  const [remember, setRemember] = useState(false)
   const [loading, setLoading] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -56,16 +80,31 @@ export function LoginPage(): React.ReactElement {
     inputRef.current?.focus()
   }
 
+  // 表单级错误（无法归属到某个输入框）需要把焦点移到错误提示本身，
+  // 否则屏幕阅读器用户不会被告知提交失败。错误块是条件渲染的，
+  // 因此只能在提交后的 effect 阶段拿到 ref，不能用 setTimeout 兜底。
+  const generalErrorFocusRef = useRef(false)
+  useEffect(() => {
+    if (formError && generalErrorFocusRef.current) {
+      generalErrorFocusRef.current = false
+      formErrorRef.current?.focus()
+    }
+  }, [formError])
+
   const reportGeneralError = (message: string) => {
+    generalErrorFocusRef.current = true
     setFormError(message)
-    setTimeout(() => formErrorRef.current?.focus(), 0)
   }
 
-  const handleAuthSuccess = (accessToken: string, authUsername: string) => {
+  const handleAuthSuccess = (accessToken: string, authUsername: string, expiresAt: number) => {
     setIsSuccess(true)
-    setTimeout(() => {
-      login(accessToken, authUsername, remember)
-    }, 160)
+    // 凭据落盘不走定时器：
+    // 1. 路由卸载后仍会执行的 setTimeout 属于游离副作用，且让「登录成功」
+    //    与「会话真正生效」之间凭空多出一段无法测试的等待；
+    // 2. `loading` 必须在这里复位，否则任何未触发卸载的路径都会把表单
+    //    永久锁在「正在校验身份…」，用户既不能重试也看不到错误。
+    login(accessToken, authUsername, remember, expiresAt)
+    setLoading(false)
   }
 
   const handleFpsUpdate = useCallback((newFps: number) => {
@@ -145,32 +184,22 @@ export function LoginPage(): React.ReactElement {
         reportFieldError(t('passwordMismatch'), confirmPasswordInputRef)
         return
       }
-
-      setLoading(true)
-      try {
-        const res = await authApi.initialize({
-          username: trimmedUsername,
-          password,
-        })
-        toast.success(t('setupSuccess'), { title: t('toastSystemReady') })
-        handleAuthSuccess(res.accessToken, res.username)
-      } catch (err: unknown) {
-        setLoading(false)
-        reportGeneralError(err instanceof Error ? err.message : t('loginError'))
-      }
-      return
     }
 
     setLoading(true)
     try {
-      const res = await authApi.login({
-        username: trimmedUsername,
-        password,
-      })
-      handleAuthSuccess(res.accessToken, res.username)
+      const credentials = { username: trimmedUsername, password }
+      const res = setupRequired
+        ? await authApi.initialize(credentials)
+        : await authApi.login(credentials)
+
+      if (setupRequired) {
+        toast.success(t('setupSuccess'), { title: t('toastSystemReady') })
+      }
+      handleAuthSuccess(res.accessToken, res.username, res.expiresAt)
     } catch (err: unknown) {
       setLoading(false)
-      reportGeneralError(err instanceof Error ? err.message : t('loginError'))
+      reportGeneralError(authErrorMessage(err, t))
     }
   }
 
@@ -222,17 +251,6 @@ export function LoginPage(): React.ReactElement {
 
       {/* 氛围渐变柔和暗角 */}
       <div aria-hidden="true" className="auth-vignette" />
-
-      {/*
-        动态极光层：承接页面动感，黑洞保持原样不动。
-        首个渲染帧即由 CSS 动画驱动，主线程零参与；
-        仅驱动 transform / opacity，全程位于 GPU 合成层。
-      */}
-      <div aria-hidden="true" className="auth-aurora">
-        <div className="auth-aurora__blob auth-aurora__blob--primary" />
-        <div className="auth-aurora__blob auth-aurora__blob--secondary" />
-        <div className="auth-aurora__blob auth-aurora__blob--tertiary" />
-      </div>
 
       {/* 远方星场：独立于 WebGL 黑洞的可见闪烁层，中央留出奇点与吸积盘空间 */}
       <Starfield />
@@ -291,18 +309,18 @@ export function LoginPage(): React.ReactElement {
         </div>
       </header>
 
-      {/* 核心双栏架构：左侧边缘管线拓扑遥测 + 右侧先锋悬浮控制吊舱 */}
-      <div className="pointer-events-none relative z-20 flex min-h-dvh w-full flex-col items-center justify-between px-6 pt-20 pb-6 sm:px-10 sm:pb-8 lg:flex-row lg:px-12 lg:pt-24">
-        {/* 左侧：完全通透，把视觉舞台全部还给 Gargantua 物理黑洞 */}
-        <div className="hidden min-h-[38vh] w-full flex-col justify-between lg:flex lg:min-h-[calc(100dvh-8rem)] lg:flex-1">
-          <div className="auth-stage-label hidden lg:flex">
-            <span className="auth-stage-label__line" />
-            <span>{t('terminal')}</span>
-          </div>
-          <div className="flex flex-1 items-center justify-center" />
+      {/* 核心二元分区架构：左侧 100% 纯净黑洞视界 + 右侧实体深空操作舱 */}
+      <div className="pointer-events-none relative z-20 flex min-h-dvh w-full flex-col lg:flex-row">
+        {/* 左侧：纯净无界黑洞剧场（完全无遮挡，黑洞自由呼吸） */}
+        <div className="flex flex-1 flex-col justify-between p-6 sm:p-10 lg:p-12">
+          {/* 左上保留空间对齐 header */}
+          <div className="h-10" />
 
-          {/* 底栏运行参数状态 */}
-          <div className="auth-stage-telemetry select-none">
+          {/* 中央完全留空给黑洞，没有任何阻碍黑洞的文字卡片 */}
+          <div className="flex-1" />
+
+          {/* 左下底栏运行参数状态 */}
+          <div className="auth-stage-telemetry pointer-events-auto select-none">
             <span className="auth-stage-telemetry__status">
               <span className="auth-stage-telemetry__dot motion-safe:animate-pulse" />
               <span>{t('opticalSensor')}</span>
@@ -314,42 +332,34 @@ export function LoginPage(): React.ReactElement {
           </div>
         </div>
 
-        {/* 右侧：先锋悬浮控制吊舱 */}
-        <div className="pointer-events-auto my-auto w-full max-w-[460px] lg:mr-2 xl:mr-6">
-          <section id="command-dock" aria-labelledby="auth-title" className="auth-panel">
-            <div className="auth-panel__corner auth-panel__corner--top-left" />
-            <div className="auth-panel__corner auth-panel__corner--top-right" />
-            <div className="auth-panel__corner auth-panel__corner--bottom-left" />
-            <div className="auth-panel__corner auth-panel__corner--bottom-right" />
-
-            <div
-              className={`auth-panel__accent-line ${isSuccess ? 'auth-panel__accent-line--success' : ''}`}
-            />
-
-            <div className="auth-panel__halo" />
-
+        {/* 右侧：实心深空操作舱 (100% Opaque Solid Console，彻底隔绝背景光干扰) */}
+        <div className="pointer-events-auto flex w-full flex-shrink-0 flex-col justify-center px-4 py-8 sm:px-6 lg:min-h-dvh lg:w-[440px] lg:px-6 xl:w-[460px] xl:px-8">
+          <section
+            id="command-dock"
+            aria-labelledby="auth-title"
+            className="auth-panel mx-auto w-full max-w-[400px] lg:max-w-none"
+          >
             <div className="auth-panel__header">
               <div className="auth-panel__status">
-                <span
-                  className={cn(
-                    'auth-panel__status-dot motion-safe:animate-pulse',
-                    statusView.dotClass,
-                  )}
-                />
-                <span>{statusView.badgeText}</span>
+                <span className={cn('auth-panel__status-dot', statusView.dotClass)} />
+                <span className="auth-panel__status-text">{statusView.badgeText}</span>
               </div>
 
-              <span className="auth-panel__revision">REV. 2026.1</span>
+              <div className="auth-panel__badge">
+                <span className="auth-panel__revision">REV. 2026.1</span>
+              </div>
             </div>
 
             <div className="auth-panel__body">
               <div className="auth-panel__intro">
-                <div className="auth-panel__eyebrow">
-                  <span className="auth-panel__eyebrow-mark" />
-                  <span>{t('terminal')}</span>
+                <div className="auth-panel__eyebrow-row">
+                  <span className="auth-panel__eyebrow">{t('terminal')}</span>
+                  <span className="auth-panel__serial" aria-hidden="true">
+                    SYS://AUTH.GW
+                  </span>
                 </div>
                 <h1 id="auth-title" className="auth-panel__title">
-                  {setupRequired && <Wand2 className="auth-setup-icon h-5 w-5" />}
+                  {setupRequired && <Wand2 className="auth-setup-icon h-4 w-4" />}
                   <span>{statusView.title}</span>
                 </h1>
                 <p className="auth-panel__subtitle">{statusView.subtitle}</p>
@@ -369,7 +379,12 @@ export function LoginPage(): React.ReactElement {
                 )}
                 {initializationStatus === 'unavailable' && (
                   <div className="auth-form-error" role="alert">
-                    <p>{t('gatewayUnavailableMessage')}</p>
+                    <div className="flex items-start gap-2.5">
+                      <AlertCircle className="auth-form-error__icon h-4 w-4" aria-hidden="true" />
+                      <p className="auth-form-error__text flex-1">
+                        {t('gatewayUnavailableMessage')}
+                      </p>
+                    </div>
                     <button
                       type="button"
                       className="auth-retry"
@@ -385,6 +400,9 @@ export function LoginPage(): React.ReactElement {
                 )}
                 {canAuthenticate && (
                   <>
+                    {/* 图标与文案必须同处一个横向行内组：.auth-form-error 是
+                        column 容器（供可用性分支在其下方追加重试按钮），
+                        直接并列子元素会把图标压到文案上方。 */}
                     {formError && (
                       <div
                         ref={formErrorRef}
@@ -393,7 +411,13 @@ export function LoginPage(): React.ReactElement {
                         aria-live="assertive"
                         tabIndex={-1}
                       >
-                        {formError}
+                        <div className="flex items-start gap-2.5">
+                          <AlertCircle
+                            className="auth-form-error__icon h-4 w-4"
+                            aria-hidden="true"
+                          />
+                          <span className="auth-form-error__text flex-1">{formError}</span>
+                        </div>
                       </div>
                     )}
                     {/* 用户名 */}
@@ -401,7 +425,7 @@ export function LoginPage(): React.ReactElement {
                       <label htmlFor="username" className="auth-label">
                         {t('operatorId')}
                       </label>
-                      <div className="relative">
+                      <div className="auth-input-group">
                         <div className="auth-input-icon">
                           <User className="h-4 w-4" />
                         </div>
@@ -429,7 +453,7 @@ export function LoginPage(): React.ReactElement {
                       <label htmlFor="password" className="auth-label">
                         {setupRequired ? t('newPassword') : t('password')}
                       </label>
-                      <div className="relative">
+                      <div className="auth-input-group">
                         <div className="auth-input-icon">
                           <KeyRound className="h-4 w-4" />
                         </div>
@@ -471,7 +495,7 @@ export function LoginPage(): React.ReactElement {
                         <label htmlFor="confirmPassword" className="auth-label">
                           {t('confirmPassword')}
                         </label>
-                        <div className="relative">
+                        <div className="auth-input-group">
                           <div className="auth-input-icon">
                             <KeyRound className="h-4 w-4" />
                           </div>
@@ -499,18 +523,24 @@ export function LoginPage(): React.ReactElement {
                     {!setupRequired && (
                       <div className="auth-options">
                         <label className="auth-remember">
-                          <input
-                            type="checkbox"
-                            disabled={loading || isSuccess}
-                            checked={remember}
-                            onChange={(e) => setRemember(e.target.checked)}
-                          />
+                          <span className="auth-checkbox">
+                            <input
+                              type="checkbox"
+                              disabled={loading || isSuccess}
+                              checked={remember}
+                              onChange={(e) => setRemember(e.target.checked)}
+                              className="auth-checkbox__native"
+                            />
+                            <span className="auth-checkbox__box" aria-hidden="true">
+                              <Check className="auth-checkbox__check" />
+                            </span>
+                          </span>
                           <span>{t('remember')}</span>
                         </label>
                       </div>
                     )}
 
-                    {/* 提交按钮（干脆利落的物理触觉微反馈） */}
+                    {/* 提交按钮（物理触觉高能主电门 + 极客回车指示） */}
                     <div className="pt-2">
                       <button
                         type="submit"
@@ -524,12 +554,19 @@ export function LoginPage(): React.ReactElement {
                           </>
                         ) : (
                           <>
-                            {loading ? (
-                              <Loader2 className="h-4 w-4 motion-safe:animate-spin" />
-                            ) : (
-                              <ArrowRight className="h-4 w-4" />
+                            <span className="flex items-center gap-2">
+                              {loading ? (
+                                <Loader2 className="h-4 w-4 motion-safe:animate-spin" />
+                              ) : (
+                                <ArrowRight className="h-4 w-4 transition-transform motion-safe:group-hover:translate-x-0.5" />
+                              )}
+                              <span>{submitLabel}</span>
+                            </span>
+                            {!loading && (
+                              <kbd className="auth-submit__kbd" aria-hidden="true">
+                                ↵
+                              </kbd>
                             )}
-                            <span>{submitLabel}</span>
                           </>
                         )}
                       </button>
@@ -538,20 +575,24 @@ export function LoginPage(): React.ReactElement {
                 )}
               </form>
 
-              <div className="auth-metrics select-none">
+              <div
+                className="auth-metrics select-none"
+                role="region"
+                aria-label="Pipeline Telemetry"
+              >
                 <div className="auth-metric">
-                  <div className="auth-metric__label">{t('ingestion')}</div>
-                  <div className="auth-metric__value">WebRTC/RTSP</div>
+                  <span className="auth-metric__label">{t('ingestion')}</span>
+                  <span className="auth-metric__value">WebRTC/RTSP</span>
                 </div>
                 <div className="auth-metric">
-                  <div className="auth-metric__label">{t('pipeline')}</div>
-                  <div className="auth-metric__value">DMA-BUF</div>
+                  <span className="auth-metric__label">{t('pipeline')}</span>
+                  <span className="auth-metric__value">DMA-BUF</span>
                 </div>
                 <div className="auth-metric">
-                  <div className="auth-metric__label">{t('zeroCopy')}</div>
-                  <div className="auth-metric__value auth-metric__value--accent">
+                  <span className="auth-metric__label">{t('zeroCopy')}</span>
+                  <span className="auth-metric__value auth-metric__value--accent">
                     {t('deviceSide')}
-                  </div>
+                  </span>
                 </div>
               </div>
             </div>

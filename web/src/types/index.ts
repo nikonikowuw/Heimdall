@@ -49,8 +49,6 @@ export const WS_TOPICS = {
   PERSONNEL_IMPORT_FINISHED: 'personnel.import.finished',
 } as const
 
-export type WsTopic = (typeof WS_TOPICS)[keyof typeof WS_TOPICS]
-
 export type SandboxStepStatus = 'running' | 'passed' | 'failed'
 
 export interface AlgorithmUploadProgress {
@@ -262,18 +260,6 @@ export interface DetectionRule {
   role: DetectionRuleRole
   lineDirection?: DetectionLineDirection
   points: DetectionPoint[]
-}
-
-export interface AnalysisTask {
-  id: number
-  cameraId: string
-  name: string
-  desiredEnabled: boolean
-  actualStatus: number
-  rulesJson: string
-  motionGateJson: string
-  createdAt: string
-  updatedAt: string
 }
 
 export interface AlarmRecord {
@@ -498,15 +484,6 @@ export interface AlgoManifest {
   classes: string[]
   license?: string
   configSchema?: Record<string, unknown>
-}
-
-export interface SandboxCheckResult {
-  passed: boolean
-  stepsTotal: number
-  stepsPassed: number
-  steps: string[]
-  errorMessage?: string
-  manifest?: AlgoManifest
 }
 
 /**

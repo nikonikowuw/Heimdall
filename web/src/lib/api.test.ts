@@ -11,6 +11,8 @@ import {
   ApiError,
   API_CODE_CONFIG_CONFLICT,
   isConfigConflictError,
+  request,
+  RequestTimeoutError,
 } from './api'
 import { useAuthStore } from '@/stores/auth'
 
@@ -71,6 +73,76 @@ describe('API Client', () => {
       '/api/v1/auth/init-status',
       expect.objectContaining({ method: 'GET' }),
     )
+  })
+
+  /**
+   * 初始化探测必须带超时，否则半开 TCP 会把登录页永久锁在「正在连接控制台」。
+   * 这是 renderToString 无法观察的（不执行 effect），只能在此层验证。
+   */
+  it('getInitStatus passes an explicit timeout that aborts a stalled request', async () => {
+    vi.useFakeTimers()
+    try {
+      // 模拟一个永不落定的请求：只有在 signal 被 abort 时才 reject
+      global.fetch = vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+      }) as unknown as typeof fetch
+
+      const pending = authApi.getInitStatus(1000)
+      const assertion = expect(pending).rejects.toBeInstanceOf(RequestTimeoutError)
+      await vi.advanceTimersByTimeAsync(1200)
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /** 未指定超时的请求不应被隐式打断（长轮询、流式下载依赖此行为）。 */
+  it('leaves requests untimed unless a timeout is requested', async () => {
+    const seen: Array<AbortSignal | null | undefined> = []
+    global.fetch = vi.fn((_url: string, init?: RequestInit) => {
+      seen.push(init?.signal)
+      return Promise.resolve({
+        status: 200,
+        json: async () => ({ code: 0, message: 'success', data: { ok: true }, timestamp: 0 }),
+      })
+    }) as unknown as typeof fetch
+
+    await request<{ ok: boolean }>('/cameras')
+    expect(seen[0] ?? null).toBeNull()
+  })
+
+  /** 调用方传入的 signal 必须继续有效地中止请求（不得被超时逻辑吞掉）。 */
+  it('still honours a caller-supplied abort signal', async () => {
+    global.fetch = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        if (init?.signal?.aborted) reject(new Error('aborted'))
+        else init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })
+    }) as unknown as typeof fetch
+
+    const controller = new AbortController()
+    const pending = request<unknown>('/cameras', { signal: controller.signal })
+    const assertion = expect(pending).rejects.toThrow('aborted')
+    controller.abort()
+    await assertion
+  })
+
+  /** 上游主动取消不得被误包装为请求超时错误。 */
+  it('does not misreport upstream cancellation as a timeout error', async () => {
+    global.fetch = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        if (init?.signal?.aborted) reject(new Error('user-aborted'))
+        else init?.signal?.addEventListener('abort', () => reject(new Error('user-aborted')))
+      })
+    }) as unknown as typeof fetch
+
+    const controller = new AbortController()
+    const pending = request<unknown>('/cameras', { signal: controller.signal, timeoutMs: 10000 })
+    const assertion = expect(pending).rejects.toThrow('user-aborted')
+    controller.abort()
+    await assertion
   })
 
   it('login should include body and return access token', async () => {

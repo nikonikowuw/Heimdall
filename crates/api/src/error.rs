@@ -28,6 +28,9 @@ pub enum ApiError {
     #[error("用户名或密码错误")]
     InvalidCredentials,
 
+    #[error("登录尝试次数过多，请在 {retry_after_ms} 毫秒后重试")]
+    TooManyAttempts { retry_after_ms: i64 },
+
     #[error("新密码强度不符合要求: {0}")]
     WeakPassword(String),
 
@@ -121,6 +124,11 @@ impl IntoResponse for ApiError {
             Self::TokenRevoked => (StatusCode::UNAUTHORIZED, 10003, self.to_string()),
             Self::AlreadyInitialized => (StatusCode::FORBIDDEN, 10006, self.to_string()),
             Self::InvalidCredentials => (StatusCode::BAD_REQUEST, 10007, self.to_string()),
+            // 429 而非 400：限流是传输层语义，客户端与反代都应能按标准状态码退避。
+            // retry_after_ms 通过 Retry-After 头下发（见下方），保持信封不变。
+            Self::TooManyAttempts { .. } => {
+                (StatusCode::TOO_MANY_REQUESTS, 10009, self.to_string())
+            }
             Self::WeakPassword(m) => (StatusCode::BAD_REQUEST, 10008, m.clone()),
             Self::NotFound(m) => (StatusCode::NOT_FOUND, 40401, m.clone()),
             Self::Media(e) => (StatusCode::BAD_REQUEST, e.error_code(), e.to_string()),
@@ -189,7 +197,18 @@ impl IntoResponse for ApiError {
             "timestamp": chrono::Utc::now().timestamp_millis(),
         }));
 
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+
+        // 限流响应带上标准 Retry-After（秒，向上取整），
+        // 让浏览器与反向代理无需解析消息文本即可退避。
+        if let Self::TooManyAttempts { retry_after_ms } = &self {
+            let seconds = ((retry_after_ms + 999) / 1000).max(1).to_string();
+            if let Ok(value) = axum::http::HeaderValue::from_str(&seconds) {
+                response.headers_mut().insert("retry-after", value);
+            }
+        }
+
+        response
     }
 }
 

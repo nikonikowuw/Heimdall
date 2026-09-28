@@ -433,22 +433,21 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
     gl.uniform3f(uTintBLoc, 0.988, 0.451, 0.749)
     gl.uniform3f(uTintCLoc, 0.42, 0.298, 1.0)
 
-    let curSingX = 0.35,
+    let curSingX = 0.32,
       curSingY = 0.5
-    let targetSingX = 0.35,
+    let targetSingX = 0.32,
       targetSingY = 0.5
 
     const updateSingularityCenterTarget = () => {
       const isDesktop = window.innerWidth >= 1024
       if (isDesktop) {
-        const dock = document.getElementById('command-dock')
-        const dockW = dock ? dock.offsetWidth : 440
-        const viewW = Math.max(window.innerWidth - dockW, 100)
-        targetSingX = (viewW * 0.5) / window.innerWidth
+        // 在桌面端将奇点固定在左侧舞台中央（约 32%~34% 视野处），彻底避开右侧操作面板
+        targetSingX = 0.33
         targetSingY = 0.5
       } else {
+        // 移动端/小屏：黑洞位于屏幕上半部分，表单位于下半部分
         targetSingX = 0.5
-        targetSingY = 0.72
+        targetSingY = 0.28
       }
     }
 

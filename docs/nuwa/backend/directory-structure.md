@@ -44,6 +44,7 @@
 - `RUST_LOG` 覆盖日志过滤；日志实际初始化见 [main.rs](../../../crates/app/src/main.rs)。
 - 配置模板可入库，`.env` 不入库；新增字段给出默认值与入口校验，保持旧配置兼容。
 - 包上传限额使用 `server.max_package_size_mb`，嵌套环境变量优先于兼容键 `HEIMDALL_MAX_PACKAGE_SIZE_MB`；拒绝零值及字节换算溢出。
+- 凭据有效期使用 `auth.token_ttl_hours`（`HEIMDALL_AUTH__TOKEN_TTL_HOURS`），同样在装配期拒绝零值与毫秒换算溢出，再经 `AppState::with_token_ttl_ms` 注入；不得在签发函数内硬编码时长。
 
 ## 测试位置
 

@@ -46,7 +46,36 @@ pub fn mask_sensitive_json_str(body: &str) -> String {
 
 type HmacSha256 = Hmac<Sha256>;
 
-const PBKDF2_ITERATIONS: u32 = 10_000;
+/// 新建密码哈希使用的 PBKDF2 迭代数。
+///
+/// 取值依据是实测而非照抄 OWASP 基线（600k）：面向 ARM 边缘设备的部署里，
+/// 单次校验的开销直接等于登录接口的最坏并发延迟，600k 会让每个登录请求吃掉
+/// 百余毫秒的 blocking 线程。210k 在开发机实测约 62ms/次，是「离线爆破成本」
+/// 与「边缘设备可承受延迟」的折中。
+///
+/// 该值只影响**新建**哈希。历史哈希通过内嵌的 `i=` 参数自行声明迭代数，
+/// 因此调整此常量不会让既有密码失效；登录成功后按 [`needs_rehash`] 被动升级。
+pub(crate) const PBKDF2_ITERATIONS: u32 = 210_000;
+
+/// 用于抹平「用户不存在」与「密码错误」耗时的占位哈希。
+///
+/// 用户不存在时若直接返回，请求会在跳过 PBKDF2 的情况下提前结束，
+/// 响应耗时差异可被远程测量，从而枚举出合法管理员用户名。
+/// 该哈希在首次使用时按当前迭代数惰性生成，保证两条分支的 CPU 开销同量级。
+static DUMMY_PASSWORD_HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// 返回占位哈希，供用户不存在分支执行一次等价耗时的校验。
+pub fn dummy_password_hash() -> &'static str {
+    DUMMY_PASSWORD_HASH.get_or_init(|| {
+        // 占位哈希的明文不可猜，避免攻击者用一个已知密码命中占位条目。
+        hash_password("heimdall-timing-equalizer-placeholder")
+    })
+}
+
+/// 判断既有哈希是否需要用当前迭代数重新派生。
+pub fn needs_rehash(encoded: &str) -> bool {
+    parse_iterations(encoded).is_some_and(|iterations| iterations < PBKDF2_ITERATIONS)
+}
 
 /// 常数时间字节切片比对，抵御时序侧信道攻击
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -84,14 +113,22 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32]
 
 /// 使用加盐 PBKDF2-HMAC-SHA256 对明文密码进行哈希
 pub fn hash_password(password: &str) -> String {
+    hash_password_with_iterations(password, PBKDF2_ITERATIONS)
+}
+
+/// 以指定迭代数派生哈希。
+///
+/// 仅供测试构造「历史低强度哈希」以验证平滑升级路径；生产路径一律走 [`hash_password`]，
+/// 不给调用方留下降低强度的后门。
+pub(crate) fn hash_password_with_iterations(password: &str, iterations: u32) -> String {
     let salt_uuid = uuid::Uuid::new_v4();
     let salt = salt_uuid.as_bytes();
-    let derived = pbkdf2_hmac_sha256(password.as_bytes(), salt, PBKDF2_ITERATIONS);
+    let derived = pbkdf2_hmac_sha256(password.as_bytes(), salt, iterations);
 
     let salt_b64 = URL_SAFE_NO_PAD.encode(salt);
     let hash_b64 = URL_SAFE_NO_PAD.encode(derived);
 
-    format!("$pbkdf2-sha256$i={PBKDF2_ITERATIONS}${salt_b64}${hash_b64}")
+    format!("$pbkdf2-sha256$i={iterations}${salt_b64}${hash_b64}")
 }
 
 /// 异步非阻塞密码哈希计算，将 CPU 密集运算委派给 blocking 线程池，杜绝阻塞 Tokio Worker
@@ -104,31 +141,36 @@ pub async fn hash_password_async(password: String) -> String {
 
 /// 校验明文密码是否与加盐哈希匹配
 pub fn verify_password(password: &str, encoded: &str) -> bool {
-    let parts: Vec<&str> = encoded.split('$').collect();
-    if parts.len() != 5 || parts[1] != "pbkdf2-sha256" {
-        return false;
-    }
-
-    let iterations = match parts[2].strip_prefix("i=") {
-        Some(iter_str) => match iter_str.parse::<u32>() {
-            Ok(val) => val,
-            Err(_) => return false,
-        },
+    let (iterations, salt, expected_hash) = match parse_encoded(encoded) {
+        Some(parsed) => parsed,
         None => return false,
-    };
-
-    let salt = match URL_SAFE_NO_PAD.decode(parts[3]) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-
-    let expected_hash = match URL_SAFE_NO_PAD.decode(parts[4]) {
-        Ok(h) => h,
-        Err(_) => return false,
     };
 
     let derived = pbkdf2_hmac_sha256(password.as_bytes(), &salt, iterations);
     constant_time_eq(&derived, &expected_hash)
+}
+
+/// 从 `$pbkdf2-sha256$i={n}${salt}${hash}` 提取迭代数，避免额外解码 base64 缓冲区。
+fn parse_iterations(encoded: &str) -> Option<u32> {
+    let parts: Vec<&str> = encoded.split('$').collect();
+    if parts.len() != 5 || parts[1] != "pbkdf2-sha256" {
+        return None;
+    }
+    parts[2].strip_prefix("i=")?.parse::<u32>().ok()
+}
+
+/// 解析 `$pbkdf2-sha256$i={n}${salt}${hash}` 编码，返回迭代数与原始字节。
+fn parse_encoded(encoded: &str) -> Option<(u32, Vec<u8>, Vec<u8>)> {
+    let parts: Vec<&str> = encoded.split('$').collect();
+    if parts.len() != 5 || parts[1] != "pbkdf2-sha256" {
+        return None;
+    }
+
+    let iterations = parts[2].strip_prefix("i=")?.parse::<u32>().ok()?;
+    let salt = URL_SAFE_NO_PAD.decode(parts[3]).ok()?;
+    let hash = URL_SAFE_NO_PAD.decode(parts[4]).ok()?;
+
+    Some((iterations, salt, hash))
 }
 
 /// 异步非阻塞密码校验，避免在 Tokio 主调度器上同步运行高频迭代
@@ -136,6 +178,14 @@ pub async fn verify_password_async(password: String, encoded: String) -> bool {
     tokio::task::spawn_blocking(move || verify_password(&password, &encoded))
         .await
         .unwrap_or(false)
+}
+
+/// 对不存在的用户执行一次等价耗时的校验。
+///
+/// 调用方必须忽略返回值：它唯一的职责是消耗掉与真实校验同量级的 CPU 时间，
+/// 使「用户不存在」与「密码错误」两条分支在响应耗时上不可区分。
+pub async fn verify_dummy_password_async(password: String) {
+    let _ = verify_password_async(password, dummy_password_hash().to_string()).await;
 }
 
 /// 签发 HS256 标准 JWT 令牌
@@ -217,9 +267,41 @@ mod tests {
         let password = "SuperSecretPassword2026!";
         let hash = hash_password(password);
 
-        assert!(hash.starts_with("$pbkdf2-sha256$i=10000$"));
+        // 前缀断言绑定当前迭代数：调整 PBKDF2_ITERATIONS 时此测试必须同步更新，
+        // 避免「改了强度但没人发现」的静默漂移。
+        assert!(hash.starts_with(&format!("$pbkdf2-sha256$i={PBKDF2_ITERATIONS}$")));
         assert!(verify_password(password, &hash));
         assert!(!verify_password("wrong-password", &hash));
+    }
+
+    #[test]
+    fn test_legacy_hash_still_verifies_after_iteration_bump() {
+        // 模拟升级前生成的低迭代数哈希：携带 i=10000 的旧格式必须继续可用，
+        // 否则调整 PBKDF2_ITERATIONS 会把所有既有部署锁在门外。
+        let password = "legacy-password-2026";
+        let legacy = hash_password_with_iterations(password, 10_000);
+
+        assert!(legacy.starts_with("$pbkdf2-sha256$i=10000$"));
+        assert!(verify_password(password, &legacy));
+        assert!(!verify_password("another-password", &legacy));
+        assert!(needs_rehash(&legacy), "低迭代数哈希应被标记为需要升级");
+    }
+
+    #[test]
+    fn test_needs_rehash_ignores_current_and_malformed() {
+        assert!(!needs_rehash(&hash_password("whatever")));
+        assert!(!needs_rehash("not-a-hash"));
+        assert!(!needs_rehash("$pbkdf2-sha256$i=abc$salt$hash"));
+    }
+
+    #[test]
+    fn test_dummy_hash_is_verifiable_and_stable() {
+        // 占位哈希必须在同一次进程内保持同一实例：否则每次调用都重新派生 210k 次
+        let first = dummy_password_hash();
+        let second = dummy_password_hash();
+        assert!(std::ptr::eq(first, second));
+        assert!(!verify_password("anything", first));
+        assert!(!needs_rehash(first));
     }
 
     #[test]

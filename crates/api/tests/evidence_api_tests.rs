@@ -26,7 +26,9 @@ async fn setup_test_app() -> (axum::Router, api::AppState, String) {
         iat: chrono::Utc::now().timestamp_millis(),
         exp: chrono::Utc::now().timestamp_millis() + 86400000,
     };
-    let token = api::crypto::generate_jwt(&claims, &state.get_jwt_secret()).unwrap();
+    let token =
+        api::crypto::generate_jwt(&claims, &state.get_jwt_secret().expect("测试环境密钥可用"))
+            .unwrap();
 
     let app = api::create_app(state.clone());
     (app, state, token)
@@ -551,7 +553,9 @@ async fn test_serve_evidence_image_streaming_and_etag_304() {
         iat: chrono::Utc::now().timestamp_millis(),
         exp: chrono::Utc::now().timestamp_millis() + 86400000,
     };
-    let token = api::crypto::generate_jwt(&claims, &state.get_jwt_secret()).unwrap();
+    let token =
+        api::crypto::generate_jwt(&claims, &state.get_jwt_secret().expect("测试环境密钥可用"))
+            .unwrap();
     let app = api::create_app(state);
 
     // 1. 首次请求：验证流式直通 200 OK、ETag 及 Content-Length

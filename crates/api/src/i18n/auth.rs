@@ -37,6 +37,12 @@ pub const STATIC_MESSAGES: &[StaticMessage] = &[
         zh_tw: "使用者名稱或密碼錯誤",
         en: "Invalid username or password",
     },
+    StaticMessage {
+        code: 10009,
+        zh_cn: "登录尝试次数过多，请稍后再试",
+        zh_tw: "登入嘗試次數過多，請稍後再試",
+        en: "Too many login attempts, please try again later",
+    },
 ];
 
 pub fn translate_auth(code: u32, original_msg: &str, locale: Locale) -> Option<String> {

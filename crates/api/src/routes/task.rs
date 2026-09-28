@@ -1486,7 +1486,11 @@ mod tests {
             iat: chrono::Utc::now().timestamp_millis(),
             exp: chrono::Utc::now().timestamp_millis() + 86400000,
         };
-        let token = crate::crypto::generate_jwt(&claims, &state.get_jwt_secret()).unwrap();
+        let token = crate::crypto::generate_jwt(
+            &claims,
+            &state.get_jwt_secret().expect("测试环境密钥可用"),
+        )
+        .unwrap();
 
         let app = crate::create_app(state.clone());
         (app, state, token, mock_coord)

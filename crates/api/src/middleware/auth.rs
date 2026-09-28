@@ -55,7 +55,11 @@ impl FromRequestParts<AppState> for AuthUser {
         };
 
         let invalid_before = state.token_invalid_before.load(Ordering::Relaxed);
-        let secret = state.get_jwt_secret();
+        // 密钥不可用时 fail closed：空密钥在 HMAC 下是合法密钥，
+        // 静默退化等于把签名完全交给攻击者。
+        let secret = state
+            .get_jwt_secret()
+            .ok_or(ApiError::Internal("凭据签名密钥不可用".to_string()))?;
         let claims = verify_jwt(token, &secret, invalid_before)?;
 
         Ok(AuthUser {

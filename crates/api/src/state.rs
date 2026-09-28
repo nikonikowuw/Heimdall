@@ -199,6 +199,11 @@ pub struct WsBroadcastEvent {
 
 /// 算法包上传默认最大上限 (1024MB 即 1GB)
 pub const DEFAULT_MAX_PACKAGE_SIZE_BYTES: usize = 1024 * 1024 * 1024;
+/// 签发 JWT 的默认有效期（24 小时，毫秒）。
+///
+/// 运行时取值由 `auth.token_ttl_hours` 经 [`AppState::with_token_ttl_ms`] 注入；
+/// 此常量仅供测试与未显式配置的场景使用。
+pub const DEFAULT_TOKEN_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 /// 算法包沙箱处理固定为单路并发，避免多个大包同时占满内存与 CPU。
 pub const DEFAULT_MAX_CONCURRENT_ALGORITHM_UPLOADS: usize = 1;
 
@@ -212,9 +217,13 @@ pub struct AppState {
     pub algo_registry: Arc<AlgoRegistry>,
     pub task_coordinator: Arc<dyn pipeline::TaskRuntimeService>,
     pub event_broadcaster: broadcast::Sender<WsBroadcastEvent>,
-    pub jwt_secret: Arc<RwLock<Vec<u8>>>,
+    pub jwt_secret: Arc<RwLock<Arc<[u8]>>>,
     pub token_invalid_before: Arc<AtomicI64>,
     pub is_initialized: Arc<AtomicBool>,
+    /// 登录失败限流器：账号与来源 IP 双桶渐进退避
+    pub login_limiter: Arc<crate::login_limiter::LoginLimiter>,
+    /// 签发 JWT 的有效期（毫秒），由 `auth.token_ttl_hours` 换算而来
+    pub token_ttl_ms: i64,
     pub shutdown_tx: broadcast::Sender<()>,
     pub max_upload_size_bytes: usize,
     pub algorithm_upload_semaphore: Arc<Semaphore>,
@@ -278,9 +287,11 @@ impl AppState {
             algo_registry,
             task_coordinator,
             event_broadcaster,
-            jwt_secret: Arc::new(RwLock::new(jwt_secret)),
+            jwt_secret: Arc::new(RwLock::new(Arc::from(jwt_secret.as_slice()))),
             token_invalid_before: Arc::new(AtomicI64::new(0)),
             is_initialized: Arc::new(AtomicBool::new(false)),
+            login_limiter: Arc::new(crate::login_limiter::LoginLimiter::new()),
+            token_ttl_ms: DEFAULT_TOKEN_TTL_MS,
             shutdown_tx,
             max_upload_size_bytes,
             algorithm_upload_semaphore: Arc::new(Semaphore::new(
@@ -306,6 +317,15 @@ impl AppState {
         metrics: Arc<crate::capture_service::RecognitionQueueMetrics>,
     ) -> Self {
         self.recognition_queue_metrics = metrics;
+        self
+    }
+
+    /// 为 API 状态注入签到凭据有效期（毫秒）。
+    ///
+    /// 由 `app` 装配期将 `auth.token_ttl_hours` 换算后传入；非法值已在配置加载时拒绝，
+    /// 此处不再重复校验。
+    pub fn with_token_ttl_ms(mut self, token_ttl_ms: i64) -> Self {
+        self.token_ttl_ms = token_ttl_ms;
         self
     }
 
@@ -343,12 +363,29 @@ impl AppState {
         let _ = self.shutdown_tx.send(());
     }
 
-    /// 获取当前的 JWT 签名密钥
-    pub fn get_jwt_secret(&self) -> Vec<u8> {
-        self.jwt_secret
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+    /// 获取当前的 JWT 签名密钥。
+    ///
+    /// 返回 `Arc<[u8]>` 而非 `Vec<u8>`：验签在每个受保护请求上执行，键长固定，
+    /// 每次克隆整个缓冲区纯属浪费；`Arc` 克隆只动一个引用计数。
+    ///
+    /// 锁中毒（持锁线程 panic）时返回 `None` 而不是空密钥：HMAC 接受任意长度密钥，
+    /// 静默退化成空密钥等于让攻击者可以伪造任意 Token。此类故障必须 fail closed。
+    pub fn get_jwt_secret(&self) -> Option<Arc<[u8]>> {
+        match self.jwt_secret.read() {
+            Ok(guard) => Some(guard.clone()),
+            Err(_) => {
+                tracing::error!("JWT 密钥锁已中毒，拒绝签发与校验凭据");
+                None
+            }
+        }
+    }
+
+    /// 覆盖 JWT 密钥（启动装配与密钥持久化同步）
+    pub fn set_jwt_secret(&self, secret: Vec<u8>) {
+        match self.jwt_secret.write() {
+            Ok(mut guard) => *guard = Arc::from(secret.as_slice()),
+            Err(_) => tracing::error!("JWT 密钥锁已中毒，无法更新密钥"),
+        }
     }
 
     /// 获取证据存储根目录路径

@@ -1,5 +1,0 @@
-export { SettingsPage } from './SettingsPage'
-export { SystemOverview } from './SystemOverview'
-export { NetworkSettings } from './NetworkSettings'
-export { StorageSettings } from './StorageSettings'
-export { TimeSettings } from './TimeSettings'

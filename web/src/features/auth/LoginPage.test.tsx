@@ -13,12 +13,16 @@ vi.mock('@/components/LocaleDropdown', () => ({
   LocaleDropdown: () => null,
 }))
 
+// 这个 mock 必须完整覆盖 LoginPage 从 @/lib/api 导入的符号，否则模块装配即失败。
+// 初始化探测的超时行为在未 mock 的 api.test.ts 中验证：本文件走 renderToString，
+// 不执行 effect，因此无法观察任何提交后的交互行为。
 vi.mock('@/lib/api', () => ({
   authApi: {
     getInitStatus: vi.fn(() => Promise.resolve({ initialized: true })),
     initialize: vi.fn(),
     login: vi.fn(),
   },
+  RequestTimeoutError: class RequestTimeoutError extends Error {},
 }))
 
 describe('LoginPage', () => {

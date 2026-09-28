@@ -31,7 +31,9 @@ async fn setup_test_app() -> (axum::Router, api::AppState, String) {
         iat: chrono::Utc::now().timestamp_millis(),
         exp: chrono::Utc::now().timestamp_millis() + 86400000,
     };
-    let token = api::crypto::generate_jwt(&claims, &state.get_jwt_secret()).unwrap();
+    let token =
+        api::crypto::generate_jwt(&claims, &state.get_jwt_secret().expect("测试环境密钥可用"))
+            .unwrap();
 
     let app = api::create_app(state.clone());
     (app, state, token)

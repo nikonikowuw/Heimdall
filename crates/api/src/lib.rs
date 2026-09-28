@@ -6,6 +6,7 @@ pub mod crypto;
 pub mod error;
 pub mod gallery_index;
 pub mod i18n;
+pub mod login_limiter;
 pub mod metrics;
 pub mod middleware;
 pub mod network_service;

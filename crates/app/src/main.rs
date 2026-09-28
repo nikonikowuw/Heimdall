@@ -202,6 +202,7 @@ async fn main() -> Result<()> {
         .server
         .max_package_size_bytes()
         .context("算法包上传大小配置无效")?;
+    let token_ttl_ms = cfg.auth.token_ttl_ms().context("认证凭据有效期配置无效")?;
 
     // 初始化 GB/T 28181 SIP 原生服务端与媒体上下文
     let gb_config = db::SysGb28181ConfigRepo::get(&db_conn)
@@ -213,6 +214,7 @@ async fn main() -> Result<()> {
         media::gb28181::PortPool::new(gb_config.rtp_port_range_start, gb_config.rtp_port_range_end);
 
     let state = api::AppState::new_with_limit(db_conn, pipeline_mgr, max_upload_size_bytes)
+        .with_token_ttl_ms(token_ttl_ms)
         .with_storage_cleaner(evidence_dir)
         .with_gb28181_sip_server(sip_server.clone());
 

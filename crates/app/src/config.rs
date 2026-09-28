@@ -21,6 +21,8 @@ pub struct AppConfig {
     pub media: MediaConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
 }
 
 /// HTTP/WebSocket 服务配置
@@ -189,11 +191,48 @@ impl Default for LoggingConfig {
     }
 }
 
+/// 认证与会话配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// 签发 JWT 的有效期（小时，默认 24）
+    #[serde(default = "default_token_ttl_hours")]
+    pub token_ttl_hours: u64,
+}
+
+impl AuthConfig {
+    /// 换算为毫秒；零值与溢出在装配期直接拒绝，不留给运行期。
+    pub fn token_ttl_ms(&self) -> Result<i64, config::ConfigError> {
+        if self.token_ttl_hours == 0 {
+            return Err(config::ConfigError::Message(
+                "auth.token_ttl_hours 必须大于 0：零有效期会签发立即过期的凭据".to_string(),
+            ));
+        }
+
+        self.token_ttl_hours
+            .checked_mul(MS_PER_HOUR)
+            .and_then(|ms| i64::try_from(ms).ok())
+            .ok_or_else(|| {
+                config::ConfigError::Message(
+                    "auth.token_ttl_hours 过大，换算为毫秒时溢出 i64".to_string(),
+                )
+            })
+    }
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            token_ttl_hours: default_token_ttl_hours(),
+        }
+    }
+}
+
 // ============================================================================
 // 默认值生成函数
 // ============================================================================
 
 const BYTES_PER_MEGABYTE: usize = 1024 * 1024;
+const MS_PER_HOUR: u64 = 60 * 60 * 1000;
 
 fn default_host() -> String {
     "0.0.0.0".to_string()
@@ -267,6 +306,10 @@ fn default_log_max_rows() -> u64 {
     500_000
 }
 
+fn default_token_ttl_hours() -> u64 {
+    24
+}
+
 // ============================================================================
 // 配置加载逻辑
 // ============================================================================
@@ -321,6 +364,7 @@ pub fn load_config(custom_path: Option<&str>) -> Result<AppConfig, config::Confi
     }
 
     app_config.server.max_package_size_bytes()?;
+    app_config.auth.token_ttl_ms()?;
     Ok(app_config)
 }
 
@@ -409,18 +453,93 @@ filter = "warn,media=debug"
     }
 
     #[test]
+    fn test_auth_token_ttl_default_and_override() {
+        // 默认值必须保留既有的 24 小时行为，避免升级后把在线用户踢下线。
+        let defaults = AppConfig::default();
+        assert_eq!(defaults.auth.token_ttl_hours, 24);
+        assert_eq!(
+            defaults.auth.token_ttl_ms().expect("默认 TTL 应可换算"),
+            86_400_000
+        );
+
+        let toml_content = r#"
+[auth]
+token_ttl_hours = 8
+"#;
+
+        let config = config::Config::builder()
+            .add_source(config::File::from_str(
+                toml_content,
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .expect("配置构建应成功");
+
+        let cfg: AppConfig = config.try_deserialize().expect("配置反序列化应成功");
+        assert_eq!(cfg.auth.token_ttl_hours, 8);
+        assert_eq!(
+            cfg.auth.token_ttl_ms().expect("自定义 TTL 应可换算"),
+            28_800_000
+        );
+        // 验证新增字段不会影响其他分区的默认值
+        assert_eq!(cfg.server.port, 8000);
+    }
+
+    #[test]
+    fn test_auth_token_ttl_rejects_invalid_values() {
+        // 零值会签发立即过期的凭据，必须在装配期而不是运行期暴露。
+        let zero = AuthConfig { token_ttl_hours: 0 };
+        assert!(zero.token_ttl_ms().is_err());
+
+        // u64::MAX 小时换算为毫秒时越界 i64。
+        let overflow = AuthConfig {
+            token_ttl_hours: u64::MAX,
+        };
+        assert!(overflow.token_ttl_ms().is_err());
+    }
+
+    #[test]
+    fn test_shipped_template_matches_loader() {
+        // 随包发布的 config.example.toml 必须能被真实加载器解析成 AppConfig：
+        // 否则运维照着模板写配置，会在启动时才发现分区或类型写错。
+        // 注意本测试不能捕获拼错的键名——serde 默认忽略未知字段，
+        // 而加 deny_unknown_fields 会让任何无关的 HEIMDALL_* 环境变量直接阻断启动。
+        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../config.example.toml")
+            .canonicalize()
+            .expect("仓库根配置模板应存在");
+
+        let config = config::Config::builder()
+            .add_source(config::File::from(template))
+            .build()
+            .expect("配置模板应可构建");
+
+        let cfg: AppConfig = config
+            .try_deserialize()
+            .expect("配置模板应能反序列化为 AppConfig");
+        assert_eq!(cfg.auth.token_ttl_hours, 24);
+        assert_eq!(
+            cfg.auth.token_ttl_ms().expect("模板 TTL 应可换算"),
+            86_400_000
+        );
+        assert!(cfg.server.max_package_size_bytes().is_ok());
+    }
+
+    #[test]
     fn test_environment_variable_override() {
         // 设置测试环境变量
         std::env::set_var("HEIMDALL_SERVER__PORT", "9999");
         std::env::set_var("HEIMDALL_PIPELINE__MAX_CONCURRENT_DECODERS", "12");
         std::env::set_var("HEIMDALL_PIPELINE__MAX_BURST_TIMEOUT_MS", "65");
         std::env::set_var("HEIMDALL_MAX_PACKAGE_SIZE_MB", "2048");
+        std::env::set_var("HEIMDALL_AUTH__TOKEN_TTL_HOURS", "12");
 
         let cfg = load_config(None).expect("带环境变量的配置加载应成功");
         assert_eq!(cfg.server.port, 9999);
         assert_eq!(cfg.server.max_package_size_mb, 2048);
         assert_eq!(cfg.pipeline.max_concurrent_decoders, 12);
         assert_eq!(cfg.pipeline.max_burst_timeout_ms, 65);
+        assert_eq!(cfg.auth.token_ttl_hours, 12);
 
         std::env::set_var("HEIMDALL_SERVER__MAX_PACKAGE_SIZE_MB", "3072");
         let canonical_cfg = load_config(None).expect("嵌套环境变量配置加载应成功");
@@ -432,6 +551,7 @@ filter = "warn,media=debug"
         std::env::remove_var("HEIMDALL_PIPELINE__MAX_CONCURRENT_DECODERS");
         std::env::remove_var("HEIMDALL_PIPELINE__MAX_BURST_TIMEOUT_MS");
         std::env::remove_var("HEIMDALL_MAX_PACKAGE_SIZE_MB");
+        std::env::remove_var("HEIMDALL_AUTH__TOKEN_TTL_HOURS");
     }
 
     #[test]

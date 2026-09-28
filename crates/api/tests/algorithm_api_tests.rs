@@ -25,7 +25,9 @@ async fn setup_test_app() -> (axum::Router, api::AppState, String) {
         iat: chrono::Utc::now().timestamp_millis(),
         exp: chrono::Utc::now().timestamp_millis() + 86400000,
     };
-    let token = api::crypto::generate_jwt(&claims, &state.get_jwt_secret()).unwrap();
+    let token =
+        api::crypto::generate_jwt(&claims, &state.get_jwt_secret().expect("测试环境密钥可用"))
+            .unwrap();
 
     let app = api::create_app(state.clone());
     (app, state, token)
@@ -338,12 +340,16 @@ async fn test_upload_package_exceeds_configured_custom_limit() {
         iat: chrono::Utc::now().timestamp_millis(),
         exp: chrono::Utc::now().timestamp_millis() + 86400000,
     };
-    let token = api::crypto::generate_jwt(&claims, &state.get_jwt_secret()).unwrap();
+    let token =
+        api::crypto::generate_jwt(&claims, &state.get_jwt_secret().expect("测试环境密钥可用"))
+            .unwrap();
 
     let app = api::create_app(state.clone());
 
-    // 自定义上传上限不应扩大普通 JSON API 的默认 2MiB body limit。
-    let oversized_password = "a".repeat(1_500_000);
+    // 自定义上传上限不得泄漏为其它路由的上限。探针用 900KB：它低于本用例设置的
+    // 1MB 上传上限，因此若该上限真的被上游化，请求就会通过 body 限制抵达 handler
+    // 并返回 400；实际观察到 413 才能证明登录路由用的是自己更小的独立上限。
+    let oversized_password = "a".repeat(900_000);
     let req = Request::builder()
         .uri("/api/v1/auth/login")
         .method("POST")
@@ -357,7 +363,11 @@ async fn test_upload_package_exceeds_configured_custom_limit() {
         ))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        resp.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "登录路由只接受两个短字段，超长 body 必须在解析前被独立上限拦下"
+    );
 
     // 构造 2MB 上传流，超过 1MB 配置上限
     let boundary = "---------------------------974767299852498929531610575";

@@ -19,11 +19,6 @@ export interface ParsedVideoChunk {
 export const WEBCODECS_HEADER_LEN = 12
 export const WEBCODECS_FLAG_DISCONTINUITY = 0x01
 
-export const CODEC_MIME_STRINGS = {
-  h264: 'avc1.42E01E',
-  h265: 'hev1.1.6.L93.B0',
-} as const
-
 /** 针对安防监控常见编码的候选 MIME 列表 (按推荐优先级降序排列：High -> Main -> Baseline) */
 export const CODEC_PROFILE_CANDIDATES: Record<'h264' | 'h265', readonly string[]> = {
   h264: ['avc1.64002A', 'avc1.4D401F', 'avc1.42E01E'],

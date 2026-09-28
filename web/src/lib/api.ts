@@ -66,24 +66,76 @@ export function isConfigConflictError(error: unknown): boolean {
 
 const BASE_URL = '/api/v1'
 
-export async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+/** 请求选项：在标准 `RequestInit` 之上补充超时。 */
+export interface RequestOptions extends RequestInit {
+  /**
+   * 请求超时（毫秒）。
+   *
+   * 不设默认值：长轮询与流式端点不应被隐式打断。需要终态的调用点
+   * （如登录页的初始化探测）显式传入，避免请求卡在半开连接时界面永久停滞。
+   */
+  timeoutMs?: number
+}
+
+/** 抛出 `ApiError` 前可先中止请求的标记，用于区分「超时」与真实业务失败。 */
+export class RequestTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`请求超时 (${timeoutMs}ms)`)
+    this.name = 'RequestTimeoutError'
+  }
+}
+
+export async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+  const { timeoutMs, ...init } = options
   const token = useAuthStore.getState().token
 
   const lang = (i18n && i18n.language) || 'zh-CN'
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept-Language': lang,
-    ...(options.headers as Record<string, string>),
+    ...(init.headers as Record<string, string>),
   }
 
   if (token) {
     headers.Authorization = `Bearer ${token}`
   }
 
-  const response = await fetch(`${BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-  })
+  // 超时控制器与调用方传入的 signal 串联：任一触发都能中止请求，
+  // 且定时器在请求落定后必须清除，否则在长驻页面上会持续堆积。
+  let didTimeout = false
+  const timeoutController = timeoutMs ? new AbortController() : null
+  const timer = timeoutController
+    ? setTimeout(() => {
+        didTimeout = true
+        timeoutController.abort()
+      }, timeoutMs)
+    : null
+  const upstreamSignal = init.signal
+  const onUpstreamAbort = () => timeoutController?.abort()
+  if (timeoutController && upstreamSignal) {
+    if (upstreamSignal.aborted) timeoutController.abort()
+    else upstreamSignal.addEventListener('abort', onUpstreamAbort, { once: true })
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`${BASE_URL}${endpoint}`, {
+      ...init,
+      headers,
+      signal: timeoutController ? timeoutController.signal : upstreamSignal,
+    })
+  } catch (error) {
+    // 超时被包装成可识别类型，避免调用方把「服务无响应」误报为「凭据错误」。
+    if (didTimeout && timeoutMs) {
+      throw new RequestTimeoutError(timeoutMs)
+    }
+    throw error
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+    if (timeoutController && upstreamSignal) {
+      upstreamSignal.removeEventListener('abort', onUpstreamAbort)
+    }
+  }
 
   // 如果遇到 401 Unauthorized 且非登录/初始化接口，触发本地登出
   if (
@@ -193,8 +245,14 @@ export const cameraApi = {
 }
 
 export const authApi = {
-  getInitStatus(): Promise<InitStatusResponse> {
-    return request<InitStatusResponse>('/auth/init-status', { method: 'GET' })
+  /**
+   * 查询初始化状态。
+   *
+   * 带超时是刻意的：该请求决定登录表单是否可交互，若不加超时，一次半开 TCP
+   * 会让页面永久停在「正在检查系统初始化状态」，用户既看不到表单也得不到重试入口。
+   */
+  getInitStatus(timeoutMs = 8000): Promise<InitStatusResponse> {
+    return request<InitStatusResponse>('/auth/init-status', { method: 'GET', timeoutMs })
   },
 
   initialize(data: InitializeRequest): Promise<LoginResponse> {

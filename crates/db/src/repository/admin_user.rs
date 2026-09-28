@@ -89,6 +89,24 @@ impl AdminUserRepo {
         Ok(())
     }
 
+    /// 仅升级密码哈希强度，不动 `updated_at` 与凭证失效时间戳。
+    ///
+    /// 与 [`Self::update_password`] 分开是因为语义不同：后者是用户主动改密，
+    /// 应刷新 `updated_at` 并作废既有 Token；此处只是登录后被动抿平哈希强度，
+    /// 既没有改密码，也不应该把用户从其他会话踢下线。
+    pub async fn update_password_hash(
+        db: &DatabaseConnection,
+        username: &str,
+        new_password_hash: &str,
+    ) -> Result<(), DbError> {
+        if let Some(user) = Self::find_by_username(db, username).await? {
+            let mut active: ActiveModel = user.into();
+            active.password_hash = Set(new_password_hash.to_string());
+            active.update(db).await?;
+        }
+        Ok(())
+    }
+
     /// 更新管理员登录密码并使此前签发的所有 Token 立即失效
     pub async fn update_password(
         db: &DatabaseConnection,
