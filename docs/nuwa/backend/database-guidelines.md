@@ -45,7 +45,16 @@
 - 时间范围与摄像头过滤建立对应复合索引，例如 `(camera_id, timestamp)`；分页遵循 [API 契约](./api-guidelines.md#分页)。
 - **排序一律以 `id` 兜底**：`occurred_at`/`captured_at`/`recognized_at`/`created_at` 均非唯一，同一毫秒的批量写入会造出大量并列行；只按时间列排时 SQLite 不保证稳定顺序，`limit`+`offset` 翻页会重复或漏行，淘汰扫描（`find_oldest_batch`）更会在同 `limit` 重查时反复拿到已删除的批次。排序必须写成 `order_by_*(时间列).order_by_*(Column::Id)`，同向追加。
 - 关键字过滤（`q`）是 `LIKE '%...%'`，**无法命中索引**，其代价由 64 字符上限与保留期约束（见 [API 契约](./api-guidelines.md#证据与告警列表的-q)）。通道名称匹配需要 `LEFT JOIN cameras`，而 `cameras.name` 非唯一列也无索引：该 join 只在客户端传 `q` 时拼入，不得无条件预置，否则会给无搜索的常态列表平白增加一次全表扫描。
-- 查询共用工具收敛在 [repository/query.rs](../../../crates/db/src/repository/query.rs)（`escape_like` / `keyword_pattern`）；新增仓储不得再抄一份转义逻辑。
+- 查询共用工具收敛在 [repository/query.rs](../../../crates/db/src/repository/query.rs)（`escape_like` / `keyword_pattern`）；新增仓储不得再抄一份转义逻辑。人员列表的 `keyword` 同样经此转义（`100%` 不得变成前缀通配符），并同样以 `id` 作次键保证翻页稳定。
+
+### 孤儿文件对账的调度约束
+
+`StorageCleaner::reconcile_orphans` 会递归遍历证据根目录并与活跃路径集合求差，**不能在任意时刻调度**：
+
+- 它只能运行在**证据生产者已停但数据库已就绪**的窗口（当前为冷启动摄像机管线启动前）。与在线写入并发运行时，刚写入磁盘、尚未完成入库的图会被判为无主文件并移入墓碑。
+- 目录遍历、逐条 `is_file()` 与 `quarantine_file`（含跨目录 rename）全部是阻塞文件系统调用，必须整段包在 `tokio::task::spawn_blocking` 内，不得在 Tokio worker 上直接展开。
+- 扫描结果拆分返回：孤儿部分在 blocking 任务内完成隔离并回传墓碑路径，由异步侧再交给 `UnlinkDispatcher`；缺失记录（Ghost Record）只计数与告警，不做自愈删除。
+- 扫描失败必须降级为警告并让服务继续启动，不得阻断启动。
 
 ### 查询模式：杜绝 N+1
 

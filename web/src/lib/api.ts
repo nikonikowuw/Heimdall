@@ -33,7 +33,6 @@ import type {
   PersonnelItem,
   PersonnelStats,
   RecognitionRecord,
-  ReextractFaceFeaturesReport,
   ReextractProgress,
   SysGb28181Config,
   TaskConfigDto,
@@ -535,11 +534,8 @@ export const personnelApi = {
     return api.get<ReextractProgress>('/personnel/reextract/status')
   },
 
-  reextractSingle(subjectId: string): Promise<ReextractFaceFeaturesReport> {
-    return api.post<ReextractFaceFeaturesReport>(
-      `/personnel/${encodeURIComponent(subjectId)}/reextract`,
-      {},
-    )
+  reextractSingle(subjectId: string): Promise<ReextractProgress> {
+    return api.post<ReextractProgress>(`/personnel/${encodeURIComponent(subjectId)}/reextract`, {})
   },
 
   /** 上传归档包并启动批量导入后台任务 */

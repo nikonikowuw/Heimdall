@@ -5,6 +5,7 @@ use sea_orm::{
 
 use crate::entity::personnel::{ActiveModel, Column, Entity, Model};
 use crate::error::DbError;
+use crate::repository::query::keyword_pattern;
 
 #[derive(Debug)]
 pub struct PersonnelRepo;
@@ -19,22 +20,21 @@ impl PersonnelRepo {
     ) -> Result<(Vec<Model>, u64), DbError> {
         let mut query = Entity::find();
 
-        if let Some(kw) = keyword {
-            let kw_trim = kw.trim();
-            if !kw_trim.is_empty() {
-                let pattern = format!("%{kw_trim}%");
-                query = query.filter(
-                    Column::Name
-                        .like(&pattern)
-                        .or(Column::SubjectId.like(&pattern))
-                        .or(Column::IdCard.like(&pattern)),
-                );
-            }
+        if let Some(pattern) = keyword_pattern(keyword) {
+            query = query.filter(
+                Column::Name
+                    .like(pattern.clone())
+                    .or(Column::SubjectId.like(pattern.clone()))
+                    .or(Column::IdCard.like(pattern)),
+            );
         }
 
         let total = query.clone().count(db).await.map_err(DbError::from)?;
         let items = query
             .order_by_desc(Column::CreatedAt)
+            // 次键保证同时间戳下的分页顺序稳定；方向只决定并列行的展示顺序。
+            // 本接口约定使用与创建时间相同的 DESC 方向。
+            .order_by_desc(Column::Id)
             .limit(limit)
             .offset(offset)
             .all(db)

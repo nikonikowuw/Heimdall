@@ -1,0 +1,3 @@
+pub const MAX_PERSONNEL_PHOTO_BYTES: usize = 12 * 1024 * 1024;
+pub const MAX_PERSONNEL_PHOTOS_PER_PERSON: usize = 5;
+pub const MAX_PERSONNEL_MULTIPART_BYTES: usize = 64 * 1024 * 1024;

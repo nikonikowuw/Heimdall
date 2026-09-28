@@ -36,6 +36,8 @@ impl ReextractTaskStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ReextractProgressDto {
     pub status: ReextractTaskStatus,
+    /// 全量任务为 `None`；单人任务记录其 `subjectId`，供轮询方归属进度。
+    pub subject_id: Option<String>,
     pub total: u64,
     pub processed: u64,
     pub succeeded: u64,
@@ -45,16 +47,6 @@ pub struct ReextractProgressDto {
     pub finished_at: Option<i64>,
     pub failures: Vec<ReextractFaceFailureDetail>,
     pub error_message: Option<String>,
-}
-
-/// 人脸特征重新提取任务执行报告（针对单人或终态）
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ReextractFaceFeaturesReportDto {
-    pub total: u64,
-    pub succeeded: u64,
-    pub failed: u64,
-    pub failures: Vec<ReextractFaceFailureDetail>,
 }
 
 /// 批量导入中单个候选人员的失败归因分类
@@ -332,6 +324,22 @@ mod tests {
         assert!(progress.is_running());
         progress.status = ImportTaskStatus::Completed;
         assert!(!progress.is_running());
+    }
+
+    #[test]
+    fn test_reextract_progress_serializes_subject_scope_for_resume() {
+        let progress = ReextractProgressDto {
+            status: ReextractTaskStatus::Running,
+            subject_id: Some("subject-42".to_string()),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(progress).unwrap();
+        assert_eq!(value["status"], "running");
+        assert_eq!(value["subjectId"], "subject-42");
+
+        let global = serde_json::to_value(ReextractProgressDto::default()).unwrap();
+        assert!(global["subjectId"].is_null());
     }
 
     #[test]

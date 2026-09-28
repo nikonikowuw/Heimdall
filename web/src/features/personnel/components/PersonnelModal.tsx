@@ -5,6 +5,14 @@ import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { useLatestRef } from '@/hooks/use-latest-ref'
 import { personnelApi } from '@/lib/api'
+import {
+  checkPersonnelPhotos,
+  formatMiB,
+  isWithinMultipartLimit,
+  preparePersonnelPhotos,
+  MAX_PERSONNEL_MULTIPART_BYTES,
+  MAX_PERSONNEL_PHOTOS_PER_PERSON,
+} from '@/lib/personnelUpload'
 import type { PersonnelItem, PersonnelDetail } from '@/types'
 
 export interface PersonnelModalProps {
@@ -19,8 +27,6 @@ interface ImageFilePreview {
   file: File
   previewUrl: string
 }
-
-const MAX_PHOTOS = 5
 
 const FIELD_CLASS = 'modal-form-field'
 
@@ -44,6 +50,8 @@ export function PersonnelModal({
   const [primaryIndex, setPrimaryIndex] = useState(0)
 
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isPreparingPhotos, setIsPreparingPhotos] = useState(false)
+  const preparingPhotosRef = useRef(false)
   const [isDragging, setIsDragging] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -80,7 +88,7 @@ export function PersonnelModal({
   // 不采用「渲染期状态调整」：重置需同时调用 cleanupPreviews() 回收 object URL，
   // 那是副作用，不能移到渲染期（改用 `key` 重建组件又会重置退出动画）。
   useEffect(() => {
-    if (!isOpen) return
+    if (isOpen) return
     void Promise.resolve().then(() => {
       setErrorMessage(null)
       setIsDragging(false)
@@ -108,31 +116,50 @@ export function PersonnelModal({
     setErrorMessage(null)
   }
 
-  const appendFiles = (files: File[]) => {
-    if (!files.length) return
+  const appendFiles = async (files: File[]) => {
+    if (!files.length || preparingPhotosRef.current || isSubmitting) return
+    preparingPhotosRef.current = true
+    setIsPreparingPhotos(true)
     setErrorMessage(null)
 
-    const availableSlots = MAX_PHOTOS - selectedImages.length
-    if (availableSlots <= 0) {
-      setErrorMessage(t('errors.maxPhotosExceeded'))
-      return
+    try {
+      const availableSlots = MAX_PERSONNEL_PHOTOS_PER_PERSON - selectedImages.length
+      const selection = checkPersonnelPhotos(files, availableSlots)
+      if (selection.overflow.length > 0) {
+        setErrorMessage(t('errors.maxPhotosExceeded', { max: MAX_PERSONNEL_PHOTOS_PER_PERSON }))
+        return
+      }
+
+      const preparation = await preparePersonnelPhotos(selection.selected)
+      if (preparation.failed.length > 0) {
+        setErrorMessage(t('errors.photoPrepareFailed'))
+        return
+      }
+      if (
+        !isWithinMultipartLimit([
+          ...selectedImages.map((preview) => preview.file),
+          ...preparation.files,
+        ])
+      ) {
+        setErrorMessage(t('errors.formTooLarge', { mb: formatMiB(MAX_PERSONNEL_MULTIPART_BYTES) }))
+        return
+      }
+
+      const newPreviews: ImageFilePreview[] = preparation.files.map((file) => ({
+        file,
+        previewUrl: URL.createObjectURL(file),
+      }))
+      setSelectedImages((prev) => [...prev, ...newPreviews])
+    } catch {
+      setErrorMessage(t('errors.photoPrepareFailed'))
+    } finally {
+      preparingPhotosRef.current = false
+      setIsPreparingPhotos(false)
     }
-
-    const toAdd = files.slice(0, availableSlots)
-    if (files.length > availableSlots) {
-      setErrorMessage(t('errors.maxPhotosExceeded'))
-    }
-
-    const newPreviews: ImageFilePreview[] = toAdd.map((file) => ({
-      file,
-      previewUrl: URL.createObjectURL(file),
-    }))
-
-    setSelectedImages((prev) => [...prev, ...newPreviews])
   }
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    appendFiles(Array.from(e.target.files || []))
+    void appendFiles(Array.from(e.target.files || []))
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -140,7 +167,7 @@ export function PersonnelModal({
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
-    if (isSubmitting) return
+    if (isSubmitting || isPreparingPhotos) return
     setIsDragging(true)
   }
 
@@ -152,15 +179,16 @@ export function PersonnelModal({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-    if (isSubmitting) return
+    if (isSubmitting || isPreparingPhotos) return
     const dropped = Array.from(e.dataTransfer.files).filter((file) =>
       file.type.startsWith('image/'),
     )
     if (dropped.length === 0) return
-    appendFiles(dropped)
+    void appendFiles(dropped)
   }
 
   const handleRemoveImage = (index: number) => {
+    if (isSubmitting || isPreparingPhotos) return
     setSelectedImages((prev) => {
       const target = prev[index]
       if (target) {
@@ -175,6 +203,7 @@ export function PersonnelModal({
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
+    if (isSubmitting || isPreparingPhotos || preparingPhotosRef.current) return
     e.preventDefault()
     setErrorMessage(null)
 
@@ -247,7 +276,7 @@ export function PersonnelModal({
       ariaLabelledBy={titleId}
       ariaDescribedBy={descriptionId}
       surface="solid"
-      closeDisabled={isSubmitting}
+      closeDisabled={isSubmitting || isPreparingPhotos}
       panelClassName="modal-surface--form p-0"
       onExitComplete={handleExitComplete}
     >
@@ -264,7 +293,7 @@ export function PersonnelModal({
         badge={isEdit ? 'EDIT' : 'NEW'}
         closeLabel={t('common:close')}
         onClose={handleClose}
-        closeDisabled={isSubmitting}
+        closeDisabled={isSubmitting || isPreparingPhotos}
       />
 
       {/* ── 2. 表单 ── */}
@@ -352,7 +381,8 @@ export function PersonnelModal({
                 />
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-[var(--text-primary)]">
-                    {t('modal.faceSampleManagement')} ({editTarget.faceCount}/{MAX_PHOTOS})
+                    {t('modal.faceSampleManagement')} ({editTarget.faceCount}/
+                    {MAX_PERSONNEL_PHOTOS_PER_PERSON})
                   </p>
                   <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
                     {t('modal.faceSampleManagementDesc')}
@@ -400,7 +430,7 @@ export function PersonnelModal({
                 <span className="font-data shrink-0 rounded-full border border-[var(--border)]/70 bg-[var(--bg-surface-solid)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">
                   {t('modal.photoCounter', {
                     current: selectedImages.length,
-                    max: MAX_PHOTOS,
+                    max: MAX_PERSONNEL_PHOTOS_PER_PERSON,
                   })}
                 </span>
               </div>
@@ -424,6 +454,7 @@ export function PersonnelModal({
                     {/* 主头像标识 / 切换按钮 */}
                     <button
                       type="button"
+                      disabled={isSubmitting || isPreparingPhotos}
                       onClick={() => setPrimaryIndex(idx)}
                       aria-pressed={primaryIndex === idx}
                       aria-label={
@@ -447,6 +478,7 @@ export function PersonnelModal({
                     {/* 删除单张按钮 */}
                     <button
                       type="button"
+                      disabled={isSubmitting || isPreparingPhotos}
                       onClick={() => handleRemoveImage(idx)}
                       aria-label={t('modal.removePhoto')}
                       title={t('modal.removePhoto')}
@@ -458,9 +490,10 @@ export function PersonnelModal({
                 ))}
 
                 {/* 添加更多按钮 */}
-                {selectedImages.length < MAX_PHOTOS && (
+                {selectedImages.length < MAX_PERSONNEL_PHOTOS_PER_PERSON && (
                   <button
                     type="button"
+                    disabled={isSubmitting || isPreparingPhotos}
                     onClick={() => fileInputRef.current?.click()}
                     className={`flex aspect-square flex-col items-center justify-center rounded-xl border-2 border-dashed p-2 text-center transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none ${
                       isDragging
@@ -475,7 +508,7 @@ export function PersonnelModal({
                         : selectedImages.length === 0
                           ? t('modal.dropzoneText')
                           : t('modal.dropzoneMore', {
-                              remaining: MAX_PHOTOS - selectedImages.length,
+                              remaining: MAX_PERSONNEL_PHOTOS_PER_PERSON - selectedImages.length,
                             })}
                     </span>
                   </button>
@@ -487,6 +520,7 @@ export function PersonnelModal({
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
                 multiple
+                disabled={isSubmitting || isPreparingPhotos}
                 className="hidden"
                 aria-label={t('modal.photoUploadTitle')}
                 onChange={handleImageSelect}
@@ -501,17 +535,19 @@ export function PersonnelModal({
             <button
               type="button"
               onClick={handleClose}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isPreparingPhotos}
               className="modal-form-button modal-form-button--secondary"
             >
               {t('actions.cancel')}
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || isPreparingPhotos}
               className="modal-form-button modal-form-button--primary"
             >
-              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {(isSubmitting || isPreparingPhotos) && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              )}
               <span>{submitButtonText}</span>
             </button>
           </div>

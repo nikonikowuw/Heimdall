@@ -45,9 +45,8 @@ pub use oplog::{OpEvent, OperationLog};
 pub use personnel::{
     FaceCandidateItem, FaceMatchResult, GalleryFaceDto, ImportFailureDetail, ImportFailureKind,
     ImportTaskStatus, PersonnelDetailDto, PersonnelImportProgressDto, PersonnelItemDto,
-    PersonnelStatsDto, RecognitionStatus, ReextractFaceFailureDetail,
-    ReextractFaceFeaturesReportDto, ReextractProgressDto, ReextractTaskStatus,
-    UpdatePersonnelRequest,
+    PersonnelStatsDto, RecognitionStatus, ReextractFaceFailureDetail, ReextractProgressDto,
+    ReextractTaskStatus, UpdatePersonnelRequest,
 };
 pub use system::{
     CoreMetrics, CpuMetrics, DiskMetrics, EvictionReport, ForceSyncResponse, InterfaceCapabilities,

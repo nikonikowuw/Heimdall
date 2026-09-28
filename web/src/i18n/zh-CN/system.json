@@ -45,7 +45,12 @@
     "activeCameras": "活跃摄像头",
     "activeTasks": "活跃任务",
     "todayAlarms": "今日告警",
-    "todayCaptures": "今日抓拍"
+    "todayCaptures": "今日抓拍",
+    "recognitionQueue": "识别对账队列",
+    "queueCapacity": "队列容量",
+    "queueDropped": "累计丢弃比对",
+    "queueFullObserved": "观察到队满次数",
+    "queueHint": "丢弃数与队满次数持续同步增长才是消费侧跟不上；仅一次队满则是瞬时尖峰。"
   },
   "cpu": {
     "core": "核心 {{id}}",

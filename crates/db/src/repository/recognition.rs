@@ -172,24 +172,39 @@ impl RecognitionRepo {
         Entity::find().count(db).await.map_err(DbError::from)
     }
 
-    /// 查询全部活跃识别记录关联的文件相对路径（现场特写）
+    /// 查询全部活跃识别记录关联的文件相对路径（现场特写 + 现场全景 + 底库隔离副本）
+    ///
+    /// 必须与 [`crate::repository::recognition`] 的淘汰路径登记集合、以及
+    /// `api::routes::system::storage::recognition_to_eviction_files` **同源**：
+    /// 漏登记任一图 = 孤儿对账会把它当成无主文件清掉，或淘汰后留下永不回收的残留。
     pub async fn find_all_active_image_paths(
         db: &DatabaseConnection,
     ) -> Result<HashSet<String>, DbError> {
         #[derive(FromQueryResult)]
         struct PathRow {
             field_crop_path: String,
+            field_image_path: String,
+            registered_photo_path: String,
         }
         let rows = Entity::find()
             .select_only()
             .column(Column::FieldCropPath)
+            .column(Column::FieldImagePath)
+            .column(Column::RegisteredPhotoPath)
             .into_model::<PathRow>()
             .all(db)
             .await?;
         let mut set = HashSet::new();
         for r in rows {
-            if !r.field_crop_path.is_empty() {
-                set.insert(r.field_crop_path);
+            // 空串表示「本次未产出」，与 image_source 的空串语义一致，不入活跃集合。
+            for path in [
+                r.field_crop_path,
+                r.field_image_path,
+                r.registered_photo_path,
+            ] {
+                if !path.is_empty() {
+                    set.insert(path);
+                }
             }
         }
         Ok(set)

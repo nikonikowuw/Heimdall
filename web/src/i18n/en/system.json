@@ -45,7 +45,12 @@
     "activeCameras": "Active Cameras",
     "activeTasks": "Active Tasks",
     "todayAlarms": "Today Alarms",
-    "todayCaptures": "Today Captures"
+    "todayCaptures": "Today Captures",
+    "recognitionQueue": "Recognition Queue",
+    "queueCapacity": "Queue capacity",
+    "queueDropped": "Comparisons dropped",
+    "queueFullObserved": "Times queue was full",
+    "queueHint": "Drops and full-queue events rising together indicate the consumer cannot keep up; a single full event is just a spike."
   },
   "cpu": {
     "core": "Core {{id}}",

@@ -11,6 +11,10 @@ pub struct GalleryFaceRepo;
 
 impl GalleryFaceRepo {
     /// 查询指定人员的所有人脸特征样本，按主头像优先、创建时间升序排列
+    ///
+    /// 同一人员的所有样常在同一批次内写入（`created_at` 完全相同），
+    /// 缺 `Id` 次键时 SQLite 不保证稳定顺序，详情页照片顺序会在两次请求间跳变，
+    /// `delete_face` 选出的新主头像也会变得不确定。次键方向与时间列一致。
     pub async fn list_by_subject_id<C: ConnectionTrait>(
         db: &C,
         subject_id: &str,
@@ -19,6 +23,7 @@ impl GalleryFaceRepo {
             .filter(Column::SubjectId.eq(subject_id))
             .order_by_desc(Column::IsPrimary)
             .order_by_asc(Column::CreatedAt)
+            .order_by_asc(Column::Id)
             .all(db)
             .await
             .map_err(DbError::from)

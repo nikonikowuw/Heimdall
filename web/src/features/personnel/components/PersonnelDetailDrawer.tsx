@@ -25,10 +25,18 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { useFocusTrap } from '@/hooks/use-focus-trap'
 import { evidenceApi, personnelApi } from '@/lib/api'
+import {
+  checkPersonnelPhotos,
+  formatMiB,
+  isWithinMultipartLimit,
+  preparePersonnelPhotos,
+  MAX_PERSONNEL_MULTIPART_BYTES,
+  MAX_PERSONNEL_PHOTOS_PER_PERSON,
+} from '@/lib/personnelUpload'
 import { motionTokens } from '@/lib/motionTokens'
 import { formatTimestamp } from '@/lib/time'
 import { copyToClipboard } from '@/lib/utils'
-import type { PersonnelDetail, GalleryFace, ReextractFaceFeaturesReport } from '@/types'
+import type { PersonnelDetail, GalleryFace, ReextractProgress } from '@/types'
 import { ReextractModal } from './ReextractModal'
 
 export interface PersonnelDetailDrawerProps {
@@ -111,7 +119,7 @@ export function PersonnelDetailDrawer({
   // 单人重新提取特征状态
   const [isReextractModalOpen, setIsReextractModalOpen] = useState(false)
   const [isReextracting, setIsReextracting] = useState(false)
-  const [reextractReport, setReextractReport] = useState<ReextractFaceFeaturesReport | null>(null)
+  const [reextractProgress, setReextractProgress] = useState<ReextractProgress | null>(null)
   const [reextractError, setReextractError] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -176,12 +184,70 @@ export function PersonnelDetailDrawer({
     }
   }, [isOpen, subjectId, autoOpenUpload, fetchDetail])
 
-  // 关闭抽屉时收起内部弹层（微任务同上）
+  useEffect(() => {
+    if (!isOpen || !subjectId) return
+    let active = true
+    personnelApi
+      .getReextractStatus()
+      .then((progress) => {
+        if (
+          active &&
+          progress.subjectId === subjectId &&
+          (progress.status === 'running' ||
+            progress.status === 'completed' ||
+            progress.status === 'failed')
+        ) {
+          setReextractProgress(progress)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [isOpen, subjectId])
+
+  useEffect(() => {
+    if (
+      !subjectId ||
+      reextractProgress?.subjectId !== subjectId ||
+      reextractProgress.status !== 'running'
+    ) {
+      return
+    }
+
+    let active = true
+    let inFlight = false
+    const poll = () => {
+      if (inFlight) return
+      inFlight = true
+      void personnelApi
+        .getReextractStatus()
+        .then((progress) => {
+          if (!active || progress.subjectId !== subjectId) return
+          setReextractProgress(progress)
+          if (progress.status === 'completed' || progress.status === 'failed') {
+            void fetchDetail(subjectId)
+            onUpdate()
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false
+        })
+    }
+
+    const timer = window.setInterval(poll, 1000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [fetchDetail, onUpdate, reextractProgress, subjectId])
+
+  // 关闭抽屉时收起内部弹层；后台任务的进度保留，重新打开时可恢复查看。
   useEffect(() => {
     if (isOpen) return
     void Promise.resolve().then(() => {
       setIsReextractModalOpen(false)
-      setReextractReport(null)
       setReextractError(null)
     })
   }, [isOpen])
@@ -246,7 +312,9 @@ export function PersonnelDetailDrawer({
 
   const handleOpenReextract = () => {
     onBeforeOpenReextract?.()
-    setReextractReport(null)
+    const hasSubjectReport =
+      reextractProgress?.subjectId === detail?.subjectId && reextractProgress?.status !== 'idle'
+    if (!hasSubjectReport) setReextractProgress(null)
     setReextractError(null)
     setIsReextractModalOpen(true)
   }
@@ -255,11 +323,14 @@ export function PersonnelDetailDrawer({
     if (!detail) return
     setIsReextracting(true)
     setReextractError(null)
+    setReextractProgress(null)
     try {
-      const report = await personnelApi.reextractSingle(detail.subjectId)
-      setReextractReport(report)
-      await fetchDetail(detail.subjectId)
-      onUpdate()
+      const progress = await personnelApi.reextractSingle(detail.subjectId)
+      setReextractProgress(progress)
+      if (progress.status === 'completed' || progress.status === 'failed') {
+        await fetchDetail(detail.subjectId)
+        onUpdate()
+      }
     } catch (err: unknown) {
       setReextractError(err instanceof Error ? err.message : t('errors.reextractFailed'))
     } finally {
@@ -269,7 +340,6 @@ export function PersonnelDetailDrawer({
 
   const handleCloseReextractModal = () => {
     setIsReextractModalOpen(false)
-    setReextractReport(null)
     setReextractError(null)
   }
 
@@ -278,28 +348,36 @@ export function PersonnelDetailDrawer({
     const files = Array.from(e.target.files || [])
     if (!files.length) return
 
-    const availableSlots = 5 - detail.faces.length
-    if (files.length > availableSlots) {
-      setError(t('errors.maxPhotosExceeded'))
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ''
-      }
-      return
-    }
-
     setActionLoading(true)
     setError(null)
     try {
+      const availableSlots = MAX_PERSONNEL_PHOTOS_PER_PERSON - detail.faces.length
+      const selection = checkPersonnelPhotos(files, availableSlots)
+      if (selection.overflow.length > 0) {
+        setError(t('errors.maxPhotosExceeded', { max: MAX_PERSONNEL_PHOTOS_PER_PERSON }))
+        return
+      }
+
+      const preparation = await preparePersonnelPhotos(selection.selected)
+      if (preparation.failed.length > 0) {
+        setError(t('errors.photoPrepareFailed'))
+        return
+      }
+      if (!isWithinMultipartLimit(preparation.files)) {
+        setError(t('errors.formTooLarge', { mb: formatMiB(MAX_PERSONNEL_MULTIPART_BYTES) }))
+        return
+      }
+
       const formData = new FormData()
-      for (const f of files) {
-        formData.append('images', f)
+      for (const file of preparation.files) {
+        formData.append('images', file)
       }
       const updated = await personnelApi.addFaces(detail.subjectId, formData)
       setDetail(updated)
       onUpdate()
       onNotify?.({
         title: t('toast.faceAdded'),
-        message: `${updated.name} · ${t('card.sampleCount')} ${updated.faces.length}/5`,
+        message: `${updated.name} · ${t('card.sampleCount')} ${updated.faces.length}/${MAX_PERSONNEL_PHOTOS_PER_PERSON}`,
       })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t('errors.failedToSave'))
@@ -313,7 +391,9 @@ export function PersonnelDetailDrawer({
 
   const primaryFace = detail ? (detail.faces.find((f) => f.isPrimary) ?? detail.faces[0]) : null
   const primaryGrade = primaryFace ? getQualityGrade(primaryFace.qualityScore, t) : null
-  const emptySlotsCount = detail ? Math.max(0, 5 - detail.faces.length) : 0
+  const emptySlotsCount = detail
+    ? Math.max(0, MAX_PERSONNEL_PHOTOS_PER_PERSON - detail.faces.length)
+    : 0
 
   return (
     <>
@@ -596,7 +676,7 @@ export function PersonnelDetailDrawer({
                     <span>{t('actions.reextractShort')}</span>
                   </button>
 
-                  {detail.faces.length < 5 && (
+                  {detail.faces.length < MAX_PERSONNEL_PHOTOS_PER_PERSON && (
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
@@ -857,8 +937,12 @@ export function PersonnelDetailDrawer({
         isOpen={isOpen && isReextractModalOpen}
         isGlobal={false}
         targetName={detail?.name}
-        progress={null}
-        singleReport={reextractReport}
+        progress={reextractProgress}
+        initialMode={
+          reextractProgress?.status === 'completed' || reextractProgress?.status === 'failed'
+            ? 'report'
+            : 'confirm'
+        }
         isStarting={isReextracting}
         error={reextractError}
         onClose={handleCloseReextractModal}

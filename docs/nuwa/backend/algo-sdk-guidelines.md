@@ -159,9 +159,28 @@ unsafe extern "C" fn(api_version: u32) -> *const AvAlgoGalleryAbi;
 - **内存占用极致轻量**：10,000 张 512D FP32 人脸底库仅占用约 21 MB 内存，多实例完全共享同一底层物理句柄。
 - **宿主单一真实信源（Single Source of Truth）**：持久化数据以宿主 SQLite 为唯一准绳，算法包底库仅作为运行期纯内存加速索引；宿主启动或算法包热重载时通过 C ABI 执行全量同步（`clear` + 批量 `insert`），毫秒级重建完成。
 
+### 批量写入符号 `av_algo_gallery_bulk`
+
+全量重建时逐条调 `gallery_insert` 会让包内 RCU 快照被复制 N 次（O(N²) 拷贝），千人级底库重建的 CPU 开销压到宿主启动路径上。因此额外导出一个**独立可选符号**：
+
+```rust
+unsafe extern "C" fn(
+    gallery: AvAlgoGallery,
+    op: u32,               // AV_GALLERY_BULK_INSERT = 1 / AV_GALLERY_BULK_REMOVE = 2
+    entries: *const AvGalleryBulkEntry,
+    entry_count: u32,
+) -> c_int;
+```
+
+- **加法式演进，不动虚表**：不修改 `AvAlgoGalleryAbi` 布局（仍为 64 字节），旧宿主忽略该符号、新宿主 `libloading` 探测。缺失时宿主回退到逐条 `insert`/`remove`，语义等价、只是慢；`supports_bulk_write()` 供观测。
+- `AvGalleryBulkEntry` 为 **24 字节、8 字节对齐**的固定布局 POD：`id` (0) / `feature_bytes` (8) / `feature_len` (16) / `reserved0` (20)。宿主与算法包**双侧**都要有尺寸、对齐与偏移断言（宿主侧见 `crates/infer/tests/c_abi_layout_tests.rs`）：两侧对同一片内存解引用，对齐不一致会导致读到的 `id` 错位半个指针。
+- `AV_GALLERY_BULK_REMOVE` 只读 `id`，`feature_bytes` / `feature_len` 置空；`entry_count == 0`、任一 `feature_bytes` 为空或 `feature_len == 0`（INSERT）均返回 `AV_ERR_INVALID_ARG`。
+- 任一条失败即整体返回错误：调用方不得当成「已同步」。宿主在批量失败时按自己的快照走全量重建自愈（见 [API 规范](./api-guidelines.md#真人脸检索降级状态)）。
+- 算法包侧由 `export_face_gallery!` 宏展开实现，同样包在 `catch_unwind` 中并设置 `last_error`。
+
 ### 导出宏
 
-算法包通过 `export_face_gallery!` 宏一键导出该虚表，内置 panic unwind 隔离防崩溃保护：
+算法包通过 `export_face_gallery!` 宏一键导出该虚表与批量写入符号，内置 panic unwind 隔离防崩溃保护：
 
 ```rust
 algo_sdk::export_face_gallery!(FaceRecognizer);

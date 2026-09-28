@@ -25,7 +25,7 @@ impl MaintenanceTaskKind {
     pub const fn label(&self) -> &'static str {
         match self {
             Self::Import => "人员批量导入",
-            Self::Reextract => "全量底库特征重新提取",
+            Self::Reextract => "人脸特征重新提取",
         }
     }
 }

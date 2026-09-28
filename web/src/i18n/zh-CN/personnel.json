@@ -181,7 +181,10 @@
   "errors": {
     "nameRequired": "请输入人员姓名",
     "photoRequired": "请至少选择 1 张有效人脸照片",
-    "maxPhotosExceeded": "单个人员最多支持 5 张照片样本",
+    "maxPhotosExceeded": "单个人员最多支持 {{max}} 张照片样本",
+    "photoPrepareFailed": "部分照片无法处理，请选择有效的 JPEG、PNG 或 WebP 图片后重试。",
+    "photoTooLarge": "单张人脸照片不能超过 {{mb}} MiB。",
+    "formTooLarge": "本次上传的照片合计不能超过 {{mb}} MiB，请减少张数或压缩后重试",
     "cannotDeleteLastFace": "人员至少保留 1 张样本，无法删除最后一张照片",
     "failedToLoad": "加载人员底库失败",
     "failedToSave": "保存人员信息失败",

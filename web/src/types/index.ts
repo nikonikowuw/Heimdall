@@ -474,6 +474,7 @@ export type ReextractTaskStatus = 'idle' | 'running' | 'completed' | 'failed'
 
 export interface ReextractProgress {
   status: ReextractTaskStatus
+  subjectId?: string | null
   total: number
   processed: number
   succeeded: number
@@ -483,13 +484,6 @@ export interface ReextractProgress {
   finishedAt?: number | null
   failures: ReextractFaceFailureDetail[]
   errorMessage?: string | null
-}
-
-export interface ReextractFaceFeaturesReport {
-  total: number
-  succeeded: number
-  failed: number
-  failures: ReextractFaceFailureDetail[]
 }
 
 export interface AlgoManifest {

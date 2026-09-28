@@ -21,11 +21,20 @@
 | 异步/同步控制  | 有界 `tokio::sync::mpsc`；阻塞接收只在 OS Worker，不能阻塞 Tokio 或硬件帧生产者 |
 | 媒体流多路分发 | `PacketDispatcher` + 独立有界 `ConsumerMailbox`（`VecDeque + Notify`）；满载清空残缺 P/B 帧并排入单一 `GopSnapshot Replay`，不阻塞生产者，不影响其他正常消费者 |
 | 告警/事件广播  | 有界 `tokio::sync::broadcast`；`Lagged` 跳过旧消息                              |
+| 识别对账排队   | 有界 `tokio::sync::mpsc`（容量 256）+ 非阻塞 `try_send`；满载丢弃当前比对事件并累加丢弃计数，不反压抓拍落库 |
 | 只读配置热替换 | `Arc<ArcSwap<Config>>`，按已有实现选用                                          |
 
 - 队列与通道规则见 [全局约定](../guides/conventions.md#队列与通道)。
 - 压缩包队列丢失参考帧后，丢弃同 GOP 残缺 P/B 帧，等新 IDR 后恢复；解码帧队列不套用 GOP 规则。
 - 事件缓冲、批次和缓存同样需容量上限，策略与指标写进配置。
+
+### 有界队列的观测口径
+
+满载丢弃类队列（如人脸识别对账队列）的可观测指标必须是**累计丢弃数**与**观测到队满次数**，不得用 `tokio::sync::mpsc::Sender::capacity()` 反推积压深度：
+
+- `capacity()` 返回的是**剩余可用槽位**，在 `Err(TrySendError::Full)` 分支里恒为 0。`容量 - capacity()` 因此永远等于队列容量这个常量，日志看起来有值却不携带任何信息——它既不会随负载变化，也无法区分瞬时限流与持续过载。
+- 需要区分二者时应同时记录队满次数：单次队满 + 丢弃计数不增长是尖峰，二者持续同步增长才是消费侧跟不上。
+- 该类计数器用 `AtomicU64` + `Ordering::Relaxed` 即可（只做观测，不参与同步）。
 
 ## 共享状态
 

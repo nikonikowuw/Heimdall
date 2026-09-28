@@ -225,6 +225,8 @@ pub struct AppState {
     /// 人员底库重型任务（批量导入 / 特征重提取）互斥闸门
     pub maintenance_gate: crate::personnel_maintenance::MaintenanceGate,
     pub gb28181_sip_server: Arc<media::gb28181::Gb28181SipServer>,
+    /// 人脸识别对账队列的投递观测计数器（与 `CaptureDispatchService` 共享同一份）
+    pub recognition_queue_metrics: Arc<crate::capture_service::RecognitionQueueMetrics>,
 }
 
 impl AppState {
@@ -290,7 +292,21 @@ impl AppState {
             import_manager,
             maintenance_gate: crate::personnel_maintenance::MaintenanceGate::new(),
             gb28181_sip_server,
+            recognition_queue_metrics: Arc::new(
+                crate::capture_service::RecognitionQueueMetrics::default(),
+            ),
         }
+    }
+
+    /// 接入抓拍分发服务的队列计数器，使 `/system/recognition-queue` 能读到真实值。
+    ///
+    /// 不接线时端点回报全零（相当于「未观测」），而不是编一个假值。
+    pub fn with_recognition_queue_metrics(
+        mut self,
+        metrics: Arc<crate::capture_service::RecognitionQueueMetrics>,
+    ) -> Self {
+        self.recognition_queue_metrics = metrics;
+        self
     }
 
     /// 为 API 状态注入自定义的 GB28181 SIP 服务器

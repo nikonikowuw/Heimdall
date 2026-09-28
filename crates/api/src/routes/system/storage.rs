@@ -101,10 +101,21 @@ fn alarm_to_eviction_files(m: db::entity::alarm::Model) -> pipeline::EvidenceRec
     pipeline::EvidenceRecordFiles::new(m.id, [m.image_rel_path, m.crop_image_rel_path])
 }
 
+/// 识别对账记录的全部物理文件：现场人脸特写 + 现场全景 + 底库隔离副本。
+///
+/// 与 `RecognitionRepo::find_all_active_image_paths` **同源**；漏登记任一图会留下
+/// 永不回收的孤儿文件（并在孤儿对账中把仍被引用的图误判为无主）。
 fn recognition_to_eviction_files(
     m: db::entity::recognition::Model,
 ) -> pipeline::EvidenceRecordFiles {
-    pipeline::EvidenceRecordFiles::new(m.id, [m.field_crop_path])
+    pipeline::EvidenceRecordFiles::new(
+        m.id,
+        [
+            m.field_crop_path,
+            m.field_image_path,
+            m.registered_photo_path,
+        ],
+    )
 }
 
 #[async_trait::async_trait]

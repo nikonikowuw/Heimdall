@@ -15,6 +15,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { evidenceApi } from '@/lib/api'
 import { copyToClipboard } from '@/lib/utils'
+import { MAX_PERSONNEL_PHOTOS_PER_PERSON } from '@/lib/personnelUpload'
 import type { PersonnelItem } from '@/types'
 
 export interface PersonnelCardProps {
@@ -262,7 +263,9 @@ export function PersonnelCard({
                       )
                     })}
                   </div>
-                  <span className="font-data font-semibold tabular-nums">{person.faceCount}/5</span>
+                  <span className="font-data font-semibold tabular-nums">
+                    {person.faceCount}/{MAX_PERSONNEL_PHOTOS_PER_PERSON}
+                  </span>
                 </div>
               </div>
 

@@ -15,7 +15,7 @@ import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { motionTokens } from '@/lib/motionTokens'
 import { formatTimestamp } from '@/lib/time'
-import type { ReextractProgress, ReextractFaceFeaturesReport } from '@/types'
+import type { ReextractProgress } from '@/types'
 
 export interface ReextractModalProps {
   isOpen: boolean
@@ -23,7 +23,6 @@ export interface ReextractModalProps {
   targetName?: string
   initialMode?: 'confirm' | 'report'
   progress: ReextractProgress | null
-  singleReport?: ReextractFaceFeaturesReport | null
   isStarting: boolean
   error?: string | null
   onClose: () => void
@@ -77,7 +76,6 @@ export function ReextractModal({
   targetName,
   initialMode = 'confirm',
   progress,
-  singleReport,
   isStarting,
   error,
   onClose,
@@ -91,10 +89,8 @@ export function ReextractModal({
   const failuresId = useId()
 
   // 状态判定
-  const isRunning = isGlobal ? progress?.status === 'running' || isStarting : isStarting
-  const isCompleted = isGlobal
-    ? progress?.status === 'completed' || progress?.status === 'failed'
-    : Boolean(singleReport)
+  const isRunning = progress?.status === 'running' || isStarting
+  const isCompleted = progress?.status === 'completed' || progress?.status === 'failed'
 
   // 根据外部状态和打开模式同步内部视图模式。
   // 同步 setState 包在微任务里，避免 effect 内同步 setState 触发级联渲染。
@@ -106,15 +102,13 @@ export function ReextractModal({
       }
       if (isRunning) {
         setCurrentMode('progress')
-      } else if (initialMode === 'report' && isCompleted) {
-        setCurrentMode('report')
-      } else if (isCompleted && !singleReport && initialMode !== 'confirm') {
+      } else if (isCompleted && initialMode === 'report') {
         setCurrentMode('report')
       } else {
         setCurrentMode('confirm')
       }
     })
-  }, [isOpen, isRunning, isCompleted, initialMode, singleReport])
+  }, [isOpen, isRunning, isCompleted, initialMode])
 
   // 任务在当前弹窗中从运行中转为完成时，自动切换为报告展示视图
   useEffect(() => {
@@ -128,13 +122,13 @@ export function ReextractModal({
   // Enter 仅在确认阶段触发重提（与底部主按钮一致，进行中/报告阶段不响应）
 
   // 汇总结算数据
-  const total = isGlobal ? (progress?.total ?? 0) : (singleReport?.total ?? 0)
-  const processed = isGlobal ? (progress?.processed ?? 0) : (singleReport?.total ?? 0)
-  const succeeded = isGlobal ? (progress?.succeeded ?? 0) : (singleReport?.succeeded ?? 0)
-  const failed = isGlobal ? (progress?.failed ?? 0) : (singleReport?.failed ?? 0)
-  const failures = isGlobal ? (progress?.failures ?? []) : (singleReport?.failures ?? [])
+  const total = progress?.total ?? 0
+  const processed = progress?.processed ?? 0
+  const succeeded = progress?.succeeded ?? 0
+  const failed = progress?.failed ?? 0
+  const failures = progress?.failures ?? []
   const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
-  const isTaskFailed = isGlobal && progress?.status === 'failed'
+  const isTaskFailed = progress?.status === 'failed'
   const isAllSuccess = !isTaskFailed && failed === 0
 
   // 任务耗时计算 (单位: 秒)
@@ -397,7 +391,7 @@ export function ReextractModal({
     return (
       <div className="modal-form-footer">
         <div className="modal-form-actions">
-          {currentMode === 'report' && isGlobal && (
+          {currentMode === 'report' && (
             <button
               type="button"
               onClick={() => setCurrentMode('confirm')}

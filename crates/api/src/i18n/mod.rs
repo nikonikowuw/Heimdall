@@ -195,6 +195,51 @@ mod tests {
             "Alarm record not found"
         );
 
+        // Personnel input validation messages must match the actual service wording.
+        assert_eq!(
+            localize_api_message(40001, "至少需要上传 1 张有效人脸照片", Locale::En),
+            "At least one face photo is required"
+        );
+        assert_eq!(
+            localize_api_message(
+                40001,
+                "人员编号必须是单一路径组件，不能包含路径分隔符",
+                Locale::En
+            ),
+            "Subject ID must be a single path component without separators."
+        );
+        let max_photo_mib = crate::personnel_limits::MAX_PERSONNEL_PHOTO_BYTES / (1024 * 1024);
+        let max_photos = crate::personnel_limits::MAX_PERSONNEL_PHOTOS_PER_PERSON;
+        let max_form_mib = crate::personnel_limits::MAX_PERSONNEL_MULTIPART_BYTES / (1024 * 1024);
+        assert_eq!(
+            localize_api_message(
+                40001,
+                &format!("单张人脸照片不能超过 {max_photo_mib} MiB"),
+                Locale::En
+            ),
+            format!("Each face photo must be at most {max_photo_mib} MiB.")
+        );
+        assert_eq!(
+            localize_api_message(
+                40001,
+                &format!("单个人员最多支持上传 {max_photos} 张人脸照片"),
+                Locale::En
+            ),
+            format!("A person can have at most {max_photos} face photos.")
+        );
+        assert_eq!(
+            localize_api_message(
+                40001,
+                &format!("人员照片表单总大小不能超过 {max_form_mib} MiB"),
+                Locale::En
+            ),
+            format!("The personnel photo upload exceeds the {max_form_mib} MiB total size limit.")
+        );
+        assert_eq!(
+            localize_api_message(40001, "人员上传表单格式无效", Locale::En),
+            "The personnel upload form is malformed."
+        );
+
         // Face Quality 40002
         assert_eq!(
             localize_api_message(
@@ -239,8 +284,20 @@ mod tests {
             "人臉識別演算法包未就緒，無法擷取特徵，請先部署/啟用人臉演算法"
         );
         assert_eq!(
-            localize_api_message(40902, "当前有全量底库特征重新提取任务正在后台执行中，请稍候再试", Locale::En),
-            "A gallery face feature re-extraction task is currently running in the background, please try again later."
+            localize_api_message(
+                40902,
+                "当前有人员底库维护任务正在后台执行中，请稍候再试",
+                Locale::En
+            ),
+            "A personnel maintenance task (bulk import or feature re-extraction) is currently running in the background. Please try again later."
+        );
+        assert_eq!(
+            localize_api_message(
+                40902,
+                "当前有人员底库维护任务正在后台执行中，请稍候再试",
+                Locale::ZhTw
+            ),
+            "當前有人員底庫維護任務（批量匯入或特徵重新擷取）正在背景執行中，請稍候再試"
         );
         assert_eq!(
             localize_api_message(40904, "人脸底库模板冲撞", Locale::ZhTw),

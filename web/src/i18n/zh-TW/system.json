@@ -45,7 +45,12 @@
     "npu": "NPU 狀態",
     "subtitle": "設備運行狀態與資源概覽",
     "thermal": "溫度狀態",
-    "topProcesses": "行程資源佔用排行"
+    "topProcesses": "行程資源佔用排行",
+    "recognitionQueue": "識別對帳佇列",
+    "queueCapacity": "佇列容量",
+    "queueDropped": "累計丟棄比對",
+    "queueFullObserved": "觀察到佇列已滿次數",
+    "queueHint": "丟棄數與佇列已滿次數持續同步成長才是消費側跟不上；僅一次已滿則是瞬時尖峰。"
   },
   "network": {
     "title": "網路/服務",

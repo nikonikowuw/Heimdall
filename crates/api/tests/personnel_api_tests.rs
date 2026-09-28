@@ -5,7 +5,7 @@ use axum::http::{Request, StatusCode};
 use db::entity::gallery_face::ActiveModel as FaceActiveModel;
 use db::entity::personnel::ActiveModel as PersonnelActiveModel;
 use db::{GalleryFaceRepo, PersonnelRepo};
-use sea_orm::Set;
+use sea_orm::{EntityTrait, Set};
 use tower::ServiceExt;
 
 async fn setup_test_app() -> (axum::Router, api::AppState, String) {
@@ -220,10 +220,20 @@ async fn test_personnel_api_crud_lifecycle() {
         .method("DELETE")
         .uri("/api/v1/personnel/emp_bob/faces/face_b2")
         .header("Authorization", format!("Bearer {token}"))
+        .header("Accept-Language", "en")
         .body(Body::empty())
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 40001);
+    assert_eq!(
+        json["message"],
+        "Each person must keep at least one face photo. The last photo cannot be deleted."
+    );
 
     // 8. PUT /api/v1/personnel/emp_bob (更新基本资料)
     let req = Request::builder()
@@ -319,6 +329,188 @@ async fn test_reextract_features_endpoints() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], 0);
     assert_eq!(json["data"]["status"], "idle");
+}
+
+fn online_personnel_upload_body(boundary: &str, image: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (name, value) in [("name", "Upload Test"), ("subjectId", "upload-test")] {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(value.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"images\"; filename=\"large.jpg\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: image/jpeg\r\n\r\n");
+    body.extend_from_slice(image);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+#[tokio::test]
+async fn test_personnel_create_accepts_multipart_body_larger_than_axum_default_limit() {
+    let (app, _state, token) = setup_test_app().await;
+    let image = vec![b'x'; 2 * 1024 * 1024 + 1];
+    let boundary = "----heimdall-personnel-large";
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/personnel")
+        .header("Authorization", format!("Bearer {token}"))
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(online_personnel_upload_body(boundary, &image)))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn test_personnel_add_faces_accepts_multipart_body_larger_than_axum_default_limit() {
+    let (app, state, token) = setup_test_app().await;
+    PersonnelRepo::insert(
+        &state.db,
+        PersonnelActiveModel {
+            id: sea_orm::NotSet,
+            subject_id: Set("upload-test".to_string()),
+            name: Set("Upload Test".to_string()),
+            id_card: Set(String::new()),
+            remark: Set(String::new()),
+            primary_photo_path: Set(String::new()),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let image = vec![b'x'; 2 * 1024 * 1024 + 1];
+    let boundary = "----heimdall-personnel-add-large";
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/personnel/upload-test/faces")
+        .header("Authorization", format!("Bearer {token}"))
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(online_personnel_upload_body(boundary, &image)))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn test_single_reextract_is_rejected_while_maintenance_gate_is_held() {
+    let (app, state, token) = setup_test_app().await;
+    let _guard = state
+        .maintenance_gate
+        .acquire(api::personnel_maintenance::MaintenanceTaskKind::Import)
+        .unwrap();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/personnel/some_user/reextract")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 40902);
+}
+
+#[tokio::test]
+async fn test_recognition_queue_metrics_endpoint_reports_real_counters() {
+    let (app, state, token) = setup_test_app().await;
+
+    let request = Request::builder()
+        .uri("/api/v1/system/recognition-queue")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], 0);
+    assert_eq!(
+        json["data"]["capacity"],
+        api::capture_service::DEFAULT_RECOGNITION_QUEUE_CAPACITY
+    );
+    assert_eq!(json["data"]["droppedTotal"], 0);
+    assert_eq!(json["data"]["fullObservedTotal"], 0);
+
+    // 端点暴露的必须是抓拍服务真实累加的那一份计数器。
+    // 若两边各持一个默认实例，端点会永远回报 0——看起来有值却毫无信息，
+    // 正是本次修复要消除的那种假指标。
+    let service = api::CaptureDispatchService::from_state(&state);
+    assert!(
+        std::sync::Arc::ptr_eq(
+            &service.recognition_metrics_handle(),
+            &state.recognition_queue_metrics
+        ),
+        "抓拍服务必须与 AppState 共享同一份计数器"
+    );
+}
+
+#[tokio::test]
+async fn test_personnel_list_clamps_page_size_and_bounds_keyword() {
+    let (app, state, token) = setup_test_app().await;
+    let now = chrono::Utc::now();
+    let personnel = (0..101)
+        .map(|index| PersonnelActiveModel {
+            id: sea_orm::NotSet,
+            subject_id: Set(format!("page-{index:03}")),
+            name: Set(format!("Person {index}")),
+            id_card: Set(String::new()),
+            remark: Set(String::new()),
+            primary_photo_path: Set(String::new()),
+            created_at: Set(now),
+            updated_at: Set(now),
+        })
+        .collect::<Vec<_>>();
+    db::entity::personnel::Entity::insert_many(personnel)
+        .exec(&state.db)
+        .await
+        .unwrap();
+
+    let request = Request::builder()
+        .uri("/api/v1/personnel?limit=10000")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"]["items"].as_array().unwrap().len(), 100);
+    assert_eq!(json["data"]["total"], 101);
+
+    let keyword = "x".repeat(65);
+    let request = Request::builder()
+        .uri(format!("/api/v1/personnel?keyword={keyword}"))
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 // ============================================================================

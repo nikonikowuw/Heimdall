@@ -45,6 +45,15 @@ pub struct GalleryFace {
     pub feature: Vec<f32>,
 }
 
+fn gallery_snapshot_lock<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    lock.write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn gallery_snapshot_read<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 1:N 检索候选人明细
 #[derive(Debug, Clone, PartialEq)]
 pub struct CandidateItem {
@@ -110,46 +119,66 @@ impl FaceGallery {
 
     /// 全量清空底库
     pub fn clear(&self) {
-        let mut guard = self
-            .snapshot
-            .write()
-            .expect("gallery snapshot lock poisoned");
+        let mut guard = gallery_snapshot_lock(&self.snapshot);
         *guard = Arc::new(GallerySnapshot::default());
     }
 
     /// 增量插入或更新一张人脸样本
     pub fn insert(&self, face: GalleryFace) {
-        let mut guard = self
-            .snapshot
-            .write()
-            .expect("gallery snapshot lock poisoned");
+        self.insert_batch([face]);
+    }
+
+    /// 批量增量插入或更新人脸样本（一次写锁、一次快照拷贝）
+    ///
+    /// RCU 语义要求写路径整体替换快照：逐条 `insert` 会让每次插入都深拷贝全部已有特征，
+    /// 全量重建退化为 O(N²) 内存流量。批量入口把 N 次拷贝压成 1 次。
+    pub fn insert_batch(&self, faces: impl IntoIterator<Item = GalleryFace>) {
+        let incoming: Vec<GalleryFace> = faces.into_iter().collect();
+        if incoming.is_empty() {
+            return;
+        }
+
+        let mut guard = gallery_snapshot_lock(&self.snapshot);
         let mut new_snapshot = (**guard).clone();
-        if let Some(pos) = new_snapshot.faces.iter().position(|f| f.id == face.id) {
-            new_snapshot.faces[pos] = face;
-        } else {
-            new_snapshot.faces.push(face);
+        let mut positions: std::collections::HashMap<u64, usize> = new_snapshot
+            .faces
+            .iter()
+            .enumerate()
+            .map(|(index, face)| (face.id, index))
+            .collect();
+
+        for face in incoming {
+            if let Some(&position) = positions.get(&face.id) {
+                new_snapshot.faces[position] = face;
+            } else {
+                positions.insert(face.id, new_snapshot.faces.len());
+                new_snapshot.faces.push(face);
+            }
         }
         *guard = Arc::new(new_snapshot);
     }
 
     /// 增量删除指定 ID 的人脸样本
     pub fn remove(&self, id: u64) {
-        let mut guard = self
-            .snapshot
-            .write()
-            .expect("gallery snapshot lock poisoned");
+        self.remove_batch([id]);
+    }
+
+    /// 批量增量删除人脸样本（一次写锁、一次快照拷贝）
+    pub fn remove_batch(&self, ids: impl IntoIterator<Item = u64>) {
+        let victims: std::collections::HashSet<u64> = ids.into_iter().collect();
+        if victims.is_empty() {
+            return;
+        }
+
+        let mut guard = gallery_snapshot_lock(&self.snapshot);
         let mut new_snapshot = (**guard).clone();
-        new_snapshot.faces.retain(|f| f.id != id);
+        new_snapshot.faces.retain(|f| !victims.contains(&f.id));
         *guard = Arc::new(new_snapshot);
     }
 
     /// 获取底库内有效样本总数
     pub fn count(&self) -> usize {
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("gallery snapshot lock poisoned")
-            .clone();
+        let snapshot = gallery_snapshot_read(&self.snapshot).clone();
         snapshot.faces.len()
     }
 
@@ -165,11 +194,7 @@ impl FaceGallery {
         }
 
         // 瞬间获取快照指针，立刻释放读锁（执行点积计算时完全无锁竞争）
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("gallery snapshot lock poisoned")
-            .clone();
+        let snapshot = gallery_snapshot_read(&self.snapshot).clone();
         if snapshot.faces.is_empty() {
             return Vec::new();
         }
@@ -342,6 +367,62 @@ mod tests {
         // 清空
         gallery.clear();
         assert_eq!(gallery.count(), 0);
+    }
+
+    /// 批量入口必须与逐条语义等价，且只走一次快照替换（O(N) 而非 O(N²)）。
+    #[test]
+    fn test_batch_insert_and_remove_match_single_item_semantics() {
+        let gallery = FaceGallery::new();
+        let mk = |id: u64, first: f32| GalleryFace {
+            id,
+            feature: vec![first, 1.0 - first],
+        };
+
+        gallery.insert_batch(vec![mk(1, 0.9), mk(2, 0.4), mk(3, 0.2)]);
+        assert_eq!(gallery.count(), 3);
+
+        // 批量插入中的重复 ID 必须在同一次快照替换内完成 upsert（后者覆盖前者）
+        gallery.insert_batch(vec![mk(2, 0.99), mk(4, 0.5)]);
+        assert_eq!(gallery.count(), 4, "重复 ID 不得产生第二份样本");
+
+        let hits = gallery.search(&[0.99, 0.01], 1, 0.0);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, 2, "upsert 应覆盖旧向量");
+
+        // 批量删除：不存在的 ID 不得影响其余样本
+        gallery.remove_batch([2, 999]);
+        assert_eq!(gallery.count(), 3);
+        assert!(gallery
+            .search(&[0.99, 0.01], 1, 0.0)
+            .iter()
+            .all(|c| c.id != 2));
+
+        // 空批次是 no-op，不得把底库清空
+        gallery.insert_batch(Vec::new());
+        gallery.remove_batch(Vec::new());
+        assert_eq!(gallery.count(), 3);
+
+        // 单条 API 仍与批量语义一致
+        gallery.remove(1);
+        gallery.insert(mk(9, 0.7));
+        assert_eq!(gallery.count(), 3);
+    }
+
+    /// RCU 快照替换必须让已持有的旧快照引用继续可见（写不影响在途检索）。
+    #[test]
+    fn test_batch_write_does_not_mutate_outstanding_snapshot() {
+        let gallery = FaceGallery::new();
+        gallery.insert(GalleryFace {
+            id: 1,
+            feature: vec![1.0, 0.0],
+        });
+        let before = gallery.count();
+        gallery.insert_batch((2..=64).map(|id| GalleryFace {
+            id,
+            feature: vec![1.0, 0.0],
+        }));
+        assert_eq!(before, 1);
+        assert_eq!(gallery.count(), 64);
     }
 
     #[test]

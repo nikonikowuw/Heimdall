@@ -1096,5 +1096,67 @@ macro_rules! export_face_gallery {
                 std::ptr::null()
             }
         }
+
+        /// 可选批量底库写入：一次调用完成一批 upsert/remove，避免宿主逐条调用导致 O(N²) 快照拷贝。
+        ///
+        /// 作为独立导出符号做加法演进——不改变 `AvAlgoGalleryAbi` 布局，旧宿主忽略、新宿主探测。
+        #[no_mangle]
+        pub unsafe extern "C" fn av_algo_gallery_bulk(
+            gallery: $crate::c_abi::AvAlgoGallery,
+            op: u32,
+            entries: *const $crate::c_abi::AvGalleryBulkEntry,
+            entry_count: u32,
+        ) -> std::ffi::c_int {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if gallery.is_null() || entries.is_null() || entry_count == 0 {
+                    return $crate::c_abi::AV_ERR_INVALID_ARG;
+                }
+
+                // SAFETY: entries 经非空校验，entry_count 由调用方声明为有效元素个数
+                let raw_entries =
+                    unsafe { std::slice::from_raw_parts(entries, entry_count as usize) };
+
+                match op {
+                    $crate::c_abi::AV_GALLERY_BULK_INSERT => {
+                        let mut batch = Vec::with_capacity(raw_entries.len());
+                        for entry in raw_entries {
+                            if entry.feature_bytes.is_null() || entry.feature_len == 0 {
+                                return $crate::c_abi::AV_ERR_INVALID_ARG;
+                            }
+                            // SAFETY: feature_bytes 非空且 feature_len 在调用期有效
+                            let bytes = unsafe {
+                                std::slice::from_raw_parts(
+                                    entry.feature_bytes,
+                                    entry.feature_len as usize,
+                                )
+                            };
+                            let feature = match $crate::face::bytes_to_floats(bytes) {
+                                Some(f) => f,
+                                None => return $crate::c_abi::AV_ERR_INVALID_ARG,
+                            };
+                            batch.push($crate::face::GalleryFace {
+                                id: entry.id,
+                                feature,
+                            });
+                        }
+                        // SAFETY: gallery 经非空校验且指向有效 FaceGallery
+                        let g = unsafe { &*(gallery as *const $crate::face::FaceGallery) };
+                        g.insert_batch(batch);
+                        $crate::c_abi::AV_OK
+                    }
+                    $crate::c_abi::AV_GALLERY_BULK_REMOVE => {
+                        // SAFETY: gallery 经非空校验且指向有效 FaceGallery
+                        let g = unsafe { &*(gallery as *const $crate::face::FaceGallery) };
+                        g.remove_batch(raw_entries.iter().map(|entry| entry.id));
+                        $crate::c_abi::AV_OK
+                    }
+                    _ => $crate::c_abi::AV_ERR_INVALID_ARG,
+                }
+            }))
+            .unwrap_or_else(|_| {
+                $crate::macros::set_last_error("av_algo_gallery_bulk 发生 Panic 崩溃");
+                $crate::c_abi::AV_ERR_INTERNAL
+            })
+        }
     };
 }

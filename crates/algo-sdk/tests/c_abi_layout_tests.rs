@@ -2,7 +2,7 @@
 //! 必须与 crates/infer/tests/c_abi_layout_tests.rs 保持严格一致！
 
 use algo_sdk::c_abi::*;
-use std::mem::{offset_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 
 #[test]
 fn test_c_abi_structure_sizes() {
@@ -50,6 +50,16 @@ fn test_c_abi_structure_sizes() {
         size_of::<AvFaceCandidate>(),
         32,
         "AvFaceCandidate size mismatch"
+    );
+    assert_eq!(
+        size_of::<AvGalleryBulkEntry>(),
+        24,
+        "AvGalleryBulkEntry size mismatch"
+    );
+    assert_eq!(
+        align_of::<AvGalleryBulkEntry>(),
+        8,
+        "AvGalleryBulkEntry alignment mismatch"
     );
     assert_eq!(
         size_of::<AvAlgoGalleryAbi>(),
@@ -102,6 +112,15 @@ fn test_c_abi_field_offsets() {
     assert_eq!(offset_of!(AvFaceCandidate, similarity), 16);
     assert_eq!(offset_of!(AvFaceCandidate, raw_score), 20);
     assert_eq!(offset_of!(AvFaceCandidate, reserved0), 24);
+
+    // av_gallery_bulk_entry 偏移与对齐（必须与 crates/infer/tests/c_abi_layout_tests.rs 逐项一致）
+    //
+    // 算法包侧与宿主侧对同一片内存做指针解引用：`feature_bytes` 前必须有 8 字节
+    // 对齐间隙，否则 32 位对齐的包读到的 `id` 会是错位的半个指针。
+    assert_eq!(offset_of!(AvGalleryBulkEntry, id), 0);
+    assert_eq!(offset_of!(AvGalleryBulkEntry, feature_bytes), 8);
+    assert_eq!(offset_of!(AvGalleryBulkEntry, feature_len), 16);
+    assert_eq!(offset_of!(AvGalleryBulkEntry, reserved0), 20);
 
     // av_algo_gallery_abi 偏移
     assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_create), 8);

@@ -8,15 +8,14 @@ use db::{DatabaseConnection, GalleryFaceRepo, PersonnelRepo};
 use sea_orm::ActiveValue::Set;
 use sea_orm::TransactionTrait;
 use types::{
-    GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto, PersonnelStatsDto,
-    ReextractFaceFailureDetail, ReextractFaceFeaturesReportDto, UpdatePersonnelRequest,
+    GalleryFaceDto, PersonnelDetailDto, PersonnelItemDto, PersonnelStatsDto, UpdatePersonnelRequest,
 };
 
 use crate::error::ApiError;
 use crate::gallery_index::{
     embedding_to_le_bytes, le_bytes_to_embedding, FaceFeatureIndex, RegisteredFace,
 };
-use crate::personnel_reextract::PersonnelReextractManager;
+use crate::personnel_limits::{MAX_PERSONNEL_PHOTOS_PER_PERSON, MAX_PERSONNEL_PHOTO_BYTES};
 use crate::state::AppState;
 
 /// 当前实机底库观测到跨主体最大 raw cosine 为 0.4019；0.49 作为保守录入拦截点，
@@ -137,13 +136,16 @@ pub(crate) async fn extract_face_pipeline(
     })
 }
 
-/// 重新提取单张人脸样本特征并更新数据库与对齐图，失败时返回具体原因
+/// 重新提取单张人脸样本特征并更新数据库与对齐图，失败时返回具体原因。
+///
+/// 成功时回传新的特征字节，使调用方能**增量**更新内存索引，
+/// 而不必为了几张样本把整个底库索引重建一遍。
 pub(crate) async fn reextract_face_sample(
     db: &DatabaseConnection,
     evidence_base_dir: &Path,
     algo_registry: &infer::package::AlgoRegistry,
     face: &db::entity::gallery_face::Model,
-) -> Result<(), String> {
+) -> Result<ReextractedFace, String> {
     let photo_abs = evidence_base_dir.join(&face.photo_rel_path);
     let raw_img = tokio::fs::read(&photo_abs).await.map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
@@ -185,7 +187,7 @@ pub(crate) async fn reextract_face_sample(
     GalleryFaceRepo::update_feature(
         db,
         &face.face_id,
-        face_data.feature_bytes,
+        face_data.feature_bytes.clone(),
         &aligned_rel_path,
         face_data.quality_score,
         face_data.detection_score,
@@ -193,7 +195,16 @@ pub(crate) async fn reextract_face_sample(
     .await
     .map_err(|err| format!("更新数据库特征失败: {err}"))?;
 
-    Ok(())
+    Ok(ReextractedFace {
+        face_id: face.face_id.clone(),
+        feature_bytes: face_data.feature_bytes,
+    })
+}
+
+/// 单张样本重提取成功后的产物，供调用方增量刷新内存索引。
+pub(crate) struct ReextractedFace {
+    pub(crate) face_id: String,
+    pub(crate) feature_bytes: Vec<u8>,
 }
 
 /// 内部处理产出的人脸特征及磁盘文件元数据
@@ -340,7 +351,6 @@ pub struct PersonnelService {
     evidence_base_dir: PathBuf,
     algo_registry: Arc<infer::package::AlgoRegistry>,
     gallery_index: Arc<FaceFeatureIndex>,
-    reextract_manager: Arc<PersonnelReextractManager>,
 }
 
 impl PersonnelService {
@@ -349,14 +359,12 @@ impl PersonnelService {
         evidence_base_dir: PathBuf,
         algo_registry: Arc<infer::package::AlgoRegistry>,
         gallery_index: Arc<FaceFeatureIndex>,
-        reextract_manager: Arc<PersonnelReextractManager>,
     ) -> Self {
         Self {
             db,
             evidence_base_dir,
             algo_registry,
             gallery_index,
-            reextract_manager,
         }
     }
 
@@ -370,7 +378,6 @@ impl PersonnelService {
                 .to_path_buf(),
             state.algo_registry.clone(),
             state.gallery_index.clone(),
-            state.reextract_manager.clone(),
         )
     }
 
@@ -497,10 +504,19 @@ impl PersonnelService {
                 "至少需要上传 1 张有效人脸照片".to_string(),
             ));
         }
-        if raw_images.len() > 5 {
-            return Err(ApiError::BadRequest(
-                "单个人员最多支持上传 5 张人脸照片".to_string(),
-            ));
+        if raw_images.len() > MAX_PERSONNEL_PHOTOS_PER_PERSON {
+            return Err(ApiError::BadRequest(format!(
+                "单个人员最多支持上传 {MAX_PERSONNEL_PHOTOS_PER_PERSON} 张人脸照片"
+            )));
+        }
+        if raw_images
+            .iter()
+            .any(|image| image.len() > MAX_PERSONNEL_PHOTO_BYTES)
+        {
+            return Err(ApiError::BadRequest(format!(
+                "单张人脸照片不能超过 {} MiB",
+                MAX_PERSONNEL_PHOTO_BYTES / (1024 * 1024)
+            )));
         }
 
         let _enrollment_permit = self
@@ -629,6 +645,13 @@ impl PersonnelService {
         subject_id: &str,
         req: UpdatePersonnelRequest,
     ) -> Result<PersonnelDetailDto, ApiError> {
+        // 与录入/导入共用同一把准入许可：改名与索引全量重载交叠时，
+        // 重载会用 DB 里的旧姓名覆盖刚写入的索引条目。
+        let _enrollment_permit = self
+            .gallery_index
+            .acquire_enrollment_permit()
+            .await
+            .map_err(ApiError::Internal)?;
         let person = PersonnelRepo::find_by_subject_id(&self.db, subject_id)
             .await?
             .ok_or_else(|| ApiError::NotFound(format!("人员不存在: {subject_id}")))?;
@@ -678,6 +701,16 @@ impl PersonnelService {
 
     /// 物理删除人员及其关联的所有样本照与数据库记录（单事务原子删除）
     pub async fn delete(&self, subject_id: &str) -> Result<(), ApiError> {
+        // 必须与录入/批量导入互斥。否则会出现确定的幽灵人员交错：
+        // 导入候选 commit 后、`upsert_faces` 前，删除已完成 commit 与内存移除，
+        // 随后导入的 `upsert_faces` 把已删样本写回内存索引——
+        // 结果是内存里存在 DB 已不存在的人员，检索会命中并落库一个
+        // `registered_photo_path` 已指向被清理目录的识别记录。
+        let _enrollment_permit = self
+            .gallery_index
+            .acquire_enrollment_permit()
+            .await
+            .map_err(ApiError::Internal)?;
         let person = PersonnelRepo::find_by_subject_id(&self.db, subject_id)
             .await?
             .ok_or_else(|| ApiError::NotFound(format!("人员不存在: {subject_id}")))?;
@@ -722,9 +755,18 @@ impl PersonnelService {
         if raw_images.is_empty() {
             return Err(ApiError::BadRequest("未选择要追加的照片".to_string()));
         }
-        if current_count + raw_images.len() as u64 > 5 {
+        if raw_images
+            .iter()
+            .any(|image| image.len() > MAX_PERSONNEL_PHOTO_BYTES)
+        {
             return Err(ApiError::BadRequest(format!(
-                "当前已有 {current_count} 张照片，追加后超出 5 张上限限制"
+                "单张人脸照片不能超过 {} MiB",
+                MAX_PERSONNEL_PHOTO_BYTES / (1024 * 1024)
+            )));
+        }
+        if current_count + raw_images.len() as u64 > MAX_PERSONNEL_PHOTOS_PER_PERSON as u64 {
+            return Err(ApiError::BadRequest(format!(
+                "单个人员最多支持上传 {MAX_PERSONNEL_PHOTOS_PER_PERSON} 张人脸照片"
             )));
         }
 
@@ -791,6 +833,11 @@ impl PersonnelService {
         subject_id: &str,
         face_id: &str,
     ) -> Result<PersonnelDetailDto, ApiError> {
+        let _enrollment_permit = self
+            .gallery_index
+            .acquire_enrollment_permit()
+            .await
+            .map_err(ApiError::Internal)?;
         let _person = PersonnelRepo::find_by_subject_id(&self.db, subject_id)
             .await?
             .ok_or_else(|| ApiError::NotFound(format!("人员不存在: {subject_id}")))?;
@@ -798,7 +845,7 @@ impl PersonnelService {
         let faces = GalleryFaceRepo::list_by_subject_id(&self.db, subject_id).await?;
         if faces.len() <= 1 {
             return Err(ApiError::BadRequest(
-                "人员至少必须保留 1 张有效人脸照片，若需清理请直接删除该人员".to_string(),
+                "人员至少保留 1 张人脸样本，无法删除最后一张照片".to_string(),
             ));
         }
 
@@ -846,6 +893,11 @@ impl PersonnelService {
         subject_id: &str,
         face_id: &str,
     ) -> Result<PersonnelDetailDto, ApiError> {
+        let _enrollment_permit = self
+            .gallery_index
+            .acquire_enrollment_permit()
+            .await
+            .map_err(ApiError::Internal)?;
         let _person = PersonnelRepo::find_by_subject_id(&self.db, subject_id)
             .await?
             .ok_or_else(|| ApiError::NotFound(format!("人员不存在: {subject_id}")))?;
@@ -864,72 +916,6 @@ impl PersonnelService {
         txn.commit().await.map_err(ApiError::from)?;
 
         self.get_detail(subject_id).await
-    }
-
-    /// 针对单个人员重新提取其所有人脸样本特征（快速同步处理）
-    pub async fn reextract_single_personnel_features(
-        &self,
-        subject_id: &str,
-    ) -> Result<ReextractFaceFeaturesReportDto, ApiError> {
-        if self.reextract_manager.is_running().await {
-            return Err(ApiError::FaceExtractionConflict(
-                "当前有全量底库特征重新提取任务正在后台执行中，请稍候再试".to_string(),
-            ));
-        }
-
-        if !self.algo_registry.is_face_extraction_ready().await {
-            return Err(ApiError::FaceAlgorithmNotLoaded(
-                "人脸识别算法包未就绪，无法提取特征，请先部署/激活人脸算法".to_string(),
-            ));
-        }
-
-        let trimmed = subject_id.trim();
-        if PersonnelRepo::find_by_subject_id(&self.db, trimmed)
-            .await?
-            .is_none()
-        {
-            return Err(ApiError::NotFound(format!("人员不存在: {trimmed}")));
-        }
-
-        let faces = GalleryFaceRepo::list_by_subject_id(&self.db, trimmed).await?;
-        let total = faces.len() as u64;
-        let mut succeeded = 0u64;
-        let mut failed = 0u64;
-        let mut failures = Vec::new();
-
-        for face in faces {
-            match reextract_face_sample(
-                &self.db,
-                &self.evidence_base_dir,
-                &self.algo_registry,
-                &face,
-            )
-            .await
-            {
-                Ok(()) => succeeded += 1,
-                Err(reason) => {
-                    failed += 1;
-                    failures.push(ReextractFaceFailureDetail {
-                        face_id: face.face_id,
-                        subject_id: face.subject_id,
-                        reason,
-                    });
-                }
-            }
-        }
-
-        if succeeded > 0 {
-            if let Err(err) = self.gallery_index.reload(&self.db).await {
-                tracing::error!("重新提取单人特征后重载底库内存特征索引失败: {err}");
-            }
-        }
-
-        Ok(ReextractFaceFeaturesReportDto {
-            total,
-            succeeded,
-            failed,
-            failures,
-        })
     }
 
     /// 提取单张人脸特征并落盘（在线录入与批量导入共用同一实现）
@@ -997,7 +983,6 @@ mod tests {
             PathBuf::new(),
             Arc::new(infer::package::AlgoRegistry::new()),
             index,
-            Arc::new(PersonnelReextractManager::new()),
         );
         let mut query = [0.0f32; 512];
         query[0] = 1.0;

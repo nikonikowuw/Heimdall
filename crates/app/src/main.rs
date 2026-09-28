@@ -266,6 +266,15 @@ async fn main() -> Result<()> {
     if let Some(cleaner) = state.storage_cleaner.as_ref() {
         // 启动常驻后台存储水位自适应巡检与过期凭据清理任务 (300s 周期)
         let store = Arc::new(api::DbEvictionStoreAdapter(state.db.clone()));
+        match cleaner.reconcile_orphans(store.as_ref()).await {
+            Ok(report) => tracing::info!(
+                scanned_files = report.total_scanned_files,
+                orphan_files_reclaimed = report.orphan_files_reclaimed,
+                missing_records_detected = report.missing_records_detected,
+                "冷启动证据文件对账完成"
+            ),
+            Err(error) => tracing::warn!(error = %error, "冷启动证据文件对账失败，服务继续启动"),
+        }
         cleaner
             .clone()
             .start_periodic_worker(store, std::time::Duration::from_secs(300));

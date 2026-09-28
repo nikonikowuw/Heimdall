@@ -8,6 +8,12 @@ pub const AV_ALGO_API_VERSION: u32 = 1;
 pub const AV_ALGO_GET_ABI_SYMBOL: &[u8] = b"av_algo_get_abi\0";
 pub const AV_ALGO_EXTRACT_FACE_SYMBOL: &[u8] = b"av_algo_extract_face\0";
 pub const AV_ALGO_GET_GALLERY_ABI_SYMBOL: &[u8] = b"av_algo_get_gallery_abi\0";
+/// 可选批量底库写入符号（进程函数，不改变 `AvAlgoGalleryAbi` 布局）。
+pub const AV_ALGO_GALLERY_BULK_SYMBOL: &[u8] = b"av_algo_gallery_bulk\0";
+
+/// 批量底库写入操作码
+pub const AV_GALLERY_BULK_INSERT: u32 = 1;
+pub const AV_GALLERY_BULK_REMOVE: u32 = 2;
 
 /// 算法包状态码
 pub const AV_OK: c_int = 0;
@@ -424,6 +430,38 @@ pub struct AvFaceCandidate {
     pub raw_score: f32,
     pub reserved0: u64,
 }
+
+/// 批量底库写入条目（每项一个 ID + 一段特征字节）
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct AvGalleryBulkEntry {
+    pub id: u64,
+    pub feature_bytes: *const u8,
+    pub feature_len: u32,
+    /// 保留字段，必须为 0
+    pub reserved0: u32,
+}
+
+impl Default for AvGalleryBulkEntry {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            feature_bytes: std::ptr::null(),
+            feature_len: 0,
+            reserved0: 0,
+        }
+    }
+}
+
+/// 可选批量底库写入函数签名（由算法包导出为 `av_algo_gallery_bulk`）。
+///
+/// `op` 为 `AV_GALLERY_BULK_INSERT` / `AV_GALLERY_BULK_REMOVE`。
+pub type AvAlgoGalleryBulkFn = unsafe extern "C" fn(
+    gallery: AvAlgoGallery,
+    op: u32,
+    entries: *const AvGalleryBulkEntry,
+    entry_count: u32,
+) -> c_int;
 
 impl Default for AvFaceCandidate {
     fn default() -> Self {

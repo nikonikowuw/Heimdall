@@ -181,7 +181,10 @@
   "errors": {
     "nameRequired": "請輸入人員姓名",
     "photoRequired": "請至少選擇 1 張有效人臉照片",
-    "maxPhotosExceeded": "單個人員最多支援 5 張照片樣本",
+    "maxPhotosExceeded": "單個人員最多支援 {{max}} 張照片樣本",
+    "photoPrepareFailed": "部分照片無法處理，請選擇有效的 JPEG、PNG 或 WebP 圖片後重試。",
+    "photoTooLarge": "單張人臉照片不得超過 {{mb}} MiB。",
+    "formTooLarge": "本次上傳的照片合計不得超過 {{mb}} MiB，請減少張數或壓縮後重試",
     "cannotDeleteLastFace": "人員至少保留 1 張樣本，無法刪除最後一張照片",
     "failedToLoad": "載入人員底庫失敗",
     "failedToSave": "儲存人員資訊失敗",

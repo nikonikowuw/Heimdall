@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
@@ -84,6 +85,30 @@ pub const DEFAULT_CAPTURE_FLUSH_INTERVAL_MS: u64 = 500;
 /// 默认人脸识别对账异步排队有界队列容量 (条)
 pub const DEFAULT_RECOGNITION_QUEUE_CAPACITY: usize = 256;
 
+/// 人脸识别对账队列的投递观测计数。
+///
+/// 不能用 `Sender::capacity()` 反推「积压深度」：它是**剩余可用槽位**，
+/// 在 `Err(Full)` 分支里恒为 0，相减得到的永远是队列容量这个常量。
+#[derive(Debug, Default)]
+pub struct RecognitionQueueMetrics {
+    /// 因队列满而丢弃的比对事件累计数
+    dropped: AtomicU64,
+    /// 观测到队满的次数，用于区分持续过载与偶发尖峰
+    full_observed: AtomicU64,
+}
+
+impl RecognitionQueueMetrics {
+    /// 投递观测快照：`(累计丢弃数, 观测到队满次数)`。
+    ///
+    /// 单次队满而丢弃数不增长是尖峰；二者持续同步增长才是消费侧跟不上。
+    pub fn snapshot(&self) -> (u64, u64) {
+        (
+            self.dropped.load(AtomicOrdering::Relaxed),
+            self.full_observed.load(AtomicOrdering::Relaxed),
+        )
+    }
+}
+
 /// 低频识别输入；embedding 只在 API 后台内存中存在。
 #[derive(Debug, Clone)]
 struct RecognitionFeature {
@@ -108,6 +133,7 @@ pub struct CaptureDispatchService {
     pub event_broadcaster: Option<broadcast::Sender<crate::state::WsBroadcastEvent>>,
     recognition_tx: mpsc::Sender<PipelineCaptureEvent>,
     recognition_rx: RecognitionRxCell,
+    recognition_metrics: Arc<RecognitionQueueMetrics>,
 }
 
 type RecognitionRxCell = Arc<Mutex<Option<mpsc::Receiver<PipelineCaptureEvent>>>>;
@@ -211,6 +237,9 @@ impl CaptureDispatchService {
             event_broadcaster: Some(state.event_broadcaster.clone()),
             recognition_tx,
             recognition_rx,
+            // 与 AppState 共享同一份计数器：`/system/recognition-queue` 读到的
+            // 就是本服务真实丢弃的那个值，而不是另一份永远为 0 的副本。
+            recognition_metrics: state.recognition_queue_metrics.clone(),
         }
     }
 
@@ -233,12 +262,21 @@ impl CaptureDispatchService {
             event_broadcaster: None,
             recognition_tx,
             recognition_rx,
+            recognition_metrics: Arc::new(RecognitionQueueMetrics::default()),
         }
     }
 
-    /// 当前人脸识别对账排队队列中的在途积压任务数
-    pub fn recognition_queue_depth(&self) -> usize {
-        DEFAULT_RECOGNITION_QUEUE_CAPACITY.saturating_sub(self.recognition_tx.capacity())
+    /// 当前人脸识别对账队列的投递观测快照：`(累计丢弃数, 观测到队满次数)`。
+    ///
+    /// 注意不能用 `Sender::capacity()` 反推「积压深度」：该值是**剩余可用槽位**，
+    /// 在 `Err(Full)` 分支里恒为 0，算出来的深度永远是队列容量这个常量，
+    /// 看起来有值却不携带任何信息。真正需要观测的是「丢了多少」和「是否持续过载」。
+    pub fn recognition_queue_metrics(&self) -> (u64, u64) {
+        self.recognition_metrics.snapshot()
+    }
+    /// 供 `AppState` 持有同一份计数器，把观测值接到 HTTP 端点上。
+    pub fn recognition_metrics_handle(&self) -> Arc<RecognitionQueueMetrics> {
+        Arc::clone(&self.recognition_metrics)
     }
 
     /// 提取识别比对质量分（人脸匹配用）：人脸质量 → 目标质量 → 置信度。
@@ -363,9 +401,18 @@ impl CaptureDispatchService {
                         match self.recognition_tx.try_send(evt.clone()) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(dropped)) => {
+                                self.recognition_metrics
+                                    .dropped
+                                    .fetch_add(1, AtomicOrdering::Relaxed);
+                                let full_observed = self
+                                    .recognition_metrics
+                                    .full_observed
+                                    .fetch_add(1, AtomicOrdering::Relaxed)
+                                    + 1;
                                 tracing::warn!(
                                     camera_id = %dropped.camera_id,
                                     track_id = dropped.tracked_object.track_id,
+                                    full_observed,
                                     queue_capacity = DEFAULT_RECOGNITION_QUEUE_CAPACITY,
                                     "人脸识别对账有界队列已满，丢弃溢出抓拍比对事件"
                                 );
@@ -857,6 +904,50 @@ mod tests {
         // 消费 1 个后通道容量应恢复
         assert!(rx.try_recv().is_ok());
         assert_eq!(tx.capacity(), 1);
+    }
+
+    /// `Sender::capacity()` 是**剩余可用槽位**，不能用它反推积压深度。
+    ///
+    /// 这个测试钉住那个诱人的错误写法：在 `Err(Full)` 分支里 `capacity()` 恒为 0，
+    /// `容量 - capacity()` 永远等于队列容量这个常量，日志看着有值却不携带信息。
+    #[test]
+    fn recognition_queue_capacity_is_not_a_depth_metric() {
+        let (tx, _rx) = mpsc::channel::<u8>(4);
+        for _ in 0..4 {
+            assert!(tx.try_send(0).is_ok());
+        }
+        assert_eq!(tx.capacity(), 0, "满队列时剩余槽位为 0");
+
+        // 错误写法会算出「深度 = 4」——恰好等于容量，与真实积压无关
+        assert_eq!(4usize.saturating_sub(tx.capacity()), 4);
+        // 而真实积压确实是 4，两者在满队列时数值相同、语义无关：
+        // 一旦消费一个，错误写法立刻变成 3，与真实积压 3 的巧合掩盖了它在其它分支的无意义性。
+        assert!(tx.try_send(0).is_err());
+    }
+
+    /// 投递观测计数器必须真实反映丢弃数，而不是从剩余容量反推。
+    #[test]
+    fn recognition_queue_metrics_count_real_drops() {
+        let metrics = RecognitionQueueMetrics::default();
+        assert_eq!(
+            (
+                metrics.dropped.load(AtomicOrdering::Relaxed),
+                metrics.full_observed.load(AtomicOrdering::Relaxed)
+            ),
+            (0, 0)
+        );
+
+        metrics.dropped.fetch_add(1, AtomicOrdering::Relaxed);
+        let full_observed = metrics.full_observed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+        assert_eq!(full_observed, 1);
+        assert_eq!(metrics.dropped.load(AtomicOrdering::Relaxed), 1);
+
+        for _ in 0..2 {
+            metrics.dropped.fetch_add(1, AtomicOrdering::Relaxed);
+            metrics.full_observed.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+        assert_eq!(metrics.dropped.load(AtomicOrdering::Relaxed), 3);
+        assert_eq!(metrics.full_observed.load(AtomicOrdering::Relaxed), 3);
     }
 
     #[test]

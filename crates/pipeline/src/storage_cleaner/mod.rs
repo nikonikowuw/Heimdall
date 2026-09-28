@@ -770,18 +770,34 @@ impl StorageCleaner {
             let config = self.config.read().await;
             config.evidence_dir.clone()
         };
-        if !root.exists() {
-            return Ok(ReconciliationReport {
-                total_scanned_files: 0,
-                orphan_files_reclaimed: 0,
-                missing_records_detected: 0,
-            });
-        }
+        let scan_root = root.clone();
+        let (scanned, orphan_paths, missing_paths) = tokio::task::spawn_blocking(move || {
+            let mut scanned = 0;
+            let mut orphan_paths = Vec::new();
+            let mut missing_paths = Vec::new();
+            if scan_root.exists() {
+                StorageCleaner::collect_disk_files(
+                    &scan_root,
+                    &scan_root,
+                    &mut scanned,
+                    &mut orphan_paths,
+                    &active_paths,
+                )
+                .map_err(|error| error.to_string())?;
 
-        let mut scanned = 0;
-        let mut orphan_paths = Vec::new();
-
-        self.collect_disk_files(&root, &root, &mut scanned, &mut orphan_paths, &active_paths)?;
+                for db_rel in &active_paths {
+                    if let Ok(safe_path) = resolve_and_verify_evidence_path(&scan_root, db_rel) {
+                        if !safe_path.is_file() {
+                            missing_paths.push(db_rel.clone());
+                        }
+                    }
+                }
+            }
+            Ok::<_, String>((scanned, orphan_paths, missing_paths))
+        })
+        .await
+        .map_err(|error| PipelineError::Snapshot(format!("证据文件对账扫描任务失败: {error}")))?
+        .map_err(|error| PipelineError::Snapshot(format!("证据文件对账扫描失败: {error}")))?;
 
         let orphan_count = orphan_paths.len() as u64;
         if orphan_count > 0 {
@@ -789,41 +805,46 @@ impl StorageCleaner {
                 count = orphan_count,
                 "对账扫描发现磁盘存在孤儿证据文件，立即移入墓碑隔离区回收"
             );
-            for rel_path in orphan_paths {
+            for _ in &orphan_paths {
                 self.metrics
                     .orphan_files_detected_total
                     .fetch_add(1, Ordering::Relaxed);
-                if let Ok(Some(tombstone_p)) = quarantine_file(&root, &rel_path) {
-                    self.dispatcher.dispatch(tombstone_p).await;
-                }
+            }
+            let quarantine_root = root.clone();
+            let tombstones = tokio::task::spawn_blocking(move || {
+                orphan_paths
+                    .iter()
+                    .filter_map(|rel_path| {
+                        quarantine_file(&quarantine_root, rel_path).ok().flatten()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|error| PipelineError::Snapshot(format!("孤儿证据隔离任务失败: {error}")))?;
+            for tombstone_path in tombstones {
+                self.dispatcher.dispatch(tombstone_path).await;
             }
         }
 
-        let mut missing_records = 0;
-        for db_rel in &active_paths {
-            if let Ok(safe_p) = resolve_and_verify_evidence_path(&root, db_rel) {
-                if !safe_p.is_file() {
-                    missing_records += 1;
-                    self.metrics
-                        .missing_files_detected_total
-                        .fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!(
-                        rel_path = %db_rel,
-                        "对账发现数据库活跃记录在物理磁盘上已丢失 (Ghost Record)"
-                    );
-                }
-            }
+        let missing_count = missing_paths.len() as u64;
+        for db_rel in missing_paths {
+            self.metrics
+                .missing_files_detected_total
+                .fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                rel_path = %db_rel,
+                "对账发现数据库活跃记录在物理磁盘上已丢失 (Ghost Record)"
+            );
         }
 
         Ok(ReconciliationReport {
             total_scanned_files: scanned,
             orphan_files_reclaimed: orphan_count,
-            missing_records_detected: missing_records,
+            missing_records_detected: missing_count,
         })
     }
 
     fn collect_disk_files(
-        &self,
         root: &Path,
         current_dir: &Path,
         scanned: &mut u64,
@@ -848,7 +869,7 @@ impl StorageCleaner {
             }
 
             if path.is_dir() {
-                self.collect_disk_files(root, &path, scanned, orphan_paths, active_paths)?;
+                Self::collect_disk_files(root, &path, scanned, orphan_paths, active_paths)?;
             } else if path.is_file() {
                 *scanned += 1;
                 if let Ok(rel) = relativize_safe_path(root, &path) {

@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod middleware;
 pub mod network_service;
 pub mod personnel_import;
+mod personnel_limits;
 pub mod personnel_maintenance;
 pub mod personnel_reextract;
 pub mod personnel_service;
@@ -28,7 +29,7 @@ pub use capture_service::CaptureDispatchService;
 pub use error::ApiError;
 pub use gallery_index::{
     embedding_to_le_bytes, le_bytes_to_embedding, sync_algo_gallery_from_package, FaceFeatureIndex,
-    RegisteredFace,
+    GalleryIndexError, RegisteredFace,
 };
 pub use network_service::NetworkService;
 pub use personnel_import::{

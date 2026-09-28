@@ -46,6 +46,13 @@ const PAGE_SIZE_OPTIONS = [12, 24, 48, 96]
 /** 归档单包上限（MB）。与后端 MAX_IMPORT_ARCHIVE_BYTES 保持一致，仅在 UI 侧做前置提示。 */
 const MAX_IMPORT_ARCHIVE_MB = 100
 
+/**
+ * 检索关键字字符上限。与后端 `MAX_PERSONNEL_KEYWORD_CHARS` 一致：
+ * 超长时后端返回 400，而列表取数失败会静默保留上一次结果，
+ * 若不在此处卡住输入，用户会看到「搜索无反应」而不是报错。
+ */
+const MAX_KEYWORD_LENGTH = 64
+
 const PAGER_CLASS =
   'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-all hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-40 disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-secondary)]'
 
@@ -252,6 +259,7 @@ export function PersonnelPage(): React.ReactElement {
     personnelApi
       .getReextractStatus()
       .then((res) => {
+        if (res.subjectId) return
         setReextractProgress(res)
         lastStatusRef.current = res.status
       })
@@ -307,6 +315,7 @@ export function PersonnelPage(): React.ReactElement {
   // 订阅 WebSocket 完成广播通知
   useEffect(() => {
     const unsub = wsClient.subscribe<ReextractProgress>('personnel.reextract.finished', (data) => {
+      if (data.subjectId) return
       lastStatusRef.current = data.status
       setReextractProgress(data)
       loadData()
@@ -317,13 +326,15 @@ export function PersonnelPage(): React.ReactElement {
   }, [loadData, pushNotice, buildReextractNotice])
 
   // 轮询后台重提任务状态
-  const isTaskRunning = reextractProgress?.status === 'running'
+  const isTaskRunning =
+    reextractProgress?.status === 'running' && reextractProgress.subjectId == null
   useEffect(() => {
     if (!isTaskRunning) return
 
     const timer = setInterval(async () => {
       try {
         const res = await personnelApi.getReextractStatus()
+        if (res.subjectId) return
         setReextractProgress(res)
 
         // 状态从 running 转为已完成或失败
@@ -585,6 +596,7 @@ export function PersonnelPage(): React.ReactElement {
 
   const hasReport =
     reextractProgress !== null &&
+    reextractProgress.subjectId == null &&
     (reextractProgress.status === 'completed' || reextractProgress.status === 'failed') &&
     !isTaskRunning
 
@@ -960,6 +972,7 @@ export function PersonnelPage(): React.ReactElement {
             placeholder={t('actions.searchPlaceholder')}
             aria-label={t('actions.searchPlaceholder')}
             clearAriaLabel={t('actions.clearSearch')}
+            maxLength={MAX_KEYWORD_LENGTH}
             containerClassName="min-w-[200px] flex-1 sm:max-w-xs"
           />
 

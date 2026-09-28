@@ -17,6 +17,7 @@ import type {
   ForceSyncResponse,
   SetTimeResponse,
   SnapshotSystemConfig,
+  RecognitionQueueStats,
 } from '@/types/system'
 
 async function get<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
@@ -93,6 +94,11 @@ export const systemApi = {
   updateTimeConfig: (config: TimeConfig) => put<TimeConfig>('/system/time/config', config),
 
   forceTimeSync: () => post<ForceSyncResponse>('/system/time/sync'),
+
+  // ─── 人脸识别对账队列观测 ───
+
+  getRecognitionQueueStats: (signal?: AbortSignal) =>
+    get<RecognitionQueueStats>('/system/recognition-queue', signal),
 
   setSystemTime: (time: string) => post<SetTimeResponse>('/system/time/set', { time }),
 }

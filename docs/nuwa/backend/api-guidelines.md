@@ -16,7 +16,8 @@
 | ------------------ | --------------------------------------------------------------------------- |
 | HTTP-FLV           | `GET /api/v1/live/{id}.flv?stream=main\|sub&token={jwt}&audio=true\|false&video=true\|false`，也支持 `{id}/flv`；`audio` 默认 false，`video` 默认 true，H.265 WebCodecs 回退时可用 `audio=true&video=false` 请求 AAC-only 音轨 |
 | WS-FLV / WebCodecs | `/api/v1/live/{id}/ws`、`/api/v1/live/{id}/webcodecs?stream=main\|sub&token={jwt}`                       |
-| 媒体流健康快照     | `GET /api/v1/system/media/streams/{stream_key}`，返回 `StreamHealthSnapshot`                |
+| 媒体流健康快照     | `GET /api/v1/system/streams/{stream_key}`，返回 `StreamHealthSnapshot` |
+| 人脸识别队列观测   | `GET /api/v1/system/recognition-queue`，返回队列容量、累计丢弃数与队满次数 |
 | 业务事件 WS        | `/api/v1/ws/events`                                                         |
 | 证据图片           | `/api/v1/evidence/image/...`；规范化后校验路径仍在证据根目录内              |
 | SPA                | 非 `/api/` 路径 fallback 到 `index.html`                                    |
@@ -57,10 +58,58 @@
 
 特征提取阶段写入的照片受 `DiskRollbackGuard` 管理；冲撞拒绝发生在 DB 事务前，失败路径不保留照片文件或人员记录。人员录入经容量为 1 的 admission semaphore 串行化，避免并发新建/追加都在对方写入索引前通过检查。
 
+### 人员列表分页
+
+`GET /api/v1/personnel` 的 `keyword` 上限 64 字符（超长 `400`），`limit` 收敛到 `1..=100`；排序为 `createdAt DESC, id DESC`。
+
+- 关键字经 `db::repository::query::keyword_pattern` 转义，`%` / `_` / `\` 按字面量匹配；前端受控输入与后端限制同源，不得只靠服务端拦截——人员页取数失败会静默保留上一次结果，超长关键字会表现为「搜索无反应」。
+- 排序带 `id` 作唯一次键，保证相同 `createdAt` 行的分页顺序稳定；次键方向只决定这些并列行的展示顺序，当前约定为 `DESC`。
+- 前端 `PAGE_SIZE_OPTIONS` 最大 96，不得超出后端 100 上限。
+
+### 人员特征重提取
+
+全量与单人重提取均通过后台 Worker 执行，使用同一份进度状态、`MaintenanceGate` 与终态 WS topic；单人任务额外持有人员录入许可直到数据库特征和内存索引更新完成。
+
+| 入口 | 语义 | 返回 |
+| --- | --- | --- |
+| `POST /api/v1/personnel/reextract` | 启动全量底库重提取 | `200` + `ReextractProgressDto` |
+| `POST /api/v1/personnel/{id}/reextract` | 启动指定人员重提取 | `200` + `ReextractProgressDto` |
+| `GET /api/v1/personnel/reextract/status` | 查询当前或最近一次重提取进度 | `200` + `ReextractProgressDto` |
+
+`ReextractProgressDto.subjectId` 在单人任务中为目标人员编号，全量任务中为 `null`。进度可由状态接口恢复；终态同时广播 `personnel.reextract.finished`。单人任务在人员详情抽屉内轮询并按 `subjectId` 归属，不能显示为全量报告。
+
+### 人员照片上传上限
+
+| 限制 | 值 | 位置 |
+| --- | --- | --- |
+| 单张照片 | 12 MiB | `read_personnel_photo_field` 与 service 双重校验 |
+| 单次 multipart 表单 | 64 MiB | `DefaultBodyLimit`，仅挂在 `POST /personnel` 与 `POST /personnel/{id}/faces` |
+| 单次照片字段数 | 5 | 路由层先于读流拦截 |
+
+- 浏览器为 multipart framing 与文本字段预留 64 KiB，因此前端可选图片总字节数会略低于 64 MiB 请求体上限；后端仍以完整 request body 执行硬限制。
+- 路由必须显式声明 `DefaultBodyLimit::max(MAX_PERSONNEL_MULTIPART_BYTES)`：axum 默认 2 MiB 会让一张手机原图在上限生效前就被 `PAYLOAD_TOO_LARGE` 拒绝。
+- 超限与解析失败的错误文案不含解析器内部细节（`MultipartError` Display 会带边界/偏移），统一映射为可本地化的固定文案，避免把内部结构泄露给客户端。
+
+### 真人脸检索降级状态
+
+C ABI 共享底库与宿主 `RegisteredFace` 快照可能因算法包异常而不一致。任何 C ABI 异常（检索失败、候选为空、候选 ID 无法映射、数量不一致、`raw_score` 非有限）都必须：置降级位 → 按宿主快照全量重建 → 重建失败则持续降级。
+
+- 降级位由单一 `AtomicU64` 同时编码**一代版本号**与降级标志：`begin_gallery_sync` 先增版本再置位，`finish_gallery_sync` 用 CAS 保证只有「版本未被并发推进且已重建」的调用者能清位。
+- 降级期间检索与冲撞校验一律走宿主路径（`gallery_sync_degraded` 为真时不消费算法包底库），而不是继续读可能缺样本的包内索引。
+- 冲撞校验的失败路径必须 fail closed 且携带归因：返回 `Err` 让录入中止，而不是 `Ok(None)` 静默放行。
+- `RegisteredFace` 快照按数字 ID 排序，C ABI 候选经 `binary_search_by_key` 关联元数据，避免每次检索构造全量 ID 哈希表。
+
+### 人员录入中的重型操作归属
+
+`reload` / 全量重建 / 宿主回退检索 / 冲撞回退检索均在 `tokio::task::spawn_blocking` 内执行；宿主快照以 `Arc<Vec<RegisteredFace>>` 做不可变替换，读侧只克隆 `Arc`。
+
+- 检索热路径不得为每样本分配 `Vec<f32>`：宿主回退直接在小端 FP32 字节切片上累加点积与范数（`normalized_cosine_from_le_bytes`），并做归一化余弦。
+- 快照不可变替换是并发正确性的前提：`insert_batch` / `remove_batch` 通过 `Arc::make_mut` 一次性复制，避免逐条写锁与部分可见。
+
 ## 人员批量导入
 
-批量建档走「归档上传 → 后台任务 → 轮询/WS 观测终态报告」异步模型，与全量底库特征重提取共用同一把单许可闸门
-（[MaintenanceGate](../../../crates/api/src/personnel_maintenance.rs)），二者不可并行；闸门被占时返回 `409` + `40902`。
+批量建档走「归档上传 → 后台任务 → 轮询/WS 观测终态报告」异步模型；批量导入与全量/单人特征重提取共用同一把单许可闸门
+（[MaintenanceGate](../../../crates/api/src/personnel_maintenance.rs)），彼此不可并行；闸门被占时返回 `409` + `40902`。
 
 | 入口 | 语义 | 载荷 |
 | --- | --- | --- |

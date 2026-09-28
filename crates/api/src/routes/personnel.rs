@@ -6,13 +6,17 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use types::{
     PersonnelDetailDto, PersonnelImportProgressDto, PersonnelItemDto, PersonnelStatsDto,
-    ReextractFaceFeaturesReportDto, ReextractProgressDto, UpdatePersonnelRequest,
+    ReextractProgressDto, UpdatePersonnelRequest,
 };
 
 use crate::error::ApiError;
 use crate::personnel_import::manager::{MAX_IMPORT_ARCHIVE_BYTES, MAX_IMPORT_REQUEST_BYTES};
 use crate::personnel_import::ImportTaskContext;
+use crate::personnel_limits::{
+    MAX_PERSONNEL_MULTIPART_BYTES, MAX_PERSONNEL_PHOTOS_PER_PERSON, MAX_PERSONNEL_PHOTO_BYTES,
+};
 use crate::personnel_maintenance::MaintenanceTaskKind;
+use crate::personnel_reextract::{ReextractScope, ReextractTaskDependencies};
 use crate::personnel_service::PersonnelService;
 use crate::response::ApiResponse;
 use crate::state::AppState;
@@ -32,6 +36,9 @@ fn default_limit() -> u64 {
     20
 }
 
+const MAX_PERSONNEL_PAGE_SIZE: u64 = 100;
+const MAX_PERSONNEL_KEYWORD_CHARS: usize = 64;
+
 /// 人员列表响应
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +50,12 @@ pub struct PersonnelListResponse {
 /// 组装人员底库路由
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/", get(list_personnel).post(create_personnel))
+        .route(
+            "/",
+            get(list_personnel)
+                .post(create_personnel)
+                .layer(DefaultBodyLimit::max(MAX_PERSONNEL_MULTIPART_BYTES)),
+        )
         .route("/stats", get(get_personnel_stats))
         .route(
             "/import",
@@ -60,7 +72,10 @@ pub fn router() -> Router<AppState> {
                 .put(update_personnel)
                 .delete(delete_personnel),
         )
-        .route("/{id}/faces", post(add_personnel_faces))
+        .route(
+            "/{id}/faces",
+            post(add_personnel_faces).layer(DefaultBodyLimit::max(MAX_PERSONNEL_MULTIPART_BYTES)),
+        )
         .route("/{id}/faces/{face_id}", delete(delete_personnel_face))
         .route(
             "/{id}/faces/{face_id}/primary",
@@ -83,9 +98,23 @@ async fn list_personnel(
     State(state): State<AppState>,
     Query(query): Query<PersonnelQuery>,
 ) -> Result<ApiResponse<PersonnelListResponse>, ApiError> {
+    let keyword = query
+        .keyword
+        .as_deref()
+        .map(str::trim)
+        .filter(|keyword| !keyword.is_empty());
+    if keyword.is_some_and(|value| value.chars().count() > MAX_PERSONNEL_KEYWORD_CHARS) {
+        return Err(ApiError::BadRequest(format!(
+            "keyword 长度不能超过 {MAX_PERSONNEL_KEYWORD_CHARS} 个字符"
+        )));
+    }
     let svc = PersonnelService::from_state(&state);
     let (items, total) = svc
-        .list(query.keyword.as_deref(), query.limit, query.offset)
+        .list(
+            keyword,
+            query.limit.clamp(1, MAX_PERSONNEL_PAGE_SIZE),
+            query.offset,
+        )
         .await?;
     Ok(ApiResponse::success(PersonnelListResponse { items, total }))
 }
@@ -119,47 +148,30 @@ async fn create_personnel(
     let mut id_card = String::new();
     let mut remark = String::new();
     let mut raw_images: Vec<Vec<u8>> = Vec::new();
+    let mut photo_fields = 0usize;
 
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| ApiError::BadRequest(format!("解析 Multipart 失败: {e}")))?
+        .map_err(map_personnel_multipart_error)?
     {
         let field_name = field.name().unwrap_or_default().to_string();
+        if is_personnel_photo_field(&field_name) {
+            append_personnel_photo_field(field, &mut photo_fields, &mut raw_images).await?;
+            continue;
+        }
         match field_name.as_str() {
             "name" => {
-                name = field
-                    .text()
-                    .await
-                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+                name = read_personnel_text_field(field).await?;
             }
             "subjectId" | "subject_id" => {
-                let val = field
-                    .text()
-                    .await
-                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-                subject_id = Some(val);
+                subject_id = Some(read_personnel_text_field(field).await?);
             }
             "idCard" | "id_card" => {
-                id_card = field
-                    .text()
-                    .await
-                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+                id_card = read_personnel_text_field(field).await?;
             }
             "remark" => {
-                remark = field
-                    .text()
-                    .await
-                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-            }
-            "image" | "images" | "photo" | "photos" | "file" | "files" => {
-                let bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-                if !bytes.is_empty() {
-                    raw_images.push(bytes.to_vec());
-                }
+                remark = read_personnel_text_field(field).await?;
             }
             _ => {}
         }
@@ -203,30 +215,81 @@ async fn add_personnel_faces(
     mut multipart: Multipart,
 ) -> Result<ApiResponse<PersonnelDetailDto>, ApiError> {
     let mut raw_images = Vec::new();
+    let mut photo_fields = 0usize;
 
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?
+        .map_err(map_personnel_multipart_error)?
     {
         let name = field.name().unwrap_or_default().to_string();
-        if matches!(
-            name.as_str(),
-            "image" | "images" | "photo" | "photos" | "file" | "files"
-        ) {
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-            if !bytes.is_empty() {
-                raw_images.push(bytes.to_vec());
-            }
+        if is_personnel_photo_field(&name) {
+            append_personnel_photo_field(field, &mut photo_fields, &mut raw_images).await?;
         }
     }
 
     let svc = PersonnelService::from_state(&state);
     let detail = svc.add_faces(&subject_id, raw_images).await?;
     Ok(ApiResponse::success(detail))
+}
+
+fn is_personnel_photo_field(name: &str) -> bool {
+    matches!(
+        name,
+        "image" | "images" | "photo" | "photos" | "file" | "files"
+    )
+}
+
+async fn append_personnel_photo_field(
+    field: axum::extract::multipart::Field<'_>,
+    photo_fields: &mut usize,
+    raw_images: &mut Vec<Vec<u8>>,
+) -> Result<(), ApiError> {
+    *photo_fields += 1;
+    if *photo_fields > MAX_PERSONNEL_PHOTOS_PER_PERSON {
+        return Err(ApiError::BadRequest(format!(
+            "单个人员最多支持上传 {MAX_PERSONNEL_PHOTOS_PER_PERSON} 张人脸照片"
+        )));
+    }
+
+    let bytes = read_personnel_photo_field(field).await?;
+    if !bytes.is_empty() {
+        raw_images.push(bytes);
+    }
+    Ok(())
+}
+
+async fn read_personnel_text_field(
+    field: axum::extract::multipart::Field<'_>,
+) -> Result<String, ApiError> {
+    let bytes = field.bytes().await.map_err(map_personnel_multipart_error)?;
+    std::str::from_utf8(&bytes)
+        .map(str::to_owned)
+        .map_err(|_| ApiError::BadRequest("人员信息字段不是有效 UTF-8".to_string()))
+}
+
+async fn read_personnel_photo_field(
+    field: axum::extract::multipart::Field<'_>,
+) -> Result<Vec<u8>, ApiError> {
+    let bytes = field.bytes().await.map_err(map_personnel_multipart_error)?;
+    if bytes.len() > MAX_PERSONNEL_PHOTO_BYTES {
+        return Err(ApiError::BadRequest(format!(
+            "单张人脸照片不能超过 {} MiB",
+            MAX_PERSONNEL_PHOTO_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(bytes.to_vec())
+}
+
+fn map_personnel_multipart_error(error: axum::extract::multipart::MultipartError) -> ApiError {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiError::BadRequest(format!(
+            "人员照片表单总大小不能超过 {} MiB",
+            MAX_PERSONNEL_MULTIPART_BYTES / (1024 * 1024)
+        ))
+    } else {
+        ApiError::BadRequest("人员上传表单格式无效".to_string())
+    }
 }
 
 /// 删除单张人脸特征样本（至少保留 1 张）
@@ -260,12 +323,15 @@ async fn start_reextract_all_faces(
     let initial_progress = state
         .reextract_manager
         .start_task(
-            state.db.clone(),
-            evidence_base_dir,
-            state.algo_registry.clone(),
-            state.gallery_index.clone(),
-            maintenance_guard,
-            state.event_broadcaster.clone(),
+            ReextractScope::AllFaces,
+            ReextractTaskDependencies {
+                db: state.db.clone(),
+                evidence_base_dir,
+                algo_registry: state.algo_registry.clone(),
+                gallery_index: state.gallery_index.clone(),
+                maintenance_guard,
+                event_broadcaster: state.event_broadcaster.clone(),
+            },
         )
         .await?;
     Ok(ApiResponse::success(initial_progress))
@@ -279,14 +345,34 @@ async fn get_reextract_status(
     Ok(ApiResponse::success(progress))
 }
 
-/// 针对单个人员重新提取其所有人脸样本特征（快速同步处理）
+/// 针对单个人员重新提取其所有人脸样本特征
+///
+/// 走与全量重提相同的后台任务模型：单体在 RK3568 这类单核 NPU 上逐个样本串行提取，
+/// 挂在一个 HTTP 请求里既会与常驻视频流推理争抢时间片，也会因超时/客户端失联
+/// 丢掉整批进度。调用方改为读 `/reextract/status` 或订阅 WS 终态主题。
 async fn reextract_single_personnel_faces(
     State(state): State<AppState>,
     AxumPath(subject_id): AxumPath<String>,
-) -> Result<ApiResponse<ReextractFaceFeaturesReportDto>, ApiError> {
-    let svc = PersonnelService::from_state(&state);
-    let report = svc.reextract_single_personnel_features(&subject_id).await?;
-    Ok(ApiResponse::success(report))
+) -> Result<ApiResponse<ReextractProgressDto>, ApiError> {
+    let evidence_base_dir = state.base_evidence_dir();
+    let maintenance_guard = state
+        .maintenance_gate
+        .acquire(MaintenanceTaskKind::Reextract)?;
+    let initial_progress = state
+        .reextract_manager
+        .start_task(
+            ReextractScope::Subject(subject_id.trim().to_string()),
+            ReextractTaskDependencies {
+                db: state.db.clone(),
+                evidence_base_dir,
+                algo_registry: state.algo_registry.clone(),
+                gallery_index: state.gallery_index.clone(),
+                maintenance_guard,
+                event_broadcaster: state.event_broadcaster.clone(),
+            },
+        )
+        .await?;
+    Ok(ApiResponse::success(initial_progress))
 }
 
 // ============================================================================

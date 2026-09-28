@@ -539,6 +539,14 @@ impl LoadedLib {
         // SAFETY: 寻址动态库代码段导出的 av_algo_get_gallery_abi 符号
         unsafe { self._lib.get(AV_ALGO_GET_GALLERY_ABI_SYMBOL).ok() }
     }
+
+    /// 尝试寻址**可选**批量底库写入符号
+    ///
+    /// 缺失不是错误：旧算法包没有该导出，宿主回退到逐条 `gallery_insert`/`gallery_remove`。
+    pub fn get_gallery_bulk_fn(&self) -> Option<Symbol<'_, AvAlgoGalleryBulkFn>> {
+        // SAFETY: 寻址动态库代码段导出的 av_algo_gallery_bulk 符号；缺失即返回 None
+        unsafe { self._lib.get(AV_ALGO_GALLERY_BULK_SYMBOL).ok() }
+    }
 }
 
 /// 算法库元数据信息（Rust 友好版）
@@ -984,6 +992,8 @@ pub struct RawAlgoGallery {
     lib: Arc<LoadedLib>,
     raw: AvAlgoGallery,
     abi: AvAlgoGalleryAbi,
+    /// 可选批量写入函数指针；为 `None` 时逐条回退。
+    bulk_fn: Option<AvAlgoGalleryBulkFn>,
     #[allow(dead_code)]
     _raw_lib: RawAlgoLibrary,
 }
@@ -1031,6 +1041,9 @@ impl RawAlgoGallery {
             reason: "gallery_create 函数指针为空".to_string(),
         })?;
 
+        // 可选批量写入符号：存在则全量重建走 O(N) 快照替换，缺失则逐条回退。
+        let bulk_fn: Option<AvAlgoGalleryBulkFn> = lib.get_gallery_bulk_fn().map(|symbol| *symbol);
+
         let mut raw: AvAlgoGallery = ptr::null_mut();
         // SAFETY: create_fn 仅接收有效库句柄并写入局部指针变量
         let status = unsafe { create_fn(lib_raw, &mut raw) };
@@ -1044,6 +1057,7 @@ impl RawAlgoGallery {
             lib,
             raw,
             abi,
+            bulk_fn,
             _raw_lib: raw_lib,
         })
     }
@@ -1108,6 +1122,92 @@ impl RawAlgoGallery {
             });
         }
         Ok(())
+    }
+
+    /// 批量增量插入或更新样本
+    ///
+    /// 算法包导出可选批量符号时走单次快照替换；否则逐条 `insert`（O(N²)，语义等价）。
+    /// 任一条失败都会返回错误——调用方不得把它当成“已同步”。
+    pub fn insert_batch(&self, samples: &[(u64, Vec<u8>)]) -> Result<(), InferError> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+
+        let Some(bulk_fn) = self.bulk_fn else {
+            for (id, feature_bytes) in samples {
+                self.insert(*id, feature_bytes)?;
+            }
+            return Ok(());
+        };
+
+        let entries: Vec<AvGalleryBulkEntry> = samples
+            .iter()
+            .map(|(id, feature_bytes)| AvGalleryBulkEntry {
+                id: *id,
+                feature_bytes: feature_bytes.as_ptr(),
+                feature_len: feature_bytes.len() as u32,
+                reserved0: 0,
+            })
+            .collect();
+
+        // SAFETY: entries 在同步调用期有效；raw 由 create 成功获得并维持存活
+        let status = unsafe {
+            bulk_fn(
+                self.raw,
+                AV_GALLERY_BULK_INSERT,
+                entries.as_ptr(),
+                entries.len() as u32,
+            )
+        };
+        if status != AV_OK {
+            return Err(InferError::Execution {
+                reason: format!("批量插入底库样本失败: status={status}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// 批量增量删除指定数字 ID 的样本
+    pub fn remove_batch(&self, ids: &[u64]) -> Result<(), InferError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        let Some(bulk_fn) = self.bulk_fn else {
+            for id in ids {
+                self.remove(*id)?;
+            }
+            return Ok(());
+        };
+
+        let entries: Vec<AvGalleryBulkEntry> = ids
+            .iter()
+            .map(|id| AvGalleryBulkEntry {
+                id: *id,
+                ..AvGalleryBulkEntry::default()
+            })
+            .collect();
+
+        // SAFETY: entries 在同步调用期有效；raw 由 create 成功获得并维持存活
+        let status = unsafe {
+            bulk_fn(
+                self.raw,
+                AV_GALLERY_BULK_REMOVE,
+                entries.as_ptr(),
+                entries.len() as u32,
+            )
+        };
+        if status != AV_OK {
+            return Err(InferError::Execution {
+                reason: format!("批量删除底库样本失败: status={status}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// 是否具备批量写入能力（供宿主选择全量重建路径与观测）
+    pub fn supports_bulk_write(&self) -> bool {
+        self.bulk_fn.is_some()
     }
 
     /// 获取底库总数

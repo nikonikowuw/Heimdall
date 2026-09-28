@@ -3,6 +3,7 @@ import { Trash2, User } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { evidenceApi } from '@/lib/api'
+import { MAX_PERSONNEL_PHOTOS_PER_PERSON } from '@/lib/personnelUpload'
 import type { PersonnelItem } from '@/types'
 
 export interface DeleteConfirmModalProps {
@@ -70,7 +71,7 @@ export function DeleteConfirmModal({
             </div>
 
             <span className="font-data shrink-0 rounded-lg border border-[var(--border)]/70 bg-[var(--bg-surface)]/70 px-2 py-1 text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">
-              {t('card.sampleCount')} {target.faceCount}/5
+              {t('card.sampleCount')} {target.faceCount}/{MAX_PERSONNEL_PHOTOS_PER_PERSON}
             </span>
           </div>
 

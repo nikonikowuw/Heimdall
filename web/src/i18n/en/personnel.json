@@ -181,7 +181,10 @@
   "errors": {
     "nameRequired": "Name is required",
     "photoRequired": "Please select at least 1 valid face photo",
-    "maxPhotosExceeded": "Maximum 5 photos per person",
+    "maxPhotosExceeded": "Maximum {{max}} photos per person",
+    "photoPrepareFailed": "Some photos could not be prepared. Choose valid JPEG, PNG, or WebP images and try again.",
+    "photoTooLarge": "Each face photo must be at most {{mb}} MiB.",
+    "formTooLarge": "The selected photos exceed {{mb}} MiB in total. Remove some or compress them.",
     "cannotDeleteLastFace": "Each person must keep at least 1 face photo",
     "failedToLoad": "Failed to load personnel gallery",
     "failedToSave": "Failed to save personnel info",

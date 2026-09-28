@@ -1,4 +1,9 @@
 use super::{Locale, StaticMessage};
+use crate::personnel_limits::{
+    MAX_PERSONNEL_MULTIPART_BYTES, MAX_PERSONNEL_PHOTOS_PER_PERSON, MAX_PERSONNEL_PHOTO_BYTES,
+};
+
+const MIB: usize = 1024 * 1024;
 
 pub const STATIC_MESSAGES: &[StaticMessage] = &[
     StaticMessage {
@@ -9,9 +14,9 @@ pub const STATIC_MESSAGES: &[StaticMessage] = &[
     },
     StaticMessage {
         code: 40902,
-        zh_cn: "当前有全量底库特征重新提取任务正在后台执行中，请稍候再试",
-        zh_tw: "當前有全量底庫特徵重新擷取任務正在背景執行中，請稍候再試",
-        en: "A gallery face feature re-extraction task is currently running in the background, please try again later.",
+        zh_cn: "当前有人员底库维护任务（批量导入或特征重新提取）正在后台执行中，请稍候再试",
+        zh_tw: "當前有人員底庫維護任務（批量匯入或特徵重新擷取）正在背景執行中，請稍候再試",
+        en: "A personnel maintenance task (bulk import or feature re-extraction) is currently running in the background. Please try again later.",
     },
     StaticMessage {
         code: 40904,
@@ -28,6 +33,100 @@ pub fn translate_personnel(code: u32, original_msg: &str, locale: Locale) -> Opt
 
     match code {
         40001 => {
+            if original_msg.contains("至少需要上传 1 张有效人脸照片") {
+                return match locale {
+                    Locale::ZhCn => Some("至少需要上传 1 张有效人脸照片".to_string()),
+                    Locale::ZhTw => Some("至少需要上傳 1 張有效人臉照片".to_string()),
+                    Locale::En => Some("At least one face photo is required".to_string()),
+                };
+            }
+            if original_msg
+                == format!("单个人员最多支持上传 {MAX_PERSONNEL_PHOTOS_PER_PERSON} 张人脸照片")
+            {
+                return Some(match locale {
+                    Locale::ZhCn => {
+                        format!("单个人员最多支持上传 {MAX_PERSONNEL_PHOTOS_PER_PERSON} 张人脸照片")
+                    }
+                    Locale::ZhTw => {
+                        format!("單個人員最多支援上傳 {MAX_PERSONNEL_PHOTOS_PER_PERSON} 張人臉照片")
+                    }
+                    Locale::En => format!(
+                        "A person can have at most {MAX_PERSONNEL_PHOTOS_PER_PERSON} face photos."
+                    ),
+                });
+            }
+            if original_msg
+                == format!(
+                    "单张人脸照片不能超过 {} MiB",
+                    MAX_PERSONNEL_PHOTO_BYTES / MIB
+                )
+            {
+                return Some(match locale {
+                    Locale::ZhCn => format!(
+                        "单张人脸照片不能超过 {} MiB",
+                        MAX_PERSONNEL_PHOTO_BYTES / MIB
+                    ),
+                    Locale::ZhTw => format!(
+                        "單張人臉照片不得超過 {} MiB",
+                        MAX_PERSONNEL_PHOTO_BYTES / MIB
+                    ),
+                    Locale::En => format!(
+                        "Each face photo must be at most {} MiB.",
+                        MAX_PERSONNEL_PHOTO_BYTES / MIB
+                    ),
+                });
+            }
+            if original_msg
+                == format!(
+                    "人员照片表单总大小不能超过 {} MiB",
+                    MAX_PERSONNEL_MULTIPART_BYTES / MIB
+                )
+            {
+                return Some(match locale {
+                    Locale::ZhCn => format!(
+                        "人员照片表单总大小不能超过 {} MiB",
+                        MAX_PERSONNEL_MULTIPART_BYTES / MIB
+                    ),
+                    Locale::ZhTw => format!(
+                        "人員照片表單總大小不得超過 {} MiB",
+                        MAX_PERSONNEL_MULTIPART_BYTES / MIB
+                    ),
+                    Locale::En => format!(
+                        "The personnel photo upload exceeds the {} MiB total size limit.",
+                        MAX_PERSONNEL_MULTIPART_BYTES / MIB
+                    ),
+                });
+            }
+            if original_msg == "人员上传表单格式无效" {
+                return Some(match locale {
+                    Locale::ZhCn => "人员上传表单格式无效".to_string(),
+                    Locale::ZhTw => "人員上傳表單格式無效".to_string(),
+                    Locale::En => "The personnel upload form is malformed.".to_string(),
+                });
+            }
+            if original_msg.contains("人员编号必须是单一路径组件") {
+                return match locale {
+                    Locale::ZhCn => Some(original_msg.to_string()),
+                    Locale::ZhTw => {
+                        Some("人員編號必須是單一路徑元件，不能包含路徑分隔符".to_string())
+                    }
+                    Locale::En => Some(
+                        "Subject ID must be a single path component without separators."
+                            .to_string(),
+                    ),
+                };
+            }
+            if original_msg.contains("keyword 长度不能超过") {
+                return match locale {
+                    Locale::ZhCn => Some(original_msg.to_string()),
+                    Locale::ZhTw => Some(
+                        original_msg
+                            .replace("长度不能超过", "長度不得超過")
+                            .replace("个字符", "個字元"),
+                    ),
+                    Locale::En => Some("Personnel search keyword is too long.".to_string()),
+                };
+            }
             if original_msg.contains("人员姓名不能为空") || original_msg.contains("姓名不能为空")
             {
                 return match locale {
@@ -48,21 +147,6 @@ pub fn translate_personnel(code: u32, original_msg: &str, locale: Locale) -> Opt
                     Locale::ZhCn => Some("必须提供至少一张人脸照片".to_string()),
                     Locale::ZhTw => Some("必須提供至少一張人臉照片".to_string()),
                     Locale::En => Some("At least one face photo must be provided".to_string()),
-                };
-            }
-            if original_msg.contains("人员最多关联 5 张人脸照片") {
-                return match locale {
-                    Locale::ZhCn => Some(original_msg.to_string()),
-                    Locale::ZhTw => Some(
-                        original_msg
-                            .replace("人员最多关联 5 张人脸照片", "人員最多關聯 5 張人臉照片")
-                            .replace("当前已有", "當前已有")
-                            .replace("张", "張")
-                            .replace("本次尝试追加", "本次嘗試追加"),
-                    ),
-                    Locale::En => {
-                        Some("A person can have at most 5 face photos in total.".to_string())
-                    }
                 };
             }
             if original_msg.contains("人员至少保留 1 张人脸样本") {

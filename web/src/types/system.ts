@@ -282,3 +282,21 @@ export interface SnapshotSystemConfig {
   subStreamCropQuality: number
   cropPaddingRatio: number
 }
+
+// ─── 人脸识别对账队列观测 ───
+
+/**
+ * 有界队列的投递观测快照。
+ *
+ * 这里刻意不暴露「积压深度」：`tokio::sync::mpsc::Sender::capacity()` 是
+ * *剩余可用槽位*，在队满分支恒为 0，用它反推深度只会得到一个永远等于
+ * `capacity` 的常量——看起来有值，却不携带任何信息。
+ *
+ * 判读口径：`droppedTotal` 单增而 `fullObservedTotal` 不同步增长是瞬时限流；
+ * 二者持续同步增长才是消费侧跟不上。
+ */
+export interface RecognitionQueueStats {
+  capacity: number
+  droppedTotal: number
+  fullObservedTotal: number
+}

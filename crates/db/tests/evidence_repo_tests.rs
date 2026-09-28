@@ -93,6 +93,24 @@ async fn test_capture_and_recognition_repository_lifecycle() {
     assert_eq!(inserted_rec.fused_count, Some(6));
     assert_eq!(inserted_rec.template_quality, Some(0.83));
 
+    // 活跃证据路径集合必须覆盖识别对账记录的全部物理文件。
+    // 漏登记 `field_image_path` / `registered_photo_path` 会让孤儿对账把仍被引用的
+    // 隔离副本（`recognitions/{id}_gallery.jpg`）判为无主文件并清除。
+    let active_paths = RecognitionRepo::find_all_active_image_paths(&db)
+        .await
+        .expect("active image paths");
+    for expected in [
+        "cam_01/crop_001.jpg",
+        "cam_01/full_001.jpg",
+        "galleries/alice.jpg",
+    ] {
+        assert!(
+            active_paths.contains(expected),
+            "活跃集合必须包含 {expected}，实际: {active_paths:?}"
+        );
+    }
+    assert_eq!(active_paths.len(), 3, "不得把空串当成活跃路径混入集合");
+
     let recs = RecognitionRepo::list_recent(&db, Some("cam_01"), 10, 0)
         .await
         .expect("list");

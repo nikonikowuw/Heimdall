@@ -18,12 +18,13 @@ import {
   Activity,
   Clock,
   Network,
+  Layers,
 } from 'lucide-react'
 import { systemApi } from '@/lib/system-api'
 import { RefreshButton } from '@/components/RefreshButton'
 import { SystemSettingsHeader } from './components/SystemSettingsHeader'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
-import type { SystemOverview as SystemOverviewData } from '@/types/system'
+import type { SystemOverview as SystemOverviewData, RecognitionQueueStats } from '@/types/system'
 
 // 导入新的组件
 import { CpuHeatmap } from './components/CpuHeatmap'
@@ -104,6 +105,7 @@ function getUsageColor(percent: number): string {
 export function SystemOverview(): React.ReactElement {
   const { t } = useTranslation('system')
   const [data, setData] = useState<SystemOverviewData | null>(null)
+  const [queueStats, setQueueStats] = useState<RecognitionQueueStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -116,9 +118,14 @@ export function SystemOverview(): React.ReactElement {
         if (isManual) {
           setRefreshing(true)
         }
-        const overview = await systemApi.getOverview(signal)
+        const [overview, queue] = await Promise.all([
+          systemApi.getOverview(signal),
+          // 队列计数是诊断性指标：取不到不影响概览渲染，不应连带把整个面板打成错误态
+          systemApi.getRecognitionQueueStats(signal).catch(() => null),
+        ])
         if (!signal?.aborted) {
           setData(overview)
+          setQueueStats(queue)
           setError(null)
         }
       } catch (err) {
@@ -247,6 +254,9 @@ export function SystemOverview(): React.ReactElement {
           <SettingsSection title={t('overview.diskDetail', { defaultValue: '磁盘详情' })}>
             <LoadingSkeleton rows={2} />
           </SettingsSection>
+          <SettingsSection title={t('overview.recognitionQueue', { defaultValue: '识别对账队列' })}>
+            <LoadingSkeleton rows={2} />
+          </SettingsSection>
         </>
       )}
 
@@ -320,6 +330,42 @@ export function SystemOverview(): React.ReactElement {
       {data && (
         <SettingsSection title={t('overview.diskDetail', { defaultValue: '磁盘详情' })}>
           <DiskDetail disk={data.disk} />
+        </SettingsSection>
+      )}
+
+      {/* 识别对账队列投递观测：有界队列的过载证据，与媒体流健康度互补 */}
+      {queueStats && (
+        <SettingsSection title={t('overview.recognitionQueue', { defaultValue: '识别对账队列' })}>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+            <StatTile
+              icon={Layers}
+              label={t('overview.queueCapacity', { defaultValue: '队列容量' })}
+              value={queueStats.capacity}
+              color="var(--accent)"
+            />
+            <StatTile
+              icon={AlertTriangle}
+              label={t('overview.queueDropped', { defaultValue: '累计丢弃比对' })}
+              value={queueStats.droppedTotal}
+              color={
+                queueStats.droppedTotal > 0 ? 'var(--status-warning)' : 'var(--status-success)'
+              }
+            />
+            <StatTile
+              icon={Activity}
+              label={t('overview.queueFullObserved', { defaultValue: '观察到队满次数' })}
+              value={queueStats.fullObservedTotal}
+              color={
+                queueStats.fullObservedTotal > 0 ? 'var(--status-warning)' : 'var(--status-success)'
+              }
+            />
+          </div>
+          <p className="mt-3 text-xs text-[var(--text-muted)]">
+            {t('overview.queueHint', {
+              defaultValue:
+                '丢弃数与队满次数持续同步增长才是消费侧跟不上；仅一次队满则是瞬时尖峰。',
+            })}
+          </p>
         </SettingsSection>
       )}
 
