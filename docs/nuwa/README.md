@@ -71,6 +71,7 @@ Nuwa 规范体系为 Heimdall 提供统一的工程准绳。系统定位于工�
 | 文档 | 说明 | 重点关注 |
 | :--- | :--- | :--- |
 | [🔁 算法实例增量运行时](./designs/algorithm-instance-incremental-runtime.md) | 算法参数即时应用、实例级增删与 Worker 增量生命周期（已落地） | 期望/实际配置分离、帧边界切换、`applied/pending/failed` 状态、任务级配置版本号并发保护 |
+| [🧩 算法 SDK 兼容性与平台层收敛（规划草案）](./designs/algo-sdk-compatibility-and-platform-absorption.md) | 双契约模型、稳定性分区、RKNN 绑定收敛、契约通道启用与兼容性门禁 | 只加不破、绞杀者迁移、冻结 ABI、semver 门禁、`frame_requirements` 默认关闭 |
 | [📹 录像与回放引擎（规划草案）](./designs/video-recording-and-playback-engine.md) | 纯流直封装 MP4 切片、事件前置缓冲与时间轴回放 | 零转码开销、配置契约与可选启闭、eMMC 寿命防护 |
 | [🎯 运动门控引擎](./designs/motion-detection-gating-engine.md) | 基于 Y 平面差分的轻量级前置门控 | 0 次无效推理、O(1) 调度、余晖保活、多边形遮罩 |
 | [🚬 RK3568 级联吸烟检测引擎](./designs/rk3568-smoking-detection-engine.md) | 面向单核 1.0 TOPS RK3568 的级联姿态与香烟检测 | 四级漏斗门控、RGA2 硬件双路零拷贝、无头纯卷积、防张冠李戴安全航迹 |
