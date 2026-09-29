@@ -18,7 +18,10 @@ export interface AuxCameraCardProps {
 }
 
 function getResolutionBadge(cam: Camera): string {
-  if (cam.lastWidth > 0 && cam.lastHeight > 0) {
+  if (cam.lastWidth >= 3840 || cam.lastHeight >= 2160) {
+    return '4K'
+  }
+  if (cam.lastHeight > 0) {
     return `${cam.lastHeight}P`
   }
   return '--'
@@ -32,14 +35,14 @@ function getStatusBadge(
     case 'healthy':
       return {
         text: t('status.online', { defaultValue: '在线' }),
-        dotClass: 'bg-status-success',
-        statusColor: 'text-status-success',
+        dotClass: 'bg-[var(--status-success)]',
+        statusColor: 'text-[var(--status-success)]',
       }
     case 'degraded':
       return {
         text: t('status.degraded', { defaultValue: '网络波动' }),
-        dotClass: 'bg-status-warning',
-        statusColor: 'text-status-warning',
+        dotClass: 'bg-[var(--status-warning)]',
+        statusColor: 'text-[var(--status-warning)]',
       }
     case 'offline':
       return {
@@ -51,8 +54,8 @@ function getStatusBadge(
     default:
       return {
         text: t('status.unprobed', { defaultValue: '待探测' }),
-        dotClass: 'bg-[var(--text-muted)]',
-        statusColor: 'text-[var(--text-muted)]',
+        dotClass: 'bg-white/40',
+        statusColor: 'text-white/80',
       }
   }
 }
@@ -78,7 +81,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
         duration: motionTokens.duration.fast,
         ease: motionTokens.easing.smooth,
       }}
-      className={`group relative cursor-pointer overflow-hidden rounded-xl border bg-[var(--bg-secondary)] text-left transition-colors duration-300 hover:shadow-lg ${
+      className={`group on-dark-surface relative aspect-video w-full cursor-pointer overflow-hidden rounded-xl border bg-[var(--video-surface)] text-left transition-colors duration-300 hover:shadow-lg ${
         isAlarming
           ? 'border-[var(--status-danger)] shadow-[var(--status-danger)]/40 shadow-lg ring-2 ring-[var(--status-danger)]'
           : isFocused
@@ -86,6 +89,7 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
             : 'hover:border-status-info/50 hover:shadow-status-info/10 border-[var(--border)]'
       }`}
     >
+      {/* 整卡点击切换为主屏焦点 */}
       <button
         type="button"
         onClick={() => onSelectHero(camera.cameraId)}
@@ -96,51 +100,15 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
         <span className="sr-only">{t('live.focusCamera', { name: camera.name })}</span>
       </button>
 
-      {/* 告警中微型指示标签 */}
-      {isAlarming && (
-        <div className="absolute top-2 left-2 z-20 flex items-center gap-1 rounded-md bg-[var(--status-danger-solid)] px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md">
-          <ShieldAlert className="h-3 w-3" />
-          <span>{t('live.alarmDetected')}</span>
-        </div>
-      )}
-
-      {/* 微缩播放器视口 */}
-      <div className="relative aspect-video w-full">
-        {/* 悬停快捷操作组 */}
-        <div className="on-dark-surface absolute top-2 right-2 z-20 flex items-center gap-1 rounded-lg bg-black/70 p-1 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onEditCamera(camera)
-            }}
-            className="min-h-11 min-w-11 rounded p-1 text-white/80 transition-colors hover:bg-white/20 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
-            aria-label={t('manage.editCamera')}
-            title={t('manage.editCamera')}
-          >
-            <Pencil className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDeleteCamera(camera)
-            }}
-            className="min-h-11 min-w-11 rounded p-1 text-[var(--status-danger)] transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none sm:min-h-0 sm:min-w-0"
-            aria-label={t('manage.deleteCamera')}
-            title={t('manage.deleteCamera')}
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-
+      {/* 画面视口（主屏休眠占位 vs 实时辅流播放器） */}
+      <div className="relative h-full w-full">
         {isFocused ? (
-          <div className="flex h-full w-full flex-col items-center justify-center bg-black/80 p-2 text-center">
-            <div className="border-status-info/30 bg-status-info/10 text-status-info flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs">
-              <Eye className="h-3 w-3" />
+          <div className="flex h-full w-full flex-col items-center justify-center bg-black/85 p-2 text-center select-none">
+            <div className="flex items-center gap-1.5 rounded-full border border-[var(--status-info)]/40 bg-[var(--status-info)]/15 px-3 py-1 text-xs font-semibold text-[var(--status-info)] shadow-xs">
+              <Eye className="h-3.5 w-3.5" />
               <span>{t('live.focusedOnHero')}</span>
             </div>
-            <span className="mt-1.5 text-[10px] text-[var(--text-muted)]">
+            <span className="mt-1.5 text-[10px] font-medium text-white/70">
               {t('live.auxStreamSleeping')}
             </span>
           </div>
@@ -157,51 +125,97 @@ export const AuxCameraCard = React.memo(function AuxCameraCard({
         )}
       </div>
 
-      {/* 卡片底部遥测状态条 */}
-      <div className="p-2.5">
-        <div className="flex items-center justify-between">
+      {/* 顶部悬浮 HUD：机位信息胶囊与快捷操作 */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between p-2 text-xs">
+        <div className="flex max-w-[calc(100%-4.25rem)] min-w-0 items-center gap-1.5 rounded-lg border border-white/20 bg-black/80 px-2 py-1 shadow-md backdrop-blur-xs">
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusBadge.dotClass}`} />
           <span
-            className={`text-xs font-semibold transition-colors ${
+            className={`truncate font-semibold transition-colors ${
               isAlarming
                 ? 'text-[var(--status-danger)]'
                 : isFocused
-                  ? 'text-status-info'
-                  : 'group-hover:text-status-info text-[var(--text-primary)]'
+                  ? 'text-[var(--status-info)]'
+                  : 'text-white group-hover:text-[var(--status-info)]'
             }`}
+            title={camera.name}
           >
             {camera.name}
           </span>
-          <span
-            className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-              normalizeProbeStatus(camera.lastProbeStatus) === 'healthy'
-                ? 'bg-status-success/10 text-status-success'
-                : 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
-            }`}
-          >
+          <span className="py-0.2 shrink-0 rounded border border-white/20 bg-white/10 px-1 font-mono text-[9px] font-semibold text-white/90">
             {getResolutionBadge(camera)}
+          </span>
+          {isAlarming && (
+            <span className="py-0.2 flex shrink-0 items-center gap-0.5 rounded bg-[var(--status-danger-solid)] px-1.5 font-mono text-[9px] font-bold text-white shadow-xs">
+              <ShieldAlert className="h-2.5 w-2.5" />
+              <span>{t('live.alarmDetected')}</span>
+            </span>
+          )}
+        </div>
+
+        {/* 悬停快捷操作组 */}
+        <div className="pointer-events-auto flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onEditCamera(camera)
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/20 bg-black/80 text-white/80 shadow-xs backdrop-blur-xs transition-colors hover:bg-white/25 hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+            aria-label={t('manage.editCamera')}
+            title={t('manage.editCamera')}
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDeleteCamera(camera)
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/20 bg-black/80 text-[var(--status-danger)] shadow-xs backdrop-blur-xs transition-colors hover:bg-[var(--status-danger-solid)] hover:text-white focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+            aria-label={t('manage.deleteCamera')}
+            title={t('manage.deleteCamera')}
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+
+      {/* 底部悬浮 HUD：实时遥测与网络状态 */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center justify-between p-2 text-[10px]">
+        {/* 真实目标遥测指标 (对齐 telemetryStore) */}
+        <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-white/20 bg-black/80 px-2.5 py-1 font-mono shadow-md backdrop-blur-xs">
+          <span
+            className="flex items-center gap-1 text-[var(--status-info)]"
+            title={telemetry ? t('live.targetCount', { count: telemetry.personCount }) : undefined}
+          >
+            <User className="h-3.5 w-3.5" />
+            <span className="font-semibold text-white/95">
+              {telemetry ? telemetry.personCount : '--'}
+            </span>
+          </span>
+          <span
+            className="flex items-center gap-1 text-[var(--status-warning)]"
+            title={
+              telemetry
+                ? t('live.vehicleCount', {
+                    count: telemetry.carCount,
+                    defaultValue: '{{count}} 车辆',
+                  })
+                : undefined
+            }
+          >
+            <Car className="h-3.5 w-3.5" />
+            <span className="font-semibold text-white/95">
+              {telemetry ? telemetry.carCount : '--'}
+            </span>
           </span>
         </div>
 
-        <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--text-muted)]">
-          {/* 真实目标遥测指标 (对齐 telemetryStore，兼容亮色/暗色高对比度) */}
-          <div className="flex items-center gap-2 font-mono">
-            <span
-              className="text-status-info flex items-center gap-0.5"
-              title={
-                telemetry ? t('live.targetCount', { count: telemetry.personCount }) : undefined
-              }
-            >
-              <User className="h-3 w-3" />
-              <span>{telemetry ? telemetry.personCount : '--'}</span>
-            </span>
-            <span className="text-status-warning flex items-center gap-0.5">
-              <Car className="h-3 w-3" />
-              <span>{telemetry ? telemetry.carCount : '--'}</span>
-            </span>
-          </div>
-
+        {/* 设备网络探测状态 */}
+        <div className="rounded-lg border border-white/20 bg-black/80 px-2.5 py-1 font-mono shadow-md backdrop-blur-xs">
           <span
-            className={`flex items-center gap-1 font-mono text-[10px] ${statusBadge.statusColor}`}
+            className={`flex items-center gap-1.5 text-[10px] font-semibold ${statusBadge.statusColor}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${statusBadge.dotClass}`} />
             <span>{statusBadge.text}</span>

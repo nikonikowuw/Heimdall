@@ -64,6 +64,7 @@
     "active": "Active",
     "standby": "Power Saving",
     "targetCount": "{{count}} targets",
+    "vehicleCount": "{{count}} vehicles",
     "liveTelemetry": "LIVE TELEMETRY",
     "tracks": "TRACKS",
     "motionHeat": "MOTION HEAT",

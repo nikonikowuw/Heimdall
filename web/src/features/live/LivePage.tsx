@@ -736,9 +736,9 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
 
       {/* 主视口布局容器 */}
       {viewMode === 'hero_rail' ? (
-        <div className="grid flex-1 grid-cols-12 gap-3 overflow-hidden">
+        <div className="grid min-h-0 flex-1 grid-cols-12 gap-3 overflow-hidden">
           {/* 左侧沉浸式 Hero Stage (占据 8.5 / 12 列) */}
-          <div className="col-span-12 flex flex-col gap-2 overflow-hidden lg:col-span-8 xl:col-span-9">
+          <div className="col-span-12 flex min-h-0 flex-col gap-2 overflow-hidden lg:col-span-8 xl:col-span-9">
             <div className="relative flex-1 overflow-hidden rounded-xl border border-[var(--border)] bg-black/40">
               {cameraLoadState !== 'ready' ? (
                 <CameraListStatus state={cameraLoadState} onRetry={handleRetryCameraLoad} />
@@ -835,12 +835,16 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
           </div>
 
           {/* 右侧 Bento Live Rail 活动流轨道 (占据 3.5 / 12 列) */}
-          <div className="col-span-12 flex flex-col gap-2.5 overflow-hidden lg:col-span-4 xl:col-span-3">
+          <div className="col-span-12 flex min-h-0 flex-col gap-2.5 overflow-hidden lg:col-span-4 xl:col-span-3">
             {/* 辅流轨道头部状态与快速搜索 */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between px-1 text-xs text-[var(--text-muted)]">
                 <span className="font-medium tracking-wide">
-                  {t('live.auxStreams')} ({cameras.length})
+                  {t('live.auxStreams')} (
+                  {filteredAuxCameras.length !== cameras.length
+                    ? `${filteredAuxCameras.length}/${cameras.length}`
+                    : cameras.length}
+                  )
                 </span>
                 <span className="text-[10px]">{t('live.switchMainHint')}</span>
               </div>
@@ -892,7 +896,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
                         className={`relative z-10 ${
                           auxFilter === filter
                             ? filter === 'all'
-                              ? 'font-medium text-white'
+                              ? 'font-medium text-[var(--accent-contrast)]'
                               : filter === 'healthy'
                                 ? 'text-status-success font-medium'
                                 : 'font-medium text-[var(--status-danger)]'
@@ -912,7 +916,7 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
             </div>
 
             {/* 辅路流卡片纵向滚动列表 */}
-            <div className="flex flex-1 flex-col gap-3 overflow-y-auto pr-0.5">
+            <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-0.5">
               {filteredAuxCameras.map((cam) => {
                 const isFocused = cam.cameraId === selectedHeroId
                 const isAlarming = recentAlarms[cam.cameraId] === true

@@ -64,6 +64,7 @@
     "active": "活跃",
     "standby": "节能中",
     "targetCount": "{{count}} 目标",
+    "vehicleCount": "{{count}} 车辆",
     "liveTelemetry": "实时遥测",
     "tracks": "航迹目标",
     "motionHeat": "运动热度",

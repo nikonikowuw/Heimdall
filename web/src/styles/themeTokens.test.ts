@@ -86,6 +86,10 @@ describe('主题 token 契约', () => {
         tokenValue(DARK_SURFACE_VARS, `status-${name}`),
         `.on-dark-surface 缺 --status-${name}`,
       ).toBeTruthy()
+      expect(
+        DARK_SURFACE_VARS,
+        `.on-dark-surface 必须重绑 --color-status-${name}，否则子元素会继承 :root 已求值的亮色深色档`,
+      ).toContain(`--color-status-${name}:`)
     }
     expect(
       tokenValue(DARK_SURFACE_VARS, 'text-primary'),

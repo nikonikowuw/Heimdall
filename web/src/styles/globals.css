@@ -412,6 +412,25 @@
     --status-neutral-soft: rgba(148, 163, 184, 0.12);
     --status-neutral-border: rgba(148, 163, 184, 0.26);
     /*
+     * 重新绑定 @theme 暴露的 utility 变量（CSS 自定义属性在声明节点即完成 var() 替换，
+     * 若不在子树节点重绑 --color-status-*，子元素会直接继承 :root 上已求值的亮色深色档）。
+     */
+    --color-status-success: var(--status-success);
+    --color-status-success-soft: var(--status-success-soft);
+    --color-status-success-border: var(--status-success-border);
+    --color-status-danger: var(--status-danger);
+    --color-status-danger-soft: var(--status-danger-soft);
+    --color-status-danger-border: var(--status-danger-border);
+    --color-status-warning: var(--status-warning);
+    --color-status-warning-soft: var(--status-warning-soft);
+    --color-status-warning-border: var(--status-warning-border);
+    --color-status-info: var(--status-info);
+    --color-status-info-soft: var(--status-info-soft);
+    --color-status-info-border: var(--status-info-border);
+    --color-status-neutral: var(--status-neutral);
+    --color-status-neutral-soft: var(--status-neutral-soft);
+    --color-status-neutral-border: var(--status-neutral-border);
+    /*
      * 文本三档，对齐原始硬编码（zinc-200/300、zinc-400、zinc-500）在视频底上的
      * 相对层级，而非照搬 .dark：.dark 的 --text-muted (#475569) 在视频底上仅 2.55:1，
      * 比原始 4.00 更差。这里取 slate-500 (#64748b, 4.06:1) 作为最低档，保持
