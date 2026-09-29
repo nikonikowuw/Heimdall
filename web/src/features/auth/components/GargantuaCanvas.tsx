@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import { useLatestRef } from '@/hooks/use-latest-ref'
+import { nextPerfScale } from './perfScale'
 
 interface GargantuaCanvasProps {
   isDark: boolean
@@ -350,7 +351,7 @@ void main() {
   gl_FragColor = vec4(col, 1.0);
 }`
 
-export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsUpdate }) => {
+export function GargantuaCanvas({ isDark, onFpsUpdate }: GargantuaCanvasProps): React.ReactElement {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const staticRenderRef = useRef<(() => void) | null>(null)
   const isDarkRef = useLatestRef(isDark)
@@ -451,9 +452,16 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       }
     }
 
-    const resize = () => {
+    let perfScale = 1.0
+    // 帧率采样窗口（每秒结算一次）：resize 与可见性变化都会重置，
+    // 避免把视口变化或后台节流造成的瞬时帧率当成稳态帧率。
+    let frames = 0
+    let lastFpsTime = performance.now()
+
+    const applyBufferResolution = () => {
       // 动态分辨率自适应：将内部物理渲染分辨率限制在合理区间
-      // 避免在 4K/Retina 显示器上盲目全量计算 600 万像素，利用 GPU 硬件双线性插值平滑呈现
+      // 避免在 4K/Retina 显示器上盲目全量计算 600 万像素，利用 GPU 硬件双线性插值平滑呈现；
+      // perfScale 由 nextPerfScale 按实测帧率调整：低帧率下调，有余量才回升（见 perfScale.ts）。
       const dpr = window.devicePixelRatio || 1
       let scale = Math.min(dpr, 1.0)
       if (window.innerWidth > 1920) {
@@ -461,14 +469,21 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       } else if (window.innerWidth <= 768) {
         scale = Math.min(dpr, 1.0)
       }
-      const w = Math.round(window.innerWidth * scale)
-      const h = Math.round(window.innerHeight * scale)
+      const effectiveScale = scale * perfScale
+      const w = Math.max(1, Math.round(window.innerWidth * effectiveScale))
+      const h = Math.max(1, Math.round(window.innerHeight * effectiveScale))
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w
         canvas.height = h
         gl.viewport(0, 0, w, h)
       }
       gl.uniform2f(uResolutionLoc, w, h)
+    }
+
+    const resize = () => {
+      frames = 0
+      lastFpsTime = performance.now()
+      applyBufferResolution()
       updateSingularityCenterTarget()
       scheduleRender()
     }
@@ -493,8 +508,6 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
     let shouldAnimate = !motionPreference.matches
     let currentTheme = isDarkRef.current ? 1.0 : 0.0
     let animId = 0
-    let frames = 0
-    let lastFpsTime = performance.now()
 
     const draw = (now: number) => {
       const elapsed = shouldAnimate ? (now - startTime) * 0.001 : 0
@@ -522,7 +535,13 @@ export const GargantuaCanvas: React.FC<GargantuaCanvasProps> = ({ isDark, onFpsU
       if (shouldAnimate) {
         frames++
         if (now - lastFpsTime >= 1000) {
-          onFpsUpdate?.(Math.round((frames * 1000) / (now - lastFpsTime)))
+          const currentFps = Math.round((frames * 1000) / (now - lastFpsTime))
+          onFpsUpdate?.(currentFps)
+          const nextScale = nextPerfScale(perfScale, currentFps)
+          if (nextScale !== perfScale) {
+            perfScale = nextScale
+            applyBufferResolution()
+          }
           frames = 0
           lastFpsTime = now
         }

@@ -5,14 +5,11 @@ import {
   Check,
   Eye,
   EyeOff,
-  KeyRound,
   Loader2,
   Moon,
   RefreshCw,
   Server,
   Sun,
-  User,
-  Wand2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LocaleDropdown } from '@/components/LocaleDropdown'
@@ -24,8 +21,11 @@ import { toast } from '@/stores/toast'
 import { CursorRing } from './components/CursorRing'
 import { GargantuaCanvas } from './components/GargantuaCanvas'
 import { Starfield } from './components/Starfield'
+import { validateAuthInput, type AuthFieldError } from './validation'
 
 type InitializationStatus = 'checking' | 'ready' | 'setup-required' | 'unavailable'
+
+type ErrorField = 'username' | 'password' | 'confirmPassword' | 'general' | null
 
 /**
  * 把提交失败归一化为可展示的文案。
@@ -64,6 +64,7 @@ export function LoginPage(): React.ReactElement {
   const [loading, setLoading] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [errorField, setErrorField] = useState<ErrorField>(null)
   const { isDark, toggleTheme } = useTheme()
   const usernameInputRef = useRef<HTMLInputElement | null>(null)
   const passwordInputRef = useRef<HTMLInputElement | null>(null)
@@ -72,10 +73,17 @@ export function LoginPage(): React.ReactElement {
   const setupRequired = initializationStatus === 'setup-required'
   const canAuthenticate = initializationStatus === 'ready' || setupRequired
 
+  const clearFormError = () => {
+    setFormError(null)
+    setErrorField(null)
+  }
+
   const reportFieldError = (
+    field: AuthFieldError['field'],
     message: string,
     inputRef: React.RefObject<HTMLInputElement | null>,
   ) => {
+    setErrorField(field)
     setFormError(message)
     inputRef.current?.focus()
   }
@@ -93,6 +101,7 @@ export function LoginPage(): React.ReactElement {
 
   const reportGeneralError = (message: string) => {
     generalErrorFocusRef.current = true
+    setErrorField('general')
     setFormError(message)
   }
 
@@ -161,30 +170,27 @@ export function LoginPage(): React.ReactElement {
     e.preventDefault()
     if (!canAuthenticate) return
 
-    const trimmedUsername = username.trim()
-    if (!trimmedUsername) {
-      reportFieldError(t('usernameRequired'), usernameInputRef)
-      return
-    }
-    if (!password) {
-      reportFieldError(t('passwordRequired'), passwordInputRef)
+    const validationError = validateAuthInput({
+      username,
+      password,
+      confirmPassword,
+      setupRequired,
+    })
+    if (validationError) {
+      const inputRefs = {
+        username: usernameInputRef,
+        password: passwordInputRef,
+        confirmPassword: confirmPasswordInputRef,
+      } as const
+      reportFieldError(
+        validationError.field,
+        t(validationError.messageKey),
+        inputRefs[validationError.field],
+      )
       return
     }
 
-    if (setupRequired) {
-      if (password.length < 6) {
-        reportFieldError(t('passwordLengthError'), passwordInputRef)
-        return
-      }
-      if (!confirmPassword) {
-        reportFieldError(t('confirmPasswordRequired'), confirmPasswordInputRef)
-        return
-      }
-      if (password !== confirmPassword) {
-        reportFieldError(t('passwordMismatch'), confirmPasswordInputRef)
-        return
-      }
-    }
+    const trimmedUsername = username.trim()
 
     setLoading(true)
     try {
@@ -217,21 +223,21 @@ export function LoginPage(): React.ReactElement {
           title: t('checkingTitle'),
           subtitle: t('checkingStatus'),
           badgeText: t('checkingStatus'),
-          dotClass: 'auth-panel__status-dot--checking',
+          dotClass: 'auth-console__status-dot--checking',
         }
       case 'unavailable':
         return {
           title: t('gatewayUnavailableTitle'),
           subtitle: t('gatewayUnavailableSubtitle'),
           badgeText: t('gatewayUnavailableTitle'),
-          dotClass: 'auth-panel__status-dot--error',
+          dotClass: 'auth-console__status-dot--error',
         }
       case 'setup-required':
         return {
           title: t('setupTitle'),
           subtitle: t('setupSubtitle'),
           badgeText: t('firstBoot'),
-          dotClass: 'auth-panel__status-dot--setup',
+          dotClass: 'auth-console__status-dot--setup',
         }
       case 'ready':
       default:
@@ -292,7 +298,10 @@ export function LoginPage(): React.ReactElement {
             title={t('themeToggle')}
             className="auth-theme-toggle"
           >
-            <div className="pointer-events-none flex items-center justify-between">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none flex items-center justify-between"
+            >
               <span className="auth-theme-toggle__icon auth-theme-toggle__icon--sun">
                 <Sun className="h-3 w-3" />
               </span>
@@ -301,6 +310,7 @@ export function LoginPage(): React.ReactElement {
               </span>
             </div>
             <div
+              aria-hidden="true"
               className={`auth-theme-toggle__thumb ${isDark ? 'auth-theme-toggle__thumb--dark' : 'auth-theme-toggle__thumb--light'}`}
             >
               {isDark ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
@@ -309,20 +319,20 @@ export function LoginPage(): React.ReactElement {
         </div>
       </header>
 
-      {/* 核心二元分区架构：左侧 100% 纯净黑洞视界 + 右侧实体深空操作舱 */}
-      <div className="pointer-events-none relative z-20 flex min-h-dvh w-full flex-col lg:flex-row">
-        {/* 左侧：纯净无界黑洞剧场（完全无遮挡，黑洞自由呼吸） */}
-        <div className="flex flex-1 flex-col justify-between p-6 sm:p-10 lg:p-12">
+      {/* 登录内容分区：黑洞场景独立铺满视口，鉴权面板在侧边呈现 */}
+      <div className="auth-layout pointer-events-none relative z-20 flex min-h-dvh w-full flex-col lg:flex-row lg:items-stretch">
+        {/* 场景舞台仅负责留白与参数状态，不修改黑洞 Canvas */}
+        <div className="auth-stage flex min-h-[46vh] flex-1 flex-col justify-between p-6 sm:min-h-[48vh] sm:p-10 lg:min-h-dvh lg:p-12">
           {/* 左上保留空间对齐 header */}
           <div className="h-10" />
 
-          {/* 中央完全留空给黑洞，没有任何阻碍黑洞的文字卡片 */}
+          {/* 中央留白给黑洞，不叠加文字或卡片 */}
           <div className="flex-1" />
 
           {/* 左下底栏运行参数状态 */}
           <div className="auth-stage-telemetry pointer-events-auto select-none">
             <span className="auth-stage-telemetry__status">
-              <span className="auth-stage-telemetry__dot motion-safe:animate-pulse" />
+              <span aria-hidden="true" className="auth-stage-telemetry__dot" />
               <span>{t('opticalSensor')}</span>
             </span>
             <span className="auth-stage-telemetry__divider hidden sm:inline">/</span>
@@ -332,278 +342,247 @@ export function LoginPage(): React.ReactElement {
           </div>
         </div>
 
-        {/* 右侧：实心深空操作舱 (100% Opaque Solid Console，彻底隔绝背景光干扰) */}
-        <div className="pointer-events-auto flex w-full flex-shrink-0 flex-col justify-center px-4 py-8 sm:px-6 lg:min-h-dvh lg:w-[440px] lg:px-6 xl:w-[460px] xl:px-8">
-          <section
-            id="command-dock"
-            aria-labelledby="auth-title"
-            className="auth-panel mx-auto w-full max-w-[400px] lg:max-w-none"
-          >
-            <div className="auth-panel__header">
-              <div className="auth-panel__status">
-                <span className={cn('auth-panel__status-dot', statusView.dotClass)} />
-                <span className="auth-panel__status-text">{statusView.badgeText}</span>
-              </div>
-
-              <div className="auth-panel__badge">
-                <span className="auth-panel__revision">REV. 2026.1</span>
-              </div>
-            </div>
-
-            <div className="auth-panel__body">
-              <div className="auth-panel__intro">
-                <div className="auth-panel__eyebrow-row">
-                  <span className="auth-panel__eyebrow">{t('terminal')}</span>
-                  <span className="auth-panel__serial" aria-hidden="true">
-                    SYS://AUTH.GW
+        <div className="auth-console-wrap pointer-events-auto w-full lg:flex-shrink-0">
+          <section id="command-dock" aria-labelledby="auth-title" className="auth-console">
+            <div className="auth-console__content">
+              <div className="auth-console__main">
+                <div className="auth-console__utility">
+                  <span className="auth-console__eyebrow">
+                    <span aria-hidden="true" className="auth-console__eyebrow-mark" />
+                    {t('terminal')}
                   </span>
+                  <div className="auth-console__status">
+                    <span
+                      aria-hidden="true"
+                      className={cn('auth-console__status-dot', statusView.dotClass)}
+                    />
+                    <span>{statusView.badgeText}</span>
+                  </div>
                 </div>
-                <h1 id="auth-title" className="auth-panel__title">
-                  {setupRequired && <Wand2 className="auth-setup-icon h-4 w-4" />}
-                  <span>{statusView.title}</span>
-                </h1>
-                <p className="auth-panel__subtitle">{statusView.subtitle}</p>
-              </div>
 
-              <form
-                onSubmit={handleSubmit}
-                noValidate
-                className="space-y-4"
-                aria-busy={loading || initializationStatus === 'checking'}
-              >
-                {initializationStatus === 'checking' && (
-                  <div className="auth-inline-state" role="status" aria-live="polite">
-                    <Loader2 className="h-4 w-4 motion-safe:animate-spin" />
-                    <span>{t('checkingStatus')}</span>
-                  </div>
-                )}
-                {initializationStatus === 'unavailable' && (
-                  <div className="auth-form-error" role="alert">
-                    <div className="flex items-start gap-2.5">
-                      <AlertCircle className="auth-form-error__icon h-4 w-4" aria-hidden="true" />
-                      <p className="auth-form-error__text flex-1">
-                        {t('gatewayUnavailableMessage')}
-                      </p>
+                <div className="auth-console__intro">
+                  <h1 id="auth-title" className="auth-console__title">
+                    {statusView.title}
+                  </h1>
+                  <p className="auth-console__subtitle">{statusView.subtitle}</p>
+                </div>
+
+                <form
+                  onSubmit={handleSubmit}
+                  noValidate
+                  className="auth-form"
+                  aria-busy={loading || initializationStatus === 'checking'}
+                >
+                  {initializationStatus === 'checking' && (
+                    <div className="auth-inline-state" role="status" aria-live="polite">
+                      <Loader2 aria-hidden="true" className="h-4 w-4 motion-safe:animate-spin" />
+                      <span>{t('checkingStatus')}</span>
                     </div>
-                    <button
-                      type="button"
-                      className="auth-retry"
-                      onClick={() => {
-                        setInitializationStatus('checking')
-                        setStatusRetryKey((previous) => previous + 1)
-                      }}
-                    >
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                      {t('retryStatus')}
-                    </button>
-                  </div>
-                )}
-                {canAuthenticate && (
-                  <>
-                    {/* 图标与文案必须同处一个横向行内组：.auth-form-error 是
-                        column 容器（供可用性分支在其下方追加重试按钮），
-                        直接并列子元素会把图标压到文案上方。 */}
-                    {formError && (
-                      <div
-                        ref={formErrorRef}
-                        className="auth-form-error"
-                        role="alert"
-                        aria-live="assertive"
-                        tabIndex={-1}
+                  )}
+                  {initializationStatus === 'unavailable' && (
+                    <div className="auth-form-error" role="alert">
+                      <div className="flex items-start gap-2.5">
+                        <AlertCircle className="auth-form-error__icon h-4 w-4" aria-hidden="true" />
+                        <p className="auth-form-error__text flex-1">
+                          {t('gatewayUnavailableMessage')}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="auth-retry"
+                        onClick={() => {
+                          setInitializationStatus('checking')
+                          setStatusRetryKey((previous) => previous + 1)
+                        }}
                       >
-                        <div className="flex items-start gap-2.5">
-                          <AlertCircle
-                            className="auth-form-error__icon h-4 w-4"
-                            aria-hidden="true"
-                          />
-                          <span className="auth-form-error__text flex-1">{formError}</span>
-                        </div>
-                      </div>
-                    )}
-                    {/* 用户名 */}
-                    <div>
-                      <label htmlFor="username" className="auth-label">
-                        {t('operatorId')}
-                      </label>
-                      <div className="auth-input-group">
-                        <div className="auth-input-icon">
-                          <User className="h-4 w-4" />
-                        </div>
-                        <input
-                          ref={usernameInputRef}
-                          type="text"
-                          id="username"
-                          name="username"
-                          autoComplete="username"
-                          required
-                          disabled={loading || isSuccess}
-                          value={username}
-                          onChange={(e) => {
-                            setUsername(e.target.value)
-                            setFormError(null)
-                          }}
-                          placeholder={setupRequired ? 'admin' : t('operatorId')}
-                          className="auth-input"
-                        />
-                      </div>
+                        <RefreshCw aria-hidden="true" className="mr-2 h-4 w-4" />
+                        {t('retryStatus')}
+                      </button>
                     </div>
-
-                    {/* 密码 */}
-                    <div>
-                      <label htmlFor="password" className="auth-label">
-                        {setupRequired ? t('newPassword') : t('password')}
-                      </label>
-                      <div className="auth-input-group">
-                        <div className="auth-input-icon">
-                          <KeyRound className="h-4 w-4" />
-                        </div>
-                        <input
-                          ref={passwordInputRef}
-                          type={showPassword ? 'text' : 'password'}
-                          id="password"
-                          name="password"
-                          autoComplete={setupRequired ? 'new-password' : 'current-password'}
-                          required
-                          disabled={loading || isSuccess}
-                          value={password}
-                          onChange={(e) => {
-                            setPassword(e.target.value)
-                            setFormError(null)
-                          }}
-                          placeholder="••••••••••••"
-                          className="auth-input"
-                        />
-                        <button
-                          type="button"
-                          disabled={loading || isSuccess}
-                          onClick={() => setShowPassword(!showPassword)}
-                          aria-label={showPassword ? t('hidePassword') : t('showPassword')}
-                          className="auth-input__toggle"
+                  )}
+                  {canAuthenticate && (
+                    <>
+                      {formError && (
+                        <div
+                          id="auth-form-error"
+                          ref={formErrorRef}
+                          className="auth-form-error"
+                          role="alert"
+                          aria-live="assertive"
+                          tabIndex={-1}
                         >
-                          {showPassword ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
+                          <div className="flex items-start gap-2.5">
+                            <AlertCircle
+                              className="auth-form-error__icon h-4 w-4"
+                              aria-hidden="true"
+                            />
+                            <span className="auth-form-error__text flex-1">{formError}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="auth-field-stack">
+                        <div className="auth-field-item">
+                          <label htmlFor="username" className="auth-label">
+                            {t('operatorId')}
+                          </label>
+                          <div className="auth-input-group">
+                            <input
+                              ref={usernameInputRef}
+                              type="text"
+                              id="username"
+                              name="username"
+                              autoComplete="username"
+                              required
+                              aria-invalid={errorField === 'username'}
+                              aria-describedby={
+                                formError && (errorField === 'username' || errorField === 'general')
+                                  ? 'auth-form-error'
+                                  : undefined
+                              }
+                              disabled={loading || isSuccess}
+                              value={username}
+                              onChange={(e) => {
+                                setUsername(e.target.value)
+                                clearFormError()
+                              }}
+                              className="auth-input auth-input--no-toggle"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="auth-field-item">
+                          <label htmlFor="password" className="auth-label">
+                            {setupRequired ? t('newPassword') : t('password')}
+                          </label>
+                          <div className="auth-input-group">
+                            <input
+                              ref={passwordInputRef}
+                              type={showPassword ? 'text' : 'password'}
+                              id="password"
+                              name="password"
+                              autoComplete={setupRequired ? 'new-password' : 'current-password'}
+                              required
+                              aria-invalid={errorField === 'password'}
+                              aria-describedby={
+                                formError && (errorField === 'password' || errorField === 'general')
+                                  ? 'auth-form-error'
+                                  : undefined
+                              }
+                              disabled={loading || isSuccess}
+                              value={password}
+                              onChange={(e) => {
+                                setPassword(e.target.value)
+                                clearFormError()
+                              }}
+                              className="auth-input"
+                            />
+                            <button
+                              type="button"
+                              disabled={loading || isSuccess}
+                              onClick={() => setShowPassword(!showPassword)}
+                              aria-label={showPassword ? t('hidePassword') : t('showPassword')}
+                              className="auth-input__toggle"
+                            >
+                              {showPassword ? (
+                                <EyeOff aria-hidden="true" className="h-4 w-4" />
+                              ) : (
+                                <Eye aria-hidden="true" className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        {setupRequired && (
+                          <div className="auth-field-item">
+                            <label htmlFor="confirmPassword" className="auth-label">
+                              {t('confirmPassword')}
+                            </label>
+                            <div className="auth-input-group">
+                              <input
+                                ref={confirmPasswordInputRef}
+                                type={showPassword ? 'text' : 'password'}
+                                id="confirmPassword"
+                                name="confirmPassword"
+                                autoComplete="new-password"
+                                required
+                                aria-invalid={errorField === 'confirmPassword'}
+                                aria-describedby={
+                                  formError && errorField === 'confirmPassword'
+                                    ? 'auth-form-error'
+                                    : undefined
+                                }
+                                disabled={loading || isSuccess}
+                                value={confirmPassword}
+                                onChange={(e) => {
+                                  setConfirmPassword(e.target.value)
+                                  clearFormError()
+                                }}
+                                className="auth-input auth-input--no-toggle"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {!setupRequired && (
+                        <div className="auth-options">
+                          <label className="auth-remember">
+                            <span className="auth-checkbox">
+                              <input
+                                type="checkbox"
+                                disabled={loading || isSuccess}
+                                checked={remember}
+                                onChange={(e) => setRemember(e.target.checked)}
+                                className="auth-checkbox__native"
+                              />
+                              <span className="auth-checkbox__box" aria-hidden="true">
+                                <Check className="auth-checkbox__check" />
+                              </span>
+                            </span>
+                            <span>{t('remember')}</span>
+                          </label>
+                        </div>
+                      )}
+
+                      <div className="auth-submit-wrap">
+                        <button
+                          type="submit"
+                          disabled={loading || isSuccess}
+                          className={cn('auth-submit group', isSuccess && 'auth-submit--success')}
+                        >
+                          <span className="auth-submit__label">
+                            {isSuccess ? (
+                              <Check aria-hidden="true" className="h-4 w-4" />
+                            ) : loading ? (
+                              <Loader2
+                                aria-hidden="true"
+                                className="h-4 w-4 motion-safe:animate-spin"
+                              />
+                            ) : null}
+                            <span>{isSuccess ? t('loginSuccess') : submitLabel}</span>
+                          </span>
+                          {!loading && !isSuccess && (
+                            <ArrowRight
+                              aria-hidden="true"
+                              className="auth-submit__icon transition-transform motion-safe:group-hover:translate-x-0.5"
+                            />
                           )}
                         </button>
                       </div>
-                    </div>
-
-                    {/* 开箱向导模式：确认密码 */}
-                    {setupRequired && (
-                      <div>
-                        <label htmlFor="confirmPassword" className="auth-label">
-                          {t('confirmPassword')}
-                        </label>
-                        <div className="auth-input-group">
-                          <div className="auth-input-icon">
-                            <KeyRound className="h-4 w-4" />
-                          </div>
-                          <input
-                            ref={confirmPasswordInputRef}
-                            type={showPassword ? 'text' : 'password'}
-                            id="confirmPassword"
-                            name="confirmPassword"
-                            autoComplete="new-password"
-                            required
-                            disabled={loading || isSuccess}
-                            value={confirmPassword}
-                            onChange={(e) => {
-                              setConfirmPassword(e.target.value)
-                              setFormError(null)
-                            }}
-                            placeholder="••••••••••••"
-                            className="auth-input"
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 记住凭证选项（仅正常登录） */}
-                    {!setupRequired && (
-                      <div className="auth-options">
-                        <label className="auth-remember">
-                          <span className="auth-checkbox">
-                            <input
-                              type="checkbox"
-                              disabled={loading || isSuccess}
-                              checked={remember}
-                              onChange={(e) => setRemember(e.target.checked)}
-                              className="auth-checkbox__native"
-                            />
-                            <span className="auth-checkbox__box" aria-hidden="true">
-                              <Check className="auth-checkbox__check" />
-                            </span>
-                          </span>
-                          <span>{t('remember')}</span>
-                        </label>
-                      </div>
-                    )}
-
-                    {/* 提交按钮（物理触觉高能主电门 + 极客回车指示） */}
-                    <div className="pt-2">
-                      <button
-                        type="submit"
-                        disabled={loading || isSuccess}
-                        className={`auth-submit ${isSuccess ? 'auth-submit--success' : ''}`}
-                      >
-                        {isSuccess ? (
-                          <>
-                            <Check className="h-4 w-4" />
-                            <span>{t('loginSuccess')}</span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="flex items-center gap-2">
-                              {loading ? (
-                                <Loader2 className="h-4 w-4 motion-safe:animate-spin" />
-                              ) : (
-                                <ArrowRight className="h-4 w-4 transition-transform motion-safe:group-hover:translate-x-0.5" />
-                              )}
-                              <span>{submitLabel}</span>
-                            </span>
-                            {!loading && (
-                              <kbd className="auth-submit__kbd" aria-hidden="true">
-                                ↵
-                              </kbd>
-                            )}
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </form>
-
-              <div
-                className="auth-metrics select-none"
-                role="region"
-                aria-label="Pipeline Telemetry"
-              >
-                <div className="auth-metric">
-                  <span className="auth-metric__label">{t('ingestion')}</span>
-                  <span className="auth-metric__value">WebRTC/RTSP</span>
-                </div>
-                <div className="auth-metric">
-                  <span className="auth-metric__label">{t('pipeline')}</span>
-                  <span className="auth-metric__value">DMA-BUF</span>
-                </div>
-                <div className="auth-metric">
-                  <span className="auth-metric__label">{t('zeroCopy')}</span>
-                  <span className="auth-metric__value auth-metric__value--accent">
-                    {t('deviceSide')}
-                  </span>
-                </div>
+                    </>
+                  )}
+                </form>
               </div>
-            </div>
 
-            <footer className="auth-panel__footer">
-              <span className="auth-panel__deployment">
-                <Server className="h-3.5 w-3.5" />
-                <span>{t('deployment')}</span>
-              </span>
-              <span className="auth-panel__copyright">{t('copyright')}</span>
-            </footer>
+              <footer className="auth-console__footer">
+                <span className="auth-console__deployment">
+                  <Server aria-hidden="true" className="h-3.5 w-3.5" />
+                  <span>{t('deployment')}</span>
+                </span>
+                <span className="auth-console__copyright">{t('copyright')}</span>
+              </footer>
+            </div>
           </section>
         </div>
       </div>

@@ -40,13 +40,17 @@ describe('LoginPage', () => {
     expect(html).not.toContain('type="submit"')
   })
 
-  it('renders device-side zero-copy and hardware platform telemetry', () => {
+  it('renders the scene canvas and i18n telemetry copy without the removed metrics grid', () => {
     const html = renderToString(<LoginPage />)
 
-    expect(html).toContain('zeroCopy')
-    expect(html).toContain('deviceSide')
+    // 场景层必须渲染；黑洞 Canvas 是登录页的视觉主体
+    expect(html).toContain('id="gargantua-canvas"')
+
+    // 遥测文案全部来自 i18n；旧指标网格及其区域语义已随三语词条一并移除
     expect(html).toContain('opticalSensor')
     expect(html).toContain('kerrMetric')
     expect(html).toContain('directBus')
+    expect(html).not.toContain('zeroCopy')
+    expect(html).not.toContain('Pipeline Telemetry')
   })
 })
