@@ -1791,6 +1791,17 @@ impl PipelineManager {
         handle.instance_metrics().await
     }
 
+    /// 获取某路摄像头各算法实例的推理在途心跳快照（供活性巡检）
+    pub async fn get_instance_inflight_snapshots(
+        &self,
+        camera_id: &str,
+    ) -> Vec<crate::pump::InstanceInflightSnapshot> {
+        let Some(handle) = self.pump_control_handle(camera_id).await else {
+            return Vec::new();
+        };
+        handle.instance_inflight_snapshots().await
+    }
+
     /// 列出某路摄像头当前挂载的算法实例描述（instanceId / algorithmId / 生效配置）
     pub async fn get_instance_descriptors(
         &self,

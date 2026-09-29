@@ -28,6 +28,7 @@
 | [API](../backend/api-guidelines.md) | HTTP、WS、DTO、鉴权与审计 |
 | [并发](../backend/concurrency-guidelines.md) | async/线程、队列、共享状态、停机 |
 | [推理后端](../backend/inference-backends.md) | 后端接入、模型加载与调度 |
+| [推理运行时健康](../backend/inference-runtime-health.md) | 活性判定、指标口径、代际栅栏、在途心跳 |
 | [媒体管线](../backend/media-pipeline.md) | RTSP、解码、帧内存、门控与流分发 |
 | [FFI](../backend/ffi-guidelines.md) | unsafe、ABI、句柄与构建绑定 |
 | [算法 SDK](../backend/algo-sdk-guidelines.md) | 插件、C ABI、预处理、交付与沙箱 |

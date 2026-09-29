@@ -227,6 +227,12 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
 `BoxesSerializer` 直接写字节序列，避免中间字符串；当前 emitter 仍分配 JSON Vec/CString，不能声称完全零分配。
 结果、JSON 和图片请求指针仅在同步回调期有效；长度不含尾部 NUL，JSON 内嵌 NUL 返回错误，消费者不能保存裸指针。
 
+### 运行状态边界
+
+- `instance_process` 返回 `AV_OK` 只表示插件报告本次同步调用成功返回；它不证明模型确实执行，也不证明输出结果在语义上正确。
+- 结果回调及其载荷只服务于推理结果管线，不能作为算法语义正确性或运行状态的证据。
+- 宿主侧监测口径、指标与在途心跳见 [推理运行时健康](./inference-runtime-health.md)；插件只需保证调用按期返回并按自身契约发射结果。
+
 ## 包与沙箱
 
 交付包含 `manifest.json`、`config.schema.json`、`testimage.jpg`、`README.md`、`lib/`、`model/`，排除源码、构建缓存和 `.env`。

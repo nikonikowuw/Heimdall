@@ -10,13 +10,25 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use infer::{InferenceBackend, InferenceWorker};
+use infer::{InferenceBackend, InferenceWorker, InferenceWorkerConfig};
 use media::decoder::VideoDecoder;
 use media::decoders::MockDecoder;
 use media::stream_hub::CameraStreamSession;
 use media::PacketDispatcher;
 use pipeline::{PipelineManager, WorkerInstanceConfig};
 use types::{BoundingBox, CodecType, Detection, EncodedPacket, FrameRef, TransportPolicy};
+
+/// 构造一个固定的合法检测结果
+fn person_detection() -> Detection {
+    Detection {
+        class_id: 0,
+        label: "person".to_string(),
+        confidence: 0.95,
+        quality_score: None,
+        bbox: BoundingBox::new(0.4, 0.2, 0.6, 0.5),
+        face: None,
+    }
+}
 
 /// 计数式模拟推理后端：记录自身服务过的帧数，并可选地模拟硬件推理耗时。
 #[derive(Debug)]
@@ -36,14 +48,57 @@ impl InferenceBackend for CountingBackend {
             tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
         }
         self.served.fetch_add(1, Ordering::SeqCst);
-        Ok(vec![Detection {
-            class_id: 0,
-            label: "person".to_string(),
-            confidence: 0.95,
-            quality_score: None,
-            bbox: BoundingBox::new(0.4, 0.2, 0.6, 0.5),
-            face: None,
-        }])
+        Ok(vec![person_detection()])
+    }
+}
+
+/// 脚本化回复：逐帧精确构造调用边界时序（成功延迟或指定错误）
+#[derive(Debug)]
+enum ScriptedReply {
+    /// 延迟 `delay_ms` 后返回合法检测结果
+    Ok { delay_ms: u64 },
+    /// 直接返回指定错误
+    Err(infer::InferError),
+}
+
+/// 脚本化模拟推理后端：按预设序列逐帧返回结果或错误，序列耗尽后返回无延迟的成功结果。
+#[derive(Debug)]
+struct ScriptedBackend {
+    name: &'static str,
+    script: std::sync::Mutex<std::collections::VecDeque<ScriptedReply>>,
+}
+
+impl ScriptedBackend {
+    fn new(name: &'static str, script: Vec<ScriptedReply>) -> Self {
+        Self {
+            name,
+            script: std::sync::Mutex::new(script.into()),
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl InferenceBackend for ScriptedBackend {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    async fn detect(&self, _frame: &FrameRef) -> Result<Vec<Detection>, infer::InferError> {
+        let reply = self
+            .script
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.pop_front());
+        match reply {
+            Some(ScriptedReply::Ok { delay_ms }) => {
+                if delay_ms > 0 {
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+                Ok(vec![person_detection()])
+            }
+            Some(ScriptedReply::Err(err)) => Err(err),
+            None => Ok(vec![person_detection()]),
+        }
     }
 }
 
@@ -103,6 +158,21 @@ async fn sampled_frames(manager: &PipelineManager, camera_id: &str, instance_id:
     instance_metrics(manager, camera_id, instance_id)
         .await
         .map(|metrics| metrics.frames_sampled.load(Ordering::Relaxed))
+        .unwrap_or(0)
+}
+
+async fn execution_failure_streak(
+    manager: &PipelineManager,
+    camera_id: &str,
+    instance_id: &str,
+) -> u64 {
+    instance_metrics(manager, camera_id, instance_id)
+        .await
+        .map(|metrics| {
+            metrics
+                .consecutive_execution_failures
+                .load(Ordering::Relaxed)
+        })
         .unwrap_or(0)
 }
 
@@ -377,6 +447,235 @@ async fn test_replaced_worker_stale_result_is_discarded() {
         "只有新 Worker 的结果可以计入该实例的推理帧数，实际: {}",
         inferred_frames(&manager, cam_id, "inst_slow").await
     );
+
+    manager.stop_all_pumps().await;
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+/// 旧 Worker 的迟到超时错误必须被代际栅栏隔离：既不增加当前实例的连续执行失败数
+/// 与推理错误累计数，也不得计入推理帧数。
+#[tokio::test]
+async fn test_stale_worker_error_does_not_taint_execution_failure_streak() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_pump_stale_error_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let manager = Arc::new(PipelineManager::with_evidence_dir(&temp_dir));
+    let cam_id = "camera_pump_stale_error";
+    let session = CameraStreamSession::mock(cam_id, "rtsp://mock-sub/live", TransportPolicy::Tcp);
+    let dispatcher = session.dispatcher.clone();
+
+    // 旧 Worker：首帧耗时 5000ms，远超其 500ms 单帧超时，必然产出一张迟到超时错误。
+    let old_worker = InferenceWorker::with_config(
+        ScriptedBackend::new(
+            "stale-error-old",
+            vec![ScriptedReply::Ok { delay_ms: 5000 }],
+        ),
+        InferenceWorkerConfig {
+            worker_name: "stale-error-old".to_string(),
+            timeout_ms: 500,
+        },
+    );
+    let old_handle = old_worker.handle();
+    let decoder: Box<dyn VideoDecoder + Send> =
+        Box::new(MockDecoder::new(cam_id, CodecType::H264, 640, 360));
+
+    manager
+        .start_analysis_pump_multi_worker(
+            cam_id,
+            session.clone(),
+            decoder,
+            vec![WorkerInstanceConfig {
+                instance_id: "inst_stale".to_string(),
+                algorithm_id: "algo_stale".to_string(),
+                algorithm_type: "detection".to_string(),
+                target_fps: 0,
+                config_json: None,
+            }],
+            vec![(
+                "inst_stale".to_string(),
+                old_handle.clone(),
+                Some(old_worker),
+            )],
+            None,
+        )
+        .await;
+
+    dispatcher.publish(keyframe_packet(1000));
+    let busy = wait_until(2000, || async { old_handle.is_busy() }).await;
+    assert!(busy, "旧 Worker 必须已开始处理首批推理");
+
+    let new_worker = InferenceWorker::with_config(
+        CountingBackend {
+            served: Arc::new(AtomicU64::new(0)),
+            delay_ms: 0,
+        },
+        InferenceWorkerConfig {
+            worker_name: "stale-error-new".to_string(),
+            timeout_ms: 500,
+        },
+    );
+    let replaced = manager
+        .replace_pump_instance_worker(cam_id, "inst_stale", new_worker)
+        .await
+        .expect("分析泵必须处于运行状态");
+    assert!(replaced, "目标实例 Worker 替换必须成功");
+
+    // 旧 Worker 的迟到超时错误必须在代际栅栏处被丢弃。
+    let stale_discarded = wait_until(3000, || async {
+        instance_metrics(&manager, cam_id, "inst_stale")
+            .await
+            .is_some_and(|metrics| metrics.stale_results.load(Ordering::Relaxed) >= 1)
+    })
+    .await;
+    assert!(stale_discarded, "旧 Worker 的迟到错误必须被代际栅栏丢弃");
+
+    let metrics = instance_metrics(&manager, cam_id, "inst_stale")
+        .await
+        .expect("实例指标");
+    assert_eq!(
+        metrics
+            .consecutive_execution_failures
+            .load(Ordering::Relaxed),
+        0,
+        "旧代际的迟到错误不得计入当前实例的连续执行失败数"
+    );
+    assert_eq!(
+        metrics.inference_errors.load(Ordering::Relaxed),
+        0,
+        "旧代际的迟到错误不得计入推理错误累计数"
+    );
+    assert_eq!(
+        metrics.frames_inferred.load(Ordering::Relaxed),
+        0,
+        "被丢弃的旧代际结果不得计入推理帧数"
+    );
+
+    // 新 Worker 接管后必须正常产出，证明推理循环未被陈旧错误污染。
+    dispatcher.publish(keyframe_packet(2000));
+    let recovered = wait_until(3000, || async {
+        inferred_frames(&manager, cam_id, "inst_stale").await == 1
+            && execution_failure_streak(&manager, cam_id, "inst_stale").await == 0
+    })
+    .await;
+    assert!(
+        recovered,
+        "新 Worker 接管后必须正常计数且连续失败数保持为零"
+    );
+
+    manager.stop_all_pumps().await;
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+/// 连续执行失败数以同步调用边界为准：当前代际的错误递增、当前代际成功清零，
+/// 而旧 Worker 的迟到成功结果不得清零已经累积的失败数。
+#[tokio::test]
+async fn test_generation_fence_keeps_failure_streak_across_worker_replacement() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_pump_fence_streak_{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let manager = Arc::new(PipelineManager::with_evidence_dir(&temp_dir));
+    let cam_id = "camera_pump_fence_streak";
+    let session = CameraStreamSession::mock(cam_id, "rtsp://mock-sub/live", TransportPolicy::Tcp);
+    let dispatcher = session.dispatcher.clone();
+
+    // 旧 Worker：第 1 帧返回执行错误（当前代际，必须计数）；
+    // 第 2 帧延迟 500ms 成功（替换期间在途，必须被栅栏丢弃且不得清零计数）。
+    let old_worker = InferenceWorker::with_config(
+        ScriptedBackend::new(
+            "fence-streak-old",
+            vec![
+                ScriptedReply::Err(infer::InferError::Execution {
+                    reason: "测试注入执行错误".to_string(),
+                }),
+                ScriptedReply::Ok { delay_ms: 500 },
+            ],
+        ),
+        InferenceWorkerConfig {
+            worker_name: "fence-streak-old".to_string(),
+            timeout_ms: 2000,
+        },
+    );
+    let old_handle = old_worker.handle();
+    let decoder: Box<dyn VideoDecoder + Send> =
+        Box::new(MockDecoder::new(cam_id, CodecType::H264, 640, 360));
+
+    manager
+        .start_analysis_pump_multi_worker(
+            cam_id,
+            session.clone(),
+            decoder,
+            vec![WorkerInstanceConfig {
+                instance_id: "inst_streak".to_string(),
+                algorithm_id: "algo_streak".to_string(),
+                algorithm_type: "detection".to_string(),
+                target_fps: 0,
+                config_json: None,
+            }],
+            vec![(
+                "inst_streak".to_string(),
+                old_handle.clone(),
+                Some(old_worker),
+            )],
+            None,
+        )
+        .await;
+
+    // 第 1 帧：当前代际执行错误必须计入连续失败数。
+    dispatcher.publish(keyframe_packet(1000));
+    let counted = wait_until(3000, || async {
+        execution_failure_streak(&manager, cam_id, "inst_streak").await == 1
+    })
+    .await;
+    assert!(counted, "当前代际的执行错误必须使连续失败数递增");
+
+    // 第 2 帧：旧 Worker 在途成功后立即被替换。
+    dispatcher.publish(keyframe_packet(2000));
+    let busy = wait_until(2000, || async { old_handle.is_busy() }).await;
+    assert!(busy, "旧 Worker 必须已开始处理第 2 帧");
+
+    let new_worker = InferenceWorker::with_config(
+        CountingBackend {
+            served: Arc::new(AtomicU64::new(0)),
+            delay_ms: 0,
+        },
+        InferenceWorkerConfig {
+            worker_name: "fence-streak-new".to_string(),
+            timeout_ms: 2000,
+        },
+    );
+    let replaced = manager
+        .replace_pump_instance_worker(cam_id, "inst_streak", new_worker)
+        .await
+        .expect("分析泵必须处于运行状态");
+    assert!(replaced, "目标实例 Worker 替换必须成功");
+
+    let stale_discarded = wait_until(3000, || async {
+        instance_metrics(&manager, cam_id, "inst_streak")
+            .await
+            .is_some_and(|metrics| metrics.stale_results.load(Ordering::Relaxed) >= 1)
+    })
+    .await;
+    assert!(stale_discarded, "旧 Worker 的迟到结果必须被代际栅栏丢弃");
+    assert_eq!(
+        execution_failure_streak(&manager, cam_id, "inst_streak").await,
+        1,
+        "旧代际的迟到成功结果不得清零当前实例的连续失败数"
+    );
+
+    // 第 3 帧：当前代际正常返回必须清零连续失败数。
+    dispatcher.publish(keyframe_packet(3000));
+    let recovered = wait_until(3000, || async {
+        inferred_frames(&manager, cam_id, "inst_streak").await == 1
+            && execution_failure_streak(&manager, cam_id, "inst_streak").await == 0
+    })
+    .await;
+    assert!(recovered, "当前代际成功返回必须清零连续失败数");
 
     manager.stop_all_pumps().await;
     let _ = std::fs::remove_dir_all(&temp_dir);

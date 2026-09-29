@@ -4,6 +4,7 @@ pub mod decoded_ring;
 pub mod error;
 pub mod events;
 pub mod geometry;
+pub mod inflight;
 pub mod manager;
 pub mod motion_gate;
 pub mod motion_gate_worker;
@@ -35,6 +36,10 @@ pub use events::{
     PipelineTrackEvent, DEFAULT_ANALYSIS_EVENT_CHANNEL_CAPACITY,
 };
 pub use geometry::{check_line_crossing, point_in_polygon};
+pub use inflight::{
+    evaluate_inflight, monotonic_now_ms, InflightGuard, InflightMarker, InflightSample,
+    InflightThresholds, InflightVerdict,
+};
 pub use manager::{
     AnalysisOutcome, PipelineManager, DEFAULT_MAX_CONCURRENT_SNAPSHOT_DECODERS,
     DEFAULT_SNAPSHOT_PERMIT_TIMEOUT_MS,
@@ -43,8 +48,8 @@ pub use motion_gate::{MaskBitmap, MotionGate, MotionGateDecision};
 pub use motion_gate_worker::{GateOutcome, MotionGateWorker};
 pub use pump::{
     AnalysisFpsGovernor, AnalysisPump, AnalysisPumpConfig, InstanceConfigUpdateOutcome,
-    InstanceDescriptor, InstanceMetrics, MotionGateRuntimeConfig, PumpMetrics,
-    SubStreamAnalysisPump, SubStreamPumpConfig, WorkerInstanceConfig,
+    InstanceDescriptor, InstanceInflightSnapshot, InstanceMetrics, MotionGateRuntimeConfig,
+    PumpMetrics, SubStreamAnalysisPump, SubStreamPumpConfig, WorkerInstanceConfig,
 };
 pub use roi::RoiAffineMapper;
 pub use rules::{RuleEvaluator, RuleIdentifier, TriggeredAlarm, DEFAULT_FULLSCREEN_RULE_INDEX};

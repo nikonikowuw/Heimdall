@@ -27,6 +27,7 @@ use crate::events::{
     EvidenceStatus, PipelineAlarmEvent, PipelineAnalysisEvent, PipelineCaptureEvent,
     PipelineTrackEvent,
 };
+use crate::inflight::{monotonic_now_ms, InflightMarker, InflightSample};
 use crate::manager::PipelineManager;
 use crate::motion_gate::MotionGate;
 use crate::motion_gate_worker::MotionGateWorker;
@@ -35,24 +36,28 @@ use crate::snapshot::SnapshotResult;
 /// 向后兼容单 Worker 模式使用的伪算法 ID
 pub(crate) const LEGACY_SINGLE_WORKER_ID: &str = "__legacy_single__";
 
-/// 取景裁剪失败的告警节流：首次立即告警，其后每 [`CROP_WARN_INTERVAL_MS`] 最多一条，
+/// 常驻循环内的失败告警节流：首次立即告警，其后每 `interval_ms` 最多一条，
 /// 附带被抑制次数。避免在常驻推理循环里按帧率刷屏。
-struct CropWarnThrottle {
+struct WarnThrottle {
+    interval_ms: i64,
     last_warn_ms: Option<i64>,
     suppressed: u32,
 }
 
-impl CropWarnThrottle {
-    const INIT: Self = Self {
-        last_warn_ms: None,
-        suppressed: 0,
-    };
+impl WarnThrottle {
+    const fn new(interval_ms: i64) -> Self {
+        Self {
+            interval_ms,
+            last_warn_ms: None,
+            suppressed: 0,
+        }
+    }
 
     /// 判定本条失败是否应当告警；返回 `Some(被抑制条数)` 表示应当告警。
     fn admit(&mut self, now_ms: i64) -> Option<u32> {
         let should_warn = self
             .last_warn_ms
-            .is_none_or(|last| now_ms.saturating_sub(last) >= CROP_WARN_INTERVAL_MS);
+            .is_none_or(|last| now_ms.saturating_sub(last) >= self.interval_ms);
         if !should_warn {
             self.suppressed = self.suppressed.saturating_add(1);
             return None;
@@ -65,6 +70,12 @@ impl CropWarnThrottle {
 /// 取景裁剪失败告警的最小间隔（10 秒）
 const CROP_WARN_INTERVAL_MS: i64 = 10_000;
 
+/// 推理执行/结果链路失败告警的最小间隔（10 秒）
+///
+/// 持续失败正是要观测的故障态，但告警不能跟着帧率走：首条即时，其后 10 秒一条并
+/// 附 `suppressed` 计数，连续失败数仍按帧在指标里完整累计。
+const INFERENCE_WARN_INTERVAL_MS: i64 = 10_000;
+
 /// 解析本帧真正送模的输入帧与坐标还原基准。
 ///
 /// **裁剪与坐标还原是同一个决策**：只有真正裁切成功，才把「局部坐标系」交给下游还原；
@@ -73,7 +84,7 @@ const CROP_WARN_INTERVAL_MS: i64 = 10_000;
 fn resolve_infer_frame(
     frame: &FrameRef,
     requested_roi: Option<BoundingBox>,
-    warn_throttle: &mut CropWarnThrottle,
+    warn_throttle: &mut WarnThrottle,
 ) -> (FrameRef, Option<BoundingBox>) {
     let Some(roi) = requested_roi else {
         return (frame.clone(), None);
@@ -104,14 +115,47 @@ pub struct InstanceMetrics {
     pub frames_inferred: AtomicU64,
     /// 因背压队列已满被丢弃的采样帧数 (Drop-Oldest)
     pub frames_dropped: AtomicU64,
-    /// 推理执行失败次数
+    /// 推理执行与结果链路的错误累计次数
     pub inference_errors: AtomicU64,
+    /// 同步调用未按期正常返回（超时/非 `AV_OK` 等）的连续次数，下次正常返回即清零
+    pub consecutive_execution_failures: AtomicU64,
     /// 触发的业务规则告警数
     pub alarms_triggered: AtomicU64,
     /// 成功落地的证据快照数
     pub snapshots_saved: AtomicU64,
-    /// 因所属 Worker 代际已被替换而丢弃的迟到推理结果数
+    /// 因所属 Worker 代际已被替换而丢弃的迟到推理结果或错误数
     pub stale_results: AtomicU64,
+}
+
+impl InstanceMetrics {
+    /// 以同步调用边界为准清零连续执行失败数。
+    fn record_execution_success(&self) {
+        self.consecutive_execution_failures
+            .store(0, Ordering::Relaxed);
+    }
+
+    /// 按调用边界归类错误并更新连续执行失败数。
+    ///
+    /// 只有「调用未能按期正常返回」才计入：超时、非 `AV_OK`、执行/ABI 错误。
+    /// `JsonParse` 发生在 `instance_process` 返回 `AV_OK` 之后，属于结果链路的独立诊断，
+    /// 不计入执行失败并按调用成功清零。
+    fn record_execution_error(&self, error: &infer::InferError) -> Option<u64> {
+        match error {
+            infer::InferError::CAbiError { .. }
+            | infer::InferError::Timeout(_)
+            | infer::InferError::Execution { .. }
+            | infer::InferError::InvalidAbi { .. } => Some(
+                self.consecutive_execution_failures
+                    .fetch_add(1, Ordering::Relaxed)
+                    .saturating_add(1),
+            ),
+            infer::InferError::JsonParse { .. } => {
+                self.record_execution_success();
+                None
+            }
+            _ => None,
+        }
+    }
 }
 
 /// 单个算法实例的运行时控制面描述（增量收敛的当前值快照）
@@ -123,6 +167,17 @@ pub struct InstanceDescriptor {
     pub target_fps: u32,
     /// 当前生效的算法配置 JSON
     pub config_json: Option<String>,
+}
+
+/// 单个算法实例的推理在途心跳快照
+///
+/// 活性巡检的输入：`sample` 为无锁采集结果，`verdict` 由巡检线程结合阈值判定，
+/// 本结构只负责把「谁」和「现状」带出去，不承担任何判定职责。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceInflightSnapshot {
+    pub instance_id: String,
+    pub algorithm_id: String,
+    pub sample: InflightSample,
 }
 
 /// 单个算法实例的多工配置
@@ -395,6 +450,8 @@ struct ControlSlot {
     managed_worker: Option<InferenceWorker>,
     infer_handle: Option<tokio::task::JoinHandle<()>>,
     metrics: Arc<InstanceMetrics>,
+    /// 推理在途心跳，供活性巡检读取
+    inflight: Arc<InflightMarker>,
     /// 生效抽帧帧率，与抽帧槽共享同一个原子量
     target_fps: Arc<AtomicU32>,
     /// 该实例 Worker 的代际，与抽帧槽共享同一个原子量
@@ -409,6 +466,7 @@ struct InstanceRuntimeParts {
     algorithm_id: String,
     config_json: Option<String>,
     metrics: Arc<InstanceMetrics>,
+    inflight: Arc<InflightMarker>,
     target_fps: Arc<AtomicU32>,
     worker_holder: Arc<tokio::sync::RwLock<InferenceWorkerHandle>>,
     worker_generation: Arc<AtomicU64>,
@@ -426,6 +484,7 @@ impl InstanceRuntimeParts {
             managed_worker,
             infer_handle: Some(self.infer_handle),
             metrics: self.metrics,
+            inflight: self.inflight,
             target_fps: self.target_fps,
             worker_generation: self.worker_generation,
             cancel: self.cancel,
@@ -461,6 +520,9 @@ fn spawn_instance_runtime(
     let infer_worker_holder = worker_holder.clone();
     let infer_metrics = instance_metrics.clone();
     let pump_metrics_infer = pump_metrics.clone();
+    // 在途心跳：实例创建即起算启动宽限，用于识别「从未进入推理」的初始化挂死
+    let inflight = Arc::new(InflightMarker::new(monotonic_now_ms()));
+    let infer_inflight = inflight.clone();
     let cam_id_infer = camera_id.to_string();
     let pipeline_mgr_infer = pipeline_mgr;
     let algorithm_id_infer = algorithm_id.to_string();
@@ -477,7 +539,9 @@ fn spawn_instance_runtime(
         );
 
         // 取景预裁剪与坐标还原基准必须成对产生（见 resolve_infer_frame）。
-        let mut crop_warn = CropWarnThrottle::INIT;
+        let mut crop_warn = WarnThrottle::new(CROP_WARN_INTERVAL_MS);
+        // 执行/结果失败告警节流（单写者，无需原子量）
+        let mut infer_warn = WarnThrottle::new(INFERENCE_WARN_INTERVAL_MS);
 
         loop {
             tokio::select! {
@@ -508,10 +572,18 @@ fn spawn_instance_runtime(
                         let (infer_frame, analysis_roi) =
                             resolve_infer_frame(&sampled_frame.frame, requested_roi, &mut crop_warn);
 
-                        match current_worker
+                        // 在途心跳：包住同步阻塞的推理调用，是算法活性的唯一直接证据。
+                        // 守卫在 Drop 时退出在途——正常返回、报错、以及 await 点被
+                        // 取消/abort 三条路径都不会把实例留在在途状态；两个原子操作对
+                        // 零拷贝主路径无可测量开销。
+                        let infer_started_ms = monotonic_now_ms();
+                        let infer_guard = infer_inflight.enter(infer_started_ms);
+                        let infer_outcome = current_worker
                             .submit_with_metadata(infer_frame)
-                            .await
-                        {
+                            .await;
+                        drop(infer_guard);
+
+                        match infer_outcome {
                             Ok(inference_result) => {
                                 // Worker 代际栅栏：替换期间旧 Worker 的在途结果必须丢弃，
                                 // 否则旧模型的检测框会混入新配置的航迹与告警链。
@@ -528,6 +600,7 @@ fn spawn_instance_runtime(
                                     continue;
                                 }
 
+                                infer_metrics.record_execution_success();
                                 let infer::InferenceResult {
                                     detections,
                                     embeddings,
@@ -647,18 +720,51 @@ fn spawn_instance_runtime(
                                 }
                             }
                             Err(err) => {
+                                // Worker 代际栅栏：替换期间旧 Worker 的取消/超时错误
+                                // 不得计入当前实例的连续执行失败数与推理错误指标。
+                                if slot_generation != infer_generation.load(Ordering::Acquire) {
+                                    infer_metrics
+                                        .stale_results
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    tracing::debug!(
+                                        camera_id = %cam_id_infer,
+                                        algorithm_id = %algorithm_id_infer,
+                                        slot_generation,
+                                        error = %err,
+                                        "丢弃已被替换 Worker 的迟到推理错误"
+                                    );
+                                    continue;
+                                }
+                                let consecutive_failures =
+                                    infer_metrics.record_execution_error(&err);
                                 infer_metrics
                                     .inference_errors
                                     .fetch_add(1, Ordering::Relaxed);
                                 pump_metrics_infer
                                     .inference_errors
                                     .fetch_add(1, Ordering::Relaxed);
-                                tracing::warn!(
-                                    camera_id = %cam_id_infer,
-                                    algorithm_id = %algorithm_id_infer,
-                                    error = %err,
-                                    "多算法实例推理执行失败"
-                                );
+                                // 告警按 10 秒节流：持续失败保留首条与周期摘要，
+                                // 连续失败数仍逐帧计入指标，不因降噪失真。
+                                if let Some(suppressed) = infer_warn.admit(timestamp) {
+                                    if let Some(consecutive_failures) = consecutive_failures {
+                                        tracing::warn!(
+                                            camera_id = %cam_id_infer,
+                                            algorithm_id = %algorithm_id_infer,
+                                            consecutive_execution_failures = consecutive_failures,
+                                            suppressed,
+                                            error = %err,
+                                            "多算法实例执行失败"
+                                        );
+                                    } else {
+                                        tracing::warn!(
+                                            camera_id = %cam_id_infer,
+                                            algorithm_id = %algorithm_id_infer,
+                                            suppressed,
+                                            error = %err,
+                                            "多算法实例结果处理失败"
+                                        );
+                                    }
+                                }
                                 pipeline_mgr_infer
                                     .expire_tracking_for_algo_at(
                                         &cam_id_infer,
@@ -685,6 +791,7 @@ fn spawn_instance_runtime(
         algorithm_id: algorithm_id.to_string(),
         config_json,
         metrics: instance_metrics.clone(),
+        inflight,
         target_fps: shared_target_fps.clone(),
         worker_holder,
         worker_generation: worker_generation.clone(),
@@ -752,6 +859,19 @@ impl SharedControlSlots {
         guard
             .iter()
             .map(|s| (s.instance_id.clone(), s.metrics.clone()))
+            .collect()
+    }
+
+    /// 采集各实例的推理在途心跳快照（仅供活性巡检读取，不改变任何状态）
+    async fn instance_inflight_snapshots(&self) -> Vec<InstanceInflightSnapshot> {
+        let guard = self.inner.lock().await;
+        guard
+            .iter()
+            .map(|s| InstanceInflightSnapshot {
+                instance_id: s.instance_id.clone(),
+                algorithm_id: s.algorithm_id.clone(),
+                sample: s.inflight.sample(),
+            })
             .collect()
     }
 
@@ -1810,6 +1930,11 @@ impl AnalysisPump {
     pub async fn instance_metrics(&self) -> Vec<(String, Arc<InstanceMetrics>)> {
         self.control_handle().instance_metrics().await
     }
+
+    /// 获取所有实例的推理在途心跳快照（供活性巡检）
+    pub async fn instance_inflight_snapshots(&self) -> Vec<InstanceInflightSnapshot> {
+        self.control_handle().instance_inflight_snapshots().await
+    }
 }
 
 impl Drop for AnalysisPump {
@@ -1880,6 +2005,11 @@ impl PumpControlHandle {
     /// 列出当前挂载的算法实例描述（instanceId / algorithmId / 抽帧频率 / 生效配置）
     pub async fn instance_descriptors(&self) -> Vec<InstanceDescriptor> {
         self.control_slots.instance_descriptors().await
+    }
+
+    /// 获取所有实例的推理在途心跳快照（供活性巡检）
+    pub async fn instance_inflight_snapshots(&self) -> Vec<InstanceInflightSnapshot> {
+        self.control_slots.instance_inflight_snapshots().await
     }
 
     /// 按 `instanceId` 原地热更新目标实例配置。
@@ -2090,6 +2220,43 @@ mod tests {
         BoundingBox, EvidenceImageStream, FaceDetail, FrameHandle, PixelFormat, StrideInfo,
     };
 
+    #[test]
+    fn execution_failure_streak_excludes_output_errors_and_resets_on_success() {
+        let metrics = InstanceMetrics::default();
+        let process_error = infer::InferError::CAbiError {
+            code: -1,
+            message: "test".to_string(),
+        };
+        let output_error = infer::InferError::JsonParse {
+            reason: "test payload".to_string(),
+        };
+
+        assert_eq!(metrics.record_execution_error(&process_error), Some(1));
+        assert_eq!(metrics.record_execution_error(&process_error), Some(2));
+        assert_eq!(
+            metrics
+                .consecutive_execution_failures
+                .load(Ordering::Relaxed),
+            2
+        );
+
+        assert_eq!(metrics.record_execution_error(&output_error), None);
+        assert_eq!(
+            metrics
+                .consecutive_execution_failures
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(metrics.record_execution_error(&process_error), Some(1));
+        metrics.record_execution_success();
+        assert_eq!(
+            metrics
+                .consecutive_execution_failures
+                .load(Ordering::Relaxed),
+            0
+        );
+    }
+
     /// 取景框未配置：原帧直通，且不得要求任何坐标还原。
     #[test]
     fn no_requested_crop_passes_frame_through() {
@@ -2099,7 +2266,7 @@ mod tests {
             _ => panic!("测试帧应为 Host 句柄"),
         };
 
-        let mut throttle = CropWarnThrottle::INIT;
+        let mut throttle = WarnThrottle::new(CROP_WARN_INTERVAL_MS);
         let (resolved, roi) = resolve_infer_frame(&frame, None, &mut throttle);
 
         assert!(roi.is_none());
@@ -2115,7 +2282,7 @@ mod tests {
     #[test]
     fn successful_crop_binds_applied_roi() {
         let frame = test_nv12_frame("cam_crop_test", 1000);
-        let mut throttle = CropWarnThrottle::INIT;
+        let mut throttle = WarnThrottle::new(CROP_WARN_INTERVAL_MS);
 
         let (resolved, roi) = resolve_infer_frame(
             &frame,
@@ -2147,7 +2314,7 @@ mod tests {
             },
         );
 
-        let mut throttle = CropWarnThrottle::INIT;
+        let mut throttle = WarnThrottle::new(CROP_WARN_INTERVAL_MS);
         let (resolved, roi) = resolve_infer_frame(
             &frame,
             Some(BoundingBox::new(0.25, 0.25, 0.75, 0.75)),
@@ -2164,8 +2331,8 @@ mod tests {
 
     /// 逐帧失败不得刷屏：首次立即告警，其后按间隔限流并统计被抑制条数。
     #[test]
-    fn crop_warn_throttle_limits_frequency() {
-        let mut throttle = CropWarnThrottle::INIT;
+    fn warn_throttle_limits_frequency() {
+        let mut throttle = WarnThrottle::new(CROP_WARN_INTERVAL_MS);
         assert_eq!(throttle.admit(1_000), Some(0), "首次失败必须告警");
         assert_eq!(throttle.admit(1_100), None);
         assert_eq!(throttle.admit(9_000), None);
