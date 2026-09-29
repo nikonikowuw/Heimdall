@@ -1160,7 +1160,7 @@
   );
 }
 
-/* ── 登录页主题 token：简洁的身份验证界面，保留场景层配色 ── */
+/* ── 登录页主题 token：先锋深空悬浮晶体卡片 (Frosted Lens Glass) ── */
 .auth-accent {
   --accent: #2563eb;
   --accent-rgb: 37, 99, 235;
@@ -1168,53 +1168,65 @@
   --ring: rgba(37, 99, 235, 0.25);
   --auth-focus: #2563eb;
   --auth-focus-ring: rgba(37, 99, 235, 0.18);
-  --auth-ink: #111827;
-  --auth-copy: #435064;
-  --auth-muted: #58677c;
-  --auth-panel: #f8f9fb;
-  --auth-panel-border: rgba(15, 23, 42, 0.15);
-  --auth-field: #f8f9fb;
-  --auth-field-border: rgba(15, 23, 42, 0.34);
-  --auth-field-focus-bg: transparent;
-  --auth-field-hover-border: rgba(37, 99, 235, 0.72);
-  --auth-focus-glow: 0 1px 0 var(--auth-focus);
+  --auth-ink: #0f172a;
+  --auth-copy: #334155;
+  --auth-muted: #64748b;
+  --auth-panel: rgba(255, 255, 255, 0.76);
+  --auth-panel-border: rgba(15, 23, 42, 0.08);
+  --auth-panel-border-hover: rgba(37, 99, 235, 0.35);
+  --auth-field: rgba(15, 23, 42, 0.035);
+  --auth-field-border: rgba(15, 23, 42, 0.11);
+  --auth-field-focus-bg: rgba(255, 255, 255, 0.95);
+  --auth-field-hover-border: rgba(37, 99, 235, 0.45);
+  --auth-field-autofill: #f1f5f9;
+  --auth-focus-glow: 0 0 0 3px rgba(37, 99, 235, 0.18);
   --auth-grid-color: rgba(0, 0, 0, 0.025);
   --auth-vignette: rgba(0, 0, 0, 0.04);
-  --auth-button-bg: #1d4ed8;
-  --auth-button-hover-bg: #1e40af;
+  --auth-button-bg: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  --auth-button-hover-bg: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   --auth-button-text: #ffffff;
-  --auth-button-border: transparent;
-  --auth-button-shadow: 0 2px 6px rgba(29, 78, 216, 0.2);
-  --auth-button-hover-shadow: 0 5px 14px rgba(29, 78, 216, 0.24);
-  --auth-panel-shadow: -1.5rem 0 3rem -2.5rem rgba(15, 23, 42, 0.28);
+  --auth-button-border: rgba(255, 255, 255, 0.2);
+  --auth-button-shadow:
+    0 4px 14px 0 rgba(37, 99, 235, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  --auth-button-hover-shadow:
+    0 6px 20px 0 rgba(37, 99, 235, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  --auth-panel-shadow:
+    0 30px 60px -15px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .dark .auth-accent {
   --accent: #3b82f6;
   --accent-rgb: 59, 130, 246;
-  --accent-soft: rgba(59, 130, 246, 0.1);
+  --accent-soft: rgba(59, 130, 246, 0.12);
   --ring: rgba(59, 130, 246, 0.3);
-  --auth-focus: #60a5fa;
-  --auth-focus-ring: rgba(96, 165, 250, 0.3);
-  --auth-ink: #f3f4f6;
-  --auth-copy: #c1c9d4;
-  --auth-muted: #9aa8ba;
-  --auth-panel: #11161b;
-  --auth-panel-border: rgba(255, 255, 255, 0.14);
-  --auth-field: #11161b;
-  --auth-field-border: rgba(255, 255, 255, 0.32);
-  --auth-field-focus-bg: transparent;
-  --auth-field-hover-border: rgba(96, 165, 250, 0.76);
-  --auth-focus-glow: 0 1px 0 var(--auth-focus);
+  --auth-focus: #3b82f6;
+  --auth-focus-ring: rgba(59, 130, 246, 0.28);
+  --auth-ink: #f8fafc;
+  --auth-copy: #cbd5e1;
+  --auth-muted: #94a3b8;
+  --auth-panel: rgba(10, 15, 29, 0.68);
+  --auth-panel-border: rgba(255, 255, 255, 0.11);
+  --auth-panel-border-hover: rgba(99, 102, 241, 0.45);
+  --auth-field: rgba(255, 255, 255, 0.04);
+  --auth-field-border: rgba(255, 255, 255, 0.1);
+  --auth-field-focus-bg: rgba(15, 23, 42, 0.85);
+  --auth-field-hover-border: rgba(96, 165, 250, 0.55);
+  --auth-field-autofill: #0b1120;
+  --auth-focus-glow: 0 0 0 3px rgba(59, 130, 246, 0.28);
   --auth-grid-color: rgba(255, 255, 255, 0.02);
   --auth-vignette: rgba(0, 0, 0, 0.76);
-  --auth-button-bg: #1d4ed8;
-  --auth-button-hover-bg: #1e40af;
+  --auth-button-bg: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  --auth-button-hover-bg: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%);
   --auth-button-text: #ffffff;
-  --auth-button-border: transparent;
-  --auth-button-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-  --auth-button-hover-shadow: 0 5px 14px rgba(0, 0, 0, 0.32);
-  --auth-panel-shadow: -1.5rem 0 3rem -2.5rem rgba(0, 0, 0, 0.72);
+  --auth-button-border: rgba(255, 255, 255, 0.22);
+  --auth-button-shadow:
+    0 4px 20px 0 rgba(37, 99, 235, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  --auth-button-hover-shadow:
+    0 6px 26px 0 rgba(37, 99, 235, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  --auth-panel-shadow:
+    0 35px 80px -15px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
 /* ── 登录页远方星场（独立合成层，不改动 WebGL 黑洞） ── */
@@ -1353,12 +1365,14 @@
 }
 
 .auth-locale-trigger {
-  min-height: 2.125rem;
-  height: 2.125rem;
-  min-width: 2.125rem;
-  border-radius: 0.5rem;
+  min-height: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  border-radius: 9999px;
   border: 1px solid var(--auth-panel-border);
   background: var(--auth-field);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   color: var(--auth-muted);
   font-family: var(--font-sans);
   font-size: 0.75rem;
@@ -1369,18 +1383,20 @@
 }
 
 .auth-locale-trigger:hover {
-  border-color: rgba(var(--accent-rgb), 0.35);
+  border-color: rgba(var(--accent-rgb), 0.45);
   color: var(--auth-ink);
 }
 
 .auth-fps-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 2.125rem;
-  height: 2.125rem;
+  min-height: 2rem;
+  height: 2rem;
   border: 1px solid var(--auth-panel-border);
-  border-radius: 0.5rem;
+  border-radius: 9999px;
   background: var(--auth-field);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   padding: 0 0.625rem;
   color: var(--auth-muted);
   font-family: var(--font-data);
@@ -1394,15 +1410,15 @@
 }
 
 .auth-fps-badge:hover {
-  border-color: rgba(var(--accent-rgb), 0.35);
+  border-color: rgba(var(--accent-rgb), 0.45);
   color: var(--auth-ink);
 }
 
 .auth-theme-toggle {
   position: relative;
   display: flex;
-  height: 2.125rem;
-  width: 3.375rem;
+  height: 2rem;
+  width: 3.25rem;
   flex-shrink: 0;
   cursor: pointer;
   align-items: center;
@@ -1410,9 +1426,11 @@
   border: 1px solid var(--auth-panel-border);
   border-radius: 9999px;
   background: var(--auth-field);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   padding: 0.125rem;
   color: var(--auth-muted);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
   transition:
     border-color 0.2s ease,
     box-shadow 0.2s ease;
@@ -1430,10 +1448,10 @@
 .auth-theme-toggle__icon {
   pointer-events: none;
   display: grid;
-  height: 1.25rem;
-  width: 1.25rem;
+  height: 1.125rem;
+  width: 1.125rem;
   place-items: center;
-  opacity: 0.45;
+  opacity: 0.55;
 }
 
 .auth-theme-toggle__thumb {
@@ -1450,21 +1468,21 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   transform: translateY(-50%);
   transition:
-    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
     background-color 0.2s ease,
     color 0.2s ease,
     box-shadow 0.2s ease;
 }
 
 .auth-theme-toggle__thumb--light {
-  color: var(--text-primary);
+  color: #f59e0b;
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.15),
-    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .auth-theme-toggle__thumb--dark {
-  transform: translate(1.25rem, -50%);
+  transform: translate(1.125rem, -50%);
   background: var(--auth-focus);
   color: #ffffff;
   box-shadow:
@@ -1494,168 +1512,243 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
   gap: 0.75rem 1rem;
   color: var(--auth-muted);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   line-height: 1.5;
+  letter-spacing: 0.04em;
+}
+
+.auth-stage-telemetry > span {
+  white-space: nowrap;
 }
 
 .auth-stage-telemetry__status {
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.45rem;
   color: var(--auth-copy);
-  font-family: var(--font-data);
-  font-size: 0.625rem;
-  letter-spacing: 0.08em;
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .auth-stage-telemetry__dot {
-  width: 0.375rem;
-  height: 0.375rem;
+  width: 0.4375rem;
+  height: 0.4375rem;
   border-radius: 9999px;
   background: var(--status-success);
-  box-shadow: 0 0 0 2px rgba(var(--status-success-rgb), 0.2);
+  box-shadow: 0 0 0 2px rgba(var(--status-success-rgb), 0.25);
+  animation: authTelemetryPulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes authTelemetryPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.9);
+  }
 }
 
 .auth-stage-telemetry__divider {
   color: var(--auth-panel-border);
+  opacity: 0.8;
 }
 
-/* ── 全高鉴权面板：与星场并置，不再使用浮动卡片 ── */
+/* ── 先锋深空悬浮晶体卡片 (Frosted Lens Glass Card) ── */
 .auth-console-wrap {
   width: 100%;
-  flex: 0 0 auto;
+  max-width: 29.5rem;
+  margin: auto 0;
+  flex-shrink: 0;
+  z-index: 20;
 }
 
 .auth-console {
   position: relative;
-  min-height: 100dvh;
-  overflow-y: auto;
-  border-left: 1px solid var(--auth-panel-border);
+  overflow: hidden;
+  border-radius: 1.5rem;
   background: var(--auth-panel);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid var(--auth-panel-border);
   box-shadow: var(--auth-panel-shadow);
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease;
 }
 
-.auth-console::before {
+.auth-console:hover {
+  border-color: var(--auth-panel-border-hover);
+}
+
+/* 吊舱顶部环境流光束 (Top Ambient Glow Beam) */
+.auth-console__glow {
   position: absolute;
-  top: calc(50% - 2.5rem);
-  left: 0;
-  width: 3px;
-  height: 5rem;
-  background: var(--auth-focus);
-  content: '';
+  top: -5.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20rem;
+  height: 10rem;
+  border-radius: 9999px;
+  background: radial-gradient(
+    circle,
+    rgba(59, 130, 246, 0.25) 0%,
+    rgba(99, 102, 241, 0.14) 48%,
+    transparent 72%
+  );
+  filter: blur(26px);
   pointer-events: none;
 }
 
 .auth-console__content {
   box-sizing: border-box;
+  position: relative;
+  z-index: 10;
   display: flex;
-  width: 100%;
-  max-width: 38rem;
-  min-height: 100dvh;
   flex-direction: column;
-  margin: 0 auto;
-  padding: 6.5rem 3.5rem 2rem;
+  padding: 2.375rem 2.5rem 2.125rem;
 }
 
 .auth-console__main {
-  margin-block: auto;
-  padding-block: 2.5rem;
+  display: flex;
+  flex-direction: column;
 }
 
 .auth-console__utility {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.875rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 1.125rem;
+  border-bottom: 1px solid var(--auth-panel-border);
 }
 
 .auth-console__eyebrow {
   display: inline-flex;
   align-items: center;
-  gap: 0.625rem;
-  color: var(--auth-focus);
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.375rem;
+  background: var(--auth-field);
+  border: 1px solid var(--auth-panel-border);
+  color: var(--auth-muted);
   font-family: var(--font-data);
   font-size: 0.6875rem;
   font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.auth-console__eyebrow-mark {
-  width: 1.25rem;
-  height: 2px;
-  background: currentColor;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .auth-console__status {
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 0.625rem;
+  gap: 0.5625rem;
   color: var(--auth-copy);
   font-family: var(--font-data);
-  font-size: 0.6875rem;
-  line-height: 1.5;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.auth-console__status-dot-wrapper {
+  position: relative;
+  display: flex;
+  height: 0.5625rem;
+  width: 0.5625rem;
+  align-items: center;
+  justify-content: center;
 }
 
 .auth-console__status-dot {
-  width: 0.5rem;
-  height: 0.5rem;
-  flex: 0 0 auto;
+  width: 0.5625rem;
+  height: 0.5625rem;
   border-radius: 50%;
   background: var(--status-success);
 }
 
-.auth-console__status-dot--setup {
+.auth-console__status-dot-ping {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--status-success);
+  opacity: 0.6;
+  animation: authDotPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes authDotPing {
+  75%,
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+.auth-console__status-dot--ready,
+.auth-console__status-dot--ready ~ .auth-console__status-dot-ping {
+  background: var(--status-success);
+}
+
+.auth-console__status-dot--setup,
+.auth-console__status-dot--setup ~ .auth-console__status-dot-ping {
   background: var(--status-warning);
 }
 
-.auth-console__status-dot--error {
+.auth-console__status-dot--error,
+.auth-console__status-dot--error ~ .auth-console__status-dot-ping {
   background: var(--status-danger);
 }
 
-.auth-console__status-dot--checking {
+.auth-console__status-dot--checking,
+.auth-console__status-dot--checking ~ .auth-console__status-dot-ping {
   background: var(--status-info);
 }
 
 .auth-console__intro {
-  margin-top: 2.25rem;
+  margin-top: 1.5rem;
 }
 
 .auth-console__title {
   margin: 0;
   color: var(--auth-ink);
   font-family: var(--font-display);
-  font-size: 1.875rem;
-  font-weight: 500;
-  letter-spacing: 0;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.018em;
+  line-height: 1.35;
+  text-wrap: balance;
 }
 
 .auth-console__subtitle {
-  max-width: 32rem;
-  margin: 0.875rem 0 0;
+  max-width: 100%;
+  margin: 0.5rem 0 0;
   color: var(--auth-copy);
   font-family: var(--font-sans);
-  font-size: 0.9375rem;
-  line-height: 1.7;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  text-wrap: pretty;
 }
 
 .auth-form {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
-  margin-top: 2.5rem;
+  gap: 1.375rem;
+  margin-top: 1.75rem;
 }
 
 .auth-field-stack {
   display: flex;
   flex-direction: column;
-  gap: 1.625rem;
+  gap: 1.125rem;
 }
 
 .auth-field-item {
@@ -1664,54 +1757,94 @@
 
 .auth-label {
   display: block;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.375rem;
   color: var(--auth-copy);
   font-family: var(--font-sans);
   font-size: 0.8125rem;
   font-weight: 500;
-  line-height: 1.5;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
+/* ── 现代微凹槽输入床 (Micro-Inset Bed) ── */
 .auth-input-group {
   position: relative;
   display: flex;
   align-items: center;
-}
-
-.auth-input {
-  width: 100%;
-  min-height: 3.25rem;
-  height: 3.25rem;
-  border: 0;
-  border-bottom: 1px solid var(--auth-field-border);
-  border-radius: 0;
+  border-radius: 0.75rem;
   background: var(--auth-field);
-  padding: 0 2.75rem 0 0;
-  box-shadow: none;
-  color: var(--auth-ink);
-  font-family: var(--font-sans);
-  font-size: 0.9375rem;
-  letter-spacing: 0;
-  caret-color: var(--auth-focus);
+  border: 1px solid var(--auth-field-border);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.03);
   transition:
     border-color 0.18s ease,
     background-color 0.18s ease,
     box-shadow 0.18s ease;
 }
 
-.auth-input--no-toggle {
-  padding-right: 0;
+.auth-input-group:hover:not(:focus-within) {
+  border-color: var(--auth-field-hover-border);
 }
 
-/* 禁用态不得保留交互暗示：去掉内凹与悬停观感，并统一到 not-allowed */
+.auth-input-group:focus-within {
+  border-color: var(--auth-focus);
+  background: var(--auth-field-focus-bg);
+  box-shadow:
+    0 0 0 3px var(--auth-focus-ring),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.auth-input-group--invalid,
+.auth-input-group--invalid:focus-within {
+  border-color: var(--status-danger) !important;
+  box-shadow: 0 0 0 3px var(--status-danger-soft) !important;
+}
+
+.auth-input-prefix {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-left: 0.9375rem;
+  padding-right: 0.625rem;
+  color: var(--auth-muted);
+  flex-shrink: 0;
+  transition: color 0.18s ease;
+}
+
+.auth-input-group:focus-within .auth-input-prefix {
+  color: var(--auth-focus);
+}
+
+.auth-input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 3rem;
+  height: 3rem;
+  border: 0;
+  border-radius: 0.75rem;
+  background: transparent;
+  padding: 0 0.875rem 0 0;
+  box-shadow: none;
+  color: var(--auth-ink);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  letter-spacing: 0;
+  caret-color: var(--auth-focus);
+}
+
+.auth-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
 .auth-input:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-  box-shadow: none;
 }
 
 .auth-input::placeholder {
   color: var(--auth-muted);
+  opacity: 0.55;
 }
 
 .auth-input::selection {
@@ -1719,60 +1852,33 @@
   color: var(--auth-ink);
 }
 
-.auth-input:hover:not(:disabled):not(:focus) {
-  border-color: var(--auth-field-hover-border);
-}
-
-.auth-input:focus,
-.auth-input:focus-visible {
-  border-bottom-color: var(--auth-focus);
-  background: var(--auth-field-focus-bg);
-  outline: none;
-  box-shadow: var(--auth-focus-glow);
-}
-
-.auth-input:focus-visible {
-  outline: 2px solid var(--auth-focus);
-  outline-offset: 3px;
-}
-
-.auth-input[aria-invalid='true'],
-.auth-input[aria-invalid='true']:focus,
-.auth-input[aria-invalid='true']:focus-visible {
-  border-color: var(--status-danger);
-  box-shadow: 0 0 0 3px var(--status-danger-soft);
-}
-
-/* 彻底解决浏览器 Chrome / Safari / Edge 恶性自动填充破坏深色背景导致白底白字吞噬的问题 */
 .auth-input:-webkit-autofill,
 .auth-input:-webkit-autofill:hover,
 .auth-input:-webkit-autofill:focus,
 .auth-input:-webkit-autofill:active {
   -webkit-text-fill-color: var(--auth-ink) !important;
-  -webkit-box-shadow: 0 0 0 1000px var(--auth-field) inset !important;
-  box-shadow: 0 0 0 1000px var(--auth-field) inset !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--auth-field-autofill) inset !important;
+  box-shadow: 0 0 0 1000px var(--auth-field-autofill) inset !important;
   caret-color: var(--auth-ink);
   transition: background-color 5000s ease-in-out 0s;
 }
 
 .auth-input__toggle {
-  position: absolute;
-  top: 50%;
-  right: 0;
-  z-index: 2;
   display: grid;
-  width: 2rem;
-  height: 2rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin-right: 0.375rem;
   cursor: pointer;
   place-items: center;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 0.375rem;
+  background: transparent;
   color: var(--auth-muted);
-  transform: translateY(-50%);
+  flex-shrink: 0;
   transition:
     color 0.18s ease,
     background-color 0.18s ease,
-    border-color 0.18s ease;
+    transform 0.12s ease;
 }
 
 .auth-input__toggle:hover:not(:disabled) {
@@ -1781,10 +1887,9 @@
 }
 
 .auth-input__toggle:active:not(:disabled) {
-  transform: translateY(-50%) scale(0.92);
+  transform: scale(0.92);
 }
 
-.auth-input__toggle:focus,
 .auth-input__toggle:focus-visible {
   outline: 2px solid var(--auth-focus);
   outline-offset: 1px;
@@ -1795,24 +1900,25 @@
   opacity: 0.4;
 }
 
+/* 记住我与选项 */
 .auth-options {
   display: flex;
-  min-height: 2.75rem;
   align-items: center;
+  justify-content: space-between;
+  padding: 0.1875rem 0;
 }
 
-/* ── 极简纯净定制复选框 ── */
 .auth-remember {
   display: inline-flex;
-  min-height: 2.75rem;
   cursor: pointer;
   align-items: center;
-  gap: 0.625rem;
+  gap: 0.5625rem;
   color: var(--auth-copy);
   font-family: var(--font-sans);
-  font-size: 0.875rem;
+  font-size: 0.84375rem;
   font-weight: 400;
   user-select: none;
+  white-space: nowrap;
   transition: color 0.18s ease;
 }
 
@@ -1841,12 +1947,12 @@
 
 .auth-checkbox__box {
   display: flex;
-  width: 1.25rem;
-  height: 1.25rem;
+  width: 1.125rem;
+  height: 1.125rem;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--auth-field-border);
-  border-radius: 0.1875rem;
+  border-radius: 0.25rem;
   background: var(--auth-field);
   color: #ffffff;
   transition:
@@ -1856,7 +1962,7 @@
 }
 
 .auth-remember:hover .auth-checkbox__box {
-  border-color: rgba(var(--accent-rgb), 0.4);
+  border-color: rgba(var(--accent-rgb), 0.45);
 }
 
 .auth-checkbox__native:focus-visible + .auth-checkbox__box {
@@ -1865,8 +1971,8 @@
 }
 
 .auth-checkbox__native:checked + .auth-checkbox__box {
-  border-color: var(--auth-button-bg);
-  background: var(--auth-button-bg);
+  border-color: var(--auth-focus);
+  background: var(--auth-focus);
   color: #ffffff;
 }
 
@@ -1890,18 +1996,17 @@
 .auth-form-error {
   display: flex;
   align-items: flex-start;
-  gap: 0.75rem;
-  border-radius: 0.1875rem;
+  gap: 0.625rem;
+  border-radius: 0.5rem;
   padding: 0.75rem 0.875rem;
-  font-size: 0.875rem;
-  line-height: 1.5;
+  font-size: 0.8125rem;
+  line-height: 1.45;
 }
 
 .auth-inline-state {
   align-items: center;
   border-left: 2px solid var(--auth-focus);
-  background: transparent;
-  padding-left: 1rem;
+  background: var(--accent-soft);
   color: var(--auth-copy);
 }
 
@@ -1913,8 +2018,8 @@
 .auth-form-error {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  border-color: var(--status-danger-border);
+  gap: 0.375rem;
+  border: 1px solid var(--status-danger-border);
   border-left: 3px solid var(--status-danger);
   background: var(--status-danger-soft);
   color: var(--status-danger);
@@ -1940,15 +2045,15 @@
 
 .auth-retry {
   display: inline-flex;
-  min-height: 2rem;
+  min-height: 1.875rem;
   cursor: pointer;
   align-items: center;
   justify-content: center;
-  margin-top: 0.375rem;
+  margin-top: 0.25rem;
   border: 1px solid var(--status-danger-border);
   border-radius: 0.375rem;
   background: var(--bg-surface-solid);
-  padding: 0.25rem 0.75rem;
+  padding: 0.1875rem 0.625rem;
   color: var(--status-danger);
   font-family: var(--font-sans);
   font-size: 0.75rem;
@@ -1977,7 +2082,7 @@
   outline-offset: 2px;
 }
 
-/* ── 主要鉴权操作 ── */
+/* ── 主要鉴权操作按钮 ── */
 .auth-submit-wrap {
   padding-top: 0.25rem;
 }
@@ -1986,24 +2091,25 @@
   position: relative;
   display: flex;
   width: 100%;
-  min-height: 3.5rem;
-  height: 3.5rem;
+  min-height: 3.125rem;
+  height: 3.125rem;
   cursor: pointer;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--auth-button-border);
-  border-radius: 0.375rem;
+  border-radius: 0.75rem;
   background: var(--auth-button-bg);
-  padding: 0 3rem;
+  padding: 0 1.5rem;
   color: var(--auth-button-text);
   font-family: var(--font-sans);
   font-size: 0.9375rem;
   font-weight: 600;
+  letter-spacing: 0.01em;
   box-shadow: var(--auth-button-shadow);
   transition:
     background-color 0.18s ease,
     box-shadow 0.18s ease,
-    transform 0.14s ease;
+    transform 0.14s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .auth-submit:hover:not(:disabled) {
@@ -2013,28 +2119,34 @@
 }
 
 .auth-submit:active:not(:disabled) {
-  transform: translateY(0);
+  transform: translateY(0) scale(0.99);
 }
 
 .auth-submit__label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.625rem;
+  gap: 0.5rem;
   line-height: 1.4;
   text-align: center;
+  white-space: nowrap;
 }
 
 .auth-submit__icon {
   position: absolute;
   right: 1.125rem;
-  width: 1rem;
-  height: 1rem;
+  width: 1.125rem;
+  height: 1.125rem;
+  transition: transform 0.18s ease;
+}
+
+.auth-submit:hover:not(:disabled) .auth-submit__icon {
+  transform: translateX(2px);
 }
 
 .auth-submit:focus-visible {
   outline: 2px solid var(--auth-focus);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 
 .auth-submit:disabled {
@@ -2052,21 +2164,25 @@
 
 .auth-console__footer {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.5rem;
   border-top: 1px solid var(--auth-panel-border);
-  margin-top: 2rem;
-  padding-top: 1rem;
+  margin-top: 1.875rem;
+  padding-top: 1.125rem;
   color: var(--auth-muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .auth-console__deployment {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .auth-console__deployment svg {
@@ -2078,10 +2194,6 @@
   white-space: nowrap;
 }
 
-/* 安全区内边距（env(safe-area-inset-*)）只有在 index.html 声明 viewport-fit=cover 后才非零。
-   本应用尚未整体接入安全区（工作区外壳未处理刘海/圆角），单独开启会把侧边栏暴露在
-   刘海之下；因此登录页沿用浏览器自身的视口内缩，不用 env() 声明一个恒为 0 的内边距。
-   若将来全网孔化：先开 viewport-fit=cover，再同步处理外壳与登录页，不要只改这里。 */
 @media (min-width: 640px) {
   .auth-header {
     padding: 1.5rem 2.5rem;
@@ -2095,83 +2207,70 @@
   }
 
   .auth-console-wrap {
-    width: clamp(28rem, 34vw, 35rem);
+    width: clamp(28.5rem, 28vw, 31rem);
+    max-width: 31rem;
+    margin: 0;
   }
 }
 
 @media (max-width: 1023px) {
+  .auth-stage {
+    min-height: 38vh;
+  }
+
   .auth-stage-telemetry {
     display: none;
   }
 
-  .auth-console,
-  .auth-console__content {
-    min-height: auto;
+  .auth-console-wrap {
+    max-width: 28rem;
+    margin: 1rem auto 2rem;
   }
 
   .auth-console__content {
-    max-width: 40rem;
-    padding: 3rem;
-  }
-
-  .auth-console__main {
-    margin: 0;
-    padding-block: 1.5rem;
+    padding: 2rem 1.875rem 1.75rem;
   }
 }
 
 @media (max-width: 639px) {
   .auth-header {
-    padding-top: 1.25rem;
-    padding-right: 1.5rem;
-    padding-left: 1.5rem;
+    padding-top: 1rem;
+    padding-right: 1.25rem;
+    padding-left: 1.25rem;
   }
 
   .auth-brand {
-    height: 1.875rem;
+    height: 1.75rem;
   }
 
   .auth-fps-badge {
     display: none;
   }
 
-  .auth-console {
-    border-top: 1px solid var(--auth-panel-border);
-    border-left: 0;
-    box-shadow: none;
-  }
-
-  .auth-console::before {
-    display: none;
+  .auth-console-wrap {
+    max-width: 100%;
+    margin: 0.5rem 0 1.5rem;
   }
 
   .auth-console__content {
-    padding: 2.25rem 1.5rem 1.75rem;
-  }
-
-  .auth-console__main {
-    padding-block: 0;
-  }
-
-  .auth-console__intro {
-    margin-top: 1.75rem;
+    padding: 1.625rem 1.375rem 1.375rem;
   }
 
   .auth-console__title {
-    font-size: 1.625rem;
+    font-size: 1.375rem;
   }
 
   .auth-form {
-    gap: 1.25rem;
-    margin-top: 2rem;
+    gap: 1.125rem;
+    margin-top: 1.375rem;
   }
 
   .auth-field-stack {
-    gap: 1.25rem;
+    gap: 1rem;
   }
 
   .auth-console__footer {
-    margin-top: 1.5rem;
+    margin-top: 1.375rem;
   }
 }
 

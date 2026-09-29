@@ -6,10 +6,13 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  Lock,
   Moon,
   RefreshCw,
   Server,
+  ShieldCheck,
   Sun,
+  User,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { LocaleDropdown } from '@/components/LocaleDropdown'
@@ -222,7 +225,7 @@ export function LoginPage(): React.ReactElement {
         return {
           title: t('checkingTitle'),
           subtitle: t('checkingStatus'),
-          badgeText: t('checkingStatus'),
+          badgeText: t('checkingTitle'),
           dotClass: 'auth-console__status-dot--checking',
         }
       case 'unavailable':
@@ -319,10 +322,10 @@ export function LoginPage(): React.ReactElement {
         </div>
       </header>
 
-      {/* 登录内容分区：黑洞场景独立铺满视口，鉴权面板在侧边呈现 */}
-      <div className="auth-layout pointer-events-none relative z-20 flex min-h-dvh w-full flex-col lg:flex-row lg:items-stretch">
+      {/* 登录内容分区：黑洞场景独立铺满视口，磨砂晶体悬浮卡片在右侧呈现 */}
+      <div className="auth-layout pointer-events-none relative z-20 flex min-h-dvh w-full flex-col justify-between p-6 sm:p-8 lg:flex-row lg:items-center lg:justify-between lg:p-12">
         {/* 场景舞台仅负责留白与参数状态，不修改黑洞 Canvas */}
-        <div className="auth-stage flex min-h-[46vh] flex-1 flex-col justify-between p-6 sm:min-h-[48vh] sm:p-10 lg:min-h-dvh lg:p-12">
+        <div className="auth-stage flex min-h-[36vh] flex-1 flex-col justify-between sm:min-h-[40vh] lg:min-h-[calc(100dvh-6rem)] lg:pr-10">
           {/* 左上保留空间对齐 header */}
           <div className="h-10" />
 
@@ -342,22 +345,28 @@ export function LoginPage(): React.ReactElement {
           </div>
         </div>
 
-        <div className="auth-console-wrap pointer-events-auto w-full lg:flex-shrink-0">
+        <div className="auth-console-wrap pointer-events-auto">
           <section id="command-dock" aria-labelledby="auth-title" className="auth-console">
+            {/* 顶端柔和环境流光 */}
+            <div aria-hidden="true" className="auth-console__glow" />
+
             <div className="auth-console__content">
               <div className="auth-console__main">
                 <div className="auth-console__utility">
-                  <span className="auth-console__eyebrow">
-                    <span aria-hidden="true" className="auth-console__eyebrow-mark" />
-                    {t('terminal')}
-                  </span>
                   <div className="auth-console__status">
-                    <span
-                      aria-hidden="true"
-                      className={cn('auth-console__status-dot', statusView.dotClass)}
-                    />
+                    <span className="auth-console__status-dot-wrapper">
+                      <span
+                        aria-hidden="true"
+                        className={cn('auth-console__status-dot', statusView.dotClass)}
+                      />
+                      <span
+                        aria-hidden="true"
+                        className={cn('auth-console__status-dot-ping', statusView.dotClass)}
+                      />
+                    </span>
                     <span>{statusView.badgeText}</span>
                   </div>
+                  <span className="auth-console__eyebrow">{t('terminal')}</span>
                 </div>
 
                 <div className="auth-console__intro">
@@ -426,7 +435,15 @@ export function LoginPage(): React.ReactElement {
                           <label htmlFor="username" className="auth-label">
                             {t('operatorId')}
                           </label>
-                          <div className="auth-input-group">
+                          <div
+                            className={cn(
+                              'auth-input-group',
+                              errorField === 'username' && 'auth-input-group--invalid',
+                            )}
+                          >
+                            <span className="auth-input-prefix" aria-hidden="true">
+                              <User className="h-4 w-4" />
+                            </span>
                             <input
                               ref={usernameInputRef}
                               type="text"
@@ -446,7 +463,8 @@ export function LoginPage(): React.ReactElement {
                                 setUsername(e.target.value)
                                 clearFormError()
                               }}
-                              className="auth-input auth-input--no-toggle"
+                              placeholder={t('operatorId')}
+                              className="auth-input"
                             />
                           </div>
                         </div>
@@ -455,7 +473,15 @@ export function LoginPage(): React.ReactElement {
                           <label htmlFor="password" className="auth-label">
                             {setupRequired ? t('newPassword') : t('password')}
                           </label>
-                          <div className="auth-input-group">
+                          <div
+                            className={cn(
+                              'auth-input-group',
+                              errorField === 'password' && 'auth-input-group--invalid',
+                            )}
+                          >
+                            <span className="auth-input-prefix" aria-hidden="true">
+                              <Lock className="h-4 w-4" />
+                            </span>
                             <input
                               ref={passwordInputRef}
                               type={showPassword ? 'text' : 'password'}
@@ -475,6 +501,7 @@ export function LoginPage(): React.ReactElement {
                                 setPassword(e.target.value)
                                 clearFormError()
                               }}
+                              placeholder={setupRequired ? t('newPassword') : t('password')}
                               className="auth-input"
                             />
                             <button
@@ -498,7 +525,15 @@ export function LoginPage(): React.ReactElement {
                             <label htmlFor="confirmPassword" className="auth-label">
                               {t('confirmPassword')}
                             </label>
-                            <div className="auth-input-group">
+                            <div
+                              className={cn(
+                                'auth-input-group',
+                                errorField === 'confirmPassword' && 'auth-input-group--invalid',
+                              )}
+                            >
+                              <span className="auth-input-prefix" aria-hidden="true">
+                                <ShieldCheck className="h-4 w-4" />
+                              </span>
                               <input
                                 ref={confirmPasswordInputRef}
                                 type={showPassword ? 'text' : 'password'}
@@ -518,7 +553,8 @@ export function LoginPage(): React.ReactElement {
                                   setConfirmPassword(e.target.value)
                                   clearFormError()
                                 }}
-                                className="auth-input auth-input--no-toggle"
+                                placeholder={t('confirmPassword')}
+                                className="auth-input"
                               />
                             </div>
                           </div>
