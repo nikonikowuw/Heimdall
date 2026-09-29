@@ -358,7 +358,7 @@ async fn test_sub_stream_pump_with_real_macos_algo_package_e2e() {
     let Some(pkg_path) = candidates.into_iter().find(|p| p.exists()) else {
         return;
     };
-    // 插件库是本地构建产物、不入版本库（见 docs/nuwa/backend/algo-sdk-guidelines.md）：
+    // 插件库是本地构建产物、不入版本库（见 .trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md）：
     // 干净检出上包目录在而 `lib/` 不在时跳过，而不是把「未构建」报成管线缺陷。
     if infer::sandbox::find_entry_library(pkg_path, "general_detection").is_err() {
         eprintln!("跳过真实 macOS 算法包端到端测试: lib/libgeneral_detection.dylib 尚未构建");

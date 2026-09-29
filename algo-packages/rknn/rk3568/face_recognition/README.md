@@ -7,7 +7,7 @@
 - **平台**: Rockchip RK3568 (NPU 1.0 TOPS @ INT8)
 - **操作系统**: Linux aarch64 (Debian / Ubuntu / Buildroot)
 - **运行时支持**: librknnrt.so >= 1.5.0
-- **算法 ABI**: 女娲标准算法插件 C ABI (`av_algo_get_abi`)
+- **算法 ABI**: 标准算法插件 C ABI (`av_algo_get_abi`)
 
 ## 模型清单
 
@@ -32,7 +32,7 @@
 
 单进程内同一算法包目录只创建一个 RKNN worker（`heimdall-rk3568-face-npu` 线程），其内常驻
 detector / embedder 两组 context；**所有通道实例共享该 worker**（RK3568 CMA 紧张下的强制约束，
-见 `docs/nuwa/backend/algo-sdk-guidelines.md`）。由此产生三条硬约束：
+见 `.trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md`）。由此产生三条硬约束：
 
 - **聚合吞吐即 NPU 上限**：一次 `instance_process()` 对应一个请求，内含 yolov8n 与 SCRFD 两次
   前向（量级数十毫秒，以板端实测为准）。多路相机帧率之和不得超过该上限，否则超出的请求会被
@@ -72,7 +72,7 @@ RUST_LOG=face_recognition_rk3568=debug,algo_sdk=info <进程>
 
 ## C ABI 输出规范
 
-`instance_process()` 输出符合女娲标准规范的检测 Envelope：
+`instance_process()` 输出符合工程规范的检测 Envelope：
 
 ```json
 {

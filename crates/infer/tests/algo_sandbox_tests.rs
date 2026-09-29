@@ -45,7 +45,7 @@ fn resolve_path(rel: &str) -> Option<std::path::PathBuf> {
 /// 解析算法包目录，并要求其插件库已构建。
 ///
 /// `lib/` 下的 `.so` / `.dylib` 是本地构建产物、不入版本库（见
-/// [algo-sdk-guidelines](../../../docs/nuwa/backend/algo-sdk-guidelines.md)）。干净检出上包目录
+/// [algo-sdk-guidelines](../../../.trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md)）。干净检出上包目录
 /// 齐全但制品缺失，依赖真实制品的前向自测应带着原因跳过，而不是把「尚未构建」报成沙箱缺陷。
 fn resolve_built_package(rel: &str, algorithm_id: &str) -> Option<std::path::PathBuf> {
     let pkg_path = resolve_path(rel)?;

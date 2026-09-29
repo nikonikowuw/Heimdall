@@ -1,6 +1,6 @@
 # 烟火检测算法包 (Rockchip RK3568 RKNN)
 
-基于女娲（Nuwa）架构规范与 `algo-sdk` 构建的 Rockchip RK3568 边缘端轻量级烟火识别算法插件。
+基于 Trellis 工程规范与 `algo-sdk` 构建的 Rockchip RK3568 边缘端轻量级烟火识别算法插件。
 
 ## 算法概览
 
@@ -29,7 +29,7 @@ fire-detections/
 ├── Cargo.toml                  # Cargo 包配置 (cdylib + rlib)
 ├── Makefile                    # 交叉编译与打包工程脚本
 ├── README.md                   # 本说明文档
-├── manifest.json               # 女娲规范算法描述元数据
+├── manifest.json               # 算法描述元数据
 ├── config.schema.json          # 前端动态配置表单 JSON Schema
 ├── .env.example                # 局部私有环境变量配置模版
 ├── model/                      # 模型工件目录

@@ -75,6 +75,9 @@
 
 ```
 Heimdall/
+├── .trellis/                       # Trellis AI 协作工作流与工程规范体系
+│   ├── spec/                       # 工程规范 (跨层 guides + 各 crate backend + web frontend)
+│   └── workflow.md                 # AI 协作工作流总纲
 ├── crates/                         # Rust Workspace 核心组件库
 │   ├── types/                      # 基础共享类型 (FrameRef, 空间规则, 编解码协议)
 │   ├── db/                         # SQLite 存储层 (SeaORM + Refinery 增量迁移)
@@ -93,26 +96,21 @@ Heimdall/
 │   │   └── i18n/                   # 国际化语言包 (zh-CN, zh-TW, en)
 ├── algo-packages/                  # 独立算法 Cargo workspace 与本地算法包资产库 ({platform}/{algo_id})
 └── docs/                           # 架构评估与技术规格文档
-    ├── nuwa/                       # Nuwa (女娲) 全套工程与架构规范体系
-    │   ├── README.md               # Nuwa 规范总览与导航索引
-    │   ├── guides/                 # 架构总览、边缘约束与跨层思考指南
-    │   ├── backend/                # Rust 后端、FFI、媒体管线与推理契约
-    │   └── frontend/               # React 19、Zustand、实时流渲染与工业 UI 规范
     ├── algo/                       # 算法模型专项调研与评测
     └── prototype/                  # 原型与交互草案
 ```
 
 ---
 
-## 📜 Nuwa (女娲) 架构与工程规范体系
+## 📜 Trellis 工程规范体系
 
-Heimdall 遵循严格的工业级边缘计算工程标准，所有架构设计与分层实现细节统一收敛于 [Nuwa 规范体系](docs/nuwa/README.md)：
+Heimdall 遵循严格的工业级边缘计算工程标准，所有架构设计与分层实现细节统一收敛于 `.trellis/spec/`：
 
-| 规范分卷 | 核心涵盖领域 | 入口文档 |
+| 规范分卷 | 核心涵盖领域 | 入口 |
 | :--- | :--- | :--- |
-| 🧭 **全局思考指南 (Guides)** | 系统分层职责、边缘资源预算（算力/内存/IO）、跨层数据流契约、代码复用思考 | [查看指南索引](docs/nuwa/guides/index.md) |
-| 🦀 **后端工程规范 (Backend)** | RTSP/StreamHub 媒体管线、双流环形抓拍、多硬件 NPU 推理、C ABI 算法沙箱、FFI 安全边界、SQLite 存储与原子淘汰、Axum API | [查看后端规范](docs/nuwa/backend/index.md) |
-| ⚛️ **前端工程规范 (Frontend)** | 实时流低噪渲染、LiveRulesStudio 动态矢量布防、Zustand 状态管理、严格时标与归一化坐标、Clean-Room 工业双主题、i18n 三语 | [查看前端规范](docs/nuwa/frontend/index.md) |
+| 🧭 **全局思考指南 (Guides)** | 系统分层职责、边缘资源预算（算力/内存/IO）、跨层数据流契约、代码复用思考 | [规范导航](.trellis/spec/guides/index.md) |
+| 🦀 **后端工程规范 (Backend)** | RTSP/StreamHub 媒体管线、双流环形抓拍、多硬件 NPU 推理、C ABI 算法沙箱、FFI 安全边界、SQLite 存储与原子淘汰、Axum API | `.trellis/spec/<crate>/backend/` |
+| ⚛️ **前端工程规范 (Frontend)** | 实时流低噪渲染、LiveRulesStudio 动态矢量布防、Zustand 状态管理、严格时标与归一化坐标、Clean-Room 工业双主题、i18n 三语 | [web/frontend](.trellis/spec/web/frontend/index.md) |
 
 > 📌 **核心协作约定**：详细的仓库协作规则、开发前检查清单（Pre-Development Checklist）与质量门禁请参阅根目录 [AGENTS.md](AGENTS.md)。
 

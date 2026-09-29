@@ -7,7 +7,7 @@
  * 并且会误导后续的工具链与读者。ESLint 的 `no-restricted-imports` 只能约束路径形状，
  * 抓不到环本身，所以用这个脚本补上。
  *
- * 判据与 `docs/nuwa/frontend/directory-structure.md` 的「层间依赖须单向 … 整个模块图
+ * 判据与 `.trellis/spec/web/frontend/directory-structure.md` 的「层间依赖须单向 … 整个模块图
  * 不得存在循环依赖」一致；发现环时逐条打印并以退出码 1 结束。
  *
  * 用法：
@@ -171,5 +171,5 @@ for (const cycle of cycles) {
   cycle.forEach((file, index) => console.error(`  ${index + 1}. ${relative(file)}`))
   console.error(`  ↳ 回到 ${relative(cycle[0])}`)
 }
-console.error('\n层级方向见 docs/nuwa/frontend/directory-structure.md 的「模块边界」。')
+console.error('\n层级方向见 .trellis/spec/web/frontend/directory-structure.md 的「模块边界」。')
 process.exit(1)

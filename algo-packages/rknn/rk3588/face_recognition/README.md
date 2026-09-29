@@ -7,7 +7,7 @@
 - **平台**: Rockchip RK3588 (NPU 6.0 TOPS @ INT8, 3-Core)
 - **操作系统**: Linux aarch64 (Debian / Ubuntu / Buildroot)
 - **运行时支持**: librknnrt.so >= 1.5.0
-- **算法 ABI**: 女娲标准算法插件 C ABI (`av_algo_get_abi`)
+- **算法 ABI**: 标准算法插件 C ABI (`av_algo_get_abi`)
 
 ## 模型清单
 
@@ -72,7 +72,7 @@ RUST_LOG=face_recognition_rk3588=debug,algo_sdk=info <进程>
 
 ## C ABI 输出规范
 
-`instance_process()` 输出符合女娲标准规范的检测 Envelope：
+`instance_process()` 输出符合工程规范的检测 Envelope：
 
 ```json
 {

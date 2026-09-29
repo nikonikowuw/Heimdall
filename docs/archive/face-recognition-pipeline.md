@@ -2,7 +2,7 @@
 
 > **Status**: implemented; macOS hardware runtime validated
 > **Scope**: macOS arm64 `face_recognition` algorithm package and its existing `infer`/`pipeline` integration
-> **Related specifications**: [Media Pipeline](../nuwa/backend/media-pipeline.md), [Algorithm SDK](../nuwa/backend/algo-sdk-guidelines.md), [Detection Contract](../nuwa/backend/detection-alarm-contract.md), [Concurrency](../nuwa/backend/concurrency-guidelines.md)
+> **Related specifications**: [Media Pipeline](../../.trellis/spec/media/backend/media-pipeline.md), [Algorithm SDK](../../.trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md), [Detection Contract](../../.trellis/spec/pipeline/backend/detection-alarm-contract.md), [Concurrency](../../.trellis/spec/guides/concurrency-guidelines.md)
 
 ## 1. Goals
 

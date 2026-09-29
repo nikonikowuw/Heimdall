@@ -396,7 +396,7 @@ enum SnapshotTask {
     /// 结算落盘：把已驻留内存的候选字节一次性写入正式证据目录。
     ///
     /// 走本线程而非 `spawn_blocking`：证据文件落盘属于
-    /// `docs/nuwa/backend/concurrency-guidelines.md` 规定的固定专用 OS Worker 职责。
+    /// `.trellis/spec/guides/concurrency-guidelines.md` 规定的固定专用 OS Worker 职责。
     WriteCandidate { evidence: CandidateEvidence },
 }
 

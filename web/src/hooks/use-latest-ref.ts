@@ -25,7 +25,7 @@ import { useEffect, useRef, type RefObject } from 'react'
  * 高频变化的值（搜索关键字、通道名映射、遥测数据）若进订阅 effect 的依赖数组，
  * 每次变化都会拆建订阅。快照 ref 让订阅只依赖「订阅目标本身」，回调内读取最新值。
  * 参见 [AlarmsPage 的 LiveFilterSnapshot](../../features/alarms/AlarmsPage.tsx)，
- * 以及 `docs/nuwa/frontend/hook-guidelines.md` 的「长生命周期订阅与高频依赖」。
+ * 以及 `.trellis/spec/web/frontend/hook-guidelines.md` 的「长生命周期订阅与高频依赖」。
  *
  * ## 使用约束
  *

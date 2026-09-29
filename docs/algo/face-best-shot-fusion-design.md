@@ -4,7 +4,7 @@
 > **实施进度**：M1 已落地（2026-09-15，含单测/集成测试与宿主接线；候选证据按 **D5** 以内存编码字节驻留）；M2 已落地（帧池融合、成熟 sidecar 与宿主握手）；M3 待开工。
 > **本版本范围**：M1 结算 / M2 融合 v2 / M3 主流回溯；**不含** M4 对账策略增强（margin → 附录 C；底库渐进增强 → 附录 B）。
 > **适用**：RK3568 `face_recognition` 算法包 + Heimdall 宿主（`pipeline` / `api` / `db` / `web`）
-> **关联**：[EdgeFace.md](./EdgeFace.md)（模型选型与阈值建议）、[face-recognition-pipeline.md](../archive/face-recognition-pipeline.md)（包族输出契约）、[algo-sdk-guidelines.md](../nuwa/backend/algo-sdk-guidelines.md)
+> **关联**：[EdgeFace.md](./EdgeFace.md)（模型选型与阈值建议）、[face-recognition-pipeline.md](../archive/face-recognition-pipeline.md)（包族输出契约）、[algo-sdk-guidelines.md](../../.trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md)
 
 ---
 

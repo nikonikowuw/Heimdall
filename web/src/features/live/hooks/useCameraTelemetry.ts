@@ -20,7 +20,7 @@ export function getCameraTelemetrySnapshot(
 /**
  * 针对单个摄像头的局部高效遥测订阅 Hook
  *
- * 遵循 Nuwa 前端规范：
+ * 遵循前端规范（`.trellis/spec/web/frontend/state-management.md`）：
  * 基于 useSyncExternalStore 实现无跳变粒度订阅，
  * 仅在目标摄像头的目标数/热度发生变化时触发当前卡片重新渲染，
  * 避免父级整个摄像头列表频繁重排重绘。

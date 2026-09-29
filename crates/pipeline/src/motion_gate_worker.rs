@@ -2,7 +2,7 @@
 //!
 //! DMA-BUF 载体上的门控评估会调用 RGA 硬件降采样（`improcess(IM_SYNC)`），并可能等待最多 100ms
 //! 的源 DMA-BUF 可读栅障——这是平台 SDK / FFI 调用，按
-//! [并发规范](../../../docs/nuwa/backend/concurrency-guidelines.md#执行归属)
+//! [并发规范](../../../.trellis/spec/guides/concurrency-guidelines.md#执行归属)
 //! 不得直接运行在 Tokio Worker 中。
 //!
 //! 本模块把 [`MotionGate`] 连同常驻的缩略图 DMA-BUF / RGA 句柄绑定到每路一个的固定 OS 线程：

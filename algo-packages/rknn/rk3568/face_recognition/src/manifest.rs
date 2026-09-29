@@ -1,6 +1,6 @@
 //! 算法包 manifest 与模型路径解析契约。
 //!
-//! 遵循女娲规范：模型属于平台专属权重资产，不强行绑定在 manifest.json 内。
+//! 遵循工程规范：模型属于平台专属权重资产，不强行绑定在 manifest.json 内。
 //! 解析顺序：package_root/.env 指定路径 -> 约定的固定模型文件路径（model/*.rknn）。
 
 use std::path::{Path, PathBuf};
