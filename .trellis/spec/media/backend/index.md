@@ -4,7 +4,7 @@
 
 ## Pre-Development Checklist
 
-1. 阅读 [媒体管线](./media-pipeline.md)：三大路径、帧与所有权、接入与分发、门控、快照硬件编码与录像切片。
+1. 阅读 [媒体管线](./media-pipeline.md)：三大路径、帧与所有权、接入与分发、门控、快照硬件编码；录像切片章节为规划设计，尚未实现。
 2. 帧内存与对齐：[全局约定](../../guides/conventions.md)（DMA-BUF 堆选择优先级、CMA 预算、热路径零分配）。
 3. 执行归属与停机：[并发模型](../../guides/concurrency-guidelines.md)（DMA-BUF/RGA 操作仅在专用 OS Worker）。
 4. DMA-BUF 导入与平台绑定：[FFI 边界](../../guides/ffi-guidelines.md)。

@@ -90,7 +90,7 @@
   - **视觉推理与高清证据环硬件隔离**：`AnalysisPump` 与 `MainStreamRingBuffer` 仅面向纯 Annex-B 视频流；在送往 VPU 硬件视频解码器或推入 RingBuffer 前，必须严格过滤 `StreamTag::Audio` 与非视频数据，杜绝非视频 NALU 冲撞硬件解码内核引发 crash。
 - **HTTP-FLV 应用层合并写**：在 FLV tag 边界执行 `flv_merge` 缓冲（默认 10ms 周期 / 64KB 上限），降低高频小包的事件循环调度开销；时间戳计算严格单调非递减并设置 `u32` 边界守卫。
 - **WebCodecs 断点标记**：二进制帧协议支持 `WEBCODECS_FLAG_DISCONTINUITY` (0x01) 标志，配合前端在 Replay 或源流重置后触发 `VideoDecoder.reset()`。
-- **运维观测**：通过 `GET /api/v1/system/media/streams/{stream_key}` 获取流与消费者的实时健康快照 `StreamHealthSnapshot`。
+- **运维观测**：通过 `GET /api/v1/system/streams/{stream_key}` 获取流与消费者的实时健康快照 `StreamHealthSnapshot`；路由以 [API 规范](../../api/backend/api-guidelines.md#路由) 与 [实现](../../../../crates/api/src/routes/system/media.rs) 为准。
 - HTTP-FLV 支持 AVC 与 Enhanced FLV HEVC（`hvc1`）；端点见 [API](../../api/backend/api-guidelines.md#路由)，浏览器能力需实测。音频-only 请求使用 `video=false`，只输出 AAC FLV Tags。
 - 帧/压缩包队列、GOP 丢弃及 500ms 解码停机超时见 [并发模型](../../guides/concurrency-guidelines.md)，不阻塞下游反压硬解。
 
@@ -130,16 +130,20 @@
 
 ## 录像流分发与切片封装规范
 
-系统支持轻量级纯流复制录像能力，约束如下：
+**状态：规划设计，尚未实现。** 当前 [ConsumerKind](../../../../crates/media/src/dispatcher.rs) 没有 `Recording` 变体，源码尚无 `RecordingMode`、`PreCaptureRingBuffer` 或录像切片持久化实现；数据库侧同样标为 [规划设计](../../db/backend/database-guidelines.md#表与查询)。以下名称、模式与默认值仅用于后续设计，不能作为现有类型、配置或产品能力使用。
 
-- **独立消费者隔离**：录像作为 `StreamHub` 的独立消费者（`ConsumerKind::Recording`），享有专用有界 `ConsumerMailbox`。磁盘 Flush/Sync 抖动导致的慢写由私有队列丢帧自愈，严禁反压阻塞物理 RTSP 接入与 AI 分析管线。
-- **纯流直封装与零转码（Direct Remuxing）**：录像仅对原始 Annex-B `EncodedPacket`（H.264/H.265/AAC）执行解复用并封装为 MP4/fMP4 容器，**0 CPU 软编、0 VPU 硬编**，仅产生极微小的 I/O 与打包开销，常驻推理主路径（`infer_fast_path`）受 0 影响。
-- **配置契约与按需开启**：录像功能默认关闭（`RecordingMode::Disabled`），向前 100% 兼容。支持细粒度按需配置：
-  - `EventOnly`（边缘推荐）：日常仅在内存 `PreCaptureRingBuffer` 维持 5~15 秒前置压缩流滑动窗口（单路仅消耗 3~7MB RAM，磁盘 0 写入、0 闪存磨损），规则或动检告警时触发落盘；
-  - `Continuous`：全天 24/7 定长切片写入（面向外挂 HDD/SSD 场景）；
-  - `Hybrid`：子码流全天连续 + 主码流高清告警。
-- **I 帧强制对齐切片**：MP4 切片分割（默认 10 秒）必须以 `is_keyframe == true` 的关键帧为首包，禁止机械定时截断，确保所有切片独立无损可播。
-- **重连与时序自愈**：接收到 `StreamItem::SourceReset` 时，立即闭合当前切片，新切片自新会话首个 IDR 关键帧重新建立单调时基。
-- **单二进制自包含**：封装器采用纯 Rust 实现，禁止外挂调用 `ffmpeg` 或其他外部 CLI 子进程。
+规划中的纯流复制录像须遵循以下约束：
+
+- **独立消费者隔离**：拟新增录像消费者（`ConsumerKind::Recording`），通过 `StreamHub` 的独立有界 `ConsumerMailbox` 接收码流。磁盘 Flush/Sync 抖动导致的慢写由私有队列丢帧自愈，严禁反压阻塞物理 RTSP 接入与 AI 分析管线。
+- **纯流直封装与零转码（Direct Remuxing）**：视频 Annex-B NALU 与独立音频包按各自格式封装为 MP4/fMP4，不进行 CPU 软编或 VPU 硬编；封装与 I/O 开销须实测，不能承诺对常驻推理零影响。
+- **配置与按需开启**：拟以 `RecordingMode::Disabled` 为默认值，新增配置须保持旧配置兼容。候选模式：
+  - `EventOnly`：内存 `PreCaptureRingBuffer` 保留告警前压缩流，告警时触发落盘；5～15 秒为候选时长，字节上限须按码率明确，不能把旧草案的 3～7MB 估算当作固定内存保证；
+  - `Continuous`：定长切片连续写入，面向外挂 HDD/SSD；
+  - `Hybrid`：子码流连续录像 + 主码流告警录像。
+- **关键帧对齐切片**：10 秒为候选切片时长，实际切分必须以关键帧为边界并保留解码所需参数集，禁止机械定时截断。
+- **重连与时序恢复**：接收到 `StreamItem::SourceReset` 时闭合当前切片，新切片从新会话可独立解码的关键帧重新建立时基。
+- **单二进制自包含**：封装器采用 Rust 实现，不外挂调用 `ffmpeg` 或其他外部 CLI 子进程。
+
+实现时必须同步补齐消费者类型、配置校验、封装器、DB 迁移与淘汰接线，并验证慢写隔离、容量上限、切片独立播放和重连恢复；这些验证要求不代表当前已有对应实现或测试。
 
 验证 stride/offset、URL 特殊字符脱敏、GOP 丢帧恢复、重配 drain、时间戳回跳、健康防抖、温控恢复与停机超时。
