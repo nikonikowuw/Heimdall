@@ -10,11 +10,13 @@ pub mod engine;
 pub mod layout;
 pub mod platforms;
 pub mod postprocess;
+pub mod transforms;
 pub mod types;
 
 pub use buffer::{CvBuffer, DmaBufLayout};
 pub use engine::CvEngine;
 pub use layout::{compute_letterbox_layout, compute_stretch_layout};
+pub use transforms::{HwLetterbox, Transform};
 pub use types::{CropRect, LetterboxLayout, PixelFormat, PreprocessMode};
 
 use crate::c_abi::AvImageOps;

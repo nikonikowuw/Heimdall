@@ -91,10 +91,6 @@ pub fn parse_yolov8_int8(ctx: &Yolov8ParseContext<'_>) -> Vec<NormBox> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 多分支路径：每个分支包含 (box, cls)，可选 score_sum
-// ---------------------------------------------------------------------------
-
 fn parse_multi_branch<const WITH_SCORE_SUM: bool>(ctx: &Yolov8ParseContext<'_>) -> Vec<NormBox> {
     let outputs_per_branch = if WITH_SCORE_SUM { 3 } else { 2 };
     let total_branches = ctx.branches.len() / outputs_per_branch;

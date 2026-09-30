@@ -25,15 +25,18 @@ struct JsonAlarmObject<'a> {
 
 /// 零分配检测框切片序列化代理
 #[derive(Debug)]
-struct BoxesSerializer<'a>(&'a [NormBox]);
+struct BoxesSerializer<'a> {
+    boxes: &'a [NormBox],
+    label_override: Option<&'a str>,
+}
 
 impl<'a> Serialize for BoxesSerializer<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for b in self.0 {
+        let mut seq = serializer.serialize_seq(Some(self.boxes.len()))?;
+        for b in self.boxes {
             let x1 = b.x.clamp(0.0, 1.0);
             let y1 = b.y.clamp(0.0, 1.0);
             let x2 = (b.x + b.w).clamp(0.0, 1.0).max(x1);
@@ -45,7 +48,7 @@ impl<'a> Serialize for BoxesSerializer<'a> {
             };
             seq.serialize_element(&JsonAlarmObject {
                 class_id: b.class_id,
-                label: b.label.unwrap_or(""),
+                label: self.label_override.unwrap_or(b.label.unwrap_or("")),
                 confidence,
                 bbox: [x1, y1, x2, y2],
             })?;
@@ -174,10 +177,22 @@ impl<'a> ResultEmitter<'a> {
     ///
     /// 采用就地追加 NUL 终止符与直接 CStr 视图转换，消除整块 JSON 内存的二次拷贝与重复扫描。
     pub fn emit_detections(&mut self, boxes: &[NormBox]) -> Result<(), AlgoError> {
+        self.emit_detections_with_label(boxes, None)
+    }
+
+    /// 发射检测结果，并为本次结果临时覆盖所有目标标签。
+    pub fn emit_detections_with_label(
+        &mut self,
+        boxes: &[NormBox],
+        label_override: Option<&str>,
+    ) -> Result<(), AlgoError> {
         let envelope = JsonAlarmEnvelope {
             schema_version: 1,
             event_id: Uuid::now_v7(),
-            objects: BoxesSerializer(boxes),
+            objects: BoxesSerializer {
+                boxes,
+                label_override,
+            },
         };
 
         let mut json_bytes = serde_json::to_vec(&envelope).map_err(|e| AlgoError::Internal {

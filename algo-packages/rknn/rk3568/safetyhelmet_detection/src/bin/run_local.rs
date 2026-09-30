@@ -16,7 +16,6 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod linux_run {
     use std::collections::HashMap;
-    use std::ffi::c_void;
     use std::fmt::Write;
     use std::fs;
     use std::path::Path;
@@ -250,14 +249,8 @@ mod linux_run {
 
             while start_time.elapsed() < target_duration {
                 let mut mock_emitter = MockEmitter::new();
-                // SAFETY: on_result_callback 与 mock_emitter 在本作用域有效存活
-                let mut emitter = unsafe {
-                    ResultEmitter::from_raw(
-                        total_frames + 1,
-                        Some(on_result_callback),
-                        &mut mock_emitter as *mut _ as *mut c_void,
-                    )
-                };
+                // SAFETY: mock_emitter 存活至 process 调用结束
+                let mut emitter = unsafe { mock_emitter.as_emitter(total_frames + 1) };
                 let safe_frame = mock_frame.as_safe_frame();
                 detector.process(safe_frame, &mut emitter)?;
                 total_frames += 1;

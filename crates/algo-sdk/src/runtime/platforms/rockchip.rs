@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::Arc;
 
+use crate::cv::buffer::CvBuffer;
 pub use crate::cv::postprocess::RknnTensorOutput;
 use crate::error::AlgoError;
+use crate::runtime::{InferenceOutput, NpuSession};
 
 pub type RknnContext = u64;
 
@@ -310,14 +312,8 @@ impl RknnRuntime {
     }
 }
 
-/// RKNN 推理输出的多模态抽象
-#[derive(Debug)]
-pub enum RknnInferenceOutput<'a> {
-    /// 9 张量/多分支 INT8 结构化特征图输出
-    MultiBranch(Vec<RknnTensorOutput<'a>>),
-    /// 单通道平铺浮点张量输出（fallback 路径使用）
-    SingleFloat(&'a [f32]),
-}
+/// RKNN 推理输出的多模态抽象（统一映射至 [`InferenceOutput`]）
+pub use crate::runtime::InferenceOutput as RknnInferenceOutput;
 
 /// 单个缓存的 DMA-BUF NPU 显存条目
 #[derive(Debug)]
@@ -1001,6 +997,23 @@ impl RknnSession {
                 std::slice::from_raw_parts(outputs_guard.outputs[0].buf as *const f32, elem_count)
             };
             process_fn(&RknnInferenceOutput::SingleFloat(float_slice))
+        }
+    }
+}
+
+impl NpuSession for RknnSession {
+    fn infer_with<F, R>(&mut self, input: &CvBuffer, f: F) -> Result<R, AlgoError>
+    where
+        F: FnOnce(&InferenceOutput<'_>) -> Result<R, AlgoError>,
+    {
+        if let Some(layout) = input.as_dma_buf_layout() {
+            self.infer_with_dma_buf(layout.fd, layout.size, f)
+        } else if let Some(bytes) = input.as_host_bytes() {
+            self.infer_with_host_bytes(bytes, f)
+        } else {
+            Err(AlgoError::IncompatibleFrame {
+                reason: "CvBuffer 既无有效 DMA-BUF 句柄，亦不可转换为 Host 内存切片".to_string(),
+            })
         }
     }
 }

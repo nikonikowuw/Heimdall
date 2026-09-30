@@ -159,6 +159,57 @@ pub struct MyDetector {
     pub config: InstanceConfig,
 }
 
+### 范式 A：基于 Composable 体系的声明式 YOLO 检测器（推荐，~15 行交付）
+
+针对标准 YOLOv8 / YOLOv11 目标检测模型，`algo-sdk` 提供类似 PyTorch/TorchVision 的 Composable 预制检测器 `GenericYoloDetector`，自动封装硬件 Letterbox、DMA-BUF 零拷贝绑定、动态配置解析与坐标反算：
+
+```rust
+use algo_sdk::prelude::*;
+
+// 1. 声明模型规格元信息
+pub struct FireSmokeSpec;
+
+impl YoloSpec for FireSmokeSpec {
+    const INPUT_DIM: (u32, u32) = (640, 384);
+    const NUM_CLASSES: usize = 2;
+    const LABELS: &'static [&'static str] = &["fire", "smoke"];
+    const MODEL_PATH: &'static str = "model/fire_smoke.rknn";
+}
+
+// 2. 导出开箱即用的工业级检测器插件
+pub type FireSmokeDetector = GenericYoloDetector<FireSmokeSpec>;
+```
+
+#### 支持魔改/定制 YOLO 结构（解码器策略模式 `YoloDecoder`）
+
+针对定制输出头（如 P2 极小目标检测头、锚框版 YOLOv5、单张量融合输出等），可通过实现 `YoloDecoder` 策略无缝替换解码算子，其余 85% 的零拷贝流水线完全复用：
+
+```rust
+use algo_sdk::prelude::*;
+
+// 自定义输出解码策略
+#[derive(Default)]
+pub struct CustomAnchorDecoder;
+
+impl YoloDecoder for CustomAnchorDecoder {
+    fn decode(&self, ctx: &YoloDecodeContext<'_>) -> Result<Vec<NormBox>, AlgoError> {
+        // 自定义解析 ctx.output，并在返回前进行坐标反算与过滤
+        let boxes = my_custom_anchor_parser(ctx.output, ctx.conf_threshold, ctx.iou_threshold)?;
+        Ok(boxes)
+    }
+}
+
+// 装配自定义解码器的检测器
+pub type CustomDetector = GenericDetector<FireSmokeSpec, CustomAnchorDecoder>;
+```
+
+---
+
+### 范式 B：底层手动精细编排（适合高度定制的多模态/级联流水线）
+
+如果算法需要多模型级联、复杂状态机流转或特征比对（如人脸识别），可使用底层原语手工编排：
+
+```rust
 impl AlgoPlugin for MyDetector {
     type Config = InstanceConfig;
 
@@ -168,15 +219,15 @@ impl AlgoPlugin for MyDetector {
         config.apply_env(&env);
 
         // 2. 加载 RKNN 模型（由 algo_sdk 统一接管物理运行时、多核掩码调度与 CPU 模拟回退）
-        let model_path = ctx.package_root.join("model/my_model.rknn");
+        let model_path = env.resolve_model_path(ctx.package_root, "MODEL_PATH", "model/my_model.rknn")?;
         let session = RknnSession::open_or_fallback(
             ctx.package_root,
             &model_path,
             RknnSessionOptions::with_core_mask(RKNN_NPU_CORE_0),
         )?;
 
-        // 3. 初始化 RGA 预处理引擎
-        let cv_engine = RgaCvEngine::new();
+        // 3. 初始化硬件预处理引擎
+        let cv_engine = CvEngine::default();
 
         Ok(Self { session, cv_engine, config })
     }
@@ -186,36 +237,41 @@ impl AlgoPlugin for MyDetector {
         frame: SafeFrame<'_>,
         emitter: &mut ResultEmitter<'_>,
     ) -> Result<(), AlgoError> {
-        // 1. RGA 硬件 Letterbox 预处理
+        // 1. 硬件 Letterbox 预处理（自动利用 2D 加速器，保底 CPU）
         let (buf, mode) = self.cv_engine.letterbox(&frame, 640, 384, [0, 0, 0])?;
         let orig_w = frame.width();
         let orig_h = frame.height();
 
         // 2. NPU 零拷贝推理 + INT8 后处理
+        let parse_and_emit = |net_out: &RknnInferenceOutput<'_>| {
+            if let RknnInferenceOutput::MultiBranch(branches) = net_out {
+                let boxes = parse_yolov8_int8(&Yolov8ParseContext {
+                    branches,
+                    config: &Yolov8RknnConfig {
+                        model_input_w: 640.0,
+                        model_input_h: 384.0,
+                        dfl_bins: 16,
+                        num_classes: 2,
+                        use_score_sum: true,
+                    },
+                    conf_threshold: self.config.confidence_threshold,
+                    iou_threshold: self.config.iou_threshold,
+                    labels: &["fire", "smoke"],
+                    label_fn: None,
+                    mode: &mode,
+                    orig_w,
+                    orig_h,
+                });
+                emitter.emit_detections(&boxes)?;
+            }
+            Ok(())
+        };
+
         if let Some(fd) = buf.as_dma_buf_fd() {
             let size = 640 * 384 * 3;
-            self.session.infer_with_dma_buf(fd, size, |net_out| {
-                let boxes = parse_yolov8_int8(
-                    &Yolov8ParseContext {
-                        branches: net_out.branches,
-                        config: &Yolov8RknnConfig {
-                            model_input_w: 640.0,
-                            model_input_h: 384.0,
-                            dfl_bins: 16,
-                            num_classes: 2,
-                            use_score_sum: true,
-                        },
-                        conf_threshold: self.config.confidence_threshold,
-                        iou_threshold: self.config.iou_threshold,
-                        labels: &["fire", "smoke"],
-                        label_fn: None,
-                        mode: &mode,
-                        orig_w,
-                        orig_h,
-                    },
-                );
-                emitter.emit_detection_boxes(&boxes)
-            })?;
+            self.session.infer_with_dma_buf(fd, size, parse_and_emit)?;
+        } else if let Some(bytes) = buf.as_host_bytes() {
+            self.session.infer_with_host_bytes(bytes, parse_and_emit)?;
         }
 
         Ok(())

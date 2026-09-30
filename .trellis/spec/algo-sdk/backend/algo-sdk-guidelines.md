@@ -17,7 +17,9 @@
 | SDK / 宿主 C ABI | [c_abi.rs](../../../../crates/algo-sdk/src/c_abi.rs)、[types.rs](../../../../crates/infer/src/c_abi/types.rs)                                                       |
 | 插件 trait / 导出宏 | [plugin.rs](../../../../crates/algo-sdk/src/plugin.rs)、[macros.rs](../../../../crates/algo-sdk/src/macros.rs)                                                      |
 | 配置宏与三级优先级 | [config.rs](../../../../crates/algo-sdk/src/config.rs)（`algo_config!`、`FromEnvValue`，自动实现显式参数追踪与三级优先级覆盖） |
-| RKNN 运行时与零拷贝 | [rknn.rs](../../../../crates/algo-sdk/src/rknn.rs)（`RknnRuntime`、`RknnSession`、DMA-BUF 零拷贝会话与内存安全生命周期） |
+| Composable 模型生态 | [models](../../../../crates/algo-sdk/src/models/mod.rs)（`YoloSpec`、`YoloDecoder` 解码策略、`GenericYoloDetector` 15行开箱即用） |
+| 硬件预处理流水线 | [cv::transforms](../../../../crates/algo-sdk/src/cv/transforms.rs)（`Transform`、`HwLetterbox` 纯设备侧零拷贝变换） |
+| 异构推理运行时与零拷贝 | [runtime](../../../../crates/algo-sdk/src/runtime/mod.rs)（`NpuSession`、`RuntimeSession` 跨芯片抽象，Rockchip RKNN 平台驱动位于 `runtime/platforms/rockchip.rs`） |
 | 本地调测与基准评测 | [testing.rs](../../../../crates/algo-sdk/src/testing.rs)（`LocalPluginRunner`、`BenchmarkStats`、`MockEmitter`） |
 | 帧 / 预处理 / 模型会话 | [frame.rs](../../../../crates/algo-sdk/src/frame.rs)、[cv](../../../../crates/algo-sdk/src/cv/mod.rs)、[model.rs](../../../../crates/algo-sdk/src/model.rs)             |
 | 后处理工具库 | [cv::postprocess](../../../../crates/algo-sdk/src/cv/postprocess/mod.rs)（quantize / dfl / yolov8_rknn）                                                  |

@@ -23,13 +23,15 @@ pub mod frame;
 pub mod macros;
 pub mod math;
 pub mod model;
+pub mod models;
 pub mod plugin;
+pub mod runtime;
 #[cfg(feature = "rknn")]
-pub mod rknn;
+pub use runtime::platforms::rockchip as rknn;
 #[cfg(feature = "rknn")]
 pub mod platforms {
     pub mod rockchip {
-        pub use crate::rknn;
+        pub use crate::runtime::platforms::rockchip as rknn;
     }
 }
 pub mod testing;
@@ -62,6 +64,7 @@ pub mod prelude {
     pub use crate::algo_config;
     pub use crate::c_abi::*;
     pub use crate::config::FromEnvValue;
+    pub use crate::cv::transforms::{HwLetterbox, Transform};
     pub use crate::cv::{self, CvBuffer, PreprocessMode};
     pub use crate::emitter::ResultEmitter;
     pub use crate::env::PackageEnv;
@@ -78,11 +81,16 @@ pub mod prelude {
         unmap_box, NormBox,
     };
     pub use crate::model::{Core, InferenceSession, ModelWeights, SharedWeights};
+    pub use crate::models::yolo::{
+        GenericDetector, GenericYoloDetector, StandardYoloConfig, YoloDecodeContext, YoloDecoder,
+        YoloSpec, Yolov8SpecDecoder,
+    };
     pub use crate::plugin::{AlgoPlugin, InitContext};
     #[cfg(feature = "rknn")]
     pub use crate::rknn::{
         self, RknnInferenceOutput, RknnRuntime, RknnSession, RknnSessionOptions,
     };
+    pub use crate::runtime::{InferenceOutput, NpuSession, RuntimeSession};
     pub use crate::testing::{MockEmitter, MockFrame, MockFrameBuilder, MockSession, MockWeights};
     pub use crate::track::{
         box_iou, ByteTrackConfig, ByteTracker, KalmanBoxTracker, Rect, STrack, TrackDetection,
