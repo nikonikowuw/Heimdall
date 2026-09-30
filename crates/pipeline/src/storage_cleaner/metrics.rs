@@ -12,6 +12,8 @@ pub struct EvictionMetrics {
     pub captures_evicted_total: AtomicU64,
     /// 成功淘汰告警记录总数
     pub alarms_evicted_total: AtomicU64,
+    /// 成功淘汰事件录像记录总数
+    pub recordings_evicted_total: AtomicU64,
     /// 从 tombstone 彻底 unlink 释放的文件总数
     pub tombstone_reclaimed_total: AtomicU64,
     /// 扫描发现并隔离清理的孤儿物理文件总数
@@ -45,6 +47,7 @@ impl EvictionMetrics {
             clean_cycles_total: self.clean_cycles_total.load(Ordering::Relaxed),
             captures_evicted_total: self.captures_evicted_total.load(Ordering::Relaxed),
             alarms_evicted_total: self.alarms_evicted_total.load(Ordering::Relaxed),
+            recordings_evicted_total: self.recordings_evicted_total.load(Ordering::Relaxed),
             tombstone_reclaimed_total: self.tombstone_reclaimed_total.load(Ordering::Relaxed),
             orphan_files_detected_total: self.orphan_files_detected_total.load(Ordering::Relaxed),
             missing_files_detected_total: self.missing_files_detected_total.load(Ordering::Relaxed),
@@ -69,6 +72,7 @@ pub struct EvictionMetricsSnapshot {
     pub clean_cycles_total: u64,
     pub captures_evicted_total: u64,
     pub alarms_evicted_total: u64,
+    pub recordings_evicted_total: u64,
     pub tombstone_reclaimed_total: u64,
     pub orphan_files_detected_total: u64,
     pub missing_files_detected_total: u64,

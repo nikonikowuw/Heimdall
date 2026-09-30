@@ -191,6 +191,9 @@ pub struct StorageConfig {
     pub recognition_quota_mb: u64,
     pub capture_retention_days: u32,
     pub capture_quota_mb: u64,
+    /// 事件录像保留天数（全局上限，通道级配置取两者较小值）
+    #[serde(default = "default_recording_retention_days")]
+    pub recording_retention_days: u32,
     pub overwrite_mode: OverwriteMode,
     pub auto_cleanup_enabled: bool,
     pub min_free_ratio: f64,
@@ -207,6 +210,10 @@ pub enum OverwriteMode {
     Stop,
 }
 
+fn default_recording_retention_days() -> u32 {
+    7
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
@@ -216,6 +223,7 @@ impl Default for StorageConfig {
             recognition_quota_mb: 0,
             capture_retention_days: 7,
             capture_quota_mb: 0,
+            recording_retention_days: default_recording_retention_days(),
             overwrite_mode: OverwriteMode::Overwrite,
             auto_cleanup_enabled: true,
             min_free_ratio: 0.15,
@@ -247,6 +255,9 @@ impl StorageConfig {
         }
         if self.capture_retention_days == 0 || self.capture_retention_days > 365 {
             return Err("capture_retention_days must be 1-365".into());
+        }
+        if self.recording_retention_days == 0 || self.recording_retention_days > 365 {
+            return Err("recording_retention_days must be 1-365".into());
         }
         if self.batch_delete_size < 10 || self.batch_delete_size > 500 {
             return Err("batch_delete_size must be 10-500".into());

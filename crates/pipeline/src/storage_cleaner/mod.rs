@@ -146,6 +146,34 @@ pub trait EvictionStore: Send + Sync {
     async fn find_all_active_image_paths(&self) -> Result<HashSet<String>, PipelineError> {
         Ok(HashSet::new())
     }
+
+    /// 查询最老的已闭合事件录像记录: (记录ID, 该记录物理文件相对路径)
+    ///
+    /// 用于水位告急时的阶梯式淘汰（优先级低于普通抓拍，高于识别与告警）。
+    async fn find_oldest_recordings(
+        &self,
+        _limit: u64,
+    ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
+        Ok(Vec::new())
+    }
+
+    /// 查询已过期的事件录像片段: (记录ID, 该记录物理文件相对路径)
+    ///
+    /// `global_retention_days` 为全局上限；实现应取与通道级配置的**较小值**作为有效保留期。
+    /// 仅返回已闭合（非 recording 状态）的记录。
+    async fn find_expired_recordings(
+        &self,
+        _now: chrono::DateTime<chrono::Utc>,
+        _global_retention_days: u32,
+        _limit: u64,
+    ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
+        Ok(Vec::new())
+    }
+
+    /// 按主键 ID 批量删除事件录像记录（物理文件由调用方隔离后异步 unlink）
+    async fn delete_recordings(&self, _ids: &[i64]) -> Result<u64, PipelineError> {
+        Ok(0)
+    }
 }
 
 /// 淘汰报告
@@ -156,6 +184,7 @@ pub struct EvictionReport {
     pub captures_deleted: u64,
     pub recognitions_deleted: u64,
     pub alarms_deleted: u64,
+    pub recordings_deleted: u64,
     pub quarantined_files: u64,
     pub missing_files: u64,
     pub drain_iterations: u32,
@@ -201,6 +230,8 @@ pub struct StorageCleanerConfig {
     pub capture_retention_days: u32,
     /// 抓拍图配额 (MB, 0 表示不限)
     pub capture_quota_mb: u64,
+    /// 事件录像保留天数上限 (默认 7 天)。通道级配置取与全局的较小值。
+    pub recording_retention_days: u32,
     /// 循环覆盖策略 (默认循环覆盖)
     pub overwrite_mode: types::system::OverwriteMode,
     /// 是否开启自动清理
@@ -221,6 +252,7 @@ impl StorageCleanerConfig {
         self.recognition_quota_mb = cfg.recognition_quota_mb;
         self.capture_retention_days = cfg.capture_retention_days;
         self.capture_quota_mb = cfg.capture_quota_mb;
+        self.recording_retention_days = cfg.recording_retention_days;
         self.overwrite_mode = cfg.overwrite_mode.clone();
         self.auto_cleanup_enabled = cfg.auto_cleanup_enabled;
     }
@@ -262,6 +294,7 @@ impl Default for StorageCleanerConfig {
             recognition_quota_mb: 0,
             capture_retention_days: 7,
             capture_quota_mb: 0,
+            recording_retention_days: 7,
             overwrite_mode: types::system::OverwriteMode::Overwrite,
             auto_cleanup_enabled: true,
         }
@@ -454,6 +487,7 @@ impl StorageCleaner {
         let mut total_captures_deleted = 0;
         let mut total_recognitions_deleted = 0;
         let mut total_alarms_deleted = 0;
+        let mut total_recordings_deleted = 0;
         let mut total_quarantined_files = 0;
         let mut total_missing_files = 0;
         let mut drain_iterations = 0;
@@ -517,8 +551,34 @@ impl StorageCleaner {
                 }
             }
         }
+        // 事件录像：TTL 到期主动清理（有效保留期 = min(通道级, 全局)）
+        if config.recording_retention_days > 0 {
+            if let Ok(expired_recordings) = store
+                .find_expired_recordings(
+                    now,
+                    config.recording_retention_days,
+                    config.batch_delete_size,
+                )
+                .await
+            {
+                if !expired_recordings.is_empty() {
+                    let recording_ids: Vec<i64> = expired_recordings.iter().map(|r| r.id).collect();
+                    let (quarantined, missing) =
+                        Self::quarantine_record_files(&config, &expired_recordings, &self.metrics);
+                    total_quarantined_files += quarantined.len() as u64;
+                    total_missing_files += missing;
+                    if let Ok(deleted) = store.delete_recordings(&recording_ids).await {
+                        total_recordings_deleted += deleted;
+                    }
+                    self.dispatcher.dispatch_batch(quarantined).await;
+                }
+            }
+        }
 
-        if total_captures_deleted > 0 || total_recognitions_deleted > 0 || total_alarms_deleted > 0
+        if total_captures_deleted > 0
+            || total_recognitions_deleted > 0
+            || total_alarms_deleted > 0
+            || total_recordings_deleted > 0
         {
             self.flush_pending_unlinks().await;
             if let Ok(new_stat) = stat_fs(&config.evidence_dir) {
@@ -575,61 +635,78 @@ impl StorageCleaner {
                 // Phase 4: 异步 Unlink 批量释放物理磁盘
                 self.dispatcher.dispatch_batch(quarantined_paths).await;
             } else {
-                // 2. 抓拍已空，淘汰识别记录 (Recognitions)
-                let oldest_recs = store.find_oldest_recognitions(current_batch_size).await?;
-                if !oldest_recs.is_empty() {
-                    let rec_ids: Vec<i64> = oldest_recs.iter().map(|r| r.id).collect();
+                // 2. 抓拍已空，淘汰事件录像 (Recordings)
+                //    录像为大数据块，腾挪效率高于图片；位置在抓拍之后、识别与告警之前。
+                let oldest_recordings = store.find_oldest_recordings(current_batch_size).await?;
+                if !oldest_recordings.is_empty() {
+                    let recording_ids: Vec<i64> = oldest_recordings.iter().map(|r| r.id).collect();
                     let (quarantined_paths, missing) =
-                        Self::quarantine_record_files(&config, &oldest_recs, &self.metrics);
+                        Self::quarantine_record_files(&config, &oldest_recordings, &self.metrics);
                     total_quarantined_files += quarantined_paths.len() as u64;
                     total_missing_files += missing;
-                    let deleted = store.delete_recognitions(&rec_ids).await?;
-                    total_recognitions_deleted += deleted;
+                    let deleted = store.delete_recordings(&recording_ids).await?;
+                    total_recordings_deleted += deleted;
                     self.dispatcher.dispatch_batch(quarantined_paths).await;
-                } else if is_emergency {
-                    // 3. 抓拍与识别均已空，且处于紧急严重水位 (< 8%) 时
-                    if config.overwrite_mode == types::system::OverwriteMode::Stop {
-                        tracing::warn!(
-                            free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
-                            "存储覆盖模式为 Stop (写满停止)，保全核心告警凭据，终止淘汰循环"
-                        );
-                        break;
-                    }
-                    let oldest_alarms = store.find_oldest_alarms(current_batch_size).await?;
-
-                    if !oldest_alarms.is_empty() {
-                        let alarm_ids: Vec<i64> = oldest_alarms.iter().map(|r| r.id).collect();
-
-                        // Phase 1: DB 预标记
-                        let _ = store.mark_alarms_deleting(&alarm_ids).await?;
-
-                        // Phase 2: 隔离
+                } else {
+                    // 3. 录像已空，淘汰识别记录 (Recognitions)
+                    let oldest_recs = store.find_oldest_recognitions(current_batch_size).await?;
+                    if !oldest_recs.is_empty() {
+                        let rec_ids: Vec<i64> = oldest_recs.iter().map(|r| r.id).collect();
                         let (quarantined_paths, missing) =
-                            Self::quarantine_record_files(&config, &oldest_alarms, &self.metrics);
+                            Self::quarantine_record_files(&config, &oldest_recs, &self.metrics);
                         total_quarantined_files += quarantined_paths.len() as u64;
                         total_missing_files += missing;
-
-                        // Phase 3: DB 提交删除
-                        let deleted = store.delete_alarms(&alarm_ids).await?;
-                        total_alarms_deleted += deleted;
-
-                        // Phase 4: 异步 Unlink
+                        let deleted = store.delete_recognitions(&rec_ids).await?;
+                        total_recognitions_deleted += deleted;
                         self.dispatcher.dispatch_batch(quarantined_paths).await;
+                    } else if is_emergency {
+                        // 4. 抓拍、录像与识别均已空，且处于紧急严重水位 (< 8%) 时
+                        if config.overwrite_mode == types::system::OverwriteMode::Stop {
+                            tracing::warn!(
+                                free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
+                                "存储覆盖模式为 Stop (写满停止)，保全核心告警凭据，终止淘汰循环"
+                            );
+                            break;
+                        }
+                        let oldest_alarms = store.find_oldest_alarms(current_batch_size).await?;
+
+                        if !oldest_alarms.is_empty() {
+                            let alarm_ids: Vec<i64> = oldest_alarms.iter().map(|r| r.id).collect();
+
+                            // Phase 1: DB 预标记
+                            let _ = store.mark_alarms_deleting(&alarm_ids).await?;
+
+                            // Phase 2: 隔离
+                            let (quarantined_paths, missing) = Self::quarantine_record_files(
+                                &config,
+                                &oldest_alarms,
+                                &self.metrics,
+                            );
+                            total_quarantined_files += quarantined_paths.len() as u64;
+                            total_missing_files += missing;
+
+                            // Phase 3: DB 提交删除
+                            let deleted = store.delete_alarms(&alarm_ids).await?;
+                            total_alarms_deleted += deleted;
+
+                            // Phase 4: 异步 Unlink
+                            self.dispatcher.dispatch_batch(quarantined_paths).await;
+                        } else {
+                            tracing::warn!(
+                                free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
+                                "数据库中抓拍、录像、识别与告警记录均已排空，自适应退出排空循环"
+                            );
+                            break;
+                        }
                     } else {
-                        tracing::warn!(
+                        // 普通抓拍、录像与识别已全部淘汰完毕，当前未触碰紧急生死线，保全核心违规告警大图！
+                        tracing::info!(
                             free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
-                            "数据库中抓拍、识别与告警记录均已排空，自适应退出排空循环"
+                            emergency_threshold = %format!("{:.2}%", config.emergency_free_ratio * 100.0),
+                            "普通抓拍、录像与识别已排空；当前未触碰紧急红线，保全核心告警凭据，退出排空循环"
                         );
                         break;
                     }
-                } else {
-                    // 普通抓拍与识别已全部淘汰完毕，当前未触碰紧急生死线，保全核心违规告警大图！
-                    tracing::info!(
-                        free_ratio = %format!("{:.2}%", stat.free_ratio * 100.0),
-                        emergency_threshold = %format!("{:.2}%", config.emergency_free_ratio * 100.0),
-                        "普通抓拍与识别已排空；当前未触碰紧急红线，保全核心告警凭据，退出排空循环"
-                    );
-                    break;
                 }
             }
 
@@ -650,6 +727,9 @@ impl StorageCleaner {
         self.metrics
             .alarms_evicted_total
             .fetch_add(total_alarms_deleted, Ordering::Relaxed);
+        self.metrics
+            .recordings_evicted_total
+            .fetch_add(total_recordings_deleted, Ordering::Relaxed);
 
         let free_ratio_after = stat.free_ratio;
 
@@ -660,12 +740,16 @@ impl StorageCleaner {
             captures = total_captures_deleted,
             recognitions = total_recognitions_deleted,
             alarms = total_alarms_deleted,
+            recordings = total_recordings_deleted,
             quarantined = total_quarantined_files,
             missing = total_missing_files,
             "连续回滞排空循环执行完毕"
         );
 
-        let evicted = total_captures_deleted + total_recognitions_deleted + total_alarms_deleted;
+        let evicted = total_captures_deleted
+            + total_recognitions_deleted
+            + total_alarms_deleted
+            + total_recordings_deleted;
         let freed_mb = stat.available_bytes.saturating_sub(available_bytes_before) / (1024 * 1024);
         if evicted > 0 {
             crate::op_log::record(types::OpEvent::StorageEviction { evicted, freed_mb });
@@ -677,6 +761,7 @@ impl StorageCleaner {
             captures_deleted: total_captures_deleted,
             recognitions_deleted: total_recognitions_deleted,
             alarms_deleted: total_alarms_deleted,
+            recordings_deleted: total_recordings_deleted,
             quarantined_files: total_quarantined_files,
             missing_files: total_missing_files,
             drain_iterations,
@@ -1015,8 +1100,10 @@ mod tests {
     struct MockStore {
         captures: Arc<RwLock<Vec<EvidenceRecordFiles>>>,
         alarms: Arc<RwLock<Vec<EvidenceRecordFiles>>>,
+        recordings: Arc<RwLock<Vec<EvidenceRecordFiles>>>,
         deleted_caps_count: AtomicU64,
         deleted_alarms_count: AtomicU64,
+        deleted_recordings_count: AtomicU64,
         marked_deleting_count: AtomicU64,
     }
 
@@ -1070,12 +1157,33 @@ mod tests {
             Ok(deleted)
         }
 
+        async fn find_oldest_recordings(
+            &self,
+            limit: u64,
+        ) -> Result<Vec<EvidenceRecordFiles>, PipelineError> {
+            let list = self.recordings.read().await;
+            Ok(list.iter().take(limit as usize).cloned().collect())
+        }
+
+        async fn delete_recordings(&self, ids: &[i64]) -> Result<u64, PipelineError> {
+            let mut list = self.recordings.write().await;
+            let initial = list.len();
+            list.retain(|r| !ids.contains(&r.id));
+            let deleted = (initial - list.len()) as u64;
+            self.deleted_recordings_count
+                .fetch_add(deleted, Ordering::Relaxed);
+            Ok(deleted)
+        }
+
         async fn find_all_active_image_paths(&self) -> Result<HashSet<String>, PipelineError> {
             let mut set = HashSet::new();
             for record in self.captures.read().await.iter() {
                 set.extend(record.paths.iter().cloned());
             }
             for record in self.alarms.read().await.iter() {
+                set.extend(record.paths.iter().cloned());
+            }
+            for record in self.recordings.read().await.iter() {
                 set.extend(record.paths.iter().cloned());
             }
             Ok(set)
@@ -1129,8 +1237,10 @@ mod tests {
         let store = MockStore {
             captures: Arc::new(RwLock::new(caps)),
             alarms: Arc::new(RwLock::new(Vec::new())),
+            recordings: Arc::new(RwLock::new(Vec::new())),
             deleted_caps_count: AtomicU64::new(0),
             deleted_alarms_count: AtomicU64::new(0),
+            deleted_recordings_count: AtomicU64::new(0),
             marked_deleting_count: AtomicU64::new(0),
         };
 
@@ -1164,6 +1274,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_drain_evicts_recordings_after_captures() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_drain_recordings_{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // 录像文件放在 `recordings/cam_x/` 子目录下（真实布局）
+        let record_dir = temp_dir.join("cam_rec");
+        fs::create_dir_all(&record_dir).unwrap();
+
+        let mut captures = Vec::new();
+        for i in 1..=2 {
+            let path = record_dir.join(format!("cap_{i}.jpg"));
+            fs::write(&path, b"cap_content").unwrap();
+            captures.push(EvidenceRecordFiles::new(
+                i,
+                [format!("cam_rec/cap_{i}.jpg")],
+            ));
+        }
+
+        let mut recordings = Vec::new();
+        for i in 10..=12 {
+            let path = record_dir.join(format!("rec_{i}.mp4"));
+            fs::write(&path, b"mp4_content").unwrap();
+            recordings.push(EvidenceRecordFiles::new(
+                i,
+                [format!("cam_rec/rec_{i}.mp4")],
+            ));
+        }
+
+        let store = MockStore {
+            captures: Arc::new(RwLock::new(captures)),
+            alarms: Arc::new(RwLock::new(Vec::new())),
+            recordings: Arc::new(RwLock::new(recordings)),
+            deleted_caps_count: AtomicU64::new(0),
+            deleted_alarms_count: AtomicU64::new(0),
+            deleted_recordings_count: AtomicU64::new(0),
+            marked_deleting_count: AtomicU64::new(0),
+        };
+
+        let cleaner = StorageCleaner::new(StorageCleanerConfig {
+            evidence_dir: temp_dir.clone(),
+            min_free_ratio: 0.99,
+            target_free_ratio: 0.995,
+            batch_delete_size: 1,
+            max_drain_iterations: 10,
+            auto_cleanup_enabled: false,
+            ..Default::default()
+        });
+
+        let report = cleaner
+            .clean_if_needed(&store)
+            .await
+            .unwrap()
+            .expect("应触发排空");
+
+        // 抓拍（2）+ 录像（3）应全部被驱逐，之后无数据可删
+        assert_eq!(report.captures_deleted, 2, "抓拍应优先被驱逐");
+        assert_eq!(report.recordings_deleted, 3, "抓拍排空后应继续驱逐录像");
+        assert_eq!(store.captures.read().await.len(), 0);
+        assert_eq!(store.recordings.read().await.len(), 0);
+
+        cleaner.flush_pending_unlinks().await;
+        // 物理文件应已从原路径移除
+        assert!(!record_dir.join("rec_10.mp4").exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
     async fn test_two_phase_atomic_eviction_and_metrics() {
         let temp_dir = std::env::temp_dir().join(format!(
             "test_eviction_twophase_{}",
@@ -1188,8 +1369,10 @@ mod tests {
                 ],
             )])),
             alarms: Arc::new(RwLock::new(Vec::new())),
+            recordings: Arc::new(RwLock::new(Vec::new())),
             deleted_caps_count: AtomicU64::new(0),
             deleted_alarms_count: AtomicU64::new(0),
+            deleted_recordings_count: AtomicU64::new(0),
             marked_deleting_count: AtomicU64::new(0),
         };
 
@@ -1250,8 +1433,10 @@ mod tests {
                 ],
             )])),
             alarms: Arc::new(RwLock::new(Vec::new())),
+            recordings: Arc::new(RwLock::new(Vec::new())),
             deleted_caps_count: AtomicU64::new(0),
             deleted_alarms_count: AtomicU64::new(0),
+            deleted_recordings_count: AtomicU64::new(0),
             marked_deleting_count: AtomicU64::new(0),
         };
 
@@ -1303,8 +1488,10 @@ mod tests {
         let store = MockStore {
             captures: Arc::new(RwLock::new(Vec::new())),
             alarms: Arc::new(RwLock::new(Vec::new())),
+            recordings: Arc::new(RwLock::new(Vec::new())),
             deleted_caps_count: AtomicU64::new(0),
             deleted_alarms_count: AtomicU64::new(0),
+            deleted_recordings_count: AtomicU64::new(0),
             marked_deleting_count: AtomicU64::new(0),
         };
 

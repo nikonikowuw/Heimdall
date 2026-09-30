@@ -249,6 +249,7 @@ async fn main() -> Result<()> {
                 runtime_cfg.recognition_quota_mb = saved_cfg.recognition_quota_mb;
                 runtime_cfg.capture_retention_days = saved_cfg.capture_retention_days;
                 runtime_cfg.capture_quota_mb = saved_cfg.capture_quota_mb;
+                runtime_cfg.recording_retention_days = saved_cfg.recording_retention_days;
                 runtime_cfg.overwrite_mode = saved_cfg.overwrite_mode;
                 runtime_cfg.auto_cleanup_enabled = saved_cfg.auto_cleanup_enabled;
                 cleaner.update_config(runtime_cfg).await;
