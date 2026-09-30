@@ -392,4 +392,13 @@ impl AppState {
     pub fn base_evidence_dir(&self) -> std::path::PathBuf {
         self.pipeline.base_evidence_dir().to_path_buf()
     }
+
+    /// 录像 Worker 的存储根。
+    ///
+    /// Worker 会在该根下自行建立 `recordings/{camera_id}/{date}/`；
+    /// DB 中存储的 `file_path` 即相对该根的路径，API 侧用
+    /// [`Self::base_evidence_dir`] 解析回绝对路径。
+    pub fn recording_storage_root(&self) -> std::path::PathBuf {
+        self.base_evidence_dir()
+    }
 }

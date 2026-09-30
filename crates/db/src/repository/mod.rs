@@ -29,7 +29,8 @@ pub use oplog::OplogRepo;
 pub use personnel::PersonnelRepo;
 pub use recognition::{RecognitionRepo, UpdateRecognitionReviewParams};
 pub use recording::{
-    CreateRecordingParams, FinishRecordingParams, LinkEventParams, RecordingRepo,
+    CreateRecordingParams, FinishRecordingParams, LinkEventParams, PersistEventParams,
+    PersistFinishedParams, RecordingFilter, RecordingRepo,
 };
 pub use sys_gb28181_config::SysGb28181ConfigRepo;
 pub use system_config::SystemConfigRepo;

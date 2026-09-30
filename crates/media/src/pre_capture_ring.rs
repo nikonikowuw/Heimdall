@@ -30,7 +30,7 @@ pub struct PreCaptureConfig {
 impl Default for PreCaptureConfig {
     fn default() -> Self {
         Self {
-            max_duration_ms: 10_000, // 默认 10 秒
+            max_duration_ms: 10_000,     // 默认 10 秒
             max_bytes: 20 * 1024 * 1024, // 20MB
             max_packets: 1000,
         }
@@ -135,9 +135,7 @@ impl PreCaptureRingBuffer {
     /// 获取当前缓存的时间跨度（毫秒）
     pub fn duration_ms(&self) -> i64 {
         match (self.queue.front(), self.queue.back()) {
-            (Some(oldest), Some(newest)) => {
-                newest.pts_ms.saturating_sub(oldest.pts_ms).max(0)
-            }
+            (Some(oldest), Some(newest)) => newest.pts_ms.saturating_sub(oldest.pts_ms).max(0),
             _ => 0,
         }
     }
@@ -286,7 +284,10 @@ mod tests {
         // GOP 1 应被淘汰
         let drained = rb.drain_from_keyframe();
         assert!(drained[0].is_keyframe);
-        assert!(drained[0].pts_ms >= 1100, "GOP 1 应被淘汰，最老帧应 >= 1100ms");
+        assert!(
+            drained[0].pts_ms >= 1100,
+            "GOP 1 应被淘汰，最老帧应 >= 1100ms"
+        );
     }
 
     #[test]
@@ -304,8 +305,10 @@ mod tests {
         rb.push(make_packet(2000, true, 6000));
 
         // 现在应只剩 GOP 2
-        assert!(rb.bytes() <= 10_000 || rb.keyframe_count < 2,
-            "超出字节上限且有 2+ 关键帧时应触发淘汰");
+        assert!(
+            rb.bytes() <= 10_000 || rb.keyframe_count < 2,
+            "超出字节上限且有 2+ 关键帧时应触发淘汰"
+        );
     }
 
     #[test]

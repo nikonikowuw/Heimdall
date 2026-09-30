@@ -35,9 +35,9 @@ macro_rules! write_box {
 /// 写入 `ftyp` box。
 pub fn write_ftyp(w: &mut impl Write) -> io::Result<()> {
     write_box!(w, b"ftyp", |w| {
-        w.write_all(b"isom")?;        // major brand
+        w.write_all(b"isom")?; // major brand
         w.write_all(&1u32.to_be_bytes())?; // minor version
-        w.write_all(b"isom")?;        // compatible brands
+        w.write_all(b"isom")?; // compatible brands
         w.write_all(b"iso5")?;
         w.write_all(b"iso6")?;
         w.write_all(b"msdh")?;
@@ -63,24 +63,20 @@ pub fn write_moov(
     write_box!(w, b"moov", |w| {
         // ── mvhd ──
         write_box!(w, b"mvhd", |w| {
-            w.write_all(&0u32.to_be_bytes())?;     // version + flags
-            w.write_all(&0u32.to_be_bytes())?;     // creation_time
-            w.write_all(&0u32.to_be_bytes())?;     // modification_time
+            w.write_all(&0u32.to_be_bytes())?; // version + flags
+            w.write_all(&0u32.to_be_bytes())?; // creation_time
+            w.write_all(&0u32.to_be_bytes())?; // modification_time
             w.write_all(&TIMESCALE.to_be_bytes())?; // timescale
-            w.write_all(&0u32.to_be_bytes())?;     // duration (unknown for fMP4)
+            w.write_all(&0u32.to_be_bytes())?; // duration (unknown for fMP4)
             w.write_all(&0x00010000u32.to_be_bytes())?; // rate = 1.0
-            w.write_all(&0x0100u16.to_be_bytes())?;     // volume = 1.0
-            w.write_all(&[0u8; 10])?;              // reserved
-            // unity matrix 3x3 (36 bytes)
-            for &v in &[
-                0x00010000u32, 0, 0,
-                0, 0x00010000, 0,
-                0, 0, 0x40000000,
-            ] {
+            w.write_all(&0x0100u16.to_be_bytes())?; // volume = 1.0
+            w.write_all(&[0u8; 10])?; // reserved
+                                      // unity matrix 3x3 (36 bytes)
+            for &v in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
                 w.write_all(&v.to_be_bytes())?;
             }
-            w.write_all(&[0u8; 24])?;              // pre_defined
-            w.write_all(&2u32.to_be_bytes())?;     // next_track_ID
+            w.write_all(&[0u8; 24])?; // pre_defined
+            w.write_all(&2u32.to_be_bytes())?; // next_track_ID
         });
 
         // ── trak ──
@@ -89,22 +85,18 @@ pub fn write_moov(
             write_box!(w, b"tkhd", |w| {
                 // version=0, flags=track_enabled|track_in_movie (0x000003)
                 w.write_all(&0x00000003u32.to_be_bytes())?;
-                w.write_all(&0u32.to_be_bytes())?;     // creation_time
-                w.write_all(&0u32.to_be_bytes())?;     // modification_time
-                w.write_all(&1u32.to_be_bytes())?;     // track_ID = 1
-                w.write_all(&0u32.to_be_bytes())?;     // reserved
-                w.write_all(&0u32.to_be_bytes())?;     // duration
-                w.write_all(&[0u8; 8])?;               // reserved
-                w.write_all(&0u16.to_be_bytes())?;     // layer
-                w.write_all(&0u16.to_be_bytes())?;     // alternate_group
-                w.write_all(&0u16.to_be_bytes())?;     // volume (0 for video)
-                w.write_all(&0u16.to_be_bytes())?;     // reserved
-                // unity matrix
-                for &v in &[
-                    0x00010000u32, 0, 0,
-                    0, 0x00010000, 0,
-                    0, 0, 0x40000000,
-                ] {
+                w.write_all(&0u32.to_be_bytes())?; // creation_time
+                w.write_all(&0u32.to_be_bytes())?; // modification_time
+                w.write_all(&1u32.to_be_bytes())?; // track_ID = 1
+                w.write_all(&0u32.to_be_bytes())?; // reserved
+                w.write_all(&0u32.to_be_bytes())?; // duration
+                w.write_all(&[0u8; 8])?; // reserved
+                w.write_all(&0u16.to_be_bytes())?; // layer
+                w.write_all(&0u16.to_be_bytes())?; // alternate_group
+                w.write_all(&0u16.to_be_bytes())?; // volume (0 for video)
+                w.write_all(&0u16.to_be_bytes())?; // reserved
+                                                   // unity matrix
+                for &v in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
                     w.write_all(&v.to_be_bytes())?;
                 }
                 // width, height (16.16 fixed-point)
@@ -116,22 +108,22 @@ pub fn write_moov(
             write_box!(w, b"mdia", |w| {
                 // mdhd
                 write_box!(w, b"mdhd", |w| {
-                    w.write_all(&0u32.to_be_bytes())?;     // version + flags
-                    w.write_all(&0u32.to_be_bytes())?;     // creation_time
-                    w.write_all(&0u32.to_be_bytes())?;     // modification_time
+                    w.write_all(&0u32.to_be_bytes())?; // version + flags
+                    w.write_all(&0u32.to_be_bytes())?; // creation_time
+                    w.write_all(&0u32.to_be_bytes())?; // modification_time
                     w.write_all(&TIMESCALE.to_be_bytes())?; // timescale
-                    w.write_all(&0u32.to_be_bytes())?;     // duration
+                    w.write_all(&0u32.to_be_bytes())?; // duration
                     w.write_all(&0x55C4u16.to_be_bytes())?; // language = 'und'
-                    w.write_all(&0u16.to_be_bytes())?;     // pre_defined
+                    w.write_all(&0u16.to_be_bytes())?; // pre_defined
                 });
 
                 // hdlr
                 write_box!(w, b"hdlr", |w| {
-                    w.write_all(&0u32.to_be_bytes())?;     // version + flags
-                    w.write_all(&0u32.to_be_bytes())?;     // pre_defined
-                    w.write_all(b"vide")?;                 // handler_type
-                    w.write_all(&[0u8; 12])?;              // reserved
-                    w.write_all(b"VideoHandler\0")?;       // name (null-terminated)
+                    w.write_all(&0u32.to_be_bytes())?; // version + flags
+                    w.write_all(&0u32.to_be_bytes())?; // pre_defined
+                    w.write_all(b"vide")?; // handler_type
+                    w.write_all(&[0u8; 12])?; // reserved
+                    w.write_all(b"VideoHandler\0")?; // name (null-terminated)
                 });
 
                 // minf
@@ -140,7 +132,7 @@ pub fn write_moov(
                     write_box!(w, b"vmhd", |w| {
                         w.write_all(&0x00000001u32.to_be_bytes())?; // version=0, flags=1
                         w.write_all(&0u16.to_be_bytes())?; // graphicsmode
-                        w.write_all(&[0u8; 6])?;           // opcolor
+                        w.write_all(&[0u8; 6])?; // opcolor
                     });
 
                     // dinf → dref
@@ -187,12 +179,12 @@ pub fn write_moov(
         // ── mvex ──
         write_box!(w, b"mvex", |w| {
             write_box!(w, b"trex", |w| {
-                w.write_all(&0u32.to_be_bytes())?;     // version + flags
-                w.write_all(&1u32.to_be_bytes())?;     // track_ID = 1
-                w.write_all(&1u32.to_be_bytes())?;     // default_sample_description_index
-                w.write_all(&0u32.to_be_bytes())?;     // default_sample_duration
-                w.write_all(&0u32.to_be_bytes())?;     // default_sample_size
-                w.write_all(&0u32.to_be_bytes())?;     // default_sample_flags
+                w.write_all(&0u32.to_be_bytes())?; // version + flags
+                w.write_all(&1u32.to_be_bytes())?; // track_ID = 1
+                w.write_all(&1u32.to_be_bytes())?; // default_sample_description_index
+                w.write_all(&0u32.to_be_bytes())?; // default_sample_duration
+                w.write_all(&0u32.to_be_bytes())?; // default_sample_size
+                w.write_all(&0u32.to_be_bytes())?; // default_sample_flags
             });
         });
     });
@@ -214,7 +206,12 @@ fn write_stsd(
         let sample_entry_type = match codec {
             CodecType::H264 => b"avc1",
             CodecType::H265 => b"hvc1",
-            _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported codec")),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unsupported codec",
+                ))
+            }
         };
         let codec_config_box_type = match codec {
             CodecType::H264 => b"avcC",
@@ -223,18 +220,18 @@ fn write_stsd(
         };
 
         write_box!(w, sample_entry_type, |w| {
-            w.write_all(&[0u8; 6])?;                   // reserved
-            w.write_all(&1u16.to_be_bytes())?;          // data_reference_index = 1
-            w.write_all(&[0u8; 16])?;                   // pre_defined + reserved
-            w.write_all(&width.to_be_bytes())?;         // width
-            w.write_all(&height.to_be_bytes())?;        // height
+            w.write_all(&[0u8; 6])?; // reserved
+            w.write_all(&1u16.to_be_bytes())?; // data_reference_index = 1
+            w.write_all(&[0u8; 16])?; // pre_defined + reserved
+            w.write_all(&width.to_be_bytes())?; // width
+            w.write_all(&height.to_be_bytes())?; // height
             w.write_all(&0x00480000u32.to_be_bytes())?; // horiz resolution 72 dpi
             w.write_all(&0x00480000u32.to_be_bytes())?; // vert resolution 72 dpi
-            w.write_all(&0u32.to_be_bytes())?;          // reserved
-            w.write_all(&1u16.to_be_bytes())?;          // frame_count = 1
-            w.write_all(&[0u8; 32])?;                   // compressorname
-            w.write_all(&0x0018u16.to_be_bytes())?;     // depth = 24
-            w.write_all(&0xFFFFu16.to_be_bytes())?;     // pre_defined = -1
+            w.write_all(&0u32.to_be_bytes())?; // reserved
+            w.write_all(&1u16.to_be_bytes())?; // frame_count = 1
+            w.write_all(&[0u8; 32])?; // compressorname
+            w.write_all(&0x0018u16.to_be_bytes())?; // depth = 24
+            w.write_all(&0xFFFFu16.to_be_bytes())?; // pre_defined = -1
 
             // avcC / hvcC
             write_box!(w, codec_config_box_type, |w| {
@@ -250,8 +247,8 @@ fn write_stsd(
 /// 单个 sample 的元数据（用于构建 `trun`）。
 #[derive(Debug)]
 pub struct SampleEntry {
-    pub duration: u32,      // timescale 单位
-    pub size: u32,          // AVCC length-prefixed payload 字节数
+    pub duration: u32, // timescale 单位
+    pub size: u32,     // AVCC length-prefixed payload 字节数
     pub is_keyframe: bool,
 }
 
@@ -427,8 +424,16 @@ mod tests {
     #[test]
     fn test_fragment_structure() {
         let samples = vec![
-            SampleEntry { duration: 3000, size: 100, is_keyframe: true },
-            SampleEntry { duration: 3000, size: 50, is_keyframe: false },
+            SampleEntry {
+                duration: 3000,
+                size: 100,
+                is_keyframe: true,
+            },
+            SampleEntry {
+                duration: 3000,
+                size: 50,
+                is_keyframe: false,
+            },
         ];
         let mdat_payload = vec![0u8; 150];
 
@@ -455,8 +460,7 @@ mod tests {
         // numSPS=1, spsLen=4, sps=[67 64 00 29],
         // numPPS=1, ppsLen=4, pps=[68 EE 3C 80]
         vec![
-            0x01, 100, 0x00, 41,
-            0xFF, // lengthSizeMinusOne = 3 (4 bytes) | reserved
+            0x01, 100, 0x00, 41, 0xFF, // lengthSizeMinusOne = 3 (4 bytes) | reserved
             0xE1, // numSPS = 1 | reserved
             0x00, 0x04, 0x67, 0x64, 0x00, 0x29, // SPS
             0x01, // numPPS

@@ -105,7 +105,7 @@ impl ParameterSets {
 
         // HEVCDecoderConfigurationRecord (简化)
         buf.push(0x01); // configurationVersion
-        // general_profile_space(2) + general_tier_flag(1) + general_profile_idc(5)
+                        // general_profile_space(2) + general_tier_flag(1) + general_profile_idc(5)
         buf.push(sps.get(2).copied().unwrap_or(0) & 0x1F); // just profile_idc from SPS NAL body
         buf.extend_from_slice(&[0x00; 4]); // general_profile_compatibility_flags
         buf.extend_from_slice(&[0x00; 6]); // general_constraint_indicator_flags
@@ -116,7 +116,7 @@ impl ParameterSets {
         buf.push(0xF8); // bitDepthLumaMinus8 | reserved
         buf.push(0xF8); // bitDepthChromaMinus8 | reserved
         buf.extend_from_slice(&0u16.to_be_bytes()); // avgFrameRate (0 = unspecified)
-        // constantFrameRate(2) + numTemporalLayers(3) + temporalIdNested(1) + lengthSizeMinusOne(2)
+                                                    // constantFrameRate(2) + numTemporalLayers(3) + temporalIdNested(1) + lengthSizeMinusOne(2)
         buf.push(0x0F); // lengthSizeMinusOne=3, others=0
         buf.push(3); // numOfArrays = 3 (VPS, SPS, PPS)
 

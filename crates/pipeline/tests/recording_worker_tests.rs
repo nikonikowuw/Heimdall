@@ -187,7 +187,10 @@ fn test_event_triggers_recording_with_precapture() {
     let bytes = std::fs::read(&rec.file_path).expect("read recording file");
     assert_eq!(&bytes[4..8], b"ftyp", "fMP4 应以 ftyp box 开头");
     assert!(bytes.windows(4).any(|w| w == b"moov"), "应包含 moov");
-    assert!(bytes.windows(4).any(|w| w == b"moof"), "应包含 moof fragment");
+    assert!(
+        bytes.windows(4).any(|w| w == b"moof"),
+        "应包含 moof fragment"
+    );
     assert!(bytes.windows(4).any(|w| w == b"mdat"), "应包含 mdat");
 }
 

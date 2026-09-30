@@ -194,11 +194,19 @@ impl<W: Write> FMP4Writer<W> {
             CodecType::H265 => ps.build_hvcc(),
             _ => None,
         }
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "failed to build codec config"))?;
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "failed to build codec config")
+        })?;
 
         let mut buf = Vec::with_capacity(512);
         boxes::write_ftyp(&mut buf)?;
-        boxes::write_moov(&mut buf, self.codec, width as u16, height as u16, &codec_private)?;
+        boxes::write_moov(
+            &mut buf,
+            self.codec,
+            width as u16,
+            height as u16,
+            &codec_private,
+        )?;
 
         self.writer.write_all(&buf)?;
         self.bytes_written += buf.len() as u64;
@@ -267,7 +275,9 @@ impl<W: Write> FMP4Writer<W> {
         let info = match self.codec {
             CodecType::H264 => parse_h264_sps(sps),
             CodecType::H265 => parse_h265_sps(sps),
-            _ => Err(crate::error::MediaError::SpsParse("unsupported codec".into())),
+            _ => Err(crate::error::MediaError::SpsParse(
+                "unsupported codec".into(),
+            )),
         }
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 

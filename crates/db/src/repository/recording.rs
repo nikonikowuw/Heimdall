@@ -1,6 +1,6 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
 };
 
 use crate::entity::recording::{ActiveModel, Column, Entity, Model};
@@ -41,7 +41,45 @@ pub struct FinishRecordingParams {
     pub status: String,
 }
 
+/// 录像列表过滤条件
+#[derive(Debug, Clone, Default)]
+pub struct RecordingFilter<'a> {
+    pub camera_id: Option<&'a str>,
+    pub status: Option<&'a str>,
+    pub start_time_ms: Option<i64>,
+    pub end_time_ms: Option<i64>,
+}
+
 impl RecordingRepo {
+    /// 按过滤条件分页查询录像（按开始时间倒序）
+    pub async fn list_filtered(
+        db: &DatabaseConnection,
+        filter: RecordingFilter<'_>,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Vec<Model>, DbError> {
+        let mut query = Entity::find();
+        if let Some(camera_id) = filter.camera_id.filter(|s| !s.trim().is_empty()) {
+            query = query.filter(Column::CameraId.eq(camera_id));
+        }
+        if let Some(status) = filter.status.filter(|s| !s.trim().is_empty()) {
+            query = query.filter(Column::Status.eq(status));
+        }
+        if let Some(start) = filter.start_time_ms {
+            query = query.filter(Column::StartTime.gte(start));
+        }
+        if let Some(end) = filter.end_time_ms {
+            query = query.filter(Column::StartTime.lte(end));
+        }
+        let results = query
+            .order_by_desc(Column::StartTime)
+            .offset(offset)
+            .limit(limit)
+            .all(db)
+            .await?;
+        Ok(results)
+    }
+
     /// 创建一条新的录像记录（状态为 recording）
     pub async fn create(
         db: &DatabaseConnection,
@@ -74,7 +112,10 @@ impl RecordingRepo {
             .filter(Column::RecordingId.eq(recording_id))
             .one(db)
             .await?
-            .ok_or_else(|| DbError::NotFound { entity: "recording", key: recording_id.to_string() })?;
+            .ok_or_else(|| DbError::NotFound {
+                entity: "recording",
+                key: recording_id.to_string(),
+            })?;
 
         let mut active: ActiveModel = record.into();
         active.end_time = Set(Some(params.end_time));
@@ -212,6 +253,75 @@ impl RecordingRepo {
             .await?;
         Ok(result)
     }
+
+    /// 单事务落库一条已完成的录像及其全部事件关联。
+    ///
+    /// 录像 Worker 在 OS 线程内闭合文件后调用异步侧，一次性写入：
+    /// `recordings` 行（已 completed/truncated） + N 条 `recording_events`。
+    /// 任一写入失败则整体回滚，不产生孤儿录像行。
+    pub async fn persist_finished(
+        db: &DatabaseConnection,
+        record: PersistFinishedParams,
+    ) -> Result<Model, DbError> {
+        let txn = db.begin().await?;
+
+        let recording = ActiveModel {
+            recording_id: Set(record.recording_id.clone()),
+            camera_id: Set(record.camera_id),
+            file_path: Set(record.file_path),
+            start_time: Set(record.start_time_ms),
+            end_time: Set(Some(record.end_time_ms)),
+            duration_ms: Set(Some((record.end_time_ms - record.start_time_ms).max(0))),
+            file_size: Set(Some(record.file_size as i64)),
+            codec: Set(record.codec),
+            status: Set(record.status),
+            created_at: Set(record.created_at_ms),
+            ..Default::default()
+        }
+        .insert(&txn)
+        .await?;
+
+        for event in record.events {
+            recording_event::ActiveModel {
+                recording_id: Set(record.recording_id.clone()),
+                event_type: Set(event.event_type),
+                event_id: Set(event.event_id),
+                event_time: Set(event.event_time_ms),
+                offset_ms: Set(event.offset_ms),
+                ..Default::default()
+            }
+            .insert(&txn)
+            .await?;
+        }
+
+        txn.commit().await?;
+        Ok(recording)
+    }
+}
+
+/// 已完成录像的单事务落库参数
+#[derive(Debug, Clone)]
+pub struct PersistFinishedParams {
+    pub recording_id: String,
+    pub camera_id: String,
+    pub file_path: String,
+    pub start_time_ms: i64,
+    pub end_time_ms: i64,
+    pub file_size: u64,
+    pub codec: String,
+    /// `completed` | `truncated`
+    pub status: String,
+    pub created_at_ms: i64,
+    pub events: Vec<PersistEventParams>,
+}
+
+/// 录像关联事件落库参数
+#[derive(Debug, Clone)]
+pub struct PersistEventParams {
+    pub event_type: String,
+    pub event_id: String,
+    pub event_time_ms: i64,
+    pub offset_ms: i64,
 }
 
 #[cfg(test)]
@@ -246,23 +356,37 @@ mod tests {
     async fn test_finish_recording() {
         let db = init_test_db().await.unwrap();
 
-        RecordingRepo::create(&db, CreateRecordingParams {
-            recording_id: "rec_002".to_string(),
-            camera_id: "cam_test".to_string(),
-            file_path: "test.mp4".to_string(),
-            start_time: 1000,
-            codec: "h264".to_string(),
-            created_at: 1000,
-        }).await.unwrap();
+        RecordingRepo::create(
+            &db,
+            CreateRecordingParams {
+                recording_id: "rec_002".to_string(),
+                camera_id: "cam_test".to_string(),
+                file_path: "test.mp4".to_string(),
+                start_time: 1000,
+                codec: "h264".to_string(),
+                created_at: 1000,
+            },
+        )
+        .await
+        .unwrap();
 
-        RecordingRepo::finish(&db, "rec_002", FinishRecordingParams {
-            end_time: 21000,
-            duration_ms: 20000,
-            file_size: 1024 * 1024,
-            status: "completed".to_string(),
-        }).await.unwrap();
+        RecordingRepo::finish(
+            &db,
+            "rec_002",
+            FinishRecordingParams {
+                end_time: 21000,
+                duration_ms: 20000,
+                file_size: 1024 * 1024,
+                status: "completed".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
-        let rec = RecordingRepo::find_by_id(&db, "rec_002").await.unwrap().unwrap();
+        let rec = RecordingRepo::find_by_id(&db, "rec_002")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(rec.status, "completed");
         assert_eq!(rec.end_time, Some(21000));
         assert_eq!(rec.duration_ms, Some(20000));
@@ -273,31 +397,46 @@ mod tests {
     async fn test_link_and_list_events() {
         let db = init_test_db().await.unwrap();
 
-        RecordingRepo::create(&db, CreateRecordingParams {
-            recording_id: "rec_003".to_string(),
-            camera_id: "cam_test".to_string(),
-            file_path: "test.mp4".to_string(),
-            start_time: 1000,
-            codec: "h264".to_string(),
-            created_at: 1000,
-        }).await.unwrap();
+        RecordingRepo::create(
+            &db,
+            CreateRecordingParams {
+                recording_id: "rec_003".to_string(),
+                camera_id: "cam_test".to_string(),
+                file_path: "test.mp4".to_string(),
+                start_time: 1000,
+                codec: "h264".to_string(),
+                created_at: 1000,
+            },
+        )
+        .await
+        .unwrap();
 
         // 关联两个事件
-        RecordingRepo::link_event(&db, LinkEventParams {
-            recording_id: "rec_003".to_string(),
-            event_type: "alarm".to_string(),
-            event_id: "evt_a1".to_string(),
-            event_time: 5000,
-            offset_ms: 4000,
-        }).await.unwrap();
+        RecordingRepo::link_event(
+            &db,
+            LinkEventParams {
+                recording_id: "rec_003".to_string(),
+                event_type: "alarm".to_string(),
+                event_id: "evt_a1".to_string(),
+                event_time: 5000,
+                offset_ms: 4000,
+            },
+        )
+        .await
+        .unwrap();
 
-        RecordingRepo::link_event(&db, LinkEventParams {
-            recording_id: "rec_003".to_string(),
-            event_type: "recognition".to_string(),
-            event_id: "evt_r1".to_string(),
-            event_time: 8000,
-            offset_ms: 7000,
-        }).await.unwrap();
+        RecordingRepo::link_event(
+            &db,
+            LinkEventParams {
+                recording_id: "rec_003".to_string(),
+                event_type: "recognition".to_string(),
+                event_id: "evt_r1".to_string(),
+                event_time: 8000,
+                offset_ms: 7000,
+            },
+        )
+        .await
+        .unwrap();
 
         let events = RecordingRepo::list_events(&db, "rec_003").await.unwrap();
         assert_eq!(events.len(), 2);
@@ -309,31 +448,45 @@ mod tests {
     async fn test_find_by_event() {
         let db = init_test_db().await.unwrap();
 
-        RecordingRepo::create(&db, CreateRecordingParams {
-            recording_id: "rec_004".to_string(),
-            camera_id: "cam_test".to_string(),
-            file_path: "test.mp4".to_string(),
-            start_time: 1000,
-            codec: "h264".to_string(),
-            created_at: 1000,
-        }).await.unwrap();
+        RecordingRepo::create(
+            &db,
+            CreateRecordingParams {
+                recording_id: "rec_004".to_string(),
+                camera_id: "cam_test".to_string(),
+                file_path: "test.mp4".to_string(),
+                start_time: 1000,
+                codec: "h264".to_string(),
+                created_at: 1000,
+            },
+        )
+        .await
+        .unwrap();
 
-        RecordingRepo::link_event(&db, LinkEventParams {
-            recording_id: "rec_004".to_string(),
-            event_type: "alarm".to_string(),
-            event_id: "evt_find_me".to_string(),
-            event_time: 5000,
-            offset_ms: 4000,
-        }).await.unwrap();
+        RecordingRepo::link_event(
+            &db,
+            LinkEventParams {
+                recording_id: "rec_004".to_string(),
+                event_type: "alarm".to_string(),
+                event_id: "evt_find_me".to_string(),
+                event_time: 5000,
+                offset_ms: 4000,
+            },
+        )
+        .await
+        .unwrap();
 
-        let result = RecordingRepo::find_by_event(&db, "alarm", "evt_find_me").await.unwrap();
+        let result = RecordingRepo::find_by_event(&db, "alarm", "evt_find_me")
+            .await
+            .unwrap();
         assert!(result.is_some());
         let (rec, evt) = result.unwrap();
         assert_eq!(rec.recording_id, "rec_004");
         assert_eq!(evt.offset_ms, 4000);
 
         // 不存在的事件
-        let none = RecordingRepo::find_by_event(&db, "alarm", "not_exist").await.unwrap();
+        let none = RecordingRepo::find_by_event(&db, "alarm", "not_exist")
+            .await
+            .unwrap();
         assert!(none.is_none());
     }
 
@@ -341,22 +494,32 @@ mod tests {
     async fn test_delete_cascades_events() {
         let db = init_test_db().await.unwrap();
 
-        RecordingRepo::create(&db, CreateRecordingParams {
-            recording_id: "rec_del".to_string(),
-            camera_id: "cam_test".to_string(),
-            file_path: "test.mp4".to_string(),
-            start_time: 1000,
-            codec: "h264".to_string(),
-            created_at: 1000,
-        }).await.unwrap();
+        RecordingRepo::create(
+            &db,
+            CreateRecordingParams {
+                recording_id: "rec_del".to_string(),
+                camera_id: "cam_test".to_string(),
+                file_path: "test.mp4".to_string(),
+                start_time: 1000,
+                codec: "h264".to_string(),
+                created_at: 1000,
+            },
+        )
+        .await
+        .unwrap();
 
-        RecordingRepo::link_event(&db, LinkEventParams {
-            recording_id: "rec_del".to_string(),
-            event_type: "alarm".to_string(),
-            event_id: "evt_del".to_string(),
-            event_time: 5000,
-            offset_ms: 4000,
-        }).await.unwrap();
+        RecordingRepo::link_event(
+            &db,
+            LinkEventParams {
+                recording_id: "rec_del".to_string(),
+                event_type: "alarm".to_string(),
+                event_id: "evt_del".to_string(),
+                event_time: 5000,
+                offset_ms: 4000,
+            },
+        )
+        .await
+        .unwrap();
 
         let deleted = RecordingRepo::delete_by_id(&db, "rec_del").await.unwrap();
         assert!(deleted);
@@ -373,36 +536,58 @@ mod tests {
         let db = init_test_db().await.unwrap();
 
         // 创建一个旧录像（已完成）
-        RecordingRepo::create(&db, CreateRecordingParams {
-            recording_id: "rec_old".to_string(),
-            camera_id: "cam_test".to_string(),
-            file_path: "old.mp4".to_string(),
-            start_time: 1000,
-            codec: "h264".to_string(),
-            created_at: 1000,
-        }).await.unwrap();
-        RecordingRepo::finish(&db, "rec_old", FinishRecordingParams {
-            end_time: 21000,
-            duration_ms: 20000,
-            file_size: 1024,
-            status: "completed".to_string(),
-        }).await.unwrap();
+        RecordingRepo::create(
+            &db,
+            CreateRecordingParams {
+                recording_id: "rec_old".to_string(),
+                camera_id: "cam_test".to_string(),
+                file_path: "old.mp4".to_string(),
+                start_time: 1000,
+                codec: "h264".to_string(),
+                created_at: 1000,
+            },
+        )
+        .await
+        .unwrap();
+        RecordingRepo::finish(
+            &db,
+            "rec_old",
+            FinishRecordingParams {
+                end_time: 21000,
+                duration_ms: 20000,
+                file_size: 1024,
+                status: "completed".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
         // 创建一个新录像（已完成）
-        RecordingRepo::create(&db, CreateRecordingParams {
-            recording_id: "rec_new".to_string(),
-            camera_id: "cam_test".to_string(),
-            file_path: "new.mp4".to_string(),
-            start_time: 99999000,
-            codec: "h264".to_string(),
-            created_at: 99999000,
-        }).await.unwrap();
-        RecordingRepo::finish(&db, "rec_new", FinishRecordingParams {
-            end_time: 100019000,
-            duration_ms: 20000,
-            file_size: 1024,
-            status: "completed".to_string(),
-        }).await.unwrap();
+        RecordingRepo::create(
+            &db,
+            CreateRecordingParams {
+                recording_id: "rec_new".to_string(),
+                camera_id: "cam_test".to_string(),
+                file_path: "new.mp4".to_string(),
+                start_time: 99999000,
+                codec: "h264".to_string(),
+                created_at: 99999000,
+            },
+        )
+        .await
+        .unwrap();
+        RecordingRepo::finish(
+            &db,
+            "rec_new",
+            FinishRecordingParams {
+                end_time: 100019000,
+                duration_ms: 20000,
+                file_size: 1024,
+                status: "completed".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
         // cutoff 在两者之间
         let expired = RecordingRepo::find_expired(&db, 50000, 100).await.unwrap();
@@ -414,20 +599,118 @@ mod tests {
     async fn test_find_active_by_camera() {
         let db = init_test_db().await.unwrap();
 
-        RecordingRepo::create(&db, CreateRecordingParams {
-            recording_id: "rec_active".to_string(),
-            camera_id: "cam_active".to_string(),
-            file_path: "active.mp4".to_string(),
-            start_time: 1000,
-            codec: "h264".to_string(),
-            created_at: 1000,
-        }).await.unwrap();
+        RecordingRepo::create(
+            &db,
+            CreateRecordingParams {
+                recording_id: "rec_active".to_string(),
+                camera_id: "cam_active".to_string(),
+                file_path: "active.mp4".to_string(),
+                start_time: 1000,
+                codec: "h264".to_string(),
+                created_at: 1000,
+            },
+        )
+        .await
+        .unwrap();
 
-        let active = RecordingRepo::find_active_by_camera(&db, "cam_active").await.unwrap();
+        let active = RecordingRepo::find_active_by_camera(&db, "cam_active")
+            .await
+            .unwrap();
         assert!(active.is_some());
         assert_eq!(active.unwrap().recording_id, "rec_active");
 
-        let none = RecordingRepo::find_active_by_camera(&db, "cam_other").await.unwrap();
+        let none = RecordingRepo::find_active_by_camera(&db, "cam_other")
+            .await
+            .unwrap();
         assert!(none.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_persist_finished_with_events() {
+        let db = init_test_db().await.unwrap();
+
+        let record = PersistFinishedParams {
+            recording_id: "rec_fin_001".to_string(),
+            camera_id: "cam_persist".to_string(),
+            file_path: "recordings/cam_persist/2025-07-15/083052_rec_fin_0.mp4".to_string(),
+            start_time_ms: 1752568252000,
+            end_time_ms: 1752568272000,
+            file_size: 2_500_000,
+            codec: "h264".to_string(),
+            status: "completed".to_string(),
+            created_at_ms: 1752568273000,
+            events: vec![
+                PersistEventParams {
+                    event_type: "alarm".to_string(),
+                    event_id: "evt_1".to_string(),
+                    event_time_ms: 1752568260000,
+                    offset_ms: 8000,
+                },
+                PersistEventParams {
+                    event_type: "recognition".to_string(),
+                    event_id: "evt_2".to_string(),
+                    event_time_ms: 1752568269000,
+                    offset_ms: 17000,
+                },
+            ],
+        };
+
+        let saved = RecordingRepo::persist_finished(&db, record).await.unwrap();
+        assert_eq!(saved.recording_id, "rec_fin_001");
+        assert_eq!(saved.status, "completed");
+        // done: duration 应由 end - start 推导
+        assert_eq!(saved.duration_ms, Some(20_000));
+        assert_eq!(saved.file_size, Some(2_500_000));
+
+        // 两个事件关联必须一并写入
+        let events = RecordingRepo::list_events(&db, "rec_fin_001")
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_id, "evt_1");
+        assert_eq!(events[0].offset_ms, 8000);
+        assert_eq!(events[1].event_id, "evt_2");
+        assert_eq!(events[1].offset_ms, 17000);
+
+        // 通过事件反查应能命中
+        let found = RecordingRepo::find_by_event(&db, "alarm", "evt_1")
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().0.recording_id, "rec_fin_001");
+    }
+
+    #[tokio::test]
+    async fn test_persist_finished_rolls_back_on_duplicate() {
+        let db = init_test_db().await.unwrap();
+
+        let make = |id: &str| PersistFinishedParams {
+            recording_id: id.to_string(),
+            camera_id: "cam_dup".to_string(),
+            file_path: "dup.mp4".to_string(),
+            start_time_ms: 1000,
+            end_time_ms: 2000,
+            file_size: 100,
+            codec: "h264".to_string(),
+            status: "completed".to_string(),
+            created_at_ms: 2000,
+            events: vec![PersistEventParams {
+                event_type: "alarm".to_string(),
+                event_id: "evt_dup".to_string(),
+                event_time_ms: 1500,
+                offset_ms: 500,
+            }],
+        };
+
+        RecordingRepo::persist_finished(&db, make("rec_dup"))
+            .await
+            .unwrap();
+        // 同一 recording_id 再次写入应失败（UNIQUE 约束）
+        let second = RecordingRepo::persist_finished(&db, make("rec_dup")).await;
+        assert!(second.is_err(), "重复 recording_id 应报错");
+
+        // 事务回滚：事件不应重复
+        let events = RecordingRepo::list_events(&db, "rec_dup").await.unwrap();
+        assert_eq!(events.len(), 1, "失败事务不得残留额外事件行");
     }
 }

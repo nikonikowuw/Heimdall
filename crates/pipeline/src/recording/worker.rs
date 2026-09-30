@@ -605,10 +605,7 @@ fn monotonic_ms() -> u64 {
     use std::sync::OnceLock;
     use std::time::Instant;
     static START: OnceLock<Instant> = OnceLock::new();
-    START
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_millis() as u64
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 #[cfg(test)]
@@ -629,7 +626,10 @@ mod tests {
         .unwrap();
 
         let s = path.to_string_lossy();
-        assert!(s.starts_with("/data/recordings/cam-01/2025-07-15/"), "实际: {s}");
+        assert!(
+            s.starts_with("/data/recordings/cam-01/2025-07-15/"),
+            "实际: {s}"
+        );
         assert!(s.ends_with("_abcdef12.mp4"), "实际: {s}");
     }
 
