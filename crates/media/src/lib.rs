@@ -15,6 +15,7 @@ pub mod image_convert;
 pub mod media_ingestor;
 #[cfg(all(target_os = "linux", feature = "rga"))]
 pub mod motion_thumb;
+pub mod pre_capture_ring;
 pub mod probe;
 pub mod retina_ingest;
 pub mod rga;
