@@ -29,6 +29,7 @@ async fn setup_test_camera_and_algo(db: &db::DatabaseConnection) {
         last_fps: sea_orm::ActiveValue::Set(25.0),
         gb28181_device_id: sea_orm::ActiveValue::Set(None),
         gb28181_channel_id: sea_orm::ActiveValue::Set(None),
+        recording_config: sea_orm::ActiveValue::Set(String::new()),
         created_at: sea_orm::ActiveValue::Set(now),
         updated_at: sea_orm::ActiveValue::Set(now),
     };

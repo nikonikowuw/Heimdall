@@ -236,6 +236,8 @@ pub struct AppState {
     pub gb28181_sip_server: Arc<media::gb28181::Gb28181SipServer>,
     /// 人脸识别对账队列的投递观测计数器（与 `CaptureDispatchService` 共享同一份）
     pub recognition_queue_metrics: Arc<crate::capture_service::RecognitionQueueMetrics>,
+    /// 事件录像调度服务（管理每通道录像 Worker 与落库桥接）
+    pub recording_service: Arc<crate::recording_service::RecordingDispatchService>,
 }
 
 impl AppState {
@@ -279,6 +281,15 @@ impl AppState {
         let gb28181_sip_server =
             media::gb28181::Gb28181SipServer::new(types::SysGb28181Config::default(), event_tx);
 
+        // 录像服务在装配期即建立，存储根取证据根（Worker 自建 `recordings/` 子目录）
+        let recording_service = Arc::new(crate::recording_service::RecordingDispatchService::new(
+            db.clone(),
+            pipeline.clone(),
+            stream_hub.clone(),
+            shutdown_tx.clone(),
+            pipeline.base_evidence_dir().to_path_buf(),
+        ));
+
         Self {
             db,
             pipeline,
@@ -306,6 +317,7 @@ impl AppState {
             recognition_queue_metrics: Arc::new(
                 crate::capture_service::RecognitionQueueMetrics::default(),
             ),
+            recording_service,
         }
     }
 

@@ -24,6 +24,8 @@ pub fn router() -> Router<AppState> {
 
 /// 实体转领域模型 DTO
 fn model_to_camera_dto(m: db::entity::camera::Model) -> Camera {
+    // 录制配置为 JSON 文本；解析失败或为空视为未配置（默认关闭）
+    let recording_config = parse_recording_config(&m.recording_config);
     Camera {
         id: m.id,
         camera_id: m.camera_id,
@@ -44,9 +46,25 @@ fn model_to_camera_dto(m: db::entity::camera::Model) -> Camera {
         last_fps: m.last_fps,
         gb28181_device_id: m.gb28181_device_id,
         gb28181_channel_id: m.gb28181_channel_id,
+        recording_config,
         created_at: m.created_at.timestamp_millis(),
         updated_at: m.updated_at.timestamp_millis(),
     }
+}
+
+/// 解析持久化的录像配置文本；空串或非法 JSON 视为未配置。
+pub fn parse_recording_config(raw: &str) -> Option<types::CameraRecordingConfig> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    serde_json::from_str::<types::CameraRecordingConfig>(trimmed)
+        .map(|config| config.normalized())
+        .map_err(|error| {
+            tracing::warn!(raw = %trimmed, %error, "摄像头录像配置解析失败，按未配置处理");
+            error
+        })
+        .ok()
 }
 
 /// 获取所有摄像头视频源列表
@@ -166,6 +184,7 @@ async fn update_camera(
     }
     let mut stream_mode_changed = false;
     let mut sub_rtsp_changed = false;
+    let mut recording_config_changed = false;
 
     if let Some(sub_url) = req.sub_rtsp_url {
         let trimmed = sub_url.trim();
@@ -188,6 +207,16 @@ async fn update_camera(
     }
     if let Some(ch_id) = req.gb28181_channel_id {
         active.gb28181_channel_id = Set(Some(ch_id));
+    }
+    if let Some(recording) = req.recording_config {
+        // 归一化后序列化落库；空串代表未配置
+        let normalized = recording.normalized();
+        let json = serde_json::to_string(&normalized)
+            .map_err(|error| ApiError::BadRequest(format!("录像配置序列化失败: {error}")))?;
+        if json != camera.recording_config {
+            recording_config_changed = true;
+        }
+        active.recording_config = Set(json);
     }
     active.updated_at = Set(chrono::Utc::now());
 
@@ -217,7 +246,63 @@ async fn update_camera(
         }
     }
 
+    // 录像配置或主码流地址变更时同步录像 Worker（幂等重启，异步不阻塞响应）
+    if recording_config_changed || rtsp_url_changed || sub_rtsp_changed {
+        sync_recording_worker(&state, &camera_id).await;
+    }
+
     Ok(ApiResponse::success(model_to_camera_dto(updated)))
+}
+
+/// 按当前持久化配置启动/停止某通道的录像 Worker（幂等）。
+///
+/// 单通道失败仅告警：录像为按需能力，不得反向阻断摄像头配置变更。
+pub(crate) async fn sync_recording_worker(state: &AppState, camera_id: &str) {
+    let camera = match db::CameraRepo::find_by_camera_id(&state.db, camera_id).await {
+        Ok(Some(camera)) => camera,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(camera_id = %camera_id, %error, "读取摄像头配置失败，跳过录像同步");
+            return;
+        }
+    };
+
+    let config = parse_recording_config(&camera.recording_config)
+        .map(|parsed| pipeline::recording::RecordingConfig {
+            mode: if parsed.enabled {
+                pipeline::recording::RecordingMode::EventOnly
+            } else {
+                pipeline::recording::RecordingMode::Disabled
+            },
+            pre_capture_seconds: parsed.pre_capture_seconds,
+            post_capture_seconds: parsed.post_capture_seconds,
+            max_file_seconds: parsed.max_file_seconds,
+            retention_days: parsed.retention_days,
+        })
+        .unwrap_or_default();
+
+    if !config.is_enabled() {
+        state.recording_service.stop_camera(camera_id).await;
+        return;
+    }
+
+    // 录像永远录主码流（高清证据）
+    if let Err(error) = state
+        .recording_service
+        .start_camera(
+            camera_id,
+            &camera.rtsp_url,
+            types::TransportPolicy::Auto,
+            config,
+        )
+        .await
+    {
+        tracing::error!(
+            camera_id = %camera_id,
+            %error,
+            "录像 Worker 同步失败，本通道录像不可用"
+        );
+    }
 }
 
 /// 删除摄像头视频源
@@ -247,6 +332,8 @@ async fn delete_camera(
         .set_camera_rules(&camera_id, Vec::new())
         .await;
     state.pipeline.set_ai_active(&camera_id, false).await;
+    // 录像 Worker 必须随通道删除而停机，避免持有已失效的拉流引用
+    state.recording_service.stop_camera(&camera_id).await;
     state.stream_hub.remove_session(&camera_id).await;
 
     // 任务及其主算法实例不能随着摄像头删除而成为孤儿记录。
@@ -436,6 +523,7 @@ mod tests {
             last_fps: 25.0,
             gb28181_device_id: None,
             gb28181_channel_id: None,
+            recording_config: String::new(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -656,6 +744,7 @@ mod tests {
             last_fps: sea_orm::ActiveValue::Set(25.0),
             gb28181_device_id: sea_orm::ActiveValue::Set(None),
             gb28181_channel_id: sea_orm::ActiveValue::Set(None),
+            recording_config: sea_orm::ActiveValue::Set(String::new()),
             created_at: sea_orm::ActiveValue::Set(chrono::Utc::now()),
             updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now()),
         };

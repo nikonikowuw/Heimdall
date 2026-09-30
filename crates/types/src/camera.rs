@@ -266,8 +266,67 @@ pub struct Camera {
     pub last_fps: f64,
     pub gb28181_device_id: Option<String>,
     pub gb28181_channel_id: Option<String>,
+    /// 通道级录像配置。`None` = 未配置（默认关闭录像）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_config: Option<CameraRecordingConfig>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// 通道级事件录像配置
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraRecordingConfig {
+    /// 是否启用事件录像
+    pub enabled: bool,
+    /// 事件前录制秒数（5~30，默认 10）
+    #[serde(default = "default_recording_pre_seconds")]
+    pub pre_capture_seconds: u32,
+    /// 事件后录制秒数（5~30，默认 10）
+    #[serde(default = "default_recording_post_seconds")]
+    pub post_capture_seconds: u32,
+    /// 单文件最大时长秒数（默认 300）
+    #[serde(default = "default_recording_max_file_seconds")]
+    pub max_file_seconds: u32,
+    /// TTL 保留天数（默认 7）
+    #[serde(default = "default_recording_retention_days")]
+    pub retention_days: u32,
+}
+
+fn default_recording_pre_seconds() -> u32 {
+    10
+}
+fn default_recording_post_seconds() -> u32 {
+    10
+}
+fn default_recording_max_file_seconds() -> u32 {
+    300
+}
+fn default_recording_retention_days() -> u32 {
+    7
+}
+
+impl Default for CameraRecordingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pre_capture_seconds: default_recording_pre_seconds(),
+            post_capture_seconds: default_recording_post_seconds(),
+            max_file_seconds: default_recording_max_file_seconds(),
+            retention_days: default_recording_retention_days(),
+        }
+    }
+}
+
+impl CameraRecordingConfig {
+    /// 钳位所有数值到合法范围，避免前端传入越界参数
+    pub fn normalized(mut self) -> Self {
+        self.pre_capture_seconds = self.pre_capture_seconds.clamp(5, 30);
+        self.post_capture_seconds = self.post_capture_seconds.clamp(5, 30);
+        self.max_file_seconds = self.max_file_seconds.clamp(30, 3600);
+        self.retention_days = self.retention_days.clamp(1, 365);
+        self
+    }
 }
 
 impl Camera {
@@ -310,6 +369,9 @@ pub struct UpdateCameraRequest {
     pub transport_policy: Option<TransportPolicy>,
     pub gb28181_device_id: Option<String>,
     pub gb28181_channel_id: Option<String>,
+    /// 通道级录像配置。`None` = 不修改；`Some` = 覆盖（可含 `enabled: false` 关闭）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_config: Option<CameraRecordingConfig>,
 }
 
 /// 探活结果结构体
@@ -428,6 +490,7 @@ mod tests {
             last_fps: 25.0,
             gb28181_device_id: None,
             gb28181_channel_id: None,
+            recording_config: None,
             created_at: 0,
             updated_at: 0,
         };

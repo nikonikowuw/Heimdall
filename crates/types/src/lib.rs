@@ -18,9 +18,9 @@ pub use auth::{
     InitializeRequest, LoginRequest, LoginResponse,
 };
 pub use camera::{
-    is_effective_main_stream, Camera, CameraProbeEvent, CameraProtocol, CameraTelemetryEvent,
-    CodecType, CreateCameraRequest, EncodedPacket, ProbeResult, ProbeStatus, StreamKey, StreamMode,
-    StreamTag, StreamType, TransportPolicy, UpdateCameraRequest,
+    is_effective_main_stream, Camera, CameraProbeEvent, CameraProtocol, CameraRecordingConfig,
+    CameraTelemetryEvent, CodecType, CreateCameraRequest, EncodedPacket, ProbeResult, ProbeStatus,
+    StreamKey, StreamMode, StreamTag, StreamType, TransportPolicy, UpdateCameraRequest,
 };
 pub use detection::{
     bytes_to_floats, megvii_calibrate_cosine, AlgorithmKind, BoundingBox, CameraTracksPayload,

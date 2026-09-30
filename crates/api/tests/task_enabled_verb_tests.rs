@@ -65,6 +65,7 @@ async fn insert_camera(state: &api::AppState, camera_id: &str, rtsp_url: &str) {
             last_fps: Set(25.0),
             gb28181_device_id: Set(None),
             gb28181_channel_id: Set(None),
+            recording_config: Set(String::new()),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
         },

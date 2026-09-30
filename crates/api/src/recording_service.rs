@@ -58,19 +58,36 @@ impl std::fmt::Debug for RecordingDispatchService {
 }
 
 impl RecordingDispatchService {
-    /// 从 `AppState` 构造。`data_dir` 通常为证据目录的父级或专用录像根。
-    pub fn from_state(state: &AppState, data_dir: impl Into<PathBuf>) -> Self {
+    /// 显式构造（`AppState` 装配期间使用，此时 `AppState` 尚未成型）。
+    pub fn new(
+        db: sea_orm::DatabaseConnection,
+        pipeline: Arc<pipeline::PipelineManager>,
+        stream_hub: Arc<media::StreamHub>,
+        shutdown_tx: broadcast::Sender<()>,
+        data_dir: impl Into<PathBuf>,
+    ) -> Self {
         let (persist_tx, persist_rx) = mpsc::channel(PERSIST_CHANNEL_CAPACITY);
         Self {
-            db: state.db.clone(),
-            pipeline: state.pipeline.clone(),
-            stream_hub: state.stream_hub.clone(),
+            db,
+            pipeline,
+            stream_hub,
             data_dir: data_dir.into(),
-            shutdown_tx: state.shutdown_tx.clone(),
+            shutdown_tx,
             workers: Arc::new(RwLock::new(HashMap::new())),
             persist_tx,
             persist_rx: Arc::new(tokio::sync::Mutex::new(Some(persist_rx))),
         }
+    }
+
+    /// 从 `AppState` 构造。
+    pub fn from_state(state: &AppState) -> Self {
+        Self::new(
+            state.db.clone(),
+            state.pipeline.clone(),
+            state.stream_hub.clone(),
+            state.shutdown_tx.clone(),
+            state.recording_storage_root(),
+        )
     }
 
     /// 录像根目录
@@ -214,6 +231,55 @@ impl RecordingDispatchService {
         self.workers.read().await.len()
     }
 
+    /// 冷启动恢复：枚举数据库中启用录像的通道并启动 Worker。
+    ///
+    /// 单通道失败仅告警，不阻断其余通道与服务启动（与任务恢复同一容错口径）。
+    pub async fn recover_enabled_cameras(self: &Arc<Self>) -> (usize, usize) {
+        let cameras = match db::CameraRepo::list_all(&self.db).await {
+            Ok(list) => list,
+            Err(error) => {
+                tracing::error!(%error, "读取摄像头列表失败，录像冷启动恢复跳过");
+                return (0, 0);
+            }
+        };
+
+        let mut started = 0usize;
+        let mut failed = 0usize;
+        for camera in cameras {
+            let Some(config) = parse_camera_recording_config(&camera.recording_config) else {
+                continue;
+            };
+            if !config.is_enabled() {
+                continue;
+            }
+
+            match self
+                .start_camera(
+                    &camera.camera_id,
+                    &camera.rtsp_url,
+                    types::TransportPolicy::Auto,
+                    config,
+                )
+                .await
+            {
+                Ok(()) => started += 1,
+                Err(error) => {
+                    failed += 1;
+                    tracing::error!(
+                        camera = %camera.camera_id,
+                        %error,
+                        "录像 Worker 冷启动恢复失败，已跳过本通道"
+                    );
+                }
+            }
+        }
+
+        if started > 0 || failed > 0 {
+            tracing::info!(started, failed, "录像冷启动恢复完成");
+        }
+        (started, failed)
+    }
+
     /// 启动落库任务（Tokio 侧）。应在 App 启动时调用一次。
     pub fn start_persist_worker(self: Arc<Self>) -> Option<tokio::task::JoinHandle<()>> {
         let rx = self
@@ -246,6 +312,35 @@ impl RecordingDispatchService {
             tracing::info!("录像落库工作线程已退出");
         }))
     }
+}
+
+/// 解析摄像头实体中的录像配置文本；空串或非法 JSON 视为未配置。
+pub(crate) fn parse_camera_recording_config(
+    raw: &str,
+) -> Option<pipeline::recording::RecordingConfig> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed = serde_json::from_str::<types::CameraRecordingConfig>(trimmed)
+        .map(|config| config.normalized())
+        .map_err(|error| {
+            tracing::warn!(raw = %trimmed, %error, "摄像头录像配置解析失败，按未配置处理");
+            error
+        })
+        .ok()?;
+
+    Some(pipeline::recording::RecordingConfig {
+        mode: if parsed.enabled {
+            pipeline::recording::RecordingMode::EventOnly
+        } else {
+            pipeline::recording::RecordingMode::Disabled
+        },
+        pre_capture_seconds: parsed.pre_capture_seconds,
+        post_capture_seconds: parsed.post_capture_seconds,
+        max_file_seconds: parsed.max_file_seconds,
+        retention_days: parsed.retention_days,
+    })
 }
 
 /// 转换 Pipeline 事件为录像触发信号。非 Alarm/Capture 事件返回 `None`。
