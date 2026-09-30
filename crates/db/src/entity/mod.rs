@@ -12,5 +12,7 @@ pub mod operational_log;
 pub mod oplog;
 pub mod personnel;
 pub mod recognition;
+pub mod recording;
+pub mod recording_event;
 pub mod sys_gb28181_config;
 pub mod task;
