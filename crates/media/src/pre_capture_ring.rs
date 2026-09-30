@@ -85,19 +85,15 @@ impl PreCaptureRingBuffer {
         self.prune();
     }
 
-    /// 导出缓冲区中从最近的前置关键帧开始的全部数据。
+    /// 导出缓冲区中从前置关键帧开始的全部有效数据。
     ///
     /// 事件触发时调用。返回的切片首包保证为关键帧，可直接送入 fMP4 Writer。
-    /// 调用后缓冲区被清空。
+    /// 选择**最早**的可用关键帧以最大化前置覆盖；调用后缓冲区被清空。
     ///
     /// 如果缓冲区无关键帧，返回空 Vec。
     pub fn drain_from_keyframe(&mut self) -> Vec<Arc<EncodedPacket>> {
-        // 找到最后一个（最新的）关键帧之前的最近一个关键帧位置
-        // 目的：保证导出数据以关键帧开头
-        let keyframe_idx = self
-            .queue
-            .iter()
-            .rposition(|pkt| pkt.is_keyframe);
+        // 找到最早的关键帧：前置覆盖最大化（prune 保证窗口内的关键帧有效）
+        let keyframe_idx = self.queue.iter().position(|pkt| pkt.is_keyframe);
 
         let Some(idx) = keyframe_idx else {
             // 没有关键帧，清空并返回空
@@ -231,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_drain_starts_from_last_keyframe() {
+    fn test_drain_starts_from_earliest_keyframe() {
         let mut rb = PreCaptureRingBuffer::new(PreCaptureConfig::default());
 
         // GOP 1
@@ -245,12 +241,11 @@ mod tests {
 
         let drained = rb.drain_from_keyframe();
 
-        // 应从 GOP 2 的关键帧开始（最近的关键帧）
-        assert_eq!(drained.len(), 3);
+        // 应从最早的关键帧开始，最大化前置覆盖
+        assert_eq!(drained.len(), 5);
         assert!(drained[0].is_keyframe);
-        assert_eq!(drained[0].pts_ms, 2000);
-        assert_eq!(drained[1].pts_ms, 2033);
-        assert_eq!(drained[2].pts_ms, 2066);
+        assert_eq!(drained[0].pts_ms, 1000);
+        assert_eq!(drained[4].pts_ms, 2066);
     }
 
     #[test]

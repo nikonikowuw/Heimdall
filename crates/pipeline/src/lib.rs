@@ -10,6 +10,7 @@ pub mod motion_gate;
 pub mod motion_gate_worker;
 pub mod op_log;
 pub mod pump;
+pub mod recording;
 pub mod roi;
 pub mod rules;
 pub mod snapshot;

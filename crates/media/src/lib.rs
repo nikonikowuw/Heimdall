@@ -35,9 +35,10 @@ pub use decoder::{DecodeDeliveryPolicy, VideoDecoder};
 pub use decoders::VideoToolboxDecoder;
 pub use decoders::{create_decoder, MockDecoder};
 pub use dispatcher::{
-    ConsumerHealthSnapshot, ConsumerId, ConsumerKind, DispatcherError, DispatcherMetrics,
-    DispatcherMetricsSnapshot, GopSnapshot, KeyframeCache, KeyframeCacheStore, MediaSubscription,
-    PacketDispatcher, PreviewDistributionConfig, StreamHealthSnapshot, StreamItem,
+    BlockingRecv, ConsumerHealthSnapshot, ConsumerId, ConsumerKind, DispatcherError,
+    DispatcherMetrics, DispatcherMetricsSnapshot, GopSnapshot, KeyframeCache, KeyframeCacheStore,
+    MediaSubscription, PacketDispatcher, PreviewDistributionConfig, StreamHealthSnapshot,
+    StreamItem,
 };
 pub use dmabuf_sync::{DmaBufSyncDirection, DmaBufSyncGuard};
 pub use encoders::{

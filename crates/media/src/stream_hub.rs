@@ -8,7 +8,7 @@ use types::TransportPolicy;
 
 use crate::clock::StreamClockAnchor;
 use crate::dispatcher::{
-    ConsumerId, ConsumerKind, DispatcherError, KeyframeCacheStore, MediaSubscription,
+    BlockingRecv, ConsumerId, ConsumerKind, DispatcherError, KeyframeCacheStore, MediaSubscription,
     PacketDispatcher, PreviewDistributionConfig, StreamItem,
 };
 use crate::error::MediaError;
@@ -195,8 +195,31 @@ impl StreamSubscription {
         self.inner.kind()
     }
 
+    /// 测试辅助：从已有 `MediaSubscription` 包装出订阅（不计数 viewer）。
+    ///
+    /// 仅用于集成测试中绕过物理流建立流程；生产路径必须走 `StreamHub::subscribe`。
+    #[doc(hidden)]
+    pub fn from_media_for_test(
+        inner: MediaSubscription,
+        session: Arc<CameraStreamSession>,
+    ) -> Self {
+        Self {
+            inner,
+            session,
+            counts_viewer: false,
+        }
+    }
+
     pub async fn recv(&self) -> Option<StreamItem> {
         self.inner.recv().await
+    }
+
+    /// 同步阻塞接收（OS 专用线程适用，如录像 Worker）。
+    ///
+    /// 返回值区分超时与关闭，调用方必须仅在 `Closed` 时退出循环。
+    /// 绝不阻塞 Tokio worker —— 仅在明确归属的专用线程内调用。
+    pub fn recv_blocking(&self, timeout: std::time::Duration) -> BlockingRecv {
+        self.inner.mailbox().recv_blocking(timeout)
     }
 }
 
