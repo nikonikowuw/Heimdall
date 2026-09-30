@@ -195,29 +195,48 @@ CREATE INDEX idx_recording_events_recording ON recording_events(recording_id);
 CREATE INDEX idx_recording_events_event ON recording_events(event_type, event_id);
 ```
 
-## EventBus 设计
+## EventBus 设计（已修正）
+
+**实现修正：不新建独立 EventBus，直接复用 `PipelineManager.analysis_event_tx`。**
+
+原设计拟新建 `EventBus` 结构，但实现时发现项目已有等价的基建：
+`PipelineManager::analysis_event_tx` 是 `tokio::sync::broadcast::Sender<PipelineAnalysisEvent>`，
+已广播 `Alarm` / `Capture` 事件，且 `subscribe_analysis_events()` 已对外开放。
+
+新建第二套事件机制会造成：
+- 重复基建，两个事件源需同步维护
+- 未来告警上报（Webhook/MQTT）必须二选一，产生歧义
+
+**正确做法**：给 `PipelineAnalysisEvent` 增加筛选订阅帮助函数，
+`RecordingWorker` 的触发桥接任务通过它接收 `Alarm` / `Capture` 并转换为 `RecordingTrigger`。
 
 ```rust
-pub struct EventSignal {
-    pub event_id: String,
-    pub event_type: EventType,     // Alarm | Recognition
-    pub timestamp_ms: i64,
-    pub camera_id: String,
-}
-
-pub struct EventBus {
-    subscribers: RwLock<Vec<crossbeam::channel::Sender<EventSignal>>>,
-}
-
-impl EventBus {
-    pub fn subscribe(&self) -> crossbeam::channel::Receiver<EventSignal> { ... }
-    pub fn publish(&self, signal: EventSignal) { ... }
+// 桥接：Tokio 侧订阅广播 → std channel → RecordingWorker OS 线程
+async fn bridge_events(
+    mut rx: tokio::sync::broadcast::Receiver<PipelineAnalysisEvent>,
+    tx: std::sync::mpsc::Sender<RecordingTrigger>,
+) {
+    while let Ok(event) = rx.recv().await {
+        let trigger = match event {
+            PipelineAnalysisEvent::Alarm(a) => RecordingTrigger {
+                event_id: a.event_id,
+                event_type: RecordingEventType::Alarm,
+                event_time_ms: a.timestamp,
+            },
+            PipelineAnalysisEvent::Capture(c) => RecordingTrigger {
+                event_id: c.capture_id,
+                event_type: RecordingEventType::Recognition,
+                event_time_ms: c.timestamp,
+            },
+            _ => continue,
+        };
+        // try_send：慢消费者不反压事件广播
+        if tx.send(trigger).is_err() {
+            break; // Worker 已退出
+        }
+    }
 }
 ```
-
-- 使用 `crossbeam::channel::bounded` 而非 `tokio::sync::broadcast`，因为主要消费者（RecordingWorker）在 OS 线程。
-- `publish` 遍历所有 subscriber sender，send 失败（满/断开）静默跳过，不阻塞 Pipeline。
-- 未来 Tokio 侧的订阅者（如 WebhookNotifier）可用小型桥接 task 转发。
 
 ## 存储淘汰集成
 
@@ -239,22 +258,29 @@ impl EventBus {
 App 启动
   │
   ├── 对每个 camera（启用录像的）
-  │     ├── Dispatcher 注册 ConsumerKind::Recording → 获得 mailbox rx
-  │     ├── EventBus.subscribe() → 获得 event rx
+  │     ├── StreamHub.subscribe(ConsumerKind::Recording) → StreamSubscription
+  │     ├── 桥接 task: analysis_event_tx → std mpsc Sender<RecordingTrigger>
   │     ├── std::thread::spawn RecordingWorker
-  │     │     └── 入参: mailbox_rx, event_rx, config, data_dir
-  │     └── 保存 JoinHandle
+  │     │     └── 入参: subscription, trigger_rx, config, data_dir, on_finished
+  │     └── 保存 RecordingWorker 句柄
   │
   ├── Pipeline 运行...
   │
 App 停机
   │
-  ├── Drop mailbox tx + event tx (发送端关闭)
-  ├── RecordingWorker 检测到 channel 断开
-  │     ├── Recording 状态 → 闭合当前文件
-  │     └── 线程退出
-  └── join 所有 RecordingWorker handles
+  ├── RecordingWorker::request_stop()
+  ├── Worker 排空 trigger_rx → 闭合当前录像 → 退出
+  └── Drop 时看护线程有界 join（不阻塞 Tokio）
 ```
+
+### 关键契约（实现中确立）
+
+| 契约 | 说明 |
+|------|------|
+| `recv_blocking` 返回值 | 必须区分 `Item` / `Timeout` / `Closed`，超时不能当作关闭 |
+| 停机顺序 | 先排空 `trigger_rx` 再检查 stop，否则最后一个事件的合并关联丢失 |
+| drain 语义 | `drain_from_keyframe` 取**最早**关键帧，最大化前置覆盖 |
+| 前置缓冲复用 | 文件闭合后前置缓冲重新积累，但当前实现直接复用（不 clear，避免丢失连续数据） |
 
 ## 前端集成
 
