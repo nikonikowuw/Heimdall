@@ -7,6 +7,7 @@ pub mod dmabuf_sync;
 pub mod encoders;
 pub mod error;
 pub mod flv;
+pub mod fmp4;
 pub mod frame_crop;
 pub mod gb28181;
 pub mod gop_queue;
