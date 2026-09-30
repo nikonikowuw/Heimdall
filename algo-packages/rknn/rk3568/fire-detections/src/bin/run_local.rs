@@ -13,21 +13,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::ffi::c_void;
     use std::path::Path;
 
-    use algo_sdk::c_abi::AvAlgoResult;
-    use algo_sdk::emitter::ResultEmitter;
     use algo_sdk::plugin::{AlgoPlugin, InitContext};
-    use algo_sdk::testing::{MockEmitter, MockFrameBuilder};
+    use algo_sdk::testing::{BenchmarkStats, LocalPluginRunner, MockFrameBuilder};
     use fire_smoke_detection::config::InstanceConfig;
     use fire_smoke_detection::plugin::FireSmokeDetector;
-
-    unsafe extern "C" fn on_result_callback(result: *const AvAlgoResult, user_data: *mut c_void) {
-        if !result.is_null() && !user_data.is_null() {
-            // SAFETY: user_data 指向有效 MockEmitter 实例
-            let emitter = unsafe { &mut *(user_data as *mut MockEmitter) };
-            // SAFETY: result 为合法指针
-            emitter.record_c_result(unsafe { &*result });
-        }
-    }
 
     let args: Vec<String> = std::env::args().collect();
     let benchmark = args.iter().any(|a| a == "--benchmark");
@@ -66,12 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         confidence_threshold: threshold,
         ..Default::default()
     };
-    let init_ctx = InitContext {
-        package_root: Path::new("."),
-        platform_id: "linux-rknn",
-        instance_id: "standalone_local",
-        is_self_test: false,
-    };
+    let init_ctx = InitContext::new(Path::new("."), "linux-rknn", "standalone_local", false);
 
     let mut detector = FireSmokeDetector::init(&init_ctx, config)?;
     let mode = if detector.session.is_fallback() {
@@ -81,66 +65,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("[Pipeline] {mode} | RK3568 NPU");
 
-    // 主循环
-    let mut timings = Vec::with_capacity(loops as usize);
+    // 运行推理或 Benchmark
+    let (stats, objects) =
+        LocalPluginRunner::benchmark(&mut detector, mock_frame.as_safe_frame(), loops as usize)?;
 
-    for i in 0..loops {
-        let mut mock_emitter = MockEmitter::new();
-        // SAFETY: on_result_callback 与 mock_emitter 在本作用域有效存活
-        let mut emitter = unsafe {
-            ResultEmitter::from_raw(
-                (i + 1) as u64,
-                Some(on_result_callback),
-                &mut mock_emitter as *mut _ as *mut c_void,
-            )
-        };
-
-        let t0 = std::time::Instant::now();
-        let safe_frame = mock_frame.as_safe_frame();
-        detector.process(safe_frame, &mut emitter)?;
-        timings.push(t0.elapsed().as_secs_f64() * 1000.0);
-
-        if i == 0 {
-            let objects = mock_emitter.detections();
-            println!("[Detection] 检测到 {} 个目标", objects.len());
-            for obj in objects {
-                println!(
-                    "  {} @ ({:.2}, {:.2}, {:.2}, {:.2}) conf={:.3}",
-                    obj.label.unwrap_or("?"),
-                    obj.x,
-                    obj.y,
-                    obj.w,
-                    obj.h,
-                    obj.confidence
-                );
-            }
-
-            // 保存可视化结果
-            let red = image::Rgb([255u8, 60u8, 60u8]);
-            let orange = image::Rgb([255u8, 165u8, 0u8]);
-            let w = rgb_image.width() as f32;
-            let h = rgb_image.height() as f32;
-            for obj in objects {
-                let color = if obj.class_id == 0 { red } else { orange };
-                let x1 = (obj.x * w).round() as i32;
-                let y1 = (obj.y * h).round() as i32;
-                let x2 = ((obj.x + obj.w) * w).round() as i32;
-                let y2 = ((obj.y + obj.h) * h).round() as i32;
-                for t in 0..3 {
-                    draw_rect(&mut rgb_image, x1 - t, y1 - t, x2 + t, y2 + t, color);
-                }
-            }
-            rgb_image.save(&output_path)?;
-            println!("[Visualizer] 结果已保存到 {output_path}");
-        }
+    println!("[Detection] 检测到 {} 个目标", objects.len());
+    for obj in &objects {
+        println!(
+            "  {} @ ({:.2}, {:.2}, {:.2}, {:.2}) conf={:.3}",
+            obj.label.unwrap_or("?"),
+            obj.x,
+            obj.y,
+            obj.w,
+            obj.h,
+            obj.confidence
+        );
     }
 
-    if benchmark && timings.len() > 1 {
-        let stats = compute_stats(&mut timings);
+    // 保存可视化结果
+    let red = image::Rgb([255u8, 60u8, 60u8]);
+    let orange = image::Rgb([255u8, 165u8, 0u8]);
+    let w = rgb_image.width() as f32;
+    let h = rgb_image.height() as f32;
+    for obj in &objects {
+        let color = if obj.class_id == 0 { red } else { orange };
+        let x1 = (obj.x * w).round() as i32;
+        let y1 = (obj.y * h).round() as i32;
+        let x2 = ((obj.x + obj.w) * w).round() as i32;
+        let y2 = ((obj.y + obj.h) * h).round() as i32;
+        for t in 0..3 {
+            draw_rect(&mut rgb_image, x1 - t, y1 - t, x2 + t, y2 + t, color);
+        }
+    }
+    rgb_image.save(&output_path)?;
+    println!("[Visualizer] 结果已保存到 {output_path}");
+
+    if benchmark && loops > 1 {
         println!("\n--- Benchmark ({loops} iterations, mode={mode}) ---");
         println!(
             "  Avg {:.2} ms | P50 {:.2} ms | P99 {:.2} ms | FPS {:.1}",
-            stats.avg, stats.p50, stats.p99, stats.fps
+            stats.avg_ms, stats.p50_ms, stats.p99_ms, stats.fps
         );
     }
 
@@ -179,23 +143,4 @@ fn draw_rect(img: &mut image::RgbImage, x1: i32, y1: i32, x2: i32, y2: i32, colo
         img.put_pixel(x1c, py as u32, color);
         img.put_pixel(x2c, py as u32, color);
     }
-}
-
-#[cfg(target_os = "linux")]
-struct Stats {
-    avg: f64,
-    p50: f64,
-    p99: f64,
-    fps: f64,
-}
-
-#[cfg(target_os = "linux")]
-fn compute_stats(samples: &mut [f64]) -> Stats {
-    samples.sort_unstable_by(|a, b| a.total_cmp(b));
-    let sum: f64 = samples.iter().sum();
-    let avg = sum / samples.len() as f64;
-    let p50 = samples[samples.len() / 2];
-    let p99 = samples[(samples.len() * 99 / 100).min(samples.len() - 1)];
-    let fps = if avg > 0.0 { 1000.0 / avg } else { 0.0 };
-    Stats { avg, p50, p99, fps }
 }

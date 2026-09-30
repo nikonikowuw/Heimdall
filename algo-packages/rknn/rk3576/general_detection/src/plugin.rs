@@ -11,9 +11,9 @@ use crate::config::InstanceConfig;
 use {
     crate::config::ClassMask,
     crate::postprocess::{parse_and_unmap_output, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH},
-    crate::rknn::{RknnRuntime, RknnSession},
     algo_sdk::cv::engine::CvEngine,
     algo_sdk::cv::platforms::rockchip::RgaCvEngine,
+    algo_sdk::rknn::{RknnInferenceOutput, RknnSession, RknnSessionOptions, RKNN_NPU_CORE_0_1},
     std::path::Path,
 };
 
@@ -89,23 +89,11 @@ impl AlgoPlugin for GeneralDetector {
         let env = ctx.load_env();
         config.apply_env(&env);
         let model_path = locate_model_file(ctx.package_root, &env)?;
-        let session = match RknnRuntime::load(ctx.package_root) {
-            Ok(runtime) => {
-                tracing::info!(
-                    model = ?model_path,
-                    "成功加载物理 RKNN 运行时 (librknnrt.so)，启用常驻硬件推理主路径"
-                );
-                RknnSession::new(runtime, &model_path)?
-            }
-            Err(e) => {
-                tracing::warn!(
-                    reason = ?e,
-                    model = ?model_path,
-                    "[debug_cpu_fallback_path] 未检测到物理 librknnrt.so，启用开发调试回退推理路径"
-                );
-                RknnSession::new_fallback(&model_path)?
-            }
-        };
+        let session = RknnSession::open_or_fallback(
+            ctx.package_root,
+            &model_path,
+            RknnSessionOptions::with_core_mask(RKNN_NPU_CORE_0_1),
+        )?;
         let cv_engine = RgaCvEngine::new();
         let mask = ClassMask::from_classes(&config.target_classes);
 

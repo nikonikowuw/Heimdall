@@ -21,12 +21,10 @@ mod linux_run {
     use std::fs;
     use std::path::Path;
 
-    use algo_sdk::c_abi::AvAlgoResult;
     use algo_sdk::cv::engine::CvEngine;
-    use algo_sdk::emitter::ResultEmitter;
     use algo_sdk::math::NormBox;
     use algo_sdk::plugin::{AlgoPlugin, InitContext};
-    use algo_sdk::testing::{MockEmitter, MockFrameBuilder};
+    use algo_sdk::testing::{BenchmarkStats, MockEmitter, MockFrameBuilder};
     use image::{Rgb, RgbImage};
     use safetyhelmet_detection::config::InstanceConfig;
     use safetyhelmet_detection::plugin::SafetyHelmetDetector;
@@ -75,45 +73,6 @@ mod linux_run {
         get_env_str(key, &default_val.to_string(), env_map)
             .parse::<i32>()
             .unwrap_or(default_val)
-    }
-
-    #[derive(Debug, Default)]
-    struct BenchmarkStats {
-        avg_ms: f64,
-        p50_ms: f64,
-        p99_ms: f64,
-        fps: f64,
-    }
-
-    impl BenchmarkStats {
-        fn compute(mut samples: Vec<f64>) -> Self {
-            if samples.is_empty() {
-                return Self::default();
-            }
-            samples.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let sum: f64 = samples.iter().sum();
-            let avg_ms = sum / samples.len() as f64;
-            let p50_idx = samples.len() * 50 / 100;
-            let p99_idx = (samples.len() * 99 / 100).min(samples.len() - 1);
-            let p50_ms = samples[p50_idx];
-            let p99_ms = samples[p99_idx];
-            let fps = if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 };
-            Self {
-                avg_ms,
-                p50_ms,
-                p99_ms,
-                fps,
-            }
-        }
-    }
-
-    unsafe extern "C" fn on_result_callback(result: *const AvAlgoResult, user_data: *mut c_void) {
-        if !result.is_null() && !user_data.is_null() {
-            // SAFETY: user_data 指向有效 MockEmitter 实例
-            let emitter = unsafe { &mut *(user_data as *mut MockEmitter) };
-            // SAFETY: result 为合法指针
-            emitter.record_c_result(unsafe { &*result });
-        }
     }
 
     fn format_detection_json(event_id: &str, objects: &[NormBox]) -> String {
@@ -260,12 +219,7 @@ mod linux_run {
                 .map(String::from)
                 .collect(),
         };
-        let init_ctx = InitContext {
-            package_root: Path::new("."),
-            platform_id: "linux-rknn",
-            instance_id: "standalone_local",
-            is_self_test: false,
-        };
+        let init_ctx = InitContext::new(Path::new("."), "linux-rknn", "standalone_local", false);
 
         let mut detector = SafetyHelmetDetector::init(&init_ctx, config)?;
         let is_fallback = detector.session.is_fallback();
@@ -336,14 +290,8 @@ mod linux_run {
         for _ in 0..warmup {
             let safe_frame = mock_frame.as_safe_frame();
             let mut mock_emitter = MockEmitter::new();
-            // SAFETY: on_result_callback 与 mock_emitter 在本作用域有效存活
-            let mut emitter = unsafe {
-                ResultEmitter::from_raw(
-                    1,
-                    Some(on_result_callback),
-                    &mut mock_emitter as *mut _ as *mut c_void,
-                )
-            };
+            // SAFETY: mock_emitter 存活至 process 调用结束
+            let mut emitter = unsafe { mock_emitter.as_emitter(1) };
             detector.process(safe_frame, &mut emitter)?;
         }
 
@@ -356,14 +304,8 @@ mod linux_run {
 
         for i in 0..loops {
             let mut mock_emitter = MockEmitter::new();
-            // SAFETY: on_result_callback 与 mock_emitter 在本作用域有效存活
-            let mut emitter = unsafe {
-                ResultEmitter::from_raw(
-                    1,
-                    Some(on_result_callback),
-                    &mut mock_emitter as *mut _ as *mut c_void,
-                )
-            };
+            // SAFETY: mock_emitter 存活至 process 调用结束
+            let mut emitter = unsafe { mock_emitter.as_emitter((i + 1) as u64) };
 
             let t_abi_start = std::time::Instant::now();
             let safe_frame = mock_frame.as_safe_frame();

@@ -36,6 +36,7 @@ dependencies = [
  "base64 0.22.1",
  "image",
  "libc",
+ "libloading",
  "serde",
  "serde_json",
  "static_assertions",

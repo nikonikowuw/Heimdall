@@ -1,9 +1,7 @@
 //! 算法配置定义与 COCO 80 类别位掩码过滤
 
-use std::collections::HashSet;
-
-use algo_sdk::env::PackageEnv;
-use serde::Deserialize;
+use algo_sdk::algo_config;
+pub use algo_sdk::env::PackageEnv;
 
 pub const COCO_CLASSES: [&str; 80] = [
     "person",
@@ -111,118 +109,14 @@ fn default_target_classes() -> Vec<String> {
     ]
 }
 
-#[derive(Deserialize, Default)]
-struct RawInstanceConfig {
-    #[serde(default)]
-    confidence_threshold: Option<f32>,
-    #[serde(default)]
-    iou_threshold: Option<f32>,
-    #[serde(default)]
-    target_classes: Option<Vec<String>>,
-    #[serde(default)]
-    custom_alarm_label: Option<String>,
-}
-
-/// 实例运行时配置
-#[derive(Debug, Clone, PartialEq)]
-pub struct InstanceConfig {
-    pub confidence_threshold: f32,
-    pub iou_threshold: f32,
-    pub target_classes: Vec<String>,
-    pub custom_alarm_label: Option<String>,
-    pub explicit_fields: HashSet<String>,
-}
-
-impl<'de> Deserialize<'de> for InstanceConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = RawInstanceConfig::deserialize(deserializer)?;
-        let mut explicit_fields = HashSet::new();
-
-        let confidence_threshold = if let Some(v) = raw.confidence_threshold {
-            explicit_fields.insert("confidence_threshold".to_string());
-            v
-        } else {
-            default_confidence()
-        };
-
-        let iou_threshold = if let Some(v) = raw.iou_threshold {
-            explicit_fields.insert("iou_threshold".to_string());
-            v
-        } else {
-            default_iou()
-        };
-
-        let target_classes = if let Some(v) = raw.target_classes {
-            explicit_fields.insert("target_classes".to_string());
-            v
-        } else {
-            default_target_classes()
-        };
-
-        let custom_alarm_label = if let Some(v) = raw.custom_alarm_label {
-            explicit_fields.insert("custom_alarm_label".to_string());
-            Some(v)
-        } else {
-            None
-        };
-
-        Ok(Self {
-            confidence_threshold,
-            iou_threshold,
-            target_classes,
-            custom_alarm_label,
-            explicit_fields,
-        })
-    }
-}
-
-impl Default for InstanceConfig {
-    fn default() -> Self {
-        Self {
-            confidence_threshold: default_confidence(),
-            iou_threshold: default_iou(),
-            target_classes: default_target_classes(),
-            custom_alarm_label: None,
-            explicit_fields: HashSet::new(),
-        }
-    }
-}
-
-impl InstanceConfig {
-    /// 注入当前算法包私有 `.env` 的参数覆盖。
-    ///
-    /// 【三级优先级阶梯原则】：
-    /// 1. 宿主显式下发的任务配置最高级：若宿主已传递该字段，严格保护，不被 `.env` 覆盖；
-    /// 2. 宿主未传递该字段时：优先使用 `.env` 局部配置；
-    /// 3. 若 `.env` 也未设置：维持代码硬编码默认值。
-    pub fn apply_env(&mut self, env: &PackageEnv) {
-        if !self.explicit_fields.contains("confidence_threshold") {
-            if let Some(v) = env.get_f32("confidence_threshold") {
-                self.confidence_threshold = v;
-            }
-        }
-        if !self.explicit_fields.contains("iou_threshold") {
-            if let Some(v) = env.get_f32("iou_threshold") {
-                self.iou_threshold = v;
-            }
-        }
-        if !self.explicit_fields.contains("custom_alarm_label") {
-            if let Some(v) = env.get_str("custom_alarm_label") {
-                self.custom_alarm_label = Some(v);
-            }
-        }
-        if !self.explicit_fields.contains("target_classes") {
-            if let Some(v) = env.get_str("target_classes") {
-                self.target_classes = v
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
-        }
+algo_config! {
+    /// 实例运行时配置
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct InstanceConfig {
+        pub confidence_threshold: f32 = default_confidence(),
+        pub iou_threshold: f32 = default_iou(),
+        pub target_classes: Vec<String> = default_target_classes(),
+        pub custom_alarm_label: Option<String> = None,
     }
 }
 

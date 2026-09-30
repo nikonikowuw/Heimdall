@@ -10,7 +10,7 @@ use algo_sdk::cv::types::PreprocessMode;
 use algo_sdk::math::NormBox;
 
 use crate::config::InstanceConfig;
-use crate::rknn::RknnInferenceOutput;
+use algo_sdk::rknn::RknnInferenceOutput;
 
 pub const MODEL_INPUT_WIDTH: f32 = 640.0;
 pub const MODEL_INPUT_HEIGHT: f32 = 384.0;

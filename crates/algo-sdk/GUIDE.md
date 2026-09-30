@@ -8,26 +8,41 @@
 - 目标平台交叉编译工具链（如 RK3568 的 `aarch64-linux-gnu-gcc`）
 - 算法模型文件（`.rknn` / `.onnx` / `.pt`）
 
+## 快速开始：一键脚手架创建
+
+Heimdall 提供了快速脚手架命令，可直接生成包含完整配置隔离、测试用例与本地评测的标准算法包工程：
+
+```bash
+# 为 RK3568 创建吸烟检测算法包
+make algo-new PLATFORM=rk3568 PKG=smoking_detection ALARM=ALARM_SMOKING
+
+# 支持平台: rk3568, rk3576, rk3588, macos
+```
+
+命令会自动将算法包注册到对应平台的 Cargo workspace 并生成就绪工程。
+
 ## 目录结构
+
+得益于 `algo-sdk` 提供的声明式宏与沉淀的运行时抽象，算法包无需再手写近千行重复的 `rknn.rs` 绑定代码，核心仅需 3 个源码文件：
 
 ```
 algo-packages/rknn/rk3568/my-algorithm/
 ├── Cargo.toml              # 包定义与依赖
 ├── manifest.json           # 算法包元数据（宿主加载时校验）
-├── config.schema.json      # 配置 JSON Schema（可选，前端动态表单）
+├── config.schema.json      # 配置 JSON Schema（供前端动态表单渲染）
+├── .env                    # 包私有环境变量覆盖模板
 ├── model/
-│   ├── my_model.rknn       # 模型文件
+│   ├── model.rknn          # RKNN 模型文件
 │   └── labels.txt          # 类别标签（可选）
 ├── lib/
-│   └── librknnrt.so        # RKNN 运行时库（目标平台）
+│   └── librknnrt.so        # RKNN 运行时库（目标平台可选私有覆盖）
 ├── testimage.jpg           # 自检测试图片
 ├── src/
-│   ├── lib.rs              # C ABI 导出入口
-│   ├── plugin.rs           # AlgoPlugin 实现（核心业务逻辑）
-│   ├── config.rs           # 配置定义与反序列化
-│   ├── rknn.rs             # RKNN 运行时绑定（可复用现有实现）
+│   ├── lib.rs              # C ABI 统一导出入口 (export_algo!)
+│   ├── plugin.rs           # AlgoPlugin 核心逻辑（使用 algo_sdk::rknn / cv）
+│   ├── config.rs           # 配置定义与三级优先级宏 (algo_config!)
 │   └── bin/
-│       └── run_local.rs    # 本地评测工具
+│       └── run_local.rs    # 本地极简评测工具 (LocalPluginRunner)
 └── tests/
     └── ...
 ```
@@ -38,32 +53,25 @@ algo-packages/rknn/rk3568/my-algorithm/
 [package]
 name = "my-algorithm-rk3568-rknn"
 version = "1.0.0"
-edition.workspace = true
-license.workspace = true
-
-[lints]
-workspace = true
+edition = "2021"
 
 [lib]
-name = "my_algorithm"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "my_algorithm_run_local"
+name = "run_local"
 path = "src/bin/run_local.rs"
 
 [dependencies]
-algo-sdk = { workspace = true, features = ["rga", "testing-hardware"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
-libloading = { workspace = true }
-libc = { workspace = true }
+algo-sdk = { path = "../../../../crates/algo-sdk" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
 ```
 
 关键点：
-- `crate-type = ["cdylib", "rlib"]`：`cdylib` 供宿主动态加载，`rlib` 供测试和 `run_local` 使用
-- `algo-sdk` 的 `rga` feature 启用 RGA 硬件加速，`testing-hardware` 启用测试工具
+- `crate-type = ["cdylib", "rlib"]`：`cdylib` 供宿主动态链接加载，`rlib` 供集成测试和 `run_local` 使用
+- `algo-sdk` 已内置 `rknn` 运行时动态加载、DMA-BUF 零拷贝管理、三级配置优先级宏与本地测试 Runner，无需额外引入 `libloading` 或 `libc`。
 
 ## Step 2: manifest.json
 
@@ -100,81 +108,75 @@ libc = { workspace = true }
 
 ## Step 3: config.rs
 
+使用 `algo-sdk` 提供的 `algo_config!` 声明式宏，只需声明字段及其默认值表达式，即可自动生成：
+1. 结构体定义与 `explicit_fields: HashSet<String>` 显式字段跟踪；
+2. `serde::Deserialize` 自动标记宿主显式传参；
+3. `Default` 默认值注入；
+4. `apply_env(&mut self, env: &PackageEnv)` 自动三级优先级阶梯覆盖（宿主配置 > `.env` > 默认值）。
+
 ```rust
-use serde::Deserialize;
+use algo_sdk::algo_config;
+pub use algo_sdk::env::PackageEnv;
 
-/// 实例运行时配置
-#[derive(Debug, Clone, Deserialize)]
-pub struct InstanceConfig {
-    #[serde(default = "default_confidence")]
-    pub confidence_threshold: f32,
+pub const DEFAULT_CONFIDENCE: f32 = 0.25;
+pub const DEFAULT_IOU: f32 = 0.45;
 
-    #[serde(default = "default_iou")]
-    pub iou_threshold: f32,
-
-    /// 监控的目标类别
-    #[serde(default = "default_target_classes")]
-    pub target_classes: Vec<String>,
-
-    /// 自定义告警标签（覆盖模型原始类别名）
-    #[serde(default)]
-    pub custom_alarm_label: Option<String>,
-}
-
-fn default_confidence() -> f32 { 0.25 }
-fn default_iou() -> f32 { 0.45 }
 fn default_target_classes() -> Vec<String> {
     vec!["fire".to_string(), "smoke".to_string()]
 }
 
-impl Default for InstanceConfig {
-    fn default() -> Self {
-        Self {
-            confidence_threshold: default_confidence(),
-            iou_threshold: default_iou(),
-            target_classes: default_target_classes(),
-            custom_alarm_label: None,
-        }
+algo_config! {
+    /// 实例运行时配置
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct InstanceConfig {
+        pub confidence_threshold: f32 = DEFAULT_CONFIDENCE,
+        pub iou_threshold: f32 = DEFAULT_IOU,
+        /// 监控的目标类别
+        pub target_classes: Vec<String> = default_target_classes(),
+        /// 自定义告警标签（覆盖模型原始类别名）
+        pub custom_alarm_label: Option<String> = None,
     }
 }
 ```
 
-要点：
-- 所有字段必须有 `serde(default)` 或 `Default` 实现
-- 配置通过 JSON 反序列化，前端动态表单可根据 `config.schema.json` 自动生成
-
 ## Step 4: plugin.rs（核心）
 
 ```rust
+use algo_sdk::cv::platforms::rockchip::RgaCvEngine;
+use algo_sdk::cv::postprocess::{
+    parse_yolov8_int8, Yolov8ParseContext, Yolov8RknnConfig,
+};
 use algo_sdk::emitter::ResultEmitter;
 use algo_sdk::error::AlgoError;
 use algo_sdk::frame::SafeFrame;
 use algo_sdk::plugin::{AlgoPlugin, InitContext};
+use algo_sdk::rknn::{RknnSession, RknnSessionOptions, RKNN_NPU_CORE_0};
 use crate::config::InstanceConfig;
 
-#[cfg(target_os = "linux")]
 pub struct MyDetector {
-    pub session: crate::rknn::RknnSession,
-    pub cv_engine: algo_sdk::cv::platforms::rockchip::RgaCvEngine,
+    pub session: RknnSession,
+    pub cv_engine: RgaCvEngine,
     pub config: InstanceConfig,
 }
 
-#[cfg(target_os = "linux")]
 impl AlgoPlugin for MyDetector {
     type Config = InstanceConfig;
 
-    fn init(ctx: &InitContext<'_>, config: Self::Config) -> Result<Self, AlgoError> {
-        // 1. 加载 RKNN 模型
-        let model_path = ctx.package_root.join("model/my_model.rknn");
-        let runtime = crate::rknn::RknnRuntime::load(ctx.package_root)
-            .map_err(|e| tracing::warn!(reason = ?e, "未检测到 librknnrt.so"));
-        let session = match runtime {
-            Ok(rt) => crate::rknn::RknnSession::new(rt, &model_path)?,
-            Err(_) => crate::rknn::RknnSession::new_fallback(&model_path)?,
-        };
+    fn init(ctx: &InitContext<'_>, mut config: Self::Config) -> Result<Self, AlgoError> {
+        // 1. 加载并应用包私有 .env 配置（支持三级优先级隔离）
+        let env = ctx.load_env();
+        config.apply_env(&env);
 
-        // 2. 初始化 RGA 预处理引擎
-        let cv_engine = algo_sdk::cv::platforms::rockchip::RgaCvEngine::new();
+        // 2. 加载 RKNN 模型（由 algo_sdk 统一接管物理运行时、多核掩码调度与 CPU 模拟回退）
+        let model_path = ctx.package_root.join("model/my_model.rknn");
+        let session = RknnSession::open_or_fallback(
+            ctx.package_root,
+            &model_path,
+            RknnSessionOptions::with_core_mask(RKNN_NPU_CORE_0),
+        )?;
+
+        // 3. 初始化 RGA 预处理引擎
+        let cv_engine = RgaCvEngine::new();
 
         Ok(Self { session, cv_engine, config })
     }
@@ -189,14 +191,14 @@ impl AlgoPlugin for MyDetector {
         let orig_w = frame.width();
         let orig_h = frame.height();
 
-        // 2. NPU 推理 + 后处理
+        // 2. NPU 零拷贝推理 + INT8 后处理
         if let Some(fd) = buf.as_dma_buf_fd() {
             let size = 640 * 384 * 3;
             self.session.infer_with_dma_buf(fd, size, |net_out| {
-                let boxes = algo_sdk::cv::postprocess::parse_yolov8_int8(
-                    &algo_sdk::cv::postprocess::Yolov8ParseContext {
-                        branches: net_out branches,
-                        config: &algo_sdk::cv::postprocess::Yolov8RknnConfig {
+                let boxes = parse_yolov8_int8(
+                    &Yolov8ParseContext {
+                        branches: net_out.branches,
+                        config: &Yolov8RknnConfig {
                             model_input_w: 640.0,
                             model_input_h: 384.0,
                             dfl_bins: 16,
@@ -212,13 +214,7 @@ impl AlgoPlugin for MyDetector {
                         orig_h,
                     },
                 );
-                emitter.emit_detections(&boxes)
-            })?;
-        } else if let Some(host_bytes) = buf.as_host_bytes() {
-            // Host 内存回退路径
-            self.session.infer_with_host_bytes(host_bytes, |net_out| {
-                // ... 同上
-                Ok(())
+                emitter.emit_detection_boxes(&boxes)
             })?;
         }
 
@@ -319,74 +315,82 @@ let boxes: Vec<NormBox> = parse_yolov8_int8(&ctx);
 ```rust
 pub mod config;
 pub mod plugin;
-pub mod rknn;
 
 use algo_sdk::export_algo;
-use algo_sdk::plugin::AlgoPlugin;
 use plugin::MyDetector;
 
 export_algo!(
     MyDetector,
     algo_id: "my_algorithm",
     version: "1.0.0",
-    algo_type: "object_detection",
+    algo_type: "detector",
     alarm_type_id: "my_alarm"
 );
 ```
 
-`export_algo!` 宏生成标准 C ABI 虚表和 `av_algo_get_abi` 导出符号，自动隔离 panic。
+`export_algo!` 宏自动展开标准 C ABI 虚拟方法表、11 个外部 C 符号与 Panic 隔离墙。
 
-## Step 6: 测试
+## Step 6: 测试与本地评测
+
+借助 `algo_sdk::testing::{LocalPluginRunner, MockFrameBuilder}`，本地单元测试与性能基准评测只需几行代码：
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use algo_sdk::testing::{MockEmitter, MockFrameBuilder};
+    use std::path::Path;
+    use algo_sdk::testing::{LocalPluginRunner, MockFrameBuilder};
 
     #[test]
     fn test_plugin_init_and_process() {
-        let config = InstanceConfig::default();
-        let ctx = InitContext {
-            package_root: Path::new("."),
-            platform_id: "linux-rknn",
-            instance_id: "test",
-            is_self_test: false,
-        };
+        let package_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let ctx = InitContext::new(
+            package_root,
+            "rk3568-rknn",
+            "test",
+            false,
+        );
 
-        let mut detector = MyDetector::init(&ctx, config).unwrap();
+        let mut detector = MyDetector::init(&ctx, InstanceConfig::default()).unwrap();
 
         let frame = MockFrameBuilder::new()
             .dimensions(1920, 1080)
-            .host_data(vec![128u8; 1920 * 1080 * 3 / 2])
             .to_nv12(16)
             .build();
 
-        let mut emitter = MockEmitter::new();
-        let safe_frame = frame.as_safe_frame();
-        detector.process(safe_frame, &mut emitter).unwrap();
+        let (elapsed_ms, _detections) =
+            LocalPluginRunner::run_once(&mut detector, frame.as_safe_frame()).unwrap();
+        assert!(elapsed_ms >= 0.0);
     }
 }
 ```
 
-运行测试：
-```bash
-cargo test -p my-algorithm-rk3568-rknn
-```
+## Step 7: 本地基准测试二进制 (`src/bin/run_local.rs`)
 
-## Step 7: 本地评测
+```rust
+use std::path::Path;
+use algo_sdk::error::AlgoError;
+use algo_sdk::plugin::{AlgoPlugin, InitContext};
+use algo_sdk::testing::{LocalPluginRunner, MockFrameBuilder};
+use my_algorithm_rk3568_rknn::config::InstanceConfig;
+use my_algorithm_rk3568_rknn::plugin::MyDetector;
 
-```bash
-# 编译
-cargo build --release --target aarch64-unknown-linux-gnu
+fn main() -> Result<(), AlgoError> {
+    let package_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ctx = InitContext::new(
+        package_root,
+        "rk3568-rknn",
+        "local-debug",
+        false,
+    );
+    let mut detector = MyDetector::init(&ctx, InstanceConfig::default())?;
+    let frame = MockFrameBuilder::new().dimensions(1920, 1080).to_nv12(16).build();
 
-# 推送到 RK3568 板端
-adb push target/aarch64-unknown-linux-gnu/release/my_algorithm_run_local /data/
+    let (stats, _) = LocalPluginRunner::benchmark(&mut detector, frame.as_safe_frame(), 100)?;
+    println!("{stats}");
 
-# 运行
-adb shell
-cd /data
-./my_algorithm_run_local --input test.jpg --output result.jpg --threshold 0.3
+    Ok(())
+}
 ```
 
 ## 完整检查清单

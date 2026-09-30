@@ -271,12 +271,7 @@ mod linux_run {
             target_classes,
             custom_alarm_label: None,
         };
-        let init_ctx = InitContext {
-            package_root: Path::new("."),
-            platform_id: "linux-rknn",
-            instance_id: "standalone_local",
-            is_self_test: false,
-        };
+        let init_ctx = InitContext::new(Path::new("."), "linux-rknn", "standalone_local", false);
 
         let mut detector = GeneralDetector::init(&init_ctx, config)?;
         let is_fallback = detector.session.is_fallback();

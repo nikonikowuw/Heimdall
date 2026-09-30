@@ -2,10 +2,8 @@
 //!
 //! 模型检测 2 个类别：`Hardhat`（安全帽）、`NO-Hardhat`（未戴安全帽）。
 
-use std::collections::HashSet;
-
-use algo_sdk::env::PackageEnv;
-use serde::Deserialize;
+use algo_sdk::algo_config;
+pub use algo_sdk::env::PackageEnv;
 
 /// 模型输出类别
 pub const HELMET_CLASSES: [&str; 2] = ["Hardhat", "NO-Hardhat"];
@@ -13,100 +11,18 @@ pub const HELMET_CLASSES: [&str; 2] = ["Hardhat", "NO-Hardhat"];
 pub const DEFAULT_CONFIDENCE: f32 = 0.45;
 pub const DEFAULT_IOU: f32 = 0.45;
 
-#[derive(Deserialize, Default)]
-struct RawInstanceConfig {
-    #[serde(default)]
-    confidence_threshold: Option<f32>,
-    #[serde(default)]
-    iou_threshold: Option<f32>,
-    #[serde(default)]
-    custom_alarm_label: Option<String>,
-}
+algo_config! {
+    /// 实例运行时配置
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct InstanceConfig {
+        /// 检测框置信度低于该值的结果将被过滤
+        pub confidence_threshold: f32 = DEFAULT_CONFIDENCE,
 
-/// 实例运行时配置
-#[derive(Debug, Clone, PartialEq)]
-pub struct InstanceConfig {
-    /// 检测框置信度低于该值的结果将被过滤
-    pub confidence_threshold: f32,
+        /// 非极大值抑制 IoU 阈值
+        pub iou_threshold: f32 = DEFAULT_IOU,
 
-    /// 非极大值抑制 IoU 阈值
-    pub iou_threshold: f32,
-
-    /// 自定义业务告警标签（可选，覆盖模型原生类别名）
-    pub custom_alarm_label: Option<String>,
-
-    /// 记录宿主任务配置显式下发的参数名（用于执行三级优先级隔离）
-    pub explicit_fields: HashSet<String>,
-}
-
-impl<'de> Deserialize<'de> for InstanceConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = RawInstanceConfig::deserialize(deserializer)?;
-        let mut explicit_fields = HashSet::new();
-        let mut track = |name: &'static str| {
-            explicit_fields.insert(name.to_string());
-        };
-
-        let confidence_threshold = raw
-            .confidence_threshold
-            .inspect(|_| track("confidence_threshold"))
-            .unwrap_or(DEFAULT_CONFIDENCE);
-
-        let iou_threshold = raw
-            .iou_threshold
-            .inspect(|_| track("iou_threshold"))
-            .unwrap_or(DEFAULT_IOU);
-
-        let custom_alarm_label = raw
-            .custom_alarm_label
-            .inspect(|_| track("custom_alarm_label"));
-
-        Ok(Self {
-            confidence_threshold,
-            iou_threshold,
-            custom_alarm_label,
-            explicit_fields,
-        })
-    }
-}
-
-impl Default for InstanceConfig {
-    fn default() -> Self {
-        Self {
-            confidence_threshold: DEFAULT_CONFIDENCE,
-            iou_threshold: DEFAULT_IOU,
-            custom_alarm_label: None,
-            explicit_fields: HashSet::new(),
-        }
-    }
-}
-
-impl InstanceConfig {
-    /// 注入当前算法包私有 `.env` 的参数覆盖。
-    ///
-    /// 【三级优先级阶梯原则】：
-    /// 1. 宿主显式下发的任务配置最高级：若宿主已传递该字段，严格保护，不被 `.env` 覆盖；
-    /// 2. 宿主未传递该字段时：优先使用 `.env` 局部配置；
-    /// 3. 若 `.env` 也未设置：维持代码硬编码默认值。
-    pub fn apply_env(&mut self, env: &PackageEnv) {
-        if !self.explicit_fields.contains("confidence_threshold") {
-            if let Some(v) = env.get_f32("confidence_threshold") {
-                self.confidence_threshold = v;
-            }
-        }
-        if !self.explicit_fields.contains("iou_threshold") {
-            if let Some(v) = env.get_f32("iou_threshold") {
-                self.iou_threshold = v;
-            }
-        }
-        if !self.explicit_fields.contains("custom_alarm_label") {
-            if let Some(v) = env.get_str("custom_alarm_label") {
-                self.custom_alarm_label = Some(v);
-            }
-        }
+        /// 自定义业务告警标签（可选，覆盖模型原生类别名）
+        pub custom_alarm_label: Option<String> = None,
     }
 }
 

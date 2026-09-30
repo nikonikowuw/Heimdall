@@ -5,6 +5,7 @@
 - `macos/Cargo.toml`: Apple Silicon CoreML packages.
 - `rknn/rk3568/Cargo.toml`: RK3568 RKNN packages.
 - `rknn/rk3576/Cargo.toml`: RK3576 RKNN packages.
+- `rknn/rk3588/Cargo.toml`: RK3588 RKNN packages.
 
 Each platform workspace owns its package members, algorithm-side dependency versions, `Cargo.lock`, and `target/` directory. The packages share the `crates/algo-sdk` source through a path dependency, but they are not members of the host workspace or of another platform workspace.
 
@@ -28,8 +29,19 @@ The root Makefile provides the same split explicitly:
 make algo-check ALGO_PLATFORM=macos
 make algo-check ALGO_PLATFORM=rknn/rk3568
 make algo-check ALGO_PLATFORM=rknn/rk3576
+make algo-check ALGO_PLATFORM=rknn/rk3588
 make algo-check-all
 ```
+
+## Quick Start: Creating a New Package
+
+Scaffold a complete, compliant algorithm package with one command:
+
+```bash
+make algo-new PLATFORM=rk3568 PKG=smoke_detection ALARM=ALARM_SMOKE
+```
+
+This generates `Cargo.toml`, `manifest.json`, `config.schema.json`, `.env`, `src/config.rs` (using `algo_config!`), `src/plugin.rs` (using unified `algo_sdk::rknn`), `src/lib.rs` (`export_algo!`), and `src/bin/run_local.rs` (`LocalPluginRunner`), and automatically registers the package in the target platform workspace.
 
 Build one package with its package Makefile, or pass the matching platform manifest explicitly:
 

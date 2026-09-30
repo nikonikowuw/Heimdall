@@ -1,9 +1,7 @@
 //! 烟火检测算法配置
 
-use std::collections::HashSet;
-
-use algo_sdk::env::PackageEnv;
-use serde::Deserialize;
+use algo_sdk::algo_config;
+pub use algo_sdk::env::PackageEnv;
 
 /// 模型支持的类别
 pub const FIRE_SMOKE_CLASSES: [&str; 2] = ["fire", "smoke"];
@@ -18,145 +16,22 @@ fn default_target_classes() -> Vec<String> {
     vec!["fire".to_string(), "smoke".to_string()]
 }
 
-#[derive(Deserialize, Default)]
-struct RawInstanceConfig {
-    #[serde(default)]
-    confidence_threshold: Option<f32>,
-    #[serde(default)]
-    iou_threshold: Option<f32>,
-    #[serde(default)]
-    target_classes: Option<Vec<String>>,
-    #[serde(default)]
-    custom_alarm_label: Option<String>,
-    #[serde(default)]
-    confirm_window: Option<usize>,
-    #[serde(default)]
-    confirm_threshold: Option<usize>,
-    #[serde(default)]
-    temporal_variance_threshold: Option<f32>,
-}
-
-/// 实例运行时配置
-#[derive(Debug, Clone, PartialEq)]
-pub struct InstanceConfig {
-    pub confidence_threshold: f32,
-    pub iou_threshold: f32,
-    /// 监控的目标类别（如只监控烟雾可设为 ["smoke"]）
-    pub target_classes: Vec<String>,
-    /// 自定义告警标签（覆盖模型原始类别名）
-    pub custom_alarm_label: Option<String>,
-    /// 多帧确认滑动窗口大小
-    pub confirm_window: usize,
-    /// 窗口内需命中的最小帧数
-    pub confirm_threshold: usize,
-    /// 时序颜色方差阈值（低于此值的候选框被判定为稳定光源误报）
-    pub temporal_variance_threshold: f32,
-
-    /// 记录宿主任务配置显式下发的参数名（用于执行三级优先级隔离）
-    pub explicit_fields: HashSet<String>,
-}
-
-impl<'de> Deserialize<'de> for InstanceConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = RawInstanceConfig::deserialize(deserializer)?;
-        let mut explicit_fields = HashSet::new();
-
-        macro_rules! track_field {
-            ($opt:expr, $name:ident, $default:expr) => {
-                match $opt {
-                    Some(v) => {
-                        explicit_fields.insert(stringify!($name).to_string());
-                        v
-                    }
-                    None => $default,
-                }
-            };
-        }
-
-        let confidence_threshold = track_field!(
-            raw.confidence_threshold,
-            confidence_threshold,
-            DEFAULT_CONFIDENCE
-        );
-        let iou_threshold = track_field!(raw.iou_threshold, iou_threshold, DEFAULT_IOU);
-        let target_classes =
-            track_field!(raw.target_classes, target_classes, default_target_classes());
-        let custom_alarm_label = raw.custom_alarm_label.inspect(|_| {
-            explicit_fields.insert("custom_alarm_label".to_string());
-        });
-        let confirm_window =
-            track_field!(raw.confirm_window, confirm_window, DEFAULT_CONFIRM_WINDOW);
-        let confirm_threshold = track_field!(
-            raw.confirm_threshold,
-            confirm_threshold,
-            DEFAULT_CONFIRM_THRESHOLD
-        );
-        let temporal_variance_threshold = track_field!(
-            raw.temporal_variance_threshold,
-            temporal_variance_threshold,
-            DEFAULT_TEMPORAL_VARIANCE_THRESHOLD
-        );
-
-        Ok(Self {
-            confidence_threshold,
-            iou_threshold,
-            target_classes,
-            custom_alarm_label,
-            confirm_window,
-            confirm_threshold,
-            temporal_variance_threshold,
-            explicit_fields,
-        })
-    }
-}
-
-impl Default for InstanceConfig {
-    fn default() -> Self {
-        Self {
-            confidence_threshold: DEFAULT_CONFIDENCE,
-            iou_threshold: DEFAULT_IOU,
-            target_classes: default_target_classes(),
-            custom_alarm_label: None,
-            confirm_window: DEFAULT_CONFIRM_WINDOW,
-            confirm_threshold: DEFAULT_CONFIRM_THRESHOLD,
-            temporal_variance_threshold: DEFAULT_TEMPORAL_VARIANCE_THRESHOLD,
-            explicit_fields: HashSet::new(),
-        }
-    }
-}
-
-impl InstanceConfig {
-    /// 注入当前算法包私有 `.env` 的参数覆盖。
-    ///
-    /// 【三级优先级阶梯原则】：
-    /// 1. 宿主显式下发的任务配置最高级：若宿主已传递该字段，严格保护，不被 `.env` 覆盖；
-    /// 2. 宿主未传递该字段时：优先使用 `.env` 局部配置；
-    /// 3. 若 `.env` 也未设置：维持代码硬编码默认值。
-    pub fn apply_env(&mut self, env: &PackageEnv) {
-        macro_rules! apply_env_field {
-            ($field:ident, $getter:ident) => {
-                if !self.explicit_fields.contains(stringify!($field)) {
-                    if let Some(v) = env.$getter(stringify!($field)) {
-                        self.$field = v.into();
-                    }
-                }
-            };
-        }
-
-        apply_env_field!(confidence_threshold, get_f32);
-        apply_env_field!(iou_threshold, get_f32);
-        apply_env_field!(confirm_window, get_usize);
-        apply_env_field!(confirm_threshold, get_usize);
-        apply_env_field!(temporal_variance_threshold, get_f32);
-
-        if !self.explicit_fields.contains("custom_alarm_label") {
-            if let Some(v) = env.get_str("custom_alarm_label") {
-                self.custom_alarm_label = Some(v);
-            }
-        }
+algo_config! {
+    /// 实例运行时配置
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct InstanceConfig {
+        pub confidence_threshold: f32 = DEFAULT_CONFIDENCE,
+        pub iou_threshold: f32 = DEFAULT_IOU,
+        /// 监控的目标类别（如只监控烟雾可设为 ["smoke"]）
+        pub target_classes: Vec<String> = default_target_classes(),
+        /// 自定义告警标签（覆盖模型原始类别名）
+        pub custom_alarm_label: Option<String> = None,
+        /// 多帧确认滑动窗口大小
+        pub confirm_window: usize = DEFAULT_CONFIRM_WINDOW,
+        /// 窗口内需命中的最小帧数
+        pub confirm_threshold: usize = DEFAULT_CONFIRM_THRESHOLD,
+        /// 时序颜色方差阈值（低于此值的候选框被判定为稳定光源误报）
+        pub temporal_variance_threshold: f32 = DEFAULT_TEMPORAL_VARIANCE_THRESHOLD,
     }
 }
 

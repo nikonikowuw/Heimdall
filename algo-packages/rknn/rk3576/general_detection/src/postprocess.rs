@@ -4,7 +4,7 @@ use algo_sdk::cv::types::PreprocessMode;
 use algo_sdk::math::{fast_nms, unmap_box, NormBox};
 
 use crate::config::{ClassMask, InstanceConfig, COCO_CLASSES};
-use crate::rknn::RknnInferenceOutput;
+use algo_sdk::rknn::{RknnInferenceOutput, RknnTensorOutput};
 
 pub const MODEL_INPUT_WIDTH: f32 = 640.0;
 pub const MODEL_INPUT_HEIGHT: f32 = 384.0;
@@ -93,7 +93,7 @@ pub fn parse_and_unmap_output(
 
 /// 解析多分支解耦 INT8 张量输出 (YOLOv8 官方 6 输出分层结构)
 fn parse_multi_branch_int8(
-    branches: &[crate::rknn::RknnTensorOutput<'_>],
+    branches: &[RknnTensorOutput<'_>],
     config: &InstanceConfig,
     class_mask: &ClassMask,
     custom_label: Option<&'static str>,

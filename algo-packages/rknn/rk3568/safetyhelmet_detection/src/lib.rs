@@ -6,7 +6,6 @@
 pub mod config;
 pub mod plugin;
 pub mod postprocess;
-pub mod rknn;
 
 use algo_sdk::export_algo;
 use algo_sdk::plugin::AlgoPlugin;

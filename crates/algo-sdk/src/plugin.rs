@@ -23,6 +23,21 @@ pub struct InitContext<'a> {
 }
 
 impl<'a> InitContext<'a> {
+    /// 构造新的初始化上下文
+    pub fn new(
+        package_root: &'a Path,
+        platform_id: &'a str,
+        instance_id: &'a str,
+        is_self_test: bool,
+    ) -> Self {
+        Self {
+            package_root,
+            platform_id,
+            instance_id,
+            is_self_test,
+        }
+    }
+
     /// 加载当前算法包根目录下的私有 `.env` 文件（不污染全局环境）
     pub fn load_env(&self) -> crate::env::PackageEnv {
         crate::env::PackageEnv::load(self.package_root)

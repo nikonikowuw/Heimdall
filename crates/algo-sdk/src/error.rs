@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::c_abi::*;
 
 /// 算法包通用错误类型
+#[non_exhaustive]
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AlgoError {
     #[error("配置解析失败: {reason}")]

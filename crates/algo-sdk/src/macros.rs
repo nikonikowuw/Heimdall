@@ -347,6 +347,8 @@ macro_rules! export_algo {
         library_close_hook: $close_hook:path
     ) => {
         // ── 11 个 C ABI 回调入口（带 catch_unwind Panic 防火墙） ──
+        #[allow(unused_imports)]
+        use $crate::plugin::AlgoPlugin as _;
 
         unsafe extern "C" fn __algo_library_open(
             args: *const $crate::c_abi::AvAlgoLibraryArgs,

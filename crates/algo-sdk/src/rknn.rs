@@ -1,14 +1,17 @@
 //! Rockchip RKNN Runtime (librknnrt) 动态绑定与安全执行会话
 //!
-//! 适配 RK3568 单核 NPU（`RKNN_NPU_CORE_0 = 1`）。
+//! 适配 Rockchip NPU (RK3568, RK3576, RK3588 等)。
+//! 提供基于 libloading 的动态符号加载、RAII 显存生命周期托管、
+//! DMA-BUF 零拷贝直通与开发调试回退模拟路径。
 
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::Arc;
 
-use algo_sdk::cv::postprocess::RknnTensorOutput;
-use algo_sdk::error::AlgoError;
+pub use crate::cv::postprocess::RknnTensorOutput;
+use crate::error::AlgoError;
 
 pub type RknnContext = u64;
 
@@ -18,8 +21,16 @@ pub const RKNN_QUERY_IN_OUT_NUM: c_int = 0;
 pub const RKNN_QUERY_INPUT_ATTR: c_int = 1;
 pub const RKNN_QUERY_OUTPUT_ATTR: c_int = 2;
 
-/// RK3568 单核 NPU 核心掩码
-const RKNN_NPU_CORE_0: c_int = 1;
+/// RKNN NPU 核心掩码常量
+pub const RKNN_NPU_CORE_AUTO: c_int = 0;
+pub const RKNN_NPU_CORE_0: c_int = 1;
+pub const RKNN_NPU_CORE_1: c_int = 2;
+pub const RKNN_NPU_CORE_2: c_int = 4;
+pub const RKNN_NPU_CORE_0_1: c_int = 3;
+pub const RKNN_NPU_CORE_0_1_2: c_int = 7;
+
+/// 默认最大 DMA-BUF 显存缓存条目数（上限 64，避免内核映射与显存耗尽）
+pub const MAX_DMA_MEM_CACHE: usize = 16;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +57,7 @@ pub enum RknnTensorFormat {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RknnTensorQntType {
     None = 0,
     Df = 1,
@@ -129,66 +140,77 @@ pub struct RknnTensorMem {
     pub priv_data: *mut c_void,
 }
 
-type RknnInitFn = unsafe extern "C" fn(
+pub type RknnInitFn = unsafe extern "C" fn(
     ctx: *mut RknnContext,
     model: *mut c_void,
     size: u32,
     flag: u32,
-    extend: *mut c_void,
+    extra: *mut c_void,
 ) -> c_int;
-type RknnDestroyFn = unsafe extern "C" fn(ctx: RknnContext) -> c_int;
-type RknnQueryFn =
+
+pub type RknnDestroyFn = unsafe extern "C" fn(ctx: RknnContext) -> c_int;
+
+pub type RknnQueryFn =
     unsafe extern "C" fn(ctx: RknnContext, cmd: c_int, info: *mut c_void, size: u32) -> c_int;
-type RknnInputsSetFn =
+
+pub type RknnInputsSetFn =
     unsafe extern "C" fn(ctx: RknnContext, n_inputs: u32, inputs: *mut RknnInput) -> c_int;
-type RknnRunFn = unsafe extern "C" fn(ctx: RknnContext, extend: *mut c_void) -> c_int;
-type RknnOutputsGetFn = unsafe extern "C" fn(
+
+pub type RknnRunFn = unsafe extern "C" fn(ctx: RknnContext, extend: *mut c_void) -> c_int;
+
+pub type RknnOutputsGetFn = unsafe extern "C" fn(
     ctx: RknnContext,
     n_outputs: u32,
     outputs: *mut RknnOutput,
     extend: *mut c_void,
 ) -> c_int;
-type RknnOutputsReleaseFn =
-    unsafe extern "C" fn(ctx: RknnContext, n_outputs: u32, outputs: *mut RknnOutput) -> c_int;
-type RknnSetCoreMaskFn = unsafe extern "C" fn(ctx: RknnContext, core_mask: c_int) -> c_int;
-type RknnCreateMemFromFdFn = unsafe extern "C" fn(
+
+pub type RknnOutputsReleaseFn =
+    unsafe extern "C" fn(ctx: RknnContext, n_ouputs: u32, outputs: *mut RknnOutput) -> c_int;
+
+pub type RknnSetCoreMaskFn = unsafe extern "C" fn(ctx: RknnContext, core_mask: c_int) -> c_int;
+
+pub type RknnCreateMemFromFdFn = unsafe extern "C" fn(
     ctx: RknnContext,
-    fd: i32,
+    dmabuf_fd: i32,
     virt_addr: *mut c_void,
     size: u32,
-    offset: i32,
+    flags: u32,
 ) -> *mut RknnTensorMem;
-type RknnDestroyMemFn = unsafe extern "C" fn(ctx: RknnContext, mem: *mut RknnTensorMem) -> c_int;
-type RknnSetIoMemFn = unsafe extern "C" fn(
+
+pub type RknnDestroyMemFn =
+    unsafe extern "C" fn(ctx: RknnContext, mem: *mut RknnTensorMem) -> c_int;
+
+pub type RknnSetIoMemFn = unsafe extern "C" fn(
     ctx: RknnContext,
     mem: *mut RknnTensorMem,
     attr: *mut RknnTensorAttr,
 ) -> c_int;
 
-/// RKNN Runtime 动态符号表
+/// 动态加载的 librknnrt C API 符号表
 pub struct RknnRuntime {
     _lib: libloading::Library,
-    rknn_init: RknnInitFn,
-    rknn_destroy: RknnDestroyFn,
-    rknn_query: RknnQueryFn,
-    rknn_inputs_set: RknnInputsSetFn,
-    rknn_run: RknnRunFn,
-    rknn_outputs_get: RknnOutputsGetFn,
-    rknn_outputs_release: RknnOutputsReleaseFn,
-    rknn_set_core_mask: Option<RknnSetCoreMaskFn>,
-    rknn_create_mem_from_fd: Option<RknnCreateMemFromFdFn>,
-    rknn_destroy_mem: Option<RknnDestroyMemFn>,
-    rknn_set_io_mem: Option<RknnSetIoMemFn>,
+    pub rknn_init: RknnInitFn,
+    pub rknn_destroy: RknnDestroyFn,
+    pub rknn_query: RknnQueryFn,
+    pub rknn_inputs_set: RknnInputsSetFn,
+    pub rknn_run: RknnRunFn,
+    pub rknn_outputs_get: RknnOutputsGetFn,
+    pub rknn_outputs_release: RknnOutputsReleaseFn,
+    pub rknn_set_core_mask: Option<RknnSetCoreMaskFn>,
+    pub rknn_create_mem_from_fd: Option<RknnCreateMemFromFdFn>,
+    pub rknn_destroy_mem: Option<RknnDestroyMemFn>,
+    pub rknn_set_io_mem: Option<RknnSetIoMemFn>,
 }
 
 impl std::fmt::Debug for RknnRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RknnRuntime")
+            .field("core_mask_supported", &self.rknn_set_core_mask.is_some())
             .field(
                 "zero_copy_supported",
-                &self.rknn_create_mem_from_fd.is_some(),
+                &(self.rknn_create_mem_from_fd.is_some() && self.rknn_set_io_mem.is_some()),
             )
-            .field("core_mask_supported", &self.rknn_set_core_mask.is_some())
             .finish()
     }
 }
@@ -199,69 +221,72 @@ impl RknnRuntime {
         let candidates = [
             package_root.join("lib/librknnrt.so"),
             package_root.join("lib64/librknnrt.so"),
-            std::path::PathBuf::from("librknnrt.so"),
-            std::path::PathBuf::from("/usr/lib/librknnrt.so"),
-            std::path::PathBuf::from("/usr/lib64/librknnrt.so"),
-            std::path::PathBuf::from("/usr/local/lib/librknnrt.so"),
+            PathBuf::from("librknnrt.so"),
+            PathBuf::from("/usr/lib/librknnrt.so"),
+            PathBuf::from("/usr/lib64/librknnrt.so"),
+            PathBuf::from("/usr/local/lib/librknnrt.so"),
         ];
+        Self::load_with_candidates(&candidates)
+    }
 
+    /// 从指定候选路径中按序尝试加载动态库
+    pub fn load_with_candidates(candidates: &[PathBuf]) -> Result<Arc<Self>, AlgoError> {
         let mut last_err = None;
-        for path in &candidates {
+        for path in candidates {
             // SAFETY: 动态加载外部 C 共享库符号，路径为预设安全候选
             match unsafe { libloading::Library::new(path) } {
                 Ok(lib) => {
-                    tracing::info!(loaded_from = ?path, "成功加载 librknnrt.so");
+                    tracing::info!(path = ?path, "成功挂载 librknnrt.so");
                     return Self::from_library(lib);
                 }
                 Err(e) => {
-                    last_err = Some(e);
+                    last_err = Some(format!("尝试加载 {path:?} 失败: {e}"));
                 }
             }
         }
 
-        Err(AlgoError::Internal {
-            reason: format!(
-                "未能在系统路径或算法包中找到 librknnrt.so 动态链接库，最后错误: {:?}",
-                last_err
-            ),
+        Err(AlgoError::ModelLoad {
+            reason: last_err.unwrap_or_else(|| "未找到可用的 librknnrt.so 动态链接库".to_string()),
         })
     }
 
     fn from_library(lib: libloading::Library) -> Result<Arc<Self>, AlgoError> {
-        // SAFETY: 获取符号并按 rknn_api.h 函数指针签名映射，由 lib 保证符号生命周期
+        // SAFETY: 从动态库提取 C 函数符号指针，并转换为强类型安全函数签名
         unsafe {
             let rknn_init: RknnInitFn =
-                *lib.get(b"rknn_init\0").map_err(|e| AlgoError::Internal {
-                    reason: format!("加载 rknn_init 符号失败: {e}"),
+                *lib.get(b"rknn_init\0").map_err(|e| AlgoError::ModelLoad {
+                    reason: format!("加载符号 rknn_init 失败: {e}"),
                 })?;
             let rknn_destroy: RknnDestroyFn =
                 *lib.get(b"rknn_destroy\0")
-                    .map_err(|e| AlgoError::Internal {
-                        reason: format!("加载 rknn_destroy 符号失败: {e}"),
+                    .map_err(|e| AlgoError::ModelLoad {
+                        reason: format!("加载符号 rknn_destroy 失败: {e}"),
                     })?;
             let rknn_query: RknnQueryFn =
-                *lib.get(b"rknn_query\0").map_err(|e| AlgoError::Internal {
-                    reason: format!("加载 rknn_query 符号失败: {e}"),
+                *lib.get(b"rknn_query\0").map_err(|e| AlgoError::ModelLoad {
+                    reason: format!("加载符号 rknn_query 失败: {e}"),
                 })?;
             let rknn_inputs_set: RknnInputsSetFn =
                 *lib.get(b"rknn_inputs_set\0")
-                    .map_err(|e| AlgoError::Internal {
-                        reason: format!("加载 rknn_inputs_set 符号失败: {e}"),
+                    .map_err(|e| AlgoError::ModelLoad {
+                        reason: format!("加载符号 rknn_inputs_set 失败: {e}"),
                     })?;
-            let rknn_run: RknnRunFn = *lib.get(b"rknn_run\0").map_err(|e| AlgoError::Internal {
-                reason: format!("加载 rknn_run 符号失败: {e}"),
-            })?;
+            let rknn_run: RknnRunFn =
+                *lib.get(b"rknn_run\0").map_err(|e| AlgoError::ModelLoad {
+                    reason: format!("加载符号 rknn_run 失败: {e}"),
+                })?;
             let rknn_outputs_get: RknnOutputsGetFn =
                 *lib.get(b"rknn_outputs_get\0")
-                    .map_err(|e| AlgoError::Internal {
-                        reason: format!("加载 rknn_outputs_get 符号失败: {e}"),
+                    .map_err(|e| AlgoError::ModelLoad {
+                        reason: format!("加载符号 rknn_outputs_get 失败: {e}"),
                     })?;
             let rknn_outputs_release: RknnOutputsReleaseFn = *lib
                 .get(b"rknn_outputs_release\0")
-                .map_err(|e| AlgoError::Internal {
-                    reason: format!("加载 rknn_outputs_release 符号失败: {e}"),
+                .map_err(|e| AlgoError::ModelLoad {
+                    reason: format!("加载符号 rknn_outputs_release 失败: {e}"),
                 })?;
 
+            // 可选符号 (Rockchip 扩展特性)
             let rknn_set_core_mask = lib.get(b"rknn_set_core_mask\0").ok().map(|s| *s);
             let rknn_create_mem_from_fd = lib.get(b"rknn_create_mem_from_fd\0").ok().map(|s| *s);
             let rknn_destroy_mem = lib.get(b"rknn_destroy_mem\0").ok().map(|s| *s);
@@ -286,15 +311,16 @@ impl RknnRuntime {
 }
 
 /// RKNN 推理输出的多模态抽象
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RknnInferenceOutput<'a> {
-    SingleFloat(&'a [f32]),
+    /// 9 张量/多分支 INT8 结构化特征图输出
     MultiBranch(Vec<RknnTensorOutput<'a>>),
+    /// 单通道平铺浮点张量输出（fallback 路径使用）
+    SingleFloat(&'a [f32]),
 }
 
-/// DMA-BUF 缓存条目上限（防止解码器/上游频繁轮转 fd 导致显存和虚拟内存泄露）
-const MAX_DMA_MEM_CACHE: usize = 16;
-
+/// 单个缓存的 DMA-BUF NPU 显存条目
+#[derive(Debug)]
 struct DmaMemEntry {
     mem: *mut RknnTensorMem,
     virt_addr: *mut c_void,
@@ -304,7 +330,7 @@ struct DmaMemEntry {
 }
 
 impl DmaMemEntry {
-    /// 释放 NPU 显存句柄与内核虚拟内存映射
+    /// 释放 NPU 显存句柄与内核虚拟内存映射（运行时 LRU 淘汰使用）
     fn release(&mut self, runtime: &RknnRuntime, ctx: RknnContext) {
         if let Some(destroy_mem) = runtime.rknn_destroy_mem {
             if !self.mem.is_null() && ctx != 0 {
@@ -313,6 +339,14 @@ impl DmaMemEntry {
                 self.mem = null_mut();
             }
         }
+        self.release_cpu_mapping();
+    }
+
+    /// 仅释放 CPU 侧 mmap 映射（Drop 路径使用）
+    ///
+    /// NPU 侧显存句柄由 `rknn_destroy(ctx)` 在 Drop 末尾统一清理，
+    /// 此处仅释放 CPU 侧 mmap 映射，避免与 `rknn_destroy` 内部清理产生 double-free。
+    fn release_cpu_mapping(&mut self) {
         if !self.virt_addr.is_null() && self.virt_addr != libc::MAP_FAILED {
             // SAFETY: 释放内核 DMA-BUF 虚拟内存映射，与 libc::mmap 成对
             unsafe { libc::munmap(self.virt_addr, self.size) };
@@ -321,11 +355,37 @@ impl DmaMemEntry {
     }
 }
 
+/// RKNN 推理会话创建选项
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct RknnSessionOptions {
+    /// 目标核心掩码（如 `RKNN_NPU_CORE_0`, `RKNN_NPU_CORE_0_1`, `RKNN_NPU_CORE_0_1_2` 等）
+    pub core_mask: c_int,
+}
+
+impl Default for RknnSessionOptions {
+    fn default() -> Self {
+        Self {
+            core_mask: RKNN_NPU_CORE_AUTO,
+        }
+    }
+}
+
+impl RknnSessionOptions {
+    pub fn new(core_mask: c_int) -> Self {
+        Self { core_mask }
+    }
+
+    pub fn with_core_mask(core_mask: c_int) -> Self {
+        Self { core_mask }
+    }
+}
+
 enum RknnBackend {
     Hardware {
         runtime: Arc<RknnRuntime>,
         ctx: RknnContext,
-        dma_mem_cache: std::collections::HashMap<i32, DmaMemEntry>,
+        dma_mem_cache: HashMap<i32, DmaMemEntry>,
         access_tick: u64,
     },
     Fallback,
@@ -373,9 +433,10 @@ impl Drop for RknnSession {
             ..
         } = self.backend
         {
-            // 释放所有已缓存的 DMA-BUF NPU 显存映射与对应虚拟内存空间
+            // 仅释放 CPU 侧 mmap 映射；NPU 侧 tensor_mem 句柄由 rknn_destroy 统一清理，
+            // 避免手动 rknn_destroy_mem 与 rknn_destroy 内部清理 double-free。
             for (_fd, mut entry) in dma_mem_cache.drain() {
-                entry.release(runtime, *ctx);
+                entry.release_cpu_mapping();
             }
 
             if *ctx != 0 {
@@ -422,10 +483,34 @@ impl<'a> Drop for RknnOutputsGuard<'a> {
 }
 
 impl RknnSession {
-    /// 从模型文件初始化 RKNN 会话（RK3568 单核）
+    /// 优先物理 librknnrt；未检测到硬件时按 debug_cpu_fallback 语义保底
+    pub fn open_or_fallback(
+        package_root: &Path,
+        model_path: &Path,
+        options: RknnSessionOptions,
+    ) -> Result<Self, AlgoError> {
+        match RknnRuntime::load(package_root) {
+            Ok(rt) => Self::new_with_core_mask(rt, model_path, options.core_mask),
+            Err(e) => {
+                tracing::warn!(reason = ?e, "未检测到物理 librknnrt.so，启用开发调试回退会话");
+                Self::new_fallback(model_path)
+            }
+        }
+    }
+
+    /// 从模型文件初始化 RKNN 会话（默认使用 RKNN_NPU_CORE_AUTO 自动调度）
     pub fn new(runtime: Arc<RknnRuntime>, model_path: &Path) -> Result<Self, AlgoError> {
+        Self::new_with_core_mask(runtime, model_path, RKNN_NPU_CORE_AUTO)
+    }
+
+    /// 从模型文件初始化 RKNN 会话，并显式指定计算核心掩码
+    pub fn new_with_core_mask(
+        runtime: Arc<RknnRuntime>,
+        model_path: &Path,
+        core_mask: c_int,
+    ) -> Result<Self, AlgoError> {
         let mut model_bytes = std::fs::read(model_path).map_err(|e| AlgoError::Internal {
-            reason: format!("读取 RKNN 模型文件失败 ({:?}): {e}", model_path),
+            reason: format!("读取 RKNN 模型文件失败 ({model_path:?}): {e}"),
         })?;
 
         let mut ctx: RknnContext = 0;
@@ -446,11 +531,20 @@ impl RknnSession {
             });
         }
 
-        // RK3568 为单核 NPU（RKNN_NPU_CORE_0 = 1）
+        // 设置核心掩码（优先读取环境变量覆盖，否则使用调用方显式配置）
         if let Some(set_core_mask) = runtime.rknn_set_core_mask {
-            // SAFETY: ctx 是有效初始化的上下文
-            unsafe {
-                (set_core_mask)(ctx, RKNN_NPU_CORE_0);
+            let mask = std::env::var("RKNN_CORE_MASK")
+                .ok()
+                .and_then(|v| v.parse::<c_int>().ok())
+                .unwrap_or(core_mask);
+
+            if mask != RKNN_NPU_CORE_AUTO {
+                // SAFETY: ctx 是有效初始化的上下文
+                let ret = unsafe { (set_core_mask)(ctx, mask) };
+                // 单核硬件如 RK3568 对非默认掩码可能返回 -13 (RKNN_ERR_DEVICE_UNAVAILABLE)，进行容忍
+                if ret != RKNN_SUCC && ret != -13 {
+                    tracing::warn!(ret, mask, "设置 RKNN NPU 核心掩码失败，回退默认调度");
+                }
             }
         }
 
@@ -526,14 +620,14 @@ impl RknnSession {
             model = ?model_path,
             input_dims = ?input_attr.dims[..input_attr.n_dims as usize],
             output_count = io_num.n_output,
-            "RKNN 模型加载完成 (RK3568 单核 NPU)"
+            "RKNN 模型加载完成"
         );
 
         Ok(Self {
             backend: RknnBackend::Hardware {
                 runtime,
                 ctx,
-                dma_mem_cache: std::collections::HashMap::new(),
+                dma_mem_cache: HashMap::new(),
                 access_tick: 0,
             },
             input_attr,
@@ -589,25 +683,28 @@ impl RknnSession {
     /// 构造模拟输出张量数据（用于 debug_cpu_fallback_path）
     ///
     /// 模拟 2 个检测结果：
-    /// - 锚点 10: fire (class 0), 置信度 0.92, 中心 (320, 192), 尺寸 (100, 80)
-    /// - 锚点 25: smoke (class 1), 置信度 0.88, 中心 (480, 300), 尺寸 (120, 90)
-    fn generate_fallback_outputs() -> Vec<f32> {
-        let mut net_out = vec![0.0f32; 84 * 5040];
-        let anchor_a = 10;
-        net_out[anchor_a] = 320.0;
-        net_out[5040 + anchor_a] = 192.0;
-        net_out[2 * 5040 + anchor_a] = 100.0;
-        net_out[3 * 5040 + anchor_a] = 80.0;
-        net_out[4 * 5040 + anchor_a] = 0.92; // class 0: fire
+    /// - 锚点 10: 类别 0, 置信度 0.92, 中心 (320, 192), 尺寸 (100, 80)
+    /// - 锚点 25: 类别 1, 置信度 0.88, 中心 (480, 300), 尺寸 (120, 90)
+    fn fallback_outputs() -> &'static [f32] {
+        static FALLBACK_DATA: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+        FALLBACK_DATA.get_or_init(|| {
+            let mut net_out = vec![0.0f32; 84 * 5040];
+            let anchor_a = 10;
+            net_out[anchor_a] = 320.0;
+            net_out[5040 + anchor_a] = 192.0;
+            net_out[2 * 5040 + anchor_a] = 100.0;
+            net_out[3 * 5040 + anchor_a] = 80.0;
+            net_out[4 * 5040 + anchor_a] = 0.92; // class 0
 
-        let anchor_b = 25;
-        net_out[anchor_b] = 480.0;
-        net_out[5040 + anchor_b] = 300.0;
-        net_out[2 * 5040 + anchor_b] = 120.0;
-        net_out[3 * 5040 + anchor_b] = 90.0;
-        net_out[(4 + 1) * 5040 + anchor_b] = 0.88; // class 1: smoke
+            let anchor_b = 25;
+            net_out[anchor_b] = 480.0;
+            net_out[5040 + anchor_b] = 300.0;
+            net_out[2 * 5040 + anchor_b] = 120.0;
+            net_out[3 * 5040 + anchor_b] = 90.0;
+            net_out[(4 + 1) * 5040 + anchor_b] = 0.88; // class 1
 
-        net_out
+            net_out
+        })
     }
 
     /// 执行推理（Host 内存输入），并闭包借用输出抽象视图
@@ -641,8 +738,7 @@ impl RknnSession {
                 self.run_and_get_outputs(runtime, *ctx, process_fn)
             }
             RknnBackend::Fallback => {
-                let net_out = Self::generate_fallback_outputs();
-                process_fn(&RknnInferenceOutput::SingleFloat(&net_out))
+                process_fn(&RknnInferenceOutput::SingleFloat(Self::fallback_outputs()))
             }
         }
     }
@@ -684,12 +780,11 @@ impl RknnSession {
         let (runtime, ctx) = match &self.backend {
             RknnBackend::Hardware { runtime, ctx, .. } => (runtime.clone(), *ctx),
             RknnBackend::Fallback => {
-                let net_out = Self::generate_fallback_outputs();
-                return process_fn(&RknnInferenceOutput::SingleFloat(&net_out));
+                return process_fn(&RknnInferenceOutput::SingleFloat(Self::fallback_outputs()));
             }
         };
 
-        // 零拷贝 API 可用时，始终走 rknn_set_io_mem 直通路径（无需环境变量开关）
+        // 零拷贝 API 可用时，始终走 rknn_set_io_mem 直通路径
         if let (Some(create_mem), Some(set_io_mem)) =
             (runtime.rknn_create_mem_from_fd, runtime.rknn_set_io_mem)
         {
@@ -780,15 +875,14 @@ impl RknnSession {
             }
 
             // LRU 淘汰：若缓存条目达到上限，淘汰最久未访问的条目
-            if dma_mem_cache.len() >= MAX_DMA_MEM_CACHE {
-                if let Some(oldest_fd) = dma_mem_cache
+            while dma_mem_cache.len() >= MAX_DMA_MEM_CACHE {
+                let oldest_fd = dma_mem_cache
                     .iter()
                     .min_by_key(|(_, entry)| entry.last_used)
-                    .map(|(&fd, _)| fd)
-                {
-                    if let Some(mut evicted) = dma_mem_cache.remove(&oldest_fd) {
-                        evicted.release(runtime, ctx);
-                    }
+                    .map(|(&fd, _)| fd);
+                let Some(fd) = oldest_fd else { break };
+                if let Some(mut evicted) = dma_mem_cache.remove(&fd) {
+                    evicted.release(runtime, ctx);
                 }
             }
 
@@ -799,7 +893,7 @@ impl RknnSession {
 
         // 缓存未命中：mmap DMA-BUF 并绑定到 NPU 上下文
         // SAFETY: 映射 DMA-BUF 虚拟地址。RKNN 驱动要求 rknn_create_mem_from_fd 必须提供非空 virt_addr。
-        //         RK3568 必须声明 PROT_READ | PROT_WRITE，只读映射将在驱动写入时触发 SIGSEGV。
+        //         Rockchip 必须声明 PROT_READ | PROT_WRITE，只读映射将在驱动写入时触发 SIGSEGV。
         let virt_addr = unsafe {
             libc::mmap(
                 null_mut(),
@@ -860,14 +954,13 @@ impl RknnSession {
         F: FnOnce(&RknnInferenceOutput<'_>) -> Result<R, AlgoError>,
     {
         let n_out = self.output_attrs.len();
-        // 9 输出张量 = YOLOv8 烟火多分支 INT8 优化输出；1 输出 = 浮点合并输出
         let is_multi_int8 = n_out > 1;
 
-        let mut outputs: Vec<RknnOutput> = (0..n_out)
+        let want_float = (!is_multi_int8) as u8;
+        let mut outputs: Vec<RknnOutput> = (0..n_out as u32)
             .map(|i| RknnOutput {
-                index: i as u32,
-                want_float: u8::from(!is_multi_int8),
-                is_prealloc: 0,
+                index: i,
+                want_float,
                 ..Default::default()
             })
             .collect();
@@ -886,25 +979,20 @@ impl RknnSession {
         let outputs_guard = RknnOutputsGuard::new(runtime, ctx, outputs);
 
         if is_multi_int8 {
-            let branch_outputs = outputs_guard
-                .outputs
-                .iter()
-                .zip(&self.output_attrs)
-                .enumerate()
-                .map(|(i, (out, attr))| {
-                    // SAFETY: out.buf 由 rknn_outputs_get 填充且大小为 out.size
-                    let data = unsafe {
-                        std::slice::from_raw_parts(out.buf as *const i8, out.size as usize)
-                    };
-                    RknnTensorOutput {
-                        index: i as u32,
-                        dims: [attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3]],
-                        scale: attr.scale,
-                        zp: attr.zp,
-                        data,
-                    }
-                })
-                .collect();
+            let mut branch_outputs = Vec::with_capacity(n_out);
+            for (i, out) in outputs_guard.outputs.iter().enumerate() {
+                let attr = &self.output_attrs[i];
+                // SAFETY: out.buf 由 rknn_outputs_get 填充且大小为 out.size
+                let slice =
+                    unsafe { std::slice::from_raw_parts(out.buf as *const i8, out.size as usize) };
+                branch_outputs.push(RknnTensorOutput {
+                    index: i as u32,
+                    dims: [attr.dims[0], attr.dims[1], attr.dims[2], attr.dims[3]],
+                    scale: attr.scale,
+                    zp: attr.zp,
+                    data: slice,
+                });
+            }
             process_fn(&RknnInferenceOutput::MultiBranch(branch_outputs))
         } else {
             let elem_count = (outputs_guard.outputs[0].size as usize) / std::mem::size_of::<f32>();
@@ -948,5 +1036,30 @@ mod tests {
         assert_eq!(entry.size, 1024);
         assert_eq!(entry.inode, 42);
         assert_eq!(entry.last_used, 1);
+    }
+
+    #[test]
+    fn test_fallback_session_lifecycle() {
+        let fake_model = Path::new("Cargo.toml"); // 使用必定存在的文件做测试
+        let session = RknnSession::new_fallback(fake_model).expect("new_fallback 应该成功");
+        assert!(session.is_fallback());
+        assert_eq!(session.input_attr.dims[1], 384);
+        assert_eq!(session.input_attr.dims[2], 640);
+        assert_eq!(session.output_attrs.len(), 1);
+
+        let rgb_dummy = vec![128u8; 640 * 384 * 3];
+        let called = session
+            .infer_with_host_bytes(&rgb_dummy, |out| {
+                match out {
+                    RknnInferenceOutput::SingleFloat(slice) => {
+                        assert_eq!(slice.len(), 84 * 5040);
+                        assert!((slice[10] - 320.0).abs() < 1e-4);
+                    }
+                    _ => panic!("fallback 模式应该返回 SingleFloat"),
+                }
+                Ok(true)
+            })
+            .expect("infer_with_host_bytes 应该成功");
+        assert!(called);
     }
 }

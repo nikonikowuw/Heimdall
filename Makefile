@@ -109,8 +109,9 @@ help: ## 显示此帮助信息
 	@echo "    make algo-clippy        检查指定平台算法 lint"
 	@echo "    make algo-fmt           格式化指定平台算法"
 	@echo "    make algo-fmt-check     检查指定平台算法格式"
-	@echo "    make algo-check-all     检查 macos、rk3568、rk3576"
-	@echo "    make algo-test-all      测试 macos、rk3568、rk3576"
+	@echo "    make algo-check-all     检查 macos、rk3568、rk3576、rk3588"
+	@echo "    make algo-test-all      测试 macos、rk3568、rk3576、rk3588"
+	@echo "    make algo-new           创建标准算法包 (例如: make algo-new PLATFORM=rk3568 PKG=phone_detection)"
 	@echo "    make algo-check ALGO_PLATFORM=rknn/rk3568"
 	@echo ""
 	@echo "  $(GREEN)SDK 库管理:$(RESET)"
@@ -285,6 +286,14 @@ algo-test-all: ## 测试全部平台算法 workspace
 	$(MAKE) algo-test ALGO_PLATFORM=rknn/rk3576
 	$(MAKE) algo-test ALGO_PLATFORM=rknn/rk3588
 
+.PHONY: algo-new
+algo-new: ## 生成全新标准算法包脚手架 (用法: make algo-new PLATFORM=rk3568 PKG=smoke_detection)
+	@if [ -z "$(PKG)" ]; then \
+		echo -e "$(RED)错误: 请指定 PKG 参数 (例如: make algo-new PLATFORM=rk3568 PKG=phone_detection)$(RESET)"; \
+		exit 1; \
+	fi
+	@./scripts/algo-new.sh $(or $(PLATFORM),rk3568) $(PKG) $(ALARM)
+
 # ============================================================================
 #  交叉编译 — 主程序
 # ============================================================================
@@ -372,6 +381,7 @@ clean: ## 清理所有构建产物
 	$(CARGO) clean --manifest-path $(ALGO_MANIFEST_MACOS)
 	$(CARGO) clean --manifest-path $(ALGO_MANIFEST_RK3568)
 	$(CARGO) clean --manifest-path $(ALGO_MANIFEST_RK3576)
+	$(CARGO) clean --manifest-path $(ALGO_MANIFEST_RK3588)
 	@echo -e "$(GREEN)[clean]$(RESET) 已清理全部构建产物"
 
 .PHONY: clean-target

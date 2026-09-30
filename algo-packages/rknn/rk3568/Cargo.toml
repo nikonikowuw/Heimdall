@@ -20,7 +20,7 @@ unwrap_used = "warn"
 
 [workspace.dependencies]
 # The SDK source is shared with Heimdall, but this workspace owns its lockfile and target.
-algo-sdk = { path = "../../../crates/algo-sdk" }
+algo-sdk = { path = "../../../crates/algo-sdk", features = ["rknn"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

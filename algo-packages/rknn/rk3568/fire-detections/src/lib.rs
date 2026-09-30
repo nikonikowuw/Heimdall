@@ -5,7 +5,6 @@
 
 pub mod config;
 pub mod plugin;
-pub mod rknn;
 pub mod temporal_verifier;
 
 use algo_sdk::export_algo;

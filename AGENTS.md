@@ -97,7 +97,8 @@ cargo nextest run --workspace
 for manifest in \
   algo-packages/macos/Cargo.toml \
   algo-packages/rknn/rk3568/Cargo.toml \
-  algo-packages/rknn/rk3576/Cargo.toml
+  algo-packages/rknn/rk3576/Cargo.toml \
+  algo-packages/rknn/rk3588/Cargo.toml
 do
   cargo fmt --manifest-path "$manifest" --all
   cargo clippy --manifest-path "$manifest" --workspace --all-targets -- -D warnings

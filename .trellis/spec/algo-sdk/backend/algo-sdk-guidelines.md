@@ -5,7 +5,7 @@
 ## 构建边界
 
 - Heimdall 根 workspace 只构建宿主 crate 与 `algo-sdk`；根 `Cargo.toml` 不列出任何具体算法包。
-- `algo-packages/` 按平台和硬件运行时拆分为 `macos`、`rknn/rk3568`、`rknn/rk3576` 三个独立 workspace，各自维护成员、算法侧依赖版本、锁文件和构建缓存。算法包通过各自 workspace 的相对路径依赖使用 `crates/algo-sdk`，不通过宿主业务 crate 反向依赖运行时。
+- `algo-packages/` 按平台和硬件运行时拆分为 `macos`、`rknn/rk3568`、`rknn/rk3576`、`rknn/rk3588` 四个独立 workspace，各自维护成员、算法侧依赖版本、锁文件和构建缓存。算法包通过各自 workspace 的相对路径依赖使用 `crates/algo-sdk`，不通过宿主业务 crate 反向依赖运行时。
 - 算法包构建、测试、格式化和交叉编译均以目标平台 workspace 的 manifest 为入口；交付前生成的 `.so/.dylib` 复制到包内 `lib/`，再由 Makefile 打成归档。
 - 包内 `lib/` 的插件库是本地构建产物，**不入版本库**（`algo-packages/` 各级 `.gitignore` 已覆盖 `*.so` / `*.dylib`）：版本库只承载 manifest、config schema、模型与源码。从干净检出开始时必须先在该包 workspace 执行 `make` / `make package` 生成 `lib/`（归档同样不入库）；否则宿主启动自愈扫描会因缺少插件库而无法自检装载该内置包，依赖真实包的沙箱测试也只会静默跳过。
 - 多个平台 workspace 可以共享 SDK 源码，但不共享 Cargo 的成员集合、锁文件或构建缓存。宿主只在运行时通过 manifest 和 C ABI 动态加载算法制品。
@@ -16,6 +16,9 @@
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | SDK / 宿主 C ABI | [c_abi.rs](../../../../crates/algo-sdk/src/c_abi.rs)、[types.rs](../../../../crates/infer/src/c_abi/types.rs)                                                       |
 | 插件 trait / 导出宏 | [plugin.rs](../../../../crates/algo-sdk/src/plugin.rs)、[macros.rs](../../../../crates/algo-sdk/src/macros.rs)                                                      |
+| 配置宏与三级优先级 | [config.rs](../../../../crates/algo-sdk/src/config.rs)（`algo_config!`、`FromEnvValue`，自动实现显式参数追踪与三级优先级覆盖） |
+| RKNN 运行时与零拷贝 | [rknn.rs](../../../../crates/algo-sdk/src/rknn.rs)（`RknnRuntime`、`RknnSession`、DMA-BUF 零拷贝会话与内存安全生命周期） |
+| 本地调测与基准评测 | [testing.rs](../../../../crates/algo-sdk/src/testing.rs)（`LocalPluginRunner`、`BenchmarkStats`、`MockEmitter`） |
 | 帧 / 预处理 / 模型会话 | [frame.rs](../../../../crates/algo-sdk/src/frame.rs)、[cv](../../../../crates/algo-sdk/src/cv/mod.rs)、[model.rs](../../../../crates/algo-sdk/src/model.rs)             |
 | 后处理工具库 | [cv::postprocess](../../../../crates/algo-sdk/src/cv/postprocess/mod.rs)（quantize / dfl / yolov8_rknn）                                                  |
 | 目标跟踪算法库 | [track::bytetrack](../../../../crates/algo-sdk/src/track/bytetrack.rs)（纯 Rust ByteTrack、卡尔曼滤波与匈牙利最优二分图匹配）                                     |
@@ -152,12 +155,12 @@ unsafe extern "C" fn(api_version: u32) -> *const AvAlgoGalleryAbi;
   - `reserved0` (`u64`) 为对齐与未来扩展保留字段。
   - 人员姓名、照片路径等业务元数据全部保留在宿主（`RegisteredFace` / SQLite）侧，通过 `id` 在检索后由宿主做人员聚合与去重，彻底消除 FFI 边界的业务双写一致性负担。
 
-### 并发与内存模型（Wait-Free RCU）
+### 并发与内存模型（短读锁与不可变快照）
 
-- 算法包内部使用 `FaceGallery` 容器，通过 RCU（Read-Copy-Update）与 `Arc<GallerySnapshot>` 维护底库快照。
-- **读写完全解耦**：写操作（`insert` / `remove` / `clear`）获取排他写锁，生成新快照并原子替换指针；检索操作（`search`）仅在入口获取瞬间读锁克隆快照的 `Arc` 指针即刻释放读锁，后续点积矩阵计算与 Top-K 堆排序在只读快照上执行，实现**多路摄像头 Worker 线程并发检索完全无锁竞争（Wait-Free）**。
-- **内存占用极致轻量**：10,000 张 512D FP32 人脸底库仅占用约 21 MB 内存，多实例完全共享同一底层物理句柄。
-- **宿主单一真实信源（Single Source of Truth）**：持久化数据以宿主 SQLite 为唯一准绳，算法包底库仅作为运行期纯内存加速索引；宿主启动或算法包热重载时通过 C ABI 执行全量同步（`clear` + 批量 `insert`），毫秒级重建完成。
+- [FaceGallery](../../../../crates/algo-sdk/src/face/gallery.rs) 使用 `RwLock<Arc<GallerySnapshot>>` 保存不可变底库快照。
+- **计算阶段不持锁，不等于 Wait-Free**：写操作（`insert` / `remove` / `clear`）持排他写锁构造并替换快照；检索操作（`search`）取得读锁、克隆 `Arc` 后释放读锁，再执行点积与 Top-K 排序。已有快照的检索可与后续写入并行，但新检索获取快照时可能等待写锁，不能承诺整个调用无锁或无等待。
+- **内存预算包含在途快照**：10,000 张 512D FP32 特征的原始数据约为 20.48 MB，不含容器、检索临时数据与快照副本。写入期间旧快照可能仍被检索持有，不能把单份特征大小当作进程内存上限。
+- **宿主单一真实信源（Single Source of Truth）**：持久化数据以宿主 SQLite 为准，算法包底库仅作为运行期内存索引；全量同步使用 `clear` + 批量 `insert`，重建耗时须按底库规模与目标设备测量，不承诺固定毫秒级完成。
 
 ### 批量写入符号 `av_algo_gallery_bulk`
 
@@ -196,15 +199,15 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
 - `CvBuffer` 统一管理 Host、DMA-BUF、CVPixelBuffer、Ascend 显存与宿主视图；宿主视图析构调用相应 free，外部句柄必须有明确 guard/释放责任。
 - `compute_letterbox_layout` 提供 scale、padding 和缩放尺寸，`unmap_box` 复用同一布局完成逆变换。
 - RGA 输出池在初始化时 import handle 并复用；输入 handle 由 `RgaHandleGuard` 单帧管理，禁止每帧重复 import/release 输出池。
-- 单 `RgaCvEngine` 最多缓存 **16** 个输出规格，超限拒绝；优先 system-dma32/system，只有显式 Rga2 强制 DMA32，Auto/Rga3 可使用 64 位物理地址堆。
+- **当前实现与预算差异**：单 `RgaCvEngine` 的缓存上限由 [engine.rs](../../../../crates/algo-sdk/src/cv/platforms/rockchip/engine.rs) 的 `MAX_CACHED_POOLS` 定义，当前为 **64**；满额时已有规格仍可复用，新增规格返回 `AlgoError::Preprocess`。旧规范按 **16** 个规格讨论部署预算，与当前代码不一致；记录 64 仅说明实现上限，不代表已批准扩大资源预算或通过目标板内存验证。现有 `pool_for_enforces_maximum_cached_pools` 测试覆盖满额后拒绝新增规格。堆选择仍优先 system-dma32/system，只有显式 Rga2 强制 DMA32，Auto/Rga3 可使用 64 位物理地址堆。
 - **进程级默认引擎必须显式回收**：`cv::default_engine` 把引擎存放在 `static OnceLock`，而 Rust 静态变量永不执行 `Drop`；若不显式回收，RGA 池持有的 DMA-BUF 导入句柄会一直存活到进程退出，由内核强制回收并在 dmesg 留下 `rga_mm: [tgid:N] Destroy handle[M] when the user exits`。契约：
   1. `CvEngine::release_hardware` 负责释放引擎持有的全部硬件资源（RGA 引擎清空并丢弃池表，池引用归零后各 `PoolResource` 析构即归还句柄），必须幂等且对无硬件资源的平台为空实现；
   2. `export_algo!` 展开的 `instance_create` 为每个实例登记 `DefaultEngineLease`，字段声明在 `InstanceContext` **末尾**，确保在 `plugin`/`engine` 之后析构；
   3. 最后一个实例销毁时计数归零并自动调用 `release_default_engine`（饱和递减，计数为 0 时拒绝递减而非回绕）；
   4. 引擎本体保留在静态中，后续实例按需重建缓冲池。
   不要改用 `library_close_hook` 做此事：`library_close` 在**每次** `RawAlgoLibrary::drop` 都触发（含 `extract_face` 等高频短操作），挂在彼处会造成池反复销毁/重建的句柄抖动。
-- 规格预算按**进程**共享且**不淘汰**：所有算法包、所有实例、所有分辨率都从同一 16 个槽位分配。因此算法包请求的 RGA 输出几何必须收敛到固定集合，**禁止**把随帧变化的 ROI 尺寸直接作为裁剪尺寸（典型翻车：best-shot 按人脸位置逐帧精确裁切，十几条航迹即耗尽预算，此后该引擎全部 `letterbox/resize` 永久失败）；超出档位集合时必须显式退化为固定尺寸（如整帧该轴尺寸），不得静默新增规格。
-- **几何预算的真实不变量是「单分辨率内有界」，不是「与分辨率无关」**：仅靠「超出档位就退化为整帧该轴尺寸」的策略，每个分辨率仍会额外贡献 1 个与帧尺寸绑定的退化档位（含该分辨率的 letterbox 规格则算 2 个），因此**进程并集随部署分辨率种类线性增长**——实测 4 种常见分辨率（640×360 / 704×576 / 1280×720 / 1920×1080）在 RK3568 人脸包上并集为 9 种几何，7 种分辨率可达 12 种，逼近 16 槽上限。落地要求：
+- **规格预算按引擎实例计数，部署内存按进程汇总**：缓存表属于单个 `RgaCvEngine`，共用该引擎的算法实例共享槽位，运行期不自动淘汰规格；不能据此假定所有动态算法库共用一张缓存表。算法包请求的 RGA 输出几何必须收敛到固定集合，**禁止**把随帧变化的 ROI 尺寸直接作为裁剪尺寸；耗尽槽位后新增规格会持续失败，已有规格仍可复用，直到显式释放缓存。超出档位集合时必须采用已定义的固定尺寸退化策略，不得静默新增规格。
+- **几何预算的真实不变量是「单分辨率内有界」，不是「与分辨率无关」**：仅靠「超出档位就退化为整帧该轴尺寸」的策略，每种分辨率仍会贡献与帧尺寸绑定的规格，因此必须核算跨分辨率并集。旧规范记录的 4 种分辨率产生 9 种几何、7 种分辨率产生 12 种几何，仅是当时按 16 槽预算讨论的样例，不能外推为当前 64 槽的容量验证。落地要求：
   1. 档位集合与退化策略必须用**跨分辨率并集**回归测试钉住上限（参考 RK3568 人脸包 `plugin::tests::snapshot_roi_geometry_union_stays_within_process_budget`，含「扫描确实到达退化分支」的饱和校验），不能只断言单分辨率内的档位数；
   2. 部署核对时按「分辨率集合 × 档位并集 + 各算法包 letterbox 规格 + 退化档」核算，为未来算法包预留余量；
   3. 需要彻底解耦时应改用固定画布 + 几何逆变换（源图降采样到定长画布后再采样），但会引入重采样误差，必须先做 embedding 一致性验证，不得为省槽位牺牲识别精度。

@@ -262,13 +262,9 @@ mod macos_run {
             iou_threshold: iou,
             target_classes,
             custom_alarm_label: None,
+            ..Default::default()
         };
-        let init_ctx = InitContext {
-            package_root: Path::new("."),
-            platform_id: "macos-arm64-coreml",
-            instance_id: "standalone",
-            is_self_test: false,
-        };
+        let init_ctx = InitContext::new(Path::new("."), "macos-arm64-coreml", "standalone", false);
 
         let mut detector = GeneralDetector::init(&init_ctx, config)?;
 

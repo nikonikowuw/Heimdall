@@ -13,6 +13,7 @@
 //! 详见 [` GUIDE.md`](https://github.com/) 开发指南。
 
 pub mod c_abi;
+pub mod config;
 pub mod cv;
 pub mod emitter;
 pub mod env;
@@ -23,9 +24,18 @@ pub mod macros;
 pub mod math;
 pub mod model;
 pub mod plugin;
+#[cfg(feature = "rknn")]
+pub mod rknn;
+#[cfg(feature = "rknn")]
+pub mod platforms {
+    pub mod rockchip {
+        pub use crate::rknn;
+    }
+}
 pub mod testing;
 pub mod track;
 
+pub use config::FromEnvValue;
 pub use emitter::ResultEmitter;
 pub use env::PackageEnv;
 pub use error::AlgoError;
@@ -49,7 +59,9 @@ pub use track::{
 
 /// SDK 统一 Prelude，便于算法开发者一键导入核心类型
 pub mod prelude {
+    pub use crate::algo_config;
     pub use crate::c_abi::*;
+    pub use crate::config::FromEnvValue;
     pub use crate::cv::{self, CvBuffer, PreprocessMode};
     pub use crate::emitter::ResultEmitter;
     pub use crate::env::PackageEnv;
@@ -67,6 +79,10 @@ pub mod prelude {
     };
     pub use crate::model::{Core, InferenceSession, ModelWeights, SharedWeights};
     pub use crate::plugin::{AlgoPlugin, InitContext};
+    #[cfg(feature = "rknn")]
+    pub use crate::rknn::{
+        self, RknnInferenceOutput, RknnRuntime, RknnSession, RknnSessionOptions,
+    };
     pub use crate::testing::{MockEmitter, MockFrame, MockFrameBuilder, MockSession, MockWeights};
     pub use crate::track::{
         box_iou, ByteTrackConfig, ByteTracker, KalmanBoxTracker, Rect, STrack, TrackDetection,

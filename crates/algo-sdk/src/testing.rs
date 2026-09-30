@@ -9,6 +9,7 @@ use std::path::Path;
 
 use crate::c_abi::*;
 use crate::cv::buffer::CvBuffer;
+use crate::emitter::ResultEmitter;
 use crate::error::AlgoError;
 use crate::frame::SafeFrame;
 use crate::math::NormBox;
@@ -768,6 +769,103 @@ impl MockFrameBuilder {
     }
 }
 
+/// 性能基准测试统计
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BenchmarkStats {
+    pub avg_ms: f64,
+    pub p50_ms: f64,
+    pub p99_ms: f64,
+    pub fps: f64,
+}
+
+impl BenchmarkStats {
+    /// 从一系列毫秒样本计算均值、P50、P99 及 FPS
+    pub fn compute(mut samples: Vec<f64>) -> Self {
+        if samples.is_empty() {
+            return Self::default();
+        }
+        samples.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let sum: f64 = samples.iter().sum();
+        let avg_ms = sum / samples.len() as f64;
+        let p50_idx = samples.len() * 50 / 100;
+        let p99_idx = (samples.len() * 99 / 100).min(samples.len() - 1);
+        let p50_ms = samples[p50_idx];
+        let p99_ms = samples[p99_idx];
+        let fps = if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 };
+        Self {
+            avg_ms,
+            p50_ms,
+            p99_ms,
+            fps,
+        }
+    }
+}
+
+impl std::fmt::Display for BenchmarkStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Benchmark: avg = {:.2}ms, p50 = {:.2}ms, p99 = {:.2}ms, fps = {:.1}",
+            self.avg_ms, self.p50_ms, self.p99_ms, self.fps
+        )
+    }
+}
+
+/// 安全的 C 回调函数入口，对接 MockEmitter
+unsafe extern "C" fn mock_emitter_c_callback(result: *const AvAlgoResult, user_data: *mut c_void) {
+    if !result.is_null() && !user_data.is_null() {
+        // SAFETY: user_data 来自 MockEmitter 指针
+        let emitter = unsafe { &mut *(user_data as *mut MockEmitter) };
+        // SAFETY: result 为合法 C 结构体指针
+        emitter.record_c_result(unsafe { &*result });
+    }
+}
+
+/// 算法插件本地执行与评测辅助
+#[derive(Debug)]
+pub struct LocalPluginRunner;
+
+impl LocalPluginRunner {
+    /// 执行单次推理，返回耗时 (ms) 与解析到的检测目标列表
+    pub fn run_once<P: crate::plugin::AlgoPlugin>(
+        plugin: &mut P,
+        frame: SafeFrame<'_>,
+    ) -> Result<(f64, Vec<NormBox>), AlgoError> {
+        let mut mock = MockEmitter::new();
+        // SAFETY: mock 存活至 process 调用结束
+        let mut emitter = unsafe { mock.as_emitter(1) };
+        let t0 = std::time::Instant::now();
+        plugin.process(frame, &mut emitter)?;
+        let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        Ok((elapsed_ms, mock.detections().to_vec()))
+    }
+
+    /// 执行多轮基准测试，返回统计指标与首轮检测结果
+    pub fn benchmark<P: crate::plugin::AlgoPlugin>(
+        plugin: &mut P,
+        frame: SafeFrame<'_>,
+        loops: usize,
+    ) -> Result<(BenchmarkStats, Vec<NormBox>), AlgoError> {
+        let loops = loops.max(1);
+        let mut samples = Vec::with_capacity(loops);
+        let mut first_detections = Vec::new();
+
+        for i in 0..loops {
+            let mut mock = MockEmitter::new();
+            // SAFETY: mock 存活至 process 调用结束
+            let mut emitter = unsafe { mock.as_emitter((i + 1) as u64) };
+            let t0 = std::time::Instant::now();
+            plugin.process(frame, &mut emitter)?;
+            samples.push(t0.elapsed().as_secs_f64() * 1000.0);
+            if i == 0 {
+                first_detections = mock.detections().to_vec();
+            }
+        }
+
+        Ok((BenchmarkStats::compute(samples), first_detections))
+    }
+}
+
 /// 模拟结果捕获器，替代 `ResultEmitter` 捕获算法发射的检测结果
 #[derive(Debug, Default)]
 pub struct MockEmitter {
@@ -779,6 +877,26 @@ pub struct MockEmitter {
 impl MockEmitter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 获取 C ABI 回调函数指针，用于在单测或本地工具中对接 `ResultEmitter::from_raw`
+    pub fn c_callback() -> Option<AvAlgoResultCb> {
+        Some(mock_emitter_c_callback)
+    }
+
+    /// 构造一个绑定当前 `MockEmitter` 的 `ResultEmitter`
+    ///
+    /// # Safety
+    /// 返回的 `ResultEmitter` 不得在当前 `MockEmitter` 析构后被调用。
+    pub unsafe fn as_emitter(&mut self, request_id: u64) -> ResultEmitter<'_> {
+        // SAFETY: 由调用方保证 self 生命周期覆盖生成的 ResultEmitter
+        unsafe {
+            ResultEmitter::from_raw(
+                request_id,
+                Self::c_callback(),
+                self as *mut Self as *mut c_void,
+            )
+        }
     }
 
     pub fn detections(&self) -> &[NormBox] {
@@ -917,5 +1035,29 @@ mod tests {
             crate::frame::FrameHandleView::Host { data } => assert_eq!(data.len(), 16),
             _ => panic!("预期 Host 句柄"),
         }
+    }
+
+    #[test]
+    fn test_benchmark_stats_compute() {
+        let empty = BenchmarkStats::compute(vec![]);
+        assert_eq!(empty, BenchmarkStats::default());
+
+        let samples = vec![10.0, 20.0, 30.0, 40.0, 50.0];
+        let stats = BenchmarkStats::compute(samples);
+        assert!((stats.avg_ms - 30.0).abs() < 1e-5);
+        assert!((stats.p50_ms - 30.0).abs() < 1e-5);
+        assert!((stats.p99_ms - 50.0).abs() < 1e-5);
+        assert!((stats.fps - 1000.0 / 30.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_mock_emitter_as_emitter() {
+        let mut mock = MockEmitter::new();
+        // SAFETY: mock 存活至 emitter 被使用完毕
+        let mut emitter = unsafe { mock.as_emitter(42) };
+        let b = NormBox::new(0.1, 0.1, 0.2, 0.2, 0.9, 1);
+        emitter.emit_detections(&[b]).expect("emit_detections");
+        assert_eq!(mock.detections().len(), 1);
+        assert_eq!(mock.detections()[0].class_id, 1);
     }
 }

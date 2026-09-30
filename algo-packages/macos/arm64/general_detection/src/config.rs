@@ -1,6 +1,7 @@
 //! 算法配置定义与 COCO 80 类别位掩码过滤
 
-use serde::Deserialize;
+use algo_sdk::algo_config;
+pub use algo_sdk::env::PackageEnv;
 
 pub const COCO_CLASSES: [&str; 80] = [
     "person",
@@ -108,27 +109,14 @@ fn default_target_classes() -> Vec<String> {
     ]
 }
 
-/// 实例运行时配置
-#[derive(Debug, Clone, Deserialize)]
-pub struct InstanceConfig {
-    #[serde(default = "default_confidence")]
-    pub confidence_threshold: f32,
-    #[serde(default = "default_iou")]
-    pub iou_threshold: f32,
-    #[serde(default = "default_target_classes")]
-    pub target_classes: Vec<String>,
-    #[serde(default)]
-    pub custom_alarm_label: Option<String>,
-}
-
-impl Default for InstanceConfig {
-    fn default() -> Self {
-        Self {
-            confidence_threshold: default_confidence(),
-            iou_threshold: default_iou(),
-            target_classes: default_target_classes(),
-            custom_alarm_label: None,
-        }
+algo_config! {
+    /// 实例运行时配置
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct InstanceConfig {
+        pub confidence_threshold: f32 = default_confidence(),
+        pub iou_threshold: f32 = default_iou(),
+        pub target_classes: Vec<String> = default_target_classes(),
+        pub custom_alarm_label: Option<String> = None,
     }
 }
 
