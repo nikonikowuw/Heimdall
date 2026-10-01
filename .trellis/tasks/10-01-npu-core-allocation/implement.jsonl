@@ -9,5 +9,11 @@
 {"file": ".trellis/spec/api/backend/api-guidelines.md", "reason": "信封、任务写入和错误映射"}
 {"file": ".trellis/spec/web/frontend/type-safety.md", "reason": "旧客户端字段保留和共享类型"}
 {"file": ".trellis/spec/guides/quality-guidelines.md", "reason": "测试及验收门禁"}
-{"file": ".trellis/tasks/10-01-npu-core-allocation/research.md", "reason": "源码证据与未验证板端事实"}
+{"file": ".trellis/tasks/10-01-npu-core-allocation/research.md", "reason": "官方 V2.3.2 权重复用 PDF/头文件固定来源、源码缺口及未验证板端事实"}
 {"file": ".trellis/tasks/10-01-npu-core-allocation/api.md", "reason": "待确认的跨层 API 契约"}
+{"file": ".trellis/spec/guides/architecture-overview.md", "reason": "跨层职责、单向依赖和运行时数据流"}
+{"file": ".trellis/spec/guides/directory-structure.md", "reason": "启动配置、容量及 deadline 的归属和兼容默认值"}
+{"file": ".trellis/spec/pipeline/backend/detection-alarm-contract.md", "reason": "实例故障隔离时保持检测、跟踪和证据行为"}
+{"file": ".trellis/tasks/10-01-npu-core-allocation/prd.md", "reason": "R01-R13、AC01-AC22；D1 已确认/Q1 撤销，不视为实施授权"}
+{"file": ".trellis/tasks/10-01-npu-core-allocation/design.md", "reason": "执行/权重双层 owner、独立 Worker、根子清理、宿主准入与 Apply"}
+{"file": ".trellis/tasks/10-01-npu-core-allocation/implement.md", "reason": "A0-E 依赖、T01-T38 合同、物理权重/并发隔离与发布门禁"}

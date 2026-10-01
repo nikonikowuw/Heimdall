@@ -2,7 +2,7 @@
   "id": "npu-core-allocation",
   "name": "npu-core-allocation",
   "title": "宿主协同 NPU 多核分配与卡亲和架构",
-  "description": "优化执行组级 NPU 放置、资源所有权、版本化插件协商和控制面闭环；草案待确认，不启动实现。",
+  "description": "规划实例专用 Worker/独立 session + 同模型物理权重共享、宿主分核与双层预算；验证 RKNN dup_context，保持 planning，不启动实现。",
   "status": "planning",
   "dev_type": null,
   "scope": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "2026-10-01 规划修订：严格 manual/执行组语义/API 与可选 ABI 扩展均待评审；板端能力及错误码未验证。",
+  "notes": "用户已确认 D1：一实例一专用推理 Worker、独立检测/特征 session、宿主分核且共享模型权重。原 Q1 共享串行组整组换核前提已撤销，不再阻塞；不是批准停组。保留默认 auto/严格 manual，亲和降级不得放宽共享权重。完整 API/双层生命周期与兼容发布仍待最终评审；目标板 SDK/预算/性能未验证，未授权 task.py start。",
   "meta": {}
 }
