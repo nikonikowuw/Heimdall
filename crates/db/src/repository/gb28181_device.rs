@@ -220,6 +220,14 @@ impl Gb28181DeviceRepo {
             .map_err(DbError::from)?;
 
         let all_cameras = CameraEntity::find().all(db).await.map_err(DbError::from)?;
+        let camera_by_gb: std::collections::HashMap<(&str, &str), &str> = all_cameras
+            .iter()
+            .filter_map(|cam| {
+                let dev_id = cam.gb28181_device_id.as_deref()?;
+                let ch_id = cam.gb28181_channel_id.as_deref()?;
+                Some(((dev_id, ch_id), cam.camera_id.as_str()))
+            })
+            .collect();
 
         let mut result = Vec::with_capacity(devices.len());
         for dev in devices {
@@ -227,10 +235,9 @@ impl Gb28181DeviceRepo {
                 .iter()
                 .filter(|c| c.device_id == dev.device_id)
                 .map(|c| {
-                    let matching_cam = all_cameras.iter().find(|cam| {
-                        cam.gb28181_device_id.as_deref() == Some(&c.device_id)
-                            && cam.gb28181_channel_id.as_deref() == Some(&c.channel_id)
-                    });
+                    let matching_camera_id = camera_by_gb
+                        .get(&(c.device_id.as_str(), c.channel_id.as_str()))
+                        .copied();
                     types::Gb28181ChannelDto {
                         device_id: c.device_id.clone(),
                         channel_id: c.channel_id.clone(),
@@ -241,8 +248,8 @@ impl Gb28181DeviceRepo {
                         parent_id: c.parent_id.clone(),
                         sub_stream_supported: c.sub_stream_supported != 0,
                         last_seen_ms: c.last_seen_ms,
-                        is_imported: matching_cam.is_some(),
-                        camera_id: matching_cam.map(|cam| cam.camera_id.clone()),
+                        is_imported: matching_camera_id.is_some(),
+                        camera_id: matching_camera_id.map(str::to_string),
                     }
                 })
                 .collect();

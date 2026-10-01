@@ -443,3 +443,45 @@ fn test_v19_drops_legacy_galleries_table() {
     // 幂等性测试
     conn.execute_batch(v19).expect("apply V19 twice");
 }
+
+#[test]
+fn test_v22_adds_camera_indexes() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    let v1 = include_str!("../src/migration/migrations/V1__init_schema.sql");
+    let v22 = include_str!("../src/migration/migrations/V22__camera_indexes.sql");
+
+    conn.execute_batch(v1).expect("apply V1");
+    conn.execute_batch(v22).expect("apply V22");
+
+    for index in [
+        "idx_cameras_healthy_status",
+        "idx_cameras_gb28181_lookup",
+        "idx_cameras_protocol",
+    ] {
+        let found: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1;",
+                [index],
+                |row| row.get(0),
+            )
+            .expect("query index presence");
+        assert_eq!(found, 1, "missing index {index}");
+    }
+
+    // 验证 EXPLAIN QUERY PLAN 使用部分索引
+    let query_plan: String = conn
+        .query_row(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM cameras WHERE last_probe_status = 'healthy';",
+            [],
+            |row| row.get(3),
+        )
+        .expect("explain query plan");
+    assert!(
+        query_plan.contains("idx_cameras_healthy_status"),
+        "expected query plan to use idx_cameras_healthy_status, got: {query_plan}"
+    );
+
+    // 幂等性测试
+    conn.execute_batch(v22).expect("apply V22 twice");
+}

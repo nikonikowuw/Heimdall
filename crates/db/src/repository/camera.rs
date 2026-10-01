@@ -56,6 +56,20 @@ impl CameraRepo {
             .map_err(DbError::from)
     }
 
+    pub async fn find_by_gb28181_channel(
+        db: &DatabaseConnection,
+        device_id: &str,
+        channel_id: &str,
+    ) -> Result<Option<Model>, DbError> {
+        Entity::find()
+            .filter(Column::Protocol.eq("gb28181"))
+            .filter(Column::Gb28181DeviceId.eq(device_id))
+            .filter(Column::Gb28181ChannelId.eq(channel_id))
+            .one(db)
+            .await
+            .map_err(DbError::from)
+    }
+
     pub async fn insert(
         db: &DatabaseConnection,
         active_model: ActiveModel,
@@ -217,5 +231,40 @@ mod tests {
                 .last_probe_status,
             "failed"
         );
+    }
+
+    #[tokio::test]
+    async fn test_find_by_gb28181_channel() {
+        let db = crate::init_test_db().await.unwrap();
+        CameraRepo::insert(
+            &db,
+            ActiveModel {
+                camera_id: Set("CAM-GB-01".to_string()),
+                name: Set("GB Channel 1".to_string()),
+                protocol: Set("gb28181".to_string()),
+                rtsp_url: Set("rtsp://127.0.0.1/gb1".to_string()),
+                gb28181_device_id: Set(Some("34020000001320000001".to_string())),
+                gb28181_channel_id: Set(Some("34020000001320000002".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let found = CameraRepo::find_by_gb28181_channel(
+            &db,
+            "34020000001320000001",
+            "34020000001320000002",
+        )
+        .await
+        .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().camera_id, "CAM-GB-01");
+
+        let not_found =
+            CameraRepo::find_by_gb28181_channel(&db, "34020000001320000001", "non_existent")
+                .await
+                .unwrap();
+        assert!(not_found.is_none());
     }
 }
