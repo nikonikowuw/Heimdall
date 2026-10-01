@@ -273,11 +273,12 @@ fn run_face_extraction_pipeline(
     }
     // SAFETY: C ABI 输入契约保证 image_bytes 指向 image_bytes_len 个只读字节。
     let image_bytes = unsafe { slice::from_raw_parts(input_ref.image_bytes, image_len) };
-    let image = image::load_from_memory(image_bytes)
-        .map_err(|error| AlgoError::Preprocess {
+    let dynamic_img =
+        image::load_from_memory(image_bytes).map_err(|error| AlgoError::Preprocess {
             reason: format!("JPEG 解码失败: {error}"),
-        })?
-        .to_rgb8();
+        })?;
+    let orientation = algo_sdk::face::parse_exif_orientation(image_bytes);
+    let image = algo_sdk::face::apply_orientation(dynamic_img, orientation).to_rgb8();
 
     let (detector_rgb, detector_mode) = prepare_detector_input(&image)?;
     let models = shared_models(package_root)?;

@@ -7,6 +7,7 @@
 
 pub mod align;
 pub mod gallery;
+pub mod orientation;
 pub mod quality;
 
 pub use align::{
@@ -18,6 +19,9 @@ pub use gallery::{
     bytes_to_floats, floats_to_bytes, megvii_calibrate_cosine, CandidateItem, FaceGallery,
     GalleryFace,
 };
+#[cfg(any(feature = "image", feature = "testing-image", test))]
+pub use orientation::apply_orientation;
+pub use orientation::parse_exif_orientation;
 pub use quality::{
     compute_quality, estimate_pitch, estimate_yaw, is_landmark_geometry_plausible, FaceQuality,
     QualityConfig,

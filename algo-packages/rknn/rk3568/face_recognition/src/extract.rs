@@ -108,7 +108,9 @@ fn decode_input_image(bytes: &[u8]) -> Result<RgbImage, AlgoError> {
     if decoded_bytes > MAX_DECODED_IMAGE_BYTES {
         return Err(AlgoError::OutOfMemory);
     }
-    Ok(decoded.to_rgb8())
+    let orientation = algo_sdk::face::parse_exif_orientation(bytes);
+    let oriented = algo_sdk::face::apply_orientation(decoded, orientation);
+    Ok(oriented.to_rgb8())
 }
 
 #[inline]

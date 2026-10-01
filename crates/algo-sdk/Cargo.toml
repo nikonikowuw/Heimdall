@@ -27,8 +27,11 @@ default = []
 rga = []
 rknn = ["dep:libloading"]
 
+# 图像工具可选特性（默认不包含，保证轻量级插件零冗余体积）
+image = ["dep:image"]
+
 # 测试脚手架可选特性
-testing-image = ["dep:image"]
+testing-image = ["image"]
 testing-hardware = ["testing-image"]
 
 [lints]

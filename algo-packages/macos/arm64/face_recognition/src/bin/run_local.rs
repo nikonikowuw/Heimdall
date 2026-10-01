@@ -490,7 +490,10 @@ mod macos {
 
         let models = CoreMlFaceModels::load(package_root)?;
         let config = InstanceConfig::default();
-        let image = image::open(&image_path)?.to_rgb8();
+        let raw_bytes = std::fs::read(&image_path)?;
+        let dynamic_img = image::load_from_memory(&raw_bytes)?;
+        let orientation = algo_sdk::face::parse_exif_orientation(&raw_bytes);
+        let image = algo_sdk::face::apply_orientation(dynamic_img, orientation).to_rgb8();
         let mock_frame = MockFrameBuilder::new()
             .dimensions(image.width(), image.height())
             .host_data(image.clone().into_raw())

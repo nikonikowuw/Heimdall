@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -940,16 +939,20 @@ impl PersonnelService {
     }
 }
 
-/// 异步调用阻塞线程池保证图片转码为标准 JPEG
+/// 异步调用阻塞线程池保证图片转码为标准 JPEG，并根据 EXIF Orientation 标签校正像素方向
 pub(crate) async fn ensure_jpeg_bytes_async(raw: Vec<u8>) -> Result<Vec<u8>, ApiError> {
-    if raw.starts_with(&[0xFF, 0xD8]) {
+    let orientation = crate::image_orientation::parse_exif_orientation(&raw);
+    if raw.starts_with(&[0xFF, 0xD8]) && orientation == 1 {
         return Ok(raw);
     }
     tokio::task::spawn_blocking(move || {
         let img = image::load_from_memory(&raw)
             .map_err(|e| ApiError::BadRequest(format!("不支持的图片格式或文件损坏: {e}")))?;
-        let mut out = Vec::with_capacity(raw.len());
-        img.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        let oriented = crate::image_orientation::apply_orientation(img, orientation);
+        let mut out = Vec::with_capacity(raw.len().max(64 * 1024));
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95);
+        encoder
+            .encode_image(&oriented)
             .map_err(|e| ApiError::Internal(format!("转码为 JPEG 失败: {e}")))?;
         Ok(out)
     })
@@ -1061,5 +1064,97 @@ mod tests {
         assert!(result.len() >= 2);
         assert_eq!(result[0], 0xFF);
         assert_eq!(result[1], 0xD8);
+    }
+
+    fn create_synthetic_jpeg_with_orientation(
+        width: u32,
+        height: u32,
+        orientation: u16,
+    ) -> Vec<u8> {
+        let rgb = image::RgbImage::from_pixel(width, height, image::Rgb([128, 64, 32]));
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+            .encode_image(&image::DynamicImage::ImageRgb8(rgb))
+            .expect("synthetic jpeg encoding should succeed");
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes());
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&orientation.to_le_bytes());
+        tiff.extend_from_slice(&[0, 0]);
+
+        let mut app1_payload = Vec::new();
+        app1_payload.extend_from_slice(b"Exif\0\0");
+        app1_payload.extend_from_slice(&tiff);
+
+        let app1_len = (app1_payload.len() + 2) as u16;
+        let mut with_exif = Vec::with_capacity(jpeg.len() + app1_payload.len() + 4);
+        with_exif.extend_from_slice(&jpeg[0..2]);
+        with_exif.push(0xFF);
+        with_exif.push(0xE1);
+        with_exif.extend_from_slice(&app1_len.to_be_bytes());
+        with_exif.extend_from_slice(&app1_payload);
+        with_exif.extend_from_slice(&jpeg[2..]);
+
+        with_exif
+    }
+
+    fn create_synthetic_png_with_orientation(width: u32, height: u32, orientation: u16) -> Vec<u8> {
+        use image::ImageEncoder;
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes());
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&orientation.to_le_bytes());
+        tiff.extend_from_slice(&[0, 0]);
+
+        let pixels = image::RgbImage::from_pixel(width, height, image::Rgb([128, 64, 32]));
+        let mut png = Vec::new();
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut png);
+        encoder.set_exif_metadata(tiff).unwrap();
+        encoder
+            .write_image(&pixels, width, height, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        png
+    }
+
+    #[tokio::test]
+    async fn test_ensure_jpeg_bytes_async_normalizes_orientation_6() {
+        // 宽 40, 高 20 的横版图像，打入 Orientation: 6 (手机竖拍)
+        let raw = create_synthetic_jpeg_with_orientation(40, 20, 6);
+        assert_eq!(crate::image_orientation::parse_exif_orientation(&raw), 6);
+
+        let normalized = ensure_jpeg_bytes_async(raw).await.unwrap();
+        assert!(normalized.starts_with(&[0xFF, 0xD8]));
+        assert_eq!(
+            crate::image_orientation::parse_exif_orientation(&normalized),
+            1
+        );
+
+        let decoded = image::load_from_memory(&normalized).unwrap();
+        // 物理像素已转正为竖版尺寸 (宽 20, 高 40)
+        assert_eq!(decoded.width(), 20);
+        assert_eq!(decoded.height(), 40);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_jpeg_bytes_async_normalizes_png_exif_orientation_6() {
+        let raw = create_synthetic_png_with_orientation(40, 20, 6);
+        assert_eq!(crate::image_orientation::parse_exif_orientation(&raw), 6);
+
+        let normalized = ensure_jpeg_bytes_async(raw).await.unwrap();
+        let decoded = image::load_from_memory(&normalized).unwrap();
+        assert_eq!(decoded.width(), 20);
+        assert_eq!(decoded.height(), 40);
     }
 }

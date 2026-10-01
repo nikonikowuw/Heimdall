@@ -12,7 +12,7 @@ name = "face_recognition_coreml"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-algo-sdk = { workspace = true }
+algo-sdk = { workspace = true, features = ["image"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 image = { workspace = true }
