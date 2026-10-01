@@ -78,10 +78,10 @@ topology 的设备/核心数组受已配置 inventory 上限限制；超限明�
 | PUT 已提交后硬件不可满足 | 保留既有任务保存响应语义，运行态 pending/failed；不得伪造整次 DB 回滚 |
 | 未认证/无权限 | 既有 401/403 |
 
-结构正确但设备离线/共享组变化的请求不能靠预检查保证生效。持久化 desiredRevision 后，由运行时复核；失败保留旧 appliedRevision 和可诊断原因。不得宣称任务 PUT 成功意味着掩码已成功设置。
+保存前依据当前可信拓扑校验 manual：设备或核心明确不存在返回 400，提示合法范围；拓扑不可用或过期而无法验证时返回 503，均不写入配置。共享组冲突按领域错误映射，不自动换核。通过检查并持久化 desiredRevision 后仍由运行时复核；失败保留旧健康 Worker、appliedRevision 和可诊断原因。重启后原绑定不可满足仅该实例启动失败。不得宣称任务 PUT 成功意味着掩码已成功设置。
 
 ## Compatibility / Changelog
 
 - 2026-10-01 draft：实例 affinity、严格 manual、诊断查询；替代原 pinned_core/pinned_device 与 spread/shared 混合语义。
 - 旧客户端省略字段不会清空新配置；Web 完整往返测试必须覆盖 taskDraft 与 LiveRulesStudio 的重建对象路径。
-- API 契约需确认；新增可视化编辑器不在本期范围。
+- 用户已确认严格 manual / auto 受控降级行为；其余完整 API 契约仍需确认。新增可视化编辑器不在本期范围。

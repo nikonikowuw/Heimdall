@@ -160,7 +160,9 @@ Runtime 错误码以目标头文件/库版本为准。当前源码对裸 -13 的
 
 新增 algorithm_instances.affinity_json（加法迁移、旧值 auto），与 params_json 分开。TaskRepo 在已有单事务内处理省略/显式 null，保留现有 algorithmInstances 集合替换语义。不能通过 Option<T> 的普通反序列化把“缺失”和“null”合并。
 
-先校验结构，再提交期望 revision；硬件/共享冲突在运行时准入复核，避免把请求前检查当锁定资源。持续沿用 configRevision 乐观锁和 desiredRevision/appliedRevision。
+先校验结构及当前可信拓扑中的设备、核心和已知能力；manual 明确非法或拓扑无法验证时拒绝保存，不修改 DB。通过后提交期望 revision；硬件/共享冲突在运行时准入复核，避免把请求前检查当锁定资源。持续沿用 configRevision 乐观锁和 desiredRevision/appliedRevision。
+
+用户已确认严格 manual：运行中修改失败保留旧健康 Worker；重启后绑定不可满足仅该实例启动失败，不自动换核、不影响其他任务。auto 仅允许经验证且可观测的受控降级。
 
 DB 提交与硬件切换不可能是单一 SQLite 事务：成功保存可处于 pending/failed；旧健康 Worker 若仍运行须显示其 appliedRevision。候选新 Worker Ready 后在帧边界切换，旧代际迟到结果继续按现有栅栏丢弃。无资源时不销毁旧 Worker以制造“成功”。
 

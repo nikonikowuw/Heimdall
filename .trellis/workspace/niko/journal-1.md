@@ -39,3 +39,35 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: 归档 Bootstrap Guidelines
+
+**Date**: 2026-10-01
+**Task**: 归档 Bootstrap Guidelines
+**Package**: infer
+**Branch**: `dev`
+
+### Summary
+
+按用户要求归档 00-bootstrap-guidelines；抽屉实现提交 7d32088 已由先前 journal 记录，本条不重复引用。NPU 多核分配任务继续处于 planning，模板哈希清单的未提交改动予以保留。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
