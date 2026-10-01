@@ -904,7 +904,16 @@ impl PacketDispatcher {
             .read()
             .values()
             .filter(|consumer| {
-                consumer.mailbox.is_recovering()
+                // 僵尸回收只面向**预览类**消费者：它们代表可重连自愈的观看客户端，
+                // 断线后不再读取即可回收。
+                //
+                // 管线内部消费者（Analysis / MainStreamEvidence / Recording）是长生命周期组件，
+                // 源流中断时它们只是暂时无包可读，重连后由 `Replay` 自愈；若一并回收，
+                // 其 mailbox 被 close 会导致分析泵 / 录像 Worker 永久退出且无人重启。
+                matches!(
+                    consumer.kind,
+                    ConsumerKind::HttpFlv | ConsumerKind::WebCodecs
+                ) && consumer.mailbox.is_recovering()
                     && now_mono_ms.saturating_sub(consumer.mailbox.last_progress_mono_ms())
                         >= self.limits.zombie_no_progress_ms
             })
@@ -1088,6 +1097,50 @@ mod tests {
             .mailbox()
             .recv_blocking(std::time::Duration::from_millis(10));
         assert!(matches!(closed, BlockingRecv::Closed));
+    }
+
+    #[tokio::test]
+    async fn internal_consumers_survive_zombie_eviction() {
+        // 管线内部消费者（分析/证据/录像）在源流中断的 recovering 窗口内不得被僵尸回收：
+        // 一旦 mailbox 被 close，分析泵与录像 Worker 会永久退出且无人重启。
+        let dispatcher = Arc::new(PacketDispatcher::new(PreviewDistributionConfig {
+            max_consumers_per_stream: 4,
+            max_total_consumers: 8,
+            ..test_config()
+        }));
+        let analysis = dispatcher
+            .subscribe("analysis", ConsumerKind::Analysis)
+            .expect("analysis subscription");
+        let recording = dispatcher
+            .subscribe("recording", ConsumerKind::Recording)
+            .expect("recording subscription");
+        let preview = dispatcher
+            .subscribe("preview", ConsumerKind::HttpFlv)
+            .expect("preview subscription");
+
+        // 用超容量的无关键帧脉冲把所有消费者推入 recovering
+        for i in 0..200 {
+            dispatcher.publish(packet(1000 + i * 40, false));
+        }
+        for sub in [&analysis, &recording, &preview] {
+            assert!(sub.mailbox().is_recovering(), "容量溢出后应进入 recovering");
+        }
+
+        // 时间推进到远超僵尸阈值
+        let now = dispatcher
+            .consumers
+            .read()
+            .values()
+            .map(|c| c.mailbox.last_progress_mono_ms())
+            .max()
+            .expect("至少一个消费者")
+            + 60_000;
+
+        // 只有预览消费者被回收
+        assert_eq!(dispatcher.evict_stalled(now), 1, "仅预览消费者应被回收");
+        assert!(!analysis.mailbox().is_closed(), "分析消费者不得被僵尸回收");
+        assert!(!recording.mailbox().is_closed(), "录像消费者不得被僵尸回收");
+        assert!(preview.mailbox().is_closed(), "预览消费者应被回收");
     }
 
     #[tokio::test]
