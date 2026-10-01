@@ -270,6 +270,11 @@ mod linux_run {
             iou_threshold: iou,
             target_classes,
             custom_alarm_label: None,
+            // 独立评测工具即宿主：其填入的值不得再被包内 .env 覆盖
+            explicit_fields: ["confidence_threshold", "iou_threshold", "target_classes"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
         };
         let init_ctx = InitContext::new(Path::new("."), "linux-rknn", "standalone_local", false);
 

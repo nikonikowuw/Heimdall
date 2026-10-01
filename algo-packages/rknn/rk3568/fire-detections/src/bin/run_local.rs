@@ -10,11 +10,10 @@
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use std::ffi::c_void;
     use std::path::Path;
 
     use algo_sdk::plugin::{AlgoPlugin, InitContext};
-    use algo_sdk::testing::{BenchmarkStats, LocalPluginRunner, MockFrameBuilder};
+    use algo_sdk::testing::{LocalPluginRunner, MockFrameBuilder};
     use fire_smoke_detection::config::InstanceConfig;
     use fire_smoke_detection::plugin::FireSmokeDetector;
 

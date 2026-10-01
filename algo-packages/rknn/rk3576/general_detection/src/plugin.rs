@@ -13,7 +13,7 @@ use {
     crate::postprocess::{parse_and_unmap_output, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH},
     algo_sdk::cv::engine::CvEngine,
     algo_sdk::cv::platforms::rockchip::RgaCvEngine,
-    algo_sdk::rknn::{RknnInferenceOutput, RknnSession, RknnSessionOptions, RKNN_NPU_CORE_0_1},
+    algo_sdk::rknn::{RknnSession, RknnSessionOptions, RKNN_NPU_CORE_0_1},
     std::path::Path,
 };
 

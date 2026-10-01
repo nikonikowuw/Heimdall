@@ -1242,6 +1242,9 @@ fn dma_identity(layout: &DmaBufLayout) -> Result<DmaIdentity, AlgoError> {
     // SAFETY: fstat 返回成功后完整写入 stat。
     let stat = unsafe { stat.assume_init() };
     Ok(DmaIdentity {
+        // dev_t 宽度随平台而异：Darwin 为 i32、Linux 为 u64。
+        // 该转换在两个目标上都是必需的，故显式豁免 unnecessary_cast。
+        #[allow(clippy::unnecessary_cast)]
         device: stat.st_dev as u64,
         inode: stat.st_ino,
         size: layout.size,
