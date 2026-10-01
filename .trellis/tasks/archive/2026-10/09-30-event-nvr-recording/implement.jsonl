@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/media/backend/media-pipeline.md", "reason": "录像流分发与切片封装规范、ConsumerKind 隔离、PreCaptureRingBuffer 与直接封装约束"}
+{"file": ".trellis/spec/guides/concurrency-guidelines.md", "reason": "线程模型约束：文件 IO 与封装必须在专用 OS 线程，禁止在 Tokio worker 运行"}
+{"file": ".trellis/spec/db/backend/database-guidelines.md", "reason": "录像数据模型设计、原子级联淘汰与'图在案在，图销案销'约束"}
+{"file": ".trellis/spec/pipeline/backend/detection-alarm-contract.md", "reason": "告警触发与事件总线对接、时间基准规范"}
+{"file": ".trellis/spec/api/backend/api-guidelines.md", "reason": "HTTP API 路由、Range 播放接口与 camelCase DTO 规范"}
+{"file": ".trellis/spec/guides/error-handling.md", "reason": "错误类型定义与 Result 规范"}
+{"file": ".trellis/spec/web/frontend/index.md", "reason": "前端播放器集成、mp4box.js 浏览器侧导出与 UI 规范"}

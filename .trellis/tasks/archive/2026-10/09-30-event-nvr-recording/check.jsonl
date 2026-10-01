@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/guides/quality-guidelines.md", "reason": "代码门禁、测试覆盖与质量规范"}
+{"file": ".trellis/spec/media/backend/media-pipeline.md", "reason": "录像流分发、时序单调性、SourceReset 恢复与防反压验收"}
+{"file": ".trellis/spec/guides/concurrency-guidelines.md", "reason": "验证无无界 channel、文件 IO 不占用 Tokio worker"}
+{"file": ".trellis/spec/db/backend/database-guidelines.md", "reason": "验证原子级联删除、相对路径存储与索引规范"}
+{"file": ".trellis/spec/api/backend/api-guidelines.md", "reason": "验证 API 响应根信封与 camelCase 命名"}
+{"file": ".trellis/spec/web/frontend/quality-guidelines.md", "reason": "前端组件生命周期、播放器无状态泄漏与测试验证"}
