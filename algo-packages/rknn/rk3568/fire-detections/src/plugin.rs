@@ -110,6 +110,11 @@ impl AlgoPlugin for FireSmokeDetector {
 
         let custom_label = leak_label(config.custom_alarm_label.as_deref());
 
+        // 解码配置自检：非法的输出结构 / 激活语义组合必须在加载期失败，
+        // 而不是在每帧后处理中静默漏检（`host_preprocess_fallback` 为无硬件时的模拟器）。
+        #[cfg(target_os = "linux")]
+        parse_config()?;
+
         tracing::info!(
             model = ?model_path,
             rga_hw = cv_engine.hardware_available(),
@@ -217,6 +222,23 @@ impl AlgoPlugin for FireSmokeDetector {
     }
 }
 
+/// 解码配置（进程内构造一次）；构造失败表示模型规格自相矛盾，
+/// 由 `init` 在加载期拒绝，不会走到推理热路径。
+///
+/// 参数含义：烟火模型均为 RKNN 优化版 9-tensor 输出（含 score_sum），
+/// 且 sigmoid 保留在图内（分类分支非负），故为 (use_score_sum, cls_is_logits) = (true, false)。
+#[cfg(target_os = "linux")]
+fn parse_config() -> Result<&'static Yolov8RknnConfig, AlgoError> {
+    static CONFIG: std::sync::OnceLock<Yolov8RknnConfig> = std::sync::OnceLock::new();
+    if let Some(config) = CONFIG.get() {
+        return Ok(config);
+    }
+
+    let config =
+        Yolov8RknnConfig::from_spec(MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT, 16, 2, true, false)?;
+    Ok(CONFIG.get_or_init(|| config))
+}
+
 /// 使用 algo-sdk 通用后处理 + 类别掩码过滤
 #[cfg(target_os = "linux")]
 fn parse_and_filter(
@@ -228,19 +250,15 @@ fn parse_and_filter(
     orig_w: u32,
     orig_h: u32,
 ) -> Vec<algo_sdk::math::NormBox> {
-    let sdk_config = Yolov8RknnConfig {
-        model_input_w: MODEL_INPUT_WIDTH,
-        model_input_h: MODEL_INPUT_HEIGHT,
-        dfl_bins: 16,
-        num_classes: 2,
-        use_score_sum: true, // 9-tensor 优化版
+    let Ok(sdk_config) = parse_config() else {
+        return Vec::new();
     };
 
     match net_out {
         RknnInferenceOutput::MultiBranch(branches) => {
             let parse_ctx = Yolov8ParseContext {
                 branches,
-                config: &sdk_config,
+                config: sdk_config,
                 conf_threshold: config.confidence_threshold,
                 iou_threshold: config.iou_threshold,
                 labels: &FIRE_SMOKE_CLASSES,

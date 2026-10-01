@@ -174,11 +174,30 @@ impl YoloSpec for FireSmokeSpec {
     const NUM_CLASSES: usize = 2;
     const LABELS: &'static [&'static str] = &["fire", "smoke"];
     const MODEL_PATH: &'static str = "model/fire_smoke.rknn";
+    // 输出结构：true = 9-tensor（含 score_sum 快筛），false = 官方 6-tensor
+    const USE_SCORE_SUM: bool = true;
+    // 分类分支激活语义：导出 ONNX 时 sigmoid 是否已移出计算图
+    const CLS_IS_LOGITS: bool = false;
 }
 
 // 2. 导出开箱即用的工业级检测器插件
 pub type FireSmokeDetector = GenericYoloDetector<FireSmokeSpec>;
 ```
+
+#### 两个必填元信息：`USE_SCORE_SUM` 与 `CLS_IS_LOGITS`
+
+这两个常量描述的是**模型导出图的实际形状**，填错不会编译失败，但会导致运行期静默漏检。判定依据只能是模型量化元数据，不得凭文件名或 ONNX 输入 dtype 推断。
+
+| 常量 | 含义 | 如何判定 |
+|------|------|----------|
+| `USE_SCORE_SUM` | `true` = 9-tensor（含 `score_sum` 快筛分支）；`false` = 官方 6-tensor | 数一下输出张量个数与是否含 `clamp*` 分支 |
+| `CLS_IS_LOGITS` | `true` = sigmoid 已移出计算图，分类分支含负值 | 看分类分支的量化范围是否含负值（如 `[-13.82, 0.90]`） |
+
+`CLS_IS_LOGITS = true` 时，解码器按 `sigmoid(dequant(raw))` 还原置信度，并将阈值换算到 logit 空间（`ln(p/(1-p))`）后量化比较——因 sigmoid 单调，`sigmoid(x) > p ⟺ x > ln(p/(1-p))`，INT8 极值快速路径不变。
+
+> **陷阱**：漏设 `CLS_IS_LOGITS` 会把负 logit 当作置信度直接与阈值比较，导致低分尺度（如全负的 `score_32`）**零检出**、其余尺度置信度系统性偏低。
+
+两者互斥约束：`score_sum` 预筛依赖 `score_sum >= max_class_score >= 阈值`，该不等式仅在概率语义下成立，因此 **9-tensor + logits 是非法组合**，`Yolov8RknnConfig::from_spec` 会在构造期返回 `ConfigParse` 错误而非静默漏检。
 
 #### 支持魔改/定制 YOLO 结构（解码器策略模式 `YoloDecoder`）
 
@@ -327,16 +346,18 @@ impl AlgoPlugin for MyDetector {
 
 ```rust
 use algo_sdk::cv::postprocess::{
-    parse_yolov8_int8, Yolov8ParseContext, Yolov8RknnConfig, RknnTensorOutput,
+    parse_yolov8_int8, ClassActivation, Yolov8ParseContext, Yolov8RknnConfig, RknnTensorOutput,
 };
 
-let config = Yolov8RknnConfig {
-    model_input_w: 640.0,   // 模型输入宽度
-    model_input_h: 384.0,   // 模型输入高度
-    dfl_bins: 16,           // DFL bins 数（YOLOv8 标准为 16）
-    num_classes: 2,         // 类别数
-    use_score_sum: true,    // true=9-tensor（含 score_sum 快筛），false=6-tensor
-};
+// 推荐：用 from_spec 构造，自动守卫“9-tensor + logits”非法组合
+let config = Yolov8RknnConfig::from_spec(
+    640.0,  // 模型输入宽度
+    384.0,  // 模型输入高度
+    16,     // DFL bins 数（YOLOv8 标准为 16）
+    2,      // 类别数
+    true,   // use_score_sum: true=9-tensor（含 score_sum 快筛），false=6-tensor
+    false,  // cls_is_logits: sigmoid 是否已移出计算图
+)?;
 
 let ctx = Yolov8ParseContext {
     branches: &rknn_outputs,        // &[RknnTensorOutput] 从 RKNN 推理获取
@@ -352,6 +373,8 @@ let ctx = Yolov8ParseContext {
 
 let boxes: Vec<NormBox> = parse_yolov8_int8(&ctx);
 ```
+
+`ClassActivation::effective_threshold(p)` / `to_confidence(raw)` 是两个语义换算入口：前者把阈值送进分类分支所在空间比较，后者把原始值还原为概率置信度。
 
 返回的 `NormBox` 坐标已归一化到 `[0.0, 1.0]`，并通过 `unmap_box` 完成 Letterbox 坐标反算。
 

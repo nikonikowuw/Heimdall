@@ -12,18 +12,22 @@
 - **平台标识 (`platform_id`)**：`linux-rknn`
 - **目标芯片 (`target_soc`)**：`rk3568`
 - **告警类型 (`alarm_type_id`)**：`safety_violation`
-- **模型文件**：`model/best_hybrid.rknn` (INT8 auto_hybrid, 4.2 MB)
-  - 输入：`images` 384x640 RGB888 NHWC uint8
-  - 输出：9 个张量 (P3/P4/P5 x {box, cls, score_sum})
+- **模型文件**：`model/yolov8_hard_hat.rknn`（INT8, 4.0 MB, `target_platform=rk3568`）
+  - 输入：`images` `[1, 3, 384, 640]` RGB, `mean=0` / `std=255`（已固化进图）
+  - 输出：**6 个张量**（P3/P4/P5 × {`box`, `score`}），官方标准解耦结构，无 score_sum 分支
+  - ⚠️ `score_*` 分支为**未激活 logits**（sigmoid 已移出计算图），解码时由
+    `CLS_IS_LOGITS = true` 按 `sigmoid` 还原并换算阈值；详见 `model/CONVERSION.md`
 - **支持类别**：
   - `Hardhat` (class 0) — 已佩戴安全帽
   - `NO-Hardhat` (class 1) — 未佩戴安全帽
-- **RK3568 NPU 参考性能**：
+- **RK3568 NPU 参考性能**（板端实测）：
 
 | 模型 | 大小 | 延迟 | FPS |
 |------|------|------|-----|
-| INT8 hybrid | 4.2 MB | ~31 ms | ~32 |
-| INT8 pure | 4.2 MB | ~29 ms | ~34 |
+| `yolov8_hard_hat.rknn`（当前, INT8） | 4.0 MB | 36.2 ms (E2E) | 27.4 |
+
+> RK3568 EVB1 DDR4 V10 实测（`librknnrt` 2.3.2，含 RGA 预处理与后处理）。
+> 完整分阶段数据见 `model/CONVERSION.md`。
 
 ---
 
@@ -38,8 +42,8 @@
 ├── config.schema.json       # 参数 JSON Schema 校验契约
 ├── .env.example             # 本地调试参数模板
 ├── model/                   # 模型文件与文档
-│   ├── best_hybrid.rknn     # INT8 auto_hybrid 量化模型 (推荐)
-│   ├── CONVERSION.md        # 模型转换记录
+│   ├── yolov8_hard_hat.rknn # 当前模型 (6-tensor, logits 分类头)
+│   ├── CONVERSION.md        # 模型转换记录与输入输出契约
 │   └── README.md            # 模型说明与导出文档
 ├── python/                  # 转换脚本和校准数据
 │   ├── convert.py           # RKNN转换脚本
@@ -50,11 +54,13 @@
 └── src/
     ├── bin/run_local.rs     # 本地评测与可视化工具
     ├── config.rs            # 参数反序列化
-    ├── rknn.rs              # librknnrt.so 动态加载与 RAII 会话
-    ├── postprocess.rs       # 9 张量解码、DFL、score_sum 快筛、NMS
+    ├── postprocess.rs       # 6 张量解码、DFL、logits 还原、NMS
     ├── plugin.rs            # AlgoPlugin 生命周期实现
     └── lib.rs               # C ABI 虚表导出宏
 ```
+
+> 历史模型 `best_hybrid.rknn` / `best_pure.rknn` / `best_fp16.rknn` 已不再入库；
+> librknnrt 动态加载与 RAII 会话已上移至 `algo-sdk` 的 `runtime` 模块。
 
 ---
 
@@ -104,7 +110,7 @@ CONF_THRESH=0.45
 IOU_THRESH=0.45
 INPUT_IMAGE=testimage.jpg
 OUTPUT_IMAGE=result.jpg
-MODEL_PATH=model/best_hybrid.rknn
+MODEL_PATH=model/yolov8_hard_hat.rknn
 LOOPS=100
 WARMUP=5
 DURATION=30

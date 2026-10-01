@@ -786,8 +786,14 @@ impl RknnSession {
         {
             let mem_ptr = self.ensure_dma_mem_cached(ctx, dma_fd, buffer_size, create_mem)?;
 
-            // 使用本地副本传递给 C FFI，防止底层驱动可能存在的非只读修改污染模型初始状态
+            // 使用本地副本传递给 C FFI，防止底层驱动可能存在的非只读修改污染模型初始状态。
+            //
+            // `rknn_set_io_mem` 绑定的是裸 DMA-BUF 字节流，类型必须由调用方声明为
+            // UINT8（与 `infer_with_host_bytes` 的 `RknnInput.type_` 保持一致）；
+            // 查询得到的 `input_attr.type_` 描述的是图内张量类型（可能是 FLOAT32），
+            // 不能直接复用。此处显式覆盖而非继承，避免静默传入错误类型。
             let mut input_attr = self.input_attr;
+            input_attr.type_ = RknnTensorType::Uint8;
             // SAFETY: mem_ptr 为有效 RknnTensorMem 句柄，input_attr 为合法输入属性
             let ret = unsafe { (set_io_mem)(ctx, mem_ptr, &mut input_attr) };
             if ret != RKNN_SUCC {
@@ -1010,6 +1016,10 @@ impl NpuSession for RknnSession {
             self.infer_with_dma_buf(layout.fd, layout.size, f)
         } else if let Some(bytes) = input.as_host_bytes() {
             self.infer_with_host_bytes(bytes, f)
+        } else if self.is_fallback() {
+            // [debug_cpu_fallback_path] 回退会话不读取输入张量，仅按 `fallback_outputs()`
+            // 返回确定性模拟输出；传入空切片即可驱动闭环，不代表真实前向推理。
+            self.infer_with_host_bytes(&[], f)
         } else {
             Err(AlgoError::IncompatibleFrame {
                 reason: "CvBuffer 既无有效 DMA-BUF 句柄，亦不可转换为 Host 内存切片".to_string(),

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 pub mod buffer;
+pub mod diagnostic;
 pub mod engine;
 pub mod layout;
 pub mod platforms;
@@ -14,6 +15,7 @@ pub mod transforms;
 pub mod types;
 
 pub use buffer::{CvBuffer, DmaBufLayout};
+pub use diagnostic::{DiagnosticConfig, FailureTracker, FailureTrackerStatus};
 pub use engine::CvEngine;
 pub use layout::{compute_letterbox_layout, compute_stretch_layout};
 pub use transforms::{HwLetterbox, Transform};

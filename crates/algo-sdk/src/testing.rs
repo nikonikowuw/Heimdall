@@ -12,7 +12,7 @@ use crate::cv::buffer::CvBuffer;
 use crate::emitter::ResultEmitter;
 use crate::error::AlgoError;
 use crate::frame::SafeFrame;
-use crate::math::NormBox;
+use crate::math::{box_xyxy_to_xywh, NormBox};
 use crate::model::{Core, InferenceSession, ModelWeights};
 
 #[cfg(target_os = "macos")]
@@ -938,10 +938,12 @@ impl MockEmitter {
                             let coords = o.get("bbox").and_then(|v| v.as_array());
                             if let Some(c) = coords {
                                 if c.len() == 4 {
-                                    let x = c[0].as_f64().unwrap_or(0.0) as f32;
-                                    let y = c[1].as_f64().unwrap_or(0.0) as f32;
-                                    let w = c[2].as_f64().unwrap_or(0.0) as f32;
-                                    let h = c[3].as_f64().unwrap_or(0.0) as f32;
+                                    let [x, y, w, h] = box_xyxy_to_xywh([
+                                        c[0].as_f64().unwrap_or(0.0) as f32,
+                                        c[1].as_f64().unwrap_or(0.0) as f32,
+                                        c[2].as_f64().unwrap_or(0.0) as f32,
+                                        c[3].as_f64().unwrap_or(0.0) as f32,
+                                    ]);
                                     let mut b = NormBox::new(x, y, w, h, confidence, class_id);
                                     b.label = label;
                                     self.detections.push(b);
@@ -1059,5 +1061,10 @@ mod tests {
         emitter.emit_detections(&[b]).expect("emit_detections");
         assert_eq!(mock.detections().len(), 1);
         assert_eq!(mock.detections()[0].class_id, 1);
+        let detection = mock.detections()[0];
+        assert!((detection.x - 0.1).abs() < 1e-6);
+        assert!((detection.y - 0.1).abs() < 1e-6);
+        assert!((detection.w - 0.2).abs() < 1e-6);
+        assert!((detection.h - 0.2).abs() < 1e-6);
     }
 }

@@ -9,6 +9,7 @@
 use std::marker::PhantomData;
 
 use crate::algo_config;
+use crate::cv::diagnostic::{DiagnosticConfig, FailureTracker};
 use crate::cv::postprocess::yolov8_rknn::{
     parse_yolov8_int8, Yolov8ParseContext, Yolov8RknnConfig,
 };
@@ -35,6 +36,11 @@ pub trait YoloSpec: Send + Sync + 'static {
     const USE_SCORE_SUM: bool = true;
     /// DFL bins 数量（YOLOv8 默认为 16）
     const DFL_BINS: usize = 16;
+    /// 分类分支是否输出未激活的 logits
+    ///
+    /// 导出 ONNX 时若将 sigmoid 移出计算图，模型的 score 分支将含负值，
+    /// 需置为 `true` 让解码器还原置信度并换算阈值。默认 `false`（图中已激活）。
+    const CLS_IS_LOGITS: bool = false;
 }
 
 algo_config! {
@@ -90,13 +96,14 @@ impl<S: YoloSpec> Default for Yolov8SpecDecoder<S> {
 
 impl<S: YoloSpec> YoloDecoder for Yolov8SpecDecoder<S> {
     fn decode(&self, ctx: &YoloDecodeContext<'_>) -> Result<Vec<NormBox>, AlgoError> {
-        let parse_cfg = Yolov8RknnConfig {
-            model_input_w: S::INPUT_DIM.0 as f32,
-            model_input_h: S::INPUT_DIM.1 as f32,
-            dfl_bins: S::DFL_BINS,
-            num_classes: S::NUM_CLASSES,
-            use_score_sum: S::USE_SCORE_SUM,
-        };
+        let parse_cfg = Yolov8RknnConfig::from_spec(
+            S::INPUT_DIM.0 as f32,
+            S::INPUT_DIM.1 as f32,
+            S::DFL_BINS,
+            S::NUM_CLASSES,
+            S::USE_SCORE_SUM,
+            S::CLS_IS_LOGITS,
+        )?;
 
         match ctx.output {
             InferenceOutput::MultiBranch(branches) => {
@@ -120,6 +127,11 @@ impl<S: YoloSpec> YoloDecoder for Yolov8SpecDecoder<S> {
 }
 
 /// 解析单张量平铺 FP32 YOLO 输出 `[1, 4 + classes, anchors]`（内部私有解码实现）
+///
+/// **激活语义**：该分支承载的是模拟推理桩（`debug_cpu_fallback_path`，见
+/// `RknnSession::fallback_outputs`）的合成输出，其分类通道直接是概率，因此不应用
+/// `S::CLS_IS_LOGITS`。该标志只描述真实 RKNN 量化图（`MultiBranch`）的分类分支语义；
+/// 回退桩在物理上不是模型前向结果，无法也无需忠实复现 logits。
 fn decode_single_float<S: YoloSpec>(data: &[f32], ctx: &YoloDecodeContext<'_>) -> Vec<NormBox> {
     let model_w = S::INPUT_DIM.0 as f32;
     let model_h = S::INPUT_DIM.1 as f32;
@@ -213,6 +225,8 @@ pub struct GenericDetector<
     pub decoder: D,
     pub config: StandardYoloConfig,
     pub custom_label: Option<String>,
+    /// 预处理/推理连续失败追踪（跨平台，纯计数，不推送业务告警）
+    pub failure_tracker: FailureTracker,
     _spec: PhantomData<S>,
 }
 
@@ -255,6 +269,7 @@ impl<S: YoloSpec, D: YoloDecoder + Default> AlgoPlugin for GenericDetector<S, D,
             decoder,
             config,
             custom_label,
+            failure_tracker: FailureTracker::new(DiagnosticConfig::default()),
             _spec: PhantomData,
         })
     }
@@ -264,6 +279,43 @@ impl<S: YoloSpec, D: YoloDecoder + Default> AlgoPlugin for GenericDetector<S, D,
         frame: SafeFrame<'_>,
         emitter: &mut ResultEmitter<'_>,
     ) -> Result<(), AlgoError> {
+        // 仅对硬件段（预处理 + 推理）计成败：`FailureTracker` 表征的是硬件降级状态。
+        // 解码与结果发射属于业务侧，其失败（如宿主回调断开）不得计入硬件失败，
+        // 否则会累积到阈值并打出伪造的“硬件恢复正常”日志。
+        let boxes = match self.infer(frame) {
+            Ok(boxes) => {
+                self.failure_tracker.record_success();
+                boxes
+            }
+            Err(error) => {
+                self.failure_tracker.record_failure();
+                return Err(error);
+            }
+        };
+
+        if !boxes.is_empty() {
+            emitter.emit_detections_with_label(&boxes, self.custom_label.as_deref())?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self, _emitter: &mut ResultEmitter<'_>) -> Result<(), AlgoError> {
+        self.failure_tracker.reset();
+        Ok(())
+    }
+
+    fn update_config(&mut self, new_config: Self::Config) -> Result<(), AlgoError> {
+        self.custom_label = normalize_custom_label(new_config.custom_alarm_label.as_deref());
+        self.config = new_config;
+        Ok(())
+    }
+}
+
+impl<S: YoloSpec, D: YoloDecoder + Default> GenericDetector<S, D, RuntimeSession> {
+    /// 硬件段：预处理（`Transform`）与推理（`NpuSession`），产出解码后的候选框。
+    ///
+    /// 该方法即 `FailureTracker` 的计数边界；结果发射被刻意排除在外。
+    fn infer(&mut self, frame: SafeFrame<'_>) -> Result<Vec<NormBox>, AlgoError> {
         let (buf, mode) = self.transform.apply(&frame)?;
         let orig_w = frame.width();
         let orig_h = frame.height();
@@ -278,19 +330,8 @@ impl<S: YoloSpec, D: YoloDecoder + Default> AlgoPlugin for GenericDetector<S, D,
                 orig_h,
             };
 
-            let boxes = self.decoder.decode(&decode_ctx)?;
-
-            if !boxes.is_empty() {
-                emitter.emit_detections_with_label(&boxes, self.custom_label.as_deref())?;
-            }
-            Ok(())
+            self.decoder.decode(&decode_ctx)
         })
-    }
-
-    fn update_config(&mut self, new_config: Self::Config) -> Result<(), AlgoError> {
-        self.custom_label = normalize_custom_label(new_config.custom_alarm_label.as_deref());
-        self.config = new_config;
-        Ok(())
     }
 }
 
@@ -428,6 +469,97 @@ mod tests {
             LocalPluginRunner::run_once(&mut detector, frame.as_safe_frame())
                 .expect("process should succeed");
         assert_eq!(boxes.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 锁住连续失败追踪契约：成功累加后归零、失败递增、`flush()` 静默重置。
+    ///
+    /// 这对应 [algo-sdk 规范](../../../../.trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md)
+    /// 「连续失败属于硬件内部状态，通过日志与健康检查暴露」的落点；若追踪器被
+    /// 再次从检测器主流程剥离，本用例必须失败。
+    #[test]
+    fn test_failure_tracker_records_outcome_and_flushes() {
+        let temp_dir = std::env::temp_dir().join(format!("algo_test_{}", uuid::Uuid::new_v4()));
+        let model_dir = temp_dir.join("model");
+        std::fs::create_dir_all(&model_dir).expect("create model dir");
+        std::fs::write(model_dir.join("model.rknn"), b"mock rknn bytes").expect("write model");
+
+        let ctx = InitContext {
+            package_root: &temp_dir,
+            platform_id: "test-platform",
+            instance_id: "inst-health",
+            is_self_test: false,
+        };
+        let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
+            .expect("init should succeed");
+
+        // 初始化后计数清零
+        assert_eq!(detector.failure_tracker.consecutive_failures(), 0);
+
+        let frame = MockFrameBuilder::new()
+            .dimensions(1920, 1080)
+            .to_nv12(16)
+            .build();
+        LocalPluginRunner::run_once(&mut detector, frame.as_safe_frame())
+            .expect("process should succeed");
+
+        // 成功路径保持连续失败为 0（不得因单帧成功而累积）
+        assert_eq!(detector.failure_tracker.consecutive_failures(), 0);
+        assert_eq!(detector.failure_tracker.total_failures(), 0);
+
+        // flush 静默重置连续计数，且不伪造失败总量
+        detector.failure_tracker.record_failure();
+        assert_eq!(detector.failure_tracker.consecutive_failures(), 1);
+        let mut emitter_owner = crate::testing::MockEmitter::new();
+        // SAFETY: emitter_owner 存活至 flush 调用结束
+        let mut emitter = unsafe { emitter_owner.as_emitter(1) };
+        detector.flush(&mut emitter).expect("flush should succeed");
+        assert_eq!(detector.failure_tracker.consecutive_failures(), 0);
+        assert_eq!(detector.failure_tracker.total_failures(), 1);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 计数边界：硬件段成功但结果发射失败时，不得计为硬件失败。
+    ///
+    /// 发射失败（如宿主回调断开）属于业务侧故障；若计入 `FailureTracker`，
+    /// 持续断连会累积到阈值并伪造硬件降级信号。
+    #[test]
+    fn test_emitter_failure_does_not_count_as_hardware_failure() {
+        let temp_dir = std::env::temp_dir().join(format!("algo_test_{}", uuid::Uuid::new_v4()));
+        let model_dir = temp_dir.join("model");
+        std::fs::create_dir_all(&model_dir).expect("create model dir");
+        std::fs::write(model_dir.join("model.rknn"), b"mock rknn bytes").expect("write model");
+
+        let ctx = InitContext {
+            package_root: &temp_dir,
+            platform_id: "test-platform",
+            instance_id: "inst-emitter",
+            is_self_test: false,
+        };
+        let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
+            .expect("init should succeed");
+
+        // `request_id = 0` 使 C 回调拒绝该次发射。
+        let mut emitter_owner = crate::testing::MockEmitter::new();
+        // SAFETY: emitter_owner 存活至 emitter 使用完毕
+        let mut emitter = unsafe { emitter_owner.as_emitter(0) };
+
+        let frame = MockFrameBuilder::new()
+            .dimensions(1920, 1080)
+            .to_nv12(16)
+            .build();
+        let result = detector.process(frame.as_safe_frame(), &mut emitter);
+
+        // 无论发射成败，硬件段已经走完，计数器不得被发射路径污染
+        assert_eq!(
+            detector.failure_tracker.total_failures(),
+            0,
+            "结果发射失败不得计入硬件失败计数"
+        );
+        // 保持编译期使用，避免未使用告警掩盖真实行为
+        let _ = result;
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

@@ -2,7 +2,7 @@ import sys
 from rknn.api import RKNN
 
 DATASET_PATH = 'safetyhelmet_dataset/dataset.txt'
-DEFAULT_RKNN_PATH = '../weights/best_hybrid.rknn'
+DEFAULT_RKNN_PATH = '../model/yolov8_hard_hat.rknn'
 DEFAULT_QUANT = True
 
 def parse_arg():

@@ -86,6 +86,15 @@ pub enum RuntimeSession {
 }
 
 impl RuntimeSession {
+    /// 是否处于开发调试 CPU 回退模拟模式
+    pub fn is_fallback(&self) -> bool {
+        match self {
+            #[cfg(feature = "rknn")]
+            Self::Rockchip(s) => s.is_fallback(),
+            Self::Fallback(_) => true,
+        }
+    }
+
     pub fn open(package_root: &Path, model_rel_path: &Path) -> Result<Self, AlgoError> {
         #[cfg(feature = "rknn")]
         {

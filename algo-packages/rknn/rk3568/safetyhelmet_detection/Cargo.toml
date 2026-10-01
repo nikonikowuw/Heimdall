@@ -18,6 +18,7 @@ path = "src/bin/run_local.rs"
 [features]
 default = []
 rga = ["algo-sdk/rga"]
+# 开启后 run_local 构造 DMA-BUF / CVPixelBuffer 真实硬件帧；未开启则退化为步长对齐的 Host NV12 模拟帧。
 testing-hardware = ["algo-sdk/testing-hardware"]
 
 [dependencies]

@@ -1,7 +1,9 @@
-//! RGA 预处理连续失败追踪机制
+//! 算法实例连续失败追踪机制
 //!
 //! 提供连续失败计数与阈值检测，供健康检查接口或监控体系读取。
-//! 不主动推送告警——错误日志由 `engine.rs` 的 `tracing::error!` 负责。
+//! 不主动推送告警——错误日志由各平台引擎（如 RGA `engine.rs`）的 `tracing::error!` 负责。
+//!
+//! 与具体硬件无关，因此独立于 `platforms/rockchip` 的 cfg 门控，供跨平台检测器复用。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
@@ -25,6 +27,9 @@ impl Default for DiagnosticConfig {
 ///
 /// 纯计数器，不负责告警推送。调用方可通过 `status()` 读取状态，
 /// 在健康检查接口或 Prometheus metrics 中暴露。
+///
+/// **计数边界**：只应统计硬件段（预处理 + 推理）的成败。业务侧失败
+/// （如宿主回调断开、解码配置错误）不得计入，否则会伪造硬件降级信号。
 #[derive(Debug)]
 pub struct FailureTracker {
     failure_threshold: u64,
@@ -52,7 +57,8 @@ impl FailureTracker {
     pub fn record_success(&self) {
         let prev = self.consecutive_failures.swap(0, Ordering::Relaxed);
         if prev > 0 {
-            tracing::info!(consecutive_failures = prev, "RGA 预处理恢复正常");
+            // 不绑定具体硬件单元：本模块为跨平台诊断原语，调用方可能是 RGA/VPU/NPU
+            tracing::info!(consecutive_failures = prev, "硬件预处理与推理恢复正常");
         }
     }
 

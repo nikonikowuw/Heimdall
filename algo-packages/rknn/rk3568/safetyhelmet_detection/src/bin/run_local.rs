@@ -3,33 +3,25 @@
 //! 专为开发者在本地环境下快速验证 RK3568 安全帽检测效果设计。
 //! 支持 `--benchmark` 性能剖析与 `--stress [DURATION]` 满载压力测试。
 
-#[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    linux_run::main()
+    runner::main()
 }
 
-#[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!("safetyhelmet_detection_run_local (RKNN) 仅支持在 Linux/Rockchip 平台上运行");
-}
-
-#[cfg(target_os = "linux")]
-mod linux_run {
+mod runner {
     use std::collections::HashMap;
     use std::fmt::Write;
     use std::fs;
     use std::path::Path;
 
-    use algo_sdk::cv::engine::CvEngine;
+    use algo_sdk::cv::transforms::Transform;
     use algo_sdk::math::NormBox;
     use algo_sdk::plugin::{AlgoPlugin, InitContext};
+    use algo_sdk::runtime::NpuSession;
     use algo_sdk::testing::{BenchmarkStats, MockEmitter, MockFrameBuilder};
     use image::{Rgb, RgbImage};
     use safetyhelmet_detection::config::InstanceConfig;
     use safetyhelmet_detection::plugin::SafetyHelmetDetector;
-    use safetyhelmet_detection::postprocess::{
-        parse_and_unmap_output, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH,
-    };
+    use safetyhelmet_detection::postprocess::parse_and_unmap_output;
 
     fn load_env_file(path: &str) -> HashMap<String, String> {
         let mut map = HashMap::new();
@@ -87,10 +79,11 @@ mod linux_run {
                 let _ = writeln!(out, "    {{\n      \"class_id\": {},", obj.class_id);
                 let _ = writeln!(out, "      \"label\": \"{label}\",");
                 let _ = writeln!(out, "      \"confidence\": {:.4},", obj.confidence);
+                let bbox = algo_sdk::math::box_xywh_to_xyxy([obj.x, obj.y, obj.w, obj.h]);
                 let _ = writeln!(
                     out,
                     "      \"bbox\": [{:.4}, {:.4}, {:.4}, {:.4}]\n    }}{comma}",
-                    obj.x, obj.y, obj.w, obj.h
+                    bbox[0], bbox[1], bbox[2], bbox[3]
                 );
             }
             out.push_str("  ]\n");
@@ -140,13 +133,38 @@ mod linux_run {
         Ok(())
     }
 
+    /// 构造本地评测用的模拟帧。
+    ///
+    /// 启用 `testing-hardware` 特性时优先构造真实 DMA-BUF / CVPixelBuffer 硬件帧；
+    /// 该特性未开启时（如 `cargo build -p` / `make host` / `make test` 的包作用域构建）
+    /// 退化为步长对齐的 Host NV12 模拟帧，保证本工具始终可编译运行。
+    fn build_mock_frame(
+        #[cfg_attr(not(feature = "testing-hardware"), allow(unused_variables))] input_path: &str,
+        rgb_image: &RgbImage,
+        width: u32,
+        height: u32,
+    ) -> algo_sdk::testing::MockFrame {
+        #[cfg(feature = "testing-hardware")]
+        {
+            if let Ok(builder) = MockFrameBuilder::from_image_hardware(input_path) {
+                return builder.build();
+            }
+        }
+
+        MockFrameBuilder::new()
+            .dimensions(width, height)
+            .host_data(rgb_image.clone().into_raw())
+            .to_nv12(16)
+            .build()
+    }
+
     pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let env_map = load_env_file(".env");
         let confidence = get_env_f32("CONF_THRESH", 0.45, &env_map);
         let iou = get_env_f32("IOU_THRESH", 0.45, &env_map);
         let input_path = get_env_str("INPUT_IMAGE", "testimage.jpg", &env_map);
         let output_path = get_env_str("OUTPUT_IMAGE", "result.jpg", &env_map);
-        let model_path = get_env_str("MODEL_PATH", "model/best_hybrid.rknn", &env_map);
+        let model_path = get_env_str("MODEL_PATH", "model/yolov8_hard_hat.rknn", &env_map);
 
         let args: Vec<String> = std::env::args().collect();
         let is_stress = args.iter().any(|arg| arg == "--stress");
@@ -199,14 +217,7 @@ mod linux_run {
         let mut rgb_image = dynamic_img.to_rgb8();
 
         // 2. 模拟 MPP 硬件解码输出帧（16 字节行跨距对齐 NV12）
-        let mock_frame = MockFrameBuilder::from_image_hardware(&input_path)
-            .unwrap_or_else(|_| {
-                MockFrameBuilder::new()
-                    .dimensions(width, height)
-                    .host_data(rgb_image.clone().into_raw())
-                    .to_nv12(16)
-            })
-            .build();
+        let mock_frame = build_mock_frame(&input_path, &rgb_image, width, height);
 
         // 3. 初始化算法实例
         let config = InstanceConfig {
@@ -222,7 +233,10 @@ mod linux_run {
 
         let mut detector = SafetyHelmetDetector::init(&init_ctx, config)?;
         let is_fallback = detector.session.is_fallback();
-        let rga_hw = detector.cv_engine.hardware_available();
+        #[cfg(all(target_os = "linux", feature = "rga"))]
+        let rga_hw = algo_sdk::cv::platforms::rockchip::RgaCvEngine::new().hardware_available();
+        #[cfg(not(all(target_os = "linux", feature = "rga")))]
+        let rga_hw = false;
 
         if is_fallback {
             println!("[Pipeline Mode] debug_cpu_fallback_path | 未检测到 librknnrt.so");
@@ -309,56 +323,30 @@ mod linux_run {
             if benchmark {
                 let safe_frame = mock_frame.as_safe_frame();
                 let t0 = std::time::Instant::now();
-                let (buf, mode) = detector.cv_engine.letterbox(
-                    &safe_frame,
-                    MODEL_INPUT_WIDTH as u32,
-                    MODEL_INPUT_HEIGHT as u32,
-                    [114, 114, 114],
-                )?;
+                let (buf, mode) = detector.transform.apply(&safe_frame)?;
                 let t1 = std::time::Instant::now();
                 let orig_w = safe_frame.width();
                 let orig_h = safe_frame.height();
-                let custom_label = detector.custom_label;
+                // 分阶段计时需要绕过 `process` 单独驱动推理；解码仍复用
+                // `parse_and_unmap_output`（配置来自 `SafetyHelmetSpec`，与生产同源），
+                // 因此这里测的是真实后处理而非一份手写的近似实现。
+                let custom_label: Option<&'static str> = None;
                 let mut t2 = std::time::Instant::now();
                 let mut t3 = std::time::Instant::now();
 
-                if let Some(fd) = buf.as_dma_buf_fd() {
-                    let buffer_size =
-                        (MODEL_INPUT_WIDTH as usize) * (MODEL_INPUT_HEIGHT as usize) * 3;
-                    detector
-                        .session
-                        .infer_with_dma_buf(fd, buffer_size, |net_out| {
-                            t2 = std::time::Instant::now();
-                            let _boxes = parse_and_unmap_output(
-                                net_out,
-                                &detector.config,
-                                custom_label,
-                                &mode,
-                                orig_w,
-                                orig_h,
-                            );
-                            t3 = std::time::Instant::now();
-                            Ok(())
-                        })?;
-                } else if let Some(host_bytes) = buf.as_host_bytes() {
-                    detector
-                        .session
-                        .infer_with_host_bytes(host_bytes, |net_out| {
-                            t2 = std::time::Instant::now();
-                            let _boxes = parse_and_unmap_output(
-                                net_out,
-                                &detector.config,
-                                custom_label,
-                                &mode,
-                                orig_w,
-                                orig_h,
-                            );
-                            t3 = std::time::Instant::now();
-                            Ok(())
-                        })?;
-                } else {
-                    return Err("CvBuffer 缺少有效数据".into());
-                }
+                detector.session.infer_with(&buf, |net_out| {
+                    t2 = std::time::Instant::now();
+                    let _boxes = parse_and_unmap_output(
+                        net_out,
+                        &detector.config,
+                        custom_label,
+                        &mode,
+                        orig_w,
+                        orig_h,
+                    );
+                    t3 = std::time::Instant::now();
+                    Ok(())
+                })?;
 
                 preprocess_samples.push((t1 - t0).as_secs_f64() * 1000.0);
                 inference_samples.push((t2 - t1).as_secs_f64() * 1000.0);

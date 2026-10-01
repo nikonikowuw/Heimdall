@@ -285,9 +285,16 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
 |------|------|----------|
 | `quantize` | `dequant_i8` / `quant_f32` INT8 量化反量化 | 任何量化模型 |
 | `dfl` | `decode_dfl` DFL softmax 加权求和解码 | YOLOv8 系列（支持任意 bin 数） |
-| `yolov8_rknn` | `parse_yolov8_int8` 多分支 INT8 解析 + score_sum 快筛 + NMS | RKNN 优化版 YOLOv8 |
+| `yolov8_rknn` | `parse_yolov8_int8` 多分支 INT8 解析 + score_sum 快筛 + logits 还原 + NMS | RKNN 优化版 YOLOv8 |
 
-- 算法包通过 `Yolov8RknnConfig` 参数驱动（输入尺寸、DFL bins、类别数、score_sum 开关），不需要为每个模型重写后处理。
+- 算法包通过 `Yolov8RknnConfig::from_spec` 参数驱动（输入尺寸、DFL bins、类别数、score_sum 开关、`cls_is_logits`），不需要为每个模型重写后处理。
+- **分类分支激活语义必须与导出图一致**：`use_score_sum` 决定 9-tensor（含 score_sum 快筛）还是 6-tensor（官方标准）结构；`cls_is_logits` 声明 sigmoid 是否已被移出计算图。
+  - 未声明 `cls_is_logits` 而模型实际为 logits 时，负值 logit 会被当作置信度直接与阈值比较，导致低分尺度（如全负的 `score_32`）**零检出**、其余尺度置信度系统性偏低。
+  - `cls_is_logits = true` 时解码器按 `sigmoid(dequant(raw))` 还原置信度，并将阈值换算到 logit 空间（`ln(p/(1-p))`）后量化比较——因 sigmoid 单调，`sigmoid(x) > p ⟺ x > ln(p/(1-p))`，INT8 极值快速路径不变。换算统一收敛在 `ClassActivation::effective_threshold` / `to_confidence` 两个入口，不在解析器内散落条件分支。
+  - 判定依据只能是**模型量化元数据**：分类分支范围含负值即为 logits（如 `score_32: [-9.72, -0.08]`）；非负区间（如 `[0, 0.75]`）则为图内已激活。不得凭文件名或 ONNX 输入 dtype 推断。
+  - **`use_score_sum` 与 `cls_is_logits` 互斥**：score_sum 预筛依赖 `score_sum >= max_class_score >= 阈值`，该不等式仅在概率语义下成立，logits 语义下其余类别的负 logit 会把总和压低并过滤掉本该通过的网格（静默漏检）。`from_spec` 对该组合返回 `ConfigParse` 错误，算法包应在 `init` 阶段即失败而非每帧回退。
+  - `YoloSpec::CLS_IS_LOGITS` 默认 `false`，存量 9-tensor 模型无需改动。
+  - `debug_cpu_fallback_path` 的单张量桩（`InferenceOutput::SingleFloat`）分类通道直接是概率，不受 `CLS_IS_LOGITS` 影响；该标志只描述真实 RKNN 量化图。算法包不得仅凭单浮点回退用例覆盖 activation 语义。
 - 扩展新模型（YOLOv11、RT-DETR 等）在 `postprocess/` 下新增文件，组合现有原语或实现新的解码逻辑。
 - `RknnTensorOutput` 类型定义在 `postprocess::yolov8_rknn`，各算法包通过 re-export 使用，不在本地重复定义。
 - 自定义标签覆盖在算法包 plugin 层完成（`parse_yolov8_int8` 返回后 `.label = Some(custom)`），不耦合到通用解析器。
@@ -301,10 +308,11 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
 - INT8 DFL 路径保持 `want_float=0`，先按 `(raw_cls-zp)*scale >= conf_thresh` 剪枝，只对候选网格执行 16-bin softmax；通用解析器通过 `Yolov8RknnConfig.dfl_bins` 和 `num_classes` 参数化，不硬编码为特定模型。
 - `RknnOutputsGuard` 在所有退出路径调用 `rknn_outputs_release`；同一 context 非线程安全，必须绑定所属 Worker。
 
-### RGA 输入对齐诊断与连续失败追踪
+### 连续失败追踪
 - **诊断日志**：`source_layout()` 仅在错误分支打 `tracing::error!` 记录上下文（frame_id、stride、format），热路径入口不打 debug 日志。
-- **失败追踪 (`FailureTracker`)**：基于 `AtomicU64` 纯计数；连续失败递增，成功时 `record_success()` 重置并打恢复日志，`flush()` 时 `reset()` 静默清零；默认阈值 30 帧（约 1 秒 @30fps）。
+- **失败追踪 (`FailureTracker`)**：定义在跨平台的 [`cv/diagnostic`](../../../../crates/algo-sdk/src/cv/diagnostic/mod.rs)（与 librga 无绑定，不受 `feature = "rga"` 门控），由 [`GenericDetector::process`](../../../../crates/algo-sdk/src/models/yolo.rs) 接入：**计数边界为硬件段（`Transform` 预处理 + `NpuSession` 推理）**，成功 `record_success()` 重置并打恢复日志，失败 `record_failure()` 递增，`flush()` 时 `reset()` 静默清零；默认阈值 30 帧（约 1 秒 @30fps）。基于 `AtomicU64` 纯计数。
 - **状态暴露**：连续失败属于硬件内部状态，通过日志与健康检查暴露，不通过 `ResultEmitter` 向前端推送非业务系统告警。
+- **计数边界不得拓宽**：解码与结果发射属业务侧，其失败（如宿主回调断开）严禁计入该计数器，否则会累积到阈值并伪造硬件降级信号，同时让 `record_success()` 打出不成立的“恢复正常”日志。`models::yolo::tests::test_failure_tracker_records_outcome_and_flushes` 锁定成功归零、失败递增、`flush()` 静默重置，以及“发射失败不计入硬件失败”四项契约。
 
 ## 算法包私有环境与参数调优 (.env)
 

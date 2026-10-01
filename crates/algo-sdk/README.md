@@ -81,13 +81,15 @@ export_algo!(MyDetector, algo_id: "my_detector", version: "1.0.0",
 ```rust
 use algo_sdk::cv::postprocess::{parse_yolov8_int8, Yolov8ParseContext, Yolov8RknnConfig};
 
-let config = Yolov8RknnConfig {
-    model_input_w: 640.0,
-    model_input_h: 384.0,
-    dfl_bins: 16,
-    num_classes: 2,       // fire / smoke
-    use_score_sum: true,  // 9-tensor 优化版
-};
+// 唯一构造入口：同时守卫“9-tensor + logits”等无法正确解码的组合
+let config = Yolov8RknnConfig::from_spec(
+    640.0,  // 模型输入宽度
+    384.0,  // 模型输入高度
+    16,     // DFL bins 数
+    2,      // 类别数（fire / smoke）
+    true,   // use_score_sum: true=9-tensor 优化版
+    false,  // cls_is_logits: sigmoid 是否已移出计算图
+)?;
 
 let ctx = Yolov8ParseContext {
     branches: &rknn_outputs,

@@ -17,4 +17,6 @@ pub mod yolov8_rknn;
 // 统一导出，方便算法包一键使用
 pub use dfl::decode_dfl;
 pub use quantize::{dequant_i8, quant_f32};
-pub use yolov8_rknn::{parse_yolov8_int8, RknnTensorOutput, Yolov8ParseContext, Yolov8RknnConfig};
+pub use yolov8_rknn::{
+    parse_yolov8_int8, ClassActivation, RknnTensorOutput, Yolov8ParseContext, Yolov8RknnConfig,
+};

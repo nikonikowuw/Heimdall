@@ -54,11 +54,16 @@ model.export(format='rknn', imgsz=[360, 640])  # 16:9
 
 ### 预训练模型
 
-| Model | Precision | Size | Input |
-|-------|-----------|------|-------|
-| best_fp16.rknn | FP16 | 7.1 MB | 384×640 |
-| best_hybrid.rknn | INT8 (auto_hybrid) | 4.2 MB | 384×640 |
-| best_pure.rknn | INT8 (pure) | 4.2 MB | 384×640 |
+| Model | Precision | Size | Input | 状态 |
+|-------|-----------|------|-------|------|
+| `yolov8_hard_hat.rknn` | INT8 | 4.0 MB | 384×640 | **当前使用**（6-tensor，logits 分类头） |
+| best_fp16.rknn | FP16 | 7.1 MB | 384×640 | 历史 |
+| best_hybrid.rknn | INT8 (auto_hybrid) | 4.2 MB | 384×640 | 历史（9-tensor，含 score_sum） |
+| best_pure.rknn | INT8 (pure) | 4.2 MB | 384×640 | 历史 |
+
+> 历史模型文件已不再入库，其契约（9-tensor / 图内 sigmoid / score_sum 快筛）
+> 仅在本节保留作参照；当前算法包由 `MODEL_PATH` 指向 `yolov8_hard_hat.rknn`。
+> 当前模型的输入输出契约与转换参数见 [`CONVERSION.md`](./CONVERSION.md)。
 
 
 
@@ -120,31 +125,41 @@ NO-Hardhat @ (300 100 400 250) 0.876
 
 ## 8. Model Details
 
-### 输入输出
+### 输入输出（当前模型 `yolov8_hard_hat.rknn`）
 
 ```
-输入:  images  [1, 3, 384, 640]  NHWC uint8
+输入:  images  [1, 3, 384, 640]  RGB
+  mean = 0 / std = 255（已固化进计算图，宿主侧不得再做除 255）
 
-输出 (9 个 tensor):
-  conv2d_47  [1, 64, 48, 80]   ← box P3 (48×80, stride=8)
-  sigmoid    [1, 2, 48, 80]    ← cls P3
-  clamp      [1, 1, 48, 80]    ← score_sum P3
-  conv2d_53  [1, 64, 24, 40]   ← box P4 (24×40, stride=16)
-  sigmoid_1  [1, 2, 24, 40]    ← cls P4
-  clamp_1    [1, 1, 24, 40]    ← score_sum P4
-  conv2d_59  [1, 64, 12, 20]   ← box P5 (12×20, stride=32)
-  sigmoid_2  [1, 2, 12, 20]    ← cls P5
-  clamp_2    [1, 1, 12, 20]    ← score_sum P5
+输出 (6 个 tensor, 官方标准解耦):
+  box_8    [1, 64, 48, 80]   ← box P3 (48×80, stride=8)
+  score_8  [1,  2, 48, 80]   ← cls P3 (logits)
+  box_16   [1, 64, 24, 40]   ← box P4 (24×40, stride=16)
+  score_16 [1,  2, 24, 40]   ← cls P4 (logits)
+  box_32   [1, 64, 12, 20]   ← box P5 (12×20, stride=32)
+  score_32 [1,  2, 12, 20]   ← cls P5 (logits)
 ```
+
+> 无 score_sum 分支。`score_*` 为**未激活 logits**（sigmoid 已移出计算图），
+> 解码器按 `sigmoid(dequant(raw))` 还原置信度并换算阈值——详见
+> [`CONVERSION.md`](./CONVERSION.md) 与 `src/plugin.rs` 的 `CLS_IS_LOGITS`。
 
 ### 后处理
 
-1. 对每个检测头（P3/P4/P5），用 DFL 解码 box 坐标
-2. 用 sigmoid 激活得到分类置信度
-3. 用 score_sum 快速过滤低分候选框
-4. NMS 去除重叠框
+1. 对每个检测头（P3/P4/P5），用 DFL 解码 box 坐标（`box_*` 分支）
+2. 取 `score_*` 各通道最大 logit，与换算到 logit 空间的阈值比较
+3. 对入选候选执行 NMS 去除重叠框
+4. 置信度输出按 sigmoid 还原为概率
 
 ### RK3568 NPU 参考性能
+
+当前模型板端实测（RK3568 EVB1 DDR4 V10，`librknnrt` 2.3.2，含 RGA 预处理与后处理）：
+
+| 模型 | 大小 | 延迟 | FPS |
+|------|------|------|-----|
+| `yolov8_hard_hat.rknn`（当前） | 4.0 MB | 36.2 ms (E2E) | 27.4 |
+
+历史模型公开参考值（口径不含后处理，与上表不完全可比）：
 
 | 模型 | 大小 | 延迟 | FPS |
 |------|------|------|-----|
