@@ -16,6 +16,11 @@ import { CameraDetailDrawer } from './components/CameraDetailDrawer'
 import { DeleteCameraModal } from './components/DeleteCameraModal'
 import { BatchImportGbModal } from './components/BatchImportGbModal'
 import type { CameraModelType } from './components/illustrations/types'
+import {
+  matchesCameraAddressQuery,
+  matchesCameraNameQuery,
+  normalizeCameraSearchQuery,
+} from './cameraSearch'
 
 export type CamerasPageProps = Record<string, never>
 
@@ -26,7 +31,8 @@ export function CamerasPage(): React.ReactElement {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [tasks, setTasks] = useState<TaskSummaryDto[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [nameQuery, setNameQuery] = useState('')
+  const [addressQuery, setAddressQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [protocolFilter, setProtocolFilter] = useState<'all' | 'rtsp' | 'gb28181'>('all')
   const [page, setPage] = useState(1)
@@ -244,26 +250,23 @@ export function CamerasPage(): React.ReactElement {
 
   // 筛选过滤
   const filteredCameras = useMemo(() => {
-    const q = searchQuery.toLowerCase().trim()
+    const normalizedName = normalizeCameraSearchQuery(nameQuery)
+    const normalizedAddress = normalizeCameraSearchQuery(addressQuery)
+
     return cameras.filter((cam) => {
       if (protocolFilter !== 'all' && cam.protocol !== protocolFilter) {
         return false
       }
 
-      const matchesSearch =
-        !q ||
-        cam.name?.toLowerCase().includes(q) ||
-        cam.cameraId?.toLowerCase().includes(q) ||
-        cam.rtspUrl?.toLowerCase().includes(q)
-
-      if (!matchesSearch) return false
+      if (!matchesCameraNameQuery(cam, nameQuery, normalizedName)) return false
+      if (!matchesCameraAddressQuery(cam, addressQuery, normalizedAddress)) return false
 
       if (statusFilter !== 'all') {
         return normalizeProbeStatus(cam.lastProbeStatus) === statusFilter
       }
       return true
     })
-  }, [cameras, searchQuery, statusFilter, protocolFilter])
+  }, [cameras, nameQuery, addressQuery, statusFilter, protocolFilter])
 
   // 分页切片计算
   const totalPages = Math.max(1, Math.ceil(filteredCameras.length / pageSize))
@@ -390,31 +393,57 @@ export function CamerasPage(): React.ReactElement {
 
       {/* 搜索与过滤筛选栏 */}
       {cameras.length > 0 && (
-        <div className="frosted-glass flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 shadow-xs">
-          <SearchInput
-            showKbdHint
-            value={searchQuery}
-            onChange={(val) => {
-              setSearchQuery(val)
-              setPage(1)
-            }}
-            onClear={() => {
-              setSearchQuery('')
-              setPage(1)
-            }}
-            placeholder={t('manage.searchPlaceholder', {
-              defaultValue: '按设备名称、ID 或 RTSP 地址搜索...',
-            })}
-            aria-label={t('manage.searchPlaceholder', {
-              defaultValue: '按设备名称、ID 或 RTSP 地址搜索...',
-            })}
-            clearAriaLabel={t('manage.clearSearch')}
-            containerClassName="flex-1"
-          />
+        <div className="frosted-glass flex flex-col gap-3 rounded-xl px-4 py-3 shadow-xs xl:flex-row xl:items-center">
+          <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 md:grid-cols-2 xl:min-w-[22rem]">
+            <SearchInput
+              showKbdHint
+              value={nameQuery}
+              onChange={(val) => {
+                setNameQuery(val)
+                setPage(1)
+              }}
+              onClear={() => {
+                setNameQuery('')
+                setPage(1)
+              }}
+              placeholder={t('manage.searchNamePlaceholder', {
+                defaultValue: '按设备名称筛选...',
+              })}
+              aria-label={t('manage.searchNamePlaceholder', {
+                defaultValue: '按设备名称筛选...',
+              })}
+              clearAriaLabel={t('manage.clearSearch')}
+              containerClassName="min-w-0"
+            />
+            <SearchInput
+              value={addressQuery}
+              onChange={(val) => {
+                setAddressQuery(val)
+                setPage(1)
+              }}
+              onClear={() => {
+                setAddressQuery('')
+                setPage(1)
+              }}
+              placeholder={t('manage.searchAddressPlaceholder', {
+                defaultValue: '按主/子码流地址或设备编码筛选...',
+              })}
+              aria-label={t('manage.searchAddressPlaceholder', {
+                defaultValue: '按主/子码流地址或设备编码筛选...',
+              })}
+              clearAriaLabel={t('manage.clearSearch')}
+              containerClassName="min-w-0"
+            />
+          </div>
 
-          <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
+          <div
+            role="group"
+            aria-label={t('manage.filterByProtocol', { defaultValue: '按接入协议筛选' })}
+            className="flex flex-wrap items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs"
+          >
             <button
               type="button"
+              aria-pressed={protocolFilter === 'all'}
               onClick={() => {
                 setProtocolFilter('all')
                 setPage(1)
@@ -429,6 +458,7 @@ export function CamerasPage(): React.ReactElement {
             </button>
             <button
               type="button"
+              aria-pressed={protocolFilter === 'rtsp'}
               onClick={() => {
                 setProtocolFilter('rtsp')
                 setPage(1)
@@ -443,6 +473,7 @@ export function CamerasPage(): React.ReactElement {
             </button>
             <button
               type="button"
+              aria-pressed={protocolFilter === 'gb28181'}
               onClick={() => {
                 setProtocolFilter('gb28181')
                 setPage(1)
@@ -457,9 +488,14 @@ export function CamerasPage(): React.ReactElement {
             </button>
           </div>
 
-          <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs">
+          <div
+            role="group"
+            aria-label={t('manage.filterByStatus', { defaultValue: '按状态筛选' })}
+            className="flex flex-wrap items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1 text-xs"
+          >
             <button
               type="button"
+              aria-pressed={statusFilter === 'all'}
               onClick={() => {
                 setStatusFilter('all')
                 setPage(1)
@@ -474,6 +510,7 @@ export function CamerasPage(): React.ReactElement {
             </button>
             <button
               type="button"
+              aria-pressed={statusFilter === 'online'}
               onClick={() => {
                 setStatusFilter('online')
                 setPage(1)
@@ -488,6 +525,7 @@ export function CamerasPage(): React.ReactElement {
             </button>
             <button
               type="button"
+              aria-pressed={statusFilter === 'degraded'}
               onClick={() => {
                 setStatusFilter('degraded')
                 setPage(1)
@@ -502,6 +540,7 @@ export function CamerasPage(): React.ReactElement {
             </button>
             <button
               type="button"
+              aria-pressed={statusFilter === 'offline'}
               onClick={() => {
                 setStatusFilter('offline')
                 setPage(1)
@@ -551,7 +590,7 @@ export function CamerasPage(): React.ReactElement {
             </p>
             <p className="mt-1 text-xs opacity-75">
               {t('manage.clearFilterHint', {
-                defaultValue: '尝试清除搜索词或更改状态过滤条件',
+                defaultValue: '尝试清除名称或地址搜索条件，或调整类型、状态筛选',
               })}
             </p>
           </div>
@@ -585,7 +624,10 @@ export function CamerasPage(): React.ReactElement {
       <div className="frosted-glass flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-2.5 text-xs text-[var(--text-secondary)] shadow-xs">
         <div className="flex items-center gap-3">
           <span>{t('pagination.page', { current: safePage })}</span>
-          {searchQuery || statusFilter !== 'all' || protocolFilter !== 'all' ? (
+          {nameQuery.trim() ||
+          addressQuery.trim() ||
+          statusFilter !== 'all' ||
+          protocolFilter !== 'all' ? (
             <span className="text-status-success font-mono font-semibold">
               ({t('pagination.pageFiltered', { count: filteredCameras.length })})
             </span>
