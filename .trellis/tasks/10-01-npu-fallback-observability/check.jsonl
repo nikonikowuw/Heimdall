@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/algo-sdk/backend/index.md", "reason": "algo-sdk Quality Check 门禁要求"}
+{"file": ".trellis/spec/guides/quality-guidelines.md", "reason": "验证、测试与审查检查点"}
+{"file": ".trellis/spec/guides/error-handling.md", "reason": "校验错误分支的降级范围与不伪造成功"}
+{"file": ".trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md", "reason": "ABI 布局与状态码回归校验基准"}
