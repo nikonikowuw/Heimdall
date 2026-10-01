@@ -1,12 +1,16 @@
-import React, { useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import {
   Award,
   Camera,
   Check,
   CheckCircle2,
   Clock,
+  Download,
   ExternalLink,
+  Film,
   Image as ImageIcon,
+  Loader2,
+  RefreshCw,
   Sparkles,
   User,
   Users,
@@ -14,11 +18,15 @@ import {
   ZoomIn,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
+import { useTranslation } from 'react-i18next'
 import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { evidenceApi } from '@/lib/api'
 import type { FaceCandidateItem, RecognitionRecord } from '@/types'
 import { formatCosineSimilarityPercent, getCosineSimilarityLevel } from '@/lib/similarity'
+import { useEventRecording } from '../hooks/useEventRecording'
+import { exportRecordingAsMp4 } from '../recordingExport'
 import { formatTimestamp } from '../utils'
+import { EventRecordingPlayer } from './EventRecordingPlayer'
 import { ImagePreviewModal } from './ImagePreviewModal'
 import { RECOGNITION_STATUS_STYLES, SIMILARITY_STYLES } from '../statusStyles'
 
@@ -122,6 +130,7 @@ export function RecognitionReviewModal({
   onReview,
   t,
 }: RecognitionReviewModalProps): React.ReactElement {
+  const { t: tr } = useTranslation('recording')
   const candidates = recognition.candidates || []
   const [selectedCandidate, setSelectedCandidate] = useState<FaceCandidateItem | null>(
     () => candidates[0] || null,
@@ -132,6 +141,33 @@ export function RecognitionReviewModal({
     subtitle?: string
     bboxJson?: string | null
   } | null>(null)
+
+  // 识别命中是录像触发源之一：有识别结果的记录才可能关联到录像片段
+  const {
+    recording,
+    error: recordingError,
+    retry: retryRecording,
+  } = useEventRecording('recognition', recognition.recognitionId)
+  const [mediaMode, setMediaMode] = useState<'image' | 'video'>('image')
+  const [exportState, setExportState] = useState<'idle' | 'exporting' | 'failed'>('idle')
+  const activeEventOffsetMs =
+    recording?.events.find((item) => item.eventId === recognition.recognitionId)?.offsetMs ?? 0
+
+  // 换记录时回到证据图模式，避免沿用上一条的媒体选择
+  const [mediaRecognitionId, setMediaRecognitionId] = useState(recognition.recognitionId)
+  if (mediaRecognitionId !== recognition.recognitionId) {
+    setMediaRecognitionId(recognition.recognitionId)
+    setMediaMode('image')
+    setExportState('idle')
+  }
+
+  const handleExport = useCallback(() => {
+    if (!recording || exportState === 'exporting') return
+    setExportState('exporting')
+    exportRecordingAsMp4(recording)
+      .then(() => setExportState('idle'))
+      .catch(() => setExportState('failed'))
+  }, [recording, exportState])
 
   // 浮层按栈响应 ESC，杜绝穿透
 
@@ -202,6 +238,84 @@ export function RecognitionReviewModal({
             <span>{formatTimestamp(recognition.recognizedAt)}</span>
           </div>
 
+          {/* 录像查询失败：给出可操作的重试，不静默当作无录像 */}
+          {recordingError && !recording && (
+            <button
+              type="button"
+              onClick={retryRecording}
+              title={recordingError}
+              className="border-status-danger/40 bg-status-danger/15 text-status-danger hover:bg-status-danger/25 flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs transition-colors"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">
+                {tr('playback.loadRetry', { defaultValue: '录像加载失败，重试' })}
+              </span>
+            </button>
+          )}
+
+          {/* 媒体切换：仅当该识别命中已保存录像时出现 */}
+          {recording && (
+            <div className="flex items-center gap-0.5 rounded-xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setMediaMode('image')}
+                aria-pressed={mediaMode === 'image'}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 transition-colors ${
+                  mediaMode === 'image'
+                    ? 'bg-[var(--bg-surface-solid)] text-[var(--text-primary)] shadow-xs'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <ImageIcon className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">
+                  {tr('playback.mediaImage', { defaultValue: '证据图' })}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMediaMode('video')}
+                aria-pressed={mediaMode === 'video'}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 transition-colors ${
+                  mediaMode === 'video'
+                    ? 'bg-[var(--bg-surface-solid)] text-[var(--text-primary)] shadow-xs'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Film className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">
+                  {tr('playback.mediaVideo', { defaultValue: '录像回放' })}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {mediaMode === 'video' && recording && (
+            <button
+              type="button"
+              disabled={exportState === 'exporting'}
+              onClick={handleExport}
+              title={exportState === 'failed' ? tr('playback.exportFailed') : tr('playback.export')}
+              className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs transition-colors disabled:opacity-60 ${
+                exportState === 'failed'
+                  ? 'border-status-danger/40 bg-status-danger/15 text-status-danger'
+                  : 'border-[var(--border)]/70 bg-[var(--bg-secondary)]/40 text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              {exportState === 'exporting' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">
+                {exportState === 'exporting'
+                  ? tr('playback.exporting')
+                  : exportState === 'failed'
+                    ? tr('playback.exportRetry')
+                    : tr('playback.export')}
+              </span>
+            </button>
+          )}
+
           {/* 关闭按钮 */}
           <button
             onClick={onClose}
@@ -213,280 +327,292 @@ export function RecognitionReviewModal({
         </div>
       </div>
 
-      {/* 内容区：左侧实时对比基准舱 VS 右侧 Top-5 候选池 */}
+      {/* 内容区：左侧实时对比基准舱 VS 右侧 Top-5 候选池；切到录像则整区让位给播放器 */}
       <div className="flex-1 overflow-y-auto p-5 sm:p-6">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* 左侧：实时双头像镜面对比舱 (占 5 列) */}
-          <div className="flex flex-col justify-between gap-4 rounded-2xl border border-[var(--border)]/60 bg-[var(--bg-primary)]/40 p-4.5 shadow-inner backdrop-blur-md lg:col-span-5">
-            <div>
-              <div className="flex items-center justify-between pb-3">
-                <span className="flex items-center gap-1.5 text-xs font-semibold tracking-tight text-[var(--text-primary)]">
-                  <Sparkles className="h-3.5 w-3.5 text-[var(--accent)]" />
-                  <span>{t('card.compareBenchmark')}</span>
-                </span>
-                <span className="font-mono text-[11px] text-[var(--text-muted)]">
-                  1 : 1 Live Verify
-                </span>
-              </div>
-
-              {/* 双头像对比舞台 */}
-              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-2xl border border-[var(--border)]/40 bg-[var(--bg-surface)]/50 p-3.5 shadow-xs backdrop-blur-xs">
-                {/* 左像：现场抓拍特写 */}
-                <MiniAvatar
-                  src={fieldCropPath}
-                  alt={t('card.siteCrop')}
-                  label={t('card.fieldCapture')}
-                  viewHdText={t('card.viewHd')}
-                  noImageText={t('card.noImage')}
-                  onZoom={() => {
-                    if (fieldCropPath) {
-                      setPreviewImage({
-                        src: evidenceApi.getImageUrl(fieldCropPath),
-                        title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
-                        subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
-                      })
-                    }
-                  }}
-                />
-
-                {/* 中间：实时相似度指示仪表 */}
-                <div className="flex flex-col items-center justify-center gap-1.5 px-0.5">
-                  <span className="font-mono text-[9px] font-bold tracking-widest text-[var(--text-muted)] uppercase">
-                    {t('card.match')}
-                  </span>
-                  <div
-                    className={`flex h-12 w-12 flex-col items-center justify-center rounded-2xl border font-mono backdrop-blur-md transition-transform duration-300 ${activeSimClass}`}
-                  >
-                    <span className="text-xs font-bold tracking-tight">{simPct}</span>
-                  </div>
-                  <span className="text-[9px] font-medium text-[var(--text-muted)]">
-                    {activeCandidate?.rank ? `#${activeCandidate.rank}` : '#1'}
-                  </span>
-                </div>
-
-                {/* 右像：当前比对候选人照片 */}
-                <MiniAvatar
-                  src={activeCandidate?.photoRelPath || recognition.registeredPhotoPath}
-                  alt={activeCandidate?.subjectName || t('card.registeredPhoto')}
-                  label={t('card.archivePhoto')}
-                  viewHdText={t('card.viewHd')}
-                  noImageText={t('card.noImage')}
-                  onZoom={() => {
-                    const p = activeCandidate?.photoRelPath || recognition.registeredPhotoPath
-                    if (p) {
-                      setPreviewImage({
-                        src: evidenceApi.getImageUrl(p),
-                        title: `${t('card.registeredPhoto')}: ${activeCandidate?.subjectName || recognition.subjectName}`,
-                        subtitle: `ID: ${activeCandidate?.subjectId || recognition.subjectId || '-'}`,
-                      })
-                    }
-                  }}
-                />
-              </div>
-
-              {/* 候选目标身份摘要卡 */}
-              <div className="mt-3.5 space-y-2 rounded-xl border border-[var(--border)]/40 bg-[var(--bg-surface)]/40 p-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--text-muted)]">{t('columns.subject')}:</span>
-                  <span className="font-semibold text-[var(--text-primary)]">
-                    {activeCandidate?.subjectName ||
-                      recognition.subjectName ||
-                      t('card.unknownSubject')}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--text-muted)]">ID:</span>
-                  <span className="font-mono text-[var(--text-secondary)]">
-                    {activeCandidate?.subjectId || recognition.subjectId || '-'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--text-muted)]">{t('card.similarity')}:</span>
-                  <span className="font-mono font-bold text-[var(--status-success)]">{simPct}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* 现场全景背景按需查看 (不占大面积，一键预览) */}
-            {fieldImagePath && (
-              <button
-                type="button"
-                onClick={() => {
-                  setPreviewImage({
-                    src: evidenceApi.getImageUrl(fieldImagePath),
-                    bboxJson: recognition.fieldBboxJson,
-                    title: `${t('card.sitePanorama')} · ${recognition.subjectName || recognition.cameraId}`,
-                    subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
-                  })
-                }}
-                className="flex w-full items-center justify-between rounded-xl border border-[var(--border)]/70 bg-[var(--bg-surface)]/60 p-2.5 text-xs text-[var(--text-secondary)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/30 hover:text-[var(--accent)] active:scale-98"
-              >
-                <span className="flex items-center gap-2">
-                  <ImageIcon className="h-4 w-4 text-[var(--accent)]" />
-                  <span className="font-medium text-[var(--text-primary)]">
-                    {t('card.sitePanorama')}
-                  </span>
-                </span>
-                <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--accent)]">
-                  <span>{t('card.viewHd')}</span>
-                  <ExternalLink className="h-3 w-3" />
-                </span>
-              </button>
-            )}
+        {mediaMode === 'video' && recording ? (
+          <div className="flex min-h-[44vh] items-center justify-center">
+            <EventRecordingPlayer
+              recording={recording}
+              initialOffsetMs={activeEventOffsetMs}
+              className="max-h-[62vh] w-full max-w-4xl rounded-xl bg-black shadow-2xl"
+            />
           </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            {/* 左侧：实时双头像镜面对比舱 (占 5 列) */}
+            <div className="flex flex-col justify-between gap-4 rounded-2xl border border-[var(--border)]/60 bg-[var(--bg-primary)]/40 p-4.5 shadow-inner backdrop-blur-md lg:col-span-5">
+              <div>
+                <div className="flex items-center justify-between pb-3">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold tracking-tight text-[var(--text-primary)]">
+                    <Sparkles className="h-3.5 w-3.5 text-[var(--accent)]" />
+                    <span>{t('card.compareBenchmark')}</span>
+                  </span>
+                  <span className="font-mono text-[11px] text-[var(--text-muted)]">
+                    1 : 1 Live Verify
+                  </span>
+                </div>
 
-          {/* 右侧：Top-5 相似度候选人池 (占 7 列) */}
-          <div className="flex flex-col gap-3 lg:col-span-7">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold tracking-tight text-[var(--text-secondary)]">
-                {t('card.candidatePool')} ({candidates.length})
-              </span>
-              <span className="text-[11px] text-[var(--text-muted)]">
-                {t('card.sortedBySimilarity')}
-              </span>
+                {/* 双头像对比舞台 */}
+                <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-2xl border border-[var(--border)]/40 bg-[var(--bg-surface)]/50 p-3.5 shadow-xs backdrop-blur-xs">
+                  {/* 左像：现场抓拍特写 */}
+                  <MiniAvatar
+                    src={fieldCropPath}
+                    alt={t('card.siteCrop')}
+                    label={t('card.fieldCapture')}
+                    viewHdText={t('card.viewHd')}
+                    noImageText={t('card.noImage')}
+                    onZoom={() => {
+                      if (fieldCropPath) {
+                        setPreviewImage({
+                          src: evidenceApi.getImageUrl(fieldCropPath),
+                          title: `${t('card.siteCrop')} · ${recognition.subjectName || recognition.cameraId}`,
+                          subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
+                        })
+                      }
+                    }}
+                  />
+
+                  {/* 中间：实时相似度指示仪表 */}
+                  <div className="flex flex-col items-center justify-center gap-1.5 px-0.5">
+                    <span className="font-mono text-[9px] font-bold tracking-widest text-[var(--text-muted)] uppercase">
+                      {t('card.match')}
+                    </span>
+                    <div
+                      className={`flex h-12 w-12 flex-col items-center justify-center rounded-2xl border font-mono backdrop-blur-md transition-transform duration-300 ${activeSimClass}`}
+                    >
+                      <span className="text-xs font-bold tracking-tight">{simPct}</span>
+                    </div>
+                    <span className="text-[9px] font-medium text-[var(--text-muted)]">
+                      {activeCandidate?.rank ? `#${activeCandidate.rank}` : '#1'}
+                    </span>
+                  </div>
+
+                  {/* 右像：当前比对候选人照片 */}
+                  <MiniAvatar
+                    src={activeCandidate?.photoRelPath || recognition.registeredPhotoPath}
+                    alt={activeCandidate?.subjectName || t('card.registeredPhoto')}
+                    label={t('card.archivePhoto')}
+                    viewHdText={t('card.viewHd')}
+                    noImageText={t('card.noImage')}
+                    onZoom={() => {
+                      const p = activeCandidate?.photoRelPath || recognition.registeredPhotoPath
+                      if (p) {
+                        setPreviewImage({
+                          src: evidenceApi.getImageUrl(p),
+                          title: `${t('card.registeredPhoto')}: ${activeCandidate?.subjectName || recognition.subjectName}`,
+                          subtitle: `ID: ${activeCandidate?.subjectId || recognition.subjectId || '-'}`,
+                        })
+                      }
+                    }}
+                  />
+                </div>
+
+                {/* 候选目标身份摘要卡 */}
+                <div className="mt-3.5 space-y-2 rounded-xl border border-[var(--border)]/40 bg-[var(--bg-surface)]/40 p-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">{t('columns.subject')}:</span>
+                    <span className="font-semibold text-[var(--text-primary)]">
+                      {activeCandidate?.subjectName ||
+                        recognition.subjectName ||
+                        t('card.unknownSubject')}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">ID:</span>
+                    <span className="font-mono text-[var(--text-secondary)]">
+                      {activeCandidate?.subjectId || recognition.subjectId || '-'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--text-muted)]">{t('card.similarity')}:</span>
+                    <span className="font-mono font-bold text-[var(--status-success)]">
+                      {simPct}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 现场全景背景按需查看 (不占大面积，一键预览) */}
+              {fieldImagePath && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewImage({
+                      src: evidenceApi.getImageUrl(fieldImagePath),
+                      bboxJson: recognition.fieldBboxJson,
+                      title: `${t('card.sitePanorama')} · ${recognition.subjectName || recognition.cameraId}`,
+                      subtitle: `${cameraName || recognition.cameraId} · ${formatTimestamp(recognition.recognizedAt)}`,
+                    })
+                  }}
+                  className="flex w-full items-center justify-between rounded-xl border border-[var(--border)]/70 bg-[var(--bg-surface)]/60 p-2.5 text-xs text-[var(--text-secondary)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/30 hover:text-[var(--accent)] active:scale-98"
+                >
+                  <span className="flex items-center gap-2">
+                    <ImageIcon className="h-4 w-4 text-[var(--accent)]" />
+                    <span className="font-medium text-[var(--text-primary)]">
+                      {t('card.sitePanorama')}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--accent)]">
+                    <span>{t('card.viewHd')}</span>
+                    <ExternalLink className="h-3 w-3" />
+                  </span>
+                </button>
+              )}
             </div>
 
-            {candidates.length === 0 ? (
-              <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--border)] p-6 text-center text-xs text-[var(--text-muted)]">
-                <Users className="mb-2 h-8 w-8 opacity-30" />
-                <span>{t('card.noCandidates')}</span>
+            {/* 右侧：Top-5 相似度候选人池 (占 7 列) */}
+            <div className="flex flex-col gap-3 lg:col-span-7">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold tracking-tight text-[var(--text-secondary)]">
+                  {t('card.candidatePool')} ({candidates.length})
+                </span>
+                <span className="text-[11px] text-[var(--text-muted)]">
+                  {t('card.sortedBySimilarity')}
+                </span>
               </div>
-            ) : (
-              <div className="space-y-2.5">
-                {candidates.map((cand, idx) => {
-                  const scorePct = formatCosineSimilarityPercent(cand.similarity, 0)
-                  const isSelected = activeCandidate?.faceId === cand.faceId
-                  const isTop1 = idx === 0
-                  const candLevel = getCosineSimilarityLevel(cand.similarity)
-                  const simRatio = Math.max(0, Math.min(100, (cand.similarity ?? 0) * 100))
 
-                  return (
-                    <div
-                      key={cand.faceId || idx}
-                      onClick={() => setSelectedCandidate(cand)}
-                      className={`relative flex cursor-pointer items-center justify-between gap-3.5 rounded-2xl border p-3 shadow-xs backdrop-blur-md transition-all duration-200 ${
-                        isSelected
-                          ? 'border-[var(--accent)] bg-[var(--accent-soft)]/20 shadow-md ring-1 ring-[var(--accent)]/30'
-                          : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/50 hover:border-[var(--accent)]/50 hover:bg-[var(--bg-surface)]'
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        {/* 排名勋章 */}
-                        <div className="flex shrink-0 flex-col items-center justify-center">
-                          {isTop1 ? (
-                            <span className="flex h-7 w-7 items-center justify-center rounded-xl border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] font-mono text-xs font-bold text-[var(--status-warning)] shadow-xs">
-                              <Award className="h-4 w-4" />
-                            </span>
-                          ) : (
-                            <span className="flex h-7 w-7 items-center justify-center rounded-xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/50 font-mono text-xs font-semibold text-[var(--text-muted)]">
-                              #{cand.rank || idx + 1}
-                            </span>
-                          )}
-                        </div>
+              {candidates.length === 0 ? (
+                <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--border)] p-6 text-center text-xs text-[var(--text-muted)]">
+                  <Users className="mb-2 h-8 w-8 opacity-30" />
+                  <span>{t('card.noCandidates')}</span>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {candidates.map((cand, idx) => {
+                    const scorePct = formatCosineSimilarityPercent(cand.similarity, 0)
+                    const isSelected = activeCandidate?.faceId === cand.faceId
+                    const isTop1 = idx === 0
+                    const candLevel = getCosineSimilarityLevel(cand.similarity)
+                    const simRatio = Math.max(0, Math.min(100, (cand.similarity ?? 0) * 100))
 
-                        {/* 候选人头像 */}
-                        <div
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (cand.photoRelPath) {
-                              setPreviewImage({
-                                src: evidenceApi.getImageUrl(cand.photoRelPath),
-                                title: `${t('card.candidateList')}: ${cand.subjectName}`,
-                                subtitle: `#${cand.rank || idx + 1} · ID: ${cand.subjectId}`,
-                              })
-                            }
-                          }}
-                          className={`group/thumb relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--video-surface)] shadow-xs ${
-                            cand.photoRelPath ? 'cursor-pointer hover:border-[var(--accent)]' : ''
-                          }`}
-                          title={cand.photoRelPath ? t('card.viewHd') : undefined}
-                        >
-                          {cand.photoRelPath ? (
-                            <>
-                              <img
-                                src={evidenceApi.getImageUrl(cand.photoRelPath)}
-                                alt={cand.subjectName}
-                                loading="lazy"
-                                decoding="async"
-                                className="h-full w-full object-cover transition-transform duration-200 group-hover/thumb:scale-105"
-                              />
-                              <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-scrim)] opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
-                                <ZoomIn className="h-3 w-3 text-white" />
-                              </div>
-                            </>
-                          ) : (
-                            <div className="flex h-full items-center justify-center text-[10px] text-[var(--text-muted)]">
-                              {t('card.noImage')}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* 身份与置信度进度条 */}
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate text-xs font-semibold text-[var(--text-primary)]">
-                              {cand.subjectName}
-                            </span>
-                            {isTop1 && (
-                              <span className="rounded-md border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] px-1.5 py-0.5 font-mono text-[9px] font-semibold text-[var(--status-warning)]">
-                                {t('card.topMatchBadge')}
+                    return (
+                      <div
+                        key={cand.faceId || idx}
+                        onClick={() => setSelectedCandidate(cand)}
+                        className={`relative flex cursor-pointer items-center justify-between gap-3.5 rounded-2xl border p-3 shadow-xs backdrop-blur-md transition-all duration-200 ${
+                          isSelected
+                            ? 'border-[var(--accent)] bg-[var(--accent-soft)]/20 shadow-md ring-1 ring-[var(--accent)]/30'
+                            : 'border-[var(--border)]/70 bg-[var(--bg-surface)]/50 hover:border-[var(--accent)]/50 hover:bg-[var(--bg-surface)]'
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          {/* 排名勋章 */}
+                          <div className="flex shrink-0 flex-col items-center justify-center">
+                            {isTop1 ? (
+                              <span className="flex h-7 w-7 items-center justify-center rounded-xl border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] font-mono text-xs font-bold text-[var(--status-warning)] shadow-xs">
+                                <Award className="h-4 w-4" />
+                              </span>
+                            ) : (
+                              <span className="flex h-7 w-7 items-center justify-center rounded-xl border border-[var(--border)]/70 bg-[var(--bg-secondary)]/50 font-mono text-xs font-semibold text-[var(--text-muted)]">
+                                #{cand.rank || idx + 1}
                               </span>
                             )}
                           </div>
-                          <div className="mt-0.5 font-mono text-[10px] text-[var(--text-muted)]">
-                            ID: {cand.subjectId}
+
+                          {/* 候选人头像 */}
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (cand.photoRelPath) {
+                                setPreviewImage({
+                                  src: evidenceApi.getImageUrl(cand.photoRelPath),
+                                  title: `${t('card.candidateList')}: ${cand.subjectName}`,
+                                  subtitle: `#${cand.rank || idx + 1} · ID: ${cand.subjectId}`,
+                                })
+                              }
+                            }}
+                            className={`group/thumb relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--video-surface)] shadow-xs ${
+                              cand.photoRelPath ? 'cursor-pointer hover:border-[var(--accent)]' : ''
+                            }`}
+                            title={cand.photoRelPath ? t('card.viewHd') : undefined}
+                          >
+                            {cand.photoRelPath ? (
+                              <>
+                                <img
+                                  src={evidenceApi.getImageUrl(cand.photoRelPath)}
+                                  alt={cand.subjectName}
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="h-full w-full object-cover transition-transform duration-200 group-hover/thumb:scale-105"
+                                />
+                                <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-scrim)] opacity-0 transition-opacity duration-200 group-hover/thumb:opacity-100">
+                                  <ZoomIn className="h-3 w-3 text-white" />
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex h-full items-center justify-center text-[10px] text-[var(--text-muted)]">
+                                {t('card.noImage')}
+                              </div>
+                            )}
                           </div>
-                          {/* 置信度条 */}
-                          <div className="mt-1.5 flex items-center gap-2">
-                            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--bg-secondary)] sm:w-28">
-                              <div
-                                className={`h-full rounded-full transition-all duration-300 ${
-                                  candLevel === 'high'
-                                    ? 'bg-[var(--status-success)]'
-                                    : candLevel === 'medium'
-                                      ? 'bg-[var(--status-warning)]'
-                                      : 'bg-[var(--status-danger)]'
-                                }`}
-                                style={{ width: `${simRatio}%` }}
-                              />
+
+                          {/* 身份与置信度进度条 */}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-xs font-semibold text-[var(--text-primary)]">
+                                {cand.subjectName}
+                              </span>
+                              {isTop1 && (
+                                <span className="rounded-md border border-[var(--status-warning-border)] bg-[var(--status-warning-soft)] px-1.5 py-0.5 font-mono text-[9px] font-semibold text-[var(--status-warning)]">
+                                  {t('card.topMatchBadge')}
+                                </span>
+                              )}
                             </div>
-                            <span
-                              className={`font-mono text-[10px] font-bold ${
-                                candLevel === 'high'
-                                  ? 'text-[var(--status-success)]'
-                                  : candLevel === 'medium'
-                                    ? 'text-[var(--status-warning)]'
-                                    : 'text-[var(--status-danger)]'
-                              }`}
-                            >
-                              {scorePct}
-                            </span>
+                            <div className="mt-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+                              ID: {cand.subjectId}
+                            </div>
+                            {/* 置信度条 */}
+                            <div className="mt-1.5 flex items-center gap-2">
+                              <div className="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--bg-secondary)] sm:w-28">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-300 ${
+                                    candLevel === 'high'
+                                      ? 'bg-[var(--status-success)]'
+                                      : candLevel === 'medium'
+                                        ? 'bg-[var(--status-warning)]'
+                                        : 'bg-[var(--status-danger)]'
+                                  }`}
+                                  style={{ width: `${simRatio}%` }}
+                                />
+                              </div>
+                              <span
+                                className={`font-mono text-[10px] font-bold ${
+                                  candLevel === 'high'
+                                    ? 'text-[var(--status-success)]'
+                                    : candLevel === 'medium'
+                                      ? 'text-[var(--status-warning)]'
+                                      : 'text-[var(--status-danger)]'
+                                }`}
+                              >
+                                {scorePct}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* 确认为此人操作按钮 */}
-                      <div className="shrink-0 pl-1">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onReview(recognition, 'confirmed', cand)
-                          }}
-                          className="flex items-center gap-1 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2.5 py-1.5 text-xs font-semibold text-[var(--status-success)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-success)] hover:bg-[var(--status-success-solid)] hover:text-white hover:shadow-[0_0_12px_var(--status-success-soft)] active:scale-95"
-                          title={t('card.confirmCandidate')}
-                        >
-                          <Check className="h-3.5 w-3.5 stroke-[2.5]" />
-                          <span className="hidden sm:inline">{t('card.adoptCandidate')}</span>
-                        </button>
+                        {/* 确认为此人操作按钮 */}
+                        <div className="shrink-0 pl-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onReview(recognition, 'confirmed', cand)
+                            }}
+                            className="flex items-center gap-1 rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-2.5 py-1.5 text-xs font-semibold text-[var(--status-success)] shadow-2xs backdrop-blur-xs transition-all hover:border-[var(--status-success)] hover:bg-[var(--status-success-solid)] hover:text-white hover:shadow-[0_0_12px_var(--status-success-soft)] active:scale-95"
+                            title={t('card.confirmCandidate')}
+                          >
+                            <Check className="h-3.5 w-3.5 stroke-[2.5]" />
+                            <span className="hidden sm:inline">{t('card.adoptCandidate')}</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* 底部决策控制坞 (Decision Dock) */}

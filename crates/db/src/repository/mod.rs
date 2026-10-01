@@ -11,6 +11,7 @@ pub mod oplog;
 pub mod personnel;
 pub(crate) mod query;
 pub mod recognition;
+pub mod recording;
 pub mod sys_gb28181_config;
 pub mod system_config;
 pub mod task;
@@ -27,6 +28,10 @@ pub use operational_log::OperationalLogRepo;
 pub use oplog::OplogRepo;
 pub use personnel::PersonnelRepo;
 pub use recognition::{RecognitionRepo, UpdateRecognitionReviewParams};
+pub use recording::{
+    CreateRecordingParams, FinishRecordingParams, LinkEventParams, PersistEventParams,
+    PersistFinishedParams, RecordingFilter, RecordingRepo,
+};
 pub use sys_gb28181_config::SysGb28181ConfigRepo;
 pub use system_config::SystemConfigRepo;
 pub use task::{

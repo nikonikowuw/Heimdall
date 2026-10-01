@@ -7,6 +7,12 @@ export interface UseImageZoomPanOptions {
   wheelStep?: number
   doubleClickZoom?: number
   enableKeyBindings?: boolean
+  /**
+   * 关闭后不再横向拦截滚轮与快捷键（拖动类回调由调用方自行不展开）。
+   * 用于切换到视频等非缩放媒体：容器上的 wheel 监听是原生绑定，
+   * 子元素阻止冒泡无法拦截，必须在源头关闭。
+   */
+  enabled?: boolean
   onToggleStatus?: () => void
   onToggleFullscreen?: () => void
 }
@@ -34,6 +40,7 @@ export function useImageZoomPan(
     wheelStep = 0.2,
     doubleClickZoom = 2.2,
     enableKeyBindings = true,
+    enabled = true,
     onToggleStatus,
     onToggleFullscreen,
   } = options
@@ -62,7 +69,7 @@ export function useImageZoomPan(
 
   // 快捷键支持 (+, -, 0, f, Space) 智能避开交互输入框
   useEffect(() => {
-    if (!enableKeyBindings) return
+    if (!enableKeyBindings || !enabled) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
@@ -94,10 +101,11 @@ export function useImageZoomPan(
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [enableKeyBindings, zoomIn, zoomOut, resetZoom, onToggleFullscreen, onToggleStatus])
+  }, [enableKeyBindings, enabled, zoomIn, zoomOut, resetZoom, onToggleFullscreen, onToggleStatus])
 
   // 滚轮缩放监听 (passive: false 允许阻止视口滚动)
   useEffect(() => {
+    if (!enabled) return
     const container = containerRef.current
     if (!container) return
 
@@ -116,7 +124,7 @@ export function useImageZoomPan(
 
     container.addEventListener('wheel', handleWheel, { passive: false })
     return () => container.removeEventListener('wheel', handleWheel)
-  }, [containerRef, maxZoom, minZoom, wheelStep])
+  }, [containerRef, maxZoom, minZoom, wheelStep, enabled])
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {

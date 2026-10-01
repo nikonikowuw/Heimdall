@@ -16,6 +16,7 @@ mod personnel_limits;
 pub mod personnel_maintenance;
 pub mod personnel_reextract;
 pub mod personnel_service;
+pub mod recording_service;
 pub mod response;
 pub mod routes;
 pub mod state;

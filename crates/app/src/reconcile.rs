@@ -560,6 +560,7 @@ mod tests {
             last_fps: Set(25.0),
             gb28181_device_id: Set(None),
             gb28181_channel_id: Set(None),
+            recording_config: Set(String::new()),
             last_probe_at: Set(None),
             last_success_at: Set(None),
             created_at: Set(chrono::Utc::now()),

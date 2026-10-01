@@ -27,6 +27,9 @@ pub struct Model {
     pub last_fps: f64,
     pub gb28181_device_id: Option<String>,
     pub gb28181_channel_id: Option<String>,
+    /// 通道级录像配置（JSON 文本）。空串 = 未配置（默认关闭录像）。
+    #[sea_orm(column_type = "Text", default_value = "")]
+    pub recording_config: String,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

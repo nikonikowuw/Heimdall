@@ -7,6 +7,7 @@ pub mod dmabuf_sync;
 pub mod encoders;
 pub mod error;
 pub mod flv;
+pub mod fmp4;
 pub mod frame_crop;
 pub mod gb28181;
 pub mod gop_queue;
@@ -14,6 +15,7 @@ pub mod image_convert;
 pub mod media_ingestor;
 #[cfg(all(target_os = "linux", feature = "rga"))]
 pub mod motion_thumb;
+pub mod pre_capture_ring;
 pub mod probe;
 pub mod retina_ingest;
 pub mod rga;
@@ -33,9 +35,10 @@ pub use decoder::{DecodeDeliveryPolicy, VideoDecoder};
 pub use decoders::VideoToolboxDecoder;
 pub use decoders::{create_decoder, MockDecoder};
 pub use dispatcher::{
-    ConsumerHealthSnapshot, ConsumerId, ConsumerKind, DispatcherError, DispatcherMetrics,
-    DispatcherMetricsSnapshot, GopSnapshot, KeyframeCache, KeyframeCacheStore, MediaSubscription,
-    PacketDispatcher, PreviewDistributionConfig, StreamHealthSnapshot, StreamItem,
+    BlockingRecv, ConsumerHealthSnapshot, ConsumerId, ConsumerKind, DispatcherError,
+    DispatcherMetrics, DispatcherMetricsSnapshot, GopSnapshot, KeyframeCache, KeyframeCacheStore,
+    MediaSubscription, PacketDispatcher, PreviewDistributionConfig, StreamHealthSnapshot,
+    StreamItem,
 };
 pub use dmabuf_sync::{DmaBufSyncDirection, DmaBufSyncGuard};
 pub use encoders::{

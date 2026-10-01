@@ -36,6 +36,7 @@ import {
   useCameraModelType,
 } from './illustrations/cameraModelType'
 import type { CameraModelType, CameraOperationalStatus } from './illustrations/types'
+import { RecordingConfigCard } from './RecordingConfigCard'
 
 export interface CameraDetailDrawerProps {
   camera: Camera | null
@@ -45,6 +46,8 @@ export interface CameraDetailDrawerProps {
   onEdit?: (camera: Camera) => void
   onDelete?: (camera: Camera) => void
   onModelTypeChange?: (cameraId: string, type: CameraModelType) => void
+  /** 录像配置保存成功后回传最新摄像头对象，供列表与详情快照同步 */
+  onRecordingConfigSaved?: (camera: Camera) => void
   isProbing?: boolean
   probeFeedback?: 'success' | 'failed'
 }
@@ -104,6 +107,7 @@ export function CameraDetailDrawer({
   onEdit,
   onDelete,
   onModelTypeChange,
+  onRecordingConfigSaved,
   isProbing = false,
   probeFeedback,
 }: CameraDetailDrawerProps): React.ReactElement | null {
@@ -625,6 +629,15 @@ export function CameraDetailDrawer({
                 </div>
               )}
             </div>
+
+            {/* ── 5.5 事件录像配置卡：开关即时保存，参数走显式保存 ── */}
+            <RecordingConfigCard
+              camera={currentCamera}
+              onSaved={(updated) => {
+                setActiveCamera(updated)
+                onRecordingConfigSaved?.(updated)
+              }}
+            />
 
             {/* ── 6. 活动与保活时钟卡 ── */}
             <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-white p-4.5 dark:bg-[var(--bg-surface-solid)]">

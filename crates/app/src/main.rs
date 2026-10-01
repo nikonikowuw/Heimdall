@@ -249,6 +249,7 @@ async fn main() -> Result<()> {
                 runtime_cfg.recognition_quota_mb = saved_cfg.recognition_quota_mb;
                 runtime_cfg.capture_retention_days = saved_cfg.capture_retention_days;
                 runtime_cfg.capture_quota_mb = saved_cfg.capture_quota_mb;
+                runtime_cfg.recording_retention_days = saved_cfg.recording_retention_days;
                 runtime_cfg.overwrite_mode = saved_cfg.overwrite_mode;
                 runtime_cfg.auto_cleanup_enabled = saved_cfg.auto_cleanup_enabled;
                 cleaner.update_config(runtime_cfg).await;
@@ -310,6 +311,14 @@ async fn main() -> Result<()> {
     // 启动后台告警异步持久化与 WebSocket 实时广播工作线程
     let alarm_svc = Arc::new(api::AlarmDispatchService::from_state(&state));
     alarm_svc.start_worker();
+
+    // 启动事件录像落库工作线程，并恢复已启用录像的通道 Worker
+    state.recording_service.clone().start_persist_worker();
+    state
+        .recording_service
+        .clone()
+        .recover_enabled_cameras()
+        .await;
 
     // 启动后台客观通行抓拍异步持久化工作线程 (三支柱职责独立，攒批入库)
     let capture_svc = Arc::new(api::CaptureDispatchService::from_state(&state));
@@ -398,6 +407,8 @@ async fn main() -> Result<()> {
         // 记录服务停止运维事件
         pipeline::op_log::record(types::OpEvent::ServiceStopped);
         state_shutdown.task_coordinator.stop_all().await;
+        // 录像 Worker 请求停机：闭合在途 fMP4 文件（看护线程有界回收）
+        state_shutdown.recording_service.stop_all().await;
         state_shutdown.notify_shutdown();
 
         // 待管线注销完成后通知运维日志与 SIP 服务端排空并退出

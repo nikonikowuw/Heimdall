@@ -131,6 +131,8 @@ pub struct CaptureDispatchService {
     pub flush_interval_ms: u64,
     pub gallery_index: Option<Arc<crate::gallery_index::FaceFeatureIndex>>,
     pub event_broadcaster: Option<broadcast::Sender<crate::state::WsBroadcastEvent>>,
+    /// 识别命中后的录像触发入口；未接线时仅不产生录像，不影响识别对账。
+    pub recording_service: Option<Arc<crate::recording_service::RecordingDispatchService>>,
     recognition_tx: mpsc::Sender<PipelineCaptureEvent>,
     recognition_rx: RecognitionRxCell,
     recognition_metrics: Arc<RecognitionQueueMetrics>,
@@ -235,6 +237,7 @@ impl CaptureDispatchService {
             flush_interval_ms: DEFAULT_CAPTURE_FLUSH_INTERVAL_MS,
             gallery_index: Some(state.gallery_index.clone()),
             event_broadcaster: Some(state.event_broadcaster.clone()),
+            recording_service: Some(state.recording_service.clone()),
             recognition_tx,
             recognition_rx,
             // 与 AppState 共享同一份计数器：`/system/recognition-queue` 读到的
@@ -260,6 +263,7 @@ impl CaptureDispatchService {
             flush_interval_ms: flush_interval_ms.max(10),
             gallery_index: None,
             event_broadcaster: None,
+            recording_service: None,
             recognition_tx,
             recognition_rx,
             recognition_metrics: Arc::new(RecognitionQueueMetrics::default()),
@@ -601,6 +605,15 @@ impl CaptureDispatchService {
                         timestamp: event.timestamp,
                     });
                 }
+            }
+
+            // 识别命中才触发事件录像：抓拍结算作为触发源会被无差别写满，
+            // 录像证据只应收敛于告警与有识别结果的记录。
+            // 时间基准取抓拍事件的帧 PTS，与主码流 PTS 同轴，前置缓冲据此回溯。
+            if let Some(recording) = &self.recording_service {
+                recording
+                    .notify_recognition(&event.camera_id, &recognition_id, event.timestamp)
+                    .await;
             }
         }
     }

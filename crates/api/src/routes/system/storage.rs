@@ -227,8 +227,105 @@ impl pipeline::storage_cleaner::EvictionStore for DbEvictionStoreAdapter {
             .await
             .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询活跃识别路径失败: {e}")))?;
         set.extend(rec_paths);
+        // 录像文件同样受对账保护，避免孤儿扫描误删仍被引用的录像
+        let recording_paths = db::RecordingRepo::find_all_file_paths(&self.0)
+            .await
+            .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询录像路径失败: {e}")))?;
+        set.extend(recording_paths);
         Ok(set)
     }
+
+    async fn find_oldest_recordings(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
+        let models = db::RecordingRepo::find_oldest_closed(&self.0, limit)
+            .await
+            .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询最老录像失败: {e}")))?;
+        Ok(models
+            .into_iter()
+            .map(recording_to_eviction_files)
+            .collect())
+    }
+
+    async fn find_expired_recordings(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        global_retention_days: u32,
+        limit: u64,
+    ) -> Result<Vec<pipeline::EvidenceRecordFiles>, pipeline::PipelineError> {
+        // 有效保留期 = min(全局上限, 通道级配置)。
+        // 先取全局窗口内最老的候选，再按通道配置逐个过滤；
+        // 过取 4 倍余量以吸收被通道级配置否决的条目。
+        let candidate_limit = limit.saturating_mul(4).max(limit);
+        let global_cutoff = now - chrono::Duration::days(i64::from(global_retention_days));
+        let candidates = db::RecordingRepo::find_closed_before_ms(
+            &self.0,
+            global_cutoff.timestamp_millis(),
+            candidate_limit,
+        )
+        .await
+        .map_err(|e| pipeline::PipelineError::Snapshot(format!("查询过期录像失败: {e}")))?;
+
+        // 缓存各通道的保留天数，避免逐条重复解析 JSON
+        let mut retention_cache: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        let mut expired = Vec::new();
+
+        for record in candidates {
+            if expired.len() as u64 >= limit {
+                break;
+            }
+            let per_camera_days = match retention_cache.get(&record.camera_id) {
+                Some(days) => *days,
+                None => {
+                    let days = load_camera_retention_days(&self.0, &record.camera_id)
+                        .await
+                        .unwrap_or(global_retention_days);
+                    retention_cache.insert(record.camera_id.clone(), days);
+                    days
+                }
+            };
+            let effective_days = per_camera_days.min(global_retention_days);
+            let cutoff_ms =
+                (now - chrono::Duration::days(i64::from(effective_days))).timestamp_millis();
+            if record.created_at < cutoff_ms {
+                expired.push(recording_to_eviction_files(record));
+            }
+        }
+
+        Ok(expired)
+    }
+
+    async fn delete_recordings(&self, ids: &[i64]) -> Result<u64, pipeline::PipelineError> {
+        db::RecordingRepo::delete_by_ids(&self.0, ids)
+            .await
+            .map_err(|e| pipeline::PipelineError::Snapshot(format!("删除录像记录失败: {e}")))
+    }
+}
+
+/// 读取某通道的录像保留天数；未配置或解析失败时返回全局值。
+async fn load_camera_retention_days(
+    db: &sea_orm::DatabaseConnection,
+    camera_id: &str,
+) -> Option<u32> {
+    let camera = db::CameraRepo::find_by_camera_id(db, camera_id)
+        .await
+        .ok()??;
+    let trimmed = camera.recording_config.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    serde_json::from_str::<types::CameraRecordingConfig>(trimmed)
+        .ok()
+        .map(|config| config.normalized().retention_days)
+}
+
+/// 录像记录 → 淘汰文件载体（相对路径基于证据根，与隔离函数同根）
+fn recording_to_eviction_files(
+    record: db::entity::recording::Model,
+) -> pipeline::EvidenceRecordFiles {
+    pipeline::EvidenceRecordFiles::new(record.id, [record.file_path])
 }
 
 /// 从 DB 读取 StorageConfig；若无记录返回默认值

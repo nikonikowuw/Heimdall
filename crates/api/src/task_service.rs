@@ -258,6 +258,7 @@ mod tests {
             last_fps: 25.0,
             gb28181_device_id: None,
             gb28181_channel_id: None,
+            recording_config: String::new(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

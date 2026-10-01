@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use bytes::Bytes;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Condvar, Mutex, RwLock};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Notify;
@@ -22,6 +22,8 @@ pub enum ConsumerKind {
     WebCodecs,
     Analysis,
     MainStreamEvidence,
+    /// 事件录像消费者：OS 专用线程通过同步阻塞接口消费主码流
+    Recording,
 }
 
 /// 媒体消费者收到的显式控制/数据消息。
@@ -197,10 +199,26 @@ struct MailboxState {
     recovering: bool,
 }
 
+/// 同步阻塞接收结果。
+///
+/// 区分「超时」与「订阅关闭」：二者语义完全不同，调用方（如录像 Worker）
+/// 必须在超时后继续工作，在关闭时才退出。
+#[derive(Debug)]
+pub enum BlockingRecv {
+    /// 收到一个数据/控制项
+    Item(StreamItem),
+    /// 超时且无数据（订阅仍开放）
+    Timeout,
+    /// 订阅已关闭，不会再有新项
+    Closed,
+}
+
 #[derive(Debug)]
 pub struct ConsumerMailbox {
     state: Mutex<MailboxState>,
     notify: Notify,
+    /// OS 专用线程的同步阻塞信号（`recv_blocking`），与 `notify` 并存互不干扰
+    sync_signal: Condvar,
     capacity: usize,
     last_progress_mono_ms: AtomicU64,
     last_progress_at_ms: std::sync::atomic::AtomicI64,
@@ -227,6 +245,7 @@ impl ConsumerMailbox {
                 recovering: false,
             }),
             notify: Notify::new(),
+            sync_signal: Condvar::new(),
             capacity,
             last_progress_mono_ms: AtomicU64::new(monotonic_ms()),
             last_progress_at_ms: std::sync::atomic::AtomicI64::new(
@@ -259,6 +278,7 @@ impl ConsumerMailbox {
 
         if result == OfferResult::Accepted {
             self.notify.notify_one();
+            self.sync_signal.notify_one();
         }
         result
     }
@@ -278,6 +298,7 @@ impl ConsumerMailbox {
 
         if accepted {
             self.notify.notify_one();
+            self.sync_signal.notify_one();
         }
         accepted
     }
@@ -301,6 +322,7 @@ impl ConsumerMailbox {
             state.queue.push_back(StreamItem::SourceReset { epoch });
         }
         self.notify.notify_one();
+        self.sync_signal.notify_one();
     }
 
     pub fn close(&self) {
@@ -311,6 +333,7 @@ impl ConsumerMailbox {
             state.recovering = false;
         }
         self.notify.notify_waiters();
+        self.sync_signal.notify_all();
     }
 
     pub fn is_closed(&self) -> bool {
@@ -367,6 +390,37 @@ impl ConsumerMailbox {
                 Some(Err(())) => return None,
                 None => notified.await,
             }
+        }
+    }
+
+    /// 同步阻塞接收（OS 专用线程适用）。
+    ///
+    /// 与 async `recv()` 共享同一队列，两者可择一使用，互不干扰。
+    /// 返回值区分「超时」与「关闭」，调用方可据此决定是否继续循环。
+    ///
+    /// 典型用途：`RecordingWorker` 等不能跑在 Tokio worker 上的消费者。
+    pub fn recv_blocking(&self, timeout: std::time::Duration) -> BlockingRecv {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut state = self.state.lock();
+        loop {
+            if let Some(item) = state.queue.pop_front() {
+                let progress_mono = monotonic_ms();
+                let progress_at = chrono::Utc::now().timestamp_millis();
+                drop(state);
+                self.last_progress_mono_ms
+                    .store(progress_mono, Ordering::Relaxed);
+                self.last_progress_at_ms
+                    .store(progress_at, Ordering::Relaxed);
+                return BlockingRecv::Item(item);
+            }
+            if state.closed {
+                return BlockingRecv::Closed;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return BlockingRecv::Timeout;
+            }
+            self.sync_signal.wait_for(&mut state, deadline - now);
         }
     }
 }
@@ -641,7 +695,7 @@ impl PacketDispatcher {
         kind: ConsumerKind,
     ) -> Result<MediaSubscription, DispatcherError> {
         let capacity = match kind {
-            ConsumerKind::Analysis | ConsumerKind::MainStreamEvidence => {
+            ConsumerKind::Analysis | ConsumerKind::MainStreamEvidence | ConsumerKind::Recording => {
                 self.limits.analysis_mailbox_capacity
             }
             ConsumerKind::HttpFlv | ConsumerKind::WebCodecs => self.limits.preview_mailbox_capacity,
@@ -850,7 +904,16 @@ impl PacketDispatcher {
             .read()
             .values()
             .filter(|consumer| {
-                consumer.mailbox.is_recovering()
+                // 僵尸回收只面向**预览类**消费者：它们代表可重连自愈的观看客户端，
+                // 断线后不再读取即可回收。
+                //
+                // 管线内部消费者（Analysis / MainStreamEvidence / Recording）是长生命周期组件，
+                // 源流中断时它们只是暂时无包可读，重连后由 `Replay` 自愈；若一并回收，
+                // 其 mailbox 被 close 会导致分析泵 / 录像 Worker 永久退出且无人重启。
+                matches!(
+                    consumer.kind,
+                    ConsumerKind::HttpFlv | ConsumerKind::WebCodecs
+                ) && consumer.mailbox.is_recovering()
                     && now_mono_ms.saturating_sub(consumer.mailbox.last_progress_mono_ms())
                         >= self.limits.zombie_no_progress_ms
             })
@@ -1004,6 +1067,80 @@ mod tests {
         let slow_item = slow.recv().await.expect("slow replay");
         assert!(matches!(slow_item, StreamItem::Replay(_)));
         assert_eq!(dispatcher.metrics.total_replays.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn recv_blocking_delivers_packets_and_respects_close() {
+        let dispatcher = Arc::new(PacketDispatcher::new(test_config()));
+        let sub = dispatcher
+            .subscribe("recorder", ConsumerKind::Recording)
+            .expect("recording subscription");
+
+        dispatcher.publish(packet(1000, true));
+        let item = sub
+            .mailbox()
+            .recv_blocking(std::time::Duration::from_millis(200));
+        assert!(
+            matches!(item, BlockingRecv::Item(StreamItem::Packet(_))),
+            "关键帧应到达"
+        );
+
+        // 无数据时超时
+        let empty = sub
+            .mailbox()
+            .recv_blocking(std::time::Duration::from_millis(10));
+        assert!(matches!(empty, BlockingRecv::Timeout));
+
+        // 关闭后明确返回 Closed
+        sub.mailbox().close();
+        let closed = sub
+            .mailbox()
+            .recv_blocking(std::time::Duration::from_millis(10));
+        assert!(matches!(closed, BlockingRecv::Closed));
+    }
+
+    #[tokio::test]
+    async fn internal_consumers_survive_zombie_eviction() {
+        // 管线内部消费者（分析/证据/录像）在源流中断的 recovering 窗口内不得被僵尸回收：
+        // 一旦 mailbox 被 close，分析泵与录像 Worker 会永久退出且无人重启。
+        let dispatcher = Arc::new(PacketDispatcher::new(PreviewDistributionConfig {
+            max_consumers_per_stream: 4,
+            max_total_consumers: 8,
+            ..test_config()
+        }));
+        let analysis = dispatcher
+            .subscribe("analysis", ConsumerKind::Analysis)
+            .expect("analysis subscription");
+        let recording = dispatcher
+            .subscribe("recording", ConsumerKind::Recording)
+            .expect("recording subscription");
+        let preview = dispatcher
+            .subscribe("preview", ConsumerKind::HttpFlv)
+            .expect("preview subscription");
+
+        // 用超容量的无关键帧脉冲把所有消费者推入 recovering
+        for i in 0..200 {
+            dispatcher.publish(packet(1000 + i * 40, false));
+        }
+        for sub in [&analysis, &recording, &preview] {
+            assert!(sub.mailbox().is_recovering(), "容量溢出后应进入 recovering");
+        }
+
+        // 时间推进到远超僵尸阈值
+        let now = dispatcher
+            .consumers
+            .read()
+            .values()
+            .map(|c| c.mailbox.last_progress_mono_ms())
+            .max()
+            .expect("至少一个消费者")
+            + 60_000;
+
+        // 只有预览消费者被回收
+        assert_eq!(dispatcher.evict_stalled(now), 1, "仅预览消费者应被回收");
+        assert!(!analysis.mailbox().is_closed(), "分析消费者不得被僵尸回收");
+        assert!(!recording.mailbox().is_closed(), "录像消费者不得被僵尸回收");
+        assert!(preview.mailbox().is_closed(), "预览消费者应被回收");
     }
 
     #[tokio::test]

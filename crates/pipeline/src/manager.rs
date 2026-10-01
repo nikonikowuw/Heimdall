@@ -2074,6 +2074,7 @@ mod tests {
             last_fps: 25.0,
             gb28181_device_id: None,
             gb28181_channel_id: None,
+            recording_config: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -2310,6 +2311,7 @@ mod tests {
             last_fps: 25.0,
             gb28181_device_id: None,
             gb28181_channel_id: None,
+            recording_config: None,
             created_at: 0,
             updated_at: 0,
         };
