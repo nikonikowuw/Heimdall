@@ -1,0 +1,41 @@
+# Journal - niko (Part 1)
+
+> AI development session journal
+> Started: 2026-10-01
+
+---
+
+
+
+## Session 1: 统一前端抽屉组件与两轴 code review 修复
+
+**Date**: 2026-10-01
+**Task**: 统一前端抽屉组件与两轴 code review 修复
+**Package**: web
+**Branch**: `dev`
+
+### Summary
+
+新增共享 Drawer 组合层并迁移 7 个业务抽屉（实体材质、small/compact/medium/wide 尺寸、统一 header/唯一滚动主体/可选固定工具栏与底栏）。两轴 code review 后修复 10 项发现：移除从未渲染的 Drawer ariaLabel 死参数（ModalOverlay 名称契约改为「至少提供其一」类型联合）、新增 titleTooltip 回填摄像头长设备名提示、.drawer-footer > :only-child 接管单一操作项对齐、清除抽屉主体内与实体面板重复的 backdrop-blur/frosted-glass、以 CSS 规则级测试守护固定头尾与唯一滚动区，并修正 AccountPanelDrawer.test.tsx 断言他组件内部类名的问题。Web 门禁全绿：479 tests / lint --max-warnings=0 / typecheck / check:cycles / build。亮暗主题与窄视口视觉检查由开发者人工完成。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7d32088` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -1,0 +1,13 @@
+{"file": ".trellis/spec/guides/conventions.md", "reason": "时间、资源上限和安全边界"}
+{"file": ".trellis/spec/guides/concurrency-guidelines.md", "reason": "固定 Worker、取消与隔离资源所有权"}
+{"file": ".trellis/spec/guides/ffi-guidelines.md", "reason": "加法 ABI、双侧布局和调用期所有权"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层输入输出校验与依赖"}
+{"file": ".trellis/spec/infer/backend/inference-backends.md", "reason": "AlgoLease、共享模型与现有后端"}
+{"file": ".trellis/spec/infer/backend/inference-runtime-health.md", "reason": "代际栅栏与健康诊断语义"}
+{"file": ".trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md", "reason": "SDK 宏、插件 API 和独立 workspace"}
+{"file": ".trellis/spec/db/backend/database-guidelines.md", "reason": "事务、迁移、任务实例同步"}
+{"file": ".trellis/spec/api/backend/api-guidelines.md", "reason": "信封、任务写入和错误映射"}
+{"file": ".trellis/spec/web/frontend/type-safety.md", "reason": "旧客户端字段保留和共享类型"}
+{"file": ".trellis/spec/guides/quality-guidelines.md", "reason": "测试及验收门禁"}
+{"file": ".trellis/tasks/10-01-npu-core-allocation/research.md", "reason": "源码证据与未验证板端事实"}
+{"file": ".trellis/tasks/10-01-npu-core-allocation/api.md", "reason": "待确认的跨层 API 契约"}
