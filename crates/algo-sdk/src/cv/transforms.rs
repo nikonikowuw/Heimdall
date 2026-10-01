@@ -1,6 +1,9 @@
 //! 硬件加速变换算子 (`Transform`)
 //!
-//! 类似于 `torchvision.transforms`，将异构 2D 硬件操作（如 Letterbox、Crop）抽象为可组合的流水线。
+//! 类似于 `torchvision.transforms`，将异构 2D 硬件操作抽象为可组合的流水线。
+//!
+//! 当前仅交付 [`HwLetterbox`]。ROI 抠图请使用 [`crate::cv::CvEngine::crop_rgb`]（非本 trait 实现），
+//! 五点仿射变换请使用 [`crate::face::align`]；两者尚未收敛为 `Transform` 算子。
 
 use super::buffer::CvBuffer;
 use super::types::PreprocessMode;
