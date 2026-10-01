@@ -9,7 +9,7 @@
 5. [x] 检查全部 7 个调用点：统一传入语义尺寸；移除抽屉外壳上的玻璃材质、重复 padding 和各自拼写的结构布局；保留业务卡片的语义化 token、翻译键、请求逻辑和按钮行为。
 6. [x] 更新 `.trellis/spec/web/frontend/component-guidelines.md` 与 `styling-guidelines.md`，记录 Drawer 组合契约、实体材质、尺寸和业务内容边界；不新增 `api.md`（纯前端变更）。
 7. [x] 执行 `pnpm format`、lint、typecheck、全量测试、循环依赖检查和生产构建；476 项测试通过，循环依赖检查与 build 成功。build 仅报告 chunk 大小提示。
-8. [ ] 进行亮/暗主题、窄/宽视口、各宽度变体、长内容滚动、头尾固定和嵌套浮层的浏览器视觉检查。当前环境未安装 Playwright/Chromium；本地 Vite 开发服务已启动于 `http://127.0.0.1:5174/`，可继续人工检查。
+8. [x] 亮/暗主题、窄/宽视口、各宽度变体、长内容滚动、头尾固定和嵌套浮层的浏览器视觉检查已由开发者人工完成（自动化环境无 Playwright/Chromium，故此项未自动化）。
 9. [x] 两轴 code review（Standards / Spec）后的修复批次：`Drawer` 移除死参数 `ariaLabel`、`ModalOverlay` 名称契约改为类型联合、新增 `titleTooltip` 并回填摄像头抽屉、`.drawer-footer > :only-child` 自动靠右并去除调用点包裹容器、清除与实体面板重复的 `backdrop-blur`/`.frosted-glass`、补 CSS 规则级结构测试。(`.trellis/.template-hashes.json` 与 `.trellis/workspace/niko/` 属 Trellis 工具链产物，不随本任务提交。)
 
 ## 验证命令
