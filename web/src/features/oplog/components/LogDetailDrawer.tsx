@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { Camera, Check, Clock, Copy, Globe, Layers, Terminal, User } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { ModalOverlay } from '@/components/ui/ModalOverlay'
-import { CloseIconButton } from '@/components/ui/CloseIconButton'
+import { Drawer } from '@/components/ui/Drawer'
 import { formatTimestamp } from '@/lib/time'
 import { copyToClipboard } from '@/lib/utils'
 import type { OperationLog, OperationalLog } from '@/types'
@@ -72,98 +71,80 @@ export function LogDetailDrawer({ log, onClose }: LogDetailDrawerProps): ReactEl
   }
 
   return (
-    <ModalOverlay
+    <Drawer
       isOpen={isOpen && Boolean(log)}
       onClose={onClose}
-      ariaLabel={t('inspector.title')}
-      variant="drawer"
-      panelClassName="modal-surface--drawer-wide"
-    >
-      {log && (
-        <>
-          {/* 抽屉顶部 Header */}
-          <header className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                <Terminal className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="truncate text-sm font-semibold text-[var(--text-primary)]">
-                    {log.kind === 'operation'
-                      ? t('inspector.operationAudit')
-                      : t('inspector.operationalEvent')}
-                  </h2>
-                  <span className="font-data rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
-                    #{log.data.id}
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-                  {t('inspector.subtitle')}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void handleCopy('all', JSON.stringify(log.data, null, 2))}
-                aria-label={t('inspector.copyAll')}
-                className="reticle-target flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-2.5 text-xs font-medium text-[var(--text-secondary)] shadow-xs transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                title={t('inspector.copyAll')}
-              >
-                {copiedKey === 'all' ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-[var(--status-success)]" />
-                    <span className="text-[var(--status-success)]">{t('inspector.copiedAll')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5" />
-                    <span>{t('inspector.copyAll')}</span>
-                  </>
-                )}
-              </button>
-
-              <CloseIconButton onClick={onClose} label={t('inspector.close')} />
-            </div>
-          </header>
-
-          {/* 抽屉内容滚动区域 */}
-          <div className="min-h-0 flex-1 overflow-y-auto p-5">
-            {log.kind === 'operation' ? (
-              <OperationLogInspector
-                log={log.data}
-                copiedKey={copiedKey}
-                onCopy={handleCopy}
-                lang={i18n.language}
-              />
+      closeLabel={t('inspector.close')}
+      title={
+        log?.kind === 'operation' ? t('inspector.operationAudit') : t('inspector.operationalEvent')
+      }
+      description={t('inspector.subtitle')}
+      icon={<Terminal className="h-4 w-4" aria-hidden="true" />}
+      metadata={
+        log ? (
+          <span className="font-data rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
+            #{log.data.id}
+          </span>
+        ) : undefined
+      }
+      headerActions={
+        log ? (
+          <button
+            type="button"
+            onClick={() => void handleCopy('all', JSON.stringify(log.data, null, 2))}
+            aria-label={t('inspector.copyAll')}
+            className="reticle-target flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-2.5 text-xs font-medium text-[var(--text-secondary)] shadow-xs transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            title={t('inspector.copyAll')}
+          >
+            {copiedKey === 'all' ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-[var(--status-success)]" />
+                <span className="text-[var(--status-success)]">{t('inspector.copiedAll')}</span>
+              </>
             ) : (
-              <OperationalLogInspector
-                log={log.data}
-                copiedKey={copiedKey}
-                onCopy={handleCopy}
-                lang={i18n.language}
-              />
+              <>
+                <Copy className="h-3.5 w-3.5" />
+                <span>{t('inspector.copyAll')}</span>
+              </>
             )}
-          </div>
-
-          {/* 底部 Footer */}
-          <footer className="flex shrink-0 items-center justify-between border-t border-[var(--border)] bg-[var(--bg-secondary)]/50 px-5 py-3">
+          </button>
+        ) : undefined
+      }
+      size="wide"
+      footer={
+        log ? (
+          <>
             <span className="text-[11px] text-[var(--text-muted)]">
               {t('inspector.generalInfo')}
             </span>
             <button
               type="button"
               onClick={onClose}
-              className="reticle-target rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface-solid)] px-4 py-1.5 text-xs font-medium text-[var(--text-primary)] shadow-xs transition-colors hover:border-[var(--accent)]"
+              className="reticle-target modal-form-button modal-form-button--secondary"
             >
               {t('inspector.close')}
             </button>
-          </footer>
-        </>
-      )}
-    </ModalOverlay>
+          </>
+        ) : undefined
+      }
+    >
+      {log &&
+        (log.kind === 'operation' ? (
+          <OperationLogInspector
+            log={log.data}
+            copiedKey={copiedKey}
+            onCopy={handleCopy}
+            lang={i18n.language}
+          />
+        ) : (
+          <OperationalLogInspector
+            log={log.data}
+            copiedKey={copiedKey}
+            onCopy={handleCopy}
+            lang={i18n.language}
+          />
+        ))}
+    </Drawer>
   )
 }
 

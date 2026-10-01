@@ -11,16 +11,15 @@ import {
   ShieldCheck,
   Trash2,
   TriangleAlert,
-  X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { Drawer } from '@/components/ui/Drawer'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { algorithmApi } from '@/lib/api'
 import { formatTimestampShort } from '@/lib/time'
 import type { AlgorithmItem, AlgorithmVersionItem } from '@/types'
 import { blockingUsageEntries, type AlgoUsageEntry } from '../algoUsage'
 import { formatBytes } from '../format'
-import { ModalOverlay } from '@/components/ui/ModalOverlay'
 
 export interface VersionsDrawerProps {
   isOpen: boolean
@@ -102,39 +101,16 @@ export function VersionsDrawer({
   }
 
   return (
-    <ModalOverlay
+    <Drawer
       isOpen={isOpen && Boolean(algorithm)}
       onClose={onClose}
-      ariaLabel={t('drawer.title')}
-      variant="drawer"
+      closeLabel={t('actions.close')}
+      title={algorithm?.name ?? ''}
+      description={algorithm?.algorithmId ?? ''}
+      icon={<Layers className="h-5 w-5" aria-hidden="true" />}
+      size="compact"
       closeDisabled={operatingVersionId !== null}
-      panelClassName="modal-surface--compact"
     >
-      <div className="flex items-center justify-between border-b border-[var(--border)] pb-4">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-            <Layers className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <h3 className="truncate text-sm font-bold text-[var(--text-primary)]">
-              {algorithm?.name ?? ''}
-            </h3>
-            <span className="font-data block truncate text-[11px] text-[var(--accent)]">
-              {algorithm?.algorithmId ?? ''}
-            </span>
-          </div>
-        </div>
-        <button
-          type="button"
-          data-autofocus
-          onClick={onClose}
-          aria-label={t('actions.close')}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
       {errorMsg && (
         <div
           role="alert"
@@ -204,7 +180,7 @@ export function VersionsDrawer({
         </div>
       )}
 
-      <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
+      <div className="mt-4 space-y-3">
         <div className="flex items-center justify-between text-xs font-semibold text-[var(--text-muted)]">
           <span>{t('drawer.versionList')}</span>
           <span>{t('drawer.versionCount', { count: algorithm?.versions.length ?? 0 })}</span>
@@ -373,6 +349,6 @@ export function VersionsDrawer({
           )
         })}
       </div>
-    </ModalOverlay>
+    </Drawer>
   )
 }

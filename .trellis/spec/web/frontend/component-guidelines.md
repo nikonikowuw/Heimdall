@@ -33,10 +33,14 @@
 ## 交互
 
 - 控件使用语义化 button/link，图标按钮有翻译后的 `aria-label`，表单关联 label，保持可见焦点。
-- 面板沿用 `.frosted-glass`，自定义光标目标加 `.reticle-target`；生成 UI 通过封装定制。
+- 普通玻璃面板沿用 `.frosted-glass`；业务抽屉通过共享 `Drawer` 使用实体材质；自定义光标目标加 `.reticle-target`，生成 UI 通过封装定制。
 - 浮层按栈响应 ESC，避免穿透关闭外层；表单/确认弹窗支持 Enter。两者均由 [use-dismiss-stack](../../../../web/src/hooks/use-dismiss-stack.ts) 的同一浮层栈分发（LIFO + `priority`），组件不各自挂 `window` 键盘监听；确认类弹窗传 `onConfirm` 才接管 Enter，焦点在 `INPUT` / `TEXTAREA` 或可编辑区时让行。
-- **浮层外壳必须复用组件，不得在业务文件里自建**：遮罩、层级、进出场动效、焦点陷阱与 `aria-modal` 语义统一由 [ModalOverlay](../../../../web/src/components/ui/ModalOverlay.tsx) 承担；调用方只提供内容、业务回调与 `panelClassName`（尺寸取 `.modal-surface--*`）。禁止再写 `<div className="modal-backdrop">` + `<motion.div className="modal-surface">` 这类外壳：CSS 类族只保证视觉一致，无法保证焦点约束与键盘语义，手写外壳会静默产生「声明了 `aria-modal` 却没有焦点陷阱」的可访问性缺口。
-  - 变体通过 props 表达：`variant="drawer"` 侧滑、`surface="solid"` 实体表单面、`layer` 取 `base`/`raised`/`top`/`highest`（对应 `--layer-*`，不在组件内写 `z-[70]` 等魔法值）、`priority` 调浮层栈顺序、`onConfirm` 接管 Enter、`onExitComplete` 清理为退场动画保留的数据快照。
+- **浮层外壳必须复用组件，不得在业务文件里自建**：遮罩、层级、进出场动效、焦点陷阱与 `aria-modal` 语义统一由 [ModalOverlay](../../../../web/src/components/ui/ModalOverlay.tsx) 承担；业务抽屉必须经 [Drawer](../../../../web/src/components/ui/Drawer.tsx) 组合层接入，普通浮层可按需直接使用 `ModalOverlay`。禁止再写 `<div className="modal-backdrop">` + `<motion.div className="modal-surface">` 这类外壳：CSS 类族只保证视觉一致，无法保证焦点约束与键盘语义，手写外壳会静默产生「声明了 `aria-modal` 却没有焦点陷阱」的可访问性缺口。
+  - `Drawer` 固定 `variant="drawer"` 与 `surface="solid"`，统一标题/关闭区、可选工具栏、唯一滚动主体和可选固定底栏；调用方通过 `title`、`description`、`icon`、`metadata`、`headerActions`、`toolbar`、`footer` 提供业务内容，通过 `small` / `compact` / `medium` / `wide` 选择尺寸。业务数据和操作留在 feature，不在调用点重拼外壳类或另建滚动容器。
+  - `Drawer` 自动将标题和说明关联至 `aria-labelledby` / `aria-describedby`，因此调用方**不再传 `ariaLabel`**（`aria-labelledby` 存在时它不会渲染到 DOM，重复传属死参数）；长标题需要原生悬浮提示时传 `titleTooltip`。关闭名称使用本地化 `closeLabel`；`closeDisabled` 同步约束遮罩/ESC 与关闭按钮，`priority`、`layer`、`onExitComplete` 原样交给 `ModalOverlay`。
+  - 底栏只有一个操作项时无需再包 `flex justify-end`（`.drawer-footer > :only-child` 已靠右）；多项时按「说明在左、操作在右」的顺序传入。
+  - `ModalOverlay` 的 `ariaLabel` 与 `ariaLabelledBy` 由类型约束为「至少提供其一」：有可见标题节点时一律用 `ariaLabelledBy` 并省略 `ariaLabel`。
+  - 直接使用 `ModalOverlay` 时通过 props 表达变体：`variant="drawer"` 侧滑、`surface="solid"` 实体面、`layer` 取 `base`/`raised`/`top`/`highest`（对应 `--layer-*`，不在组件内写 `z-[70]` 等魔法值）、`priority` 调浮层栈顺序、`onConfirm` 接管 Enter、`onExitComplete` 清理为退场动画保留的数据快照。
   - 沉浸式媒体查看器（灯箱）的遮罩即内容面，无法套用 panel 结构时，可保留自定义根元素，但必须自行接入 [useFocusTrap](../../../../web/src/hooks/use-focus-trap.ts) 与 `useDismissStack`，并补齐本地化 `aria-label`。
 - 二次确认弹窗（危险/警告操作）复用 [ConfirmDialog](../../../../web/src/components/ui/ConfirmDialog.tsx)：标题、说明、图标、页脚操作与提交态由该原语提供，需人工核对的对象信息与预览清单通过 `children` 传入，失败原因走 `errorMessage`（Toast 与内联错误只由一处负责）。
 - 关闭按钮复用 [CloseIconButton](../../../../web/src/components/ui/CloseIconButton.tsx)，内联错误提示复用 [FormErrorAlert](../../../../web/src/components/ui/FormErrorAlert.tsx)，不在业务文件重复拼这组类名。

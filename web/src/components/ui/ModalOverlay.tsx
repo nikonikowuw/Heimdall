@@ -17,11 +17,9 @@ const LAYER_CLASS: Record<ModalOverlayLayer, string> = {
   highest: 'modal-backdrop--highest',
 }
 
-export interface ModalOverlayProps {
+interface ModalOverlayBaseProps {
   isOpen: boolean
   onClose: () => void
-  ariaLabel: string
-  ariaLabelledBy?: string
   ariaDescribedBy?: string
   role?: 'dialog' | 'alertdialog'
   variant?: ModalOverlayVariant
@@ -39,6 +37,14 @@ export interface ModalOverlayProps {
   onExitComplete?: () => void
   children: ReactNode
 }
+
+/**
+ * 无障碍名称契约：`ariaLabel` 与 `ariaLabelledBy` 至少提供其一（类型层面
+ * 阻止两者都缺省），同时提供时以 `ariaLabelledBy` 为准——它指向可见标题
+ * 节点，此时 `ariaLabel` 不渲染到 DOM，调用方不需要重复传。
+ */
+export type ModalOverlayProps = ModalOverlayBaseProps &
+  ({ ariaLabel: string; ariaLabelledBy?: string } | { ariaLabel?: string; ariaLabelledBy: string })
 
 function getPanelHiddenState(
   isDrawer: boolean,

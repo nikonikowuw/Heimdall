@@ -19,7 +19,7 @@
 - 需要 rgba 三元组（发光阴影等）时用 `--*-rgb` token，如 `rgba(var(--status-danger-rgb), 0.6)`；不要写死 `rgba(244,63,94,…)`。
 - **Canvas 2D / WebGL 不参与 CSS 级联**：`ctx.fillStyle`、`ctx.strokeStyle`、`ctx.shadowColor` 与 shader 字符串里的 `var()` 是非法颜色串，会被**静默忽略**（绘制回退到上一个颜色），因此这些位置必须写字面色值，并由 `themeTokens.test.ts` 守护。
 - `.dark` 根类切换变量，初始主题及持久化以 [use-theme.ts](../../../../web/src/hooks/use-theme.ts) 为准（当前默认 dark）。
-- 面板复用 `.frosted-glass` 等共享材质，卡片使用 16～24px 圆角，避免直角；不随意使用 `!important`。
+- 普通玻璃面板复用 `.frosted-glass` 等共享材质；业务抽屉使用实体 `--bg-surface-solid`，不得在抽屉结构层叠加毛玻璃。业务卡片按语义选择背景，卡片使用 16～24px 圆角；不随意使用 `!important`。
 - 需要悬停/聚焦反馈的可点击面板用 `.frosted-glass-interactive`：它与 `.frosted-glass` 材质参数一致，但声明在 `@layer components`，因此 `hover:border-*`、`hover:shadow-*` 等 utilities 能正常覆盖。`.frosted-glass` 是 unlayered 规则，会压过 utilities 的 border/background/box-shadow，在这些属性上属于静默失效。
 - 生产图标统一 Lucide，零 Emoji；避免霓虹闪烁，图标沿用统一 stroke 风格。
 - **高频页面避免无意义的无限装饰动画**：实时监控、多路视频、高 DPR Canvas 或大量 `backdrop-filter` 区域内，默认不用 `animate-pulse`、`animate-ping`、`animate-bounce` 等持续动画表达在线状态；静态颜色、边框与 `shadow` 已能传达状态。单次入场动画不受此禁令。
@@ -44,6 +44,14 @@
 - 选择框重置原生 `appearance` 后必须渲染 `.select-field__caret`，否则不同平台的原生箭头会与图标体系冲突。
 - **强调态**：筛选维度已收敛当前视图（取值不等于「全部」）时传 `emphasis`，由 `.select-field--emphasis` 统一着色，不在调用点写条件模板串。
 - 原生下拉面板的 `option` 配色不受页面层叠影响，由 `.select-field option` 统一指定，避免暗色主题下亮出系统白底。
+
+## 业务抽屉
+
+- 业务抽屉统一使用 [Drawer](../../../../web/src/components/ui/Drawer.tsx)，不在 feature 内重复实现标题栏、滚动主体、工具栏或底栏。尺寸映射为 `small` 24rem、`compact` 28rem、`medium` 36rem、`wide` 42rem；保持窄视口宽度受视口约束。
+- 抽屉外壳固定使用 `--bg-surface-solid`。`.drawer-header`、`.drawer-toolbar`、`.drawer-footer` 通过边框和间距 token 分区，不叠加独立半透明/模糊材质；业务内容中的卡片按语义选择背景（`--bg-surface`、`--bg-secondary`、状态 soft 档），但不在实体面板上再叠加 `backdrop-blur` / `.frosted-glass`——底已不透明，模糊无视觉收益且会拖慢帧率。唯一例外是直接压在图片/媒体上的小角标（如照片主图微标、质量分级），其模糊用于保证未知底图上的可读性。
+- 滚动职责只属于 `.drawer-body`：其 flex 子项须允许收缩并独立纵向滚动。工具栏与底栏留在滚动区外，窄宽度下操作项可换行；避免在主体内再建立全高滚动容器。固定头尾与唯一滚动区的契约由 `Drawer.test.tsx` 直接校验 `globals.css` 规则守护，重构时不得破坏。
+- 底栏单一操作项由 `.drawer-footer > :only-child` 自动靠右，调用点不需要额外的 `flex justify-end` 包裹容器；需要多个操作项时按左侧说明、右侧操作的顺序并列传入。
+- 标题、说明、图标、metadata 和操作由 `Drawer` 的结构插槽承载；关闭可访问名称及可选 tooltip 使用本地化文案。结构样式统一维护在 `globals.css`，调用点只用 `bodyClassName` 补充业务内容布局。
 
 ## 表单弹窗
 

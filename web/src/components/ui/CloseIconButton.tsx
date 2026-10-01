@@ -11,6 +11,7 @@ export interface CloseIconButtonProps {
   disabled?: boolean
   /** 保留键盘焦点但禁止操作，适用于提交期间的模态框控件 */
   ariaDisabled?: boolean
+  title?: string
   variant?: CloseIconButtonVariant
   className?: string
 }
@@ -33,6 +34,7 @@ export function CloseIconButton({
   label,
   disabled = false,
   ariaDisabled = false,
+  title,
   variant = 'plain',
   className,
 }: CloseIconButtonProps): ReactElement {
@@ -45,6 +47,7 @@ export function CloseIconButton({
       disabled={disabled}
       aria-disabled={ariaDisabled || undefined}
       aria-label={label}
+      title={title}
       className={cn(
         'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
         VARIANT_CLASS[variant],

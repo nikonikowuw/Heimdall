@@ -11,6 +11,14 @@ describe('CloseIconButton', () => {
     expect(html).toContain('type="button"')
   })
 
+  it('supports an optional localized tooltip title', () => {
+    const html = renderToString(
+      <CloseIconButton onClick={() => {}} label="Close" title="Close panel" />,
+    )
+
+    expect(html).toContain('title="Close panel"')
+  })
+
   it('reflects the disabled state while a request is in flight', () => {
     const html = renderToString(<CloseIconButton onClick={() => {}} label="Close" disabled />)
 

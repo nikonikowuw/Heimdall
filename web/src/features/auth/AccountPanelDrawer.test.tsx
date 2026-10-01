@@ -38,9 +38,14 @@ describe('AccountPanelDrawer', () => {
   it('exposes the account panel as a labelled modal drawer', () => {
     const html = render(true)
 
+    const titleId = html.match(/aria-labelledby="([^"]+)"/)?.[1]
+
     expect(html).toContain('role="dialog"')
     expect(html).toContain('aria-modal="true"')
-    expect(html).toContain('aria-label="accountPanel.title"')
+    expect(titleId).toBeTruthy()
+    expect(html).toContain(`id="${titleId}"`)
+    // 抽屉外壳结构由 Drawer 自身用例守护，此处只断言用户可见文案确实渲染
+    expect(html).toContain('>accountPanel.title<')
   })
 
   it('renders the change-password entry and revoke notice inside the panel', () => {

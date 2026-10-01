@@ -1,8 +1,7 @@
 import React from 'react'
 import { Cpu, ExternalLink, ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { ModalOverlay } from '@/components/ui/ModalOverlay'
-import { CloseIconButton } from '@/components/ui/CloseIconButton'
+import { Drawer } from '@/components/ui/Drawer'
 import type { AlgoManifest } from '@/types'
 
 export interface AlgoSandboxDrawerProps {
@@ -15,7 +14,7 @@ export interface AlgoSandboxDrawerProps {
 /**
  * 算法详情侧滑抽屉。
  *
- * 外壳、层级、焦点陷阱与 ESC 由共享 ModalOverlay 承担，本组件只组织算法元信息内容。
+ * 外壳、层级、焦点陷阱与 ESC 由共享 Drawer 和 ModalOverlay 承担，本组件只组织算法元信息内容。
  */
 export function AlgoSandboxDrawer({
   isOpen,
@@ -28,23 +27,26 @@ export function AlgoSandboxDrawer({
   const closeHint = t('studio.closeDrawerHint', { defaultValue: '关闭 (Esc / 点击遮罩)' })
 
   return (
-    <ModalOverlay
+    <Drawer
       isOpen={isOpen && Boolean(algo)}
       onClose={onClose}
-      ariaLabel={algo?.name ?? ''}
-      variant="drawer"
-      panelClassName="modal-surface--small space-y-4 overflow-y-auto p-5"
+      closeLabel={closeHint}
+      title={algo?.name ?? ''}
+      icon={<Cpu className="h-4 w-4" aria-hidden="true" />}
+      size="small"
+      bodyClassName="space-y-4"
+      footer={
+        algo ? (
+          <button
+            type="button"
+            onClick={onClose}
+            className="modal-form-button modal-form-button--primary"
+          >
+            {t('algoDrawer.done')}
+          </button>
+        ) : undefined
+      }
     >
-      <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)]">
-            <Cpu className="h-4 w-4" aria-hidden="true" />
-          </div>
-          <span className="text-base font-bold text-[var(--text-primary)]">{algo?.name ?? ''}</span>
-        </div>
-        <CloseIconButton onClick={onClose} label={closeHint} className="h-7 w-7 rounded-md" />
-      </div>
-
       {algo && (
         <>
           <div className="space-y-2.5 text-xs text-[var(--text-secondary)]">
@@ -111,18 +113,8 @@ export function AlgoSandboxDrawer({
               </button>
             )}
           </div>
-
-          <div className="flex justify-end pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-[6px] bg-[var(--accent)] px-5 py-2 text-xs font-semibold text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
-            >
-              {t('algoDrawer.done')}
-            </button>
-          </div>
         </>
       )}
-    </ModalOverlay>
+    </Drawer>
   )
 }
