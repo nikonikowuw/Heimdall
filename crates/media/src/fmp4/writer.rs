@@ -23,9 +23,20 @@ pub struct FragmentInfo {
     pub duration_ms: u64,
 }
 
+/// fragment 内积累的原始样本（按解码顺序排列）。
+///
+/// 只记录输入侧的时间戳与尺寸；解码时间轴（duration / composition offset）
+/// 在 flush 时统一推导，因为那需要整个 GOP 的显示时刻集合。
+#[derive(Debug, Clone, Copy)]
+struct RawSample {
+    pts_ms: i64,
+    size: u32,
+    is_keyframe: bool,
+}
+
 /// 当前 GOP 正在积累的 sample 数据
 struct PendingFragment {
-    samples: Vec<SampleEntry>,
+    samples: Vec<RawSample>,
     mdat_payload: Vec<u8>,
     base_pts_ms: i64,
     last_pts_ms: i64,
@@ -138,22 +149,10 @@ impl<W: Write> FMP4Writer<W> {
             return Ok(flushed_info);
         }
 
-        // 计算 sample duration（和上一个 sample 的 PTS 差值，转换到 timescale）
-        let duration_ms = if pending.samples.is_empty() {
-            // 第一个 sample，duration 暂时用 0，后续在 flush 时修正
-            0
-        } else {
-            (packet.pts_ms - pending.last_pts_ms).max(0)
-        };
-        let duration_ts = ms_to_timescale(duration_ms);
-
-        // 修正前一个 sample 的 duration（如果它还是 0）
-        if pending.samples.len() == 1 && pending.samples[0].duration == 0 && duration_ts > 0 {
-            pending.samples[0].duration = duration_ts;
-        }
-
-        pending.samples.push(SampleEntry {
-            duration: duration_ts,
+        // 仅记录原始样本；解码时间轴的 duration 与 composition offset
+        // 需要整个 GOP 的显示时刻集合，统一在 flush 时推导。
+        pending.samples.push(RawSample {
+            pts_ms: packet.pts_ms,
             size: avcc_data.len() as u32,
             is_keyframe: packet.is_keyframe,
         });
@@ -215,18 +214,49 @@ impl<W: Write> FMP4Writer<W> {
     }
 
     /// flush 一个完整的 pending fragment 到文件。
-    fn flush_fragment(&mut self, mut pending: PendingFragment) -> io::Result<FragmentInfo> {
+    fn flush_fragment(&mut self, pending: PendingFragment) -> io::Result<FragmentInfo> {
+        // ── 解码时间轴推导 ──
+        //
+        // 直播流没有容器级 DTS：到达顺序即解码顺序，而 RTP 时间戳是显示时刻，
+        // 含 B 帧时在解码序下会回退（IPBB 的到达序是 I,P,B,B）。
+        // 对 CFR 流，一个 GOP 的**显示时刻集合**与**解码槽位集合**是同一个均匀网格，
+        // 因此把第 k 个到达的样本放到第 k 早的槽位上，即可得到严格递增的 DTS，
+        // 而 CTS = pts - dts 恰好还原原始显示顺序。这是 MP4 表达重排序的标准方式，
+        // 也让无重排序的流得到与以往完全一致的结果（dts == pts，偏移全为 0）。
+        let mut slots: Vec<i64> = pending.samples.iter().map(|sample| sample.pts_ms).collect();
+        slots.sort_unstable();
+        // 重复显示时刻（重复帧 / 丢包补位）按 1ms 错开，保证 DTS 严格递增
+        for index in 1..slots.len() {
+            if slots[index] <= slots[index - 1] {
+                slots[index] = slots[index - 1] + 1;
+            }
+        }
+
+        let mut entries: Vec<SampleEntry> = Vec::with_capacity(pending.samples.len());
+        for (index, raw) in pending.samples.iter().enumerate() {
+            let dts_ms = slots[index];
+            let duration_ms = slots
+                .get(index + 1)
+                .map(|next| (next - dts_ms).max(0))
+                .unwrap_or(0);
+            entries.push(SampleEntry {
+                duration: ms_to_timescale(duration_ms),
+                size: raw.size,
+                is_keyframe: raw.is_keyframe,
+                composition_offset: ms_to_timescale_signed(raw.pts_ms - dts_ms),
+            });
+        }
+
         // 修正最后一个 sample 的 duration（使用前一个 sample 的 duration 兜底）
-        if pending.samples.last().is_some_and(|s| s.duration == 0) {
-            let fallback = pending
-                .samples
+        if entries.last().is_some_and(|sample| sample.duration == 0) {
+            let fallback = entries
                 .iter()
                 .rev()
                 .skip(1)
-                .find(|s| s.duration > 0)
-                .map(|s| s.duration)
+                .find(|sample| sample.duration > 0)
+                .map(|sample| sample.duration)
                 .unwrap_or(ms_to_timescale(33));
-            if let Some(last) = pending.samples.last_mut() {
+            if let Some(last) = entries.last_mut() {
                 last.duration = fallback;
             }
         }
@@ -234,9 +264,11 @@ impl<W: Write> FMP4Writer<W> {
         self.sequence_number += 1;
 
         let origin = self.origin_pts_ms.unwrap_or(0);
-        let base_decode_time = ms_to_timescale_u64((pending.base_pts_ms - origin).max(0));
+        // 解码序起点即本 fragment 最早的显示时刻（IDR 在其 GOP 内最先显示）
+        let base_decode_time =
+            ms_to_timescale_u64((slots.first().copied().unwrap_or(origin) - origin).max(0));
 
-        let sample_count = pending.samples.len();
+        let sample_count = entries.len();
         let duration_ms = if sample_count > 0 {
             (pending.last_pts_ms - pending.base_pts_ms).max(0) as u64
         } else {
@@ -248,7 +280,7 @@ impl<W: Write> FMP4Writer<W> {
             &mut buf,
             self.sequence_number,
             base_decode_time,
-            &pending.samples,
+            &entries,
             &pending.mdat_payload,
         )?;
 
@@ -318,6 +350,15 @@ fn ms_to_timescale(ms: i64) -> u32 {
 #[inline]
 fn ms_to_timescale_u64(ms: i64) -> u64 {
     (ms.max(0) as u64 * VIDEO_TIMESCALE as u64) / 1000
+}
+
+/// 毫秒 → timescale (90kHz)，保留符号。
+///
+/// composition offset 可为负（重排帧早于其解码槽位显示），不能截断到 0。
+#[inline]
+fn ms_to_timescale_signed(ms: i64) -> i32 {
+    let ticks = ms.saturating_mul(VIDEO_TIMESCALE as i64) / 1000;
+    ticks.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 #[cfg(test)]
@@ -449,5 +490,129 @@ mod tests {
         writer.push(&make_h264_keyframe(0)).unwrap();
         assert!(writer.push(&audio_pkt).unwrap().is_none());
         writer.finish().unwrap();
+    }
+
+    /// 从产出的字节里解析 `trun`：返回 (version, has_composition, 每样本 (duration, composition_offset))
+    ///
+    /// `pos` 指向 "trun" 类型字段，布局为：
+    /// type(4) | version+flags(4) | sample_count(4) | data_offset(4) | samples...
+    fn parse_trun(bytes: &[u8]) -> (u8, bool, Vec<(u32, i32)>) {
+        let pos = bytes
+            .windows(4)
+            .position(|w| w == b"trun")
+            .expect("trun 必须存在");
+        let version = bytes[pos + 4];
+        let flags = u32::from_be_bytes(
+            bytes[pos + 4..pos + 8]
+                .try_into()
+                .expect("version+flags 必须 4 字节"),
+        );
+        let count = u32::from_be_bytes(
+            bytes[pos + 8..pos + 12]
+                .try_into()
+                .expect("sample_count 必须 4 字节"),
+        ) as usize;
+        let has_composition = flags & 0x800 != 0;
+        let stride = if has_composition { 16 } else { 12 };
+
+        let mut samples = Vec::with_capacity(count);
+        for index in 0..count {
+            let base = pos + 16 + index * stride;
+            let duration = u32::from_be_bytes(
+                bytes[base..base + 4]
+                    .try_into()
+                    .expect("duration 必须 4 字节"),
+            );
+            let composition = if has_composition {
+                i32::from_be_bytes(
+                    bytes[base + 12..base + 16]
+                        .try_into()
+                        .expect("composition 必须 4 字节"),
+                )
+            } else {
+                0
+            };
+            samples.push((duration, composition));
+        }
+        (version, has_composition, samples)
+    }
+
+    /// 含 B 帧的流（到达顺序 ≠ 显示顺序）必须产出严格递增的 DTS，
+    /// 且 CTS 精确还原原始显示时刻——这是修复“录像时序错乱”的核心保证。
+    #[test]
+    fn test_writer_derives_monotonic_dts_for_reordered_stream() {
+        let mut output = Vec::new();
+        let mut writer = FMP4Writer::new(&mut output, CodecType::H264);
+
+        // IPBB：解码（到达）序是 I,P,B,B；显示帧间隔 40ms。
+        // 旧实现在这里会因 PTS 回退算出 0 时长，输出重复 DTS。
+        writer.push(&make_h264_keyframe(1000)).unwrap(); // 显示 1000
+        writer.push(&make_h264_pframe(1120)).unwrap(); // 显示 1120（解码第 2）
+        writer.push(&make_h264_pframe(1040)).unwrap(); // 显示 1040（解码第 3）
+        writer.push(&make_h264_pframe(1080)).unwrap(); // 显示 1080（解码第 4）
+        writer.push(&make_h264_keyframe(2000)).unwrap(); // 触发上一 GOP flush
+
+        let (version, has_composition, samples) = parse_trun(&output);
+        assert!(has_composition, "重排序流必须携带 composition offset");
+        assert_eq!(version, 1, "存在负偏移时必须使用 version 1");
+        assert_eq!(samples.len(), 4);
+
+        // DTS 从 1000ms（origin）起算，槽位应为均匀网格 0,40,80,120ms → 3600 ticks/帧
+        let mut dts_cursor = 0i64;
+        let mut dts_series = Vec::new();
+        let mut presentations: Vec<i64> = Vec::new();
+        for (duration, composition) in &samples {
+            dts_series.push(dts_cursor);
+            // 显示时刻 = DTS + CTS，换算回与输入同轴的毫秒
+            presentations.push((dts_cursor + i64::from(*composition)) * 1000 / 90_000 + 1000);
+            dts_cursor += i64::from(*duration);
+        }
+
+        assert!(
+            dts_series.windows(2).all(|w| w[1] > w[0]),
+            "DTS 必须严格递增，实际: {dts_series:?}"
+        );
+        assert_eq!(
+            dts_series,
+            vec![0, 3600, 7200, 10800],
+            "解码槽位应为均匀网格"
+        );
+
+        // 还原出的显示时刻必须与输入的 PTS 一一对应
+        let mut sorted = presentations.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            vec![1000, 1040, 1080, 1120],
+            "显示时刻集合必须完整保留"
+        );
+        // 解码序 = 到达序：第 1 帧最早显示，其余回退帧的显示时刻应小于前一个锚点
+        assert_eq!(presentations[0], 1000, "IDR 显示最早");
+        assert_eq!(presentations[1], 1120, "P 帧显示在 B 帧之后");
+        assert_eq!(presentations[2], 1040);
+        assert_eq!(presentations[3], 1080);
+    }
+
+    /// 无重排序的流必须保持与旧实现完全一致：不写 composition offset、version 0。
+    #[test]
+    fn test_writer_keeps_legacy_output_for_ordered_stream() {
+        let mut output = Vec::new();
+        let mut writer = FMP4Writer::new(&mut output, CodecType::H264);
+
+        writer.push(&make_h264_keyframe(1000)).unwrap();
+        writer.push(&make_h264_pframe(1040)).unwrap();
+        writer.push(&make_h264_pframe(1080)).unwrap();
+        writer.push(&make_h264_keyframe(2000)).unwrap();
+
+        let (version, has_composition, samples) = parse_trun(&output);
+        assert!(!has_composition, "无重排序时不应引入 composition offset");
+        assert_eq!(version, 0);
+        assert_eq!(samples.len(), 3);
+        assert!(
+            samples.iter().all(|(_, composition)| *composition == 0),
+            "无重排序时偏移恒为 0"
+        );
+        // 时长即显示间隔
+        assert_eq!(samples[0].0, 3600); // 40ms @ 90kHz
     }
 }

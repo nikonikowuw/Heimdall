@@ -250,27 +250,38 @@ pub struct SampleEntry {
     pub duration: u32, // timescale 单位
     pub size: u32,     // AVCC length-prefixed payload 字节数
     pub is_keyframe: bool,
+    /// 显示时刻相对解码时刻的补偿（timescale 单位）。
+    ///
+    /// 无重排序时为 0；含 B 帧时为负（重排帧早于其解码槽位显示）。
+    /// 对应 ISO 14496-12 的 `sample_composition_time_offset`。
+    pub composition_offset: i32,
 }
 
 /// 写入 `trun` box。
 ///
-/// 包含 data_offset（placeholder）、per-sample duration/size/flags。
+/// 采样点按**解码顺序**排列（MP4 强制要求），显示顺序由 composition offset 表达。
 fn write_trun(w: &mut impl Write, samples: &[SampleEntry]) -> io::Result<()> {
     // flags: data-offset(0x1) + duration(0x100) + size(0x200) + flags(0x400) = 0x701
-    let trun_flags: u32 = 0x000701;
+    // 存在重排序时追加 composition-time-offset(0x800)
+    let has_composition = samples.iter().any(|s| s.composition_offset != 0);
+    // 负偏移只能由 version 1 承载，全部非负时保持 version 0 以获得最广的解析器兼容
+    let needs_signed = samples.iter().any(|s| s.composition_offset < 0);
+    let trun_flags: u32 = if has_composition { 0x000F01 } else { 0x000701 };
+    let trun_version: u32 = if needs_signed { 1 } else { 0 };
 
     let sample_count = samples.len() as u32;
 
     // trun body = version+flags(4) + sample_count(4) + data_offset(4)
-    //           + sample_count * (duration(4) + size(4) + flags(4))
-    let trun_body_size = 4 + 4 + 4 + sample_count * 12;
+    //           + sample_count * (duration(4) + size(4) + flags(4) [+ composition(4)])
+    let per_sample_bytes = if has_composition { 16u32 } else { 12u32 };
+    let trun_body_size = 4 + 4 + 4 + sample_count * per_sample_bytes;
     let trun_box_size = 8 + trun_body_size;
 
     // data_offset 先写 0 作为 placeholder，由 write_fragment 调用 fixup_trun_data_offset 回填
 
     w.write_all(&trun_box_size.to_be_bytes())?;
     w.write_all(b"trun")?;
-    w.write_all(&trun_flags.to_be_bytes())?; // version=0 + flags
+    w.write_all(&((trun_version << 24) | trun_flags).to_be_bytes())?;
     w.write_all(&sample_count.to_be_bytes())?;
     w.write_all(&0u32.to_be_bytes())?; // data_offset placeholder (index: 12 from trun start)
 
@@ -286,6 +297,9 @@ fn write_trun(w: &mut impl Write, samples: &[SampleEntry]) -> io::Result<()> {
             0x01010000
         };
         w.write_all(&flags.to_be_bytes())?;
+        if has_composition {
+            w.write_all(&s.composition_offset.to_be_bytes())?;
+        }
     }
 
     Ok(())
@@ -428,11 +442,13 @@ mod tests {
                 duration: 3000,
                 size: 100,
                 is_keyframe: true,
+                composition_offset: 0,
             },
             SampleEntry {
                 duration: 3000,
                 size: 50,
                 is_keyframe: false,
+                composition_offset: 0,
             },
         ];
         let mdat_payload = vec![0u8; 150];

@@ -304,34 +304,59 @@ App 停机
 | drain 语义 | `drain_from_keyframe` 取**最早**关键帧，最大化前置覆盖 |
 | 前置缓冲复用 | 文件闭合后前置缓冲重新积累，但当前实现直接复用（不 clear，避免丢失连续数据） |
 
-## 已知缺陷：B 帧流的时间戳错乱
+## B 帧码流的时间戳处理
 
-真机验证时发现，**含 B 帧的码流录出的文件时序错乱**（与触发源无关，属 fMP4 写入路径既有问题）：
+真机验证时发现：含 B 帧的码流录出的文件时序错乱（与触发源无关，属 fMP4 写入路径问题）。
 
 ```
-含 B 帧源（High profile, has_b_frames=2）：
+修复前（含 B 帧源 High profile, has_b_frames=2）：
   ffmpeg -f null：non monotonically increasing dts   ← 告警
   输出样本时序：0.00, 0.16, 0.32, 0.32, 0.32, 0.32, ...  ← 零长度样本
-无 B 帧源（Main profile, has_b_frames=0）：
-  零错误
+  与源逐帧比对：3/157 帧显示顺序正确（1%）—— 画面实际已错乱
 ```
 
-**根因**：`EncodedPacket` 只携带 `pts_ms`，**没有 DTS 字段**；
-`FMP4Writer::push` 用相邻包 PTS 差值计算 sample duration 并把负数 `.max(0)` 截为 0。
-B 帧流在解码（到达）顺序下 PTS 非单调，负差值被截断成零长度样本，
-累积出重复 DTS，违反 MP4 对解码时序单调性的要求。
+### 根因：接入层抹平了重排序信息
 
-**影响面**：现网摄像头为 Main profile 无 B 帧，实测全部录像零错误，不受影响；
-但具备 B 帧的主流机型会录出时序错乱的文件（可解码但帧序/seek 不可靠）。
+`retina_ingest` 曾对每个包做 `pts_ms = calculated.max(previous)` 单调钳制。
+该钳制的本意是抵御源端时钟重置与循环推流，但它假设“显示顺序 == 解码顺序”，
+对 B 帧流是错的：RTP 到达顺序即解码顺序，含 B 帧时 PTS 在解码序下**天然回退**。
+钳制把回退抹成重复 PTS，下游拿到的就是一组无法还原显示顺序的时刻；
+写入器再用相邻 PTS 差值算 sample duration（负数被 `.max(0)` 截断），
+就产生零长度样本 → 重复 DTS → 违反 MP4 对解码时序单调性的要求。
 
-**正确修法**（需牵动 media 层包结构，故未随本次改动一并处理）：
+### 修法：接入层交付真实显示时刻，容器层自行合成解码序
 
-1. `EncodedPacket` 增加 `dts_ms`，由接入层（RTSP 客户端）填充；
-2. fMP4 写入改用 DTS 构建 `tfdt` / `trun` 时间轴；
-3. PTS 与 DTS 的偏差写入 `trun` 的 `sample_composition_time_offset`（CTTS 语义），
-   才能同时保留解码顺序与可重排的显示顺序。
+**接入层**：不再钳制，`pts_ms` 即为真实显示时间戳（可非单调）；
+循环推流的落差补偿改以“已交付 PTS 最大值”为基准（原用上一包，重排序时会偏高）。
 
-临时规避：码流侧关闭 B 帧（`x264 --bframes 0` / 摄像头编码配置 Main profile）。
+**fMP4 写入器**：从 GOP 槽位反推解码时间轴。
+对 CFR 流，一个 GOP 的**显示时刻集合**与**解码槽位集合**是同一个均匀网格：
+把第 k 个到达的样本放到第 k 早的槽位，即可得严格递增的 DTS，
+而 `CTS = pts - dts` 恰好还原原始显示顺序。这是 MP4 表达重排序的标准方式。
+
+```
+修复后（同一 B 帧源）：
+  tfdt base=0 | trun v1 带 composition offset
+  #0: dts=  0ms dur=40ms cts=  0ms pts=  0ms   ← IDR
+  #1: dts= 40ms dur=40ms cts=+120ms pts=160ms   ← P 帧在解码序第 2、显示在后
+  #2: dts= 80ms dur=40ms cts=  0ms pts= 80ms
+  #3: dts=120ms dur=40ms cts=-80ms pts= 40ms   ← B 帧（负偏移需 version 1）
+  #4: dts=160ms dur=40ms cts=-40ms pts=120ms
+  与源逐帧比对：367/368 帧显示顺序正确（99%）
+```
+
+**兼容性**：无重排序的流不写 composition offset、保持 version 0，
+输出与改动前完全一致（现网 Main profile 无 B 帧摄像头零影响）；
+仅在检测到重排序时升级为 version 1。
+
+### 附带影响
+
+- **直播预览（FLV）**：FLV 封装器已有自适应 DTS/CTS 推导（`calculate_dts_cts`），
+  它依赖“相对 PTS 回退”来探测 B 帧。接入层不再抹平后，该探测才真正生效——
+  此前的 FLV 输出对 B 帧流同样是错的。
+- **分析链路**：解码器输出帧本已是显示顺序，帧调度读的是解码后 PTS，不受影响。
+- **证据环 / 前置缓冲**：按 PTS 就近查找与按位置 GOP 分组均与单调性无关；
+  基于首末 PTS 差值的时长裁剪在重排序时可能多保留不到一帧，属安全侧偏差。
 
 ## 前端集成
 

@@ -100,7 +100,8 @@ struct TimestampMapping {
     source_delta_ms: Option<i64>,
     calculated_pts_ms: i64,
     pts_ms: i64,
-    was_clamped: bool,
+    /// 本包 PTS 小于上一包，即解码顺序与显示顺序不一致（存在 B 帧重排序）
+    reordered: bool,
     large_jump: bool,
 }
 
@@ -135,7 +136,10 @@ impl RtpDiagnostics {
 #[derive(Debug, Default)]
 struct TrackTimestampMapper {
     last_elapsed_ticks: Option<i64>,
+    /// 上一包交付的 PTS；B 帧重排序时可能小于更早的包，不能当作单调水位
     last_pts_ms: Option<i64>,
+    /// 已交付 PTS 的最大值，仅用于循环推流的落差补偿
+    max_pts_ms: Option<i64>,
     loop_offset_ms: i64,
 }
 
@@ -153,18 +157,18 @@ impl TrackTimestampMapper {
         // 循环播放 (Loop) / 时间戳重置检测：
         // 若时间戳发生超过 1 秒的大幅负向倒退 (source_delta_ms <= -LOOP_REWIND_THRESHOLD_MS)，
         // 说明该流为本地文件循环播放推流 (如 ffmpeg -stream_loop -1) 或源端时钟重置。
-        // 为防止输出 PTS 被后续的 .max(last) 锁死停滞，将前一轮末尾时间与新起点的落差补偿进 loop_offset_ms，
-        // 保障跨循环轮次时对外交付的 PTS 依然平滑单调递增。
-        if let (Some(delta_ms), Some(last_pts)) = (source_delta_ms, self.last_pts_ms) {
+        // 为了防止输出 PTS 在跨循环轮次时停滞或倒退，将前一轮末尾与新起点的落差
+        // 补偿进 loop_offset_ms，保障对外交付的 PTS 依然平滑递增。
+        if let (Some(delta_ms), Some(max_pts)) = (source_delta_ms, self.max_pts_ms) {
             if delta_ms <= -LOOP_REWIND_THRESHOLD_MS {
                 let unadjusted_pts = clamp_i128_to_i64(
                     i128::from(base_timestamp_ms)
                         + i128::from(elapsed_ms)
                         + i128::from(self.loop_offset_ms),
                 );
-                if last_pts >= unadjusted_pts {
+                if max_pts >= unadjusted_pts {
                     self.loop_offset_ms = clamp_i128_to_i64(
-                        i128::from(self.loop_offset_ms) + i128::from(last_pts - unadjusted_pts) + 1,
+                        i128::from(self.loop_offset_ms) + i128::from(max_pts - unadjusted_pts) + 1,
                     );
                 }
             }
@@ -175,10 +179,15 @@ impl TrackTimestampMapper {
                 + i128::from(elapsed_ms)
                 + i128::from(self.loop_offset_ms),
         );
-        let pts_ms = self
-            .last_pts_ms
-            .map_or(calculated_pts_ms, |last| calculated_pts_ms.max(last));
-        let was_clamped = pts_ms != calculated_pts_ms;
+        // 交付真实显示时间戳，不再做 `.max(last)` 单调化。
+        //
+        // RTP 到达顺序即解码顺序，含 B 帧时 PTS 在解码序下天然回退——那是重排序信息
+        // 本身。旧实现把它抹平成重复 PTS，容器层（fMP4/FLV）拿到的就是一组无法还原
+        // 显示顺序的时刻，直接造成录像样本时长归零、DTS 重复。
+        // 需要单调解码序的容器层自行合成 DTS（fMP4 写入器按 GOP 槽位重排，
+        // FLV 封装器已有自适应 DTS/CTS 推导）。
+        let pts_ms = calculated_pts_ms;
+        let reordered = self.last_pts_ms.is_some_and(|last| pts_ms < last);
         let large_jump = source_delta_ms
             .map(|delta| {
                 delta >= TIMESTAMP_DISCONTINUITY_WARN_MS
@@ -188,6 +197,7 @@ impl TrackTimestampMapper {
 
         self.last_elapsed_ticks = Some(source_elapsed_ticks);
         self.last_pts_ms = Some(pts_ms);
+        self.max_pts_ms = Some(self.max_pts_ms.map_or(pts_ms, |max| max.max(pts_ms)));
 
         TimestampMapping {
             source_timestamp: timestamp.timestamp(),
@@ -197,7 +207,7 @@ impl TrackTimestampMapper {
             source_delta_ms,
             calculated_pts_ms,
             pts_ms,
-            was_clamped,
+            reordered,
             large_jump,
         }
     }
@@ -432,8 +442,8 @@ impl RetinaIngestor {
             clock_rate_hz = mapping.clock_rate_hz,
             calculated_pts_ms = mapping.calculated_pts_ms,
             output_pts_ms = mapping.pts_ms,
-            pts_was_clamped = mapping.was_clamped,
-            "Retina 媒体源时间戳出现大幅跳变，已记录并保持对外 PTS 单调"
+            pts_reordered = mapping.reordered,
+            "Retina 媒体源时间戳出现大幅跳变，已记录并保留真实显示时刻"
         );
     }
 
@@ -1140,21 +1150,25 @@ mod tests {
     }
 
     #[test]
-    fn test_track_timestamp_mapper_uses_clock_rate_and_preserves_monotonic_pts() {
+    fn test_track_timestamp_mapper_uses_clock_rate_and_preserves_reordering() {
         let base_timestamp_ms = 1_700_000_000_000;
         let mut mapper = TrackTimestampMapper::default();
 
         let first = mapper.map(timestamp(0, 90_000), base_timestamp_ms);
         assert_eq!(first.pts_ms, base_timestamp_ms);
+        assert!(!first.reordered);
 
         let next = mapper.map(timestamp(3_600, 90_000), base_timestamp_ms);
         assert_eq!(next.pts_ms, base_timestamp_ms + 40);
         assert_eq!(next.source_delta_ms, Some(40));
+        assert!(!next.reordered);
 
+        // B 帧重排序：解码序在后的帧显示在更早的时刻，必须原样交付而不是抹平，
+        // 否则容器层无法还原显示顺序（录像时序错乱的根因）。
         let reordered = mapper.map(timestamp(1_800, 90_000), base_timestamp_ms);
         assert_eq!(reordered.calculated_pts_ms, base_timestamp_ms + 20);
-        assert_eq!(reordered.pts_ms, next.pts_ms);
-        assert!(reordered.was_clamped);
+        assert_eq!(reordered.pts_ms, base_timestamp_ms + 20);
+        assert!(reordered.reordered);
     }
 
     #[test]
