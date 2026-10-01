@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/web/frontend/quality-guidelines.md", "reason": "Web 门禁、测试选择与视觉可访问性检查"}
+{"file": ".trellis/spec/guides/quality-guidelines.md", "reason": "验证、测试与审查通用检查点"}
+{"file": ".trellis/spec/web/frontend/index.md", "reason": "Quality Check 门禁命令与实时页面检查"}
+{"file": ".trellis/spec/web/frontend/component-guidelines.md", "reason": "交互与可访问性契约；数值输入小节一致性"}
+{"file": ".trellis/spec/web/frontend/directory-structure.md", "reason": "模块边界与循环依赖判据"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "重复实现与共享提取检查"}
+{"file": ".trellis/tasks/10-01-numeric-input-blur-validation/prd.md", "reason": "验收标准与 Out of Scope 边界"}
+{"file": ".trellis/tasks/10-01-numeric-input-blur-validation/design.md", "reason": "站点参数表与失焦语义表作为核对基准"}

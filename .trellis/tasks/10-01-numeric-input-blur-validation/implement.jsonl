@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/web/frontend/index.md", "reason": "web 包规范入口与 Pre-Development Checklist"}
+{"file": ".trellis/spec/web/frontend/component-guidelines.md", "reason": "组件接口/归属与交互规范；本次新增数值输入小节的落点"}
+{"file": ".trellis/spec/web/frontend/styling-guidelines.md", "reason": "现有输入控件类族与表单视觉规范，确认不新增类族"}
+{"file": ".trellis/spec/web/frontend/directory-structure.md", "reason": "lib/ 与 components/ 归属、单向依赖与 @/ 引用规则"}
+{"file": ".trellis/spec/web/frontend/type-safety.md", "reason": "判别联合与运行时收窄约束"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "输入输出、校验责任方与最小改动边界"}
+{"file": ".trellis/spec/guides/conventions.md", "reason": "跨层硬约束与共享约定引用方式"}
+{"file": ".trellis/tasks/10-01-numeric-input-blur-validation/design.md", "reason": "三段式契约、NumericField 契约、站点参数表与失焦语义"}
+{"file": ".trellis/tasks/10-01-numeric-input-blur-validation/prd.md", "reason": "需求、验收标准与已确认决策 D1/D2"}
