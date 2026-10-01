@@ -1,7 +1,8 @@
 //! 插件生命周期与 export_algo! 宏集成验证测试
 
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use algo_sdk::prelude::*;
 use serde::Deserialize;
@@ -77,6 +78,35 @@ export_algo!(
 
 static RESULT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+/// 串行化所有触及 `library_open` / `library_close` 的用例。
+///
+/// 日志桥接的登记槽位与活跃标记是**进程级全局状态**，而 `library_close` 会停用
+/// 桥接；若用例并行执行，一个用例的 `library_close` 会在另一个用例断言前
+/// 把桥接关掉，导致间歇性失败。
+static LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
+
+/// 宿主日志回调收到的调用：(level, 消息, msg[len] 是否为 NUL)。
+static LOG_CALLS: Mutex<Vec<(c_int, String, bool)>> = Mutex::new(Vec::new());
+
+unsafe extern "C" fn test_logger(_user: *mut c_void, level: c_int, msg: *const c_char, len: u32) {
+    if msg.is_null() {
+        return;
+    }
+    // SAFETY: 桥接层保证 msg 指向本调用期有效、以 0 结尾的缓冲。
+    let text = unsafe { CStr::from_ptr(msg) }
+        .to_string_lossy()
+        .into_owned();
+    // 宿主 `default_c_logger` 忽略 len 改用 `CStr::from_ptr`，因此第 len 字节必须是
+    // 终止符；这里记录下来回到用例主体断言，而不在回调内 assert（回调被
+    // catch_unwind 包裹，内部 panic 会被静默吞掉，无法作为失败信号）。
+    // SAFETY: 桥接层保证缓冲至少有 len + 1 字节。
+    let nul_at_len = unsafe { *msg.add(len as usize) } == 0;
+    LOG_CALLS
+        .lock()
+        .expect("log calls lock")
+        .push((level, text, nul_at_len));
+}
+
 unsafe extern "C" fn test_on_result(result: *const AvAlgoResult, _user: *mut c_void) {
     if !result.is_null() {
         // SAFETY: 测试中宿主保证传入有效的非空 result 指针
@@ -89,6 +119,8 @@ unsafe extern "C" fn test_on_result(result: *const AvAlgoResult, _user: *mut c_v
 
 #[test]
 fn test_plugin_full_lifecycle() {
+    let _guard = LIFECYCLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     // 1. 获取 C ABI 虚表
     // SAFETY: 测试调取本模块导出的 ABI 虚表指针
     let abi_ptr = unsafe { av_algo_get_abi(AV_ALGO_API_VERSION) };
@@ -194,6 +226,8 @@ fn test_plugin_full_lifecycle() {
 
 #[test]
 fn test_plugin_panic_isolation() {
+    let _guard = LIFECYCLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     // SAFETY: 调取 ABI 虚表指针
     let abi_ptr = unsafe { av_algo_get_abi(AV_ALGO_API_VERSION) };
     // SAFETY: abi_ptr 非空
@@ -266,4 +300,72 @@ fn test_plugin_panic_isolation() {
         (abi.instance_destroy.expect("destroy"))(inst);
         (abi.library_close.expect("close"))(lib);
     }
+}
+
+/// B1 / B2 / B8：宿主在 `library_open` 提供的日志回调必须真正收到插件内事件。
+///
+/// 这是端到端用例：经真实 ABI 虚表触发 `library_open`，而不是直接调用桥接内部函数。
+#[test]
+fn test_library_open_bridges_host_log_callback() {
+    let _guard = LIFECYCLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    LOG_CALLS.lock().expect("log calls lock").clear();
+
+    // SAFETY: 调取 ABI 虚表指针
+    let abi_ptr = unsafe { av_algo_get_abi(AV_ALGO_API_VERSION) };
+    assert!(!abi_ptr.is_null(), "av_algo_get_abi 符号应有效");
+    // SAFETY: abi_ptr 非空
+    let abi = unsafe { &*abi_ptr };
+
+    let pkg_root = CString::new("/tmp/mock_pkg").expect("cstring");
+    let platform = CString::new("test-platform").expect("cstring");
+    let open_args = AvAlgoLibraryArgs {
+        size: std::mem::size_of::<AvAlgoLibraryArgs>() as u32,
+        api_version: AV_ALGO_API_VERSION,
+        package_root: pkg_root.as_ptr(),
+        platform_id: platform.as_ptr(),
+        platform_tag: 0,
+        log: Some(test_logger),
+        log_user: std::ptr::null_mut(),
+    };
+
+    let mut lib: AvAlgoLibrary = std::ptr::null_mut();
+    // SAFETY: 传入合法的 open_args
+    let status = unsafe { (abi.library_open.expect("open"))(&open_args, &mut lib) };
+    assert_eq!(status, AV_OK);
+    assert!(!lib.is_null());
+
+    // library_open 之后、library_close 之前的事件必须到达宿主回调。
+    tracing::warn!(backend = "rknn", "回退会话已启用（测试）");
+
+    let calls = LOG_CALLS.lock().expect("log calls lock").clone();
+    assert_eq!(calls.len(), 1, "宿主日志回调必须被真实调用一次");
+    let (level, text, nul_at_len) = &calls[0];
+    assert_eq!(
+        *level, 3,
+        "warn 必须映射为 level 3（与宿主 default_c_logger 约定一致）"
+    );
+    assert!(
+        text.contains("回退会话已启用"),
+        "事件内容必须到达宿主回调: {text}"
+    );
+    assert!(
+        text.contains("backend"),
+        "结构化字段必须随消息一并转发: {text}"
+    );
+    assert!(
+        *nul_at_len,
+        "msg 必须以 NUL 结尾（宿主用 CStr::from_ptr 读取）"
+    );
+
+    // B8：library_close 之后不得再回调宿主。
+    // SAFETY: lib 句柄有效
+    let close_status = unsafe { (abi.library_close.expect("close"))(lib) };
+    assert_eq!(close_status, AV_OK);
+
+    tracing::warn!("库关闭后的日志不应到达宿主");
+    assert_eq!(
+        LOG_CALLS.lock().expect("log calls lock").len(),
+        1,
+        "library_close 之后不得再回调宿主"
+    );
 }

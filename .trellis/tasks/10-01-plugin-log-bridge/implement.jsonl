@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/algo-sdk/backend/index.md", "reason": "algo-sdk 规范入口与 Pre-Development Checklist"}
+{"file": ".trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md", "reason": "C ABI 虚表、library_open/close 生命周期、AvAlgoLibraryArgs"}
+{"file": ".trellis/spec/guides/logging-guidelines.md", "reason": "级别选择、字段命名、脱敏约束；本任务核心依据"}
+{"file": ".trellis/spec/guides/ffi-guidelines.md", "reason": "unsafe 边界、C 回调、panic 隔离"}
+{"file": ".trellis/spec/guides/concurrency-guidelines.md", "reason": "静态槽位与日志热路径的并发约束"}
+{"file": ".trellis/spec/guides/error-handling.md", "reason": "降级与退出；回调失败不得影响业务路径"}

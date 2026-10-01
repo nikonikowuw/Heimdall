@@ -65,6 +65,15 @@ pub fn copy_str_to_c_chars<const N: usize>(src: &str, dst: &mut [c_char; N]) {
 pub struct LibraryContext {
     pub package_root: PathBuf,
     pub platform_id: String,
+    /// 宿主在 `library_open` 时提供的日志回调持有权；`None` 表示宿主未提供回调
+    /// （或未提供），插件日志退化为无操作。
+    ///
+    /// 持有权是 **RAII** 的：随本上下文一同析构。这样 `library_open` 的任何
+    /// 失败返回路径（如 `open_hook` 报错）也会自动释放计数，不会泄漏。
+    /// 转发层实际读取的是 [`crate::logging`] 的 lib 级静态槽位（subscriber 需要
+    /// `'static` 访问权限），本字段只承载“本次 open 登记过”这一事实与配额，
+    /// 不复制回调指针。
+    pub log_bridge_lease: Option<crate::logging::HostLogBridgeLease>,
 }
 
 /// 算法实例常驻上下文
@@ -383,9 +392,22 @@ macro_rules! export_algo {
                         }
                     };
 
+                // 桥接宿主日志回调：先登记（取得 RAII 持有权）再安装转发 subscriber
+                // （幂等，失败不 panic）。持有权随 `LibraryContext` 析构自动释放，
+                // 因此 `open_hook` 失败或 panic 的返回路径不会泄漏计数——这些路径
+                // 下宿主拿不到句柄，永不调用 `library_close`。
+                // 未提供回调（None）时保持既有行为，不安装 subscriber。
+                let log_bridge_lease = raw_args.log.map(|log_fn| {
+                    let lease =
+                        $crate::logging::register_host_log_sink(log_fn, raw_args.log_user);
+                    $crate::logging::install_host_log_subscriber();
+                    lease
+                });
+
                 let lib_ctx = Box::new($crate::macros::LibraryContext {
                     package_root: std::path::PathBuf::from(root_str),
                     platform_id: platform_str.to_string(),
+                    log_bridge_lease,
                 });
 
                 if let Err(error) = $open_hook(&lib_ctx.package_root) {
@@ -449,6 +471,12 @@ macro_rules! export_algo {
                         Box::from_raw(lib as *mut $crate::macros::LibraryContext)
                     };
                     $close_hook(&lib_ctx.package_root);
+                    // 日志桥接持有权随 `lib_ctx` 析构自动释放，无需手工配对；
+                    // 引用计数保证只有**最后一个**库句柄释放时才真正停用转发。
+                    // `library_close` 在每次 `RawAlgoLibrary::drop` 都触发
+                    // （含 `extract_face` / `create_gallery` 等短操作），而常驻
+                    // Worker 会长期持有另一个句柄；若在此无条件停用，一次短操作
+                    // 就会把常驻推理的日志静默提前。
                     drop(lib_ctx);
                 }
                 $crate::c_abi::AV_OK

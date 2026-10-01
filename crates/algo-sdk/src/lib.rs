@@ -20,6 +20,7 @@ pub mod env;
 pub mod error;
 pub mod face;
 pub mod frame;
+pub mod logging;
 pub mod macros;
 pub mod math;
 pub mod model;

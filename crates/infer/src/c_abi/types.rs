@@ -69,6 +69,22 @@ pub const AV_RESULT_SELF_TEST: u32 = 2;
 pub const AV_RESULT_RECOGNITION: u32 = 3;
 
 /// 日志函数指针
+///
+/// **本定义必须与插件侧 `crates/algo-sdk/src/c_abi.rs` 的 `AvLogFn` 逐字一致**
+/// （含契约注释）：两侧各自独立编译，靠人工同步。
+///
+/// # 契约（插件与宿主双向，不得单方面放宽）
+///
+/// - **NUL 结尾**：`msg` 必须指向以 `0` 结尾的有效 C 字符串。宿主实现用
+///   `CStr::from_ptr` 读取并**忽略 `len`**（见 `crates/infer/src/c_abi/loader.rs`
+///   的 `default_c_logger`）；`len` 仍必须填**不含**终止符的字节数。
+/// - **长度单位**：`len` 以**字节**计，不是字符数。
+/// - **有效只在本调用期间**：`msg` 无需在回调返回后继续存活，回调**不得**保存该指针。
+/// - **线程安全**：回调必须可在**任意线程**上被调用且可重入并发。插件侧的转发
+///   可能发生在任意工作线程（如 RKNN 推理 Worker），不保证与 `library_open` 同线程。
+///   `crates/algo-sdk` 的日志桥接依赖此契约；宿主实现必须自行加锁或使用无共享状态的实现。
+/// - **不得 panic**：`extern "C"` 回调内 panic 在不可 unwind 守卫处直接终止进程，
+///   外层 `catch_unwind` 无法隔离。宿主实现须自行包裹（见 `default_c_logger`）。
 pub type AvLogFn =
     unsafe extern "C" fn(user: *mut c_void, level: c_int, msg: *const c_char, len: u32);
 

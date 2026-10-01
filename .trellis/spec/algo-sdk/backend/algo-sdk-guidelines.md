@@ -16,6 +16,7 @@
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | SDK / 宿主 C ABI | [c_abi.rs](../../../../crates/algo-sdk/src/c_abi.rs)、[types.rs](../../../../crates/infer/src/c_abi/types.rs)                                                       |
 | 插件 trait / 导出宏 | [plugin.rs](../../../../crates/algo-sdk/src/plugin.rs)、[macros.rs](../../../../crates/algo-sdk/src/macros.rs)                                                      |
+| 插件日志桥接 | [logging.rs](../../../../crates/algo-sdk/src/logging.rs)（`HostLogBridgeLease` RAII 持有权 + 自装 `tracing` Subscriber；级别映射与宿主 `default_c_logger` 双向绑定） |
 | 配置宏与三级优先级 | [config.rs](../../../../crates/algo-sdk/src/config.rs)（`algo_config!`、`FromEnvValue`，自动实现显式参数追踪与三级优先级覆盖） |
 | Composable 模型生态 | [models](../../../../crates/algo-sdk/src/models/mod.rs)（`YoloSpec`、`YoloDecoder` 解码策略、`GenericYoloDetector` 15行开箱即用） |
 | 硬件预处理流水线 | [cv::transforms](../../../../crates/algo-sdk/src/cv/transforms.rs)（`Transform`、`HwLetterbox` 纯设备侧零拷贝变换） |
@@ -69,6 +70,141 @@ export_algo!(
 - 每个 C ABI 入口隔离 panic，失败返回 `AV_ERR_INTERNAL`（panic 隔离规则见 [全局约定](../../guides/conventions.md#防御性错误处理)）。
 - `AlgoPlugin: Sized + Send + 'static`，配置为 `DeserializeOwned + Default`；必需实现 `init(ctx, config)` 和同步 `process(SafeFrame, &mut ResultEmitter)`。
 - `InitContext` 提供 `package_root/platform_id/instance_id/is_self_test`。默认 `flush/set_rules` 返回成功，`update_config` 返回 `NotImplemented`，不能误报配置已应用。
+
+## 插件日志桥接 (`logging`)
+
+宿主在 `library_open` 时通过 `AvAlgoLibraryArgs.log` / `log_user` 提供 C 日志回调（宿主实现见 `crates/infer/src/c_abi/loader.rs` 的 `default_c_logger`）。`algo-sdk` 负责把插件内的 `tracing` 事件转发过去。
+
+### 为何必须由插件自装 subscriber
+
+算法包以 `cdylib` 交付，拥有**独立 workspace 与独立 lock**，`tracing-core` 被**静态链入每个 `.so` 的私有副本**且不导出任何 tracing 符号。
+
+导出符号实测（`nm -gU`，release 构建）：
+
+| 算法包 | `av_algo_*` 导出符号 | 导出的 tracing 符号 |
+| --- | --- | --- |
+| `face_recognition`（rk3568 / rk3588） | `av_algo_get_abi`、`av_algo_extract_face`、`av_algo_get_gallery_abi`、`av_algo_gallery_bulk` | 0 |
+| `face_recognition`（rk3576） | `av_algo_get_abi`、`av_algo_extract_face` | 0 |
+
+> 人脸包额外导出 gallery 两符（`macros.rs` 的 `export_face_gallery!`）；**不得**把符号清单写成“仅两个”，那只对未导出 gallery 的包成立。结论只依赖「tracing 符号数为 0」这一点。
+
+因此：
+
+- 宿主的 `tracing_subscriber::registry().init()` 只作用于**宿主自己的** dispatcher，**不可**被插件复用；
+- 插件若不自行安装 subscriber，其 `tracing` 事件会回落到 no-op sink 并被静默丢弃。
+
+**隔离性已实测**（2026-10-01）：两个各自独立 workspace 构建的 cdylib，各自调用 `install_host_log_subscriber()` **均返回成功**（若全局状态共享，第二个必失败），各发 3 条事件后 `alpha=3, beta=3`，**无串流**。因此一个进程内加载多个算法包时，每个包只能看到自己的事件。
+
+### 契约
+
+| 项 | 契约 |
+| --- | --- |
+| 触发 | `library_open` 且 `AvAlgoLibraryArgs.log` 为 `Some` 时登记并安装；`None` 时保持既有行为（不安装、不登记） |
+| 级别映射 | TRACE→0 / DEBUG→1 / INFO→2 / WARN→3 / ERROR→4。**与宿主 `default_c_logger` 是双向契约**，改任一侧必须同步另一侧与其表驱动测试 |
+| 消息格式 | 必须是 **NUL 结尾** 缓冲：宿主用 `CStr::from_ptr` 读取并**忽略 `len`**；`len` 仍按契约填不含终止符的字节数 |
+| 内部 NUL | 必须替换（当前用 U+FFFD），否则宿主 `CStr` 读取会静默截断后半段 |
+| 字段 | `message` 之外的结构化字段以 `key=value` 追加。算法包诊断普遍形如 `warn!(reason = ?e, "...")`，丢弃字段会失去诊断价值 |
+| 共存 | `set_global_default` 失败（已安装全局 subscriber、插件自身 `fmt().init()`）必须**忽略而非 panic**，不得覆盖已有 dispatcher |
+| 线程安全 | `AvLogFn` 必须可在**任意线程**上被调用且可重入并发；插件转发可能发生在推理 Worker 等任意工作线程。宿主须自行加锁——`default_c_logger` 据此设计（无共享可变状态） |
+| 不做 target 过滤 | cdylib 拥有**私有** `tracing-core` 副本，本订阅器只能看到本插件自身发出的事件，宿主事件不会进入该 dispatcher，因此「劫持宿主事件」不成立（`design.md` §3.3 的过滤项因此无对象） |
+| 依赖 | 不得为此引入 `tracing-subscriber` 或新增任何依赖：`tracing` 已 re-export 全部所需 core 类型（`Subscriber`/`Event`/`Metadata`/`Level`/`span::Id`/`field::Visit`） |
+
+### 交付体积（实测）
+
+rk3588 人脸包 release 构建，`nm -gU` 导出符号集完全一致（含 `av_algo_get_gallery_abi` / `av_algo_gallery_bulk`），导出 tracing 符号数为 0：
+
+| 版本 | `.dylib` 字节数 | 差值 |
+| --- | --- | --- |
+| 引入桥接前 | 2212048 | — |
+| 引入桥接后 | 2240368 | **+28320（+27.7 KiB，+1.28%）** |
+
+> 不得再写“体积零变化”。零变化的是**依赖图**（`Cargo.lock` 无改动），不是产物大小：`logging.rs` 的转发实现会链入每个 cdylib。
+
+### 生命周期：持有权必须是 RAII，禁止在 `library_close` 手工配对
+
+> **Warning**：`library_close` 在**每次** `RawAlgoLibrary::drop` 都触发，而 `RawAlgoLibrary::open` 有长期与短命两类调用点：常驻 Worker **长期持有**一个句柄（`package.rs` 的 `create_worker`），`extract_face` / `create_gallery` 则另开短命句柄、用完即关。
+>
+> 若 `library_close` 无条件停用日志桥接，一次 `extract_face` 就会把常驻 Worker 的后续日志**静默掐断**——正是本能力要消灭的缺陷模式。
+
+但不能因此把释放逻辑写在 `library_close` 里：
+
+> **Warning**：`library_open` 存在**不产生库句柄**的失败返回路径——`open_hook` 返回 `Err`（如 `shared_models()` 的 `ModelLoad` 失败）或在其内部 panic。这些路径下宿主拿不到句柄，因此**不会**调用 `library_close`（`crates/infer/src/c_abi/loader.rs` 只在 `raw_lib` 非空时关闭）。手工配对会让每次失败加载永久泄漏一个计数。
+
+→ **持有权必须是 RAII 的**（[`HostLogBridgeLease`](../../../../crates/algo-sdk/src/logging.rs)）：`register_host_log_sink` 返回持有权，随 `LibraryContext` 一同析构，正常返回、失败返回与 unwind 三条路径全部自动配对。持有权是**零尺寸**类型，不复制回调负载。
+
+契约：
+
+1. `library_open`（且 `log` 为 `Some`）登记并取得一个持有权；`log` 为 `None` 时不登记、不取持有权；
+2. 持有权随 `LibraryContext` 析构自动释放——**不得**在 `library_close` 里手工递减；
+3. 活跃性由计数**单一派生**（`count > 0`），**不另设 `AtomicBool`**：两个独立状态源之间存在丢失更新窗口（`release` 减到 0 与 `register` 并发时，`store(false)` 可能落在 `store(true)` 之后），会造成「计数为 1 但桥接已关」；
+4. 计数为 0 时递减必须**饱和**（`checked_sub`），否则会回绕成天文数字而永不归零；
+5. 回调永不释放（所有权属于宿主，且宿主始终传同一 `default_c_logger`）。
+
+该手法与上文「进程级默认引擎必须显式回收」及 `DefaultEngineLease` 同源。**通用规则**：凡是挂在 `library_open` 上的进程级资源，都必须按**库句柄**引用计数，且必须用 RAII 而非 `library_close` 钩子配对——因为并非每次成功的登记都会走到 `library_close`。
+
+### 验证与错误矩阵
+
+| 条件 | 期望行为 |
+| --- | --- |
+| `log = None` | 不安装、不登记、不计数；其 `library_close` 也不得递减（否则会扣掉另一个存活句柄的配额） |
+| `library_open` 重复调用 | 幂等（`OnceLock` 首次写入生效）；计数按调用次数递增 |
+| **`open_hook` 返回 `Err`** | 持有权随 `LibraryContext` 析构释放；**不得**留下计数（这些路径没有 `library_close`） |
+| **`open_hook` 内部 panic** | 同上一行：`catch_unwind` 展开时持授权随栈帧析构 |
+| 全局 subscriber 已被占用 | 安装返回 `false`，不 panic，不覆盖 |
+| 宿主回调 panic | **进程 abort（SIGABRT），不可隔离**。`AvLogFn` 是 `extern "C"`，回调内 panic 会在其自身的不可 unwind 守卫处直接终止进程，外层 `catch_unwind` 无法介入。宿主侧的 `default_c_logger` 已将函数体包在 `catch_unwind` 内，隔离责任在宿主 |
+| 消息含内部 NUL | 替换为 U+FFFD，不 panic、不使宿主越界读 |
+| 未配对的释放 | 计数饱和于 0，不回绕、不 panic |
+| 常驻句柄 + 短命句柄 | 短命句柄关闭后桥接**继续活跃**，直到最后一个句柄释放 |
+| 先 `log = Some` open、后 `fmt().init()` | 后者 panic（全局订阅器已被占用）。仓库内无此类二进制；探针走 rlib、不调 `library_open` |
+
+### 必测项（断言点）
+
+单元测试（`crates/algo-sdk/src/logging.rs`）：
+
+- `registered_callback_receives_event_content` — 事件内容与结构化字段真实到达回调，且宿主读取位置为终止符；
+- `level_mapping_matches_host_contract` — 五级映射表驱动；
+- `message_is_nul_terminated_and_interior_nul_is_sanitized` — NUL 语义与内部 NUL 替换；
+- `inactive_bridge_is_a_noop` — 停用后退化为无操作；
+- `none_callback_registers_nothing` — `log = None` 不登记、不计数；
+- `install_is_idempotent_and_never_panics` — 共存不 panic；
+- `lease_carries_no_callback_payload` — 持有权零尺寸（不复制回调负载）；
+- `lease_drop_releases_exactly_one_holding` — **回归锁**：持有权在析构时释放，不依赖 `library_close`；
+- `bridge_stays_active_until_last_handle_released` — 模拟「常驻句柄 + 短命句柄」，短命句柄关闭不得停用桥接；
+- `release_without_register_saturates_at_zero` — 未配对释放不回绕。
+
+端到端（走真实 C ABI 虚表）：
+
+- `plugin_lifecycle.rs::test_library_open_bridges_host_log_callback` — 经 `library_open` 注册后插件内 `tracing::warn!` 到达回调；`library_close` 后不再回调；
+- `plugin_open_failure.rs::failed_open_does_not_leak_log_bridge` — **P1 回归锁**：`open_hook` 失败后不得留下持有权（含反复失败不累积）；
+- `plugin_open_failure.rs::none_log_close_does_not_decrement_other_handles` — `log = None` 的 `close` 不得递减其他句柄的配额。
+
+> **判别力（已实测变异验证）**：
+>
+> - 把 `register_host_log_sink` 的返回值 `mem::forget`（精确复现修复前的手工配对语义），`failed_open_does_not_leak_log_bridge` 以「失败 open 不得留下持有权」`left: 1, right: 0` 失败，`none_log_close_does_not_decrement_other_handles` 以「全部句柄关闭后必须停用」失败；
+> - 把 `release_host_log_bridge` 改为无条件停用，`bridge_stays_active_until_last_handle_released` 会以「还有库句柄存活时不得停用桥接」失败；
+> - 去掉 `library_open` 中的登记，`test_library_open_bridges_host_log_callback` 会以 `left: 0, right: 1` 失败。
+>
+> 新增同类用例时，请优先断言**具体取值**而不是「没有崩溃」。
+
+### 测试编写约束（踩过的坑）
+
+> **Warning**：`HOST_LOG_SINK` 是 `OnceLock`（set-once，与生产语义一致）。**同一测试二进制内所有用例必须登记同一个回调**——若某个用例登记了别的回调，谁先跑到就永久胜出，其余用例的断言静默失真且难以复现。
+>
+> 实测过一次违反此约束的后果：一个登记「会 panic 的回调」的用例，约 1/190 概率抢先写入槽位，使后续任意用例在转发时进入该回调 → 因 `extern "C"` 不可 unwind → **SIGABRT 崩掉整个测试进程**（退出码 134，且没有任何断言失败信息，极易误判为环境问题）。
+>
+> 因此**不要**再添加「回调 panic 是否被隔离」这类用例：它在 `extern "C"` 下不可断言（见上表）。
+
+### 常见错误
+
+**错误**：宿主提供了 log 回调，就以为插件日志自动可观测。
+
+**症状**：`crates/infer` 侧收不到任何插件诊断，降级/失败/硬件异常全部无声。
+
+**根因**：`LibraryContext` 早期版本从不读取 `AvAlgoLibraryArgs.log`，且 `algo-sdk` 内 0 处 `tracing_subscriber`——宿主想收、插件有得发，中间的桥是断的。
+
+**修复**：由 `library_open` 登记回调并自装 subscriber（见上）。
+
+**预防**：插件侧出现「应当可见但看不见」的日志时，先确认 `logging` 桥接是否登记成功，而不是先怀疑日志级别。
 
 ## 帧契约
 
@@ -207,7 +343,7 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
   2. `export_algo!` 展开的 `instance_create` 为每个实例登记 `DefaultEngineLease`，字段声明在 `InstanceContext` **末尾**，确保在 `plugin`/`engine` 之后析构；
   3. 最后一个实例销毁时计数归零并自动调用 `release_default_engine`（饱和递减，计数为 0 时拒绝递减而非回绕）；
   4. 引擎本体保留在静态中，后续实例按需重建缓冲池。
-  不要改用 `library_close_hook` 做此事：`library_close` 在**每次** `RawAlgoLibrary::drop` 都触发（含 `extract_face` 等高频短操作），挂在彼处会造成池反复销毁/重建的句柄抖动。
+  不要改用 `library_close_hook` 做此事：`library_close` 在**每次** `RawAlgoLibrary::drop` 都触发（含 `extract_face` 等高频短操作），挂在彼处会造成池反复销毁/重建的句柄抖动。同类进程级资源的通用 RAII 持有权契约见 [插件日志桥接 · 生命周期](#生命周期持有权必须是-raii禁止在-library_close-手工配对)。
 - **规格预算按引擎实例计数，部署内存按进程汇总**：缓存表属于单个 `RgaCvEngine`，共用该引擎的算法实例共享槽位，运行期不自动淘汰规格；不能据此假定所有动态算法库共用一张缓存表。算法包请求的 RGA 输出几何必须收敛到固定集合，**禁止**把随帧变化的 ROI 尺寸直接作为裁剪尺寸；耗尽槽位后新增规格会持续失败，已有规格仍可复用，直到显式释放缓存。超出档位集合时必须采用已定义的固定尺寸退化策略，不得静默新增规格。
 - **几何预算的真实不变量是「单分辨率内有界」，不是「与分辨率无关」**：仅靠「超出档位就退化为整帧该轴尺寸」的策略，每种分辨率仍会贡献与帧尺寸绑定的规格，因此必须核算跨分辨率并集。旧规范记录的 4 种分辨率产生 9 种几何、7 种分辨率产生 12 种几何，仅是当时按 16 槽预算讨论的样例，不能外推为当前 64 槽的容量验证。落地要求：
   1. 档位集合与退化策略必须用**跨分辨率并集**回归测试钉住上限（参考 RK3568 人脸包 `plugin::tests::snapshot_roi_geometry_union_stays_within_process_budget`，含「扫描确实到达退化分支」的饱和校验），不能只断言单分辨率内的档位数；
