@@ -23,6 +23,7 @@ function camera(cameraId: string, name = cameraId): Camera {
     lastWidth: 1920,
     lastHeight: 1080,
     lastFps: 25,
+    recordingConfig: null,
     createdAt: 0,
     updatedAt: 0,
   }

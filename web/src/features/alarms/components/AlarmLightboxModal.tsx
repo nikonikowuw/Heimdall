@@ -4,6 +4,8 @@ import {
   CheckCircle2,
   Download,
   ExternalLink,
+  Film,
+  ImageIcon,
   Loader2,
   Maximize,
   Minimize,
@@ -12,12 +14,16 @@ import {
   X,
 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
+import { useTranslation } from 'react-i18next'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { useFocusTrap } from '@/hooks/use-focus-trap'
 import { evidenceApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import type { AlarmRecord } from '@/types'
+import { useEventRecording } from '../hooks/useEventRecording'
 import { useImageZoomPan } from '../hooks/useImageZoomPan'
+import { exportRecordingAsMp4 } from '../recordingExport'
+import { EventRecordingPlayer } from './EventRecordingPlayer'
 import { ZoomControls } from './ZoomControls'
 import {
   calculateFittedImageRect,
@@ -48,9 +54,37 @@ export function AlarmLightboxModal({
   onSelectCrop,
   t,
 }: AlarmLightboxModalProps): React.ReactElement {
+  const { t: tr } = useTranslation('recording')
   const isProcessed = alarm.status === 'processed'
   const isCritical = alarm.severity === 'critical'
   const shouldReduce = useReducedMotion()
+
+  // 事件关联录像：仅当后端已保存过该事件的片段时，才提供回放入口
+  const {
+    recording,
+    error: recordingError,
+    retry: retryRecording,
+  } = useEventRecording('alarm', alarm.eventId)
+  const [mediaMode, setMediaMode] = useState<'image' | 'video'>('image')
+  const [exportState, setExportState] = useState<'idle' | 'exporting' | 'failed'>('idle')
+  const activeEventOffsetMs =
+    recording?.events.find((item) => item.eventId === alarm.eventId)?.offsetMs ?? 0
+
+  // 换告警时回到照片模式，避免沿用上一条事件的媒体选择
+  const [mediaAlarmId, setMediaAlarmId] = useState(alarm.eventId)
+  if (mediaAlarmId !== alarm.eventId) {
+    setMediaAlarmId(alarm.eventId)
+    setMediaMode('image')
+    setExportState('idle')
+  }
+
+  const handleExport = useCallback(() => {
+    if (!recording || exportState === 'exporting') return
+    setExportState('exporting')
+    exportRecordingAsMp4(recording)
+      .then(() => setExportState('idle'))
+      .catch(() => setExportState('failed'))
+  }, [recording, exportState])
 
   const rootRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -83,6 +117,8 @@ export function AlarmLightboxModal({
   // 缩放平移交互由统一 Hook 接管
   const { zoom, zoomIn, zoomOut, resetZoom, dragProps, containerCursorClass, transformStyle } =
     useImageZoomPan(containerRef, {
+      // 视频模式下把滚轮与快捷键交还给播放器
+      enabled: mediaMode === 'image',
       onToggleStatus,
       onToggleFullscreen: toggleBrowserFullscreen,
     })
@@ -207,10 +243,60 @@ export function AlarmLightboxModal({
           </div>
         </div>
 
-        {/* 右侧操作区：缩放控制、全屏、下载与关闭 */}
+        {/* 右侧操作区：媒体切换、缩放控制、全屏、下载与关闭 */}
         <div className="flex items-center gap-2">
-          {/* 浮动缩放控制条 */}
-          {isFullLoaded && (
+          {/* 录像查询失败：给出可操作的重试，不静默当作无录像 */}
+          {recordingError && !recording && (
+            <button
+              type="button"
+              onClick={retryRecording}
+              title={recordingError}
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--status-danger)]/40 bg-[var(--status-danger)]/20 px-3 py-1.5 text-xs text-[var(--status-danger)] transition-all hover:bg-[var(--status-danger)]/30"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">
+                {tr('playback.loadRetry', { defaultValue: '录像加载失败，重试' })}
+              </span>
+            </button>
+          )}
+          {/* 媒体切换：仅当该事件已保存录像时出现，默认仍看证据图 */}
+          {recording && (
+            <div className="flex items-center gap-0.5 rounded-xl border border-white/15 bg-white/5 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setMediaMode('image')}
+                aria-pressed={mediaMode === 'image'}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 transition-colors ${
+                  mediaMode === 'image'
+                    ? 'bg-white/15 text-white'
+                    : 'text-[var(--text-secondary)] hover:text-white'
+                }`}
+              >
+                <ImageIcon className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">
+                  {tr('playback.mediaImage', { defaultValue: '证据图' })}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMediaMode('video')}
+                aria-pressed={mediaMode === 'video'}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 transition-colors ${
+                  mediaMode === 'video'
+                    ? 'bg-white/15 text-white'
+                    : 'text-[var(--text-secondary)] hover:text-white'
+                }`}
+              >
+                <Film className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">
+                  {tr('playback.mediaVideo', { defaultValue: '录像回放' })}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {/* 浮动缩放控制条（仅图片模式） */}
+          {mediaMode === 'image' && isFullLoaded && (
             <ZoomControls
               zoom={zoom}
               onZoomIn={zoomIn}
@@ -220,7 +306,32 @@ export function AlarmLightboxModal({
             />
           )}
 
-          {alarm.imageRelPath && (
+          {mediaMode === 'video' && recording ? (
+            <button
+              type="button"
+              disabled={exportState === 'exporting'}
+              onClick={handleExport}
+              title={exportState === 'failed' ? tr('playback.exportFailed') : tr('playback.export')}
+              className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs transition-all disabled:opacity-60 ${
+                exportState === 'failed'
+                  ? 'border-[var(--status-danger)]/40 bg-[var(--status-danger)]/20 text-[var(--status-danger)]'
+                  : 'border-white/15 bg-white/5 text-[var(--text-primary)] hover:bg-white/15 hover:text-white'
+              }`}
+            >
+              {exportState === 'exporting' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">
+                {exportState === 'exporting'
+                  ? tr('playback.exporting')
+                  : exportState === 'failed'
+                    ? tr('playback.exportRetry')
+                    : tr('playback.export')}
+              </span>
+            </button>
+          ) : alarm.imageRelPath ? (
             <a
               href={evidenceApi.getImageUrl(alarm.imageRelPath)}
               download={`alarm_${alarm.eventId}.jpg`}
@@ -233,7 +344,7 @@ export function AlarmLightboxModal({
               <Download className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">{t('modal.fullImage')}</span>
             </a>
-          )}
+          ) : null}
 
           {/* 原生浏览器全屏切换 */}
           <button
@@ -266,94 +377,105 @@ export function AlarmLightboxModal({
       {/* 中央全视口超清画布 (100% 视口满屏展开) */}
       <div
         ref={containerRef}
-        {...dragProps}
-        className={`relative flex h-full w-full flex-1 items-center justify-center overflow-hidden ${containerCursorClass}`}
+        {...(mediaMode === 'image' ? dragProps : {})}
+        className={`relative flex h-full w-full flex-1 items-center justify-center overflow-hidden ${
+          mediaMode === 'image' ? containerCursorClass : ''
+        }`}
       >
-        {/* 加载占位与特写兜底 */}
-        {fullImageStatus !== 'loaded' && alarm.cropImageRelPath && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden bg-black/60 backdrop-blur-md">
-            <img
-              src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
-              alt="Preview Placeholder"
-              className="max-h-[60%] max-w-[60%] rounded-2xl object-contain opacity-75 shadow-2xl transition-opacity duration-150"
-            />
-            {isFullLoading && (
-              <div className="absolute bottom-16 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-1.5 text-xs text-[var(--text-primary)] shadow-lg backdrop-blur-md">
-                <Loader2 className="h-4 w-4 animate-spin text-[var(--status-danger)]" />
-                <span>{t('modal.loadingFullHd')}</span>
+        {mediaMode === 'video' && recording ? (
+          <div className="flex h-full w-full items-center justify-center px-4 pt-16 pb-24 sm:px-6">
+            <EventRecordingPlayer recording={recording} initialOffsetMs={activeEventOffsetMs} />
+          </div>
+        ) : (
+          <>
+            {/* 加载占位与特写兜底 */}
+            {fullImageStatus !== 'loaded' && alarm.cropImageRelPath && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden bg-black/60 backdrop-blur-md">
+                <img
+                  src={evidenceApi.getImageUrl(alarm.cropImageRelPath)}
+                  alt="Preview Placeholder"
+                  className="max-h-[60%] max-w-[60%] rounded-2xl object-contain opacity-75 shadow-2xl transition-opacity duration-150"
+                />
+                {isFullLoading && (
+                  <div className="absolute bottom-16 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-1.5 text-xs text-[var(--text-primary)] shadow-lg backdrop-blur-md">
+                    <Loader2 className="h-4 w-4 animate-spin text-[var(--status-danger)]" />
+                    <span>{t('modal.loadingFullHd')}</span>
+                  </div>
+                )}
+                {isFullError && (
+                  <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-black/80 px-4 py-2 text-xs text-[var(--text-primary)] shadow-lg">
+                    <span>{t('modal.fullImageLoadFailed')}</span>
+                    {retryButton}
+                  </div>
+                )}
               </div>
             )}
-            {isFullError && (
-              <div className="absolute inset-x-4 bottom-16 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-[var(--status-danger)]/30 bg-black/80 px-4 py-2 text-xs text-[var(--text-primary)] shadow-lg">
+
+            {isFullLoading && !alarm.cropImageRelPath && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="h-10 w-10 animate-spin text-[var(--status-danger)] opacity-70" />
+              </div>
+            )}
+
+            {isFullError && !alarm.cropImageRelPath && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-xs text-[var(--text-primary)]">
                 <span>{t('modal.fullImageLoadFailed')}</span>
                 {retryButton}
               </div>
             )}
-          </div>
-        )}
 
-        {isFullLoading && !alarm.cropImageRelPath && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <Loader2 className="h-10 w-10 animate-spin text-[var(--status-danger)] opacity-70" />
-          </div>
-        )}
-
-        {isFullError && !alarm.cropImageRelPath && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-xs text-[var(--text-primary)]">
-            <span>{t('modal.fullImageLoadFailed')}</span>
-            {retryButton}
-          </div>
-        )}
-
-        {/* 图片与 BBox 联动缩放平移层 */}
-        {alarm.imageRelPath ? (
-          <div
-            className="relative flex h-full w-full items-center justify-center will-change-transform"
-            style={transformStyle}
-          >
-            <img
-              src={fullImageSrc}
-              alt="Alarm Fullscreen"
-              fetchPriority="high"
-              decoding="async"
-              draggable={false}
-              className={`evidence-main-img pointer-events-none max-h-full max-w-full object-contain transition-opacity duration-150 select-none ${
-                isFullLoaded ? 'opacity-100' : 'opacity-0'
-              }`}
-              onLoad={handleImageLoad}
-              onError={handleImageError}
-            />
-
-            {/* 目标人体 BBox 框 */}
-            {bodyBBox && imgRect && isFullLoaded && (
+            {/* 图片与 BBox 联动缩放平移层 */}
+            {alarm.imageRelPath ? (
               <div
-                className="pointer-events-none absolute border-2 border-[var(--status-danger)] bg-[var(--status-danger)]/15 shadow-[0_0_15px_rgba(var(--status-danger-rgb),0.6)] transition-all"
-                style={getBBoxStyle(bodyBBox, imgRect)}
+                className="relative flex h-full w-full items-center justify-center will-change-transform"
+                style={transformStyle}
               >
-                <span className="absolute -top-5.5 left-0 rounded bg-[var(--status-danger-solid)] px-1.5 py-0.5 font-mono text-[9px] font-bold whitespace-nowrap text-white shadow-md">
-                  #{alarm.trackId} {alarm.targetLabel} ({((alarm.confidence ?? 0) * 100).toFixed(0)}
-                  %)
-                </span>
-              </div>
-            )}
+                <img
+                  src={fullImageSrc}
+                  alt="Alarm Fullscreen"
+                  fetchPriority="high"
+                  decoding="async"
+                  draggable={false}
+                  className={`evidence-main-img pointer-events-none max-h-full max-w-full object-contain transition-opacity duration-150 select-none ${
+                    isFullLoaded ? 'opacity-100' : 'opacity-0'
+                  }`}
+                  onLoad={handleImageLoad}
+                  onError={handleImageError}
+                />
 
-            {/* 目标人脸 BBox 框 */}
-            {faceBBox && imgRect && isFullLoaded && (
-              <div
-                className="border-marker-border bg-marker-soft pointer-events-none absolute border-2 border-dashed shadow-[0_0_12px_rgba(var(--marker-rgb),0.5)] transition-all"
-                style={getBBoxStyle(faceBBox, imgRect)}
-              >
-                <span className="bg-marker-solid absolute -top-4.5 left-0 rounded px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-md">
-                  {formatFaceBBoxLabel(targetBBoxes?.face)}
-                </span>
+                {/* 目标人体 BBox 框 */}
+                {bodyBBox && imgRect && isFullLoaded && (
+                  <div
+                    className="pointer-events-none absolute border-2 border-[var(--status-danger)] bg-[var(--status-danger)]/15 shadow-[0_0_15px_rgba(var(--status-danger-rgb),0.6)] transition-all"
+                    style={getBBoxStyle(bodyBBox, imgRect)}
+                  >
+                    <span className="absolute -top-5.5 left-0 rounded bg-[var(--status-danger-solid)] px-1.5 py-0.5 font-mono text-[9px] font-bold whitespace-nowrap text-white shadow-md">
+                      #{alarm.trackId} {alarm.targetLabel} (
+                      {((alarm.confidence ?? 0) * 100).toFixed(0)}
+                      %)
+                    </span>
+                  </div>
+                )}
+
+                {/* 目标人脸 BBox 框 */}
+                {faceBBox && imgRect && isFullLoaded && (
+                  <div
+                    className="border-marker-border bg-marker-soft pointer-events-none absolute border-2 border-dashed shadow-[0_0_12px_rgba(var(--marker-rgb),0.5)] transition-all"
+                    style={getBBoxStyle(faceBBox, imgRect)}
+                  >
+                    <span className="bg-marker-solid absolute -top-4.5 left-0 rounded px-1.5 py-0.5 font-mono text-[8px] font-bold whitespace-nowrap text-white shadow-md">
+                      {formatFaceBBoxLabel(targetBBoxes?.face)}
+                    </span>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        ) : !alarm.cropImageRelPath ? (
-          <div className="flex h-full w-full items-center justify-center font-mono text-sm text-[var(--text-muted)]">
-            {t('modal.noImage')}
-          </div>
-        ) : null}
+            ) : !alarm.cropImageRelPath ? (
+              <div className="flex h-full w-full items-center justify-center font-mono text-sm text-[var(--text-muted)]">
+                {t('modal.noImage')}
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
 
       {/* 底部悬浮智能信息胶囊坞 (Floating Bottom Dock) */}
@@ -423,7 +545,8 @@ export function AlarmLightboxModal({
 
       {/* 底部轻量提示 */}
       <div className="pointer-events-none absolute bottom-1.5 left-1/2 z-40 -translate-x-1/2 font-mono text-[10px] text-[var(--text-muted)]">
-        {t('modal.escHint')} · {t('modal.zoomHint')} · {t('modal.toggleStatusShort')} ·{' '}
+        {t('modal.escHint')}
+        {mediaMode === 'image' && <> · {t('modal.zoomHint')}</>} · {t('modal.toggleStatusShort')} ·{' '}
         {t('modal.fullscreenShort')}
       </div>
     </motion.div>

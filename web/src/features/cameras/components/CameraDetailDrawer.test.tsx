@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Camera } from '@/types'
 import { CameraDetailDrawer } from './CameraDetailDrawer'
 
-// 模拟 react-i18next
+// 模拟 react-i18next；抽屉现在会经 RecordingConfigCard 引入 API client，
+// 后者在模块初始化时调用 initReactI18next，因此这里必须一并提供。
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     t: (key: string, opts?: { defaultValue?: string }) => opts?.defaultValue || key,
     i18n: { language: 'zh-CN' },
@@ -26,6 +28,7 @@ const mockCamera: Camera = {
   lastWidth: 3840,
   lastHeight: 2160,
   lastFps: 30,
+  recordingConfig: null,
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
 }

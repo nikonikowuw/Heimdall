@@ -648,6 +648,12 @@ export function CamerasPage(): React.ReactElement {
         task={selectedCameraForDetail ? taskMap.get(selectedCameraForDetail.cameraId) : undefined}
         onClose={() => setSelectedCameraForDetail(null)}
         onManualProbe={handleManualProbe}
+        onRecordingConfigSaved={(updated) => {
+          setCameras((prev) => prev.map((c) => (c.cameraId === updated.cameraId ? updated : c)))
+          setSelectedCameraForDetail((curr) =>
+            curr?.cameraId === updated.cameraId ? updated : curr,
+          )
+        }}
         onModelTypeChange={(cameraId, type) => {
           setModelTypeOverrides((prev) => ({ ...prev, [cameraId]: type }))
         }}

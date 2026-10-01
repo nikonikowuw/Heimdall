@@ -1,0 +1,27 @@
+{
+  "config": {
+    "title": "事件錄影",
+    "subtitle": "告警或辨識觸發時儲存事件前後片段",
+    "enable": "啟用事件錄影",
+    "preCapture": "事件前錄製",
+    "postCapture": "事件後錄製",
+    "maxFile": "單檔上限",
+    "retention": "保留天數",
+    "unitSecond": "秒",
+    "unitDay": "天",
+    "save": "儲存參數",
+    "saveFailed": "儲存失敗，請重試",
+    "dirtyHint": "修改參數後需儲存生效",
+    "disabledHint": "開啟後，告警與辨識事件將自動儲存事件前後片段，可在告警詳情中回放。"
+  },
+  "playback": {
+    "playerLabel": "事件錄影播放器",
+    "mediaImage": "證據圖",
+    "mediaVideo": "錄影回放",
+    "export": "匯出 MP4",
+    "exporting": "匯出中…",
+    "exportFailed": "匯出失敗",
+    "exportRetry": "重試匯出",
+    "loadRetry": "錄影載入失敗，重試"
+  }
+}

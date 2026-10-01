@@ -91,6 +91,8 @@ export interface Camera {
   lastFps: number
   gb28181DeviceId?: string | null
   gb28181ChannelId?: string | null
+  /** 未配置时为 null，对应后端未写入 `recording_config` 的默认关闭状态 */
+  recordingConfig: CameraRecordingConfig | null
   createdAt: number
   updatedAt: number
 }
@@ -116,12 +118,57 @@ export interface UpdateCameraRequest {
   transportPolicy?: 'auto' | 'tcp' | 'udp'
   gb28181DeviceId?: string
   gb28181ChannelId?: string
+  recordingConfig?: CameraRecordingConfig
 }
 
 export interface SubStreamCandidate {
   brand: string
   subUrl: string
   description: string
+}
+
+/** 通道级事件录像配置，与后端 `CameraRecordingConfig` 字段逐字对齐 */
+export interface CameraRecordingConfig {
+  enabled: boolean
+  preCaptureSeconds: number
+  postCaptureSeconds: number
+  maxFileSeconds: number
+  retentionDays: number
+}
+
+/** 录像文件生命周期状态，与后端 `recordings.status` 取值一一对应 */
+export type RecordingStatus = 'completed' | 'truncated' | 'failed'
+
+/** 事件与录像的关联类型，对应后端 `recording_events.event_type` 白名单 */
+export type EventRecordingType = 'alarm' | 'recognition'
+
+/** 录像元数据（不含关联事件） */
+export interface RecordingRecord {
+  id: number
+  recordingId: string
+  cameraId: string
+  /** 文件内首包 PTS（UTC 毫秒），与事件时间同轴 */
+  startTime: number
+  endTime: number | null
+  durationMs: number | null
+  fileSize: number | null
+  codec: string
+  status: RecordingStatus
+  createdAt: number
+}
+
+/** 事件在录像文件内的定位信息 */
+export interface RecordingEventLink {
+  eventType: EventRecordingType
+  eventId: string
+  eventTime: number
+  /** 事件相对录像起点的毫秒偏移，播放器据此 seek */
+  offsetMs: number
+}
+
+/** 录像详情：元数据 + 同文件内关联的全部事件 */
+export interface RecordingDetail extends RecordingRecord {
+  events: RecordingEventLink[]
 }
 
 export interface SysGb28181Config {

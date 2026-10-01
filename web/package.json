@@ -18,6 +18,7 @@
     "i18next": "^26.4.1",
     "i18next-resources-to-backend": "^1.2.3",
     "lucide-react": "^1.16.0",
+    "mediabunny": "^1.61.0",
     "motion": "^13.2.0",
     "mpegts.js": "^1.8.2",
     "react": "^19.0.0",

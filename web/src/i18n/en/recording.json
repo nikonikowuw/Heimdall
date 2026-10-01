@@ -1,0 +1,27 @@
+{
+  "config": {
+    "title": "Event Recording",
+    "subtitle": "Save clips around alarms and recognitions",
+    "enable": "Enable event recording",
+    "preCapture": "Before event",
+    "postCapture": "After event",
+    "maxFile": "Max file length",
+    "retention": "Retention",
+    "unitSecond": "s",
+    "unitDay": "d",
+    "save": "Save settings",
+    "saveFailed": "Save failed, please retry",
+    "dirtyHint": "Changes take effect after saving",
+    "disabledHint": "When enabled, alarms and recognitions automatically save clips before and after the event for playback in alarm details."
+  },
+  "playback": {
+    "playerLabel": "Event recording player",
+    "mediaImage": "Snapshot",
+    "mediaVideo": "Recording",
+    "export": "Export MP4",
+    "exporting": "Exporting…",
+    "exportFailed": "Export failed",
+    "exportRetry": "Retry export",
+    "loadRetry": "Recording failed to load, retry"
+  }
+}

@@ -34,6 +34,15 @@ const PERSIST_CHANNEL_CAPACITY: usize = 64;
 /// 单通道触发通道容量：告警/识别事件同样低频
 const TRIGGER_CHANNEL_CAPACITY: usize = 128;
 
+/// 单通道录像运行时句柄：Worker 与其外部触发发送端。
+///
+/// 两者同生命周期存放，避免两张表各自增删导致状态漂移；
+/// 触发端是 `SyncSender` 的克隆，与内部桥接任务共用同一触发通道。
+struct CameraRecordingHandle {
+    worker: RecordingWorker,
+    trigger_tx: std::sync::mpsc::SyncSender<RecordingTrigger>,
+}
+
 /// 事件录像调度服务
 pub struct RecordingDispatchService {
     db: sea_orm::DatabaseConnection,
@@ -43,7 +52,7 @@ pub struct RecordingDispatchService {
     data_dir: PathBuf,
     shutdown_tx: broadcast::Sender<()>,
     /// 已启动的录像 Worker，按 camera_id 索引
-    workers: Arc<RwLock<HashMap<String, RecordingWorker>>>,
+    workers: Arc<RwLock<HashMap<String, CameraRecordingHandle>>>,
     /// 已完成录像的落库发送端
     persist_tx: mpsc::Sender<FinishedRecording>,
     persist_rx: Arc<tokio::sync::Mutex<Option<mpsc::Receiver<FinishedRecording>>>>,
@@ -128,7 +137,6 @@ impl RecordingDispatchService {
 
         // 触发通道：桥接任务（Tokio 侧）→ Worker（OS 线程）
         let (trigger_tx, trigger_rx) = std::sync::mpsc::sync_channel(TRIGGER_CHANNEL_CAPACITY);
-
         // 落库回调：在 Worker OS 线程内执行，只做非阻塞投递
         let persist_tx = self.persist_tx.clone();
         let camera_owned = camera_id.to_string();
@@ -161,6 +169,8 @@ impl RecordingDispatchService {
         let bridge_stop = self.shutdown_tx.subscribe();
         let worker_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let worker_alive_bridge = Arc::clone(&worker_alive);
+        // 外部触发（识别命中路径）用的发送端：先克隆再移交给桥接任务
+        let external_trigger_tx = trigger_tx.clone();
 
         tokio::spawn(async move {
             let mut shutdown_rx = bridge_stop;
@@ -198,21 +208,55 @@ impl RecordingDispatchService {
             tracing::debug!(camera = %bridge_camera, "录像事件桥接任务退出");
         });
 
-        self.workers
-            .write()
-            .await
-            .insert(camera_id.to_string(), worker);
+        self.workers.write().await.insert(
+            camera_id.to_string(),
+            CameraRecordingHandle {
+                worker,
+                // 外部触发（识别命中路径）持有独立克隆，与桥接任务互不干扰
+                trigger_tx: external_trigger_tx,
+            },
+        );
         tracing::info!(camera = %camera_id, "录像 Worker 已启动");
         Ok(())
     }
 
+    /// 识别命中触发录像：由识别对账（1:N 比对）落库成功后调用。
+    ///
+    /// 非阻塞投递：通道满或该通道未启用录像时直接丢弃本次触发，
+    /// 绝不反压识别对账链路（录像缺失只影响证据完整性，不得影响识别结果落地）。
+    pub async fn notify_recognition(
+        &self,
+        camera_id: &str,
+        recognition_id: &str,
+        event_time_ms: i64,
+    ) {
+        let trigger = RecordingTrigger {
+            event_id: recognition_id.to_string(),
+            event_type: RecordingEventType::Recognition,
+            event_time_ms,
+        };
+
+        let workers = self.workers.read().await;
+        let Some(handle) = workers.get(camera_id) else {
+            // 该通道未启用录像，属正常路径
+            return;
+        };
+        if handle.trigger_tx.try_send(trigger).is_err() {
+            tracing::warn!(
+                camera = %camera_id,
+                recognition_id,
+                "录像触发通道不可用，丢弃本次识别触发"
+            );
+        }
+    }
+
     /// 停止某通道录像（幂等）。闭合在途文件后线程退出。
     pub async fn stop_camera(&self, camera_id: &str) {
-        let worker = self.workers.write().await.remove(camera_id);
-        if let Some(worker) = worker {
-            worker.request_stop();
+        let handle = self.workers.write().await.remove(camera_id);
+        if let Some(handle) = handle {
+            handle.worker.request_stop();
             // Worker 的 Drop 会交给看护线程有界回收，此处不阻塞等待
-            drop(worker);
+            drop(handle);
             tracing::info!(camera = %camera_id, "录像 Worker 已请求停机");
         }
     }
@@ -220,8 +264,8 @@ impl RecordingDispatchService {
     /// 停止全部录像 Worker
     pub async fn stop_all(&self) {
         let mut workers = self.workers.write().await;
-        for (camera_id, worker) in workers.drain() {
-            worker.request_stop();
+        for (camera_id, handle) in workers.drain() {
+            handle.worker.request_stop();
             tracing::info!(camera = %camera_id, "录像 Worker 已请求停机");
         }
     }
@@ -343,7 +387,12 @@ pub(crate) fn parse_camera_recording_config(
     })
 }
 
-/// 转换 Pipeline 事件为录像触发信号。非 Alarm/Capture 事件返回 `None`。
+/// 转换 Pipeline 事件为录像触发信号。
+///
+/// 这里只接规则告警：抓拍是「客观通行事实」，每次轨迹结算都会产生，
+/// 若以其为触发源，录像会被无差别写满，绝大多数片段没有检索价值。
+/// 识别命中的触发由 `CaptureDispatchService` 在 1:N 比对落库成功后单独投递
+/// （见 `notify_recognition`），使录像只覆盖告警与有识别结果的记录。
 fn to_trigger(camera_id: &str, event: &PipelineAnalysisEvent) -> Option<RecordingTrigger> {
     match event {
         PipelineAnalysisEvent::Alarm(alarm) => {
@@ -356,17 +405,9 @@ fn to_trigger(camera_id: &str, event: &PipelineAnalysisEvent) -> Option<Recordin
                 event_time_ms: alarm.timestamp,
             })
         }
-        PipelineAnalysisEvent::Capture(capture) => {
-            if capture.camera_id != camera_id {
-                return None;
-            }
-            Some(RecordingTrigger {
-                event_id: capture.capture_id.clone(),
-                event_type: RecordingEventType::Recognition,
-                event_time_ms: capture.timestamp,
-            })
-        }
-        PipelineAnalysisEvent::Tracks(_) | PipelineAnalysisEvent::Telemetry(_) => None,
+        PipelineAnalysisEvent::Capture(_)
+        | PipelineAnalysisEvent::Tracks(_)
+        | PipelineAnalysisEvent::Telemetry(_) => None,
     }
 }
 
@@ -428,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_to_trigger_filters_by_camera() {
-        use pipeline::{EvidenceStatus, PipelineAnalysisEvent, PipelineCaptureEvent};
+        use pipeline::{EvidenceStatus, PipelineAnalysisEvent};
 
         fn tracked() -> types::TrackedObject {
             types::TrackedObject {
@@ -469,20 +510,37 @@ mod tests {
 
         // 不匹配通道
         assert!(to_trigger("cam_other", &event).is_none());
+    }
 
-        // Capture 事件
+    /// 抓拍是客观通行事实（每次轨迹结算都产生），不得作为录像触发源；
+    /// 录像只应由告警与识别命中驱动。
+    #[test]
+    fn test_to_trigger_ignores_capture() {
+        use pipeline::{PipelineAnalysisEvent, PipelineCaptureEvent};
+
         let capture = PipelineCaptureEvent {
             capture_id: "cap_1".into(),
             camera_id: "cam_1".into(),
             algorithm_id: "algo".into(),
-            tracked_object: tracked(),
+            tracked_object: types::TrackedObject {
+                track_id: 1,
+                class_id: 0,
+                label: "person".into(),
+                confidence: 0.9,
+                quality_score: None,
+                bbox: types::BoundingBox::new(0.1, 0.1, 0.2, 0.2),
+                face: None,
+                embedding: None,
+                trajectory: vec![],
+            },
             snapshot: None,
             timestamp: 2000,
         };
-        let trigger =
-            to_trigger("cam_1", &PipelineAnalysisEvent::Capture(Box::new(capture))).unwrap();
-        assert_eq!(trigger.event_id, "cap_1");
-        assert_eq!(trigger.event_type, RecordingEventType::Recognition);
+        let event = PipelineAnalysisEvent::Capture(Box::new(capture));
+
+        // 无论通道是否匹配，抓拍都不再触发录像
+        assert!(to_trigger("cam_1", &event).is_none());
+        assert!(to_trigger("cam_other", &event).is_none());
     }
 
     #[test]

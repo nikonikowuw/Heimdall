@@ -50,6 +50,7 @@ const mockCamera: Camera = {
   lastWidth: 1920,
   lastHeight: 1080,
   lastFps: 25,
+  recordingConfig: null,
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
 }

@@ -15,6 +15,7 @@ import type {
   ChangePasswordRequest,
   CreateCameraRequest,
   DiscoveredDevice,
+  EventRecordingType,
   Gb28181ConfigResponse,
   Gb28181Device,
   HostPlatformInfo,
@@ -33,6 +34,9 @@ import type {
   PersonnelItem,
   PersonnelStats,
   RecognitionRecord,
+  RecordingDetail,
+  RecordingRecord,
+  RecordingStatus,
   ReextractProgress,
   SysGb28181Config,
   TaskConfigDto,
@@ -522,6 +526,52 @@ export const evidenceApi = {
     const token = useAuthStore.getState().token
     const q = token ? `?token=${encodeURIComponent(token)}` : ''
     return `${BASE_URL}/evidence/image/${relPath}${q}`
+  },
+}
+
+export const recordingApi = {
+  list(
+    params?: {
+      cameraId?: string
+      status?: RecordingStatus
+      startTime?: number
+      endTime?: number
+      limit?: number
+      offset?: number
+    },
+    signal?: AbortSignal,
+  ): Promise<RecordingRecord[]> {
+    return api.get<RecordingRecord[]>(`/recordings${toQueryString(params)}`, signal)
+  },
+
+  get(recordingId: string, signal?: AbortSignal): Promise<RecordingDetail> {
+    return api.get<RecordingDetail>(`/recordings/${encodeURIComponent(recordingId)}`, signal)
+  },
+
+  /**
+   * 事件反查关联录像。无关联时后端返回 `data: null`（而非 404），
+   * 调用方必须显式处理 null 分支，不能把空结果当作错误。
+   */
+  findByEvent(
+    eventType: EventRecordingType,
+    eventId: string,
+    signal?: AbortSignal,
+  ): Promise<RecordingDetail | null> {
+    return api.get<RecordingDetail | null>(
+      `/recordings/by-event/${encodeURIComponent(eventType)}/${encodeURIComponent(eventId)}`,
+      signal,
+    )
+  },
+
+  delete(recordingId: string): Promise<void> {
+    return api.delete<void>(`/recordings/${encodeURIComponent(recordingId)}`)
+  },
+
+  /** 录像文件直链；`<video>` 无法携带请求头，认证走 query token */
+  getFileUrl(recordingId: string): string {
+    const token = useAuthStore.getState().token
+    const q = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `${BASE_URL}/recordings/${encodeURIComponent(recordingId)}/file${q}`
   },
 }
 
