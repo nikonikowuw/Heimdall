@@ -276,7 +276,11 @@ mod linux_run {
                 .map(String::from)
                 .collect(),
         };
-        let init_ctx = InitContext::new(Path::new("."), "linux-rknn", "standalone_local", false);
+        // 本地开发工具：在无 librknnrt 的机器上以模拟回退跑通本地基线，
+        // 故显式声明 `Allow`，不依赖任何环境变量逃生口。
+        // 注意：生产路径经 C ABI 装载，恒定无此声明。
+        let init_ctx = InitContext::new(Path::new("."), "linux-rknn", "standalone_local", false)
+            .with_fallback_policy_override(algo_sdk::runtime::FallbackPolicy::Allow);
 
         let mut detector = GeneralDetector::init(&init_ctx, config)?;
         let is_fallback = detector.session.is_fallback();

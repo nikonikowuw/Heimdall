@@ -584,6 +584,9 @@ macro_rules! export_algo {
                     platform_id: &lib_ctx.platform_id,
                     instance_id,
                     is_self_test: raw_args.mode == $crate::c_abi::AV_INSTANCE_INSTALL_SELF_TEST,
+                    // 生产路径：策略只能由宿主自报的 platform_id 与自检模式决定。
+                    // 显式声明仅供本地开发工具（不走 C ABI）使用。
+                    fallback_policy_override: None,
                 };
 
                 let mut plugin = match <$plugin_ty as $crate::plugin::AlgoPlugin>::init(&ctx, config) {

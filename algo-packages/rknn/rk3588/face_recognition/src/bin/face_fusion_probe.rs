@@ -280,6 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         platform_id: "linux-rknn",
         instance_id: "fusion_probe",
         is_self_test: false,
+        fallback_policy_override: None,
     };
     let fusion_min_quality = config.fusion_min_quality_score;
     let quality_min_score = config.quality_thresholds.min_score;

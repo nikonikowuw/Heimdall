@@ -1,6 +1,13 @@
 #![cfg(target_os = "linux")]
 
 //! RK3576 真实硬件前向推理与模型初始化集成测试
+//!
+//! 本包声明 `linux-rknn`，且用例以 `is_self_test: true` 初始化，因此安装自检硬门要求
+//! 真实 NPU 运行时。无 `librknnrt.so` 时 `init` 会以 `AV_ERR_MODEL_LOAD_FAILED` 失败，
+//! 不再降级为模拟会话（这正是硬门要消除的静默伪装）。
+//!
+//! 在具备 RKNN NPU 硬件与 `librknnrt.so` 的目标板上运行：
+//! `cargo test -p general-detection-rknn -- --ignored`
 
 use std::ffi::c_void;
 use std::path::Path;
@@ -22,6 +29,7 @@ unsafe extern "C" fn test_result_callback(result: *const AvAlgoResult, user_data
 }
 
 #[test]
+#[ignore = "需要物理 RK3576 NPU 硬件和 librknnrt.so 环境"]
 fn test_real_rknn_hardware_inference_if_available() {
     let local_model = Path::new("model/yolov8n-640x384-rk3576.rknn");
     let pkg_root_buf = if local_model.is_file() {
@@ -41,6 +49,7 @@ fn test_real_rknn_hardware_inference_if_available() {
         platform_id: "linux-rknn",
         instance_id: "hardware_test_instance",
         is_self_test: true,
+        fallback_policy_override: None,
     };
 
     let config = InstanceConfig::default();

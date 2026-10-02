@@ -3,13 +3,21 @@
 //! 提供跨芯片平台（Rockchip RKNN、未来华为昇腾 CANN/ACL、Apple CoreML 等）的统一推理会话抽象、
 //! 零拷贝显存直通接口与动态平台路由。
 
+pub mod fallback;
 pub mod platforms;
 
 use std::path::Path;
 
 use crate::cv::buffer::CvBuffer;
 use crate::cv::postprocess::RknnTensorOutput;
+use crate::env::PackageEnv;
 use crate::error::AlgoError;
+
+pub use fallback::{
+    classify_session_availability, hardware_unavailable_error, normalize_platform_id,
+    platform_requires_hardware, resolve_fallback_policy, FallbackPolicy, HardwareAvailability,
+    HardwareStatus, ALLOW_CPU_FALLBACK_ENV_KEY,
+};
 
 /// 异构推理引擎的原始输出统一视图
 #[derive(Debug)]
@@ -86,19 +94,46 @@ pub enum RuntimeSession {
 }
 
 impl RuntimeSession {
-    /// 是否处于开发调试 CPU 回退模拟模式
-    pub fn is_fallback(&self) -> bool {
+    /// 会话的硬件可用性状态
+    ///
+    /// `Fallback` 变体未使用任何硬件单元，一律为 [`HardwareStatus::Simulated`]。
+    /// "需要硬件但不可用"由构造返回的 `Err` 表达，会在本枚举域之外。
+    pub fn hardware_status(&self) -> HardwareStatus {
         match self {
             #[cfg(feature = "rknn")]
-            Self::Rockchip(s) => s.is_fallback(),
-            Self::Fallback(_) => true,
+            Self::Rockchip(s) => s.hardware_status(),
+            Self::Fallback(_) => HardwareStatus::Simulated,
         }
     }
 
+    /// 是否处于开发调试 CPU 回退模拟模式
+    pub fn is_fallback(&self) -> bool {
+        self.hardware_status() == HardwareStatus::Simulated
+    }
+
+    /// 以默认策略（[`FallbackPolicy::Allow`]）打开会话
+    ///
+    /// 签名与行为与历史版本逐位一致，既有调用点不受影响。
     pub fn open(package_root: &Path, model_rel_path: &Path) -> Result<Self, AlgoError> {
+        Self::open_with_policy(package_root, model_rel_path, FallbackPolicy::default())
+    }
+
+    /// 以显式回退策略打开会话（加法式新增入口）
+    ///
+    /// `policy` 为 [`FallbackPolicy::RequireHardware`] 且无可用运行时时返回
+    /// `Err(AlgoError::ModelLoad { .. })`，绝不返回模拟会话。
+    pub fn open_with_policy(
+        package_root: &Path,
+        model_rel_path: &Path,
+        policy: FallbackPolicy,
+    ) -> Result<Self, AlgoError> {
         #[cfg(feature = "rknn")]
         {
-            let options = platforms::rockchip::RknnSessionOptions::default();
+            // `RknnSessionOptions` 为 `#[non_exhaustive]`，但本 crate 内部可用结构体更新语法。
+            let options = platforms::rockchip::RknnSessionOptions {
+                fallback_policy: policy,
+                ..Default::default()
+            };
             let session = platforms::rockchip::RknnSession::open_or_fallback(
                 package_root,
                 model_rel_path,
@@ -109,9 +144,30 @@ impl RuntimeSession {
 
         #[cfg(not(feature = "rknn"))]
         {
+            // 本 SDK 未编译任何硬件平台驱动，"真实硬件"在该构建下物理上不存在。
+            if policy == FallbackPolicy::RequireHardware {
+                return Err(hardware_unavailable_error(
+                    package_root,
+                    model_rel_path,
+                    "当前构建未启用任何硬件推理后端（如 `rknn` feature）",
+                ));
+            }
             let s = CpuFallbackSession::open(package_root, model_rel_path)?;
             Ok(Self::Fallback(s))
         }
+    }
+
+    /// 解析本实例应使用的回退策略（自检模式 + 宿主平台标识 + 调用方显式声明 + 包私有 `.env`）
+    ///
+    /// 供声明式骨架与直接构造会话的算法包统一调用，避免各自重复实现优先级。
+    /// `explicit` 为 `None` 时行为与历史一致（仅由自检与平台决定）。
+    pub fn resolve_policy(
+        is_self_test: bool,
+        platform_id: &str,
+        env: Option<&PackageEnv>,
+        explicit: Option<FallbackPolicy>,
+    ) -> FallbackPolicy {
+        resolve_fallback_policy(is_self_test, platform_id, env, explicit)
     }
 }
 

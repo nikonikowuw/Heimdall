@@ -91,6 +91,10 @@ pub mod prelude {
     pub use crate::rknn::{
         self, RknnInferenceOutput, RknnRuntime, RknnSession, RknnSessionOptions,
     };
+    pub use crate::runtime::fallback::{
+        classify_session_availability, normalize_platform_id, platform_requires_hardware,
+        resolve_fallback_policy, FallbackPolicy, HardwareAvailability, HardwareStatus,
+    };
     pub use crate::runtime::{InferenceOutput, NpuSession, RuntimeSession};
     pub use crate::testing::{MockEmitter, MockFrame, MockFrameBuilder, MockSession, MockWeights};
     pub use crate::track::{

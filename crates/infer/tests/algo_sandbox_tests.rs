@@ -70,6 +70,48 @@ fn test_platform_id_normalization() {
     assert_eq!(normalize_platform_id("linux-arm64-ascend"), "linux-ascend");
     assert_eq!(normalize_platform_id("ascend"), "linux-ascend");
     assert_eq!(normalize_platform_id("linux-x64"), "linux-x64");
+    assert_eq!(normalize_platform_id("generic-x86_64-cpu"), "linux-x64");
+    assert_eq!(normalize_platform_id("linux-x86_64"), "linux-x64");
+    // 反例：未知别名原样返回，不得被误归一化为某一硬件平台。
+    assert_eq!(
+        normalize_platform_id("unknown-platform"),
+        "unknown-platform"
+    );
+}
+
+/// 别名表漂移防护：本表与算法包侧的副本必须逐项一致。
+///
+/// 副本一：`crates/algo-sdk/src/runtime/fallback.rs::normalize_platform_id`
+/// （SDK 不能反向依赖本 crate，故为最小必要重复，由该文件的表驱动单测锁定）。
+/// 副本二：`algo-packages/rknn/rk3588/face_recognition/src/manifest.rs`。
+///
+/// 三处任一处新增别名而其余未同步时，硬件平台的"回退策略"判定会与宿主的
+/// "平台匹配"判定分叉，本表是最先暴露该分叉的位置。
+#[test]
+fn test_platform_alias_table_stays_in_sync_with_algo_sdk_copy() {
+    // 权威别名族：归一化后必须精确落在四个规范代号上。
+    let expected: [(&str, &str); 13] = [
+        ("macos-arm64", "macos-arm64"),
+        ("macos-arm64-coreml", "macos-arm64"),
+        ("darwin-arm64", "macos-arm64"),
+        ("linux-rknn", "linux-rknn"),
+        ("linux-arm64-rknn", "linux-rknn"),
+        ("rknn", "linux-rknn"),
+        ("linux-ascend", "linux-ascend"),
+        ("linux-arm64-ascend", "linux-ascend"),
+        ("ascend", "linux-ascend"),
+        ("linux-x64", "linux-x64"),
+        ("generic-x86_64-cpu", "linux-x64"),
+        ("linux-x86_64", "linux-x64"),
+        ("unknown-platform", "unknown-platform"),
+    ];
+    for (input, want) in expected {
+        assert_eq!(
+            normalize_platform_id(input),
+            want,
+            "别名表与 algo-sdk 副本分叉: {input}"
+        );
+    }
 }
 
 #[test]

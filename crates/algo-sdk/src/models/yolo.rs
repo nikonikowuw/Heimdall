@@ -257,7 +257,18 @@ impl<S: YoloSpec, D: YoloDecoder + Default> AlgoPlugin for GenericDetector<S, D,
         config.apply_env(&env);
 
         let model_file = env.resolve_model_path(ctx.package_root, "MODEL_PATH", S::MODEL_PATH)?;
-        let session = RuntimeSession::open(ctx.package_root, &model_file)?;
+
+        // 回退策略由宿主自报的 `platform_id` 与是否处于安装自检决定，
+        // 允许调用方（本地开发工具）显式声明，并由包私有 `.env` 提供**显式**覆盖。
+        // 自检模式下策略强制为 `RequireHardware`，因此无硬件时 `init` 直接失败，
+        // 宿主 `instance_create` 返回 `AV_ERR_MODEL_LOAD_FAILED`，自检不会误判通过。
+        let policy = RuntimeSession::resolve_policy(
+            ctx.is_self_test,
+            ctx.platform_id,
+            Some(&env),
+            ctx.fallback_policy_override,
+        );
+        let session = RuntimeSession::open_with_policy(ctx.package_root, &model_file, policy)?;
 
         let transform = HwLetterbox::new(S::INPUT_DIM.0, S::INPUT_DIM.1);
         let decoder = D::default();
@@ -338,6 +349,7 @@ impl<S: YoloSpec, D: YoloDecoder + Default> GenericDetector<S, D, RuntimeSession
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::FallbackPolicy;
     use crate::testing::{LocalPluginRunner, MockFrameBuilder};
 
     struct TestHelmetSpec;
@@ -362,6 +374,7 @@ mod tests {
             platform_id: "test-platform",
             instance_id: "inst-0",
             is_self_test: false,
+            fallback_policy_override: None,
         };
 
         let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
@@ -376,6 +389,168 @@ mod tests {
             .expect("process should succeed");
         assert!(elapsed_ms >= 0.0);
         assert_eq!(boxes.len(), 2, "CPU fallback 应完成 FP32 检测后处理");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 本机是否真实具备 RKNN 运行时
+    ///
+    /// 仅用于区分"硬门合法放行（真机）"与"硬门失效（开发机却成功）"。
+    /// 未编译 `rknn` feature 时，真实硬件路径在该构建下物理上不存在。
+    #[cfg(feature = "rknn")]
+    fn has_real_rknn_runtime(package_root: &std::path::Path) -> bool {
+        crate::runtime::platforms::rockchip::RknnRuntime::load(package_root).is_ok()
+    }
+
+    #[cfg(not(feature = "rknn"))]
+    fn has_real_rknn_runtime(_package_root: &std::path::Path) -> bool {
+        false
+    }
+
+    /// 构造含 `model/model.rknn` 的临时算法包目录，可选写入包私有 `.env`
+    fn temp_detector_package(env_content: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("algo_test_{}", uuid::Uuid::new_v4()));
+        let model_dir = dir.join("model");
+        std::fs::create_dir_all(&model_dir).expect("create model dir");
+        std::fs::write(model_dir.join("model.rknn"), b"mock rknn bytes").expect("write model");
+        if let Some(content) = env_content {
+            std::fs::write(dir.join(".env"), content).expect("write .env");
+        }
+        dir
+    }
+
+    /// A7（SDK 侧）：安装自检模式下，模拟降级不得让 `init` 成功
+    ///
+    /// 这是自检硬门在插件边界的证据：宿主 `AlgoSandbox` 从 `instance_create` 拿到
+    /// 非 `AV_OK` 即判定自检失败，因此无需宿主新增校验代码。
+    /// 前提是"无硬件运行时"；开发机天然满足，真机上则合法通过。
+    #[test]
+    fn test_self_test_init_requires_real_hardware() {
+        let temp_dir = temp_detector_package(None);
+        let ctx = InitContext {
+            package_root: &temp_dir,
+            platform_id: "linux-rknn",
+            instance_id: "inst-self-test",
+            is_self_test: true,
+            fallback_policy_override: None,
+        };
+
+        match TestHelmetDetector::init(&ctx, StandardYoloConfig::default()) {
+            Ok(_) => assert!(
+                has_real_rknn_runtime(&temp_dir),
+                "自检模式下不得用模拟会话冒充成功：本机无 librknnrt，但 init 却返回了会话"
+            ),
+            Err(error) => {
+                assert!(
+                    matches!(error, AlgoError::ModelLoad { .. }),
+                    "自检硬门失败必须映射为 ModelLoad（-5），实际: {error:?}"
+                );
+                assert_eq!(error.to_c_status(), crate::c_abi::AV_ERR_MODEL_LOAD_FAILED);
+                let reason = error.to_string();
+                assert!(
+                    reason.contains("ALLOW_CPU_FALLBACK"),
+                    "错误必须给运维可操作指引: {reason}"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// A5：非硬件平台（开发机）上 `GenericDetector::init` 仍可用无驱动回退
+    #[test]
+    fn test_init_keeps_fallback_on_non_hardware_platform() {
+        let temp_dir = temp_detector_package(None);
+        let ctx = InitContext {
+            package_root: &temp_dir,
+            // 归一化后不属于硬件平台，即使 `is_self_test` 为 false 也应保持 Allow
+            platform_id: "macos-arm64-coreml",
+            instance_id: "inst-dev",
+            is_self_test: false,
+            fallback_policy_override: None,
+        };
+
+        let detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
+            .expect("非硬件平台必须保留无驱动回退能力");
+        assert!(detector.session.is_fallback());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 本地开发工具路径：显式声明 `Allow` 在硬件平台上仍可跑模拟回退
+    ///
+    /// 这是 `run_local` 摆脱 `ALLOW_CPU_FALLBACK` 环境变量的直接证据：
+    /// 开发意图写在代码里，而不是部署期外部文件里。
+    #[test]
+    fn test_init_explicit_allow_enables_local_dev_fallback_on_hardware_platform() {
+        let temp_dir = temp_detector_package(None);
+        let ctx = InitContext {
+            package_root: &temp_dir,
+            // 硬件平台：默认策略本会是 RequireHardware
+            platform_id: "linux-rknn",
+            instance_id: "inst-local-dev",
+            is_self_test: false,
+            fallback_policy_override: Some(FallbackPolicy::Allow),
+        };
+
+        let detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
+            .expect("本地开发工具的显式 Allow 必须能在硬件平台上跑通模拟回退");
+        assert!(detector.session.is_fallback());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 回归锁：显式声明**不可**翻越安装自检硬门
+    ///
+    /// 若允许翻越，安装自检就又能用模拟会话冒充真实推理（本任务要消灭的失败模式）
+    /// ——哪怕调用方拿着本地开发工具的心态传了 `Allow`。
+    #[test]
+    fn test_init_self_test_gate_ignores_explicit_allow() {
+        let temp_dir = temp_detector_package(None);
+        let ctx = InitContext {
+            package_root: &temp_dir,
+            platform_id: "linux-rknn",
+            instance_id: "inst-self-test-explicit",
+            is_self_test: true,
+            fallback_policy_override: Some(FallbackPolicy::Allow),
+        };
+
+        match TestHelmetDetector::init(&ctx, StandardYoloConfig::default()) {
+            Ok(_) => assert!(
+                has_real_rknn_runtime(&temp_dir),
+                "自检硬门必须忽略显式 Allow：本机无 librknnrt，但 init 却返回了会话"
+            ),
+            Err(error) => assert!(
+                matches!(error, AlgoError::ModelLoad { .. }),
+                "自检硬门失败必须映射为 ModelLoad（-5），实际: {error:?}"
+            ),
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// A6：`.env` 不得推翻安装自检硬门，且历史平台别名必须归一化为硬件平台
+    #[test]
+    fn test_init_self_test_gate_survives_env_override() {
+        let temp_dir = temp_detector_package(Some("ALLOW_CPU_FALLBACK=1\n"));
+        let ctx = InitContext {
+            package_root: &temp_dir,
+            platform_id: "linux-arm64-rknn", // 历史别名，必须归一化为硬件平台
+            instance_id: "inst-self-test-env",
+            is_self_test: true,
+            fallback_policy_override: None,
+        };
+
+        match TestHelmetDetector::init(&ctx, StandardYoloConfig::default()) {
+            Ok(_) => assert!(
+                has_real_rknn_runtime(&temp_dir),
+                "`.env` 不得推翻安装自检的硬件硬门"
+            ),
+            Err(error) => assert!(
+                matches!(error, AlgoError::ModelLoad { .. }),
+                "实际错误: {error:?}"
+            ),
+        }
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -410,6 +585,7 @@ mod tests {
             platform_id: "test-platform",
             instance_id: "inst-custom",
             is_self_test: false,
+            fallback_policy_override: None,
         };
 
         let mut detector = CustomTestDetector::init(&ctx, StandardYoloConfig::default())
@@ -441,6 +617,7 @@ mod tests {
             platform_id: "test-platform",
             instance_id: "inst-config-update",
             is_self_test: false,
+            fallback_policy_override: None,
         };
 
         let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
@@ -490,6 +667,7 @@ mod tests {
             platform_id: "test-platform",
             instance_id: "inst-health",
             is_self_test: false,
+            fallback_policy_override: None,
         };
         let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
             .expect("init should succeed");
@@ -537,6 +715,7 @@ mod tests {
             platform_id: "test-platform",
             instance_id: "inst-emitter",
             is_self_test: false,
+            fallback_policy_override: None,
         };
         let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
             .expect("init should succeed");

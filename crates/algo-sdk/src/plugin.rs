@@ -8,6 +8,7 @@ use crate::c_abi::*;
 use crate::emitter::ResultEmitter;
 use crate::error::AlgoError;
 use crate::frame::SafeFrame;
+use crate::runtime::FallbackPolicy;
 
 /// 算法实例初始化上下文
 #[derive(Debug)]
@@ -20,10 +21,23 @@ pub struct InitContext<'a> {
     pub instance_id: &'a str,
     /// 是否处于安装自检模式 (Self-Test)
     pub is_self_test: bool,
+    /// 调用方**显式**声明的回退策略；`None` 表示交给平台与自检规则解析。
+    ///
+    /// 生产路径（宿主经 C ABI 装载）恒为 `None`，策略由宿主自报的 `platform_id`
+    /// 与是否处于自检模式决定；只有本地开发工具（`run_local` 等）才应设为
+    /// [`FallbackPolicy::Allow`]，因为开发机物理上没有 `librknnrt`，其意图是
+    /// "本机跑通模拟回退"，而不是伪装成生产硬件推理。
+    ///
+    /// **该字段不可翻越安装自检硬门**：`is_self_test == true` 时策略恒为
+    /// [`FallbackPolicy::RequireHardware`]，本字段被忽略。
+    pub fallback_policy_override: Option<FallbackPolicy>,
 }
 
 impl<'a> InitContext<'a> {
     /// 构造新的初始化上下文
+    ///
+    /// 回退策略交由平台与自检规则解析（`fallback_policy_override == None`），
+    /// 与历史行为逐位一致。
     pub fn new(
         package_root: &'a Path,
         platform_id: &'a str,
@@ -35,7 +49,17 @@ impl<'a> InitContext<'a> {
             platform_id,
             instance_id,
             is_self_test,
+            fallback_policy_override: None,
         }
+    }
+
+    /// 显式声明回退策略（本地开发工具用，加法式链式入口）
+    ///
+    /// 典型用法：`run_local` 等开发工具在无 `librknnrt` 的机器上以
+    /// [`FallbackPolicy::Allow`] 运行模拟回退，不依赖 `.env` 逃生口。
+    pub fn with_fallback_policy_override(mut self, policy: FallbackPolicy) -> Self {
+        self.fallback_policy_override = Some(policy);
+        self
     }
 
     /// 加载当前算法包根目录下的私有 `.env` 文件（不污染全局环境）

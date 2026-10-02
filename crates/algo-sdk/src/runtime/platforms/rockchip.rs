@@ -13,6 +13,9 @@ use std::sync::Arc;
 use crate::cv::buffer::CvBuffer;
 pub use crate::cv::postprocess::RknnTensorOutput;
 use crate::error::AlgoError;
+use crate::runtime::fallback::{
+    describe_load_failure, hardware_unavailable_error, FallbackPolicy, HardwareStatus,
+};
 use crate::runtime::{InferenceOutput, NpuSession};
 
 pub type RknnContext = u64;
@@ -357,23 +360,40 @@ impl DmaMemEntry {
 pub struct RknnSessionOptions {
     /// 目标核心掩码（如 `RKNN_NPU_CORE_0`, `RKNN_NPU_CORE_0_1`, `RKNN_NPU_CORE_0_1_2` 等）
     pub core_mask: c_int,
+    /// 无硬件运行时（`librknnrt` 加载失败）时的行为策略
+    ///
+    /// 加法式新增：默认 [`FallbackPolicy::Allow`]，与历史行为逐位一致。
+    pub fallback_policy: FallbackPolicy,
 }
 
 impl Default for RknnSessionOptions {
     fn default() -> Self {
         Self {
             core_mask: RKNN_NPU_CORE_AUTO,
+            fallback_policy: FallbackPolicy::default(),
         }
     }
 }
 
 impl RknnSessionOptions {
     pub fn new(core_mask: c_int) -> Self {
-        Self { core_mask }
+        Self {
+            core_mask,
+            fallback_policy: FallbackPolicy::default(),
+        }
     }
 
     pub fn with_core_mask(core_mask: c_int) -> Self {
-        Self { core_mask }
+        Self {
+            core_mask,
+            fallback_policy: FallbackPolicy::default(),
+        }
+    }
+
+    /// 加法式新增：显式指定回退策略，保留既有核心掩码
+    pub fn with_fallback_policy(mut self, fallback_policy: FallbackPolicy) -> Self {
+        self.fallback_policy = fallback_policy;
+        self
     }
 }
 
@@ -479,7 +499,12 @@ impl<'a> Drop for RknnOutputsGuard<'a> {
 }
 
 impl RknnSession {
-    /// 优先物理 librknnrt；未检测到硬件时按 debug_cpu_fallback 语义保底
+    /// 优先物理 librknnrt；未检测到硬件时按 `options.fallback_policy` 决定行为
+    ///
+    /// - [`FallbackPolicy::Allow`]：降级为 `debug_cpu_fallback_path` 模拟会话（开发/调试）；
+    /// - [`FallbackPolicy::RequireHardware`]：返回 `Err(AlgoError::ModelLoad { reason })`，
+    ///   绝不返回模拟会话，且错误信息包含 `package_root`、模型路径、底层加载失败原因与
+    ///   显式放开回退的操作指引，供运维定位。
     pub fn open_or_fallback(
         package_root: &Path,
         model_path: &Path,
@@ -487,10 +512,24 @@ impl RknnSession {
     ) -> Result<Self, AlgoError> {
         match RknnRuntime::load(package_root) {
             Ok(rt) => Self::new_with_core_mask(rt, model_path, options.core_mask),
-            Err(e) => {
-                tracing::warn!(reason = ?e, "未检测到物理 librknnrt.so，启用开发调试回退会话");
-                Self::new_fallback(model_path)
-            }
+            Err(e) => match options.fallback_policy {
+                FallbackPolicy::Allow => {
+                    tracing::warn!(
+                        reason = ?e,
+                        package_root = ?package_root,
+                        "未检测到物理 librknnrt.so，启用开发调试回退会话 (debug_cpu_fallback_path)"
+                    );
+                    Self::new_fallback(model_path)
+                }
+                FallbackPolicy::RequireHardware => Err(hardware_unavailable_error(
+                    package_root,
+                    model_path,
+                    &format!(
+                        "无法加载平台运行时 librknnrt.so（{}）",
+                        describe_load_failure(&e)
+                    ),
+                )),
+            },
         }
     }
 
@@ -671,9 +710,22 @@ impl RknnSession {
         })
     }
 
+    /// 会话的硬件可用性状态
+    ///
+    /// "需要硬件但不可用"不会产生会话对象（构造返回 `Err`），因此本枚举只有两态；
+    /// 三态归约见 [`crate::runtime::fallback::classify_session_availability`]。
+    pub fn hardware_status(&self) -> HardwareStatus {
+        match self.backend {
+            RknnBackend::Hardware { .. } => HardwareStatus::Hardware,
+            RknnBackend::Fallback => HardwareStatus::Simulated,
+        }
+    }
+
     /// 是否处于开发调试 CPU 回退模式
+    ///
+    /// 内部委托 [`Self::hardware_status`]，外部行为逐位一致。
     pub fn is_fallback(&self) -> bool {
-        matches!(self.backend, RknnBackend::Fallback)
+        self.hardware_status() == HardwareStatus::Simulated
     }
 
     /// 构造模拟输出张量数据（用于 debug_cpu_fallback_path）
@@ -1066,6 +1118,7 @@ mod tests {
         let fake_model = Path::new("Cargo.toml"); // 使用必定存在的文件做测试
         let session = RknnSession::new_fallback(fake_model).expect("new_fallback 应该成功");
         assert!(session.is_fallback());
+        assert_eq!(session.hardware_status(), HardwareStatus::Simulated);
         assert_eq!(session.input_attr.dims[1], 384);
         assert_eq!(session.input_attr.dims[2], 640);
         assert_eq!(session.output_attrs.len(), 1);
@@ -1084,5 +1137,108 @@ mod tests {
             })
             .expect("infer_with_host_bytes 应该成功");
         assert!(called);
+    }
+
+    /// A1：默认策略即既有行为（`Allow`），且 `with_*` 构造入口行为不变
+    #[test]
+    fn test_session_options_default_keeps_existing_behavior() {
+        assert_eq!(
+            RknnSessionOptions::default().fallback_policy,
+            FallbackPolicy::Allow
+        );
+        assert_eq!(RknnSessionOptions::default().core_mask, RKNN_NPU_CORE_AUTO);
+
+        let by_new = RknnSessionOptions::new(RKNN_NPU_CORE_0);
+        assert_eq!(by_new.core_mask, RKNN_NPU_CORE_0);
+        assert_eq!(by_new.fallback_policy, FallbackPolicy::Allow);
+
+        let by_mask = RknnSessionOptions::with_core_mask(RKNN_NPU_CORE_0_1);
+        assert_eq!(by_mask.core_mask, RKNN_NPU_CORE_0_1);
+        assert_eq!(by_mask.fallback_policy, FallbackPolicy::Allow);
+
+        let explicit = by_mask.with_fallback_policy(FallbackPolicy::RequireHardware);
+        assert_eq!(explicit.core_mask, RKNN_NPU_CORE_0_1);
+        assert_eq!(explicit.fallback_policy, FallbackPolicy::RequireHardware);
+    }
+
+    /// A5：开发机（无 librknnrt）默认策略下仍可降级为模拟会话
+    #[test]
+    fn test_allow_policy_keeps_dev_fallback_available() {
+        let fake_model = Path::new("Cargo.toml");
+        let options = RknnSessionOptions::default();
+        let session = RknnSession::open_or_fallback(Path::new("."), fake_model, options)
+            .expect("Allow 策略必须保留无驱动回退能力");
+        assert!(session.is_fallback());
+        assert_eq!(session.hardware_status(), HardwareStatus::Simulated);
+    }
+
+    /// A2：`RequireHardware` 在无可用运行时时必须返回 `ModelLoad` 错误而非模拟会话
+    ///
+    /// 断言错误**变体**（不是仅 `is_err()`），并校验错误信息可定位。
+    #[test]
+    fn test_require_hardware_fails_without_runtime() {
+        let fake_model = Path::new("Cargo.toml");
+        let options = RknnSessionOptions::with_core_mask(RKNN_NPU_CORE_0_1)
+            .with_fallback_policy(FallbackPolicy::RequireHardware);
+
+        let result = RknnSession::open_or_fallback(Path::new("."), fake_model, options);
+        let error = match result {
+            Ok(_) => panic!("RequireHardware 在无硬件时必须失败，不得返回模拟会话"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, AlgoError::ModelLoad { .. }),
+            "RequireHardware 失败必须映射为 ModelLoad（-5），实际: {error:?}"
+        );
+        assert_eq!(error.to_c_status(), crate::c_abi::AV_ERR_MODEL_LOAD_FAILED);
+
+        let reason = error.to_string();
+        for needle in [
+            "package_root: .",
+            "Cargo.toml",
+            "librknnrt",
+            crate::runtime::fallback::ALLOW_CPU_FALLBACK_ENV_KEY,
+        ] {
+            assert!(
+                reason.contains(needle),
+                "错误信息必须包含可定位信息 `{needle}`，实际: {reason}"
+            );
+        }
+    }
+
+    /// A3：三态可判别 —— `Hardware` / `Simulated` / `Unavailable`
+    #[test]
+    fn test_hardware_availability_three_states_are_distinguishable() {
+        use crate::runtime::fallback::{classify_session_availability, HardwareAvailability};
+
+        // 硬件态：构造一个真实的 Hardware 后端句柄不可行（需要真机），
+        // 因此直接校验 `hardware_status()` 的映射与三态归约函数值域。
+        let simulated = Ok(HardwareStatus::Simulated);
+        assert_eq!(
+            classify_session_availability(&simulated),
+            HardwareAvailability::Simulated
+        );
+
+        let hardware = Ok(HardwareStatus::Hardware);
+        assert_eq!(
+            classify_session_availability(&hardware),
+            HardwareAvailability::Hardware
+        );
+
+        let unavailable: Result<HardwareStatus, AlgoError> = Err(AlgoError::ModelLoad {
+            reason: "无硬件".to_string(),
+        });
+        assert_eq!(
+            classify_session_availability(&unavailable),
+            HardwareAvailability::Unavailable
+        );
+
+        // `is_fallback()` 与 `Simulated` 等价（兼容旧调用点）
+        let fallback = RknnSession::new_fallback(Path::new("Cargo.toml")).expect("回退会话");
+        assert_eq!(
+            fallback.is_fallback(),
+            fallback.hardware_status() == HardwareStatus::Simulated
+        );
+        assert_ne!(fallback.hardware_status(), HardwareStatus::Hardware);
     }
 }

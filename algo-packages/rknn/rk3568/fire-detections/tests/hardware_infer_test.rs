@@ -1,6 +1,13 @@
 #![cfg(target_os = "linux")]
 
-//! RK3568 烟火检测插件集成测试（覆盖真实/回退推理与时序确认流程）
+//! RK3568 烟火检测插件集成测试（真实硬件前向推理与时序确认流程）
+//!
+//! 本包声明 `linux-rknn`，且用例以 `is_self_test: true` 初始化，因此安装自检硬门要求
+//! 真实 NPU 运行时。无 `librknnrt.so` 时 `init` 会以 `AV_ERR_MODEL_LOAD_FAILED` 失败，
+//! 不再降级为模拟会话（这正是硬门要消除的静默伪装）。
+//!
+//! 在具备 RKNN NPU 硬件与 `librknnrt.so` 的目标板上运行：
+//! `cargo test -p fire-smoke-detection-rk3568-rknn -- --ignored`
 
 use std::ffi::c_void;
 
@@ -21,6 +28,7 @@ unsafe extern "C" fn test_result_callback(result: *const AvAlgoResult, user_data
 }
 
 #[test]
+#[ignore = "需要物理 RK3568 NPU 硬件和 librknnrt.so 环境"]
 fn test_fire_smoke_detection_pipeline() {
     let pkg_root_buf = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let pkg_root = pkg_root_buf.as_path();
@@ -35,6 +43,7 @@ fn test_fire_smoke_detection_pipeline() {
         platform_id: "linux-rknn",
         instance_id: "fire_smoke_integration_test",
         is_self_test: true,
+        fallback_policy_override: None,
     };
 
     let config = InstanceConfig {

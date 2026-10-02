@@ -69,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         platform_id: "linux-rknn",
         instance_id: "local_hardware_test",
         is_self_test: false,
+        fallback_policy_override: None,
     };
     let mut recognizer = FaceRecognizer::init(&init_ctx, InstanceConfig::default())?;
     println!(

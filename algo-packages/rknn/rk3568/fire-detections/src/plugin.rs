@@ -31,6 +31,7 @@ use {
     algo_sdk::cv::platforms::rockchip::RgaCvEngine,
     algo_sdk::cv::postprocess::{parse_yolov8_int8, Yolov8ParseContext, Yolov8RknnConfig},
     algo_sdk::rknn::{RknnInferenceOutput, RknnSession, RknnSessionOptions, RKNN_NPU_CORE_0},
+    algo_sdk::runtime::resolve_fallback_policy,
     std::path::Path,
 };
 
@@ -95,10 +96,19 @@ impl AlgoPlugin for FireSmokeDetector {
         let env = ctx.load_env();
         config.apply_env(&env);
         let model_path = locate_model_file(ctx.package_root, &env)?;
+        // 回退策略由宿主自报的 `platform_id`、是否处于安装自检以及调用方显式声明决定
+        // （`.env` 仅做显式覆盖）。
+        // 本包声明 `linux-rknn`：在本平台上静默输出模拟框属于部署错误，必须响亮失败。
+        let policy = resolve_fallback_policy(
+            ctx.is_self_test,
+            ctx.platform_id,
+            Some(&env),
+            ctx.fallback_policy_override,
+        );
         let session = RknnSession::open_or_fallback(
             ctx.package_root,
             &model_path,
-            RknnSessionOptions::with_core_mask(RKNN_NPU_CORE_0),
+            RknnSessionOptions::with_core_mask(RKNN_NPU_CORE_0).with_fallback_policy(policy),
         )?;
         let cv_engine = RgaCvEngine::new();
         let mask = ClassMask::from_classes(&config.target_classes);
