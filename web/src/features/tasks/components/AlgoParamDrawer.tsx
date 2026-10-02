@@ -3,15 +3,15 @@ import { Check, Cpu, RotateCcw, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Drawer } from '@/components/ui/Drawer'
 import type { AlgoManifest } from '@/types'
-import { isCosineThresholdKey, percentToScore, scoreToPercent } from '@/lib/similarity'
-import { getEnumOptions, resolveEnumSelection, stripLegacyInjectedParams } from '../algoMetadata'
 import {
   clampNumericParam,
   formatNumericDraft,
-  getNumericParamConfig,
   isFiniteNumber,
   parseNumericDraft,
-} from '../numericParam'
+} from '@/lib/numericDraft'
+import { isCosineThresholdKey, percentToScore, scoreToPercent } from '@/lib/similarity'
+import { getEnumOptions, resolveEnumSelection, stripLegacyInjectedParams } from '../algoMetadata'
+import { getNumericParamConfig } from '../numericParam'
 import { EnumArrayField } from './EnumArrayField'
 import { getLocalizedClassName } from './rulesStudioTypes'
 

@@ -6,9 +6,12 @@ import { RefreshButton } from '@/components/RefreshButton'
 import { SystemSettingsHeader } from './components/SystemSettingsHeader'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { NumericField } from '@/components/ui/NumericField'
+import { FieldShell } from './components/FieldShell'
 import { NetworkTrialBanner } from './components/NetworkTrialBanner'
 import { NetworkConflictModal } from './components/NetworkConflictModal'
 import { useNetworkTrial } from './hooks/use-network-trial'
+import { clampNumericParam } from '@/lib/numericDraft'
 import type { NetworkInterface, IpConfig } from '@/types/system'
 
 const DEFAULT_IPV4_DRAFT: IpConfig = {
@@ -19,6 +22,13 @@ const DEFAULT_IPV4_DRAFT: IpConfig = {
   dns: [],
   metric: null,
 }
+
+/** 编辑表单内文本与数值输入共用的视觉类；数值字段的行为由 NumericField 承担 */
+const FIELD_INPUT_CLASS =
+  'w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-[13px] text-[var(--text-primary)] transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none'
+
+/** 数值字段沿用原实现等宽数字排版（IP/Metric 对齐可读） */
+const FIELD_INPUT_NUMERIC_CLASS = `${FIELD_INPUT_CLASS} font-mono`
 
 function isVirtualInterface(iface: NetworkInterface): boolean {
   if (iface.type === 'virtual' || iface.type === 'loopback') {
@@ -128,10 +138,13 @@ export function NetworkSettings(): React.ReactElement {
       setSaveError(null)
       // IpConfig 的 prefix/metric 已是 `number | null`，无需再套 Number()；dns 恒为 string[]，
       // 空数组与省略字段在服务端等价（均由 serde default 折成 []）。仅在发送前归一化空字符串。
+      // 前缀保存兜底（R3）：不假设输入框已收敛，发送前再 clamp 到 1–32（同源后端 validate_ip_config）。
+      // 判空故意用 `== null`：网络数据在 API 边界是断言收窄而非运行时校验，
+      // 服务端省略该字段时实际值会是 `undefined`，`=== null` 漏判会把 NaN 送进请求。
       const res = await systemApi.updateNetworkInterface(name, {
         method: config.method,
         address: config.address?.trim() || undefined,
-        prefix: config.prefix ?? undefined,
+        prefix: config.prefix == null ? undefined : clampNumericParam(config.prefix, 1, 32),
         gateway: config.gateway?.trim() || undefined,
         dns: config.dns,
         metric: config.metric ?? undefined,
@@ -543,16 +556,19 @@ function NetworkCard({
                   placeholder="192.168.1.100"
                   mono
                 />
-                <FieldInput
-                  label={t('network.prefix', { defaultValue: '前缀' })}
-                  type="number"
-                  min={1}
-                  max={32}
-                  value={draft.prefix || ''}
-                  onChange={(v) => onDraftChange({ ...draft, prefix: Number(v) || null })}
-                  placeholder="24"
-                  mono
-                />
+                <FieldShell label={t('network.prefix', { defaultValue: '前缀' })}>
+                  <NumericField
+                    label={t('network.prefix', { defaultValue: '前缀' })}
+                    type="integer"
+                    emptyBehavior="null"
+                    min={1}
+                    max={32}
+                    value={draft.prefix}
+                    onChange={(v) => onDraftChange({ ...draft, prefix: v })}
+                    placeholder="24"
+                    className={FIELD_INPUT_NUMERIC_CLASS}
+                  />
+                </FieldShell>
               </div>
               <div className="grid grid-cols-[1fr_100px] gap-3">
                 <FieldInput
@@ -562,19 +578,17 @@ function NetworkCard({
                   placeholder="192.168.1.1"
                   mono
                 />
-                <FieldInput
-                  label="Metric"
-                  type="number"
-                  value={draft.metric ?? ''}
-                  onChange={(v) =>
-                    onDraftChange({
-                      ...draft,
-                      metric: v === '' ? null : Number(v),
-                    })
-                  }
-                  placeholder={isMgmt ? '100' : '500'}
-                  mono
-                />
+                <FieldShell label="Metric">
+                  <NumericField
+                    label="Metric"
+                    type="integer"
+                    emptyBehavior="null"
+                    value={draft.metric ?? null}
+                    onChange={(v) => onDraftChange({ ...draft, metric: v })}
+                    placeholder={isMgmt ? '100' : '500'}
+                    className={FIELD_INPUT_NUMERIC_CLASS}
+                  />
+                </FieldShell>
               </div>
               <FieldInput
                 label="DNS"
@@ -628,39 +642,29 @@ function NetworkCard({
   )
 }
 
+/** 文本字段：排版外壳与数值字段一致，输入行为保持原生受控 */
 function FieldInput({
   label,
   value,
   onChange,
   placeholder,
-  type = 'text',
-  min,
-  max,
   mono = false,
 }: {
   label: string
-  value: string | number
+  value: string
   onChange: (v: string) => void
   placeholder?: string
-  type?: string
-  min?: number
-  max?: number
   mono?: boolean
 }): React.ReactElement {
   return (
-    <div>
-      <label className="mb-1.5 block text-[12px] font-medium text-[var(--text-muted)]">
-        {label}
-      </label>
+    <FieldShell label={label}>
       <input
-        type={type}
-        min={min}
-        max={max}
+        type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className={`w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-[13px] text-[var(--text-primary)] transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none ${mono ? 'font-mono' : ''}`}
+        className={`${FIELD_INPUT_CLASS} ${mono ? 'font-mono' : ''}`}
       />
-    </div>
+    </FieldShell>
   )
 }

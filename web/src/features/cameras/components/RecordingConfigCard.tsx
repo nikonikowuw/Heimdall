@@ -1,6 +1,7 @@
 import { Clapperboard, Loader2 } from 'lucide-react'
 import React, { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { NumericField } from '@/components/ui/NumericField'
 import { cameraApi } from '@/lib/api'
 import type { Camera, CameraRecordingConfig } from '@/types'
 import {
@@ -16,41 +17,19 @@ export interface RecordingConfigCardProps {
   onSaved: (camera: Camera) => void
 }
 
-interface NumberFieldProps {
+interface NumberFieldCellProps {
   label: string
   unit: string
-  value: number
-  range: { min: number; max: number }
-  disabled: boolean
-  onChange: (value: number) => void
+  children: React.ReactNode
 }
 
-function NumberField({
-  label,
-  unit,
-  value,
-  range,
-  disabled,
-  onChange,
-}: NumberFieldProps): React.ReactElement {
+/** 卡片内的数值字段单元格：只负责标签/单位排版，输入行为由 NumericField 承担 */
+function NumberFieldCell({ label, unit, children }: NumberFieldCellProps): React.ReactElement {
   return (
     <label className="flex flex-col gap-1 rounded-xl border border-[var(--border)]/60 bg-[var(--bg-secondary)]/30 p-2.5">
       <span className="text-[11px] text-[var(--text-muted)]">{label}</span>
       <span className="flex items-baseline gap-1">
-        <input
-          type="number"
-          min={range.min}
-          max={range.max}
-          value={value}
-          disabled={disabled}
-          onChange={(event) => {
-            const next = Number.parseInt(event.target.value, 10)
-            // 输入框清空等中间态不写入草稿，等用户给出合法数字
-            if (Number.isNaN(next)) return
-            onChange(next)
-          }}
-          className="font-data w-full bg-transparent text-sm font-semibold text-[var(--text-primary)] tabular-nums outline-none disabled:opacity-60"
-        />
+        {children}
         <span className="text-[11px] whitespace-nowrap text-[var(--text-muted)]">{unit}</span>
       </span>
     </label>
@@ -158,38 +137,66 @@ export function RecordingConfigCard({
       {draft.enabled ? (
         <div className="mt-3.5 space-y-3">
           <div className="grid grid-cols-2 gap-2.5">
-            <NumberField
+            <NumberFieldCell
               label={t('config.preCapture', { defaultValue: '事件前录制' })}
               unit={unitSecond}
-              value={draft.preCaptureSeconds}
-              range={RECORDING_LIMITS.preCaptureSeconds}
-              disabled={saving}
-              onChange={(value) => setDraft({ ...draft, preCaptureSeconds: value })}
-            />
-            <NumberField
+            >
+              <NumericField
+                label={t('config.preCapture', { defaultValue: '事件前录制' })}
+                type="integer"
+                min={RECORDING_LIMITS.preCaptureSeconds.min}
+                max={RECORDING_LIMITS.preCaptureSeconds.max}
+                value={draft.preCaptureSeconds}
+                disabled={saving}
+                onChange={(value) => setDraft({ ...draft, preCaptureSeconds: value })}
+                className="font-data w-full bg-transparent text-sm font-semibold text-[var(--text-primary)] tabular-nums outline-none disabled:opacity-60"
+              />
+            </NumberFieldCell>
+            <NumberFieldCell
               label={t('config.postCapture', { defaultValue: '事件后录制' })}
               unit={unitSecond}
-              value={draft.postCaptureSeconds}
-              range={RECORDING_LIMITS.postCaptureSeconds}
-              disabled={saving}
-              onChange={(value) => setDraft({ ...draft, postCaptureSeconds: value })}
-            />
-            <NumberField
+            >
+              <NumericField
+                label={t('config.postCapture', { defaultValue: '事件后录制' })}
+                type="integer"
+                min={RECORDING_LIMITS.postCaptureSeconds.min}
+                max={RECORDING_LIMITS.postCaptureSeconds.max}
+                value={draft.postCaptureSeconds}
+                disabled={saving}
+                onChange={(value) => setDraft({ ...draft, postCaptureSeconds: value })}
+                className="font-data w-full bg-transparent text-sm font-semibold text-[var(--text-primary)] tabular-nums outline-none disabled:opacity-60"
+              />
+            </NumberFieldCell>
+            <NumberFieldCell
               label={t('config.maxFile', { defaultValue: '单文件上限' })}
               unit={unitSecond}
-              value={draft.maxFileSeconds}
-              range={RECORDING_LIMITS.maxFileSeconds}
-              disabled={saving}
-              onChange={(value) => setDraft({ ...draft, maxFileSeconds: value })}
-            />
-            <NumberField
+            >
+              <NumericField
+                label={t('config.maxFile', { defaultValue: '单文件上限' })}
+                type="integer"
+                min={RECORDING_LIMITS.maxFileSeconds.min}
+                max={RECORDING_LIMITS.maxFileSeconds.max}
+                value={draft.maxFileSeconds}
+                disabled={saving}
+                onChange={(value) => setDraft({ ...draft, maxFileSeconds: value })}
+                className="font-data w-full bg-transparent text-sm font-semibold text-[var(--text-primary)] tabular-nums outline-none disabled:opacity-60"
+              />
+            </NumberFieldCell>
+            <NumberFieldCell
               label={t('config.retention', { defaultValue: '保留天数' })}
               unit={unitDay}
-              value={draft.retentionDays}
-              range={RECORDING_LIMITS.retentionDays}
-              disabled={saving}
-              onChange={(value) => setDraft({ ...draft, retentionDays: value })}
-            />
+            >
+              <NumericField
+                label={t('config.retention', { defaultValue: '保留天数' })}
+                type="integer"
+                min={RECORDING_LIMITS.retentionDays.min}
+                max={RECORDING_LIMITS.retentionDays.max}
+                value={draft.retentionDays}
+                disabled={saving}
+                onChange={(value) => setDraft({ ...draft, retentionDays: value })}
+                className="font-data w-full bg-transparent text-sm font-semibold text-[var(--text-primary)] tabular-nums outline-none disabled:opacity-60"
+              />
+            </NumberFieldCell>
           </div>
 
           <div className="flex items-center justify-between gap-2">

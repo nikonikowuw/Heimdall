@@ -13,10 +13,17 @@ import {
   X,
 } from 'lucide-react'
 import { ModalOverlay } from '@/components/ui/ModalOverlay'
+import { NumericField } from '@/components/ui/NumericField'
 import { useDismissStack } from '@/hooks/use-dismiss-stack'
 import { gb28181Api } from '@/lib/api'
+import { clampNumericParam } from '@/lib/numericDraft'
 import type { Gb28181ConfigResponse } from '@/types'
 import { SystemSettingsHeader } from './components/SystemSettingsHeader'
+import { GB28181_LIMITS } from './gb28181Limits'
+
+/** 数值输入框视觉与同页文本输入保持一致；行为由 NumericField 承担 */
+const NUMBER_INPUT_CLASS =
+  'w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none'
 
 export function Gb28181Settings(): React.ReactElement {
   const { t } = useTranslation('system')
@@ -78,15 +85,30 @@ export function Gb28181Settings(): React.ReactElement {
   const handleSave = async () => {
     setSaving(true)
     try {
+      // 保存兜底（R3）：不假设输入框已收敛，发送前对数值字段再做一次区间收敛。
+      // 端口字段 wire 类型为 `u16`，上下界即类型边界；心跳上界 86400（一天）是操作意义的
+      // 软约束、非后端硬约束（wire 为 `u32`），仅用于防误输入，与输入框区间同源。
       const updated = await gb28181Api.updateConfig({
         sipId,
         sipDomain,
-        sipPort,
+        sipPort: clampNumericParam(sipPort, GB28181_LIMITS.sipPort.min, GB28181_LIMITS.sipPort.max),
         sipPassword,
-        rtpPortRangeStart: rtpStart,
-        rtpPortRangeEnd: rtpEnd,
+        rtpPortRangeStart: clampNumericParam(
+          rtpStart,
+          GB28181_LIMITS.rtpPort.min,
+          GB28181_LIMITS.rtpPort.max,
+        ),
+        rtpPortRangeEnd: clampNumericParam(
+          rtpEnd,
+          GB28181_LIMITS.rtpPort.min,
+          GB28181_LIMITS.rtpPort.max,
+        ),
         autoCatalogSync: autoSync,
-        heartbeatTimeoutSec: heartbeatTimeout,
+        heartbeatTimeoutSec: clampNumericParam(
+          heartbeatTimeout,
+          GB28181_LIMITS.heartbeatTimeoutSec.min,
+          GB28181_LIMITS.heartbeatTimeoutSec.max,
+        ),
       })
       if (data) {
         setData({
@@ -261,11 +283,14 @@ export function Gb28181Settings(): React.ReactElement {
             <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
               {t('gb28181.sipPort', { defaultValue: 'SIP 监听端口 (Port)' })}
             </label>
-            <input
-              type="number"
+            <NumericField
+              label={t('gb28181.sipPort', { defaultValue: 'SIP 监听端口 (Port)' })}
+              type="integer"
+              min={GB28181_LIMITS.sipPort.min}
+              max={GB28181_LIMITS.sipPort.max}
               value={sipPort}
-              onChange={(e) => setSipPort(Number(e.target.value))}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              onChange={setSipPort}
+              className={NUMBER_INPUT_CLASS}
             />
           </div>
 
@@ -309,11 +334,14 @@ export function Gb28181Settings(): React.ReactElement {
             <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
               {t('gb28181.heartbeatTimeout', { defaultValue: '心跳超时判定时长 (秒)' })}
             </label>
-            <input
-              type="number"
+            <NumericField
+              label={t('gb28181.heartbeatTimeout', { defaultValue: '心跳超时判定时长 (秒)' })}
+              type="integer"
+              min={GB28181_LIMITS.heartbeatTimeoutSec.min}
+              max={GB28181_LIMITS.heartbeatTimeoutSec.max}
               value={heartbeatTimeout}
-              onChange={(e) => setHeartbeatTimeout(Number(e.target.value))}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              onChange={setHeartbeatTimeout}
+              className={NUMBER_INPUT_CLASS}
             />
           </div>
         </div>
@@ -336,22 +364,28 @@ export function Gb28181Settings(): React.ReactElement {
             <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
               {t('gb28181.portStart', { defaultValue: '端口池起始' })}
             </label>
-            <input
-              type="number"
+            <NumericField
+              label={t('gb28181.portStart', { defaultValue: '端口池起始' })}
+              type="integer"
+              min={GB28181_LIMITS.rtpPort.min}
+              max={GB28181_LIMITS.rtpPort.max}
               value={rtpStart}
-              onChange={(e) => setRtpStart(Number(e.target.value))}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              onChange={setRtpStart}
+              className={NUMBER_INPUT_CLASS}
             />
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">
               {t('gb28181.portEnd', { defaultValue: '端口池结束' })}
             </label>
-            <input
-              type="number"
+            <NumericField
+              label={t('gb28181.portEnd', { defaultValue: '端口池结束' })}
+              type="integer"
+              min={GB28181_LIMITS.rtpPort.min}
+              max={GB28181_LIMITS.rtpPort.max}
               value={rtpEnd}
-              onChange={(e) => setRtpEnd(Number(e.target.value))}
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              onChange={setRtpEnd}
+              className={NUMBER_INPUT_CLASS}
             />
           </div>
         </div>

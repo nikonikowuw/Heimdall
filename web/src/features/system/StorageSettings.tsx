@@ -3,17 +3,38 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, Trash2, Check, RotateCcw } from 'lucide-react'
 import { systemApi } from '@/lib/system-api'
 import { RefreshButton } from '@/components/RefreshButton'
+import { NumericField } from '@/components/ui/NumericField'
 import { SystemSettingsHeader } from './components/SystemSettingsHeader'
 import { SettingsSection, LoadingSkeleton, ErrorBanner } from './components/SettingsSection'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { MountBadge } from './components/MountBadge'
-import type { StorageConfig, StorageStatus, SnapshotSystemConfig } from '@/types/system'
+import { FieldShell } from './components/FieldShell'
+import {
+  FREE_RATIO_PERCENT_LIMITS,
+  STORAGE_LIMITS,
+  clampStorageDraft,
+  percentToRatio,
+  ratioToPercent,
+  type StorageDraft,
+} from './storageDraft'
+import type { StorageStatus, SnapshotSystemConfig } from '@/types/system'
+
+/** 保留表格内的数值输入：等宽居中，与迁移前 `NumericInput` 的同款视觉 */
+const RETENTION_INPUT_CLASS =
+  'w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-center font-mono text-[13px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none'
+
+/** 配额列额外需要占位符配色（`0=不限` 提示） */
+const RETENTION_QUOTA_INPUT_CLASS = `${RETENTION_INPUT_CLASS} placeholder:text-[var(--text-muted)]`
+
+/** 高级设置内的数值输入：行内表单视觉，与迁移前 `NumberInput` 的同款 */
+const ADVANCED_INPUT_CLASS =
+  'w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-[13px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none'
 
 export function StorageSettings(): React.ReactElement {
   const { t } = useTranslation('system')
   const [status, setStatus] = useState<StorageStatus | null>(null)
-  const [config, setConfig] = useState<StorageConfig | null>(null)
-  const [draft, setDraft] = useState<StorageConfig | null>(null)
+  const [config, setConfig] = useState<StorageDraft | null>(null)
+  const [draft, setDraft] = useState<StorageDraft | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -78,7 +99,9 @@ export function StorageSettings(): React.ReactElement {
       setSaving(true)
       setSaveError(null)
       setSaveSuccess(false)
-      const updated = await systemApi.updateStorageConfig(draft)
+      // 保存兜底（R3）：不假设输入框已收敛，发送前对全部数值字段再收敛一次。
+      // 服务端 `StorageConfig::validate()` 会整体拒绝越界值（51100），前端提前对齐区间。
+      const updated = await systemApi.updateStorageConfig(clampStorageDraft(draft))
       setConfig(updated)
       setDraft(updated)
       setSaveSuccess(true)
@@ -436,31 +459,67 @@ export function StorageSettings(): React.ReactElement {
               {showAdvanced && (
                 <div className="space-y-3 border-t border-[var(--border)] px-4 pt-3 pb-4">
                   <div className="grid grid-cols-2 gap-3">
-                    <NumberInput
-                      label={t('storage.minFree', { defaultValue: '触发清理水位(%)' })}
-                      value={Math.round(draft.minFreeRatio * 100)}
-                      onChange={(v) => setDraft({ ...draft, minFreeRatio: v / 100 })}
-                    />
-                    <NumberInput
-                      label={t('storage.targetFree', { defaultValue: '目标水位(%)' })}
-                      value={Math.round(draft.targetFreeRatio * 100)}
-                      onChange={(v) => setDraft({ ...draft, targetFreeRatio: v / 100 })}
-                    />
-                    <NumberInput
-                      label={t('storage.emergencyFree', { defaultValue: '紧急水位(%)' })}
-                      value={Math.round(draft.emergencyFreeRatio * 100)}
-                      onChange={(v) => setDraft({ ...draft, emergencyFreeRatio: v / 100 })}
-                    />
-                    <NumberInput
-                      label={t('storage.criticalFree', { defaultValue: '熔断水位(%)' })}
-                      value={Math.round(draft.criticalFreeRatio * 100)}
-                      onChange={(v) => setDraft({ ...draft, criticalFreeRatio: v / 100 })}
-                    />
-                    <NumberInput
-                      label={t('storage.batchSize', { defaultValue: '单批删除数' })}
-                      value={draft.batchDeleteSize}
-                      onChange={(v) => setDraft({ ...draft, batchDeleteSize: v })}
-                    />
+                    {/* 水位在校站层以百分数呈现，DTO 仍是 0–1 比值；区间按字段真实语义传给组件，
+                        不在包装层写死 —— 旧的 NumberInput 把水位与批大小统一锁在 0–100。 */}
+                    <FieldShell label={t('storage.minFree', { defaultValue: '触发清理水位(%)' })}>
+                      <NumericField
+                        label={t('storage.minFree', { defaultValue: '触发清理水位(%)' })}
+                        type="integer"
+                        min={FREE_RATIO_PERCENT_LIMITS.min}
+                        max={FREE_RATIO_PERCENT_LIMITS.max}
+                        value={ratioToPercent(draft.minFreeRatio)}
+                        onChange={(v) => setDraft({ ...draft, minFreeRatio: percentToRatio(v) })}
+                        className={ADVANCED_INPUT_CLASS}
+                      />
+                    </FieldShell>
+                    <FieldShell label={t('storage.targetFree', { defaultValue: '目标水位(%)' })}>
+                      <NumericField
+                        label={t('storage.targetFree', { defaultValue: '目标水位(%)' })}
+                        type="integer"
+                        min={FREE_RATIO_PERCENT_LIMITS.min}
+                        max={FREE_RATIO_PERCENT_LIMITS.max}
+                        value={ratioToPercent(draft.targetFreeRatio)}
+                        onChange={(v) => setDraft({ ...draft, targetFreeRatio: percentToRatio(v) })}
+                        className={ADVANCED_INPUT_CLASS}
+                      />
+                    </FieldShell>
+                    <FieldShell label={t('storage.emergencyFree', { defaultValue: '紧急水位(%)' })}>
+                      <NumericField
+                        label={t('storage.emergencyFree', { defaultValue: '紧急水位(%)' })}
+                        type="integer"
+                        min={FREE_RATIO_PERCENT_LIMITS.min}
+                        max={FREE_RATIO_PERCENT_LIMITS.max}
+                        value={ratioToPercent(draft.emergencyFreeRatio)}
+                        onChange={(v) =>
+                          setDraft({ ...draft, emergencyFreeRatio: percentToRatio(v) })
+                        }
+                        className={ADVANCED_INPUT_CLASS}
+                      />
+                    </FieldShell>
+                    <FieldShell label={t('storage.criticalFree', { defaultValue: '熔断水位(%)' })}>
+                      <NumericField
+                        label={t('storage.criticalFree', { defaultValue: '熔断水位(%)' })}
+                        type="integer"
+                        min={FREE_RATIO_PERCENT_LIMITS.min}
+                        max={FREE_RATIO_PERCENT_LIMITS.max}
+                        value={ratioToPercent(draft.criticalFreeRatio)}
+                        onChange={(v) =>
+                          setDraft({ ...draft, criticalFreeRatio: percentToRatio(v) })
+                        }
+                        className={ADVANCED_INPUT_CLASS}
+                      />
+                    </FieldShell>
+                    <FieldShell label={t('storage.batchSize', { defaultValue: '单批删除数' })}>
+                      <NumericField
+                        label={t('storage.batchSize', { defaultValue: '单批删除数' })}
+                        type="integer"
+                        min={STORAGE_LIMITS.batchDeleteSize.min}
+                        max={STORAGE_LIMITS.batchDeleteSize.max}
+                        value={draft.batchDeleteSize}
+                        onChange={(v) => setDraft({ ...draft, batchDeleteSize: v })}
+                        className={ADVANCED_INPUT_CLASS}
+                      />
+                    </FieldShell>
                   </div>
                 </div>
               )}
@@ -634,27 +693,36 @@ function RetentionRow({
   quota: number
   onChange: (days: number, quota: number) => void
 }): React.ReactElement {
+  const { t } = useTranslation('system')
+  // 表格单元格没有 label 元素，可访问名称由「行类型 + 列头」拼出，避免三行两列出现四个同名控件
+  const daysLabel = `${label} ${t('storage.retentionDays', { defaultValue: '保留天数' })}`
+  const quotaLabel = `${label} ${t('storage.quotaMb', { defaultValue: '配额(MB)' })}`
+
   return (
     <tr className="bg-[var(--bg-surface)] transition-colors hover:bg-[var(--bg-secondary)]/50">
       <td className="px-4 py-3">
         <span className="font-medium text-[var(--text-primary)]">{label}</span>
       </td>
       <td className="px-3 py-3">
-        <NumericInput
-          min={1}
-          max={365}
+        <NumericField
+          label={daysLabel}
+          type="integer"
+          min={STORAGE_LIMITS.retentionDays.min}
+          max={STORAGE_LIMITS.retentionDays.max}
           value={days}
           onChange={(nextDays) => onChange(nextDays, quota)}
-          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-center font-mono text-[13px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none"
+          className={RETENTION_INPUT_CLASS}
         />
       </td>
       <td className="px-3 py-3">
-        <NumericInput
-          min={0}
+        <NumericField
+          label={quotaLabel}
+          type="integer"
+          min={STORAGE_LIMITS.quotaMb.min}
           value={quota}
           onChange={(nextQuota) => onChange(days, nextQuota)}
           placeholder="0=不限"
-          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 text-center font-mono text-[13px] text-[var(--text-primary)] transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none"
+          className={RETENTION_QUOTA_INPUT_CLASS}
         />
       </td>
     </tr>
@@ -746,80 +814,6 @@ function RadioOption({
         <p className="mt-0.5 text-[12px] text-[var(--text-muted)]">{description}</p>
       </div>
     </label>
-  )
-}
-
-function NumericInput({
-  value,
-  onChange,
-  ...props
-}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur' | 'type'> & {
-  value: number
-  onChange: (value: number) => void
-}): React.ReactElement {
-  const [inputValue, setInputValue] = useState(() => String(value))
-  const [isEditing, setIsEditing] = useState(false)
-
-  // 非编辑态同步外部值：用渲染期状态调整而非 effect。
-  // effect 会先渲染一帧旧值再覆盖（外部值变化时表现为输入框闪一下），
-  // 渲染期调整在本次渲染内直接收敛。编辑中刻意不同步，避免打断用户输入。
-  const [syncedValue, setSyncedValue] = useState(value)
-  if (!isEditing && value !== syncedValue) {
-    setSyncedValue(value)
-    setInputValue(String(value))
-  }
-
-  const handleBlur = () => {
-    setIsEditing(false)
-    const parsed = Number(inputValue)
-    if (inputValue.trim() === '' || !Number.isFinite(parsed)) {
-      setInputValue(String(value))
-      return
-    }
-    onChange(parsed)
-    setInputValue(String(parsed))
-  }
-
-  return (
-    <input
-      {...props}
-      type="number"
-      value={inputValue}
-      onFocus={() => setIsEditing(true)}
-      onChange={(event) => {
-        const nextValue = event.currentTarget.value
-        setInputValue(nextValue)
-        if (nextValue.trim() === '') return
-        const parsed = Number(nextValue)
-        if (Number.isFinite(parsed)) onChange(parsed)
-      }}
-      onBlur={handleBlur}
-    />
-  )
-}
-
-function NumberInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: number
-  onChange: (v: number) => void
-}): React.ReactElement {
-  return (
-    <div>
-      <label className="mb-1.5 block text-[12px] font-medium text-[var(--text-muted)]">
-        {label}
-      </label>
-      <NumericInput
-        min={0}
-        max={100}
-        value={value}
-        onChange={onChange}
-        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-[13px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 focus:outline-none"
-      />
-    </div>
   )
 }
 
