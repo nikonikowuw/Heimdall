@@ -466,7 +466,7 @@ export function ReextractModal({
       closeDisabled={isStarting}
       priority={5}
       onConfirm={currentMode === 'confirm' ? onConfirm : undefined}
-      panelClassName="modal-surface--form max-w-xl p-0"
+      panelClassName="modal-surface--form modal-surface--xl p-0"
     >
       <ModalFormHeader
         icon={HeaderIcon}

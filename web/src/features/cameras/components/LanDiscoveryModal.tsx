@@ -64,7 +64,7 @@ export function LanDiscoveryModal({
       })}
       layer="highest"
       closeDisabled={scanning}
-      panelClassName="max-h-[82vh]"
+      panelClassName="modal-surface--wide max-h-[82vh]"
     >
       {/* 头部 */}
       <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)]/70 px-6 py-4.5">

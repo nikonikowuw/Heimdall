@@ -56,8 +56,14 @@ function getPanelHiddenState(
  * 统一浮层外壳：承担遮罩、层级、进出场动效、焦点陷阱、ESC/Enter 浮层栈与
  * `aria-modal` 语义。业务弹窗只提供内容与业务回调，不再自建外壳。
  *
- * 需要自定义尺寸/内衬时通过 `panelClassName` 传入 `modal-surface--*` 类族，
- * 不要在调用点重新拼 `modal-backdrop` / `modal-scrim` 结构。
+ * 尺寸只由 `.modal-surface--*` 档位决定，本组件不为 modal 变体注入任何默认档位：
+ * 同一元素带上两个档位时，同层同权重的规则只能靠源序决出胜负，结果是窄档位被
+ * 静默改成宽档位。调用方需通过 `panelClassName` 显式声明档位（`--small` / `--compact` /
+ * `--narrow` / `--xl` / `--medium` / `--wide` / `--extra-wide`）；未声明时回落到
+ * `.modal-surface` 基类的 36rem。
+ *
+ * 需要自定义内衬时同样通过 `panelClassName` 传入，不要在调用点重新拼
+ * `modal-backdrop` / `modal-scrim` 结构。
  */
 export function ModalOverlay({
   isOpen,
@@ -133,7 +139,7 @@ export function ModalOverlay({
               // p-6 为默认内衬；共享表单布局由调用方覆盖内边距，并使用自己的内容区和页脚间距
               'modal-surface cursor-default p-6 outline-hidden',
               surface === 'glass' && 'modal-surface--glass',
-              isDrawer ? 'modal-surface--drawer' : 'modal-surface--wide',
+              isDrawer && 'modal-surface--drawer',
               panelClassName,
             )}
           >

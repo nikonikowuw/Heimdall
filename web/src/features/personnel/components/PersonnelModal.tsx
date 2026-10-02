@@ -277,7 +277,7 @@ export function PersonnelModal({
       ariaDescribedBy={descriptionId}
       surface="solid"
       closeDisabled={isSubmitting || isPreparingPhotos}
-      panelClassName="modal-surface--form p-0"
+      panelClassName="modal-surface--form modal-surface--wide p-0"
       onExitComplete={handleExitComplete}
     >
       <ModalFormHeader

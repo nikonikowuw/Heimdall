@@ -487,16 +487,20 @@
     max-width: 32rem;
   }
 
+  .modal-surface--xl {
+    max-width: 36rem;
+  }
+
+  .modal-surface--medium {
+    max-width: 42rem;
+  }
+
   .modal-surface--wide {
     max-width: 48rem;
   }
 
   .modal-surface--extra-wide {
     max-width: 64rem;
-  }
-
-  .modal-surface--medium {
-    max-width: 42rem;
   }
 
   .modal-surface--form {

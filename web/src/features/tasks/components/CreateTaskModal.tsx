@@ -567,7 +567,7 @@ export function CreateTaskModal({
       ariaDescribedBy="create-task-description"
       surface="solid"
       closeDisabled={isSubmitting}
-      panelClassName="modal-surface--form p-0"
+      panelClassName="modal-surface--form modal-surface--wide p-0"
     >
       <ModalFormHeader
         icon={Sliders}

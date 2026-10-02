@@ -752,7 +752,7 @@ export function PersonnelImportModal({
       ariaDescribedBy={descriptionId}
       surface="solid"
       closeDisabled={isStarting || isCancelling}
-      panelClassName="modal-surface--form max-w-xl p-0"
+      panelClassName="modal-surface--form modal-surface--xl p-0"
     >
       <ModalFormHeader
         icon={HeaderIcon}

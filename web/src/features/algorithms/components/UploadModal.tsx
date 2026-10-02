@@ -264,7 +264,7 @@ export function UploadModal({ isOpen, onClose, onSuccess }: UploadModalProps): R
       ariaDescribedBy={descriptionId}
       surface="solid"
       closeDisabled={isUploading}
-      panelClassName="modal-surface--form max-w-xl p-0"
+      panelClassName="modal-surface--form modal-surface--xl p-0"
     >
       <ModalFormHeader
         icon={Upload}
