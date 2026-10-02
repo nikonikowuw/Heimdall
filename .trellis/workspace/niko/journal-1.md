@@ -138,3 +138,43 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: NPU fallback observability hard gate
+<!-- trellis-session: v=2 fp=17d76d0b866ac037 -->
+
+**Date**: 2026-10-02
+**Task**: NPU fallback observability hard gate
+**Branch**: `dev`
+
+### Summary
+
+Implemented explicit hardware fallback policy, platform_id-based resolution, and an unbypassable install self-test gate. Added actionable ModelLoad errors, three-state availability reporting, explicit local-tool Allow overrides, regression tests, and updated specs.
+
+### Main Changes
+
+- RKNN sessions now distinguish hardware-required failure from simulated fallback; self-test cannot be overridden.
+- Development tools explicitly opt into simulated fallback without relying on .env.
+- Documented policy precedence, 512-byte last_error ordering, and validation contract.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1cae773` | feat(algo-sdk): enforce hardware-required fallback policy |
+| `8d2599b` | docs(spec): document hardware fallback contract |
+| `e57ced1` | chore(task): finalize NPU fallback observability artifacts |
+
+### Testing
+
+- [OK] Workspace: 977 tests passed; algo-sdk with rknn feature: 174 passed.
+- [OK] macOS, RK3568, RK3576, RK3588 workspaces: 37 / 88 / 34 / 67 tests passed.
+- [OK] fmt, workspace/platform clippy, Linux cross-target checks, mutation gate check, and git diff --check passed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Continue the separate NPU core-allocation task from its planning phase.
