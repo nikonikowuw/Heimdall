@@ -203,6 +203,16 @@ export function TaskCameraCard({
   const [copied, setCopied] = useState(false)
   const probeBadge = getProbeBadge(camera.lastProbeStatus, t)
 
+  /* 主标题显示任务名，副标题给摄像头身份。
+   * 未重命名的任务其 `config.name` 默认即摄像头名（LiveRulesStudio 的默认命名），
+   * 因此主标题视觉不变；仅在用户重命名后体现差异，与页面语义（一通道一任务）一致。
+   * 副标题避免与主标题重复：任务名与摄像头名相同时只留通道 ID。
+   */
+  const displayName = config?.name || camera.name || camera.cameraId
+  const cameraIdentity = camera.name || camera.cameraId
+  const secondaryLine =
+    displayName === cameraIdentity ? camera.cameraId : `${cameraIdentity} · ${camera.cameraId}`
+
   const handleCopyRtsp = async (e: React.MouseEvent) => {
     e.stopPropagation()
     const success = await copyToClipboard(camera.rtspUrl)
@@ -247,10 +257,13 @@ export function TaskCameraCard({
           </div>
           <div className="min-w-0">
             <h4 className="truncate text-sm font-bold tracking-tight text-[var(--text-primary)]">
-              {camera.name || camera.cameraId}
+              {displayName}
             </h4>
-            <p className="truncate font-mono text-[11px] text-[var(--text-muted)]">
-              {camera.cameraId}
+            <p
+              className="truncate font-mono text-[11px] text-[var(--text-muted)]"
+              title={secondaryLine}
+            >
+              {secondaryLine}
             </p>
           </div>
         </div>
@@ -309,7 +322,7 @@ export function TaskCameraCard({
         onClick={onConfigure}
         whileHover={reduceMotion ? undefined : { scale: 1.005 }}
         whileTap={reduceMotion ? undefined : { scale: 0.99 }}
-        aria-label={`${t('actions.configureRules', { defaultValue: '配置算法与布防规则' })} - ${camera.name || camera.cameraId}`}
+        aria-label={`${t('actions.configureRules', { defaultValue: '配置算法与布防规则' })} - ${displayName}`}
         className="group/canvas relative mt-3.5 aspect-video w-full overflow-hidden rounded-xl border border-black/10 bg-[#05070c] shadow-inner transition-all hover:border-[var(--accent)]/50 hover:shadow-[0_0_24px_rgba(var(--status-info-rgb),0.18)] dark:border-white/10"
       >
         {/* 背景微米点阵 + 雷达网格 */}

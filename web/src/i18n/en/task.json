@@ -82,6 +82,19 @@
     "addCameraHint": "No RTSP video stream device added yet",
     "addFirstCamera": "Add First Camera"
   },
+  "filter": {
+    "searchPlaceholder": "Search task, camera, or channel ID",
+    "algorithmLabel": "Filter by algorithm",
+    "algorithmAll": "All algorithms",
+    "armStatusLabel": "Filter by arm status",
+    "armAll": "All",
+    "armed": "Armed",
+    "disarmed": "Disarmed",
+    "matched": "{{count}} matched",
+    "noMatchTitle": "No matching tasks",
+    "noMatchHint": "Try clearing the search or adjusting the arm status and algorithm filters",
+    "clearAll": "Clear filters"
+  },
   "card": {
     "rtspDirect": "RTSP Stream:",
     "geometryRules": "Zones",

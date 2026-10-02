@@ -82,6 +82,19 @@
     "addCameraHint": "暂未接入任何 RTSP 视频流设备",
     "addFirstCamera": "接入首路摄像头"
   },
+  "filter": {
+    "searchPlaceholder": "搜索任务名 / 摄像头名 / 通道 ID",
+    "algorithmLabel": "按算法筛选",
+    "algorithmAll": "全部算法",
+    "armStatusLabel": "按布防状态筛选",
+    "armAll": "全部",
+    "armed": "已布防",
+    "disarmed": "未布防",
+    "matched": "筛选命中 {{count}}",
+    "noMatchTitle": "未找到匹配的布防任务",
+    "noMatchHint": "尝试清除搜索条件，或调整布防状态与算法筛选",
+    "clearAll": "清除筛选"
+  },
   "card": {
     "rtspDirect": "RTSP 直通流:",
     "geometryRules": "布防几何规则:",

@@ -82,6 +82,19 @@
     "addCameraHint": "暫未接入任何 RTSP 視訊串流設備",
     "addFirstCamera": "接入首路攝影機"
   },
+  "filter": {
+    "searchPlaceholder": "搜尋任務名 / 攝影機名 / 通道 ID",
+    "algorithmLabel": "依演算法篩選",
+    "algorithmAll": "全部演算法",
+    "armStatusLabel": "依布防狀態篩選",
+    "armAll": "全部",
+    "armed": "已布防",
+    "disarmed": "未布防",
+    "matched": "篩選命中 {{count}}",
+    "noMatchTitle": "未找到符合條件的布防任務",
+    "noMatchHint": "嘗試清除搜尋條件，或調整布防狀態與演算法篩選",
+    "clearAll": "清除篩選"
+  },
   "card": {
     "rtspDirect": "RTSP 直通流:",
     "geometryRules": "布防幾何規則:",

@@ -1,15 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus, ShieldAlert, Sliders, Video } from 'lucide-react'
+import { Plus, RotateCcw, Search, ShieldAlert, Sliders, Video } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { RefreshButton } from '@/components/RefreshButton'
 import { motionTokens } from '@/lib/motionTokens'
-import { cameraApi, taskApi } from '@/lib/api'
+import { algorithmApi, cameraApi, taskApi } from '@/lib/api'
 import type { Camera, TaskConfigDto, StreamMode } from '@/types'
 import { CreateTaskModal } from './components/CreateTaskModal'
 import { DeleteTaskModal } from './components/DeleteTaskModal'
 import { LiveRulesStudio } from './components/LiveRulesStudio'
 import { TaskCameraCard } from './components/TaskCameraCard'
+import { TaskFilterBar } from './components/TaskFilterBar'
+import {
+  ALGORITHM_FILTER_ALL,
+  countByArmStatus,
+  deriveAlgorithmOptions,
+  filterTasks,
+  type ArmStatusFilter,
+  type TaskFilterEntry,
+} from './taskFilter'
 import { PageHeader } from '@/components/ui/PageHeader'
 
 export interface TasksPageProps {
@@ -29,8 +38,14 @@ export function TasksPage({
 
   const [cameras, setCameras] = useState<Camera[]>([])
   const [taskConfigs, setTaskConfigs] = useState<Record<string, TaskConfigDto>>({})
+  const [algoNames, setAlgoNames] = useState<ReadonlyMap<string, string>>(new Map())
   const [selectedCameraForConfig, setSelectedCameraForConfig] = useState<Camera | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+
+  // 筛选状态：三个维度独立持有，互不干扰；清除筛选一次性复位
+  const [query, setQuery] = useState('')
+  const [armStatus, setArmStatus] = useState<ArmStatusFilter>('all')
+  const [algorithmId, setAlgorithmId] = useState(ALGORITHM_FILTER_ALL)
 
   // 任务创建与删除模态框状态
   const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false)
@@ -39,9 +54,19 @@ export function TasksPage({
   // 取数不碰 loading：挂载时由 useState(true) 承担，刷新时在事件处理器内置位。
   // 用 `.then/.catch/.finally` 链，理由同 CamerasPage（async + try/finally 会被
   // set-state-in-effect 保守判为同步 setState）。
+  //
+  // 算法清单走 `allSettled` 而非 `all`：算法名仅影响筛选下拉的标签，其取数失败
+  // 不得让整个任务列表报错。不传 `pageSize`，对齐 LiveRulesStudio 的既有调用形态；
+  // 算法数超出首页返回量时标签回落原始 ID，功能不降级，不为此新增分页循环。
   const loadData = useCallback((): Promise<void> => {
-    return Promise.all([cameraApi.list(), taskApi.list()])
-      .then(([cams, tasks]) => {
+    return Promise.allSettled([cameraApi.list(), taskApi.list(), algorithmApi.list()])
+      .then(([camsResult, tasksResult, algosResult]) => {
+        if (camsResult.status === 'rejected' || tasksResult.status === 'rejected') {
+          throw new Error('task list load failed')
+        }
+
+        const cams = camsResult.value
+        const tasks = tasksResult.value
         setCameras(cams)
 
         const configs: Record<string, TaskConfigDto> = {}
@@ -62,6 +87,12 @@ export function TasksPage({
           }
         }
         setTaskConfigs(configs)
+
+        setAlgoNames(
+          algosResult.status === 'fulfilled'
+            ? new Map(algosResult.value.items.map((item) => [item.algorithmId, item.name]))
+            : new Map(),
+        )
       })
       .catch(() => {
         // 优雅降级处理
@@ -139,11 +170,52 @@ export function TasksPage({
     }
   }
 
-  // 真正绑定了 AI 任务的摄像头通道
-  const camerasWithTasks = cameras.filter((c) => taskConfigs[c.cameraId] !== undefined)
+  // 真正绑定了 AI 任务的摄像头通道（页面 KPI 与空态共用）
   const totalArmed = Object.values(taskConfigs).filter((cfg) => cfg.desiredEnabled).length
   // 引用必须稳定：创建向导依赖它推导候选通道，每次渲染新建 Set 会把向导状态重置
   const existingCameraIdsWithTasks = useMemo(() => new Set(Object.keys(taskConfigs)), [taskConfigs])
+
+  /* ── 筛选编排 ──
+   *
+   * 检索单元按 `cameras` 数组顺序构建，**不重排**：该顺序由 `CameraRepo::list_all`
+   * 决定，与 CamerasPage / LivePage 共享同一口径（三页均消费 `cameraApi.list()`），
+   * 在任务页单独排序会让三页视觉口径分裂。`filterTasks` 为顺序保持过滤，
+   * 因此筛选后卡片的相对先后与筛选前一致，只有被滤除的项消失。
+   *
+   * 全量口径（KPI 与药丸计数）与命中数在此分离：标题栏的「任务总数 / 已布防」
+   * 始终描述整个任务集，只有「筛选命中 N」随筛选变化。`entries.length` 即「任务
+   * 总数」，不另建一份摄像头数组 —— 下游只需要它的长度。
+   */
+  const entries = useMemo(() => {
+    const list: TaskFilterEntry[] = []
+    for (const camera of cameras) {
+      const config = taskConfigs[camera.cameraId]
+      if (config) list.push({ camera, config })
+    }
+    return list
+  }, [cameras, taskConfigs])
+  const armStatusCounts = useMemo(
+    () => countByArmStatus(entries.map((entry) => entry.config)),
+    [entries],
+  )
+  const algorithmOptions = useMemo(
+    () =>
+      deriveAlgorithmOptions(
+        entries.map((entry) => entry.config),
+        algoNames,
+      ),
+    [entries, algoNames],
+  )
+  const visibleEntries = useMemo(
+    () => filterTasks(entries, { query, armStatus, algorithmId }),
+    [entries, query, armStatus, algorithmId],
+  )
+
+  function clearFilters(): void {
+    setQuery('')
+    setArmStatus('all')
+    setAlgorithmId(ALGORITHM_FILTER_ALL)
+  }
 
   return (
     <AnimatePresence mode="wait">
@@ -183,7 +255,7 @@ export function TasksPage({
                 <span className="flex items-center gap-1 text-[var(--text-muted)]">
                   <span>{t('channelCount', { defaultValue: '任务总数' })}:</span>
                   <strong className="font-semibold text-[var(--text-primary)]">
-                    {camerasWithTasks.length}
+                    {entries.length}
                   </strong>
                 </span>
                 <span className="text-[var(--border-strong)]">/</span>
@@ -213,6 +285,23 @@ export function TasksPage({
             }
           />
 
+          {/* 检索与筛选工作台：仅在系统存在通道时渲染（对齐 CamerasPage 的 `cameras.length > 0` 门控） */}
+          {cameras.length > 0 && (
+            <TaskFilterBar
+              query={query}
+              onQueryChange={setQuery}
+              onQueryClear={() => setQuery('')}
+              armStatus={armStatus}
+              onArmStatusChange={setArmStatus}
+              armStatusCounts={armStatusCounts}
+              algorithmId={algorithmId}
+              onAlgorithmChange={setAlgorithmId}
+              algorithmOptions={algorithmOptions}
+              onClearFilters={clearFilters}
+              matchedCount={visibleEntries.length}
+            />
+          )}
+
           {/* AI 任务卡片矩阵 */}
           <div className="min-h-0 flex-1 overflow-auto pt-1">
             {cameras.length === 0 ? (
@@ -240,7 +329,7 @@ export function TasksPage({
                   </button>
                 )}
               </div>
-            ) : camerasWithTasks.length === 0 ? (
+            ) : entries.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-24 text-center text-[var(--text-muted)]">
                 <ShieldAlert className="mb-2 h-8 w-8 text-[var(--accent)] opacity-60" />
                 <p className="font-medium text-[var(--text-secondary)]">
@@ -261,6 +350,18 @@ export function TasksPage({
                   <span>{t('createFirstTask', { defaultValue: '创建首个布防任务' })}</span>
                 </button>
               </div>
+            ) : visibleEntries.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-24 text-center text-[var(--text-muted)]">
+                <Search className="mb-2 h-8 w-8 opacity-40" />
+                <p className="font-medium text-[var(--text-secondary)]">
+                  {t('filter.noMatchTitle')}
+                </p>
+                <p className="mt-1 max-w-sm text-xs opacity-75">{t('filter.noMatchHint')}</p>
+                <button type="button" onClick={clearFilters} className="page-action-btn mt-4">
+                  <RotateCcw className="h-4 w-4" />
+                  <span>{t('filter.clearAll')}</span>
+                </button>
+              </div>
             ) : (
               <motion.div
                 variants={{
@@ -275,18 +376,18 @@ export function TasksPage({
                 animate="visible"
                 className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3"
               >
-                {camerasWithTasks.map((camera) => (
+                {visibleEntries.map(({ camera, config }) => (
                   <TaskCameraCard
                     key={camera.id}
                     camera={camera}
-                    config={taskConfigs[camera.cameraId]}
+                    config={config}
                     onToggleArm={() => handleToggleArm(camera)}
                     onConfigure={() => setSelectedCameraForConfig(camera)}
                     onStreamModeChange={(nextMode) => handleStreamModeChange(camera, nextMode)}
                     onDelete={() =>
                       setTaskToDelete({
                         cameraId: camera.cameraId,
-                        name: taskConfigs[camera.cameraId]?.name || camera.name || camera.cameraId,
+                        name: config.name || camera.name || camera.cameraId,
                       })
                     }
                     t={t}
