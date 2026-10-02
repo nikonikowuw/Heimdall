@@ -1,6 +1,6 @@
 # PRD: NPU 硬件回退静默降级可观测性与自检硬门
 
-> 状态：planning。创建日期 2026-10-01。来源：`09-30-edge-torch-algo-ecosystem` 交接项 H3。
+> 状态：in_progress。创建日期 2026-10-01。来源：`09-30-edge-torch-algo-ecosystem` 交接项 H3。
 
 ## 1. 目标与用户价值
 
@@ -57,19 +57,21 @@
 
 解析优先级（高 → 低）：
 
-1. 安装自检模式 → 强制 `RequireHardware`
-2. 宿主平台为硬件平台 → `RequireHardware`
-3. 其他（开发机） → `Allow`
-4. 可选：算法包私有 `.env` 显式覆盖
+1. 安装自检模式 → 强制 `RequireHardware`；此硬门不可由代码显式覆盖或 `.env` 翻越。
+2. 调用方显式策略 `fallback_policy_override` → 采纳显式值。仅供受控调用方（如本地开发工具）声明意图；生产 C ABI 路径恒传 `None`。
+3. 算法包私有 `.env` 中 `ALLOW_CPU_FALLBACK=1` → 显式选择 `Allow`，但不影响安装自检。
+4. 宿主 `platform_id` 归一化后属于硬件平台 → `RequireHardware`。
+5. 其他平台 → `Allow`。
+
+`run_local` 等本地开发工具应在代码中显式声明 `Allow`，不依赖 `.env` 逃生口。
+**不得用 `.env` 作为默认策略来源。** `.env` 被版本库忽略，新设备上必然缺失；没有显式覆盖时，策略由自检模式与宿主自报的 `platform_id` 决定。
 
 **平台判定必须基于宿主自报的 `platform_id`，不得依赖编译期 `cfg`。**
 理由：`algo-sdk` 存在同一进程内同时服务多个平台算法包的场景，且 `cfg` 在 SDK 内无法表达"宿主是什么"。
 
-**不得用 `.env` 作为默认策略来源。** `.env` 被版本库忽略，新设备上必然缺失；以部署时不存在的东西作为安全开关是循环依赖。
-
 ### 4.3 安装自检硬门
 
-宿主安装自检流程必须在创建实例后、判定通过前，确认算法包未处于模拟降级状态。任一环节不满足则自检**失败**。
+安装自检只有在实例初始化满足真实硬件要求时才能通过。自检模式下无论调用方显式声明或包私有 `.env` 如何配置，都必须使用 `RequireHardware`；硬件不可用时 `instance_create` 返回模型加载错误，宿主既有自检流程据此判定失败。
 
 ### 4.4 声明式路径可传递策略
 
@@ -93,18 +95,18 @@
 
 ## 7. 验收标准 (Acceptance Criteria)
 
-- [ ] **A1：策略可表达** — `RknnSessionOptions` 可表达 `Allow` / `RequireHardware`；默认值等于既有行为（`Allow`），既有测试无需改动即通过。
-- [ ] **A2：`RequireHardware` 真实生效** — 无可用运行时时，构造返回 `Err`，**不得**返回可用的模拟会话。测试须断言"返回的是错误"而不只是"返回了某个东西"。
-- [ ] **A3：三态可判别** — 提供查询能力使调用方能区分真实硬件 / 模拟降级 / 需硬件但不可用。测试覆盖三种状态。
-- [ ] **A4：自检硬门** — 安装自检模式下，模拟降级不得导致自检通过。测试须覆盖"自检 + 无硬件 → 失败"。
-- [ ] **A5：开发机回退保留** — 非硬件平台上默认策略仍为 `Allow`，既有回退路径测试继续通过。
-- [ ] **A6：平台判定基于 platform_id** — 规则以归一化后的宿主 `platform_id` 为准，`algo-sdk` 内**不得**新增按目标 SoC 或宿主 OS 的 `cfg` 分支。可通过代码审查 + 测试断言。
-- [ ] **A7：自检流程在模拟降级下失败（可由 SDK 单独满足）** — 安装自检模式下，模拟降级必须导致自检失败，且给出可定位错误。
+- [x] **A1：策略可表达** — `RknnSessionOptions` 可表达 `Allow` / `RequireHardware`；默认值等于既有行为（`Allow`），既有测试无需改动即通过。
+- [x] **A2：`RequireHardware` 真实生效** — 无可用运行时时，构造返回 `Err`，**不得**返回可用的模拟会话。测试须断言"返回的是错误"而不只是"返回了某个东西"。
+- [x] **A3：三态可判别** — 提供查询能力使调用方能区分真实硬件 / 模拟降级 / 需硬件但不可用。测试覆盖三种状态。
+- [x] **A4：自检硬门** — 安装自检模式下，模拟降级不得导致自检通过。测试须覆盖"自检 + 无硬件 → 失败"。
+- [x] **A5：开发机回退保留** — 非硬件平台上默认策略仍为 `Allow`，既有回退路径测试继续通过。
+- [x] **A6：平台判定基于 platform_id** — 规则以归一化后的宿主 `platform_id` 为准，`algo-sdk` 内**不得**新增按目标 SoC 或宿主 OS 的 `cfg` 分支。可通过代码审查 + 测试断言。
+- [x] **A7：自检流程在模拟降级下失败（可由 SDK 单独满足）** — 安装自检模式下，模拟降级必须导致自检失败，且给出可定位错误。
   - **实现路径已定稿（`design.md` §1.4 / §4.4）**：硬门完全落在 `algo-sdk` 内，由 `instance_create` 返回 `AV_ERR_MODEL_LOAD_FAILED` 自然使 `sandbox.rs:838` 判定失败，**宿主零改动**。
   - 因此本项的验收证据是「自检模式 + 无硬件 → `instance_create` 返回 `-5` 且 `last_error` 可定位」，**不**要求宿主新增校验代码。
   - 可选防御性增强（非验收门槛）：在 `SelfTestReport` 中记录硬件状态，使自检报告能区分真实推理与模拟会话（`design.md` §4.4）。
-- [ ] **A8：向后兼容** — `RuntimeSession::open`、`RknnSession::open_or_fallback` 现有签名与行为对外保持可用；`algo-sdk` 与算法包的既有测试全绿。
-- [ ] **A9：门禁全绿** — `cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings`、`cargo nextest run --workspace`（或 `cargo test`），以及 AGENTS.md 列出的四个算法平台 workspace 门禁全部通过。
+- [x] **A8：向后兼容** — `RuntimeSession::open`、`RknnSession::open_or_fallback` 现有签名与行为对外保持可用；`algo-sdk` 与算法包的既有测试全绿。
+- [x] **A9：门禁全绿** — `cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings`、`cargo nextest run --workspace`（或 `cargo test`），以及 AGENTS.md 列出的四个算法平台 workspace 门禁全部通过。
 
 ## 8. 开放问题（均已定稿）
 

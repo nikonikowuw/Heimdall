@@ -3,7 +3,7 @@
   "name": "npu-fallback-observability",
   "title": "NPU 硬件回退静默降级可观测性与自检硬门",
   "description": "消除 CPU fallback 静默降级：策略化 RequireHardware、安装自检硬门、platform_id 驱动规则",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": "algo-sdk",

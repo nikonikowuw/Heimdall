@@ -1,4 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
 {"file": ".trellis/spec/algo-sdk/backend/index.md", "reason": "algo-sdk 规范入口与 Pre-Development Checklist"}
 {"file": ".trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md", "reason": "C ABI 虚表、状态码映射、InitContext 契约、插件生命周期"}
 {"file": ".trellis/spec/guides/error-handling.md", "reason": "错误枚举与降级规则；本任务核心依据：不得吞错误后伪造成功"}

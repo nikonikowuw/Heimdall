@@ -45,92 +45,60 @@ let detections_count = collected_results.lock().map(|r| r.len()).unwrap_or(0);  
 
 ### 1.4 可利用的关键事实
 
-1. `AlgoPlugin::init` 的 `InitContext` 同时携带 `is_self_test` 与 `platform_id`（`plugin.rs:19-23`）；
-2. `is_self_test` 由 `raw_args.mode == AV_INSTANCE_INSTALL_SELF_TEST` 派生（`macros.rs:558`）；
-3. `instance_create` 返回非 `AV_OK` 时，宿主的自检流程**已经会失败**（`sandbox.rs:838`）并通过 `last_error` 取回原因（`macros.rs:788`）。
+1. `AlgoPlugin::init` 的 `InitContext` 携带 `is_self_test`、`platform_id` 与 `fallback_policy_override`（`plugin.rs`）；
+2. `is_self_test` 由 `raw_args.mode == AV_INSTANCE_INSTALL_SELF_TEST` 派生；
+3. `export_algo!` 创建的生产上下文恒将 `fallback_policy_override` 置为 `None`；自检下策略解析始终优先返回 `RequireHardware`；
+4. `instance_create` 返回非 `AV_OK` 时，宿主既有自检流程已会失败（`sandbox.rs`）并通过 `last_error` 取回原因。
 
-→ **硬门可完全落在 `algo-sdk` 内，宿主零改动**（§4.4）。
+→ **硬门完全落在 `algo-sdk`，宿主零改动**（§4.4）。
 
 ## 2. 契约与边界
 
-### 2.1 新增类型（`A1`）
+### 2.1 策略、状态与运行时选项（`A1` / `A3`）
 
 ```rust
-// crates/algo-sdk/src/runtime/platforms/rockchip.rs（或 runtime 内共享位置）
-
-/// 无硬件时的行为策略
+// crates/algo-sdk/src/runtime/fallback.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FallbackPolicy {
-    /// 无硬件时降级为模拟会话（开发/调试）
     #[default]
     Allow,
-    /// 无硬件时必须失败，不得返回模拟会话
     RequireHardware,
 }
 
-#[derive(Debug, Clone, Copy)]
+pub enum HardwareStatus { Hardware, Simulated } // 成功构造的会话状态
+pub enum HardwareAvailability { Hardware, Simulated, Unavailable } // 构造结果三态
+
+// crates/algo-sdk/src/runtime/platforms/rockchip.rs
+#[non_exhaustive]
 pub struct RknnSessionOptions {
     pub core_mask: c_int,
-    /// 加法式新增；`Default` 即既有行为
-    pub fallback_policy: FallbackPolicy,
+    pub fallback_policy: FallbackPolicy, // 新增字段，Default = Allow
 }
 ```
 
-**加法式保证**：`fallback_policy` 的 `Default` 为 `Allow`，与既有行为逐位一致。所有既有 `RknnSessionOptions::with_core_mask(...)` / `RknnSessionOptions::default()` 构造点行为不变（`A8`）。
+`FallbackPolicy::Allow` 与 `RknnSessionOptions::default()` 保持既有默认行为；`new` / `with_core_mask` 保留原签名。
+`hardware_status()` 提供成功会话的硬件状态，既有 `is_fallback()` 保留并委托给该状态。
 
 ### 2.2 三态可判别（`A3`）
 
-现状是布尔 `is_fallback()`，无法区分"需硬件但不可用"。因 `RequireHardware` 失败即返回 `Err`，该态不会产生会话对象，故**三态只需在"成功构造"域内区分两态 + 用 `Err` 表达第三态**：
+会话对象只包含成功构造的两态：`HardwareStatus::{Hardware, Simulated}`。需要硬件但不可用时构造返回 `Err(AlgoError::ModelLoad { .. })`，不会产生会话对象。统一归约入口 `classify_session_availability(&Result<HardwareStatus, AlgoError>)` 将这两态与失败映射为 `HardwareAvailability::{Hardware, Simulated, Unavailable}`。
 
-```rust
-/// 会话的硬件可用性状态
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HardwareStatus {
-    /// 真实硬件运行时已就绪
-    Hardware,
-    /// 开发调试模拟会话（未使用硬件）
-    Simulated,
-}
-
-impl RknnSession {
-    pub fn hardware_status(&self) -> HardwareStatus { /* backend 映射 */ }
-    /// 保留既有布尔查询，内部委托 hardware_status，避免破坏调用点
-    pub fn is_fallback(&self) -> bool { self.hardware_status() == HardwareStatus::Simulated }
-}
-```
-
-`RuntimeSession` 同步提供 `hardware_status()`，并对 `Fallback` 变体返回 `Simulated`。
-
-> 三态语义：`Hardware` = 真硬件；`Simulated` = 模拟会话；`Err(...)` = 需硬件但不可用。
+`RknnSession` 与 `RuntimeSession` 都提供 `hardware_status()`；`is_fallback()` 保留既有签名与语义。
 
 ### 2.3 策略解析（`A4` / `A5` / `A6`）
 
-```rust
-/// 宿主平台标识 → 是否必须真实硬件
-///
-/// 判据来自宿主自报的 platform_id，**不使用 cfg**：
-/// 同一进程可能同时装载多平台算法包，而 algo-sdk 无法用 cfg 表达“宿主是什么”。
-fn platform_requires_hardware(platform_id: &str) -> bool {
-    matches!(normalize_platform_id(platform_id), "linux-rknn" | "linux-ascend")
-}
-```
+平台判定只依据宿主自报的 `platform_id`，不使用 SoC / OS `cfg`；归一化规则在 SDK 侧与宿主保持最小必要重复，并由双方表驱动测试锁定。
+RKNN / Ascend 平台归一化后要求硬件；macOS / x86 等平台默认允许模拟回退。
 
-归一化必须与宿主一致：宿主在 `package.rs:106` 用 `normalize_platform_id` 校验 `manifest.platform_id == current_platform_id()`，rsknn 包的 manifest 统一写 `linux-rknn`（**不含 SoC**，已核实 6 个 rknn 包）。
+实际解析优先级（高 → 低）：
 
-```rust
-/// 解析回退策略
-pub fn resolve_fallback_policy(is_self_test: bool, platform_id: &str) -> FallbackPolicy {
-    if is_self_test {
-        return FallbackPolicy::RequireHardware;   // 自检不得用模拟冒充
-    }
-    if platform_requires_hardware(platform_id) {
-        return FallbackPolicy::RequireHardware;
-    }
-    FallbackPolicy::Allow
-}
-```
+1. `is_self_test == true` → `RequireHardware`，硬门不可绕过；
+2. `InitContext::fallback_policy_override` 为 `Some(policy)` → 采纳显式策略；生产 C ABI 路径恒传 `None`，本地 `run_local` 工具可显式传 `Allow`；
+3. 包私有 `.env` 的 `ALLOW_CPU_FALLBACK=1` → 显式 `Allow`，但不能覆盖自检硬门；
+4. `platform_requires_hardware(platform_id)` 为真 → `RequireHardware`；
+5. 其他 → `Allow`。
 
-因为 `algo-sdk` 不能反向依赖 `crates/infer` 的 `normalize_platform_id`，归一化逻辑在 SDK 侧做**最小必要重复**（仅 4 个别名族），并以单元测试锁定与宿主一致。**这是本设计唯一的重复点，必须在测试中显式断言。**
+统一入口为 `resolve_fallback_policy(is_self_test, platform_id, env, explicit)`；`GenericDetector` 与直接创建 RKNN 会话的插件都使用此入口，避免调用方各自实现优先级。`.env` 不是默认策略来源，仅在用户显式配置时覆盖普通实例的硬件平台策略。
 
 ### 2.4 `RequireHardware` 的失败语义（`A2`；开放问题 1 定稿）
 
@@ -141,36 +109,25 @@ pub fn resolve_fallback_policy(is_self_test: bool, platform_id: &str) -> Fallbac
 - **零新增状态码**，`AV_ALGO_API_VERSION` 不变，零 ABI 变更（满足 §5 约束 4）；
 - 沿既有链路自然变响：`init` 返回 `Err` → `macros.rs:787-790` `set_last_error` + `to_c_status()` → `instance_create` 返回 `-5` → 宿主 `check_c_status` 取回 `last_error` 详情 → `InferError::CAbiError`。
 
-`reason` 必须包含可定位信息（`prd.md` §5 约束 5「失败信息可操作」）：`package_root`、模型路径、底层加载失败原因、以及"如需在无硬件环境运行请显式设置 `ALLOW_CPU_FALLBACK=1`"的操作指引。
+`reason` 必须包含可定位信息：`package_root`、模型路径、底层加载失败原因和可操作指引。宿主 `check_c_status` 读取 `last_error` 的栈缓冲为 **512 字节**，因此消息顺序固定为：失败结论 → 操作指引 → `package_root` → 模型路径 → 底层原因（最易截断，放最后）。错误采用 `AlgoError::ModelLoad`（映射到 `AV_ERR_MODEL_LOAD_FAILED = -5`）；同时明确即使设置 `ALLOW_CPU_FALLBACK=1` 也不能绕过安装自检硬门。
 
 ### 2.5 声明式路径的策略透传（`A4` / `A8`）
 
-`GenericDetector::init` 目前调用 `RuntimeSession::open(ctx.package_root, &model_file)`（`models/yolo.rs:260`），无策略入参。
+`RuntimeSession::open(package_root, model_path)` 保留既有签名并默认 `Allow`，以满足向后兼容；增加 `open_with_policy` 传递显式策略。
+`GenericDetector::init` 先加载算法包私有 `.env` 供配置解析，再通过统一 resolver 计算策略：
 
 ```rust
-impl RuntimeSession {
-    /// 既有入口保持签名与行为（A8）
-    pub fn open(package_root: &Path, model_rel_path: &Path) -> Result<Self, AlgoError> {
-        Self::open_with_policy(package_root, model_rel_path, FallbackPolicy::Allow)
-    }
-
-    /// 加法式新增：显式策略入口
-    pub fn open_with_policy(
-        package_root: &Path,
-        model_rel_path: &Path,
-        policy: FallbackPolicy,
-    ) -> Result<Self, AlgoError> { /* ... */ }
-}
-```
-
-`GenericDetector::init` 改为：
-
-```rust
-let policy = resolve_fallback_policy(ctx.is_self_test, ctx.platform_id);
+let env = ctx.load_env();
+let policy = RuntimeSession::resolve_policy(
+    ctx.is_self_test,
+    ctx.platform_id,
+    Some(&env),
+    ctx.fallback_policy_override,
+);
 let session = RuntimeSession::open_with_policy(ctx.package_root, &model_file, policy)?;
 ```
 
-**关键收益**：自检硬门在此处自动生效，无需宿主改动。
+即使 `.env` 或显式 override 请求 `Allow`，自检模式仍先解析为 `RequireHardware`。
 
 ## 3. 数据流
 
@@ -178,37 +135,37 @@ let session = RuntimeSession::open_with_policy(ctx.package_root, &model_file, po
 宿主六步沙箱自检
    │  instance_create(mode = AV_INSTANCE_INSTALL_SELF_TEST)
    ▼
-macros.rs:558  is_self_test = true
+macros.rs 以 is_self_test=true、fallback_policy_override=None 构造 InitContext
    │
    ▼
-GenericDetector::init
-   │  resolve_fallback_policy(true, "linux-rknn") → RequireHardware
+GenericDetector::init / 直接 RKNN 插件 init
+   │  resolve_policy(true, platform_id, env, explicit) → RequireHardware
    ▼
 RuntimeSession::open_with_policy(.., RequireHardware)
+或 RknnSession::open_or_fallback(.., RequireHardware)
    │
    ▼
-RknnSession::open_or_fallback
-   │  RknnRuntime::load 失败
-   ▼
-   ├─ Allow            → new_fallback() → Ok(Simulated)  ← 仍可用于开发机
+RknnRuntime::load 失败
+   ├─ Allow            → new_fallback() → Ok(Simulated)  ← 仅显式开发/调试路径
    └─ RequireHardware  → Err(ModelLoad)                  ← 自检在此中断
                               │
                               ▼
-                    macros.rs:787 set_last_error + AV_ERR_MODEL_LOAD_FAILED
+                    macros.rs 设置 last_error + 返回 AV_ERR_MODEL_LOAD_FAILED
                               │
                               ▼
-                    sandbox.rs:838 create_code != AV_OK → SandboxValidation 失败
-                              │  step = "5.算法库 C ABI 导出符号核对"
-                              ▼
-                    自检拒绝该算法包（不再有 2 个假框的 detections_count）
+                    sandbox.rs 既有 create 失败分支判定自检失败
+
+普通 C ABI 实例的 override 恒为 None；硬件平台运行时不可用时同样 fail fast。
+本地 `run_local` 工具通过 `with_fallback_policy_override(Allow)` 明确表达模拟调试意图，且该声明不经 C ABI 传递。
 ```
 
 ## 4. 边界与取舍
 
-### 4.1 为什么不用 `.env` 作为策略来源（开放问题 3）
+### 4.1 显式覆盖与开发机默认
 
-`.env` 被 `.gitignore` 忽略（`.env.example` 仅为模板），新设备上必然缺失。以"部署时不存在的东西"作为安全开关是循环依赖。
-**决定**：`.env` 仅作为**显式覆盖**（`ALLOW_CPU_FALLBACK=1` 时强制 `Allow`），默认不从 `.env` 读取策略。
+`.env` 不是默认策略来源；缺失时策略仍由自检模式和宿主 `platform_id` 决定。仅当包私有 `.env` 明确写入 `ALLOW_CPU_FALLBACK=1` 时，才为普通实例显式选择 `Allow`；安装自检始终先于该项并强制 `RequireHardware`。
+
+本地 `run_local` 等工具采用代码级 `with_fallback_policy_override(FallbackPolicy::Allow)`，不依赖 `.env`。生产 `export_algo!` 路径恒传 `None`，因此代码级开发覆盖不会影响 C ABI 装载。
 
 ### 4.2 为什么平台判定不用 `cfg`
 
@@ -220,20 +177,20 @@ RknnSession::open_or_fallback
 
 ### 4.4 宿主是否需要改动
 
-**硬门不需要**（§1.4 事实 3：`instance_create` 非 `AV_OK` 已使自检失败）。
+**硬门不需要宿主改动**：`instance_create` 在 `init` 返回 `Err` 时已有错误码与 `last_error` 传播链路，既有沙箱 create 失败分支据此拒绝安装。真实 C ABI 路径由 `export_algo!` 创建 `fallback_policy_override=None` 的上下文；自检标记优先级最高，因此 `.env` 和调用方显式 `Allow` 都不能让自检通过。
 
-建议的**可选防御性增强**（非本任务验收门槛）：在自检第 6 步的 `SelfTestReport` 中记录硬件状态，使自检报告能区分"真实推理 N 个目标"与"模拟会话 N 个目标"。当前 `SelfTestReport` 只有 `detections_count`，无法自证。**若实施，需评估是否扩展 `SelfTestReport` 字段及其对既有测试的影响。**
+本任务未扩展 `SelfTestReport`；在构造阶段硬件不可用就失败，因此无需在通过的报告中补充模拟态字段。
 
 ### 4.5 需要一并更新的既有调用点
 
-两个包**直接**调用 `open_or_fallback`，不走 `RuntimeSession`：
+以下两个包直接调用 `open_or_fallback`，不走 `RuntimeSession`，因此也必须调用统一策略解析器并把结果写入 `RknnSessionOptions`：
 
-| 包 | 位置 |
+| 包 | 行为 |
 |---|---|
-| `algo-packages/rknn/rk3568/fire-detections` | `src/plugin.rs:98` |
-| `algo-packages/rknn/rk3576/general_detection` | `src/plugin.rs:92` |
+| `algo-packages/rknn/rk3568/fire-detections` | 普通硬件平台实例 `RequireHardware`；本地 `run_local` 显式 `Allow` |
+| `algo-packages/rknn/rk3576/general_detection` | 普通硬件平台实例 `RequireHardware`；本地 `run_local` 显式 `Allow` |
 
-它们已在 `init(ctx)` 内持有 `ctx.platform_id`，改为传入解析后的策略即可（各约 2 行）。不更新则这两个包保持当前（不安全）行为。
+RKNN 人脸工具直接加载 `RknnRuntime`，不经过模拟 fallback；更新 `InitContext` 字面量时保持 `fallback_policy_override=None`。
 
 ## 5. 测试策略
 
@@ -241,11 +198,11 @@ RknnSession::open_or_fallback
 |---|---|---|
 | A1 | 单元 | `FallbackPolicy::default() == Allow`；`RknnSessionOptions` 既有构造点行为不变 |
 | A2 | 单元 | 无运行时 + `RequireHardware` → `Err(ModelLoad)`；断言错误**变体**而非仅 `is_err()` |
-| A3 | 单元 | `hardware_status()` 三态映射；`is_fallback()` 与 `Simulated` 等价 |
-| A4 | 单元 | `resolve_fallback_policy(true, *) == RequireHardware`（平台无关） |
-| A5 | 单元 | `resolve_fallback_policy(false, "darwin-aarch64") == Allow`；无驱动回退仍返回 `Ok(Simulated)` |
-| A6 | 单元 | 归一化与宿主一致：对 `linux-rknn` / `linux-arm64-rknn` / `rknn` / `linux-ascend` / `ascend` 全族断言；对 `macos-arm64-coreml` 等断言 `Allow` |
-| A7 | 集成 | 自检模式 + 无硬件 → `instance_create` 返回 `AV_ERR_MODEL_LOAD_FAILED`；`last_error` 含可定位信息 |
+| A3 | 单元 | `HardwareStatus` 两态、`HardwareAvailability` 三态归约；`is_fallback()` 与 `Simulated` 等价 |
+| A4 | 单元 / C ABI 集成 | 自检模式、显式 `Allow`、`.env` `Allow` 均不能绕过 `RequireHardware` |
+| A5 | 单元 | 非硬件平台默认 `Allow`；无驱动回退返回 `Ok(Simulated)` |
+| A6 | 单元 | SDK 与宿主平台别名归一化一致；不出现 SoC / OS `cfg` 平台策略分支 |
+| A7 | C ABI 集成 | 自检模式 + 无硬件 → `instance_create` 返回 `AV_ERR_MODEL_LOAD_FAILED`；512 字节 `last_error` 窗口内含可操作信息 |
 | A8 | 门禁 | 既有测试不改动即通过 |
 | A9 | 门禁 | 全量 fmt / clippy / test + 四个算法平台 workspace 全绿（见 `implement.md` §2 Step 9） |
 
