@@ -48,3 +48,37 @@
 - 高风险媒体/图形视口局部错误隔离，不牵连导航和其他监控路。
 
 验证无关事件下播放器稳定、动态 key、键盘行为及反复挂载/切流后的资源释放。
+
+## 数值输入与校验时机
+
+人工录入数值的字段（端口、秒数、天数、配额、百分比、Metric 等）统一遵循**三段式契约：编辑期只维护草稿、失焦时收敛、提交时兜底**。共享参考实现为 [NumericField](../../../../web/src/components/ui/NumericField.tsx)（行为组件）与 [numericDraft](../../../../web/src/lib/numericDraft.ts)（纯逻辑，无 React）；站点只负责提供边界与空值语义，并在保存路径保留兜底。
+
+- **编辑期只维护草稿**：`onChange` 只更新本地字符串草稿并接受键盘中间态（空串、`-`、`.`、不完整小数），显示值永远来自草稿；共享字段组件编辑期**不派发数值回调**，未收敛的中间态不得写入提交模型。确需滑块 ↔ 数值实时联动的站点自行组合自有控件，共享组件刻意不做实时派发。
+- **失焦/Enter 收敛**：解析草稿 → 按下方语义表处理 → 可解析则 clamp 到 `[min, max]` → 派发一次数值回调，并把草稿原地格式化为提交值显示（不依赖父层回传，避免一帧回跳）。外部值同步沿用仓库既有模式：非编辑态外部值变化时同步草稿，编辑中刻意不同步。
+- **提交兜底**：保存/应用路径必须对最终值再做一次 clamp，不假设 UI 已收敛（先例：[recordingConfig](../../../../web/src/features/cameras/recordingConfig.ts) 的 `clampRecordingConfig`）。
+
+### 失焦语义表
+
+| 失焦时的草稿             | 必填（`emptyBehavior` 缺省为 `revert`）   | 可空（`emptyBehavior="null"`）                |
+| ------------------------ | ----------------------------------------- | --------------------------------------------- |
+| 空串 / 纯空白            | 回退上次合法值，不派发                    | 派发 `null`，界面保持空白                     |
+| 不可解析非空（如 `abc`） | 回退，不派发                              | **回退**（笔误不是清空意图，不降级为 `null`） |
+| 可解析、区间内           | 原样派发                                  | 同左                                          |
+| 可解析、超界             | clamp 到边界后派发，显示边界值            | 同左                                          |
+| 可解析、`0` 且 `min > 0` | clamp 到 `min` 派发（`0` 不得折算成空值） | 同左                                          |
+
+实现入口与约束：
+
+- **判别联合 props**：`emptyBehavior: 'revert'` 配 `value: number` / `onChange: (value: number) => void`；`emptyBehavior: 'null'` 配 `value: number | null` / `onChange: (value: number | null) => void`。让「可空字段忘记处理 null」与「必填字段被迫处理 null」都成为类型错误，不用 `value: number | null` 的弱签名。
+- **`label` 必填**并落到 `aria-label`（漏写从运行期缺陷变成编译期错误，沿用 [SearchInput](../../../../web/src/components/ui/SearchInput.tsx) / [SelectField](../../../../web/src/components/ui/SelectField.tsx) 的做法）；组件不内置 label 元素，标签排布与视觉由调用点 `className` 决定，不在本次新增 `.numeric-field` 类族（视觉类族见[样式规范](styling-guidelines.md#工具栏输入控件)）。
+- **`type?: 'number' | 'integer'`** 只决定草稿解析与格式化：`integer` 拒绝小数草稿并在收敛时取整；`min` / `max` 是语义边界，只参与收敛、不落到 DOM —— 原生 `min`/`max` 不阻挡键入、只影响 `:invalid`，站点又不在 `<form>` 提交路径上。
+- **外部值同步必须能处理非有限数**：草稿同步用 `Object.is` 比较外部值（而非 `!==`）—— `NaN` 与自身不相等，用 `!==` 会让「外部值已变化」永为真，在渲染期同步的写法下直接造成 Too many re-renders 渲染循环；非有限外部值（`NaN` / `Infinity`）一律显示为空串，不渲染字符串 `'NaN'`。
+- 渲染为 **`type="text"` + `inputMode`**（`integer` 为 `numeric`，否则 `decimal`）：`type="number"` 各浏览器对 `-`、`1.`、空串的 `value` 归一化不一致，恰好会破坏要保留的键盘中间态。不宣告 `role="spinbutton"`：未实现方向键步进却声明该角色会向辅助技术谎报能力。
+- **新表单不得自建受控 number 输入**：禁止 `value` 直绑 `number` + `onChange` 里 `Number(...)` / `parseInt` 的组合 —— 它会导致清空弹回、`0` 被折叠为空值、超界静默。数值字段一律用 `NumericField`；站点内只保留保存侧兜底纯函数。
+
+测试约定：
+
+- 解析、clamp、格式化等纯逻辑下沉 `lib/numericDraft.ts`，在默认 node 环境用单测覆盖中间态与边界，见 [numericDraft.test.ts](../../../../web/src/lib/numericDraft.test.ts)。
+- 交互行为（清空 → 重输、失焦收敛、编辑期不派发、外部值同步）用 RTL + jsdom：文件首行 `// @vitest-environment jsdom` 按文件 opt-in，不修改全局 `test.environment`；仓库未开 vitest `globals`，每个 jsdom 文件显式 `afterEach(cleanup)`；不依赖 jest-dom 断言或 `user-event`，`fireEvent.change` + `fireEvent.blur` 足以表达失焦语义。见 [NumericField.test.tsx](../../../../web/src/components/ui/NumericField.test.tsx) 与[测试选择](quality-guidelines.md#测试选择)。
+
+验证清空 → 重输不被回写、失焦按语义表收敛、编辑期不派发、保存路径仍有最终 clamp。
