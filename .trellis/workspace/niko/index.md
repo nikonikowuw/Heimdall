@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
-- **Last Active**: 2026-10-01
+- **Total Sessions**: 4
+- **Last Active**: 2026-10-02
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~105 | Active |
+| `journal-1.md` | ~140 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-10-02 | Numeric input blur validation | `acee8197cf1a31a5895344ec3c476417c071c75c`, `4598408e0a6554b4155aeb80e488a6db1e078201` | `dev` |
 | 3 | 2026-10-01 | 归档事件驱动 NVR 录像任务 | - | `dev` |
 | 2 | 2026-10-01 | 归档 Bootstrap Guidelines | - | `dev` |
 | 1 | 2026-10-01 | 统一前端抽屉组件与两轴 code review 修复 | `7d32088` | `dev` |

@@ -103,3 +103,38 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Numeric input blur validation
+
+**Date**: 2026-10-02
+**Task**: Numeric input blur validation
+**Package**: algo-sdk
+**Branch**: `dev`
+
+### Summary
+
+实现共享 NumericField 与 numericDraft，迁移录像、GB28181、网络和存储数值输入，增加失焦/提交兜底及交互测试，并固化前端 spec。Web 自动门禁通过（75 个测试文件、563 项测试；format、lint、typecheck、cycles、build 均通过）。真实浏览器下的三语、键盘焦点及设置流程人工核对未执行。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `acee8197cf1a31a5895344ec3c476417c071c75c` | (see git log) |
+| `4598408e0a6554b4155aeb80e488a6db1e078201` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
