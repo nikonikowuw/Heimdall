@@ -45,6 +45,11 @@
 - 二次确认弹窗（危险/警告操作）复用 [ConfirmDialog](../../../../web/src/components/ui/ConfirmDialog.tsx)：标题、说明、图标、页脚操作与提交态由该原语提供，需人工核对的对象信息与预览清单通过 `children` 传入，失败原因走 `errorMessage`（Toast 与内联错误只由一处负责）。
 - 关闭按钮复用 [CloseIconButton](../../../../web/src/components/ui/CloseIconButton.tsx)，内联错误提示复用 [FormErrorAlert](../../../../web/src/components/ui/FormErrorAlert.tsx)，不在业务文件重复拼这组类名。
 - 创建与编辑表单弹窗复用 `ModalFormHeader`、`.modal-surface--form`、`.modal-form-content` 与 `.modal-form-footer`；保留业务字段分组，但标题、滚动区、按钮区不另起一套视觉结构。标题与描述必须通过 `aria-labelledby` / `aria-describedby` 关联，关闭按钮使用本地化 `aria-label`。
+  - **弹窗内的工具条必须走共享类族，不得手拼**：视图切换 / 过滤 / 次要动作放进 `.modal-form-toolbar`（详见[样式规范](styling-guidelines.md#表单弹窗)）。头部、工具条、页脚三者固定，唯一滚动区是 `.modal-form-content`；把滚动加在外层 `div` 或用 `mt-*` 凑分区会产生双内衬与头部不齐。
+  - **尺寸用 `modal-surface--*` token，不传裸 `max-w-*`**：裸 utility 读不出「这是哪一档」，与 `Drawer` 的 `small` / `compact` / `medium` / `wide` 词表脱节；即使当前宽度数值恰好相同（如 `max-w-2xl` 与 `--medium` 均为 42rem、`max-w-xl` 与 `--xl` 均为 36rem），也必须走 token，否则后续调整只能逐个调用点改。
+  - **尺寸档位由调用方显式声明，`ModalOverlay` 不注入默认档位**：档位值域为 `--small` 24rem / `--compact` 28rem / `--narrow` 32rem / `--xl` 36rem / `--medium` 42rem / `--wide` 48rem / `--extra-wide` 64rem；未声明时回落 `.modal-surface` 基类的 36rem。同一元素带上两个档位时，同层同权重的规则只能靠源序决出胜负，未声明的档位会被静默改宽（历史上 `ModalOverlay` 曾无条件注入 `--wide`，导致 `--small` / `--compact` / `--narrow` 调用点实际渲染为 48rem）；该契约由 `ModalOverlay.test.tsx` 守护，不要恢复注入。
+  - **只有带滚动/页脚的查看器是否收敛到 form 族由内容形态决定**：无工具条、无固定页脚且内容自然撑高的只读查看器可直接用 `ModalOverlay` + `panelClassName`；一旦出现固定页脚或独立滚动区，就必须收敛到 form 三区结构，避免与同域表单弹窗出现两套内衬与标题视觉。
+  - **不要用片段标识符做 id**：标题/描述的 `id` 一律 `useId()` 生成。`CreateTaskModal` 里的 `id="create-task-title"` 是硬编码字面量，同一页面渲染多个实例时会重复 id 并使 `aria-labelledby` 指向首个节点；新代码不再照抄该写法。
 - 高风险媒体/图形视口局部错误隔离，不牵连导航和其他监控路。
 
 验证无关事件下播放器稳定、动态 key、键盘行为及反复挂载/切流后的资源释放。

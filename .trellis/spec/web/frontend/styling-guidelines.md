@@ -56,6 +56,7 @@
 ## 表单弹窗
 
 - 创建/编辑表单统一使用 [ModalFormHeader](../../../../web/src/components/ui/ModalFormHeader.tsx) 与 `.modal-surface--form`。表单面板使用实体 `--bg-surface-solid`；遮罩可保留单层轻模糊，不叠加 `.modal-surface--glass`，标题、滚动内容、底部操作分别使用 `.modal-form-header`、`.modal-form-content`、`.modal-form-footer`。
+- **表单头部与滚动区之间需要工具条时**（视图切换、过滤、次要动作）使用 `.modal-form-toolbar`：它与 `.modal-form-header` / `.modal-form-footer` 同为 `flex: 0 0 auto`，不接管滚动；**滚动职责仍然只属于 `.modal-form-content`**，不得在工具条内另建滚动容器，也不得用 `mt-*` 手工凑分区。工具条内需要靠右的次要动作时在该元素自身加 `ms-auto`（对齐方向无关物流属性），不要为方向写死 `justify-between`。
 - 文本输入、选择框和文本域复用 `.modal-form-field`；标签使用 `.modal-form-label`，操作按钮使用 `.modal-form-button` 的次要/主要变体。业务分组和选择项可保留各自布局，不重复定义弹窗外壳的尺寸、滚动与页脚间距。
 - 表单说明、徽标、关闭控件和字段占位文字使用 `--text-secondary`；`--text-muted` 只用于非关键元数据。主操作按钮使用 `--accent` 背景与高对比白色文字（`.modal-form-button--primary` 已内置固定双主题高对比前景）；操作按钮统一复用 `.modal-form-button` 的主要/次要/危险（`--danger`）变体。
 - 验证键盘焦点、字段错误、内容溢出及亮暗主题；窄视口下标题和说明允许换行，不能遮挡关闭按钮。
