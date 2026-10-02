@@ -21,6 +21,7 @@
 | Composable 模型生态 | [models](../../../../crates/algo-sdk/src/models/mod.rs)（`YoloSpec`、`YoloDecoder` 解码策略、`GenericYoloDetector` 15行开箱即用） |
 | 硬件预处理流水线 | [cv::transforms](../../../../crates/algo-sdk/src/cv/transforms.rs)（`Transform`、`HwLetterbox` 纯设备侧零拷贝变换） |
 | 异构推理运行时与零拷贝 | [runtime](../../../../crates/algo-sdk/src/runtime/mod.rs)（`NpuSession`、`RuntimeSession` 跨芯片抽象，Rockchip RKNN 平台驱动位于 `runtime/platforms/rockchip.rs`） |
+| 硬件回退策略与可用性判定 | [runtime/fallback.rs](../../../../crates/algo-sdk/src/runtime/fallback.rs)（`FallbackPolicy`、`HardwareStatus`/`HardwareAvailability`、`resolve_fallback_policy`、`platform_requires_hardware`） |
 | 本地调测与基准评测 | [testing.rs](../../../../crates/algo-sdk/src/testing.rs)（`LocalPluginRunner`、`BenchmarkStats`、`MockEmitter`） |
 | 帧 / 预处理 / 模型会话 | [frame.rs](../../../../crates/algo-sdk/src/frame.rs)、[cv](../../../../crates/algo-sdk/src/cv/mod.rs)、[model.rs](../../../../crates/algo-sdk/src/model.rs)             |
 | 后处理工具库 | [cv::postprocess](../../../../crates/algo-sdk/src/cv/postprocess/mod.rs)（quantize / dfl / yolov8_rknn）                                                  |
@@ -69,7 +70,8 @@ export_algo!(
 - ABI 版本为 `AV_ALGO_API_VERSION = 1`，64 位 `AvAlgoAbi` 大小为 96 字节。
 - 每个 C ABI 入口隔离 panic，失败返回 `AV_ERR_INTERNAL`（panic 隔离规则见 [全局约定](../../guides/conventions.md#防御性错误处理)）。
 - `AlgoPlugin: Sized + Send + 'static`，配置为 `DeserializeOwned + Default`；必需实现 `init(ctx, config)` 和同步 `process(SafeFrame, &mut ResultEmitter)`。
-- `InitContext` 提供 `package_root/platform_id/instance_id/is_self_test`。默认 `flush/set_rules` 返回成功，`update_config` 返回 `NotImplemented`，不能误报配置已应用。
+- `InitContext` 提供 `package_root/platform_id/instance_id/is_self_test/fallback_policy_override`。默认 `flush/set_rules` 返回成功，`update_config` 返回 `NotImplemented`，不能误报配置已应用。
+  `fallback_policy_override` 在 `export_algo!` 展开处**恒为 `None`**，硬门与优先级契约见 [硬件回退策略](#硬件回退策略-fallbackpolicy)。
 
 ## 插件日志桥接 (`logging`)
 
@@ -247,6 +249,11 @@ rk3588 人脸包 release 构建，`nm -gU` 导出符号集完全一致（含 `av
 
 `AlgoError` 映射见 [error.rs](../../../../crates/algo-sdk/src/error.rs)；`last_error` 使用线程局部错误缓存提供详情，安全层不传播 C 整数错误码。
 
+> **Warning：`last_error` 的实际可见长度受宿主读取缓冲限制**。宿主 `check_c_status` 用 **512 字节**栈缓冲
+> （`crates/infer/src/c_abi/loader.rs`），`copy_last_error` 按 `min(len, cap - 1)` 截断，超长尾段会被静默丢弃。
+> 因此写入 `last_error` 的错误消息必须把**可操作指引排在前面**、最易截断的底层原因放最后；
+> 详细契约与回归锁见 [硬件回退策略](#硬件回退策略-fallbackpolicy)。
+
 ## 可选人脸提取
 
 `av_algo_extract_face` 是独立可选符号，不扩展 `AvAlgoAbi` 虚表。宿主通过 `libloading` 探测，缺失时视为不支持。
@@ -354,6 +361,215 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
 - `SharedWeights<W>` 用 `Arc<W>` 共享权重，`session()` 用 `AtomicUsize` Round-Robin 分配，`session_on(Core)` 显式绑定。
 - `Core` 支持 Auto、Id、All、Mask；各实例 session 独占。逻辑共享不代替具体 SDK 的物理内存验证。
 
+## 硬件回退策略 (`FallbackPolicy`)
+
+### 1. 范围 / 触发
+
+任何由算法包自行创建推理会话的路径都受本契约约束：声明式骨架
+[`GenericDetector::init`](../../../../crates/algo-sdk/src/models/yolo.rs) 与直连 `RknnSession::open_or_fallback`
+的包（当前为 `rk3568/fire-detections`、`rk3576/general_detection`）。
+
+**背景缺陷**：任一平台运行时加载失败（不只是“物理上确无加速单元”，也包括 `package_root` 拼写错误、
+ABI/架构不匹配、`.so` 缺失）都会静默降级为 `debug_cpu_fallback_path` 模拟会话，
+该会话产出**写死的模拟检测框**。后果是“安装自检通过”无法证明模型真的加载到了硬件——
+宿主已有的 `platform_id` / `algorithm_id` 校验与六步沙箱自检全部覆盖不到这一点。
+本契约把降级从“隐式默认”改为“显式策略”，并让失败响亮且可定位。
+
+### 2. 签名
+
+```rust
+// crates/algo-sdk/src/runtime/fallback.rs
+pub const ALLOW_CPU_FALLBACK_ENV_KEY: &str = "ALLOW_CPU_FALLBACK";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FallbackPolicy {
+    #[default]
+    Allow,             // 无硬件 → 模拟会话（开发/调试；既有默认行为）
+    RequireHardware,   // 无硬件 → Err，绝不返回模拟会话
+}
+
+pub enum HardwareStatus { Hardware, Simulated }          // 成功构造域内两态
+pub enum HardwareAvailability { Hardware, Simulated, Unavailable }  // 含构造失败的归约三态
+
+pub fn classify_session_availability(
+    result: &Result<HardwareStatus, AlgoError>,
+) -> HardwareAvailability;
+
+pub fn normalize_platform_id(id: &str) -> &str;
+pub fn platform_requires_hardware(platform_id: &str) -> bool;
+
+/// 策略解析唯一入口（优先级见 §3）
+pub fn resolve_fallback_policy(
+    is_self_test: bool,
+    platform_id: &str,
+    env: Option<&PackageEnv>,
+    explicit: Option<FallbackPolicy>,   // 调用方显式声明；生产路径恒为 None
+) -> FallbackPolicy;
+
+/// “要求硬件但不可用”的可定位错误（`cause` 为底层根因描述）
+pub fn hardware_unavailable_error(package_root: &Path, model_path: &Path, cause: &str) -> AlgoError;
+/// 剥掉 `ModelLoad` 的外层 `Display` 前缀，避免嵌套重复占用宿主错误缓冲
+pub fn describe_load_failure(error: &AlgoError) -> String;
+```
+
+```rust
+// crates/algo-sdk/src/runtime/platforms/rockchip.rs
+#[non_exhaustive]
+pub struct RknnSessionOptions {
+    pub core_mask: c_int,
+    pub fallback_policy: FallbackPolicy,   // 加法式新增；Default = Allow
+}
+impl RknnSessionOptions {
+    pub fn with_fallback_policy(self, fallback_policy: FallbackPolicy) -> Self;  // 链式，保留 core_mask
+}
+
+impl RknnSession {
+    pub fn hardware_status(&self) -> HardwareStatus;
+    pub fn is_fallback(&self) -> bool;   // 内部委托 hardware_status，外部行为逐位不变
+}
+```
+
+```rust
+// crates/algo-sdk/src/runtime/mod.rs
+impl RuntimeSession {
+    pub fn open(package_root, model_rel_path) -> Result<Self, AlgoError>;          // 既有签名，委托 Allow
+    pub fn open_with_policy(package_root, model_rel_path, policy) -> Result<Self, AlgoError>;
+    pub fn hardware_status(&self) -> HardwareStatus;   // Fallback 变体 → Simulated
+    pub fn resolve_policy(is_self_test, platform_id, env, explicit) -> FallbackPolicy;
+}
+```
+
+```rust
+// crates/algo-sdk/src/plugin.rs
+pub struct InitContext<'a> {
+    pub package_root: &'a Path,
+    pub platform_id: &'a str,
+    pub instance_id: &'a str,
+    pub is_self_test: bool,
+    pub fallback_policy_override: Option<FallbackPolicy>,   // 加法式新增
+}
+impl<'a> InitContext<'a> {
+    pub fn with_fallback_policy_override(self, policy: FallbackPolicy) -> Self;
+}
+```
+
+### 3. 契约
+
+**策略解析优先级（高 → 低）**，实现唯一落点在 `resolve_fallback_policy`：
+
+| # | 条件 | 结果 |
+| --- | --- | --- |
+| 1 | `is_self_test == true` | `RequireHardware` —— **硬门，不可被任何下层依据翻越** |
+| 2 | `explicit = Some(p)`（调用方显式声明） | `p` |
+| 3 | `.env` 中 `ALLOW_CPU_FALLBACK` 为真值（`1`/`true`/`yes`/`on`） | `Allow` |
+| 4 | `platform_requires_hardware(platform_id)` | `RequireHardware` |
+| 5 | 其他（macOS / x86 开发机） | `Allow` |
+
+**平台判定只读宿主自报的 `platform_id` 字符串，`algo-sdk` 内不得新增按目标 SoC / 宿主 OS 的 `cfg` 分支**：
+同一进程可能同时装载多平台算法包，`cfg` 只能表达“本包编译成什么”，无法表达“宿主是什么”。
+`normalize_platform_id` 与宿主 [`crates/infer/src/sandbox.rs`](../../../../crates/infer/src/sandbox.rs) 的同名函数是
+**最小必要重复**（SDK 不能反向依赖宿主 crate）：只做 4 个别名族归一化，
+两侧一致性由 `algo-sdk` 的表驱动单测与 `infer::algo_sandbox_tests::test_platform_alias_table_stays_in_sync_with_algo_sdk_copy` 双向锁定，任一侧漂移即失败。
+
+**生产路径必须封死显式声明**：`export_algo!` 展开的 `instance_create` 构造 `InitContext` 时
+恒定写 `fallback_policy_override: None`。显式声明仅供**不走 C ABI** 的本地开发工具使用。
+
+**`RequireHardware` 的失败语义**：返回 [`AlgoError::ModelLoad`](../../../../crates/algo-sdk/src/error.rs)
+→ `AV_ERR_MODEL_LOAD_FAILED = -5`。**零新增状态码、`AV_ALGO_API_VERSION` 不变、零 ABI 变更**。
+沿既有链路自然变响：`init` 返回 `Err` → `macros.rs` 的 `set_last_error` + `to_c_status()` →
+`instance_create` 返回 `-5` → 宿主 `check_c_status` 取回 `last_error` →
+`sandbox.rs` 的 `create_code != AV_OK` 判定自检失败（**宿主无需新增校验代码**）。
+
+**错误消息字段顺序是契约，不可随意重排**：宿主 `check_c_status` 用 **512 字节**栈缓冲读取
+`last_error`（`crates/infer/src/c_abi/loader.rs`），`copy_last_error` 按 `min(len, cap - 1)` 截断。
+底层 `libloading` 的失败原因（含候选路径 + dlopen 报错）本身就可达 300+ 字节，
+因此必须按 **结论 → 操作指引 → `package_root` → 模型路径 → 底层原因（最易截断，放最后）** 排列。
+把操作指引排到末位会让运维只能读到“模型加载失败”——恰好退回本契约要消灭的不可诊断状态。
+另外 `RknnRuntime::load` 失败返回的已是 `ModelLoad`，直接 `{e}` 插值会嵌套出重复的 `模型加载失败: ` 前缀、
+白耗缓冲配额，必须经 `describe_load_failure` 剥壳后再嵌入。
+
+### 4. 验证与错误矩阵
+
+| 条件 | 期望行为 |
+| --- | --- |
+| 自检模式 + 无运行时 | `instance_create` → `-5`，实例句柄为 null，`last_error` 含 `librknnrt` / `package_root` / `ALLOW_CPU_FALLBACK` |
+| 自检模式 + `explicit = Some(Allow)` | **仍为 `RequireHardware`**（硬门不可翻越） |
+| 自检模式 + `.env` `ALLOW_CPU_FALLBACK=1` | **仍为 `RequireHardware`**（硬门优先于 `.env`） |
+| 硬件平台 + 常规实例 + 无声明 | `RequireHardware` —— 不是只在自检阶段设门；生产常规实例静默降级同属部署错误 |
+| 硬件平台 + `explicit = Some(Allow)` | `Allow`（本地开发工具逃生口） |
+| 硬件平台 + `.env` `ALLOW_CPU_FALLBACK=1` | `Allow`（运维显式覆盖；但自检不受影响） |
+| 非硬件平台（macOS / x86） | `Allow`，回退会话可用且能完成 `instance_process` 闭环 |
+| `ALLOW_CPU_FALLBACK` 为 `0`/`no`/缺失 | 不放开回退（只有真值才生效） |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**：rknn 包在目标板上缺失 `librknnrt.so` → 自检第 5 步 `instance_create` 返回 `-5`，错误给出
+  `package_root`、模型路径、底层 dlopen 原因与放开回退的操作指引，安装被拒绝。
+- **Base**：macOS 开发机（`platform_id` 归一化为 `macos-arm64`）默认 `Allow`，无驱动回退照常可用。
+- **Bad**：在自检路径上允许显式声明或 `.env` 翻越硬门 → 安装自检又能以“2 个假框”通过，
+  缺陷原样回归。
+
+### 6. 必测项（断言点）
+
+单元（`crates/algo-sdk/src/runtime/fallback.rs`）：
+
+- `allow_is_the_default_policy` / `test_session_options_default_keeps_existing_behavior` —— 默认即既有行为；
+- `test_require_hardware_fails_without_runtime` —— 断言错误**变体**为 `ModelLoad` 且 `to_c_status() == -5`，
+  并校验 4 个定位信息子串（不是仅 `is_err()`）；
+- `self_test_gate_cannot_be_overridden_by_explicit_declaration` —— **回归锁**：硬门忽略显式声明；
+- `self_test_gate_cannot_be_overridden_by_env` —— 硬门优先于 `.env`；
+- `explicit_declaration_allows_simulation_on_hardware_platform` —— 开发工具逃生口；
+- `platform_id_normalization_matches_host_contract` —— 别名族表驱动，锁定与宿主一致；
+- `hardware_unavailable_error_keeps_actionable_hint_within_host_error_buffer` —— **宿主 512 字节窗口回归锁**：
+  用与宿主相同的截断规则断言三个关键定位项均落在前 511 字节内（含超长 `package_root`）；
+- `describe_load_failure_strips_redundant_model_load_prefix` —— 不嵌套 `模型加载失败: ` 前缀。
+
+集成（走真实 C ABI 虚表，`crates/algo-sdk/tests/fallback_policy_gate.rs`）：
+
+- `self_test_mode_without_hardware_fails_instance_create` —— 自检 + 无硬件 → `-5` + 句柄 null + `last_error` 三要素；
+- `normal_mode_on_hardware_platform_also_requires_hardware` —— 常规实例同样受约束；
+- `non_hardware_platform_keeps_simulation_available` —— 回退会话可完成 `instance_process`；
+- `explicit_env_override_restores_simulation_on_hardware_platform` —— 保证错误里的操作指引不是空头承诺；
+- `self_test_gate_cannot_be_overridden_by_env`。
+
+SDK 侧 `models/yolo.rs`：`test_self_test_init_requires_real_hardware`、
+`test_init_keeps_fallback_on_non_hardware_platform`、
+`test_init_explicit_allow_enables_local_dev_fallback_on_hardware_platform`、
+`test_init_self_test_gate_ignores_explicit_allow`。
+
+> **判别力（已实测变异验证）**：把 `RequireHardware` 分支改回 `new_fallback(model_path)` → 6 个用例失败
+> （含集成的 3 个）；把解析顺序改成 `explicit` 优先于 `is_self_test` → 2 个硬门回归锁失败；
+> 把 `package_root` 移到消息末尾 → 512 字节窗口锁等 3 个用例失败。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// 宿主装载的实例竟然可以声明“我允许模拟回退”，或把硬门排到显式声明之后
+let policy = resolve_fallback_policy(ctx.is_self_test, ctx.platform_id, Some(&env),
+                                     ctx.fallback_policy_override);
+// 若实现把 explicit 判断写在 is_self_test 之前，安装自检就又可以用假框通过
+
+// 本地开发工具依赖部署期文件才能跑通
+// (在 run_local 里什么都不声明，指望运维去建 .env)
+```
+
+#### Correct
+
+```rust
+// 1) 生产路径：export_algo! 展开处恒定 None，宿主无法注入声明
+let ctx = InitContext { /* ... */, fallback_policy_override: None };
+
+// 2) 本地开发工具：意图写在代码里，不依赖 .env
+let init_ctx = InitContext::new(Path::new("."), "linux-rknn", "standalone_local", false)
+    .with_fallback_policy_override(FallbackPolicy::Allow);
+
+// 3) 解析顺序：硬门永远第一
+if is_self_test { return RequireHardware; }
+if let Some(p) = explicit { return p; }
+```
+
 ## 结果发射
 
 结果字段、坐标、告警/证据职责与迁移要求统一见 [检测结果、告警与证据契约](../../pipeline/backend/detection-alarm-contract.md)。下表描述当前实现；`emit_detections` 尚未按新检测协议迁移。
@@ -437,6 +653,10 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
 
 ## Rockchip RKNN
 
+- **无硬件时不得静默降级**：`RknnSession::open_or_fallback` 由 `RknnSessionOptions::fallback_policy`
+  控制（`Allow` 降级为 `debug_cpu_fallback_path` 模拟会话：2 个写死的目标；`RequireHardware` 返回
+  `AlgoError::ModelLoad` → `-5`）。策略、优先级与自检硬门契约见 [硬件回退策略](#硬件回退策略-fallbackpolicy)。
+  新增会话入口时必须接入策略，不得自行决定降级。
 - RK3576 双核用 `RKNN_NPU_CORE_0_1=3`，RK3588 三核用 `RKNN_NPU_CORE_0_1_2=7`；不把 AUTO 当已启用多核。
 - 本项目 BSP 的 `rknn_create_mem_from_fd` 需要有效 `virt_addr`；`dma_mem_cache` 持有映射，禁止逐帧 mmap/munmap。
 - **DMA-BUF 映射权限硬性约束**：使用 `mmap` 将输入 DMA-BUF 映射为虚拟地址供 `rknn_create_mem_from_fd` 使用时，必须声明为 `libc::PROT_READ | libc::PROT_WRITE`。严禁仅使用只读 `PROT_READ`，否则后续调用 `rknn_inputs_set` 执行 Host 内存拷贝时，`librknnrt` 向该张量虚拟地址写入数据将立即触发 Linux 内核缺页写保护致命段错误（SIGSEGV）。
@@ -481,6 +701,20 @@ algo_sdk::export_face_gallery!(FaceRecognizer);
 - 模型文件属于平台专属权重资产，不强制在 `manifest.json` 中强行绑定；
 - 遵循解析顺序：`package_root/.env` 指定路径（如 `MODEL_PATH` / `DETECTOR_MODEL_PATH`） → 约定的固定模型文件路径（`model/*.rknn` 或 `model/*.mlpackage`）；
 - `PackageEnv::resolve_model_path()` 强制防路径穿越检查，拒绝任何包含 `..` 的相对路径，确保模型路径安全规范化在合法物理文件系统内。
+
+### 4. 不得用 `.env` 充当安全开关
+
+`.env` 被 `.gitignore` 忽略（仅 `.env.example` 入库），新设备上必然缺失。
+以“部署时不存在的东西”作为安全开关是循环依赖，因此：
+
+- **默认策略不得从 `.env` 读取**：无硬件时是否允许回退，由宿主自报的 `platform_id` 与是否处于安装自检决定；
+- `ALLOW_CPU_FALLBACK` 仅作为**显式覆盖**（`=1` 时强制 `Allow`），用于运维在无硬件环境手动放开；
+- **它不得翻越安装自检硬门**：自检模式下策略恒为 `RequireHardware`；
+- 本地开发工具（`run_local` 等）不得依赖该变量，应在代码中显式声明
+  `InitContext::with_fallback_policy_override(FallbackPolicy::Allow)`；
+- 新增任何“部署期文件驱动安全行为”的开关前，先回答：该文件在新设备/干净检出上是否必然存在。
+
+详见 [硬件回退策略](#硬件回退策略-fallbackpolicy)。
 
 ## 验证与已知差异
 

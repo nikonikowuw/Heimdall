@@ -5,11 +5,14 @@
 ## Pre-Development Checklist
 
 1. 阅读 [算法 SDK 与 C ABI](./algo-sdk-guidelines.md)：构建边界、状态与生命周期、导出接口、帧契约（ns 单位）、状态码与共享底库 ABI。
-2. FFI 契约变更同时阅读 [FFI 边界](../../guides/ffi-guidelines.md) 与 [全局约定](../../guides/conventions.md)（防御性错误处理、资源释放）。
-3. 插件交付物、六步沙箱自检与归档安全以 [AGENTS.md](../../../../AGENTS.md) 项目契约为准。
-4. 抽象复用判断参考 [代码复用思考指南](../../guides/code-reuse-thinking-guide.md)。
+2. 涉及会话创建/硬件降级时必读 [硬件回退策略](./algo-sdk-guidelines.md#硬件回退策略-fallbackpolicy)：策略优先级、自检硬门、`.env` 只能做显式覆盖且不得翻越硬门。
+3. FFI 契约变更同时阅读 [FFI 边界](../../guides/ffi-guidelines.md) 与 [全局约定](../../guides/conventions.md)（防御性错误处理、资源释放）。
+4. 插件交付物、六步沙箱自检与归档安全以 [AGENTS.md](../../../../AGENTS.md) 项目契约为准。
+5. 抽象复用判断参考 [代码复用思考指南](../../guides/code-reuse-thinking-guide.md)。
 
 ## Quality Check
 
 - 执行 [AGENTS.md](../../../../AGENTS.md) 的 Rust/Native 门禁；算法包不属于根 workspace，按 AGENTS.md 中列出的平台 manifest 单独执行。
 - 按 [质量检查](../../guides/quality-guidelines.md) 覆盖：ABI 布局断言、错误路径、资源释放与沙箱回归。
+- 涉及硬件回退策略时，额外确认：自检硬门不可被显式声明或 `.env` 翻越（含变异验证），
+  且 `last_error` 的可操作指引落在宿主 512 字节读取窗口内。

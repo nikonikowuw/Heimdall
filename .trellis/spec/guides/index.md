@@ -15,7 +15,7 @@
 | --- | --- |
 | [全局约定](./conventions.md) | 时间、坐标、队列通道、边缘内存预算、DTO 契约、资源释放、存储保护 |
 | [架构概览](./architecture-overview.md) | Crate 职责边界、单向依赖、三大路径拓扑、抽象与复用原则 |
-| [错误处理](./error-handling.md) | 错误枚举、传播、降级或退出 |
+| [错误处理](./error-handling.md) | 错误枚举、传播、降级或退出；静默降级不得伪装成功 |
 | [日志](./logging-guidelines.md) | 日志字段、span、采样与落盘 |
 | [并发](./concurrency-guidelines.md) | async/线程、队列、共享状态、停机 |
 | [FFI](./ffi-guidelines.md) | unsafe、ABI、句柄与构建绑定 |
