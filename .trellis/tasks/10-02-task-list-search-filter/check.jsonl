@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/web/frontend/index.md", "reason": "web 层 Quality Check 门禁与验收范围"}
+{"file": ".trellis/spec/web/frontend/quality-guidelines.md", "reason": "用户可观察行为验证、列表项稳定性"}
+{"file": ".trellis/spec/web/frontend/directory-structure.md", "reason": "模块边界与跨域导入禁令（check 需核对是否越界）"}
+{"file": ".trellis/spec/web/frontend/component-guidelines.md", "reason": "组件接口契约、可访问名称必填"}
+{"file": ".trellis/spec/web/frontend/type-safety.md", "reason": "类型边界与 DTO 一致性"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "查重与复用：不得重复实现既有工具"}
+{"file": ".trellis/spec/guides/quality-guidelines.md", "reason": "分层质量检查口径"}

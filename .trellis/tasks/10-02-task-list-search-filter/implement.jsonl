@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/web/frontend/index.md", "reason": "web 层规范入口与 Pre-Development Checklist"}
+{"file": ".trellis/spec/web/frontend/directory-structure.md", "reason": "模块边界、feature 上提判据、i18n 三语同步要求"}
+{"file": ".trellis/spec/web/frontend/component-guidelines.md", "reason": "组件接口与归属、列表项稳定性约定"}
+{"file": ".trellis/spec/web/frontend/hook-guidelines.md", "reason": "useCallback/useMemo 稳定化、effect 内不同步 setState、取数用 .then 链"}
+{"file": ".trellis/spec/web/frontend/styling-guidelines.md", "reason": "SearchInput/SelectField 控件职责表、主题 token、禁硬编码颜色"}
+{"file": ".trellis/spec/web/frontend/type-safety.md", "reason": "DTO 与边界收窄、联合类型取值表"}
+{"file": ".trellis/spec/web/frontend/quality-guidelines.md", "reason": "实时性能约定（列表项稳定、虚拟滚动门槛 200 条）"}
