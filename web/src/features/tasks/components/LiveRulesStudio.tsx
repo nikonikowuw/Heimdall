@@ -43,7 +43,7 @@ import { ActivityZonesSection } from './ActivityZonesSection'
 import { AlgoParamDrawer } from './AlgoParamDrawer'
 import { AlgoSandboxDrawer } from './AlgoSandboxDrawer'
 import { AlgorithmInstanceItem, AlgorithmRack } from './AlgorithmRack'
-import { extractTargetClasses } from '../algoMetadata'
+import { extractConfigProperties, extractTargetClasses } from '@/lib/algoConfigSchema'
 import { RulePropertiesPanel } from './RulePropertiesPanel'
 import { StudioToolIsland } from './StudioToolIsland'
 import {
@@ -579,12 +579,9 @@ export function LiveRulesStudio({
       // 首次激活：自动根据算法 schema 初始化官方推荐默认参数
       const found = availableAlgos.find((a) => a.algorithmId === algoId)
       const initialParams: Record<string, unknown> = {}
-      if (found?.configSchema?.properties) {
-        const props = found.configSchema.properties as Record<string, Record<string, unknown>>
-        for (const [k, p] of Object.entries(props)) {
-          if (p.default !== undefined) {
-            initialParams[k] = p.default
-          }
+      for (const [k, p] of Object.entries(extractConfigProperties(found))) {
+        if (p.default !== undefined) {
+          initialParams[k] = p.default
         }
       }
       if (found?.classes && found.classes.length > 0) {

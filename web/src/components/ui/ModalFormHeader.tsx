@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
-import { X, type LucideIcon } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import { CloseIconButton } from './CloseIconButton'
 
 export interface ModalFormHeaderProps {
   icon: LucideIcon
@@ -47,16 +48,14 @@ export function ModalFormHeader({
           </p>
         </div>
       </div>
-      <button
-        type="button"
+      <CloseIconButton
         onClick={onClose}
-        disabled={closeDisabled}
-        aria-label={closeLabel}
+        label={closeLabel}
         title={closeTitle}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none disabled:opacity-50"
-      >
-        <X className="h-4 w-4" aria-hidden="true" />
-      </button>
+        disabled={closeDisabled}
+        // 关闭控件按样式规范使用 --text-secondary（CloseIconButton plain 默认是 --text-muted）
+        className="text-[var(--text-secondary)]"
+      />
     </header>
   )
 }

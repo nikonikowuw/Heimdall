@@ -6,7 +6,7 @@ import { SearchInput } from '@/components/ui/SearchInput'
 import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
 import type { AlgorithmItem, Camera, TaskConfigDto } from '@/types'
-import { extractTargetClasses } from '../algoMetadata'
+import { extractTargetClasses } from '@/lib/algoConfigSchema'
 import {
   buildQuickCreatePayload,
   pickActiveVersion,

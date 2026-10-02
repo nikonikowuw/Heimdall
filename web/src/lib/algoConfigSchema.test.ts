@@ -3,9 +3,9 @@ import {
   buildSchemaDefaultParams,
   extractConfigProperties,
   extractTargetClasses,
-} from './algoMetadata'
+} from './algoConfigSchema'
 
-describe('algoMetadata', () => {
+describe('algoConfigSchema', () => {
   it('reads target classes from the schema enum', () => {
     const classes = extractTargetClasses({
       configSchema: {

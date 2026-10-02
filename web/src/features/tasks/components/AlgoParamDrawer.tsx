@@ -10,7 +10,12 @@ import {
   parseNumericDraft,
 } from '@/lib/numericDraft'
 import { isCosineThresholdKey, percentToScore, scoreToPercent } from '@/lib/similarity'
-import { getEnumOptions, resolveEnumSelection, stripLegacyInjectedParams } from '../algoMetadata'
+import {
+  extractConfigProperties,
+  getEnumOptions,
+  resolveEnumSelection,
+  stripLegacyInjectedParams,
+} from '@/lib/algoConfigSchema'
 import { getNumericParamConfig } from '../numericParam'
 import { EnumArrayField } from './EnumArrayField'
 import { getLocalizedClassName } from './rulesStudioTypes'
@@ -93,13 +98,8 @@ export function AlgoParamDrawer({
     }
   }
 
-  const schemaObj = useMemo(() => {
-    return (algo?.configSchema as Record<string, unknown>) || {}
-  }, [algo])
-
-  const propertiesObj = useMemo(() => {
-    return (schemaObj.properties as Record<string, Record<string, unknown>>) || {}
-  }, [schemaObj])
+  // schema 一览由共享叶子层解析，与「参数规范」查看器复用同一份结构校验
+  const propertiesObj = useMemo(() => extractConfigProperties(algo), [algo])
 
   /**
    * schema 是参数的唯一事实来源：声明了什么就渲染什么。

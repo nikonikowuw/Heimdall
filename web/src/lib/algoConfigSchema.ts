@@ -1,3 +1,16 @@
+/**
+ * 算法包 `configSchema` 的解析与参数派生。
+ *
+ * 归属 `lib/`（叶子层）而非任何单一 feature：schema 是算法包的资产属性，消费方
+ * 同时来自 `algorithms`（查看参数规范）与 `tasks`（渲染参数控件、初始化默认参数）
+ * 两个 feature。按 [目录与 i18n](../../../.trellis/spec/web/frontend/directory-structure.md)
+ * 的「跨 feature 共用的纯逻辑与其值类型放 `lib/`」，单一真源落在叶子层，
+ * 依赖方向恒为 `features → lib`，不会产生 feature 之间的环。
+ *
+ * 本模块为纯逻辑（无 React、无 IO），入参一律声明为 `unknown`：数据来自后端 JSON，
+ * 属不可信边界，由本模块做结构校验，不依赖调用方断言。
+ */
+
 /** 算法 schema 中用于声明目标类别的常见字段名 */
 const TARGET_CLASS_KEYS = ['target_classes', 'allowed_classes', 'classes'] as const
 
@@ -25,8 +38,10 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 /**
- * 算法配置来源。字段声明为 `unknown`：入参来自后端 JSON，属不可信边界，
- * 由本模块负责结构校验而非依赖调用方断言。
+ * 算法配置来源。
+ *
+ * 只要调用方持有 `configSchema` / `manifestRaw` 两者之一即可，不要求完整的
+ * `AlgorithmVersionItem`——`SchemaModal` 传版本条目，`AlgoParamDrawer` 传 manifest。
  */
 export interface AlgoConfigSource {
   configSchema?: unknown
@@ -97,6 +112,25 @@ export function stripLegacyInjectedParams(
   return stripped
 }
 
+/** 读取 array 型参数的候选项（`items.enum`）；非字符串枚举返回空数组 */
+export function getEnumOptions(prop: Record<string, unknown>): string[] {
+  const items = isRecord(prop.items) ? prop.items : undefined
+  const options = items?.enum
+  return isStringArray(options) && options.length > 0 ? [...options] : []
+}
+
+/**
+ * 解析 array 型参数的选中项。
+ *
+ * 优先采用运行时值（空数组是用户「清空」的合法结果，必须尊重），
+ * 其次 schema 默认值，最后回退到全部候选项。
+ */
+export function resolveEnumSelection(prop: Record<string, unknown>, raw: unknown): string[] {
+  if (isStringArray(raw)) return [...raw]
+  if (isStringArray(prop.default)) return [...prop.default]
+  return getEnumOptions(prop)
+}
+
 /**
  * 依据算法 configSchema 生成初始参数。
  *
@@ -133,23 +167,4 @@ export function buildSchemaDefaultParams(
   }
 
   return params
-}
-
-/** 读取 array 型参数的候选项（`items.enum`）；非字符串枚举返回空数组 */
-export function getEnumOptions(prop: Record<string, unknown>): string[] {
-  const items = isRecord(prop.items) ? prop.items : undefined
-  const options = items?.enum
-  return isStringArray(options) && options.length > 0 ? [...options] : []
-}
-
-/**
- * 解析 array 型参数的选中项。
- *
- * 优先采用运行时值（空数组是用户「清空」的合法结果，必须尊重），
- * 其次 schema 默认值，最后回退到全部候选项。
- */
-export function resolveEnumSelection(prop: Record<string, unknown>, raw: unknown): string[] {
-  if (isStringArray(raw)) return [...raw]
-  if (isStringArray(prop.default)) return [...prop.default]
-  return getEnumOptions(prop)
 }

@@ -543,6 +543,20 @@
     padding: 1.25rem;
   }
 
+  /*
+   * 表单弹窗的工具栏：夹在固定头部与唯一滚动区之间。
+   * 只声明分区与内衬，不接管滚动——滚动职责仍属 .modal-form-content。
+   */
+  .modal-form-toolbar {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 1.25rem;
+  }
+
   .modal-form-label {
     color: var(--text-secondary);
     font-size: 0.75rem;
@@ -1191,6 +1205,7 @@
   @media (min-width: 640px) {
     .modal-form-header,
     .modal-form-content,
+    .modal-form-toolbar,
     .modal-form-footer,
     .drawer-header,
     .drawer-toolbar,

@@ -1,8 +1,10 @@
-import React, { useMemo, useState } from 'react'
-import { Code2, Copy, FileJson, X } from 'lucide-react'
+import React, { useId, useMemo, useState } from 'react'
+import { Code2, Copy, FileJson } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { ModalFormHeader } from '@/components/ui/ModalFormHeader'
 import { ModalOverlay } from '@/components/ui/ModalOverlay'
 import { SearchInput } from '@/components/ui/SearchInput'
+import { extractConfigProperties } from '@/lib/algoConfigSchema'
 import { copyToClipboard } from '@/lib/utils'
 import type { AlgorithmItem } from '@/types'
 import { activeVersionItem } from '../algoFilters'
@@ -26,11 +28,20 @@ const PROPERTY_SEARCH_THRESHOLD = 6
 /**
  * 参数配置规范查看器。
  *
+ * 外壳、遮罩、焦点陷阱与 ESC 由 [ModalOverlay](../../../components/ui/ModalOverlay.tsx)
+ * 承担；标题、唯一滚动区与页脚分别复用 `ModalFormHeader` / `.modal-form-content` /
+ * `.modal-form-footer`，与同域的上传弹窗保持同一套结构，不另起视觉层。
+ *
+ * 因为存在可见标题节点，无障碍名称走 `aria-labelledby` / `aria-describedby`
+ * （`ariaLabel` 在有 `ariaLabelledBy` 时不会渲染，重复传属死参数）。
+ *
  * 参数较多的算法（十几个可调项）在平板上翻表很难定位，因此提供属性过滤；
  * 过滤只影响表格视图，原始 JSON 始终可整体复制，避免出现「复制的是过滤后子集」的误解。
  */
 export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): React.ReactElement {
   const { t } = useTranslation('algo')
+  const titleId = useId()
+  const descriptionId = useId()
   const [showRaw, setShowRaw] = useState(false)
   const [copied, setCopied] = useState(false)
   const [propertyQuery, setPropertyQuery] = useState('')
@@ -42,15 +53,16 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
     [activeVersion],
   )
 
+  // 复用共享解析：与 AlgoParamDrawer 的参数一览同源，避免两处结构校验各自漂移
   const properties: SchemaProperty[] = useMemo(() => {
-    const propertiesObj = (schemaObj.properties as Record<string, Record<string, unknown>>) ?? {}
+    const propertiesObj = extractConfigProperties(activeVersion)
     return Object.entries(propertiesObj).map(([key, value]) => ({
       key,
       type: String(value.type || 'unknown'),
       defaultVal: value.default !== undefined ? JSON.stringify(value.default) : '-',
       description: String(value.description || '-'),
     }))
-  }, [schemaObj])
+  }, [activeVersion])
 
   const visibleProperties = useMemo(() => {
     const query = propertyQuery.trim().toLowerCase()
@@ -76,34 +88,23 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
     <ModalOverlay
       isOpen={isOpen && Boolean(algorithm)}
       onClose={onClose}
-      ariaLabel={`${t('schema.title')} - ${algorithm?.name ?? ''}`}
-      variant="modal"
-      panelClassName="max-w-2xl"
+      ariaLabelledBy={titleId}
+      ariaDescribedBy={descriptionId}
+      surface="solid"
+      panelClassName="modal-surface--form modal-surface--medium p-0"
     >
-      <div className="flex items-center justify-between border-b border-[var(--border)] pb-4">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-            <Code2 className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <h3 className="truncate text-sm font-bold text-[var(--text-primary)]">
-              {t('schema.title')} · {algorithm?.name ?? ''}
-            </h3>
-            <p className="text-[11px] text-[var(--text-muted)]">{t('schema.subtitle')}</p>
-          </div>
-        </div>
-        <button
-          type="button"
-          data-autofocus
-          onClick={onClose}
-          aria-label={t('actions.close')}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
+      <ModalFormHeader
+        icon={Code2}
+        title={`${t('schema.title')} · ${algorithm?.name ?? ''}`}
+        titleId={titleId}
+        description={t('schema.subtitle')}
+        descriptionId={descriptionId}
+        closeLabel={t('actions.close')}
+        onClose={onClose}
+      />
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+      {/* 工具栏：视图切换 / 属性过滤 / 复制。过滤只作用于表格视图。 */}
+      <div className="modal-form-toolbar">
         <div
           role="group"
           aria-label={t('schema.title')}
@@ -131,12 +132,12 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            <FileJson className="h-3.5 w-3.5" />
+            <FileJson className="h-3.5 w-3.5" aria-hidden="true" />
             <span>{t('schema.rawJson')}</span>
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="ms-auto flex items-center gap-2">
           {!showRaw && properties.length > PROPERTY_SEARCH_THRESHOLD && (
             <SearchInput
               sizeVariant="compact"
@@ -153,15 +154,16 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
           <button
             type="button"
             onClick={handleCopy}
-            className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)]"
+            className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-hidden"
           >
-            <Copy className="h-3.5 w-3.5" />
+            <Copy className="h-3.5 w-3.5" aria-hidden="true" />
             <span>{copied ? t('schema.copied') : t('schema.copyJson')}</span>
           </button>
         </div>
       </div>
 
-      <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
+      {/* 唯一滚动区：头/工具栏/页脚固定在滚动区外 */}
+      <div className="modal-form-content">
         {showRaw ? (
           <pre className="font-data rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4 text-xs leading-relaxed text-[var(--text-primary)]">
             {rawJsonString}
@@ -219,11 +221,11 @@ export function SchemaModal({ isOpen, algorithm, onClose }: SchemaModalProps): R
         )}
       </div>
 
-      <div className="mt-6 flex justify-end border-t border-[var(--border)] pt-4">
+      <div className="modal-form-footer">
         <button
           type="button"
           onClick={onClose}
-          className="rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+          className="modal-form-button modal-form-button--secondary"
         >
           {t('actions.close')}
         </button>

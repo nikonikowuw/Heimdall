@@ -5,7 +5,7 @@ import type {
   TaskAlgorithmInstanceDto,
   TaskConfigDto,
 } from '@/types'
-import { buildSchemaDefaultParams } from './algoMetadata'
+import { buildSchemaDefaultParams } from '@/lib/algoConfigSchema'
 
 /**
  * 任务写入载荷的纯逻辑层。
