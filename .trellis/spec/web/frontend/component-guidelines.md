@@ -87,3 +87,38 @@
 - 交互行为（清空 → 重输、失焦收敛、编辑期不派发、外部值同步）用 RTL + jsdom：文件首行 `// @vitest-environment jsdom` 按文件 opt-in，不修改全局 `test.environment`；仓库未开 vitest `globals`，每个 jsdom 文件显式 `afterEach(cleanup)`；不依赖 jest-dom 断言或 `user-event`，`fireEvent.change` + `fireEvent.blur` 足以表达失焦语义。见 [NumericField.test.tsx](../../../../web/src/components/ui/NumericField.test.tsx) 与[测试选择](quality-guidelines.md#测试选择)。
 
 验证清空 → 重输不被回写、失焦按语义表收敛、编辑期不派发、保存路径仍有最终 clamp。
+
+## 列表检索与筛选
+
+列表页的检索与筛选遵循同一套分层：**纯逻辑下沉本域 `xxxFilter.ts`（无 React），筛选栏独立成组件，页面只负责编排与派生**。参考实现为 [taskFilter.ts](../../../../web/src/features/tasks/taskFilter.ts) + [TaskFilterBar.tsx](../../../../web/src/features/tasks/components/TaskFilterBar.tsx)，单维度的先例见 [cameraSearch.ts](../../../../web/src/features/cameras/cameraSearch.ts)。
+
+### 组合语义与取值表
+
+- **维度间 AND、维度内 OR**：文本检索命中任一字段即通过；多个筛选维度同时施加时取交集。多值维度（如任务挂载多个算法实例）用 `some(...)` 语义 —— 任务同时挂载通用检测与火焰检测时，筛「火焰检测」必须命中，否则用户会得到静默的错误答案。
+- 取值表用 `defineFilters<TUnion>()([...])` 声明，与联合类型在实参位置双向锁定（漏档与越界都是声明处的编译错误），见 [filters.ts](../../../../web/src/features/alarms/filters.ts) 与 [type-safety.md](type-safety.md#边界收窄必须走共享工具)。
+  - **`defineFilters` 目前在 alarms 与 tasks 各有一份，属接受的重复**：跨域导入违反[模块边界](directory-structure.md#模块边界)，而上提到 `lib/` 会改动 alarms 既有代码。**第三个消费点出现时应上提至 `lib/`** 并同步迁移两处调用。
+- **查询串归一化只做一次**：先 `trim().toLowerCase()` 归一化，再以 `preNormalized` 参数传入匹配函数，避免循环内重复归一化。空串/纯空白等价于「无查询」。
+- **无筛选时纯过滤函数必须返回入参原引用**（非新建数组）：卡片矩阵未 `memo` 时，每次渲染的新引用会触发全量重渲染。用 `toBe` 断言钉住。
+- **「有生效筛选」只能有一处实现**：`hasActiveTaskFilters(filters)` 同时是 `filterTasks` 的短路条件与筛选栏「清除筛选」按钮的可见性开关。两者各写一份会漂移出「按钮不出现但列表已被过滤」这类自相矛盾的界面。
+- **筛选维度的谓词独立成函数**（如 `matchesTaskArmStatus` / `matchesTaskAlgorithm`），不在 `filterTasks` 里内联条件链：每个维度都需单独测试与复用，且档位判定在渲染处也会用到（计数、选中态）。
+- **计数类型与档位联合类型同集**：`ArmStatusCounts = Record<ArmStatusFilter, number>`，渲染处直接 `counts[option]` 取用，不再写一遍「档位 → 字段」的映射三元链。
+
+### 计数口径
+
+**KPI 与命中数是两套口径，不得互相覆盖**。页面标题栏的舰队级 KPI（总数、已布防）与筛选栏内各档位计数一律为**全量口径**，不随当前筛选变化；只有「筛选命中 N」跟随筛选。否则「已布防 15」会随文本检索一起缩水，用户无法判断筛选前后的分布。
+
+### 归属与降级
+
+- 筛选纯逻辑只消费 `@/types`，**不 import 任何 feature**：跨域数据（如算法友好名映射）由页面取回后作为 `ReadonlyMap` 参数注入，缺失时回落原始 ID，复用既有的 `?.name ?? id` 降级策略。
+- 取数用 `Promise.allSettled` 而非 `all`：仅影响展示标签的非关键请求失败时不得让整个列表报错。
+- 筛选条件变化时**不重排列表**：过滤是顺序保持的，筛选后相对先后与筛选前一致。列表顺序由数据源的既有口径决定，在单个页面单独排序会让多页共用同一 API 时视觉口径分裂。
+
+### 空态与门控
+
+- 「尚无数据」与「筛选无命中」必须是**两个独立空态**：前者引导创建，后者提供清除筛选入口。把筛选无命中渲染成空数据集会让用户怀疑数据丢失。
+- 筛选栏在数据源为空时整体不渲染（`cameras.length > 0 &&`），避免对着空态展示无效控件。
+- **派生状态不进 props**：可由受控值直接推出的开关（如「是否存在生效筛选」）由筛选栏自行调用共享判定，不从页面传入；只有需要跨组件一致的全量口径计数（`armStatusCounts`、`matchedCount`）才作为 props 传递。
+- 搜索框用 [SearchInput](../../../../web/src/components/ui/SearchInput.tsx)（`showKbdHint` + `clearAriaLabel`），枚举维度用 [SelectField](../../../../web/src/components/ui/SelectField.tsx)（`emphasis` 标记该维度已收敛，`allOption` 承载「全部」档）。键盘与可访问性契约见[样式规范](styling-guidelines.md#工具栏输入控件)与[交互](#交互)。
+- **受控回调必须丢弃控件签名里的额外实参**：`SearchInput` / `SelectField` 的 `onChange` 是 `(value, event)`，回调契约若只接收单参就写 `(value) => onChange(value)`，不要直接透传 —— 否则 DOM 事件会泄漏给父层，下游调试时看到意外的第二个实参。
+
+验证归一化与字段覆盖、多实例任一命中、组合 AND、无筛选时的原引用与「有生效筛选」判定同源、计数与命中数的口径分离、无匹配空态的一键清除。
