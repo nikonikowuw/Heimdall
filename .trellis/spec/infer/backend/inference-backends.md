@@ -57,6 +57,23 @@ CoreML 计算单元、RKNN 核心掩码、映射缓存和输出 RAII 的约束�
    - **业务层（Multi-Instance）**：每路摄像头拥有独立的 `AlgoInstance`（如 `FaceRecognizer`）与独立的 `InferenceWorker`，状态（ByteTrack 跟踪器、Kalman 矩阵、ROI 多边形与 FPS 计数）严格隔离；
    - **硬件层（Shared NPU Context）**：受硬件显存严苛约束的算法（如人脸识别 YOLOv8-Face + EdgeFace），底层使用 `Weak<SharedModels>` 单例由专属 OS 线程独占硬件 RKNN Context，多路业务实例与无状态离线提取（`av_algo_extract_face`）分时共享排队推理。
 
+## Worker 有界退出与故障隔离协议 (Quarantine Supervisor)
+
+在驱动层（如 RKNN、DVPP、ACL）由于硬件总线异常、死锁或卡顿导致析构阻塞时，传统的无界 `join()` 或在当前 Tokio 任务中直接等待会导致宿主关键停机/切换流程永久卡死。
+
+为此，`crates/infer/src/worker.rs` 建立了**有界退出与隔离协议**：
+
+1. **Worker 线程内显式清理由前置守卫保障**：
+   - 停机信号送达后，Worker OS 线程内部首先显式释放 Tokio Runtime（`rt`）及 `backend` 实例；
+   - 清理完成后，再通过 `exit_tx` 发送退出确认；
+2. **停机超时与异常断开的隔离 (Quarantine)**：
+   - 宿主 `InferenceWorker::stop` 设定有界超时（默认 `SHUTDOWN_TIMEOUT = 5s`）；
+   - 若超时未收到完成确认，或通道因 Worker panic 异常断开，严禁执行无界 `join()`；
+   - 宿主立即将该 Worker 的 OS 线程 `JoinHandle` 移交后台全局 `QuarantineSupervisor`，并在状态机中标记为 `WorkerState::Quarantined`，返回 `InferError::Timeout`；
+3. **后台 Reaper 轮询与资源追踪**：
+   - `QuarantineSupervisor` 由独立的非阻塞后台线程以固定间隔（`REAPER_POLL_INTERVAL = 1s`）轮询 `join_handle.is_finished()`；
+   - 仅当物理 OS 线程真正退出后才回收其 JoinHandle，并记入隔离恢复指标，杜绝句柄悬挂或静默泄漏。
+
 ## 验证
 
 - 无硬件测试验证类型/形状、坐标范围、配置与失败分支；测试规则见 [全局约定](../../guides/conventions.md#测试)。

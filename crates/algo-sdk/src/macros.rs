@@ -220,6 +220,34 @@ pub unsafe fn parse_c_str<'a>(ptr: *const c_char) -> Result<&'a str, AlgoError> 
     unsafe { parse_c_str_bounded(ptr, MAX_C_STRING_BYTES) }
 }
 
+/// 在反序列化业务配置前单次剥离宿主保留的 `__heimdall_placement` 字段
+///
+/// 避免业务插件的 `Config` 因标注 `#[serde(deny_unknown_fields)]` 而在注入 placement 元数据时反序列化失败。
+pub fn deserialize_config_stripping_placement<T: serde::de::DeserializeOwned + Default>(
+    json_str: &str,
+) -> Result<(T, Option<serde_json::Value>), AlgoError> {
+    if json_str.trim().is_empty() {
+        return Ok((T::default(), None));
+    }
+
+    let mut val: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| AlgoError::ConfigParse {
+            reason: format!("配置 JSON 格式非法: {e}"),
+        })?;
+
+    let placement = if let serde_json::Value::Object(ref mut map) = val {
+        map.remove("__heimdall_placement")
+    } else {
+        None
+    };
+
+    let config: T = serde_json::from_value(val).map_err(|e| AlgoError::ConfigParse {
+        reason: format!("配置反序列化错误: {e}"),
+    })?;
+
+    Ok((config, placement))
+}
+
 /// 校验并借用规则数组；规则和点坐标都必须满足 C ABI 与归一化契约。
 ///
 /// # Safety
@@ -547,15 +575,13 @@ macro_rules! export_algo {
                         return error.to_c_status();
                     }
                 };
-                let config = if config_json.trim().is_empty() {
-                    Default::default()
-                } else {
-                    match serde_json::from_str(config_json) {
-                        Ok(config) => config,
-                        Err(error) => {
-                            $crate::macros::set_last_error(format!("配置解析错误: {error}"));
-                            return $crate::c_abi::AV_ERR_CONFIG_INVALID;
-                        }
+                let (config, _placement) = match $crate::macros::deserialize_config_stripping_placement::<
+                    <$plugin_ty as $crate::plugin::AlgoPlugin>::Config,
+                >(config_json) {
+                    Ok(res) => res,
+                    Err(error) => {
+                        $crate::macros::set_last_error(error.to_string());
+                        return $crate::c_abi::AV_ERR_CONFIG_INVALID;
                     }
                 };
 
@@ -688,18 +714,13 @@ macro_rules! export_algo {
                         return error.to_c_status();
                     }
                 };
-                let config = if config_json.trim().is_empty() {
-                    Default::default()
-                } else {
-                    match serde_json::from_str::<
-                        <$plugin_ty as $crate::plugin::AlgoPlugin>::Config,
-                    >(config_json)
-                    {
-                        Ok(config) => config,
-                        Err(error) => {
-                            $crate::macros::set_last_error(format!("配置解析错误: {error}"));
-                            return $crate::c_abi::AV_ERR_CONFIG_INVALID;
-                        }
+                let (config, _placement) = match $crate::macros::deserialize_config_stripping_placement::<
+                    <$plugin_ty as $crate::plugin::AlgoPlugin>::Config,
+                >(config_json) {
+                    Ok(res) => res,
+                    Err(error) => {
+                        $crate::macros::set_last_error(error.to_string());
+                        return $crate::c_abi::AV_ERR_CONFIG_INVALID;
                     }
                 };
                 // SAFETY: inst 必须是由当前 ABI 的 instance_create 创建的有效句柄。
@@ -1192,4 +1213,70 @@ macro_rules! export_face_gallery {
             })
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize, PartialEq, Default)]
+    #[serde(deny_unknown_fields)]
+    struct StrictConfig {
+        #[serde(default)]
+        threshold: f32,
+    }
+
+    #[test]
+    fn test_deserialize_config_strips_placement_successfully() {
+        let raw = r#"{
+            "threshold": 0.75,
+            "__heimdall_placement": {
+                "version": 1,
+                "strategy": "pinned",
+                "core_mask": 2
+            }
+        }"#;
+
+        let (config, placement) = deserialize_config_stripping_placement::<StrictConfig>(raw)
+            .expect("包含 placement 的 JSON 剥离反序列化应成功");
+        assert_eq!(config.threshold, 0.75);
+        let placement_val = placement.expect("应成功提取 placement 对象");
+        assert_eq!(
+            placement_val["strategy"]
+                .as_str()
+                .expect("strategy 必须为字符串"),
+            "pinned"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_config_without_placement() {
+        let raw = r#"{"threshold": 0.5}"#;
+        let (config, placement) = deserialize_config_stripping_placement::<StrictConfig>(raw)
+            .expect("无 placement 的普通 JSON 解析应成功");
+        assert_eq!(config.threshold, 0.5);
+        assert!(placement.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_config_empty() {
+        let (config, placement) =
+            deserialize_config_stripping_placement::<StrictConfig>("").expect("空配置应返回默认值");
+        assert_eq!(config, StrictConfig::default());
+        assert!(placement.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_config_rejects_other_unknown_fields() {
+        let raw = r#"{
+            "threshold": 0.75,
+            "__heimdall_placement": { "core_mask": 1 },
+            "invalid_unknown_field": 123
+        }"#;
+
+        let err = deserialize_config_stripping_placement::<StrictConfig>(raw)
+            .expect_err("含其他未知字段应返回错误");
+        assert!(matches!(err, AlgoError::ConfigParse { .. }));
+    }
 }

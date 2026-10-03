@@ -9,6 +9,7 @@ pub mod frame;
 pub mod gb28181;
 pub mod oplog;
 pub mod personnel;
+pub mod placement;
 pub mod system;
 pub mod task;
 
@@ -47,6 +48,10 @@ pub use personnel::{
     ImportTaskStatus, PersonnelDetailDto, PersonnelImportProgressDto, PersonnelItemDto,
     PersonnelStatsDto, RecognitionStatus, ReextractFaceFailureDetail, ReextractProgressDto,
     ReextractTaskStatus, UpdatePersonnelRequest,
+};
+pub use placement::{
+    AffinityIntent, CleanupStatus, PlacementApplicationStatus, WirePlacementMetadata,
+    WireWeightBinding,
 };
 pub use system::{
     CoreMetrics, CpuMetrics, DiskMetrics, EvictionReport, ForceSyncResponse, InterfaceCapabilities,

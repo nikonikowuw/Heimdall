@@ -65,6 +65,48 @@ fn test_c_abi_structure_sizes() {
         64,
         "AvAlgoGalleryAbi size mismatch"
     );
+
+    // 放置扩展与回执结构体验证
+    assert_eq!(
+        size_of::<AvAlgoPlacementCapsPod>(),
+        32,
+        "AvAlgoPlacementCapsPod size mismatch"
+    );
+    assert_eq!(
+        align_of::<AvAlgoPlacementCapsPod>(),
+        4,
+        "AvAlgoPlacementCapsPod alignment mismatch"
+    );
+    assert_eq!(
+        size_of::<AvAlgoInstanceReceiptPod>(),
+        72,
+        "AvAlgoInstanceReceiptPod size mismatch"
+    );
+    assert_eq!(
+        align_of::<AvAlgoInstanceReceiptPod>(),
+        8,
+        "AvAlgoInstanceReceiptPod alignment mismatch"
+    );
+    assert_eq!(
+        size_of::<AvAlgoCleanupReceiptPod>(),
+        72,
+        "AvAlgoCleanupReceiptPod size mismatch"
+    );
+    assert_eq!(
+        align_of::<AvAlgoCleanupReceiptPod>(),
+        8,
+        "AvAlgoCleanupReceiptPod alignment mismatch"
+    );
+    assert_eq!(
+        size_of::<AvAlgoPlacementExtensionV1>(),
+        64,
+        "AvAlgoPlacementExtensionV1 size mismatch"
+    );
+    assert_eq!(
+        align_of::<AvAlgoPlacementExtensionV1>(),
+        std::mem::align_of::<usize>(),
+        "AvAlgoPlacementExtensionV1 alignment mismatch"
+    );
 }
 
 #[test]
@@ -129,4 +171,55 @@ fn test_c_abi_field_offsets() {
     assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_remove), 40);
     assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_search), 48);
     assert_eq!(offset_of!(AvAlgoGalleryAbi, gallery_count), 56);
+
+    // av_algo_placement_caps_pod 偏移
+    assert_eq!(offset_of!(AvAlgoPlacementCapsPod, size), 0);
+    assert_eq!(offset_of!(AvAlgoPlacementCapsPod, api_version), 4);
+    assert_eq!(offset_of!(AvAlgoPlacementCapsPod, caps), 8);
+    assert_eq!(offset_of!(AvAlgoPlacementCapsPod, supported_core_mask), 12);
+    assert_eq!(
+        offset_of!(AvAlgoPlacementCapsPod, max_child_contexts_per_root),
+        16
+    );
+
+    // av_algo_instance_receipt_pod 偏移
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, size), 0);
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, api_version), 4);
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, status), 8);
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, assigned_core_mask), 12);
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, actual_core_mask), 16);
+    assert_eq!(
+        offset_of!(AvAlgoInstanceReceiptPod, weight_sharing_confirmed),
+        20
+    );
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, generation), 24);
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, sdk_error_code), 32);
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, reserved0), 36);
+    assert_eq!(offset_of!(AvAlgoInstanceReceiptPod, reservation_id), 40);
+
+    // av_algo_cleanup_receipt_pod 偏移
+    assert_eq!(offset_of!(AvAlgoCleanupReceiptPod, size), 0);
+    assert_eq!(offset_of!(AvAlgoCleanupReceiptPod, api_version), 4);
+    assert_eq!(offset_of!(AvAlgoCleanupReceiptPod, cleanup_status), 8);
+    assert_eq!(offset_of!(AvAlgoCleanupReceiptPod, sdk_error_code), 12);
+    assert_eq!(offset_of!(AvAlgoCleanupReceiptPod, generation), 16);
+    assert_eq!(offset_of!(AvAlgoCleanupReceiptPod, reservation_id), 24);
+    assert_eq!(offset_of!(AvAlgoCleanupReceiptPod, reserved0), 56);
+    assert_eq!(offset_of!(AvAlgoCleanupReceiptPod, reserved1), 64);
+
+    // av_algo_placement_extension_v1 偏移
+    assert_eq!(offset_of!(AvAlgoPlacementExtensionV1, size), 0);
+    assert_eq!(offset_of!(AvAlgoPlacementExtensionV1, api_version), 4);
+    assert_eq!(
+        offset_of!(AvAlgoPlacementExtensionV1, query_capabilities),
+        8
+    );
+    assert_eq!(
+        offset_of!(AvAlgoPlacementExtensionV1, query_instance_receipt),
+        16
+    );
+    assert_eq!(
+        offset_of!(AvAlgoPlacementExtensionV1, query_cleanup_receipt),
+        24
+    );
 }

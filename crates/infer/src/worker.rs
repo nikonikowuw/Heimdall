@@ -415,6 +415,18 @@ impl InferenceWorker {
     where
         F: FnOnce() -> Result<Box<dyn InferenceBackend>, InferError> + Send + 'static,
     {
+        Self::with_backend_factory_timeout(factory, config, WORKER_STARTUP_TIMEOUT)
+    }
+
+    /// 使用后端工厂函数与指定启动超时时间构建常驻推理工作线程
+    pub fn with_backend_factory_timeout<F>(
+        factory: F,
+        config: InferenceWorkerConfig,
+        startup_timeout: Duration,
+    ) -> Result<Self, InferError>
+    where
+        F: FnOnce() -> Result<Box<dyn InferenceBackend>, InferError> + Send + 'static,
+    {
         let slot = Arc::new(SharedSlot::new());
         let is_alive = Arc::new(AtomicBool::new(true));
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -536,6 +548,10 @@ impl InferenceWorker {
                     }
                 }
 
+                // 显式在所属专用 Worker OS 线程内完成 backend 析构与 C ABI 资源清理
+                drop(rt);
+                drop(backend);
+
                 tracing::info!(worker_name = %thread_worker_name, "专用常驻推理 OS 线程已平稳退出");
                 let _ = exit_tx.send(());
             })
@@ -543,7 +559,7 @@ impl InferenceWorker {
                 reason: format!("创建专用常驻推理线程失败: {err}"),
             })?;
 
-        match startup_rx.recv_timeout(WORKER_STARTUP_TIMEOUT) {
+        match startup_rx.recv_timeout(startup_timeout) {
             Ok(Ok(())) => Ok(Self {
                 worker_name,
                 handle,
@@ -553,20 +569,28 @@ impl InferenceWorker {
                 state: WorkerState::Running,
             }),
             Ok(Err(error)) => {
-                let _ = thread_handle.join();
+                if thread_handle.is_finished() {
+                    let _ = thread_handle.join();
+                } else {
+                    quarantine_worker(worker_name, thread_handle);
+                }
                 Err(error)
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 tracing::error!(
                     worker_name = %worker_name,
-                    timeout_ms = WORKER_STARTUP_TIMEOUT.as_millis() as u64,
+                    timeout_ms = startup_timeout.as_millis() as u64,
                     "推理 Worker 启动握手超时，疑似算法库或模型初始化阻塞，移入隔离池保活"
                 );
                 quarantine_worker(worker_name, thread_handle);
-                Err(InferError::Timeout(WORKER_STARTUP_TIMEOUT))
+                Err(InferError::Timeout(startup_timeout))
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = thread_handle.join();
+                if thread_handle.is_finished() {
+                    let _ = thread_handle.join();
+                } else {
+                    quarantine_worker(worker_name, thread_handle);
+                }
                 Err(InferError::Execution {
                     reason: "推理 Worker 启动握手通道异常关闭".to_string(),
                 })
@@ -629,7 +653,7 @@ impl InferenceWorker {
             .unwrap_or(Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
 
         match recv_res {
-            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Ok(()) => {
                 let _ = thread.join();
                 self.state = WorkerState::Stopped;
                 tracing::debug!(worker_name = %self.worker_name, "推理工作线程已正常优雅退出并回收");
@@ -643,6 +667,21 @@ impl InferenceWorker {
                     "推理工作线程在指定超时时间内未能退出（疑似硬件驱动内核调用挂起），移入全局隔离池受控保活，杜绝句柄提前释放导致内存踩踏"
                 );
                 quarantine_worker(self.worker_name.clone(), thread);
+                false
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // 通道异常断开（例如线程发生未捕获 Panic 或异常退出）：
+                // 绝不能当作正常已完成（不虚报已完成），若线程未就绪则移入隔离池
+                if thread.is_finished() {
+                    let _ = thread.join();
+                } else {
+                    quarantine_worker(self.worker_name.clone(), thread);
+                }
+                self.state = WorkerState::Quarantined;
+                tracing::warn!(
+                    worker_name = %self.worker_name,
+                    "推理工作线程退出握手通道异常断开，工作线程已标记为隔离异常状态"
+                );
                 false
             }
         }
@@ -1169,5 +1208,116 @@ mod tests {
         let reclaimed = try_reclaim_quarantined_workers();
         assert_eq!(reclaimed, 1, "底层 C FFI 结束后隔离线程应当被成功回收");
         assert_eq!(quarantined_workers_count(), 0);
+    }
+
+    #[derive(Debug)]
+    struct SlowDropBackend {
+        drop_sleep_ms: u64,
+    }
+
+    #[async_trait(?Send)]
+    impl InferenceBackend for SlowDropBackend {
+        fn name(&self) -> &'static str {
+            "SlowDropBackend"
+        }
+
+        async fn detect(&self, _frame: &FrameRef) -> Result<Vec<Detection>, InferError> {
+            Ok(vec![])
+        }
+    }
+
+    impl Drop for SlowDropBackend {
+        fn drop(&mut self) {
+            std::thread::sleep(Duration::from_millis(self.drop_sleep_ms));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_exit_timeout_isolation_t01() {
+        clear_quarantine_pool_for_test();
+        let backend = Arc::new(SlowDropBackend { drop_sleep_ms: 400 });
+        let config = InferenceWorkerConfig {
+            worker_name: "test-slow-drop-worker".to_string(),
+            timeout_ms: 100,
+        };
+        let mut worker = InferenceWorker::with_config(backend, config);
+        let start = std::time::Instant::now();
+        let stopped = worker.stop(Duration::from_millis(50));
+        let elapsed = start.elapsed();
+
+        assert!(!stopped, "backend Drop 挂起时 stop 必须返回 false 并隔离");
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "stop 耗时 {elapsed:?} 超出有界上限，未能按时隔离脱身"
+        );
+        assert_eq!(worker.state(), WorkerState::Quarantined);
+        assert_eq!(quarantined_workers_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_worker_factory_hung_thread_quarantined_t02() {
+        clear_quarantine_pool_for_test();
+        let factory = || -> Result<Box<dyn InferenceBackend>, InferError> {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(Box::new(MockEchoBackend { sleep_ms: 0 }) as Box<dyn InferenceBackend>)
+        };
+        let config = InferenceWorkerConfig {
+            worker_name: "test-startup-timeout-worker".to_string(),
+            timeout_ms: 100,
+        };
+        let res = InferenceWorker::with_backend_factory_timeout(
+            factory,
+            config,
+            Duration::from_millis(50),
+        );
+        assert!(res.is_err(), "启动超时必须返回 Err");
+        assert!(matches!(res.unwrap_err(), InferError::Timeout(_)));
+        assert_eq!(
+            quarantined_workers_count(),
+            1,
+            "启动超时的线程必须被移入隔离池受控保活，杜绝脱管与无界等待"
+        );
+    }
+
+    struct PanicDropBackend;
+
+    #[async_trait(?Send)]
+    impl InferenceBackend for PanicDropBackend {
+        fn name(&self) -> &'static str {
+            "PanicDropBackend"
+        }
+
+        async fn detect(&self, _frame: &FrameRef) -> Result<Vec<Detection>, InferError> {
+            Ok(vec![])
+        }
+    }
+
+    impl Drop for PanicDropBackend {
+        fn drop(&mut self) {
+            panic!("模拟析构阶段 Panic 崩溃");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_exit_channel_disconnect_not_completed_t03() {
+        clear_quarantine_pool_for_test();
+        let backend = Arc::new(PanicDropBackend);
+        let config = InferenceWorkerConfig {
+            worker_name: "test-panic-drop-worker".to_string(),
+            timeout_ms: 100,
+        };
+        let mut worker = InferenceWorker::with_config(backend, config);
+        let stopped = worker.stop(Duration::from_millis(100));
+
+        // 核心断言：析构 panic 导致通道断开时，绝不能报告成功（stopped 必须为 false，state 为 Quarantined）
+        assert!(
+            !stopped,
+            "通道异常断开/析构 Panic 时 stop 绝不能返回 true 虚报完成"
+        );
+        assert_eq!(
+            worker.state(),
+            WorkerState::Quarantined,
+            "异常断开应标记为 Quarantined，不可误判为 Stopped"
+        );
     }
 }

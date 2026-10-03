@@ -530,3 +530,92 @@ pub struct AvAlgoGalleryAbi {
 
 pub type AvAlgoGetGalleryAbiFn =
     unsafe extern "C" fn(requested_api_version: u32) -> *const AvAlgoGalleryAbi;
+
+pub const AV_ALGO_PLACEMENT_EXTENSION_SYMBOL: &[u8] = b"av_algo_get_placement_extension\0";
+
+pub const AV_PLACEMENT_CAP_NONE: u32 = 0;
+pub const AV_PLACEMENT_CAP_EXECUTION_ISOLATION: u32 = 1 << 0;
+pub const AV_PLACEMENT_CAP_WEIGHT_SHARING: u32 = 1 << 1;
+
+pub const AV_PLACEMENT_STATUS_ACKNOWLEDGED: u32 = 1;
+pub const AV_PLACEMENT_STATUS_RUNTIME_MANAGED: u32 = 2;
+pub const AV_PLACEMENT_STATUS_DEGRADED: u32 = 3;
+pub const AV_PLACEMENT_STATUS_UNVERIFIED: u32 = 4;
+pub const AV_PLACEMENT_STATUS_FAILED: u32 = 5;
+
+pub const AV_CLEANUP_STATUS_CLEANED: u32 = 1;
+pub const AV_CLEANUP_STATUS_UNVERIFIED: u32 = 2;
+pub const AV_CLEANUP_STATUS_FAILED: u32 = 3;
+
+/// 算法放置与权重共享能力结构体 (32 字节)
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct AvAlgoPlacementCapsPod {
+    pub size: u32,
+    pub api_version: u32,
+    pub caps: u32,
+    pub supported_core_mask: u32,
+    pub max_child_contexts_per_root: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+    pub reserved2: u32,
+}
+
+/// 算法实例放置回执 (72 字节)
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct AvAlgoInstanceReceiptPod {
+    pub size: u32,
+    pub api_version: u32,
+    pub status: u32,
+    pub assigned_core_mask: u32,
+    pub actual_core_mask: u32,
+    pub weight_sharing_confirmed: u32,
+    pub generation: u64,
+    pub sdk_error_code: i32,
+    pub reserved0: u32,
+    pub reservation_id: [u8; 32],
+}
+
+/// 资源清理回执 (72 字节)
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct AvAlgoCleanupReceiptPod {
+    pub size: u32,
+    pub api_version: u32,
+    pub cleanup_status: u32,
+    pub sdk_error_code: i32,
+    pub generation: u64,
+    pub reservation_id: [u8; 32],
+    pub reserved0: u64,
+    pub reserved1: u64,
+}
+
+/// 可选 NPU 放置与权重共享扩展虚表 (64 字节)
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct AvAlgoPlacementExtensionV1 {
+    pub size: u32,
+    pub api_version: u32,
+    pub query_capabilities:
+        Option<unsafe extern "C" fn(out_caps: *mut AvAlgoPlacementCapsPod) -> c_int>,
+    pub query_instance_receipt: Option<
+        unsafe extern "C" fn(
+            inst: AvAlgoInstance,
+            out_receipt: *mut AvAlgoInstanceReceiptPod,
+        ) -> c_int,
+    >,
+    pub query_cleanup_receipt: Option<
+        unsafe extern "C" fn(
+            reservation_id: *const c_char,
+            out_receipt: *mut AvAlgoCleanupReceiptPod,
+        ) -> c_int,
+    >,
+    pub reserved0: *const c_void,
+    pub reserved1: *const c_void,
+    pub reserved2: *const c_void,
+    pub reserved3: *const c_void,
+}
+
+pub type AvAlgoGetPlacementExtensionFn =
+    unsafe extern "C" fn(requested_api_version: u32) -> *const AvAlgoPlacementExtensionV1;

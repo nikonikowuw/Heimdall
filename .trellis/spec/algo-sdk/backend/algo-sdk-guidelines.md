@@ -322,6 +322,39 @@ unsafe extern "C" fn(
 
 - **加法式演进，不动虚表**：不修改 `AvAlgoGalleryAbi` 布局（仍为 64 字节），旧宿主忽略该符号、新宿主 `libloading` 探测。缺失时宿主回退到逐条 `insert`/`remove`，语义等价、只是慢；`supports_bulk_write()` 供观测。
 - `AvGalleryBulkEntry` 为 **24 字节、8 字节对齐**的固定布局 POD：`id` (0) / `feature_bytes` (8) / `feature_len` (16) / `reserved0` (20)。宿主与算法包**双侧**都要有尺寸、对齐与偏移断言（宿主侧见 `crates/infer/tests/c_abi_layout_tests.rs`）：两侧对同一片内存解引用，对齐不一致会导致读到的 `id` 错位半个指针。
+
+## NPU 放置与权重复用可选扩展 (`AvAlgoPlacementExtensionV1`)
+
+为了支撑宿主协同 NPU 多核分配与卡亲和架构（D1 架构：独占实例 Worker、独立会话与 IO、宿主统筹分核、板端真实物理权重复用），定义了加法式可选扩展虚表符号 `av_algo_get_placement_extension`。
+
+```rust
+pub const AV_ALGO_PLACEMENT_EXTENSION_SYMBOL: &[u8] = b"av_algo_get_placement_extension\0";
+
+pub type AvAlgoGetPlacementExtensionFn =
+    unsafe extern "C" fn(requested_api_version: u32) -> *const AvAlgoPlacementExtensionV1;
+```
+
+### 虚表与 POD 结构布局
+
+- **虚表不破坏基础 `AvAlgoAbi`**：基础 `AvAlgoAbi` 严格保持 64 位 96 字节固定不变；宿主通过 `libloading` 动态查找该符号，缺失时视为该包仅支持单卡/默认运行，维持完全向后兼容。
+- `AvAlgoPlacementExtensionV1` 大小为 **64 字节、8 字节对齐**：
+  - `size` (`u32`): 结构体自身大小（64 字节）；
+  - `api_version` (`u32`): 扩展 API 版本（当前为 1）；
+  - `query_capabilities`: 查询算法包对各硬件平台（RKNN/Ascend）的核心绑定与权重复用能力支持；
+  - `query_instance_receipt`: 查询实例应用放置策略后的硬件回执（绑定核心掩码、真实分配设备等）；
+  - `query_cleanup_receipt`: 查询实例销毁时硬件资源的释放状态；
+  - `reserved0..reserved3`: 未来扩展保留函数指针。
+- **扩展 POD 结构体**：
+  - `AvAlgoPlacementCapsPod` (大小 32 字节，4 字节对齐)：包含 `core_pinning_supported`、`shared_weights_supported`、`preferred_weight_sharing_route` (1=RouteA, 2=RouteB) 等标志；
+  - `AvAlgoInstanceReceiptPod` (大小 72 字节，8 字节对齐)：包含 `applied_core_mask`、`runtime_device_index`、`status`、`reservation_id` (32B) 等；
+  - `AvAlgoCleanupReceiptPod` (大小 72 字节，8 字节对齐)：包含 `cleanup_status`、`generation`、`reservation_id` (32B) 等；
+  - 宿主与 SDK 双侧均有 `size_of`、`align_of` 及关键字段 offset 的单元测试断言。
+
+### Wire 协议与业务插件隔离 (`__heimdall_placement`)
+
+- 宿主在下发给 `instance_create` 的实例 JSON 配置顶层注入私有字段 `__heimdall_placement`；
+- **配置剥离保护机制**：`export_algo!` 宏在调用业务插件配置反序列化前，先通过 `deserialize_config_stripping_placement` 将 `__heimdall_placement` 剥离并留存，业务插件无论是否标记 `#[serde(deny_unknown_fields)]` 均可安全解析，杜绝未知字段反序列化失败崩溃；
+- 算法包如需获取放置元数据，可由 SDK 内部机制消费或传递给底层 InitContext Builder。
 - `AV_GALLERY_BULK_REMOVE` 只读 `id`，`feature_bytes` / `feature_len` 置空；`entry_count == 0`、任一 `feature_bytes` 为空或 `feature_len == 0`（INSERT）均返回 `AV_ERR_INVALID_ARG`。
 - 任一条失败即整体返回错误：调用方不得当成「已同步」。宿主在批量失败时按自己的快照走全量重建自愈（见 [API 规范](../../api/backend/api-guidelines.md#真人脸检索降级状态)）。
 - 算法包侧由 `export_face_gallery!` 宏展开实现，同样包在 `catch_unwind` 中并设置 `last_error`。
