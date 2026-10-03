@@ -6,16 +6,22 @@
 
 连接池由 `db` 构建，默认 1～4 个连接，关闭高频 SQL 日志。连接初始化必须保证：
 
-| PRAGMA         | 值        | 目的           |
-| -------------- | -------- | ------------ |
-| `journal_mode` | `WAL`    | 降低读写互斥       |
-| `synchronous`  | `NORMAL` | 减少 fsync 写放大 |
-| `busy_timeout` | `5000`   | 写锁等待 5000ms  |
-| `foreign_keys` | `ON`     | 保证外键与级联约束    |
+| PRAGMA         | 值           | 目的           |
+| -------------- | ----------- | ------------ |
+| `journal_mode` | `WAL`       | 降低读写互斥       |
+| `synchronous`  | `NORMAL`    | 减少 fsync 写放大 |
+| `busy_timeout` | `5000`      | 写锁等待 5000ms  |
+| `foreign_keys` | `ON`        | 保证外键与级联约束    |
+| `optimize`     | `0x10012`   | 引导并维护查询计划统计信息 |
 
 - Refinery 文件：`src/migration/migrations/V{version}__{snake_case_description}.sql`。
 - 版本递增，已合并迁移只增不改；修复或回滚用新的前向迁移。
 - SQL 通过 `embed_migrations!` 内嵌，启动先迁移再初始化 SeaORM；失败立即退出。
+- **`PRAGMA optimize` 必须两处各一份**：`connection.rs::init_db`（sea-orm 连接池）与 `migration/mod.rs::run_migrations`（rusqlite 独立连接）各持有自己的 pragma 序列，互不共享。迁移处**必须放在迁移执行之后**：全新库在建表前 optimize 无事可做，统计信息不会生成。
+- **`optimize` 的 bitmask 必须含 `0x10`，否则冷启动无界 ANALYZE**。bundled SQLite 3.46 的语义：`0x10000` = 连本连接从未查询过的表也纳入检查；`0x2` = 对可能受益的表运行 ANALYZE（默认位）；**`0x10` = 以有界 `analysis_limit` 执行**（内部取 `SQLITE_DEFAULT_OPTIMIZE_LIMIT` = 2000 行）。缺 `0x10` 时 `nLimit = 0`，ANALYZE 不受行数限制，会完整扫描库内每个索引。实测（50 万告警 + 20 万抓拍 + 20 万识别）：`0x10002` = 302 ms，`0x10012` = 40 ms；2 M 行时分别为 2912 ms 与 1915 ms。因此一律写 **`0x10012`**。
+- **`0x10000` 与 `0x2` 的精确范围**：`0x2` = 对可能受益的表运行 ANALYZE（默认位），**与 skip-scan 无关**；跳扫由优化器依据 `sqlite_stat1` 自行决策，**没有任何 pragma bit 用于开关它**。`0x10000` = 让本连接从未查询过的表也进入检查，它**不是无条件必需**：因条件 4b（表上存在缺 stat1 的索引）已能覆盖绝大多数首次引导场景；`0x10000` 真正不可替代的是**无索引表**（4b/4c 均无法成立）。实测（bundled 3.46）确认：有索引且无 stat1 的表，单靠 `0x2` 即被分析；无索引表则必须靠 `0x10000`。
+- **默认 mask 包含 `0x10`，风险只在显式传值时出现**：裸 `PRAGMA optimize` 的默认 mask 为 `0xfffe`（含 `0x10`），因此「显式写 `0x10002`」看似与默认等价，实际把有界 ANALYZE 关掉了——这是最容易被误判的写法。一律写 **`0x10012`**。
+- **统计信息缺失会让计划退化，而不是报错**。
 
 ## 表与查询
 
@@ -43,6 +49,14 @@
 - **[规划设计] 录像切片实体 (RecordSegments)**：独立于抓拍单张图管理，表名为 `record_segments`。记录 `camera_id`、`stream_type`、`start_time_ms`、`end_time_ms`、`duration_ms`、`file_path`（必须为相对路径）、`has_motion`、`has_alarm`、`alarm_ids` 及 `status`。必须建立 `(camera_id, start_time_ms, end_time_ms)` 与 `(status, has_alarm, start_time_ms)` 复合索引，满足时间轴毫秒级范围检索与高效淘汰。
 - 查询封装在 Repository，`api` / `pipeline` 不直接使用 SeaORM DSL；列表必须有 `limit`。
 - 时间范围与摄像头过滤建立对应复合索引，例如 `(camera_id, timestamp)`；分页遵循 [API 契约](../../api/backend/api-guidelines.md#分页)。
+- **复合索引首列未被约束时，计划与统计信息强相关**：SQLite 对这类查询只能走跳扫（skip-scan），而跳扫有**硬性前置条件**——优化器要求该索引 `hasStat1`（`sqlite3.c` 的 `hasStat1!=0` 断言）且首列基数够大，**没有任何统计信息时跳扫根本不会被考虑**（不是「代价估算后判负」）。结果是静默退化为全表扫 + `USE TEMP B-TREE FOR ORDER BY`：不报错，只表现为耗时随数据量上涨。实测（50 万行告警，`alarm_records` 仅有 `(camera_id, occurred_at DESC)`）：默认态「全部通道 + 今天」86.52 ms `SCAN`；补齐 `(occurred_at DESC, id DESC)` 后 0.05 ms `SEARCH`。**因此为「不约束首列的常态查询」单独建索引，比依赖统计信息更根本**——实测把 `sqlite_stat1` 删掉后，该计划仍保持 `SEARCH`（不再随 stats 有无而变）。
+- **排序索引必须把 `id` 纳入列定义**：仅建 `(occurred_at)` 时，`ORDER BY occurred_at DESC, id DESC` 仍需 `TEMP B-TREE`；列定义必须完整复刻排序子句（见上一条「排序一律以 `id` 兜底」）。
+- **删列前先查见证依赖**：`ALTER TABLE ... DROP COLUMN`（SQLite 3.35+）会**重写整表并重建既有索引**（100 万行实测约 1.15 s），需在迁移窗口内完成；既有索引会存活，但必须显式断言（见 `crates/db/tests/migration_tests.rs` 的 V24 用例）。同时确认无 view / trigger 引用该列。
+- **绑定的时间类型决定比较语义**：SQLx 对 `NaiveDateTime` 编码为空格分隔（`%F %T%.f`），对 `DateTime<Tz>` 编码为 RFC3339；而时间列由 ORM `Set(Utc::now())` 写入时是 RFC3339。字符串序下 `' ' < 'T'`，混用会在**非零点边界**静默丢行（零点边界恰好同果，因此最易漏测）。时间范围参数一律用 `DateTimeUtc`。
+- **回归测试必须能区分修复前后两种实现**：一个「只断言总数」的测试很容易被相互抵消的行掩盖。反例：为验证 `count_since` 改用 `occurred_at`，若只构造「帧今日/入库昨日」与「帧昨日/入库今日」各一条，断言总数 `== 2` 对**两种实现都成立**（一边漏计、一边多计，精确抵消），测试看似通过却毫无保护。必须断言**命中行的身份集合**（如返回的 `event_id` 列表），或至少让两侧的计数不相等。
+- **`count_*` 聚合的时间列必须与该实体列表的时间轴一致**：否则同一页面上「统计卡片」与「列表筛选」会给出矛盾数字。证据时间轴优先于入库时间轴（见 [全局约定](../../guides/conventions.md#时间)的「时间戳对应源帧」）；`created_at` 只是内部簿记列，不应用于业务统计（如 `AlarmRepo::count_since` 用 `occurred_at` 而非 `created_at`）。
+- **「今日」类聚合的零点口径必须与消费端一致**：时间轴对齐（同一列）**不等于**边界对齐。后端若用 **UTC 零点**而前端筛选用**设备/浏览器本地零点**，在 UTC+8 下每天 00:00–08:00 这 8 小时内「今日告警」卡片与列表会给出不同数字。跨层统计的日界应以设备时区（`TimeStatus.timezone` / `timezone_offset`）为准，或显式接受 UTC 口径并在两端同时使用——不得默认两者等价。
+- **无生产者的预留字段不得进入 DTO / 筛选器 / 渲染层**：新增 DB 列时必须同时具备写入来源。仅有 SQL `DEFAULT` 而无任何写入路径的列会让用户看到一个恒定值（如曾经的 `severity` 列：唯一写入点是硬编码常量，前端渲染永远显示 `warning`、筛选永远返回空集）。删列比留一个无来源的列便宜。删列时**必须同步清理该列在 i18n 语言包里的键**——`grep` 只匹配标识符（`severity`）会漏掉标题化的键名（`allSeverities`），孤儿键不会被 i18n parity 测试拦住（它只校验三语之间的一致性，不校验是否被引用）。
 - **排序一律以 `id` 兜底**：`occurred_at`/`captured_at`/`recognized_at`/`created_at` 均非唯一，同一毫秒的批量写入会造出大量并列行；只按时间列排时 SQLite 不保证稳定顺序，`limit`+`offset` 翻页会重复或漏行，淘汰扫描（`find_oldest_batch`）更会在同 `limit` 重查时反复拿到已删除的批次。排序必须写成 `order_by_*(时间列).order_by_*(Column::Id)`，同向追加。
 - 关键字过滤（`q`）是 `LIKE '%...%'`，**无法命中索引**，其代价由 64 字符上限与保留期约束（见 [API 契约](../../api/backend/api-guidelines.md#证据与告警列表的-q)）。通道名称匹配需要 `LEFT JOIN cameras`，而 `cameras.name` 非唯一列也无索引：该 join 只在客户端传 `q` 时拼入，不得无条件预置，否则会给无搜索的常态列表平白增加一次全表扫描。
 - 查询共用工具收敛在 [repository/query.rs](../../../../crates/db/src/repository/query.rs)（`escape_like` / `keyword_pattern`）；新增仓储不得再抄一份转义逻辑。人员列表的 `keyword` 同样经此转义（`100%` 不得变成前缀通配符），并同样以 `id` 作次键保证翻页稳定。
