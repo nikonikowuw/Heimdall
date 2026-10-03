@@ -1,6 +1,7 @@
 # 源码证据、差异与硬件验证边界
 
-> 2026-10-01；源码静态评审，不代表板端结果。行号可能随实现变化，路径/符号为主要定位依据。
+> 2026-10-01 首次记录；2026-10-02 复核并追加漂移与旁证。源码静态评审，不代表板端结果。
+> 行号可能随实现变化，路径/符号为主要定位依据；2026-10-02 已按符号锚重新核对全部 P0 缺口，见「源码锚点漂移」。
 
 ## 已确认源码事实
 
@@ -60,6 +61,27 @@
 - 当前鉴权由 `crates/api/src/routes/mod.rs:23-41` protected router 和 `middleware/auth.rs` 的管理员 JWT 提供；不声称已有细粒度 NPU RBAC 权限。
 - `crates/algo-sdk/src/macros.rs` 的 instance_destroy 捕获 panic 且基础 ABI 没有销毁结果：仅宿主线程结束无法证明插件所有资源释放，因此可选扩展需明确清理回执和查询上下文生命周期。
 
+### S04 — 硬件回退策略现状（2026-10-02 复核，源码与现行 spec 已核验）
+
+- 现行契约：`.trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md` 的「硬件回退策略 (`FallbackPolicy`)」章节；实现落点 `crates/algo-sdk/src/runtime/fallback.rs`（提交 `1cae773`，2026-10-02）。
+- `FallbackPolicy { Allow, RequireHardware }`、`platform_requires_hardware`、`resolve_fallback_policy` 的既定优先级：自检硬门 > 调用方显式声明 > 包私有 `.env` `ALLOW_CPU_FALLBACK` > 平台判定 > 默认 `Allow`。
+- 对 R05/R13 的强制约束：placement 的默认核心（runtimeManaged）与 auto 受控亲和降级都不得放宽回退策略；新增任何会话创建入口必须经 `RuntimeSession::open_with_policy` / `RknnSessionOptions::fallback_policy`，不得自行决定降级。
+- 绕过难度已被源码结构固定：`RknnSessionOptions` 标注 `#[non_exhaustive]`，宿主 crate 无法用结构体更新语法构造，只能走 `Default` + 链式 builder，插件侧需施加同等约束。
+- 与 placement 的接口边界：`plugin.rs::InitContext` 现含 `package_root/platform_id/instance_id/is_self_test/fallback_policy_override` 五字段；构造点包括 `macros.rs::export_algo!` 展开处（恒定 `None`）、`models/yolo.rs` 的 10 处测试构造点，以及 rk3568/rk3576/rk3588 的 `run_local.rs`、`face_fusion_probe.rs`、`hardware_infer_test.rs`。placement 的 `InitContext` 演进必须与这些构造点同步，且不得改写 `fallback_policy_override` 语义。
+
+### 源码锚点漂移（2026-10-02 复核）
+
+按符号重新核对 P0 缺口：H01/H02/H03/H09/H10/H12 的**结论全部成立**，仅行号整体下移约 10 行；H08 的定位段落已被期间合入的 SDK 变更改变。后续以符号为锚，不以行号为准。
+
+| 缺口 | 原锚（2026-10-01）                             | 2026-10-02 复核现状                                                                                                                                                                       |
+| ---- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| H01  | `worker.rs:526-540,631-645`                     | `InferenceWorker::stop`（约 594-646）的 `Ok/Disconnected` 分支直接 `join()`；`with_backend_factory` 启动 `Err/Disconnected` 分支（约 555-573）同样直接 join。结论成立                     |
+| H02  | `coordinator.rs:1403-1454`                      | 两处 `shutdown_workers(workers)` 后 `return Err` 仍在。结论成立                                                                                                                           |
+| H03  | `coordinator.rs:440-449`、`task.rs:695-705`     | `InstanceDesiredConfig::from_launch` 仍写 `desired_revision: 0`；`resolve_outcome_revision` 仍回读数据库当前版本；`algorithm_instance.rs` 的 `mark_apply_*` 仍先 `find_by_instance_id` 再比较。结论成立 |
+| H08  | `models/yolo.rs:255-260`、`runtime/mod.rs:98-106` | `GenericDetector::init` 现读取 `resolve_policy`（非固定 options）；`model.rs::SharedWeights::session` 的自主 Round-Robin 仍在（约 70-74）。结论成立，锚点需按符号重取                                     |
+| H09  | `package.rs:1570-1597`                          | `AlgoRegistry::extract_face`（约 1569-1597）：`_lease` 仍在 async fn 内，`spawn_blocking` closure 只持 `target_pkg`。结论成立                                                              |
+| 掩码 | `rockchip.rs:531-545`                           | 掩码读取现位于 `RknnSession::open_or_fallback`（约 570-583）；`RknnSessionOptions` 新增 `core_mask` + `fallback_policy` 两字段                                                                 |
+
 ## 官方依据与证据等级
 
 ### S01 — RKNNRT V2.3.2 完整手册（已在线核验）
@@ -86,6 +108,7 @@
 
 - 无选定目标板的 Runtime/header/driver/model profile；没有真机验证物理共享、跨线程移交、根/子销毁和跨核并发。手册能力不是板端结果。
 - 手册未在上述段落充分定义源 context 可提前销毁的全部条件；采用根活到最后 child 清理确认的保守所有权，不试图提前释放。
+- 跨线程安全性的推导前提已被现行 spec 证伪：`algo-sdk-guidelines.md` 的 `RknnOutputsGuard` 段明确「同一 context 非线程安全，必须绑定所属 Worker」。当前架构已决策首选路线 A（控制面创建后独占移交），后备路线 B（实例线程内加锁 dup），其物理成立性必须由 A0 的专项实验判定；不得因句柄是整数就 `unsafe impl Send/Sync`。候选路线与判定矩阵见 `design.md` §6.3.1。
 - 未证明派生/销毁与兄弟 session 推理并发时的耗时、锁粒度；设计不能通过给所有推理加全局 mutex 来掩盖这一门禁。
 - 旧 SDK 对裸 -13 的注释/忽略分支仍需目标错误表核对，不把所有非零归为“亲和不支持”。
 - 本机 rknn-pro 参考基于头文件谨慎提示无共享保证；S01 补足完整手册证据，不改变“按部署版本测内存/生命周期”的要求。
@@ -102,11 +125,15 @@
 
 ### 物理共享与执行独立专项实验
 
+标号 P1–P7 仅在本节内有效，与 implement.md 的 T01–T44 测试合同编号无关，不得混用。
+
 1. 固定同一模型/Runtime/设备，分别运行共享方案 root+1/2/3/N child 与独立 rknn_init 对照；后者仅测试，不作为生产回退。
 2. 记录实际 root/child 初始化调用与依赖、query 原始值、RSS/PSS、DMA-heap/设备分配、CMA 可用信息、fd 与预热后稳态/峰值。根 internal、临时模型字节缓存与媒体池须分项解释；不能把不同比例省内存一律叫权重只驻留一份。
 3. 共享机制/可信生命周期与多源增量共同判定；传感器不可用应列明，证据不足不签发 verified。预先固定允许的 allocator 波动与私有增量上限，禁止测后移动门槛。
 4. 相异输入并发、延迟取输出、独立停止/换核、派生失败、首实例退出与最后 child 隔离；确认输出不串帧、不覆盖，root 保留，兄弟实例不被控制面停掉。三核设备需证明不再只有一个插件推理队列；线程多/分核日志不等于并行吞吐已验收。
 5. ABI/符号缺失、未知 profile、预算不足与 default-core 重试均验证 fail-closed；不得回退每实例全量权重或共享串行 Actor。
+6. **线程归属实测验证（优先路线 A，后备路线 B）**：优先验证首选路线 A「控制线程 dup 后一次性移交实例线程并在实例线程内设核/推理/销毁」，逐条记录跨线程使用与设核的实际返回码与耗时；若路线 A 异常则验证后备路线 B「实例线程内 dup（同一 root 的 dup 由控制侧串行化）」，判定哪条满足「同一 context 绑定所属 Worker」。两条均不成立则该 profile 不满足 D1，不降级为共享串行推理或每实例 `rknn_init`。
+7. 亲和与回退策略的交互：`runtimeManaged`、auto 亲和降级、派生失败重试均不得改变 `RequireHardware` 语义（禁止返回 `debug_cpu_fallback_path` 模拟会话），自检硬门在被注入 placement 元数据后仍不可翻越。
 
 ## Spec 差异处理
 

@@ -179,6 +179,7 @@ acknowledged 仅代表 SDK/插件核心确认，不是物理权重证明或硬�
 | weightId / weightReservationId / weightGeneration | 权重资源、预算和根代际身份，独立于执行组；重建不复用旧资源票据                                                                |
 | sharingDomainId / deviceId / modelKey             | 共享边界与规范化模型键；同路径/同名不同域不能合并，不返回路径/fd/指针                                                         |
 | sharingStatus                                     | pending / verified / unverified / unsupported / failed；verified 需绑定已审核目标 profile 和当前根/子回执，不只读取插件布尔值 |
+| —（执行侧预算的对称性取舍）                      | **已确认取舍**：执行侧暂不在面板暴露预算字节数。R09 要求“权重驻留与执行资源分别计费”，而 `WeightSnapshot.memory` 暴露了 `weightBudgetBytes`/`rootPrivateBudgetBytes`，`GroupPlacementSnapshot` 却只有计数（`privateSessionCount`/`inflightCount`），外部无法直接证明 AC03 的「共享权重不豁免私有资源预算」。本期明确不在组快照新增字节字段（避免把未冻结的逐路预算口径写成对外承诺），改由 `TopologySnapshot.usage` 的 `unknownAccountingUnits`/`quarantinedUnits` 与 `privateSessions` 表达准入有界性；执行侧字节预算仅在宿主日志与审计中记录。后续若需对外暴露，走同一协议版本化加法点，不隐式扩充 |
 | mechanism                                         | rknnDupContext / unknown；本期不宣称尚未接入的共享机制                                                                        |
 | evidenceProfileId                                 | 经验证模型/Runtime/设备合同的不透明标识，缺失为 null；不代表 GET 时重新测过物理内存                                           |
 | lifecycle                                         | 同资源生命周期枚举；冷却保活/隔离继续计费；released 不保留无界历史                                                            |
@@ -314,4 +315,5 @@ WeightSnapshot **没有 assigned/coreIndex、实例 revision 或统一 applyStat
 - 本轮修订：分离实例配置/运行槽/尝试与组资源；补完整拓扑空值语义、真实 revision 与原子拒绝、旧无 ID 客户端和既有单算法桥接、实际 JWT 鉴权边界。
 - 旧客户端省略字段不会清空新配置；Web 回归覆盖 taskDraft、LiveRulesStudio 重建对象、null reset 和旧服务端缺失新字段。未知运行状态不得被前端归一化成 acknowledged。
 - 本次 D1 修订：执行组按实例独立；删除尚未实施的共享组成员端点，新增权重根/消费者分页；实例分核与物理共享证据分开。
+- 2026-10-02 复核（本轮）：补执行侧预算不对外暴露的显式取舍；「placement 路径不得放宽 `RequireHardware`」登记为跨契约约束（详见 `research.md` S04 与 `design.md` §6.3.1）；行号锚改为符号锚。**本节无 REST 形状变化**，既有字段名/枚举/分页/错误分类全部不变。
 - 用户已确认 D1、严格 manual / auto 受控亲和降级；完整 API 仍待确认。新增可视化编辑器不在本期范围。

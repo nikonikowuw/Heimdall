@@ -224,15 +224,53 @@ wire v1 例子（内部字段沿用 snake_case，与 REST 分离）：
 
 生产接线须覆盖 `models/yolo.rs::GenericDetector::init -> RuntimeSession::open -> RknnSession`，不能只改手写 plugin.rs；用可选 placement/options 路径传递受检请求，不在通用模板硬编码平台 mask。`model.rs::SharedWeights/Core` 的本地轮转不是宿主账本，受管理 session 不得再次自主分核。与 `09-30-edge-torch-algo-ecosystem` 共用这些入口，阶段 A 冻结接口及文件归属，C 阶段先复核合入后的调用图。
 
+**A 阶段接口冻结的三条结构约束（2026-10-02 复核）**：
+
+1. `models/yolo.rs` 现有 10 处 `InitContext { .. }` 测试构造点；`InitContext` 现有 5 个字段（`package_root`/`platform_id`/`instance_id`/`is_self_test`/`fallback_policy_override`）且均为 `pub` 字段无 builder。新增 placement 会波及 10 处 yolo.rs 构造点 + `macros.rs::export_algo!` 展开处 + 3 个平台的 `run_local.rs`/`face_fusion_probe.rs`/`hardware_infer_test.rs`。建议改为 `#[non_exhaustive]` + builder 一次性收敛新增字段，否则每次协议扩展都要改全部构造点。
+2. `RknnSessionOptions` 已是 `#[non_exhaustive]` + `Default` + 链式 builder（`with_fallback_policy`），宿主 crate 无法用结构体更新语法绕过；placement 选项必须走同一形态（新增 `with_core_selection` 或等价链式方法），不得新增可直接构造的 `pub` 字段路径。
+3. 回退策略与 placement 的交汇点必须显式登记：新自动（runtimeManaged）路径与 auto 亲和降级路径都要携带 `FallbackPolicy`（配置侧默认 `RequireHardware`），不得调用 `RuntimeSession::open` 的默认 `Allow` 重载；`GenericDetector::init` 现有 `resolve_policy(is_self_test, platform_id, env, ctx.fallback_policy_override)` 调用点必须保持等价语义。自定义 RknnSession 的包另需单独纳入 placement 路径，否则会出现「声明式模板已受管理、手写包仍自行分核」的漏洞。
+
+**并存期约束**：在 placement 落地前，`models/yolo.rs` / `runtime/mod.rs` / `rockchip.rs` / `macros.rs` / `model.rs` 仍是并发修改热点（如 `1cae773` 改动 `resolve_policy` 与 `RknnSessionOptions`）。B/C 阶段开工前重新取一次实际调用图与符号锚，禁用 2026-10-01 的旧行号；与后续 SDK 任务协调文件归属。
+
 ### 6.3 RKNN 共享权重实现路线与 Worker 归属
 
 官方 RKNNRT V2.3.2 手册 p21–22 明确 `rknn_dup_context(rknn_context *context_in, rknn_context *context_out)` 创建同模型新 context 以复用权重，适用于多线程执行；这是首选路线，来源固定版本/哈希见 research.md。头文件本身描述较简略，不能继续说“官方没有共享权重合同”；但文档支持不代表部署 BSP 已验证。
 
-每个模型 WeightOwner 持有独立根 context，不作为摄像头生产 session。控制 Worker 串行完成根初始化、`rknn_dup_context(&root, &child)` 及最终根销毁；成功创建的 child 以 HAL 内部独占所有权胶囊一次性交给指定实例 Worker，此后设置核心、绑定独占 IO、推理与销毁均在该 Worker。中途取消/发送失败，胶囊由受控清理路径接管，不能泄漏或只丢裸句柄。
+每个模型 WeightOwner 持有独立根 context，不作为摄像头生产 session。
 
-一次性转移不是跨线程并发使用；正式实现前须以目标 Runtime 资料和测试确认 transfer、并发派生/兄弟运行、销毁顺序可行。不得仅因句柄是整数就 unsafe impl Send/Sync；原始 context 不进入宿主安全层或 REST，根永不并发被多个克隆操作访问。若目标 SDK 无法满足此线程模型，先补可证明的线程归属方案并评审，不能退回共享串行推理。
+#### 6.3.1 架构路线决策：首选路线 A（创建后独占移交）与后备路线 B
 
-绑定在每个 child 上执行；派生可能继承的默认状态需显式校验/设置，不让源 context 的核心决定所有实例。根保持到所有子 context、进行中的派生以及隔离子对象清理确认之后再销毁，不依赖“先毁根也安全”的未验证假设。
+现行 spec 已明确「同一 context 非线程安全，必须绑定所属 Worker」；结合系统并发架构与 Rust 独占所有权模型，**架构层面正式确立首选路线 A 作为设计主线，路线 B 作为实测后备降级路线**：
+
+- **首选路线 A（控制面创建后独占移交，设计基线）**：
+  - 控制 Worker 串行完成根权重加载与 `rknn_dup_context(&root, &child)` 派生；
+  - 成功创建的 child 封装为独占所有权 RAII 胶囊（Rust 侧 `Send + !Sync`，绝不能 `Sync`），通过有界通道一次性移交给目标实例 Worker；
+  - 此后核心设置（`set_core_mask`）、独占 IO/Workspace 内存绑定、逐帧推理以及销毁（`rknn_destroy`）均在该实例 Worker 线程内闭环执行；
+  - 清理回执挂点默认挂接在实例 Worker 上下文；
+  - **核心优势**：推理线程零锁争用、冷启动无并发锁排队、控制面状态机单向无环、根资源生命周期被彻底沙箱化保护。
+  - **成立前提与验证点**：SDK 允许「非本线程创建的 context 在他线程使用与销毁」。若 `set_core_mask` 必须在创建线程调用，则由控制 Worker 在 dup 后立即绑核再移交（子选项 A2）。
+- **后备路线 B（实例线程内加锁 dup，容错降级）**：
+  - 仅作为 A0 硬件实测的容错降级路线。当且仅当 A0 板端实验证实路线 A 在当前 BSP 下存在不可逾越的 TLS 跨线程段错误或设核冲突时，才触发翻转至路线 B；
+  - 实例 Worker 自身调用 `rknn_dup_context`，root 仅作只读源；同一 root 的并发 dup 必须由控制侧提供互斥锁串行化。
+
+**与 R01/R13 的边界**：无论哪条路线，都必须给出「同一权重根 + 每实例独立 child context」；若最终只能得到「所有实例共用一个被并发访问的 context」，则既不满足 R01（执行独立）也不满足 R13（独立执行上下文），必须阻塞该 profile，而不是退回共享串行推理。
+
+**判定标准（A0 优先实测路线 A）**：以目标 BSP 的实测返回码与并发正确性为准，A0 阶段优先对路线 A 执行实测，逐条记录下面 4 项；若路线 A 任一为否即切换后备路线 B 验证；两条全否则阻塞 profile：
+
+1. child 能否在非创建线程内完成推理、设置核心与销毁（含并发兄弟实例同时推理）；
+2. 同一 root 能否在控制侧串行化下被并发触发多次 dup（路线 B 后备用），返回码、锁粒度与耗时是否可接受；
+3. 是否可在不停止兄弟实例的前提下单独销毁某个 child；
+4. 根是否可保留到所有 child 与在途派生清理确认之后。
+
+两条路线的共同硬边界（不因选路放宽）：不得通过给所有推理加全局 mutex 来掩盖并发问题；不得因选路结论而取消 `required` 权重共享；原始 context 不进入宿主安全层或 REST。
+
+**首选路线 A 下的控制面与实例面职责**：
+- 控制 Worker 串行完成根初始化与 `rknn_dup_context`；成功创建的 child 以 HAL 内部独占所有权胶囊一次性交给指定实例 Worker，此后设核（或移交前完成）、绑定独占 IO、推理与销毁均在该 Worker；中途取消/发送失败由受控清理路径接管，不能泄漏或只丢裸句柄。此主线保留「根永不并发被多个克隆操作访问」。
+- 若切换为后备路线 B，dup 改在实例 Worker 内发起，控制 Worker 只承担根初始化、**并发 dup 的串行化协调**与最终根销毁，不再包办派生。
+
+若目标 SDK 两条路线均无法满足，先补可证明的线程归属方案并评审，不能退回共享串行推理；不得仅因句柄是整数就 `unsafe impl Send/Sync`。
+
+**移交与并发规则遵循首选路线 A（见上）**，无论最终采用哪条，原始 context 都不进入宿主安全层或 REST。绑定在每个 child 上执行；派生可能继承的默认状态需显式校验/设置，不让源 context 的核心决定所有实例。根保持到所有子 context、进行中的派生以及隔离子对象清理确认之后再销毁，不依赖“先毁根也安全”的未验证假设。
 
 不使用 `RKNN_FLAG_SHARE_WEIGHT_MEM` 作为同模型复制的快捷替代：V2.3.2 手册说明它主要服务旧式多分辨率/去权重模型，此任务不改模型制品/转换。`rknn_set_weight_mem`、外部分配和共享 internal/workspace 不纳入默认路线；不能为省内存把并发可写资源混成一份。
 
@@ -319,7 +357,8 @@ Ascend 仅预留 device identity 与内存域校验：未来必须把 decoder/pr
 
 ## 11. 待冻结的技术门禁
 
-- D1 架构已确认，旧 Q1 撤销；完整 API/兼容发布和最新摘要仍须评审，不据此启动实现。
+- **D1 架构已确认，旧 Q1 撤销；完整 API/兼容发布和最新摘要仍须评审，不据此启动实现。**
+- **P0（明确）ABI 清理回执语义默认以首选路线 A（控制面创建后独占移交）推进基线冻结**：child 的独占所有权与清理职责归属于实例 Worker。A0 板端实验优先验证路线 A（见 §6.3.1 的 4 条判定标准），通过后即闭环解除 B-R14；若路线 A 异常则快速翻转为路线 B 调整回执挂点。未经验证不得接生产代码。
 - 可选扩展包含资源计划、权重根、实例、离线执行及各自清理回执；阶段 A 冻结精确 ABI、缓冲上限与线程归属，未通过不得接生产。
 - 首先完成独立的目标板可行性验证：共享符号/生命周期、根到 child 移交、跨核并发与内存证据。板端不可行时阻塞该 profile，而非降低产品要求。
 - 初始化/停止/回执/恢复 deadline、硬容量和性能阈值在实验前冻结，不用草案数字代替硬件结果。
