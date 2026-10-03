@@ -27,6 +27,41 @@ impl Default for AffinityIntent {
     }
 }
 
+impl AffinityIntent {
+    /// 归一化亲和意图（将空 policy 填充为默认 "spread"）
+    pub fn normalized(&self) -> Self {
+        match self {
+            Self::Auto { policy } => {
+                let p = if policy.trim().is_empty() {
+                    default_spread_policy()
+                } else {
+                    policy.clone()
+                };
+                Self::Auto { policy: p }
+            }
+            Self::Manual {
+                device_id,
+                core_index,
+            } => Self::Manual {
+                device_id: device_id.clone(),
+                core_index: *core_index,
+            },
+        }
+    }
+
+    /// 判断两个亲和意图是否等价
+    pub fn is_equivalent_to(&self, other: &Self) -> bool {
+        self.normalized() == other.normalized()
+    }
+}
+
+/// 比较两个可选亲和意图是否等价（None 视为默认 auto spread）
+pub fn is_affinity_equivalent(a: Option<&AffinityIntent>, b: Option<&AffinityIntent>) -> bool {
+    let a_norm = a.map(|v| v.normalized()).unwrap_or_default();
+    let b_norm = b.map(|v| v.normalized()).unwrap_or_default();
+    a_norm == b_norm
+}
+
 /// 宿主注入算法配置的 Wire Placement 元数据 (`__heimdall_placement`)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WirePlacementMetadata {

@@ -28,6 +28,8 @@ pub struct TaskAlgorithmInstanceDto {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
+    pub affinity: Option<types::AffinityIntent>,
+    #[serde(default)]
     pub actual_status: i32,
     #[serde(default)]
     pub desired_revision: i64,
@@ -47,12 +49,14 @@ impl From<&db::entity::algorithm_instance::Model> for TaskAlgorithmInstanceDto {
     fn from(m: &db::entity::algorithm_instance::Model) -> Self {
         let algo_params =
             serde_json::from_str(&m.params_json).unwrap_or_else(|_| serde_json::json!({}));
+        let affinity = serde_json::from_str(&m.affinity_json).ok();
         Self {
             instance_id: m.instance_id.clone(),
             algorithm_id: m.algorithm_id.clone(),
             analysis_fps: m.analysis_fps,
             algo_params,
             enabled: Some(m.enabled),
+            affinity,
             actual_status: m.actual_status,
             desired_revision: m.desired_revision,
             applied_revision: m.applied_revision,
@@ -78,6 +82,8 @@ pub struct TaskAlgorithmInstanceSummaryDto {
     pub algorithm_id: String,
     pub analysis_fps: i32,
     pub enabled: bool,
+    #[serde(default)]
+    pub affinity: Option<types::AffinityIntent>,
     pub actual_status: i32,
     pub apply_state: types::InstanceApplyState,
     pub status_message: String,
@@ -85,11 +91,13 @@ pub struct TaskAlgorithmInstanceSummaryDto {
 
 impl From<&db::entity::algorithm_instance::Model> for TaskAlgorithmInstanceSummaryDto {
     fn from(m: &db::entity::algorithm_instance::Model) -> Self {
+        let affinity = serde_json::from_str(&m.affinity_json).ok();
         Self {
             instance_id: m.instance_id.clone(),
             algorithm_id: m.algorithm_id.clone(),
             analysis_fps: m.analysis_fps,
             enabled: m.enabled,
+            affinity,
             actual_status: m.actual_status,
             apply_state: m.runtime_apply_state(),
             status_message: m.status_message.clone(),
@@ -340,19 +348,6 @@ async fn update_task(
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound(format!("关联摄像头未找到: {camera_id}")))?;
 
-    // 若请求中指定了 stream_mode 且与当前摄像头不一致，则经由 CameraRepo 仓储原子更新
-    if let Some(mode) = dto.stream_mode {
-        if mode.as_str() != camera.stream_mode {
-            if let Some(updated_cam) =
-                db::CameraRepo::update_stream_mode(&state.db, camera_id, mode.as_str())
-                    .await
-                    .map_err(|e| ApiError::Internal(e.to_string()))?
-            {
-                camera = updated_cam;
-            }
-        }
-    }
-
     // 实例列表解析与合法性校验
     let instances = resolve_task_instances_for_save(&state, camera_id, &dto).await?;
 
@@ -360,7 +355,7 @@ async fn update_task(
     let mg = dto.motion_gate.clone().unwrap_or_default();
     let mg_json = serde_json::to_string(&mg).unwrap_or_else(|_| "{}".to_string());
 
-    // 1. 事务保存任务与算法实例集合
+    // 1. 事务保存任务与算法实例集合（若传入 stream_mode，在同一事务内原子更新 cameras）
     let saved_task = TaskRepo::save_task_with_instances(
         &state.db,
         db::SaveTaskWithInstancesParams {
@@ -372,6 +367,7 @@ async fn update_task(
             status_message: None,
             instances: Some(instances),
             expected_revision: dto.config_revision,
+            stream_mode: dto.stream_mode,
         },
     )
     .await
@@ -386,6 +382,10 @@ async fn update_task(
         }
         other => ApiError::Internal(other.to_string()),
     })?;
+
+    if let Some(mode) = dto.stream_mode {
+        camera.stream_mode = mode.as_str().to_string();
+    }
 
     let saved_instances = AlgorithmInstanceRepo::list_by_camera_id(&state.db, camera_id).await?;
 
@@ -490,10 +490,12 @@ fn preserve_existing_instances(
     existing
         .into_iter()
         .map(|inst| db::SaveTaskAlgorithmInstanceParams {
+            instance_id: Some(inst.instance_id),
             algorithm_id: inst.algorithm_id,
             analysis_fps: inst.analysis_fps,
             params_json: inst.params_json,
             enabled: Some(inst.enabled),
+            affinity_json: Some(inst.affinity_json),
         })
         .collect()
 }
@@ -516,6 +518,7 @@ async fn resolve_task_instances_for_save(
                 analysis_fps: Some(item.analysis_fps),
                 algo_params: Some(item.algo_params.clone()),
                 enabled: item.enabled.or(Some(dto.desired_enabled)),
+                affinity: item.affinity.clone(),
             })
             .collect();
 
@@ -541,11 +544,17 @@ async fn resolve_task_instances_for_save(
                 let params_json = cfg
                     .normalized_algo_params_json()
                     .unwrap_or_else(|_| "{}".to_string());
+                let affinity_json = cfg
+                    .affinity
+                    .as_ref()
+                    .map(|aff| serde_json::to_string(aff).unwrap_or_else(|_| "{}".to_string()));
                 db::SaveTaskAlgorithmInstanceParams {
+                    instance_id: cfg.instance_id,
                     algorithm_id: cfg.algorithm_id,
                     analysis_fps,
                     params_json,
                     enabled: cfg.enabled,
+                    affinity_json,
                 }
             })
             .collect());
@@ -583,10 +592,12 @@ async fn resolve_task_instances_for_save(
         }
 
         return Ok(vec![db::SaveTaskAlgorithmInstanceParams {
+            instance_id: None,
             algorithm_id: target_algo_id,
             analysis_fps: dto.analysis_fps,
             params_json: algo_params_json,
             enabled: Some(dto.desired_enabled),
+            affinity_json: None,
         }]);
     }
 
@@ -616,6 +627,7 @@ async fn resolve_task_instances_for_save(
         analysis_fps: Some(dto.analysis_fps),
         algo_params: Some(dto.algo_params.clone()),
         enabled: Some(dto.desired_enabled),
+        affinity: None,
     };
     config
         .validate()
@@ -631,10 +643,12 @@ async fn resolve_task_instances_for_save(
     let analysis_fps = config.normalized_analysis_fps();
     let algorithm_id = config.algorithm_id;
     Ok(vec![db::SaveTaskAlgorithmInstanceParams {
+        instance_id: None,
         algorithm_id,
         analysis_fps,
         params_json,
         enabled: Some(dto.desired_enabled),
+        affinity_json: None,
     }])
 }
 
@@ -713,20 +727,21 @@ async fn persist_instance_outcome(
     state: &AppState,
     outcome: &pipeline::InstanceApplyOutcome,
 ) -> Result<(), ApiError> {
+    let Some(revision) = resolve_outcome_revision(state, outcome).await? else {
+        // 实例已被删除：收敛结果无处回写，属于正常竞态
+        return Ok(());
+    };
+
     if outcome.apply_state == types::InstanceApplyState::Failed {
         AlgorithmInstanceRepo::mark_apply_failed(
             &state.db,
             &outcome.instance_id,
+            revision,
             &outcome.status_message,
         )
         .await?;
         return Ok(());
     }
-
-    let Some(revision) = resolve_outcome_revision(state, outcome).await? else {
-        // 实例已被删除：收敛结果无处回写，属于正常竞态
-        return Ok(());
-    };
 
     if outcome.apply_state == types::InstanceApplyState::Applied {
         AlgorithmInstanceRepo::mark_apply_applied(&state.db, &outcome.instance_id, revision)
@@ -1121,11 +1136,13 @@ async fn sync_pipeline_with_models(
                 &i.params_json,
                 i.analysis_fps,
             )
+            .map(|cfg| cfg.with_desired_revision(i.desired_revision))
             .unwrap_or_else(|_| pipeline::InstanceLaunchConfig {
                 instance_id: i.instance_id.clone(),
                 algorithm_id: i.algorithm_id.clone(),
                 algo_params: serde_json::json!({}),
                 target_fps: 10,
+                desired_revision: i.desired_revision,
             })
         })
         .collect();

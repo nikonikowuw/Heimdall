@@ -54,9 +54,27 @@ pub struct InstanceLaunchConfig {
     pub algo_params: serde_json::Value,
     /// 分析采样目标帧率 (0 表示不限帧率，1..=60 为目标帧率)
     pub target_fps: u32,
+    /// 期望配置版本号（`algorithm_instances.desired_revision`）
+    pub desired_revision: i64,
 }
 
 impl InstanceLaunchConfig {
+    /// 构造新的启动配置（默认期望版本为 0）
+    pub fn new(
+        instance_id: impl Into<String>,
+        algorithm_id: impl Into<String>,
+        algo_params: serde_json::Value,
+        target_fps: u32,
+    ) -> Self {
+        Self {
+            instance_id: instance_id.into(),
+            algorithm_id: algorithm_id.into(),
+            algo_params,
+            target_fps,
+            desired_revision: 0,
+        }
+    }
+
     /// 从持久化参数解析构建启动配置并校验
     pub fn from_persisted(
         instance_id: impl Into<String>,
@@ -88,7 +106,14 @@ impl InstanceLaunchConfig {
             algorithm_id: algorithm_id.into(),
             algo_params,
             target_fps,
+            desired_revision: 0,
         })
+    }
+
+    /// 链式指定期望配置版本号
+    pub fn with_desired_revision(mut self, revision: i64) -> Self {
+        self.desired_revision = revision;
+        self
     }
 }
 
@@ -157,6 +182,7 @@ impl StartCameraPipelineParams {
                 algorithm_id,
                 algo_params,
                 target_fps,
+                desired_revision: 0,
             }],
         }
     }
@@ -437,7 +463,7 @@ pub struct InstanceDesiredConfig {
 }
 
 impl InstanceDesiredConfig {
-    /// 从启动配置构造期望快照（整路保存路径没有单实例版本号，`desired_revision` 记 0）
+    /// 从启动配置构造期望快照（携带真实单实例版本号）
     pub fn from_launch(camera_id: &str, launch: &InstanceLaunchConfig) -> Self {
         Self {
             camera_id: camera_id.to_string(),
@@ -446,7 +472,7 @@ impl InstanceDesiredConfig {
             analysis_fps: launch.target_fps as i32,
             params_json: launch.algo_params.to_string(),
             enabled: true,
-            desired_revision: 0,
+            desired_revision: launch.desired_revision,
         }
     }
 
@@ -1388,7 +1414,7 @@ impl TaskRuntimeCoordinator {
 
     async fn start_camera_pipeline_inner(
         &self,
-        params: StartCameraPipelineParams,
+        mut params: StartCameraPipelineParams,
     ) -> Result<u64, CoordinatorError> {
         let _operation_guard = match self.acquire_start_slot(&params).await? {
             StartSlot::AlreadyRunning(generation) => return Ok(generation),
@@ -1399,25 +1425,36 @@ impl TaskRuntimeCoordinator {
         let mut instance_configs = Vec::with_capacity(params.instances.len());
         let mut workers = Vec::with_capacity(params.instances.len());
         let mut leases = Vec::with_capacity(params.instances.len());
+        let mut first_error = None;
 
         for inst in &params.instances {
             let lease = match self.algo_registry.acquire_lease(&inst.algorithm_id).await {
                 Ok(lease) => lease,
                 Err(err) => {
-                    shutdown_workers(workers).await;
+                    tracing::error!(
+                        camera_id = %params.camera_id,
+                        instance_id = %inst.instance_id,
+                        algorithm_id = %inst.algorithm_id,
+                        error = %err,
+                        "冷启动获取算法算力租约失败，记录单实例故障"
+                    );
                     let msg = err.to_string();
-                    if msg.contains("未在注册中心就绪") {
-                        return Err(CoordinatorError::AlgorithmNotFound {
+                    let coord_err = if msg.contains("未在注册中心就绪") {
+                        CoordinatorError::AlgorithmNotFound {
                             algorithm_id: inst.algorithm_id.clone(),
-                        });
+                        }
+                    } else {
+                        CoordinatorError::AlgorithmInstance {
+                            reason: format!("获取算法算力租约失败 ({}): {err}", inst.algorithm_id),
+                        }
+                    };
+                    if first_error.is_none() {
+                        first_error = Some(coord_err);
                     }
-                    return Err(CoordinatorError::AlgorithmInstance {
-                        reason: format!("获取算法算力租约失败 ({}): {err}", inst.algorithm_id),
-                    });
+                    continue;
                 }
             };
             let pkg = lease.package().clone();
-            leases.push(lease);
 
             let algorithm_type = pkg.manifest().algorithm_type.clone();
             // 插件可见的实例身份使用算法实例 ID（而非 camera_id）：同一摄像头挂载
@@ -1444,16 +1481,34 @@ impl TaskRuntimeCoordinator {
             let worker = match instance_result {
                 Ok(Ok(worker)) => worker,
                 Ok(Err(err)) => {
-                    shutdown_workers(workers).await;
-                    return Err(CoordinatorError::AlgorithmInstance {
-                        reason: err.to_string(),
-                    });
+                    tracing::error!(
+                        camera_id = %params.camera_id,
+                        instance_id = %inst.instance_id,
+                        algorithm_id = %inst.algorithm_id,
+                        error = %err,
+                        "冷启动创建算法实例 Worker 失败，记录单实例故障"
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(CoordinatorError::AlgorithmInstance {
+                            reason: err.to_string(),
+                        });
+                    }
+                    continue;
                 }
                 Err(err) => {
-                    shutdown_workers(workers).await;
-                    return Err(CoordinatorError::TaskJoin(err));
+                    tracing::error!(
+                        camera_id = %params.camera_id,
+                        instance_id = %inst.instance_id,
+                        error = %err,
+                        "冷启动 Worker 阻塞任务异常"
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(CoordinatorError::TaskJoin(err));
+                    }
+                    continue;
                 }
             };
+            leases.push(lease);
             let handle = worker.handle();
             instance_configs.push(crate::pump::WorkerInstanceConfig {
                 instance_id: inst.instance_id.clone(),
@@ -1468,6 +1523,23 @@ impl TaskRuntimeCoordinator {
             });
             workers.push((inst.instance_id.clone(), handle, Some(worker)));
         }
+
+        if instance_configs.is_empty() {
+            shutdown_workers(workers).await;
+            return Err(
+                first_error.unwrap_or_else(|| CoordinatorError::AlgorithmInstance {
+                    reason: "没有可用的算法实例".to_string(),
+                }),
+            );
+        }
+
+        let succeeded_ids: std::collections::HashSet<&str> = instance_configs
+            .iter()
+            .map(|c| c.instance_id.as_str())
+            .collect();
+        params
+            .instances
+            .retain(|i| succeeded_ids.contains(i.instance_id.as_str()));
 
         let decoder_camera_id = params.camera_id.clone();
         let decoder_codec = params.sub_codec;

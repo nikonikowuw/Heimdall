@@ -303,6 +303,8 @@ pub struct TaskAlgorithmInstanceConfig {
     pub algo_params: Option<serde_json::Value>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub affinity: Option<crate::placement::AffinityIntent>,
 }
 
 impl TaskAlgorithmInstanceConfig {
@@ -348,6 +350,24 @@ impl TaskAlgorithmInstanceConfig {
                 return Err(crate::error::TypeError::InvalidAlgoParams {
                     actual_type: json_type_name(value),
                 });
+            }
+        }
+        if let Some(affinity) = &self.affinity {
+            match affinity {
+                crate::placement::AffinityIntent::Manual { device_id, .. } => {
+                    if device_id.trim().is_empty() {
+                        return Err(crate::error::TypeError::InvalidAffinity(
+                            "Manual 亲和指定 deviceId 不能为空".to_string(),
+                        ));
+                    }
+                }
+                crate::placement::AffinityIntent::Auto { policy } => {
+                    if !policy.trim().is_empty() && policy != "spread" && policy != "pack" {
+                        return Err(crate::error::TypeError::InvalidAffinity(format!(
+                            "不支持的 Auto 放置策略: {policy}"
+                        )));
+                    }
+                }
             }
         }
         Ok(())
@@ -552,6 +572,9 @@ mod tests {
             analysis_fps: Some(15),
             algo_params: Some(serde_json::json!({"confidence": 0.5})),
             enabled: Some(true),
+            affinity: Some(crate::AffinityIntent::Auto {
+                policy: "spread".to_string(),
+            }),
         };
         assert!(valid.validate().is_ok());
         assert_eq!(valid.normalized_analysis_fps(), 15);
@@ -569,6 +592,7 @@ mod tests {
             analysis_fps: None,
             algo_params: Some(serde_json::Value::Null),
             enabled: None,
+            affinity: None,
         };
         assert!(null_params.validate().is_ok());
         assert_eq!(null_params.to_launch_target_fps(), 10);
@@ -585,6 +609,7 @@ mod tests {
             analysis_fps: Some(0),
             algo_params: None,
             enabled: None,
+            affinity: None,
         };
         assert_eq!(
             empty_id.validate().expect_err("空算法 ID 必须校验失败"),
@@ -597,6 +622,7 @@ mod tests {
             analysis_fps: Some(-1),
             algo_params: None,
             enabled: None,
+            affinity: None,
         };
         assert_eq!(
             negative_fps.validate().expect_err("负 FPS 必须校验失败"),
@@ -609,6 +635,7 @@ mod tests {
             analysis_fps: None,
             algo_params: Some(serde_json::json!([1])),
             enabled: None,
+            affinity: None,
         };
         assert_eq!(
             array_params.validate().expect_err("数组参数必须校验失败"),
@@ -616,6 +643,31 @@ mod tests {
                 actual_type: "array".into()
             }
         );
+
+        let invalid_manual = TaskAlgorithmInstanceConfig {
+            instance_id: None,
+            algorithm_id: "general_detection".into(),
+            analysis_fps: None,
+            algo_params: None,
+            enabled: None,
+            affinity: Some(crate::AffinityIntent::Manual {
+                device_id: "   ".to_string(),
+                core_index: 0,
+            }),
+        };
+        assert!(invalid_manual.validate().is_err());
+
+        let invalid_policy = TaskAlgorithmInstanceConfig {
+            instance_id: None,
+            algorithm_id: "general_detection".into(),
+            analysis_fps: None,
+            algo_params: None,
+            enabled: None,
+            affinity: Some(crate::AffinityIntent::Auto {
+                policy: "invalid_policy".to_string(),
+            }),
+        };
+        assert!(invalid_policy.validate().is_err());
     }
 
     #[test]

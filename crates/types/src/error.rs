@@ -32,6 +32,9 @@ pub enum TypeError {
 
     #[error("算法 ID 不能为空")]
     EmptyAlgorithmId,
+
+    #[error("算法亲和配置非法: {0}")]
+    InvalidAffinity(String),
 }
 
 /// 媒体帧与缓冲区抽象相关错误

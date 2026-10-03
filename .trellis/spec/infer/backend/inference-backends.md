@@ -98,6 +98,18 @@ CoreML 计算单元、RKNN 核心掩码、映射缓存和输出 RAII 的约束�
    - 账本在准入申请时主动联动 `quarantined_workers_count()`；
    - 当系统内由于底层驱动卡顿被隔离的 Worker 数量达到安全阈值（默认 5）时，立即拦截新的推理实例准入，防止资源雪崩与系统崩溃。
 
+## 配置持久化、版本栅栏与局部故障隔离
+
+1. **亲和意图持久化与代际更新 (`desired_revision`)**：
+   - 算法实例配置表增加 `affinity_json TEXT NOT NULL DEFAULT '{"mode":"auto","policy":"spread"}'`；
+   - 仅在实例实际有效配置（帧率、参数、启用状态、非等价亲和意图）变更时才递增 `desired_revision` 并将 `runtime_apply_state` 置为 `Pending`；等价亲和意图（如默认 auto spread 与显式 auto spread）不推进版本，避免无谓的运行时重启。
+2. **两阶段配置收敛的版本栅栏 (Revision Barrier)**：
+   - 运行时收敛（如成功挂载、降级、或失败）回写数据库时，`AlgorithmInstanceRepo` 的状态推进接口强制实施版本栅栏：`WHERE instance_id = ? AND desired_revision = target_revision`；
+   - 若在运行时收敛在途期间发生并发配置修改，旧收敛结果匹配行数为 0 并静默跳过，绝不覆盖新配置版本。
+3. **冷启动多实例局部故障隔离 (Partial Startup Isolation)**：
+   - 冷启动多算法管线时，单实例获取租约或创建 Worker 失败时记录日志与局部故障，继续初始化同路其他健康算法实例；
+   - 仅当该路所有实例均初始化失败时才整路回滚，确保局部故障不连坐整路视频分析。
+
 ## 验证
 
 - 无硬件测试验证类型/形状、坐标范围、配置与失败分支；测试规则见 [全局约定](../../guides/conventions.md#测试)。

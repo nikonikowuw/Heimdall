@@ -71,7 +71,10 @@ fn test_init_context_with_placement_builder() {
     assert_eq!(ctx.instance_id, "inst-1");
     assert!(!ctx.is_self_test);
     assert_eq!(
-        ctx.wire_placement.as_ref().expect("wire_placement 应存在").reservation_id,
+        ctx.wire_placement
+            .as_ref()
+            .expect("wire_placement 应存在")
+            .reservation_id,
         "res-abc-001"
     );
 

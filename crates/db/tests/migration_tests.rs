@@ -697,6 +697,70 @@ fn test_v24_drops_alarm_severity_preserving_rows_and_indexes() {
     }
 }
 
+#[test]
+fn test_v25_migration_adds_affinity_json_with_default() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    apply_migrations_up_to_v12(&conn);
+
+    // 迁移前准备基础数据：camera, algorithm, analysis_task, algorithm_instances
+    conn.execute_batch(
+        r#"
+        INSERT INTO cameras (camera_id, name, protocol, rtsp_url)
+        VALUES ('cam-01', '摄像头01', 'rtsp', 'rtsp://127.0.0.1/live');
+
+        INSERT INTO algorithms (algorithm_id, name, algorithm_type, active_version, description, is_builtin)
+        VALUES ('yolo_v8', 'YOLOv8', 'detection', '1.0.0', 'det', 1);
+
+        INSERT INTO analysis_tasks (id, camera_id, name, desired_enabled, actual_status)
+        VALUES (1, 'cam-01', '任务01', 1, 0);
+
+        INSERT INTO algorithm_instances (
+            instance_id, task_id, camera_id, algorithm_id, analysis_fps, params_json, enabled, actual_status
+        ) VALUES (
+            'inst-01', 1, 'cam-01', 'yolo_v8', 15, '{"conf":0.5}', 1, 0
+        );
+        "#,
+    )
+    .expect("insert pre-migration rows");
+
+    // 应用 V25 迁移
+    conn.execute_batch(include_str!(
+        "../src/migration/migrations/V25__algorithm_instance_affinity.sql"
+    ))
+    .expect("apply V25");
+
+    // 验证列已存在
+    let has_affinity: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('algorithm_instances') WHERE name = 'affinity_json';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("probe affinity_json column");
+    assert_eq!(has_affinity, 1, "affinity_json 列应已被 V25 添加");
+
+    // 验证历史行自动获得默认配置 '{"mode":"auto","policy":"spread"}'
+    let affinity_val: String = conn
+        .query_row(
+            "SELECT affinity_json FROM algorithm_instances WHERE instance_id = 'inst-01';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query affinity_json");
+    assert_eq!(affinity_val, r#"{"mode":"auto","policy":"spread"}"#);
+
+    // 验证能够反序列化为 AffinityIntent
+    let parsed: types::AffinityIntent =
+        serde_json::from_str(&affinity_val).expect("parse affinity");
+    assert_eq!(
+        parsed,
+        types::AffinityIntent::Auto {
+            policy: "spread".to_string(),
+        }
+    );
+}
+
 /// 按版本顺序应用到 V12 的前置迁移链。
 ///
 /// V23 断言 `status` 列（V3 添加），V23 下线的死索引由 V12 创建——缺任一前置迁移，

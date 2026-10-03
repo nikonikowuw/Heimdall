@@ -415,6 +415,7 @@ fn parse_launch_instances(
             &instance.params_json,
             instance.analysis_fps,
         )
+        .map(|cfg| cfg.with_desired_revision(instance.desired_revision))
         .map_err(|err| format!("算法实例 {} 配置错误: {err}", instance.instance_id))?;
         launch_instances.push(launch_config);
     }
@@ -617,12 +618,15 @@ mod tests {
                 motion_gate_json: r#"{"enabled":true}"#.to_string(),
                 status_message: None,
                 instances: Some(vec![db::SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "general_det".to_string(),
                     analysis_fps: 15,
                     params_json: r#"{"threshold":0.5}"#.to_string(),
                     enabled: Some(true),
+                    affinity_json: None,
                 }]),
                 expected_revision: None,
+                stream_mode: None,
             },
         )
         .await
@@ -674,12 +678,15 @@ mod tests {
                 motion_gate_json: r#"{"enabled":true}"#.to_string(),
                 status_message: None,
                 instances: Some(vec![db::SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "general_det".to_string(),
                     analysis_fps: 10,
                     params_json: "{}".to_string(),
                     enabled: Some(true),
+                    affinity_json: None,
                 }]),
                 expected_revision: None,
+                stream_mode: None,
             },
         )
         .await
@@ -727,12 +734,15 @@ mod tests {
                 motion_gate_json: "{}".to_string(),
                 status_message: None,
                 instances: Some(vec![db::SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "general_det".to_string(),
                     analysis_fps: 10,
                     params_json: "{}".to_string(),
                     enabled: Some(true),
+                    affinity_json: None,
                 }]),
                 expected_revision: None,
+                stream_mode: None,
             },
         )
         .await
@@ -778,12 +788,15 @@ mod tests {
                 motion_gate_json: "{}".to_string(),
                 status_message: None,
                 instances: Some(vec![db::SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "general_det".to_string(),
                     analysis_fps: 10,
                     params_json: "{}".to_string(),
                     enabled: Some(true),
+                    affinity_json: None,
                 }]),
                 expected_revision: None,
+                stream_mode: None,
             },
         )
         .await
@@ -834,6 +847,7 @@ mod tests {
                 status_message: None,
                 instances: Some(vec![]),
                 expected_revision: None,
+                stream_mode: None,
             },
         )
         .await

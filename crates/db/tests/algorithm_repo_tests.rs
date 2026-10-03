@@ -151,6 +151,7 @@ async fn test_algorithm_and_version_repository_lifecycle() {
             status_message: None,
             instances: Some(vec![]),
             expected_revision: None,
+            stream_mode: None,
         },
     )
     .await
@@ -166,6 +167,7 @@ async fn test_algorithm_and_version_repository_lifecycle() {
         params_json: r#"{"confidenceThreshold":0.5}"#.to_string(),
         rules_json: "[]".to_string(),
         motion_gate_json: "{}".to_string(),
+        affinity_json: None,
         enabled: true,
     };
     let inst = AlgorithmInstanceRepo::create(&db, inst_params)
@@ -217,6 +219,7 @@ async fn test_algorithm_and_version_repository_lifecycle() {
             params_json: None,
             rules_json: None,
             motion_gate_json: None,
+            affinity_json: None,
             enabled: Some(false),
         },
     )

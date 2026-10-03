@@ -50,8 +50,8 @@ pub use personnel::{
     ReextractTaskStatus, UpdatePersonnelRequest,
 };
 pub use placement::{
-    AffinityIntent, CleanupStatus, PlacementApplicationStatus, WirePlacementMetadata,
-    WireWeightBinding,
+    is_affinity_equivalent, AffinityIntent, CleanupStatus, PlacementApplicationStatus,
+    WirePlacementMetadata, WireWeightBinding,
 };
 pub use system::{
     CoreMetrics, CpuMetrics, DiskMetrics, EvictionReport, ForceSyncResponse, InterfaceCapabilities,

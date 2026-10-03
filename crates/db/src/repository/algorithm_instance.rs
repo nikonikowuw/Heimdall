@@ -1,6 +1,6 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set,
+    sea_query::Expr, ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
 };
 
 use crate::entity::algorithm_instance::{ActiveModel, Column, Entity, Model};
@@ -17,6 +17,7 @@ pub struct CreateInstanceParams {
     pub rules_json: String,
     pub motion_gate_json: String,
     pub enabled: bool,
+    pub affinity_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +26,7 @@ pub struct UpdateInstanceParams {
     pub params_json: Option<String>,
     pub rules_json: Option<String>,
     pub motion_gate_json: Option<String>,
+    pub affinity_json: Option<String>,
     pub enabled: Option<bool>,
 }
 
@@ -103,6 +105,9 @@ impl AlgorithmInstanceRepo {
             desired_revision: Set(0),
             applied_revision: Set(0),
             runtime_apply_state: Set(types::InstanceApplyState::Applied.as_i32()),
+            affinity_json: Set(params
+                .affinity_json
+                .unwrap_or_else(|| r#"{"mode":"auto","policy":"spread"}"#.to_string())),
             created_at: Set(now),
             updated_at: Set(now),
         };
@@ -137,6 +142,9 @@ impl AlgorithmInstanceRepo {
         }
         if let Some(en) = params.enabled {
             active.enabled = Set(en);
+        }
+        if let Some(aj) = params.affinity_json {
+            active.affinity_json = Set(aj);
         }
         active.updated_at = Set(chrono::Utc::now());
 
@@ -192,78 +200,90 @@ impl AlgorithmInstanceRepo {
 
     /// 回写运行时配置收敛成功：实际代际追上期望代际并置为 applied。
     ///
-    /// 仅当调用方持有的 `desired_revision == applied_revision` 时才代表已收敛；
-    /// 并发提交的更高代际不会被本次结果覆盖（由 SQL 条件保证幂等与不倒退）。
+    /// 条件更新：`WHERE instance_id = ? AND desired_revision = target_revision`。
+    /// 若数据库已有更高代际或已被删除（`rows_affected == 0`），则不覆写并返回 `Ok(None)`。
     pub async fn mark_apply_applied(
         db: &DatabaseConnection,
         instance_id: &str,
-        applied_revision: i64,
+        target_revision: i64,
     ) -> Result<Option<Model>, DbError> {
-        let Some(model) = Self::find_by_instance_id(db, instance_id).await? else {
-            return Ok(None);
-        };
-        if model.desired_revision != applied_revision {
-            // 更高代际已在排队：本次结果已经过时，保持 pending 交由后续收敛处理。
-            return Ok(Some(model));
+        let now = chrono::Utc::now();
+        let res = Entity::update_many()
+            .filter(Column::InstanceId.eq(instance_id))
+            .filter(Column::DesiredRevision.eq(target_revision))
+            .col_expr(Column::AppliedRevision, Expr::value(target_revision))
+            .col_expr(
+                Column::RuntimeApplyState,
+                Expr::value(types::InstanceApplyState::Applied.as_i32()),
+            )
+            .col_expr(Column::StatusMessage, Expr::value(String::new()))
+            .col_expr(Column::UpdatedAt, Expr::value(now))
+            .exec(db)
+            .await?;
+        if res.rows_affected > 0 {
+            Self::find_by_instance_id(db, instance_id).await
+        } else {
+            Ok(None)
         }
-
-        let previous_state = model.runtime_apply_state;
-        let mut active: ActiveModel = model.into();
-        active.applied_revision = Set(applied_revision);
-        active.runtime_apply_state = Set(types::InstanceApplyState::Applied.as_i32());
-        if types::InstanceApplyState::from_i32(previous_state)
-            == Some(types::InstanceApplyState::Failed)
-        {
-            // 失败原因属于已收敛的旧代际，收敛成功后清理，避免长期显示过期错误。
-            active.status_message = Set(String::new());
-        }
-        active.updated_at = Set(chrono::Utc::now());
-        let updated = active.update(db).await?;
-        Ok(Some(updated))
     }
 
     /// 回写运行时仍在收敛：保留 pending 状态，并把等待原因透出给控制面。
     ///
+    /// 条件更新：`WHERE instance_id = ? AND desired_revision = target_revision`。
     /// 仅在期望代际尚未变化时写入，避免把已过时的等待原因覆盖到新代际上。
     pub async fn mark_apply_pending(
         db: &DatabaseConnection,
         instance_id: &str,
-        desired_revision: i64,
+        target_revision: i64,
         reason: &str,
     ) -> Result<Option<Model>, DbError> {
-        let Some(model) = Self::find_by_instance_id(db, instance_id).await? else {
-            return Ok(None);
-        };
-        if model.desired_revision != desired_revision {
-            return Ok(Some(model));
+        let now = chrono::Utc::now();
+        let res = Entity::update_many()
+            .filter(Column::InstanceId.eq(instance_id))
+            .filter(Column::DesiredRevision.eq(target_revision))
+            .col_expr(
+                Column::RuntimeApplyState,
+                Expr::value(types::InstanceApplyState::Pending.as_i32()),
+            )
+            .col_expr(Column::StatusMessage, Expr::value(reason))
+            .col_expr(Column::UpdatedAt, Expr::value(now))
+            .exec(db)
+            .await?;
+        if res.rows_affected > 0 {
+            Self::find_by_instance_id(db, instance_id).await
+        } else {
+            Ok(None)
         }
-
-        let mut active: ActiveModel = model.into();
-        active.runtime_apply_state = Set(types::InstanceApplyState::Pending.as_i32());
-        active.status_message = Set(reason.to_string());
-        active.updated_at = Set(chrono::Utc::now());
-        let updated = active.update(db).await?;
-        Ok(Some(updated))
     }
 
     /// 回写运行时配置应用失败：保留期望代际，只记录失败状态与可展示原因。
     ///
+    /// 条件更新：`WHERE instance_id = ? AND desired_revision = target_revision`。
     /// 旧 Worker 继续使用上一份已生效配置，因此 `applied_revision` 不回退。
+    /// 若数据库中已有更新代际，本结果直接丢弃（`rows_affected == 0` 返回 `Ok(None)`），杜绝迟到错误覆盖新配置。
     pub async fn mark_apply_failed(
         db: &DatabaseConnection,
         instance_id: &str,
+        target_revision: i64,
         reason: &str,
     ) -> Result<Option<Model>, DbError> {
-        let Some(model) = Self::find_by_instance_id(db, instance_id).await? else {
-            return Ok(None);
-        };
-
-        let mut active: ActiveModel = model.into();
-        active.runtime_apply_state = Set(types::InstanceApplyState::Failed.as_i32());
-        active.status_message = Set(reason.to_string());
-        active.updated_at = Set(chrono::Utc::now());
-        let updated = active.update(db).await?;
-        Ok(Some(updated))
+        let now = chrono::Utc::now();
+        let res = Entity::update_many()
+            .filter(Column::InstanceId.eq(instance_id))
+            .filter(Column::DesiredRevision.eq(target_revision))
+            .col_expr(
+                Column::RuntimeApplyState,
+                Expr::value(types::InstanceApplyState::Failed.as_i32()),
+            )
+            .col_expr(Column::StatusMessage, Expr::value(reason))
+            .col_expr(Column::UpdatedAt, Expr::value(now))
+            .exec(db)
+            .await?;
+        if res.rows_affected > 0 {
+            Self::find_by_instance_id(db, instance_id).await
+        } else {
+            Ok(None)
+        }
     }
 
     /// 列出期望配置尚未在运行时收敛的实例（服务重启后的恢复入口）

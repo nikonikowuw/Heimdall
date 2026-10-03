@@ -154,19 +154,24 @@ async fn test_save_task_with_multiple_instances() {
             status_message: None,
             instances: Some(vec![
                 SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "general_detection".to_string(),
                     analysis_fps: 15,
                     params_json: r#"{"confidence":0.5}"#.to_string(),
                     enabled: Some(true),
+                    affinity_json: None,
                 },
                 SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "face_recognition".to_string(),
                     analysis_fps: 5,
                     params_json: "{}".to_string(),
                     enabled: Some(false),
+                    affinity_json: None,
                 },
             ]),
             expected_revision: None,
+            stream_mode: None,
         },
     )
     .await
@@ -198,19 +203,24 @@ async fn test_save_task_with_multiple_instances() {
             status_message: None,
             instances: Some(vec![
                 SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "general_detection".to_string(),
                     analysis_fps: 10,
                     params_json: "{}".to_string(),
                     enabled: None,
+                    affinity_json: None,
                 },
                 SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "general_detection".to_string(),
                     analysis_fps: 20,
                     params_json: "{}".to_string(),
                     enabled: None,
+                    affinity_json: None,
                 },
             ]),
             expected_revision: None,
+            stream_mode: None,
         },
     )
     .await;
@@ -452,19 +462,24 @@ async fn test_update_task_runtime_state_granular() {
             status_message: None,
             instances: Some(vec![
                 SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "general_detection".to_string(),
                     analysis_fps: 15,
                     params_json: "{}".to_string(),
                     enabled: Some(true),
+                    affinity_json: None,
                 },
                 SaveTaskAlgorithmInstanceParams {
+                    instance_id: None,
                     algorithm_id: "face_recognition".to_string(),
                     analysis_fps: 10,
                     params_json: "{}".to_string(),
                     enabled: Some(true),
+                    affinity_json: None,
                 },
             ]),
             expected_revision: None,
+            stream_mode: None,
         },
     )
     .await
@@ -532,12 +547,15 @@ async fn test_update_instance_and_sync_task_propagates_rules_and_motion_gate() {
             motion_gate_json: r#"{"enabled":false}"#.to_string(),
             status_message: None,
             instances: Some(vec![SaveTaskAlgorithmInstanceParams {
+                instance_id: None,
                 algorithm_id: "general_detection".to_string(),
                 analysis_fps: 10,
                 params_json: "{}".to_string(),
                 enabled: Some(true),
+                affinity_json: None,
             }]),
             expected_revision: None,
+            stream_mode: None,
         },
     )
     .await
@@ -659,12 +677,15 @@ async fn test_save_task_with_instances_enforces_config_revision() {
             motion_gate_json: r#"{"enabled":true}"#.to_string(),
             status_message: None,
             instances: Some(vec![SaveTaskAlgorithmInstanceParams {
+                instance_id: None,
                 algorithm_id: "general_detection".to_string(),
                 analysis_fps: fps,
                 params_json: "{}".to_string(),
                 enabled: Some(true),
+                affinity_json: None,
             }]),
             expected_revision,
+            stream_mode: None,
         };
 
     // 首次创建：无快照可校验，写入后版本号为 1
@@ -765,12 +786,15 @@ async fn test_runtime_state_updates_do_not_bump_config_revision() {
             motion_gate_json: "{}".to_string(),
             status_message: None,
             instances: Some(vec![SaveTaskAlgorithmInstanceParams {
+                instance_id: None,
                 algorithm_id: "general_detection".to_string(),
                 analysis_fps: 10,
                 params_json: "{}".to_string(),
                 enabled: Some(true),
+                affinity_json: None,
             }]),
             expected_revision: None,
+            stream_mode: None,
         },
     )
     .await
@@ -823,12 +847,15 @@ async fn test_set_task_enabled_only_toggles_intent() {
             motion_gate_json: r#"{"enabled":true,"threshold":30}"#.to_string(),
             status_message: None,
             instances: Some(vec![SaveTaskAlgorithmInstanceParams {
+                instance_id: None,
                 algorithm_id: "general_detection".to_string(),
                 analysis_fps: 15,
                 params_json: r#"{"confidence":0.6}"#.to_string(),
                 enabled: Some(true),
+                affinity_json: None,
             }]),
             expected_revision: None,
+            stream_mode: None,
         },
     )
     .await

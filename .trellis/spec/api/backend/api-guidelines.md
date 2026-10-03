@@ -33,8 +33,13 @@
 | `PUT /api/v1/tasks/{cameraId}` | 整份配置覆盖写：名称、布防意图、防区、门控、算法实例集合 | 完整配置，可带 `configRevision` |
 | `PUT /api/v1/tasks/{cameraId}/enabled` | 状态动词：只翻转布防总闸，不改动其余配置 | `{ "enabled": bool }`，必填 |
 
-- `algorithmInstances` 是集合替换语义：不在数组中的实例会被删除；省略该字段表示保留现有集合。`statusMessage`、`streamMode` 同理由服务端保留现值。
+- `algorithmInstances` 是集合替换语义：不在数组中的实例会被删除；省略该字段表示保留现有集合。`statusMessage`、`streamMode` 同理由服务端保留现值。每个实例支持显式配置 `affinity`（亲和意图，包含 `auto` { `policy`: "spread" / "pack" } 与 `manual` { `deviceId`, `coreIndex` }，默认为自动 spread 负载打散）。显式提交的非空 `instanceId` 必须与库内既有实例一致且批次内唯一，禁止跨任务复用；省略 `instanceId` 时自动匹配同算法实例并保留已有分配。
+- `streamMode` 原子持久化：若写任务请求中附带了 `streamMode`，则由 `TaskRepo::save_task_with_instances` 在单一 SQLite 事务内原子同步更新 `cameras.stream_mode`。若配置校验失败或版本冲突回滚，摄像头模式一并回滚，杜绝半提交撕裂。
 - `configRevision`：响应必带；请求可省略，省略即不做版本校验。`0` 表示「读取时该通道还没有任务」，供快速创建做乐观断言。不匹配返回 `409` + `40903`，且错误响应 `data` 为 `null`。
+- 两阶段配置收敛与单实例版本栅栏：
+  - 第一阶段：任务级保存仅在实例有效配置真正发生变动（分析帧率、业务参数、启用状态、非等价亲和意图变动）时推进 `desired_revision += 1` 并置为 `Pending`；等价亲和（如 auto spread 缺省与显式 spread）不推进版本；
+  - 第二阶段：运行时收敛完成并回写状态时，`mark_apply_applied`、`mark_apply_pending` 与 `mark_apply_failed` 严格施加版本栅栏（`WHERE instance_id = ? AND desired_revision = target_revision`），若实例已被更新的会话推进，则条件更新影响行数为 0（返回 `Ok(None)`），杜绝旧收敛结果覆盖更新版本的脏写。
+- 启动单实例故障隔离：冷启动多算法管线时，若单个算法实例获取算力租约或初始化 Worker 失败，记录单实例故障后继续初始化其余健康实例；仅当全部算法实例均失败时才整路回滚，避免局部故障连坐全路分析。
 - 两条入口都只提交期望配置：运行时收敛一律由 `sync_pipeline_for_camera` 从已提交的持久化配置驱动，禁止任何入口用请求体拼装 `StartCameraPipelineParams`。
 - 布防总闸（`analysis_tasks.desired_enabled`）与实例分闸（`algorithm_instances.enabled`）是两个独立开关：撤防不写回分闸，运行与否由总闸判定。
 

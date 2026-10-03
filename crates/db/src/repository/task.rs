@@ -27,14 +27,18 @@ pub struct SaveTaskWithInstancesParams {
     /// `Some(0)` 表示「读取时该通道尚无任务」，用于快速创建的乐观断言；
     /// `None` 表示不做版本校验（脚本与迁移期客户端）。
     pub expected_revision: Option<i64>,
+    /// 摄像头码流分析模式（纳入本单次事务原子更新）
+    pub stream_mode: Option<types::StreamMode>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SaveTaskAlgorithmInstanceParams {
+    pub instance_id: Option<String>,
     pub algorithm_id: String,
     pub analysis_fps: i32,
     pub params_json: String,
     pub enabled: Option<bool>,
+    pub affinity_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +179,22 @@ impl TaskRepo {
         txn: &DatabaseTransaction,
         params: SaveTaskWithInstancesParams,
     ) -> Result<Model, DbError> {
+        // 若指定了 stream_mode，在同一事务内原子更新 cameras 表
+        if let Some(stream_mode) = params.stream_mode {
+            crate::entity::camera::Entity::update_many()
+                .filter(crate::entity::camera::Column::CameraId.eq(&params.camera_id))
+                .col_expr(
+                    crate::entity::camera::Column::StreamMode,
+                    sea_orm::sea_query::Expr::value(stream_mode.as_str()),
+                )
+                .col_expr(
+                    crate::entity::camera::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+                )
+                .exec(txn)
+                .await?;
+        }
+
         let task =
             if let Some(existing) = Self::find_by_camera_id_txn(txn, &params.camera_id).await? {
                 // 整体覆盖写入前先校验快照版本：不匹配说明别的会话已经改过这份配置，
@@ -246,17 +266,59 @@ impl TaskRepo {
                 .iter()
                 .map(|ar| {
                     let parsed: serde_json::Value = serde_json::from_str(&ar.params_json)?;
+                    let affinity: Option<types::AffinityIntent> = match &ar.affinity_json {
+                        Some(aj) => Some(serde_json::from_str(aj)?),
+                        None => None,
+                    };
                     Ok(types::TaskAlgorithmInstanceConfig {
-                        instance_id: None,
+                        instance_id: ar.instance_id.clone(),
                         algorithm_id: ar.algorithm_id.clone(),
                         analysis_fps: Some(ar.analysis_fps),
                         algo_params: Some(parsed),
                         enabled: ar.enabled,
+                        affinity,
                     })
                 })
                 .collect::<Result<Vec<_>, DbError>>()?;
 
             types::validate_task_algorithm_instances(&domain_configs)?;
+
+            // 校验显式传入的 instance_id：
+            // 1) 同一批次内不得有重复的非空 instance_id
+            // 2) 若指定了 instance_id，且库中存在匹配该 algorithm_id 的行，则其 instance_id 必须一致；
+            // 3) 若库中已有行，但指定的 instance_id 与其不符（或者指向了其他任务/算法），则拒绝。
+            let mut seen_ids = std::collections::HashSet::new();
+            for inst in &instances {
+                if let Some(explicit_id) = &inst.instance_id {
+                    let trimmed = explicit_id.trim();
+                    if !trimmed.is_empty() {
+                        if !seen_ids.insert(trimmed.to_string()) {
+                            return Err(DbError::Validation(format!(
+                                "提交的算法实例集合中存在重复 instanceId: {trimmed}"
+                            )));
+                        }
+                        if let Some(existing) = existing_instances.get(&inst.algorithm_id) {
+                            if existing.instance_id != trimmed {
+                                return Err(DbError::Validation(format!(
+                                    "算法 {} 的显式 instanceId ({trimmed}) 与库中已有实例 ({}) 不匹配",
+                                    inst.algorithm_id, existing.instance_id
+                                )));
+                            }
+                        } else {
+                            // 检查该 instance_id 是否已被其他任务使用
+                            let other = InstEntity::find()
+                                .filter(InstColumn::InstanceId.eq(trimmed))
+                                .one(txn)
+                                .await?;
+                            if other.is_some() {
+                                return Err(DbError::Validation(format!(
+                                    "显式 instanceId ({trimmed}) 属于其他任务或算法，禁止跨任务复用"
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
 
             // 事务内批量检查算法包是否存在
             let algo_ids: Vec<&str> = instances.iter().map(|i| i.algorithm_id.as_str()).collect();
@@ -294,11 +356,25 @@ impl TaskRepo {
 
                 if let Some(model) = existing_instances.get(&instance.algorithm_id) {
                     desired_ids.push(model.id);
-                    // 任务级保存只应在真的改变了期望配置（参数/帧率/启停）时代际 +1；
+
+                    // 亲和意图比较：若提交了 affinity_json 则解析并与库内比较；若未提交则保留库内旧值
+                    let (new_affinity_json, affinity_changed) = match &instance.affinity_json {
+                        Some(raw_json) => {
+                            let old_intent = model.affinity_intent();
+                            let new_intent: types::AffinityIntent =
+                                serde_json::from_str(raw_json).unwrap_or_default();
+                            let changed = !old_intent.is_equivalent_to(&new_intent);
+                            (raw_json.clone(), changed)
+                        }
+                        None => (model.affinity_json.clone(), false),
+                    };
+
+                    // 任务级保存只应在真的改变了期望配置（参数/帧率/启停/亲和意图）时代际 +1；
                     // 仅镜像写入规则与门控字段不构成需要运行时收敛的变更。
                     let config_changed = model.analysis_fps != instance.analysis_fps
                         || model.params_json != instance.params_json
-                        || model.enabled != instance_enabled;
+                        || model.enabled != instance_enabled
+                        || affinity_changed;
                     let mut active: InstActiveModel = model.clone().into();
                     active.analysis_fps = Set(instance.analysis_fps);
                     active.params_json = Set(instance.params_json.clone());
@@ -306,6 +382,8 @@ impl TaskRepo {
                     active.motion_gate_json = Set(params.motion_gate_json.clone());
                     active.enabled = Set(instance_enabled);
                     active.camera_id = Set(params.camera_id.clone());
+                    active.affinity_json = Set(new_affinity_json);
+
                     if config_changed {
                         active.desired_revision = Set(model.desired_revision + 1);
                         active.runtime_apply_state =
@@ -320,9 +398,22 @@ impl TaskRepo {
                     active.update(txn).await?;
                 } else {
                     let now = chrono::Utc::now();
+                    let chosen_id = instance
+                        .instance_id
+                        .as_deref()
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+
+                    let aff_json = instance
+                        .affinity_json
+                        .clone()
+                        .unwrap_or_else(|| r#"{"mode":"auto","policy":"spread"}"#.to_string());
+
                     let inserted = InstActiveModel {
                         id: sea_orm::ActiveValue::NotSet,
-                        instance_id: Set(uuid::Uuid::now_v7().to_string()),
+                        instance_id: Set(chosen_id),
                         task_id: Set(task.id),
                         camera_id: Set(params.camera_id.clone()),
                         algorithm_id: Set(instance.algorithm_id.clone()),
@@ -330,6 +421,7 @@ impl TaskRepo {
                         params_json: Set(instance.params_json.clone()),
                         rules_json: Set(params.rules_json.clone()),
                         motion_gate_json: Set(params.motion_gate_json.clone()),
+                        affinity_json: Set(aff_json),
                         enabled: Set(instance_enabled),
                         actual_status: Set(types::TaskStatus::STOPPED),
                         status_message: Set(String::new()),
@@ -472,10 +564,12 @@ impl TaskRepo {
                 let mut instances_params: Vec<SaveTaskAlgorithmInstanceParams> = existing_instances
                     .into_iter()
                     .map(|i| SaveTaskAlgorithmInstanceParams {
+                        instance_id: Some(i.instance_id),
                         algorithm_id: i.algorithm_id,
                         analysis_fps: i.analysis_fps,
                         params_json: i.params_json,
                         enabled: Some(i.enabled),
+                        affinity_json: Some(i.affinity_json),
                     })
                     .collect();
                 instances_params.push(instance.clone());
@@ -491,6 +585,7 @@ impl TaskRepo {
                         status_message: None,
                         instances: Some(instances_params),
                         expected_revision: None,
+                        stream_mode: None,
                     },
                 )
                 .await?;
@@ -724,10 +819,12 @@ impl TaskRepo {
             None
         } else {
             Some(vec![SaveTaskAlgorithmInstanceParams {
+                instance_id: None,
                 algorithm_id: params.algorithm_id,
                 analysis_fps: params.analysis_fps,
                 params_json: params.algo_params_json,
                 enabled: Some(params.desired_enabled),
+                affinity_json: None,
             }])
         };
 
@@ -742,6 +839,7 @@ impl TaskRepo {
                 status_message: None,
                 instances,
                 expected_revision: None,
+                stream_mode: None,
             },
         )
         .await
@@ -767,6 +865,7 @@ impl TaskRepo {
                 status_message: None,
                 instances: None,
                 expected_revision: None,
+                stream_mode: None,
             },
         )
         .await

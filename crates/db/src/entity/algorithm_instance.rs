@@ -27,6 +27,8 @@ pub struct Model {
     pub applied_revision: i64,
     /// 运行时配置应用状态：0=applied / 1=pending / 2=failed
     pub runtime_apply_state: i32,
+    #[sea_orm(column_type = "Text")]
+    pub affinity_json: String,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }
@@ -41,5 +43,10 @@ impl Model {
     pub fn runtime_apply_state(&self) -> types::InstanceApplyState {
         types::InstanceApplyState::from_i32(self.runtime_apply_state)
             .unwrap_or(types::InstanceApplyState::Failed)
+    }
+
+    /// 解析放置亲和意图；若反序列化失败回退为默认 auto spread
+    pub fn affinity_intent(&self) -> types::AffinityIntent {
+        serde_json::from_str(&self.affinity_json).unwrap_or_default()
     }
 }

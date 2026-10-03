@@ -179,6 +179,7 @@ fn launch(instance_id: &str, algorithm_id: &str, target_fps: u32) -> InstanceLau
         algorithm_id: algorithm_id.to_string(),
         algo_params: serde_json::json!({}),
         target_fps,
+        desired_revision: 0,
     }
 }
 
