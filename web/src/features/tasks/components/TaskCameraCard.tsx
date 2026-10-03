@@ -19,6 +19,7 @@ import { motionTokens } from '@/lib/motionTokens'
 import { copyToClipboard } from '@/lib/utils'
 import type { Camera, DetectionRule, StreamMode, TaskConfigDto } from '@/types'
 import { summarizeInstanceApply, unappliedNoticeLines } from '../applyState'
+import { formatAffinityBadge } from '../affinity'
 
 export interface TaskCameraCardProps {
   camera: Camera
@@ -507,6 +508,14 @@ export function TaskCameraCard({
           )}
         </span>
         <span className="flex shrink-0 items-center gap-2 font-mono text-[11px]">
+          {primaryInstance && primaryInstance.enabled && (
+            <span
+              className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]"
+              title={t('affinityBadgeTitle', { defaultValue: 'NPU 核心调度策略' })}
+            >
+              {formatAffinityBadge(primaryInstance.affinity)}
+            </span>
+          )}
           <span className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
             {analysisFps > 0 ? `${analysisFps} FPS` : t('card.fpsAuto', { defaultValue: '自动' })}
           </span>

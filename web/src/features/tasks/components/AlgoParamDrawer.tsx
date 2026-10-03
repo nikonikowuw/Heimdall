@@ -2,7 +2,10 @@ import React, { useMemo, useState } from 'react'
 import { Check, Cpu, RotateCcw, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Drawer } from '@/components/ui/Drawer'
-import type { AlgoManifest } from '@/types'
+import type { AffinityIntent, AlgoManifest } from '@/types'
+import type { NpuMetrics } from '@/types/system'
+import { systemApi } from '@/lib/system-api'
+import { formatAffinityBadge } from '../affinity'
 import {
   clampNumericParam,
   formatNumericDraft,
@@ -25,6 +28,8 @@ export interface AlgoParamDrawerProps {
   algo: AlgoManifest | null
   fps: number
   onFpsChange: (fps: number) => void
+  affinity?: AffinityIntent | null
+  onAffinityChange?: (affinity: AffinityIntent) => void
   params: Record<string, unknown>
   onSaveParams: (params: Record<string, unknown>) => void
   onClose: () => void
@@ -61,6 +66,8 @@ export function AlgoParamDrawer({
   algo,
   fps,
   onFpsChange,
+  affinity,
+  onAffinityChange,
   params,
   onSaveParams,
   onClose,
@@ -70,9 +77,47 @@ export function AlgoParamDrawer({
   // 本地临时编辑状态。数值参数以字符串草稿承载，才能保留空串、小数点、负号等
   // 键盘中间态；校验与取整推迟到失焦或应用时执行。
   const [localFps, setLocalFps] = useState<number>(fps)
+  const [localAffinity, setLocalAffinity] = useState<AffinityIntent>(
+    affinity ?? { mode: 'auto', policy: 'spread' },
+  )
   const [localParams, setLocalParams] = useState<Record<string, unknown>>(params)
   const [numberDrafts, setNumberDrafts] = useState<Record<string, string>>({})
   const [arraySearches, setArraySearches] = useState<Record<string, string>>({})
+
+  // 动态读取系统 NPU 拓扑与核心指标
+  const [npuMetrics, setNpuMetrics] = useState<NpuMetrics | null>(null)
+
+  React.useEffect(() => {
+    if (!isOpen) return
+    const controller = new AbortController()
+    systemApi
+      .getOverview(controller.signal)
+      .then((res) => {
+        if (!controller.signal.aborted && res?.npu) {
+          setNpuMetrics(res.npu)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      controller.abort()
+    }
+  }, [isOpen])
+
+  const npuCores = useMemo(() => {
+    return npuMetrics?.cores ?? []
+  }, [npuMetrics])
+
+  const isNpuProbing = isOpen && npuMetrics === null
+
+  // 当切换为 manual 或在 manual 模式下点选核心时，优先保留既有已分配的 deviceId
+  const currentDeviceId =
+    localAffinity.mode === 'manual' && localAffinity.deviceId
+      ? localAffinity.deviceId
+      : affinity?.mode === 'manual' && affinity.deviceId
+        ? affinity.deviceId
+        : 'rknn-npu0'
+
+  const hasMultiCore = npuCores.length > 1 || (isNpuProbing && localAffinity.mode === 'manual')
 
   // 以 (isOpen, algo?.algorithmId) 标识当前调优抽屉的会话。
   // 仅在打开抽屉或切换目标算法时初始化草稿；在同一会话中严禁因父组件重渲染（如 WS 遥测到达）
@@ -92,6 +137,7 @@ export function AlgoParamDrawer({
     setActiveSession({ isOpen, algoId: currentAlgoId })
     if (isOpen && algo) {
       setLocalFps(fps)
+      setLocalAffinity(affinity ?? { mode: 'auto', policy: 'spread' })
       setLocalParams({ ...params })
       setNumberDrafts({})
       setArraySearches({})
@@ -114,6 +160,7 @@ export function AlgoParamDrawer({
   // 恢复官方推荐默认值
   function handleResetDefaults(): void {
     setLocalFps(10)
+    setLocalAffinity({ mode: 'auto', policy: 'spread' })
     const reset: Record<string, unknown> = {}
     for (const [key, prop] of Object.entries(propertiesObj)) {
       if (prop.default !== undefined) {
@@ -187,6 +234,7 @@ export function AlgoParamDrawer({
 
   function handleApply(): void {
     onFpsChange(localFps)
+    onAffinityChange?.(localAffinity)
     onSaveParams(getFinalParams())
     onClose()
   }
@@ -296,7 +344,168 @@ export function AlgoParamDrawer({
               </p>
             </div>
 
-            {/* 2. 模型自定义专属参数 */}
+            {/* 2. NPU 算力调度与核心分配 (NPU Core Affinity) */}
+            <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5 shadow-sm transition-all">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-bold text-[var(--text-primary)]">
+                  <Cpu className="h-3.5 w-3.5 text-[var(--accent)]" />
+                  <span className="text-xs">
+                    {t('affinity.title', { defaultValue: 'NPU 算力调度与核心分配' })}
+                  </span>
+                </div>
+                <span className="rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-2 py-0.5 font-mono text-[10px] font-bold text-[var(--text-secondary)]">
+                  {formatAffinityBadge(localAffinity)}
+                </span>
+              </div>
+
+              {/* 模式选择 Tab: 自动调度 vs 手动指定 */}
+              <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-1 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setLocalAffinity({ mode: 'auto', policy: 'spread' })}
+                  className={`flex items-center justify-center rounded-lg py-1.5 font-medium transition-all ${
+                    localAffinity.mode === 'auto'
+                      ? 'border border-[var(--border)] bg-[var(--bg-surface-solid)] font-bold text-[var(--text-primary)] shadow-sm'
+                      : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                  }`}
+                >
+                  {t('affinity.autoMode', { defaultValue: '自动调度 (Auto)' })}
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasMultiCore}
+                  onClick={() =>
+                    setLocalAffinity({
+                      mode: 'manual',
+                      deviceId: currentDeviceId,
+                      coreIndex: 0,
+                    })
+                  }
+                  title={
+                    !hasMultiCore
+                      ? t('affinity.singleCoreHint', {
+                          defaultValue: '当前设备为单核或系统托管，无需手动切核',
+                        })
+                      : undefined
+                  }
+                  className={`flex items-center justify-center rounded-lg py-1.5 font-medium transition-all ${
+                    localAffinity.mode === 'manual'
+                      ? 'border border-[var(--border)] bg-[var(--bg-surface-solid)] font-bold text-[var(--text-primary)] shadow-sm'
+                      : !hasMultiCore
+                        ? 'cursor-not-allowed text-[var(--text-muted)] opacity-50'
+                        : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                  }`}
+                >
+                  {t('affinity.manualMode', { defaultValue: '手动指定核心 (Manual)' })}
+                </button>
+              </div>
+
+              {/* Auto 模式下的策略选择 */}
+              {localAffinity.mode === 'auto' && (
+                <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setLocalAffinity({ mode: 'auto', policy: 'spread' })}
+                    className={`flex flex-col rounded-lg border p-2 text-left transition-all ${
+                      localAffinity.policy !== 'pack'
+                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
+                        : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'
+                    }`}
+                  >
+                    <span className="text-xs font-bold">
+                      {t('affinity.spreadTitle', { defaultValue: '均衡分流 (Spread)' })}
+                    </span>
+                    <span className="mt-0.5 font-sans text-[10px] text-[var(--text-muted)]">
+                      {t('affinity.spreadDesc', {
+                        defaultValue: '负载优先，实例打散至不同核心 (推荐)',
+                      })}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLocalAffinity({ mode: 'auto', policy: 'pack' })}
+                    className={`flex flex-col rounded-lg border p-2 text-left transition-all ${
+                      localAffinity.policy === 'pack'
+                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
+                        : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:border-[var(--border-strong)]'
+                    }`}
+                  >
+                    <span className="text-xs font-bold">
+                      {t('affinity.packTitle', { defaultValue: '紧凑聚合 (Pack)' })}
+                    </span>
+                    <span className="mt-0.5 font-sans text-[10px] text-[var(--text-muted)]">
+                      {t('affinity.packDesc', { defaultValue: '聚合优先，优先塞满同一物理核心' })}
+                    </span>
+                  </button>
+                </div>
+              )}
+
+              {/* Manual 模式下的具体核心选择 */}
+              {localAffinity.mode === 'manual' && (
+                <div className="space-y-1.5 pt-1">
+                  <span className="block text-[11px] font-medium text-[var(--text-secondary)]">
+                    {t('affinity.selectCore', { defaultValue: '选择目标 NPU 物理核心：' })}
+                  </span>
+                  {npuCores.length === 0 && isNpuProbing ? (
+                    <div className="py-2 text-center font-mono text-[11px] text-[var(--text-muted)]">
+                      {t('affinity.loadingTopology', {
+                        defaultValue: '正在探测 NPU 拓扑与核心指标...',
+                      })}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2 font-mono text-xs">
+                      {npuCores.map((core) => {
+                        const isSelected = localAffinity.coreIndex === core.coreId
+                        return (
+                          <button
+                            key={core.coreId}
+                            type="button"
+                            onClick={() =>
+                              setLocalAffinity({
+                                mode: 'manual',
+                                deviceId: currentDeviceId,
+                                coreIndex: core.coreId,
+                              })
+                            }
+                            className={`flex flex-col items-center justify-center rounded-lg border py-2 transition-all ${
+                              isSelected
+                                ? 'border-[var(--accent)] bg-[var(--accent-soft)] font-bold text-[var(--text-primary)] shadow-sm'
+                                : 'border-[var(--border)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]'
+                            }`}
+                          >
+                            <span>Core {core.coreId}</span>
+                            <span className="mt-0.5 text-[10px] text-[var(--text-muted)]">
+                              {t('affinity.coreLoad', {
+                                percent: core.utilizationPercent.toFixed(0),
+                                defaultValue: `${core.utilizationPercent.toFixed(0)}% 负载`,
+                              })}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                {isNpuProbing && npuCores.length === 0
+                  ? t('affinity.loadingTopology', {
+                      defaultValue: '正在探测 NPU 拓扑与核心指标...',
+                    })
+                  : hasMultiCore
+                    ? t('affinity.multiCoreNote', {
+                        defaultValue:
+                          '多核异构调度：默认 Auto 均衡策略可实现双/多核心并行推理，避免单核过载瓶颈。',
+                      })
+                    : t('affinity.singleCoreNote', {
+                        defaultValue:
+                          '当前运行环境为单核 NPU 或宿主托管模式，已由底层驱动自动优化调度。',
+                      })}
+              </p>
+            </div>
+
+            {/* 3. 模型自定义专属参数 */}
             {schemaParams.length > 0 && (
               <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3.5 shadow-sm transition-all">
                 <div className="flex items-center gap-1.5 font-bold text-[var(--text-primary)]">

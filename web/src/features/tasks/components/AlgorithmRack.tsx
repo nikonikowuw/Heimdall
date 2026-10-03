@@ -3,13 +3,15 @@ import { Boxes, CreditCard, Flame, ScanFace, Settings2, ShieldAlert, Cpu } from 
 import { motion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { motionTokens } from '@/lib/motionTokens'
-import type { AlgoManifest } from '@/types'
+import type { AffinityIntent, AlgoManifest } from '@/types'
+import { formatAffinityBadge } from '../affinity'
 
 export interface AlgorithmInstanceItem {
   algorithmId: string
   analysisFps: number
   algoParams: Record<string, unknown>
   enabled: boolean
+  affinity?: AffinityIntent | null
 }
 
 export interface AlgorithmRackProps {
@@ -177,9 +179,17 @@ export function AlgorithmRack({
                     {algo.algorithmId}
                   </span>
                   {isEnabled && (
-                    <span className="shrink-0 rounded-[4px] border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-1.5 py-0.5 font-bold text-[var(--status-success)] shadow-2xs">
-                      {instance.analysisFps || 10} FPS
-                    </span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <span
+                        className="rounded-[4px] border border-[var(--border)] bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)]"
+                        title={t('affinityBadgeTitle', { defaultValue: 'NPU 核心调度策略' })}
+                      >
+                        {formatAffinityBadge(instance.affinity)}
+                      </span>
+                      <span className="rounded-[4px] border border-[var(--status-success-border)] bg-[var(--status-success-soft)] px-1.5 py-0.5 font-bold text-[var(--status-success)] shadow-2xs">
+                        {instance.analysisFps || 10} FPS
+                      </span>
+                    </div>
                   )}
                 </div>
               </motion.div>

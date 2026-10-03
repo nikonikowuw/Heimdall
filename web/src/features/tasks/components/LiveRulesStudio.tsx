@@ -24,6 +24,7 @@ import { algorithmApi, isConfigConflictError, taskApi } from '@/lib/api'
 import { motionTokens } from '@/lib/motionTokens'
 import { telemetryStore } from '@/lib/telemetryStore'
 import type {
+  AffinityIntent,
   AlgoManifest,
   Camera,
   DetectionLineDirection,
@@ -487,6 +488,7 @@ export function LiveRulesStudio({
           analysisFps: inst.analysisFps ?? 10,
           algoParams: (inst.algoParams as Record<string, unknown>) ?? {},
           enabled: inst.enabled ?? true,
+          affinity: inst.affinity,
         }
       }
 
@@ -641,6 +643,22 @@ export function LiveRulesStudio({
         [algoId]: {
           ...existing,
           analysisFps: newFps,
+        },
+      }
+    })
+  }
+
+  const handleAffinityChange = (newAffinity: AffinityIntent) => {
+    if (!paramDrawerAlgo) return
+    const algoId = paramDrawerAlgo.algorithmId
+    setActiveInstances((prev) => {
+      const existing = prev[algoId]
+      if (!existing) return prev
+      return {
+        ...prev,
+        [algoId]: {
+          ...existing,
+          affinity: newAffinity,
         },
       }
     })
@@ -1081,6 +1099,7 @@ export function LiveRulesStudio({
           analysisFps: item.analysisFps,
           algoParams: item.algoParams,
           enabled: item.enabled,
+          affinity: item.affinity,
         }),
       )
 
@@ -2004,6 +2023,10 @@ export function LiveRulesStudio({
           paramDrawerAlgo ? (activeInstances[paramDrawerAlgo.algorithmId]?.analysisFps ?? 10) : 10
         }
         onFpsChange={handleFpsChange}
+        affinity={
+          paramDrawerAlgo ? activeInstances[paramDrawerAlgo.algorithmId]?.affinity : undefined
+        }
+        onAffinityChange={handleAffinityChange}
         params={
           paramDrawerAlgo
             ? (activeInstances[paramDrawerAlgo.algorithmId]?.algoParams ?? EMPTY_ALGO_PARAMS)

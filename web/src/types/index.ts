@@ -548,12 +548,19 @@ export interface MotionGateConfig {
   motionHoldFrames?: number
 }
 
+export type AffinityPolicy = 'spread' | 'pack'
+
+export type AffinityIntent =
+  | { mode: 'auto'; policy?: AffinityPolicy | string }
+  | { mode: 'manual'; deviceId: string; coreIndex: number }
+
 export interface TaskAlgorithmInstanceDto {
   instanceId?: string
   algorithmId: string
   analysisFps?: number
   algoParams?: Record<string, unknown>
   enabled?: boolean
+  affinity?: AffinityIntent | null
   actualStatus?: number
   /** 期望配置版本号；每次期望配置提交递增 */
   desiredRevision?: number
@@ -571,6 +578,7 @@ export interface TaskAlgorithmInstanceSummaryDto {
   algorithmId: string
   analysisFps: number
   enabled: boolean
+  affinity?: AffinityIntent | null
   actualStatus: number
   applyState: InstanceApplyState
   statusMessage: string
