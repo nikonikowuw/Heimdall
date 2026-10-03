@@ -178,3 +178,35 @@ Implemented explicit hardware fallback policy, platform_id-based resolution, and
 ### Next Steps
 
 - Continue the separate NPU core-allocation task from its planning phase.
+
+## [2026-10-03] NPU 跨层协议基线、有界清理与路线 A/B 验证 (10-03-npu-abi-protocol-baseline)
+
+### Summary
+
+实现了 NPU 多核分配与卡亲和架构的基线协议（Subtask 1），包括 Worker 线程有界退出与隔离管理（QuarantineSupervisor）、C ABI Placement 扩展（`AvAlgoPlacementExtensionV1` 与双侧 POD 对齐断言）、Wire 放置配置安全剥离保护（`__heimdall_placement`），以及独立的板端验证探针工具（`tools/probe_rknn_dup_context/`）。
+
+### Main Changes
+
+- **Worker 有界清理与隔离**：重构 `crates/infer/src/worker.rs`，在 Worker 线程内部显式释放 runtime 与 backend 后再发送退出完成信号；对停机超时及通道断开引入 `QuarantineSupervisor`，移交后台非阻塞 Reaper 回收，杜绝无界 join() 与误判完成。
+- **C ABI Placement 可选扩展**：在 `crates/infer/src/c_abi/types.rs` 与 `crates/algo-sdk/src/c_abi.rs` 中定义 `AvAlgoPlacementExtensionV1` 及 POD 结构（`AvAlgoPlacementCapsPod`、`AvAlgoInstanceReceiptPod`、`AvAlgoCleanupReceiptPod`），维持基础 `AvAlgoAbi` 96 字节不变，双侧通过静态与单元测试严格断言尺寸、对齐与字段偏移。
+- **Wire 协议兼容性与配置安全剥离**：在 `crates/algo-sdk/src/macros.rs` 中增加 `deserialize_config_stripping_placement`，在插件配置反序列化前单次剥离 `__heimdall_placement`，保护标记有 `#[serde(deny_unknown_fields)]` 的业务插件。
+- **T42 板端独立探针**：编写无宿主依赖的最小 C 探针工具 `tools/probe_rknn_dup_context/`，提供完整 Makefile、多线程并发压测、路线 A（独占移交）与路线 B（加锁 dup）双路线测试及内存查询。
+- **自动化测试与回归矩阵**：落地 T01（停机超时隔离）、T02（创建失败隔离）、T03（通道断开隔离）、T13（Wire 兼容性与配置剥离）、T14（回执防御性解析）、T41（自检硬件硬门）全项测试。
+- **规范同步**：更新 `.trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md` 与 `.trellis/spec/infer/backend/inference-backends.md`。
+
+### Testing
+
+- [OK] `cargo fmt --all -- --check` 通过。
+- [OK] `cargo clippy --all-targets -- -D warnings` 全工作区通过。
+- [OK] `cargo nextest run --workspace` 1001 项测试全绿。
+- [OK] `algo-packages/macos` 37 项测试全绿。
+- [OK] `algo-packages/rknn/{rk3568, rk3576, rk3588}` cargo clippy 全部无告警通过。
+- [OK] `probe_rknn_dup_context` 本地编译与静态自测运行通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进子任务 2 (`10-03-npu-host-placement-ledger`)：构建宿主 NPU 拓扑探测、核心分配账本与世代屏障。

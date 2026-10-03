@@ -1,0 +1,37 @@
+{
+  "id": "10-03-npu-abi-protocol-baseline",
+  "name": "npu-abi-protocol-baseline",
+  "title": "NPU 跨层协议、有界清理与路线 A/B 验证基线",
+  "description": "冻结可选 C ABI 扩展与双层清理回执，修复 worker.rs 退出 join 与析构隔离，建立 wire 协议测试，执行 A0 目标板路线 A/B 实测",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": "infer",
+  "priority": "P1",
+  "creator": "niko",
+  "assignee": "niko",
+  "createdAt": "2026-10-03",
+  "completedAt": "2026-10-03",
+  "branch": "dev",
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-01-npu-core-allocation",
+  "relatedFiles": [
+    "crates/infer/src/worker.rs",
+    "crates/infer/src/c_abi/mod.rs",
+    "crates/types/src/algo.rs",
+    "crates/algo-sdk/src/macros.rs",
+    "crates/algo-sdk/src/plugin.rs"
+  ],
+  "notes": "母任务 10-01-npu-core-allocation 的子任务 1。聚焦阶段 A0/A：冻结 C ABI 可选 placement 扩展与双层清理回执；修复 worker.rs 有界退出协议；建立双侧 wire 测试；并在 A0 目标板上实测首选路线 A 与后备路线 B 的 4 项判定标准（解除 B-R14）。",
+  "meta": {
+    "blockingFacts": [
+      "B-R14 route-a-preferred-pending-board-verification",
+      "B-TGT target-board-profile-unselected"
+    ]
+  }
+}

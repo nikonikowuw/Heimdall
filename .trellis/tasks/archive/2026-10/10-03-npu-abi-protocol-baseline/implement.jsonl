@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/infer/backend/index.md", "reason": "infer 包架构约束与模块职责"}
+{"file": ".trellis/spec/infer/backend/inference-runtime-health.md", "reason": "Worker 生命周期健康与在途代际判定准则"}
+{"file": ".trellis/spec/guides/ffi-guidelines.md", "reason": "FFI 跨层边界、ABI 布局断言与内存安全准则"}
+{"file": ".trellis/spec/guides/concurrency-guidelines.md", "reason": "并发与专用线程隔离、锁外析构准则"}
+{"file": ".trellis/spec/types/backend/index.md", "reason": "types 类型包定义与错误码规范"}

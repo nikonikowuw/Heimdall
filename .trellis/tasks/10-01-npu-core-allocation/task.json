@@ -18,7 +18,13 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "10-03-npu-abi-protocol-baseline",
+    "10-03-npu-host-placement-ledger",
+    "10-03-algo-sdk-rknn-shared-weights",
+    "10-03-npu-persistence-revision-barrier",
+    "10-03-npu-board-verification-release"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "用户已确认 D1：一实例一专用推理 Worker、独立检测/特征 session、宿主分核且共享模型权重。原 Q1 共享串行组整组换核前提已撤销，不再阻塞；不是批准停组。保留默认 auto/严格 manual，亲和降级不得放宽共享权重。2026-10-02 复核轮：新增 R14（线程安全与线程归属）/AC23-AC25/T39-T44；用户确认架构层面首选路线 A（控制面创建后独占移交），路线 B 作为实测后备降级，ABI 契约与回执挂点默认按路线 A 基线推进；登记 09-30-edge-torch-algo-ecosystem 已 completed 且交付已合入（4a9a797/d50487b/aa0cb7c/da594ab/1cae773）；新增 research.md S04（FallbackPolicy 现状）与源码锚点漂移表，H 表行号锚改为符号锚；design.md 固化 §6.3.1 首选路线 A 与后备路线 B 及 4 条判定标准；api.md 补执行侧预算不对外暴露显式取舍（无 REST 形状变化）。完整 API/双层生命周期与兼容发布仍待最终评审；目标板 SDK/预算/性能未验证，未授权 task.py start。",
