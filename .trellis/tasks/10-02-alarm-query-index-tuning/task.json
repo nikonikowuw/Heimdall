@@ -1,0 +1,30 @@
+{
+  "id": "alarm-query-index-tuning",
+  "name": "alarm-query-index-tuning",
+  "title": "告警查询链路物理层修复：统计信息、索引与时间轴口径",
+  "description": "修复实时告警中心查询链路的物理层欠账：补齐 SQLite 统计信息（PRAGMA optimize）、为 alarm_records 补时间/状态索引并下线死索引、将 count_since 从 created_at 对齐到 occurred_at、收窄孤儿对账的活跃路径查询范围。不含 severity 语义与前端疑点。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "niko",
+  "assignee": "niko",
+  "createdAt": "2026-10-02",
+  "completedAt": null,
+  "branch": "dev",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "ac14_benchmark": "50万行告警库（SQLite 3.46.0 bundled，无 sqlite_stat1）：\n  默认今日列表  86.52ms SCAN+TEMP B-TREE  ->  0.05ms SEARCH idx_alarm_records_time       (1730x)\n  状态+今日列表 116.23ms SCAN+TEMP B-TREE ->  0.05ms SEARCH idx_alarm_records_status_time (2325x)\n  默认列表 offset=2400 88.20ms -> 0.14ms\nAC3 已在'无统计信息'下达成：V23 索引使计划不再依赖 sqlite_stat1。\n完整迁移链 V1..V24 耗时 69ms。\n统计信息引导（PRAGMA optimize）实测，真实 V1..V24 schema：\n  mask 0x10002（缺 0x10 位，无界 ANALYZE）：50万/20万/20万 = 302ms；200万/50万/50万 = 2912ms\n  mask 0x10012（已采纳，有界）           ：50万/20万/20万 =  40ms；200万/50万/50万 = 1915ms\n  二次启动（stat1 已存在）：1-2ms\n注：0x10000 位需 SQLite 3.46+；系统 python sqlite3(3.43.2) 不支持，验证须用 rusqlite bundled(3.46.0)。",
+    "review_fixes": "代码评审（Standards + Spec 两轴，含实测反证）后收口的修复：\n1. P1 PRAGMA optimize=0x10002 -> 0x10012：缺 0x10 位时 nLimit=0，ANALYZE 无界。实测（真实 V1..V24 schema、bundled 3.46.0、50万告警+20万抓拍+20万识别）302ms -> 40ms；2M 行 2912ms -> 1915ms。注释与 spec 同步订正（'3.46 自动施加 analysis_limit' 对本 mask 不成立）。\n2. P2 订正 bit 0x2 语义：它是「对可能受益的表运行 ANALYZE」，与 skip-scan 无关；跳扫由优化器按 sqlite_stat1 决策（硬前置条件 hasStat1!=0，见 sqlite3.c:165489），无 pragma bit 开关它。\n3. P2【最重要】count_since 回归测试是空洞的：只断言总数==2，而「帧今日/入库昨日」与「帧昨日/入库今日」各一条时两种实现精确抵消，对回退零保护。已重写为断言命中行身份集合 + 与列表一致；变异测试（OccurredAt->CreatedAt）确认现在会失败（2 != 3）。\n4. P2 allSeverities 孤儿键（三语）删除：AC9 的 grep 'severity' 漏掉标题化的 'severities'。\n5. P2 overview today_start 由 UTC 零点改为本地零点：列表默认窗按前端本地零点，UTC+8 下 00:00-08:00 两者矛盾。补端点级 AC7 测试，变异测试（改回 UTC 零点）确认能捕获。\n6. P2 三处重复的 SQLx 编码说明收敛为引用 spec。\n7. AC2/AC3 断言收紧：原断言只查索引名，SCAN...USING INDEX 也能过；现要求 SEARCH 且排除 SCAN；AC3 显式断言无 stat1 前提 + 事后 ANALYZE 反向保持。\n8. 补 AC1/AC5/AC7/AC10 测试（原仅 task notes 声称）：AC1 断言业务表有统计条目（存在性会被空表骗过）；AC5 断言 refinery_schema_history 含 V23/V24 且幂等；AC7 打真实端点；AC10 断言响应无 severity 且参数被忽略。\n门禁：cargo fmt --check / clippy -D warnings / nextest --workspace 988 passed；web format+lint+typecheck+617 tests+check:cycles+build 全绿。",
+    "review_fixes_v2": "第二/三轮独立校验后追加的修正：\n9. 【关键】AC2/AC3 首轮「收紧」是半假的：query_row 只读 EXPLAIN 第 1 行，而 TEMP B-TREE 是第 2 行，导致 !contains('TEMP B-TREE') 是死代码（把 V23 索引去掉 id 次键仍会通过）。已加 explain_plan() 汇齐全部结果行；变异测试（去掉 id）确认现在会失败。\n10. design.md/implement.md 残留 0x10002 处方与错误论断已订正。\n11. 「保守判负」框架在 prd.md/V23 注释/connection.rs 中已统一为准确描述（跳扫硬前提是 hasStat1）。\n12. 0x10000 位并非无条件必需（bundled 3.46 实测矩阵）：有索引且缺 stat1 的表单靠 0x2 即被 ANALYZE（条件 4b）；仅无索引表必须依赖它。\n13. 【关键】AC7 测试 oracle 与实现算法不一致：测试用固定偏移回推零点，实现是 DST 感知；在夏令时切换日相差 60 分钟 -> 测试假失败。已公开实现函数 local_today_start 并让测试直接复用，消除双实现漂移；TZ=Shanghai/Berlin/New_York/UTC/Auckland 全通过，DST 三分支（Single/Ambiguous/None）冻结时钟验证通过。\n14. AC7 跨零点竞态：加守卫（跨天则重算，仅在未跨天时用强断言）。\n15. AC11 补正向断言：WS 载荷不得含 severity。\n门禁（最终）：cargo fmt --check / clippy -D warnings / nextest --workspace 988 passed；web lint+typecheck+617 tests+check:cycles+build 全绿。"
+  }
+}
