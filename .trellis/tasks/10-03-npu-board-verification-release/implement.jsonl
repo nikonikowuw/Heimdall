@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/infer/backend/inference-backends.md", "reason": "NPU 亲和调度与放置生命周期"}
+{"file": ".trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md", "sections": ["Rockchip RKNN"], "reason": "算法 SDK RKNN 共享权重与运行时契约"}

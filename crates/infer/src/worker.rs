@@ -1165,8 +1165,11 @@ mod tests {
         }
     }
 
+    static QUARANTINE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn test_inference_worker_stop_quarantines_hung_thread() {
+        let _guard = QUARANTINE_TEST_LOCK.lock().await;
         clear_quarantine_pool_for_test();
 
         // 后端在 C FFI 同步阻塞 400ms
@@ -1234,6 +1237,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worker_exit_timeout_isolation_t01() {
+        let _guard = QUARANTINE_TEST_LOCK.lock().await;
         clear_quarantine_pool_for_test();
         let backend = Arc::new(SlowDropBackend { drop_sleep_ms: 400 });
         let config = InferenceWorkerConfig {
@@ -1256,6 +1260,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worker_factory_hung_thread_quarantined_t02() {
+        let _guard = QUARANTINE_TEST_LOCK.lock().await;
         clear_quarantine_pool_for_test();
         let factory = || -> Result<Box<dyn InferenceBackend>, InferError> {
             std::thread::sleep(Duration::from_millis(300));
@@ -1300,6 +1305,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worker_exit_channel_disconnect_not_completed_t03() {
+        let _guard = QUARANTINE_TEST_LOCK.lock().await;
         clear_quarantine_pool_for_test();
         let backend = Arc::new(PanicDropBackend);
         let config = InferenceWorkerConfig {

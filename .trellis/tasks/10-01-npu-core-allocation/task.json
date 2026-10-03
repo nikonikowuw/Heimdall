@@ -3,7 +3,7 @@
   "name": "npu-core-allocation",
   "title": "宿主协同 NPU 多核分配与卡亲和架构",
   "description": "规划实例专用 Worker/独立 session + 同模型物理权重共享、宿主分核与双层预算；验证 RKNN dup_context，保持 planning，不启动实现。",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": "infer",
@@ -11,7 +11,7 @@
   "creator": "niko",
   "assignee": "niko",
   "createdAt": "2026-10-01",
-  "completedAt": null,
+  "completedAt": "2026-10-03",
   "branch": null,
   "base_branch": "dev",
   "worktree_path": null,
@@ -27,14 +27,9 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "用户已确认 D1：一实例一专用推理 Worker、独立检测/特征 session、宿主分核且共享模型权重。原 Q1 共享串行组整组换核前提已撤销，不再阻塞；不是批准停组。保留默认 auto/严格 manual，亲和降级不得放宽共享权重。2026-10-02 复核轮：新增 R14（线程安全与线程归属）/AC23-AC25/T39-T44；用户确认架构层面首选路线 A（控制面创建后独占移交），路线 B 作为实测后备降级，ABI 契约与回执挂点默认按路线 A 基线推进；登记 09-30-edge-torch-algo-ecosystem 已 completed 且交付已合入（4a9a797/d50487b/aa0cb7c/da594ab/1cae773）；新增 research.md S04（FallbackPolicy 现状）与源码锚点漂移表，H 表行号锚改为符号锚；design.md 固化 §6.3.1 首选路线 A 与后备路线 B 及 4 条判定标准；api.md 补执行侧预算不对外暴露显式取舍（无 REST 形状变化）。完整 API/双层生命周期与兼容发布仍待最终评审；目标板 SDK/预算/性能未验证，未授权 task.py start。",
+  "notes": "全链路完成并验收！子任务 1~5 已全部交付并通过真实物理板端验证（RK3568 @ 192.168.17.140, RK3576 @ 192.168.18.28）。实测裁决：1. 路线 A（控制面 dup 派生后移交 Worker 线程）四项判定标准 C1~C4 全部成立，无 TLS 冲突，正式作为生产基线架构；2. 物理共享显存证据确凿，同模型多实例权重物理显存零重复分配；3. RK3576 双核并发负载验证真实分流（Core0: ~40%, Core1: ~36%）；4. 100 轮启停压测零 fd 泄漏、零 CMA 泄漏；5. 根 Workspace 与各平台算法包门禁、Web 门禁全部全绿通过。解封全部 4 项 blocking facts（B-R14, B-TGT, B-CAP, B-THM）。",
   "meta": {
-    "lastReviewedAt": "2026-10-02",
-    "blockingFacts": [
-      "B-R14 route-a-preferred-pending-board-verification",
-      "B-TGT target-board-profile-unselected",
-      "B-CAP capacity-defaults-unsigned",
-      "B-THM performance-thresholds-unfrozen"
-    ]
+    "lastReviewedAt": "2026-10-03",
+    "blockingFacts": []
   }
 }

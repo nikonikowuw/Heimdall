@@ -706,7 +706,15 @@ if let Some(p) = explicit { return p; }
   控制（`Allow` 降级为 `debug_cpu_fallback_path` 模拟会话：2 个写死的目标；`RequireHardware` 返回
   `AlgoError::ModelLoad` → `-5`）。策略、优先级与自检硬门契约见 [硬件回退策略](#硬件回退策略-fallbackpolicy)。
   新增会话入口时必须接入策略，不得自行决定降级。
-- RK3576 双核用 `RKNN_NPU_CORE_0_1=3`，RK3588 三核用 `RKNN_NPU_CORE_0_1_2=7`；不把 AUTO 当已启用多核。
+- **物理多核掩码与调度规约**：
+  - RK3576 双核支持显式单核分流：`Core0=1` (`RKNN_NPU_CORE_0`)、`Core1=2` (`RKNN_NPU_CORE_1`)，双核全开为 `3` (`RKNN_NPU_CORE_0_1`)；
+  - RK3588 三核支持：`Core0=1`、`Core1=2`、`Core2=4`，全核为 `7` (`RKNN_NPU_CORE_0_1_2`)；
+  - RK3568 单核平台（1.0 TOPS）驱动不支持显式 `rknn_set_core_mask`（返回 -13 硬件错误），禁止调用设核 API，单核交由底层驱动默认调度。
+- **上下文复制与多线程专属所有权 (路线 A 基线)**：
+  - 基于 `rknn_dup_context` 实现同物理模型跨实例的权重显存共享（仅 Root 持有模型权重，Child 零显存冗余）；
+  - 严格采用路线 A：控制面通过 Root Context 派生 Child Context 后，一次性独占转移至该实例专属的 OS Worker 线程；
+  - 实例 Worker 线程在自身线程上下文中执行 `rknn_set_core_mask`、`rknn_run` 与 `rknn_destroy`；
+  - 析构顺序强制为“先子后根”；Child 必须通过 RAII Guard 包装，即使在设核或推理失败的异常路径也必须确保调用 `rknn_destroy`，严禁孤儿上下文导致文件描述符与 CMA 连续物理内存泄漏。
 - 本项目 BSP 的 `rknn_create_mem_from_fd` 需要有效 `virt_addr`；`dma_mem_cache` 持有映射，禁止逐帧 mmap/munmap。
 - **DMA-BUF 映射权限硬性约束**：使用 `mmap` 将输入 DMA-BUF 映射为虚拟地址供 `rknn_create_mem_from_fd` 使用时，必须声明为 `libc::PROT_READ | libc::PROT_WRITE`。严禁仅使用只读 `PROT_READ`，否则后续调用 `rknn_inputs_set` 执行 Host 内存拷贝时，`librknnrt` 向该张量虚拟地址写入数据将立即触发 Linux 内核缺页写保护致命段错误（SIGSEGV）。
 - **受限 CMA 内存下的会话复用**：在 RK3568 等物理连续内存紧缺平台（如 `CmaTotal: 16MB`），两阶段算法（检测+识别）必须通过 `SharedModels` 弱引用单例 Actor 模式统一管理底层 RKNN Context，禁止按摄像头重复初始化导致 CMA OOM。
