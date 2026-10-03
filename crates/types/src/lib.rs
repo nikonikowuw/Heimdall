@@ -12,7 +12,7 @@ pub mod personnel;
 pub mod system;
 pub mod task;
 
-pub use alarm::{AlarmRecord, AlarmSeverity, AlarmStatus, AlarmType};
+pub use alarm::{AlarmRecord, AlarmStatus, AlarmType};
 pub use auth::{
     AdminUser, AdminUserDto, AuthClaims, ChangePasswordRequest, InitStatusResponse,
     InitializeRequest, LoginRequest, LoginResponse,

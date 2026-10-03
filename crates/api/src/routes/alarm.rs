@@ -3,7 +3,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
-use types::{AlarmSeverity, AlarmStatus, TOPIC_ALARM_STATUS_CHANGED};
+use types::{AlarmStatus, TOPIC_ALARM_STATUS_CHANGED};
 
 use db::{AlarmFilter, AlarmRepo};
 
@@ -32,7 +32,6 @@ pub struct AlarmDto {
     pub crop_image_id: String,
     pub crop_image_rel_path: String,
     pub rule_type: String,
-    pub severity: AlarmSeverity,
     pub status: AlarmStatus,
     pub handled_at: Option<i64>,
     pub created_at: i64,
@@ -55,7 +54,6 @@ impl From<db::entity::alarm::Model> for AlarmDto {
             crop_image_id: m.crop_image_id,
             crop_image_rel_path: m.crop_image_rel_path,
             rule_type: m.rule_type,
-            severity: AlarmSeverity::from_str_loose(&m.severity),
             status: AlarmStatus::from_str_loose(&m.status),
             handled_at: m.handled_at.map(|t| t.timestamp_millis()),
             created_at: m.created_at.timestamp_millis(),
@@ -69,7 +67,6 @@ pub struct AlarmQuery {
     pub status: Option<String>,
     pub target_label: Option<String>,
     pub rule_type: Option<String>,
-    pub severity: Option<String>,
     /// 关键字匹配事件 ID、类别、规则、通道 ID 或通道名称。
     pub q: Option<String>,
     pub start_time: Option<i64>,
@@ -86,7 +83,6 @@ pub struct AlarmCountQuery {
     pub status: Option<String>,
     pub target_label: Option<String>,
     pub rule_type: Option<String>,
-    pub severity: Option<String>,
     /// 关键字匹配事件 ID、类别、规则、通道 ID 或通道名称。
     pub q: Option<String>,
     pub start_time: Option<i64>,
@@ -141,7 +137,6 @@ async fn list_alarms(
             status: params.status.as_deref(),
             target_label: params.target_label.as_deref(),
             rule_type: params.rule_type.as_deref(),
-            severity: params.severity.as_deref(),
             keyword,
             start_time: start_utc,
             end_time: end_utc,
@@ -169,7 +164,6 @@ async fn count_alarms(
             status: params.status.as_deref(),
             target_label: params.target_label.as_deref(),
             rule_type: params.rule_type.as_deref(),
-            severity: params.severity.as_deref(),
             keyword,
             start_time: start_utc,
             end_time: end_utc,

@@ -222,9 +222,14 @@ impl CaptureRepo {
             .map_err(DbError::from)
     }
 
+    /// 统计某时刻之后产生的抓拍数量（时间轴为 `captured_at`，帧/事件时间）。
+    ///
+    /// 入参类型必须用 `DateTimeUtc`，理由见
+    /// [数据库规范](../../../.trellis/spec/db/backend/database-guidelines.md#表与查询)
+    /// 「绑定的时间类型决定比较语义」。与 `AlarmRepo::count_since` 保持签名一致。
     pub async fn count_since(
         db: &DatabaseConnection,
-        since: chrono::NaiveDateTime,
+        since: sea_orm::entity::prelude::DateTimeUtc,
     ) -> Result<u64, DbError> {
         let count = Entity::find()
             .filter(Column::CapturedAt.gte(since))

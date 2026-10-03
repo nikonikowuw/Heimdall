@@ -58,7 +58,6 @@ export interface AlgorithmUploadProgress {
 }
 
 export type AlarmStatus = 'unprocessed' | 'processed'
-export type AlarmSeverity = 'warning' | 'critical'
 
 export type ProbeStatus = 'never' | 'healthy' | 'success' | 'degraded' | 'reconnecting' | 'failed'
 
@@ -324,7 +323,6 @@ export interface AlarmRecord {
   cropImageId?: string
   cropImageRelPath?: string
   ruleType?: string
-  severity?: AlarmSeverity
   status: AlarmStatus
   handledAt?: number | null
   createdAt: number

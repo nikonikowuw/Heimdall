@@ -351,7 +351,6 @@ export const alarmApi = {
       status?: AlarmStatus | string
       targetLabel?: string
       ruleType?: string
-      severity?: string
       q?: string
       startTime?: number
       endTime?: number
@@ -365,7 +364,6 @@ export const alarmApi = {
       status: params?.status,
       target_label: params?.targetLabel,
       rule_type: params?.ruleType,
-      severity: params?.severity,
       q: params?.q,
       start_time: params?.startTime,
       end_time: params?.endTime,
@@ -381,7 +379,6 @@ export const alarmApi = {
       status?: AlarmStatus | string
       targetLabel?: string
       ruleType?: string
-      severity?: string
       q?: string
       startTime?: number
       endTime?: number
@@ -393,7 +390,6 @@ export const alarmApi = {
       status: params?.status,
       target_label: params?.targetLabel,
       rule_type: params?.ruleType,
-      severity: params?.severity,
       q: params?.q,
       start_time: params?.startTime,
       end_time: params?.endTime,

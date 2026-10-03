@@ -25,7 +25,6 @@ pub struct AlarmFilter<'a> {
     pub status: Option<&'a str>,
     pub target_label: Option<&'a str>,
     pub rule_type: Option<&'a str>,
-    pub severity: Option<&'a str>,
     /// 关键字，字面量匹配事件 ID、类别、规则、通道 ID 与通道名称
     pub keyword: Option<&'a str>,
     pub start_time: Option<DateTimeUtc>,
@@ -45,9 +44,6 @@ fn build_filter_query(filter: AlarmFilter<'_>) -> sea_orm::Select<Entity> {
     }
     if let Some(rt) = filter.rule_type.filter(|s| !s.trim().is_empty()) {
         query = query.filter(Column::RuleType.eq(rt));
-    }
-    if let Some(sev) = filter.severity.filter(|s| !s.trim().is_empty()) {
-        query = query.filter(Column::Severity.eq(sev));
     }
     if let Some(pattern) = keyword_pattern(filter.keyword) {
         query = query
@@ -288,12 +284,19 @@ impl AlarmRepo {
             .map_err(DbError::from)
     }
 
-    pub async fn count_since(
-        db: &DatabaseConnection,
-        since: chrono::NaiveDateTime,
-    ) -> Result<u64, DbError> {
+    /// 统计某时刻之后产生的告警数量。
+    ///
+    /// 过滤列必须用 `occurred_at`（帧/事件时间）而非 `created_at`（入库时间）：
+    /// 告警列表的排序与时间筛选均走 `occurred_at`，改用入库时间后，补录、时移帧或
+    /// 历史回溯分析会让仪表盘“今日告警”与列表筛选给出相互矛盾的数字。
+    /// 与 `CaptureRepo::count_since`（用 `captured_at`）及全局约定“时间戳对应源帧”一致。
+    ///
+    /// 入参类型必须用 `DateTimeUtc`，理由见
+    /// [数据库规范](../../../.trellis/spec/db/backend/database-guidelines.md#表与查询)
+    /// 「绑定的时间类型决定比较语义」。
+    pub async fn count_since(db: &DatabaseConnection, since: DateTimeUtc) -> Result<u64, DbError> {
         let count = Entity::find()
-            .filter(Column::CreatedAt.gte(since))
+            .filter(Column::OccurredAt.gte(since))
             .count(db)
             .await
             .map_err(DbError::from)?;

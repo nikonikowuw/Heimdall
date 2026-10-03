@@ -2,6 +2,8 @@ mod gb28181;
 mod media;
 mod network;
 mod overview;
+
+pub use overview::local_today_start;
 mod snapshot;
 mod storage;
 mod time;

@@ -56,7 +56,6 @@ export function AlarmLightboxModal({
 }: AlarmLightboxModalProps): React.ReactElement {
   const { t: tr } = useTranslation('recording')
   const isProcessed = alarm.status === 'processed'
-  const isCritical = alarm.severity === 'critical'
   const shouldReduce = useReducedMotion()
 
   // 事件关联录像：仅当后端已保存过该事件的片段时，才提供回放入口
@@ -221,19 +220,8 @@ export function AlarmLightboxModal({
       {/* 顶部悬浮磨砂指挥条 */}
       <div className="absolute inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/10 bg-gradient-to-b from-black/85 via-black/50 to-transparent px-6 py-3.5 backdrop-blur-md">
         <div className="flex items-center gap-3">
-          <ShieldAlert
-            className={`h-5 w-5 ${isCritical ? 'animate-pulse text-[var(--status-danger)]' : 'text-status-warning'}`}
-          />
+          <ShieldAlert className="text-status-warning h-5 w-5" />
           <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
-                isCritical
-                  ? 'animate-pulse bg-[var(--status-danger-solid)] text-white'
-                  : 'bg-[var(--status-warning-solid)]/90 text-white'
-              }`}
-            >
-              {alarm.severity || 'WARNING'}
-            </span>
             <h3 className="text-sm font-semibold tracking-wide text-white">
               {alarm.targetLabel} · {getRuleTypeLabel(alarm.ruleType, t)}
             </h3>

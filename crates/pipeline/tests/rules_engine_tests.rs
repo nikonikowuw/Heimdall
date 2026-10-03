@@ -149,7 +149,6 @@ async fn test_full_pipeline_rules_evidence_and_eviction() {
         crop_image_id: Set("crop_01".to_string()),
         crop_image_rel_path: Set(crop_rel.clone()),
         rule_type: Set("line".to_string()),
-        severity: Set("critical".to_string()),
         created_at: Set(now),
         ..Default::default()
     };

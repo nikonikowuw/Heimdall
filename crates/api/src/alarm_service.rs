@@ -4,7 +4,7 @@ use tokio::sync::broadcast;
 use db::{AlarmRepo, AlgorithmRepo, CameraRepo, DbError};
 use pipeline::{PipelineAlarmEvent, PipelineAnalysisEvent, PipelineManager};
 use sea_orm::Set;
-use types::{AlarmSeverity, AlarmStatus, DetectionRuleRole, TOPIC_ALARM_TRIGGERED};
+use types::{AlarmStatus, DetectionRuleRole, TOPIC_ALARM_TRIGGERED};
 
 use crate::state::{AppState, WsBroadcastEvent};
 
@@ -101,7 +101,6 @@ impl AlarmDispatchService {
             crop_image_id: Set(crop_image_id.to_string()),
             crop_image_rel_path: Set(crop_image_rel_path.to_string()),
             rule_type: Set(rule_type.to_string()),
-            severity: Set(AlarmSeverity::Warning.as_str().to_string()),
             status: Set(AlarmStatus::Unprocessed.as_str().to_string()),
             handled_at: Set(None),
             created_at: Set(chrono::Utc::now()),
@@ -133,7 +132,6 @@ impl AlarmDispatchService {
                 "alarmTypeId": saved_alarm.alarm_type_id,
                 "targetLabel": saved_alarm.target_label,
                 "ruleType": saved_alarm.rule_type,
-                "severity": saved_alarm.severity,
                 "cropImageRelPath": saved_alarm.crop_image_rel_path,
                 "imageRelPath": saved_alarm.image_rel_path,
                 "occurredAt": event.timestamp,

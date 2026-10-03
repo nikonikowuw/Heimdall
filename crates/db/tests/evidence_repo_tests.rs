@@ -170,7 +170,6 @@ async fn test_evidence_keyword_filters_and_stable_order() {
             crop_image_id: Set("alarm_crop".to_string()),
             crop_image_rel_path: Set("alarm_crop.jpg".to_string()),
             rule_type: Set("intrusion".to_string()),
-            severity: Set("high".to_string()),
             status: Set("unprocessed".to_string()),
             handled_at: Set(None),
             created_at: Set(now),
@@ -298,4 +297,108 @@ async fn test_evidence_keyword_filters_and_stable_order() {
     .await
     .expect("count recognition search");
     assert_eq!(recognition_count, 1);
+}
+
+/// `AlarmRepo::count_since` 必须按帧时间（`occurred_at`）而非入库时间（`created_at`）计数。
+///
+/// 断言分两层，缺一不可：
+///
+/// 1. **身份集合**：用列表查询（同样过滤 `occurred_at`）取出命中的 `event_id` 集合，
+///    确认恰好是「帧时间在今日」的那几条。这是唯一能防止「漏计 + 多计相互抵消」的断言。
+/// 2. **与列表一致**：`count_since` 必须等于该集合大小——这正是需求本身
+///    （「统计卡片」与「列表筛选」同基准，不得给出矛盾数字）。
+///
+/// 构造上刻意让两种实现的总数**不相等**（补录 2 条 vs 时移 1 条）：
+/// 若实现回退成 `created_at`，得到的是 2 而非 3，测试立即失败。
+/// 仅断言 `count == 2` 且两种形态各一条时，两侧恰好抵消：
+/// `occurred_at` 计 [A,B]、`created_at` 计 [A,C]，总数都是 2，测试对回退零保护。
+#[tokio::test]
+async fn test_alarm_count_since_uses_frame_time_not_insert_time() {
+    let db = init_test_db().await.expect("init in-memory db");
+
+    let now = chrono::Utc::now();
+    let today_start = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        now.date_naive().and_hms_opt(0, 0, 0).expect("midnight"),
+        chrono::Utc,
+    );
+
+    // 1. 今日告警：帧时间与入库时间都在今日
+    let today_frame = today_start + chrono::Duration::seconds(60);
+    // 2. 补录告警 ×2：帧时间在今日，但入库时间在昨日（模拟延迟入库）
+    let backfilled_frame_1 = today_start + chrono::Duration::seconds(120);
+    let backfilled_frame_2 = today_start + chrono::Duration::seconds(180);
+    let yesterday_insert = today_start - chrono::Duration::hours(6);
+    // 3. 时移告警 ×1：帧时间在昨日，但入库时间在今日（模拟历史录像回溯分析）
+    let yesterday_frame = today_start - chrono::Duration::hours(2);
+    let today_insert = today_start + chrono::Duration::seconds(10);
+
+    let rows = [
+        ("EVT-TODAY", today_frame, today_frame),
+        ("EVT-BACKFILL-1", backfilled_frame_1, yesterday_insert),
+        ("EVT-BACKFILL-2", backfilled_frame_2, yesterday_insert),
+        ("EVT-SHIFTED", yesterday_frame, today_insert),
+    ];
+    for (event_id, occurred_at, created_at) in rows {
+        AlarmRepo::insert(
+            &db,
+            alarm::ActiveModel {
+                id: sea_orm::NotSet,
+                event_id: Set(event_id.to_string()),
+                camera_id: Set("cam_01".to_string()),
+                alarm_type_id: Set("intrusion".to_string()),
+                occurred_at: Set(occurred_at),
+                target_label: Set("person".to_string()),
+                confidence: Set(0.9),
+                track_id: Set(1),
+                bbox_json: Set("[0.1, 0.2, 0.3, 0.4]".to_string()),
+                image_id: Set(String::new()),
+                image_rel_path: Set(String::new()),
+                crop_image_id: Set(String::new()),
+                crop_image_rel_path: Set(String::new()),
+                rule_type: Set("roi".to_string()),
+                status: Set("unprocessed".to_string()),
+                handled_at: Set(None),
+                created_at: Set(created_at),
+            },
+        )
+        .await
+        .expect("insert alarm");
+    }
+
+    // 第一层：列表查询（与仪表盘同一 `occurred_at` 基准）命中的身份集合。
+    let listed = AlarmRepo::list_filtered(
+        &db,
+        AlarmFilter {
+            start_time: Some(today_start),
+            ..AlarmFilter::default()
+        },
+        100,
+        0,
+    )
+    .await
+    .expect("list_filtered");
+
+    let mut ids: Vec<&str> = listed.iter().map(|m| m.event_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec!["EVT-BACKFILL-1", "EVT-BACKFILL-2", "EVT-TODAY"],
+        "列表必须按 occurred_at 圈定今日告警：帧时间在昨日的 EVT-SHIFTED \
+         即使入库时间在今日也不得出现"
+    );
+
+    // 第二层：聚合必须与列表同一基准。
+    // 若 count_since 回退为 created_at，这里会得到 2（EVT-TODAY + EVT-SHIFTED），
+    // 与上面断言的身份集合大小 3 不符，测试失败。
+    let count = AlarmRepo::count_since(&db, today_start)
+        .await
+        .expect("count_since");
+
+    assert_eq!(
+        count,
+        listed.len() as u64,
+        "count_since 必须与列表筛选同基准（occurred_at）：列表命中 {ids:?} 共 {} 条，\
+         聚合却得到 {count}。回退成 created_at 会得到 2。",
+        listed.len()
+    );
 }

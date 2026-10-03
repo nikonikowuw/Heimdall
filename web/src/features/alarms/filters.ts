@@ -1,4 +1,4 @@
-import type { AlarmSeverity, AlarmStatus, RecognitionStatus } from '@/types'
+import type { AlarmStatus, RecognitionStatus } from '@/types'
 
 /**
  * 证据三支柱的筛选维度取值表。
@@ -42,10 +42,6 @@ function defineFilters<TUnion extends string>() {
 /** 规则类型筛选，与 `alarms.rule_type` 落库取值对齐；`all` 表示不过滤 */
 export const RULE_TYPE_FILTERS = defineFilters<'roi' | 'line'>()(['all', 'roi', 'line'])
 export type RuleTypeFilter = (typeof RULE_TYPE_FILTERS)[number]
-
-/** 严重级别筛选，与 `AlarmSeverity` 全量对齐 */
-export const SEVERITY_FILTERS = defineFilters<AlarmSeverity>()(['all', 'warning', 'critical'])
-export type SeverityFilter = (typeof SEVERITY_FILTERS)[number]
 
 /**
  * 告警处理状态筛选。

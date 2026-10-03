@@ -28,13 +28,7 @@ import { useLatestRef } from '@/hooks/use-latest-ref'
 import { motionTokens } from '@/lib/motionTokens'
 import { systemApi } from '@/lib/system-api'
 import { wsClient } from '@/lib/wsClient'
-import {
-  type AlarmSeverity,
-  type AlarmStatus,
-  type Camera,
-  type ProbeStatus,
-  WS_TOPICS,
-} from '@/types'
+import { type AlarmStatus, type Camera, type ProbeStatus, WS_TOPICS } from '@/types'
 import { AuxCameraCard } from './components/AuxCameraCard'
 import { BentoCameraCard } from './components/BentoCameraCard'
 import { LivePlayer } from '@/components/LivePlayer'
@@ -93,7 +87,6 @@ interface LiveAlarmToast {
   cameraId: string
   targetLabel: string
   ruleType: string
-  severity: AlarmSeverity
   cropImageRelPath?: string
   imageRelPath?: string
 }
@@ -432,7 +425,6 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
       cameraId?: string
       targetLabel?: string
       ruleType?: string
-      severity?: AlarmSeverity
       cropImageRelPath?: string
       imageRelPath?: string
     }>(WS_TOPICS.ALARM_TRIGGERED, (p) => {
@@ -446,7 +438,6 @@ export function LivePage({ onNavigateToAlarms }: LivePageProps = {}): React.Reac
         cameraId: targetCamId,
         targetLabel: p.targetLabel || 'Target',
         ruleType: p.ruleType || 'intrusion',
-        severity: p.severity || 'warning',
         cropImageRelPath: p.cropImageRelPath,
         imageRelPath: p.imageRelPath,
       })

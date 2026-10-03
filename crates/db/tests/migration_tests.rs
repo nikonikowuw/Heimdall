@@ -485,3 +485,280 @@ fn test_v22_adds_camera_indexes() {
     // 幂等性测试
     conn.execute_batch(v22).expect("apply V22 twice");
 }
+
+/// V23 必须补上"全部通道 + 时间窗"这一默认态所需的排序流索引，并下线死索引。
+///
+/// 断言方式是 `EXPLAIN QUERY PLAN` 而非仅检查索引存在：索引建了但计划不选它，
+/// 对本次修复而言等于没修（默认态原先退化为 SCAN + TEMP B-TREE）。
+#[test]
+fn test_v23_adds_alarm_query_indexes_and_drops_dead_capture_index() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    // status 列由 V3 添加，死索引由 V12 创建，因此前置链必须跑到 V12。
+    apply_migrations_up_to_v12(&conn);
+    let v23 = include_str!("../src/migration/migrations/V23__alarm_query_indexes.sql");
+    conn.execute_batch(v23).expect("apply V23");
+
+    // AC3 的前提必须显式成立：本用例在**完全没有 sqlite_stat1** 的库上验证计划，
+    // 否则就变成「靠统计信息才走对索引」，而 R2.1 的目标恰恰是摆脱这个依赖。
+    let stat1_present: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("probe sqlite_stat1");
+    assert_eq!(
+        stat1_present, 0,
+        "AC3：本用例必须在无统计信息的库上验证计划（不得先行 ANALYZE）"
+    );
+
+    for index in ["idx_alarm_records_time", "idx_alarm_records_status_time"] {
+        let found: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1;",
+                [index],
+                |row| row.get(0),
+            )
+            .expect("query index presence");
+        assert_eq!(found, 1, "missing index {index}");
+    }
+
+    // 默认态（不约束 camera_id）：必须走 idx_alarm_records_time，且不得出现临时排序。
+    // id 是排序次键，索引未覆盖它时 SQLite 会追加一行 `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`。
+    let plan = explain_plan(
+        &conn,
+        "SELECT * FROM alarm_records \
+         WHERE occurred_at >= '2026-10-02T00:00:00+00:00' \
+         ORDER BY occurred_at DESC, id DESC LIMIT 24;",
+    );
+    // AC2 要求 SEARCH，不是 SCAN：`SCAN ... USING INDEX`（覆盖索引但全扫）也能
+    // 包含索引名，只断言 contains(索引名) 会放过它。这里钉死访问方式。
+    assert!(
+        plan.contains("SEARCH") && plan.contains("idx_alarm_records_time"),
+        "默认态必须走 SEARCH idx_alarm_records_time（不得是 SCAN），got: {plan}"
+    );
+    assert!(
+        !plan.contains("SCAN"),
+        "默认态不得回退为全表扫，got: {plan}"
+    );
+    // 必须对**全部** EXPLAIN 行断言：临时排序是第 2 行，只看第 1 行会漏掉。
+    assert!(
+        !plan.contains("TEMP B-TREE"),
+        "默认态仍在做临时排序（id 未进索引？），got: {plan}"
+    );
+
+    // 状态筛选：命中 status_time 索引。
+    let status_plan = explain_plan(
+        &conn,
+        "SELECT * FROM alarm_records \
+         WHERE status = 'unprocessed' AND occurred_at >= '2026-10-02T00:00:00+00:00' \
+         ORDER BY occurred_at DESC, id DESC LIMIT 24;",
+    );
+    assert!(
+        status_plan.contains("SEARCH") && status_plan.contains("idx_alarm_records_status_time"),
+        "状态筛选必须走 SEARCH idx_alarm_records_status_time（不得是 SCAN），got: {status_plan}"
+    );
+    assert!(
+        !status_plan.contains("SCAN"),
+        "状态筛选不得回退为全表扫，got: {status_plan}"
+    );
+    assert!(
+        !status_plan.contains("TEMP B-TREE"),
+        "状态筛选仍在做临时排序，got: {status_plan}"
+    );
+
+    // 死索引必须下线。
+    let dead: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_capture_records_camera_crop';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query dead index presence");
+    assert_eq!(dead, 0, "idx_capture_records_camera_crop 应已被 V23 删除");
+
+    // 幂等性测试
+    conn.execute_batch(v23).expect("apply V23 twice");
+
+    // AC3 反向：即使有人事后跑过 ANALYZE，计划也必须保持 SEARCH（不得反向退化）。
+    conn.execute_batch("ANALYZE;")
+        .expect("analyze to populate stat1");
+    let stat1_now: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("probe sqlite_stat1 after analyze");
+    assert_eq!(stat1_now, 1, "ANALYZE 后应存在 sqlite_stat1");
+
+    let plan_after_analyze = explain_plan(
+        &conn,
+        "SELECT * FROM alarm_records \
+         WHERE occurred_at >= '2026-10-02T00:00:00+00:00' \
+         ORDER BY occurred_at DESC, id DESC LIMIT 24;",
+    );
+    assert!(
+        plan_after_analyze.contains("SEARCH")
+            && plan_after_analyze.contains("idx_alarm_records_time")
+            && !plan_after_analyze.contains("TEMP B-TREE"),
+        "AC3：有统计信息时同样应走 SEARCH idx_alarm_records_time 且无临时排序，\
+         got: {plan_after_analyze}"
+    );
+}
+
+/// 取 `EXPLAIN QUERY PLAN` 的**全部**结果行并拼接。
+///
+/// 必须收全行而不是只读第 1 行：SQLite 把「用哪个索引」放在第 1 行，
+/// 而「临时排序」是单独的一行（`USE TEMP B-TREE FOR LAST TERM OF ORDER BY`）。
+/// 只读第 1 行会让 `!contains("TEMP B-TREE")` 永真——断言变成死代码，
+/// 索引漏写 `id` 次键这种退化就无法被拦住。
+fn explain_plan(conn: &Connection, sql: &str) -> String {
+    let mut stmt = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .expect("prepare explain");
+    let rows: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(3))
+        .expect("run explain")
+        .collect::<Result<_, _>>()
+        .expect("collect explain rows");
+    rows.join(" | ")
+}
+
+/// V24 必须物理移除从未被使用的 severity 列，且不丢行、不连带删除既有索引。
+///
+/// SQLite 的 DROP COLUMN 会重写整表，历史上曾出现"重建时索引丢失"的担忧，
+/// 因此这里显式断言 V23 建的索引在 V24 之后依然存活。
+#[test]
+fn test_v24_drops_alarm_severity_preserving_rows_and_indexes() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+
+    apply_migrations_up_to_v12(&conn);
+    conn.execute_batch(include_str!(
+        "../src/migration/migrations/V23__alarm_query_indexes.sql"
+    ))
+    .expect("apply V23");
+
+    // 迁移前插入两行（含 V2 默认的 severity 取值）
+    conn.execute_batch(
+        r#"
+        INSERT INTO alarm_records
+            (event_id, camera_id, alarm_type_id, occurred_at, target_label, severity)
+        VALUES
+            ('EVT-1', 'cam-01', 'intrusion', '2026-10-02T09:00:00+00:00', 'person', 'warning'),
+            ('EVT-2', 'cam-02', 'intrusion', '2026-10-02T10:00:00+00:00', 'car',    'critical');
+        "#,
+    )
+    .expect("insert pre-migration rows");
+
+    let rows_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM alarm_records;", [], |row| row.get(0))
+        .expect("count before");
+
+    conn.execute_batch(include_str!(
+        "../src/migration/migrations/V24__drop_alarm_severity.sql"
+    ))
+    .expect("apply V24");
+
+    // 列已物理消失
+    let has_severity: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('alarm_records') WHERE name = 'severity';",
+            [],
+            |row| row.get(0),
+        )
+        .expect("probe severity column");
+    assert_eq!(has_severity, 0, "severity 列应已被 V24 移除");
+
+    // 无行丢失
+    let rows_after: i64 = conn
+        .query_row("SELECT COUNT(*) FROM alarm_records;", [], |row| row.get(0))
+        .expect("count after");
+    assert_eq!(
+        rows_before, rows_after,
+        "DROP COLUMN 不得丢行：before={rows_before} after={rows_after}"
+    );
+
+    // 索引在整表重写后仍存活
+    for index in [
+        "idx_alarm_records_time",
+        "idx_alarm_records_status_time",
+        "idx_alarm_records_camera_time",
+    ] {
+        let found: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1;",
+                [index],
+                |row| row.get(0),
+            )
+            .expect("query index survival");
+        assert_eq!(found, 1, "V24 整表重写后索引 {index} 丢失");
+    }
+}
+
+/// 按版本顺序应用到 V12 的前置迁移链。
+///
+/// V23 断言 `status` 列（V3 添加），V23 下线的死索引由 V12 创建——缺任一前置迁移，
+/// 测试会以 "no such column" 或"索引本就不存在"的方式假阳性/假阴性失败。
+///
+/// 只有 V23/V24 用例需要这条完整链，**刻意不让兄弟用例共用**：
+/// 其余用例各自只需 V1+V2 / V1+V8 / V1+V9 这样的最小前置集，
+/// 把它们升成完整链会让「某个老迁移是否真的留下必需状态」这类断言失去意义。
+/// `include_str!` 是编译期宏，无法用一个运行时集合替代重复列写。
+fn apply_migrations_up_to_v12(conn: &Connection) {
+    let chain: [(&str, &str); 12] = [
+        (
+            "V1",
+            include_str!("../src/migration/migrations/V1__init_schema.sql"),
+        ),
+        (
+            "V2",
+            include_str!("../src/migration/migrations/V2__evidence_triad_and_galleries.sql"),
+        ),
+        (
+            "V3",
+            include_str!("../src/migration/migrations/V3__alarm_status_processing.sql"),
+        ),
+        (
+            "V4",
+            include_str!("../src/migration/migrations/V4__add_algorithms_and_instances.sql"),
+        ),
+        (
+            "V5",
+            include_str!("../src/migration/migrations/V5__bind_algorithm_to_analysis_tasks.sql"),
+        ),
+        (
+            "V6",
+            include_str!("../src/migration/migrations/V6__bind_algorithm_instances_to_tasks.sql"),
+        ),
+        (
+            "V7",
+            include_str!("../src/migration/migrations/V7__gallery_personnel_and_faces.sql"),
+        ),
+        (
+            "V8",
+            include_str!("../src/migration/migrations/V8__add_camera_stream_mode.sql"),
+        ),
+        (
+            "V9",
+            include_str!("../src/migration/migrations/V9__operational_logs.sql"),
+        ),
+        (
+            "V10",
+            include_str!("../src/migration/migrations/V10__recognition_status_and_topk.sql"),
+        ),
+        (
+            "V11",
+            include_str!("../src/migration/migrations/V11__gb28181_tables.sql"),
+        ),
+        (
+            "V12",
+            include_str!("../src/migration/migrations/V12__recognition_field_image_path.sql"),
+        ),
+    ];
+    for (name, sql) in chain {
+        conn.execute_batch(sql)
+            .unwrap_or_else(|e| panic!("apply {name} failed: {e}"));
+    }
+}

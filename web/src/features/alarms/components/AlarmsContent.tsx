@@ -149,7 +149,6 @@ export function AlarmsContent({
             <th className="px-3 py-2.5">{t('columns.camera')}</th>
             <th className="px-3 py-2.5">{t('columns.targetLabel')}</th>
             <th className="px-3 py-2.5">{t('columns.ruleType')}</th>
-            <th className="px-3 py-2.5">{t('columns.severity')}</th>
             <th className="px-3 py-2.5">{t('columns.confidence')}</th>
             <th className="px-3 py-2.5">{t('columns.status')}</th>
             <th className="px-3 py-2.5">{t('columns.occurredAt')}</th>

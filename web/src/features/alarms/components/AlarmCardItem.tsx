@@ -26,7 +26,6 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
   t,
 }: AlarmCardItemProps): React.ReactElement {
   const isProcessed = alarm.status === 'processed'
-  const isCritical = alarm.severity === 'critical'
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [imageLoaded, setImageLoaded] = useState(false)
   const [imageError, setImageError] = useState(false)
@@ -84,9 +83,7 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
           ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]/50'
           : isProcessed
             ? 'border-[var(--border)] opacity-75 hover:opacity-100'
-            : isCritical
-              ? 'border-[var(--status-danger)]/70 shadow-[0_0_12px_var(--status-danger-soft)] hover:border-[var(--status-danger)]'
-              : 'border-[var(--status-warning-border)] hover:border-[var(--status-warning)]'
+            : 'border-[var(--status-warning-border)] hover:border-[var(--status-warning)]'
       }`}
     >
       <div className="relative aspect-video w-full overflow-hidden bg-[var(--video-surface)]">
@@ -150,17 +147,8 @@ export const AlarmCardItem = React.memo(function AlarmCardItem({
           </button>
         )}
 
-        {/* 左上角严重级别与规则徽章 */}
+        {/* 左上角规则徽章 */}
         <div className="absolute top-2 left-2 flex items-center gap-1.5">
-          <span
-            className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase shadow-xs backdrop-blur-md ${
-              isCritical
-                ? 'bg-[var(--status-danger-solid)] text-white'
-                : 'bg-[var(--status-warning-solid)] text-white'
-            }`}
-          >
-            {alarm.severity || 'WARNING'}
-          </span>
           <span className="rounded-md bg-black/60 px-1.5 py-0.5 font-mono text-[10px] text-white backdrop-blur-xs">
             {getRuleTypeLabel(alarm.ruleType, t)}
           </span>

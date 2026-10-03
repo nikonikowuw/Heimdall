@@ -190,7 +190,13 @@ async fn test_alarm_persistence_and_ws_broadcast_flow() {
     assert_eq!(payload["alarmTypeId"], "INTRUSION");
     assert_eq!(payload["targetLabel"], "person");
     assert_eq!(payload["ruleType"], "roi");
-    assert_eq!(payload["severity"], "warning");
+    // AC11：severity 全链路下线后，触发广播载荷不得再携带该字段。
+    // 正向断言（而不只是删掉旧断言）：载荷字段由 alarm_service 构造，
+    // 缺了这条，日后有人把 severity 加回 payload 就无人拦截。
+    assert!(
+        payload.get("severity").is_none(),
+        "AC11：TOPIC_ALARM_TRIGGERED 载荷不得包含 severity，got: {payload}"
+    );
     assert_eq!(payload["occurredAt"], 1741100000000i64);
     assert!(payload["cropImageRelPath"]
         .as_str()
@@ -319,7 +325,6 @@ async fn test_update_alarm_status_and_ws_broadcast() {
         crop_image_id: Set("crop".to_string()),
         crop_image_rel_path: Set("crop_path".to_string()),
         rule_type: Set("line".to_string()),
-        severity: Set("warning".to_string()),
         status: Set("unprocessed".to_string()),
         handled_at: Set(None),
         created_at: Set(chrono::Utc::now()),
@@ -724,7 +729,6 @@ async fn test_count_and_batch_update_alarm_status_api() {
         crop_image_id: Set("crop1".to_string()),
         crop_image_rel_path: Set("crop_path1".to_string()),
         rule_type: Set("roi".to_string()),
-        severity: Set("critical".to_string()),
         status: Set("unprocessed".to_string()),
         handled_at: Set(None),
         created_at: Set(chrono::Utc::now()),
@@ -744,7 +748,6 @@ async fn test_count_and_batch_update_alarm_status_api() {
         crop_image_id: Set("crop2".to_string()),
         crop_image_rel_path: Set("crop_path2".to_string()),
         rule_type: Set("line".to_string()),
-        severity: Set("warning".to_string()),
         status: Set("unprocessed".to_string()),
         handled_at: Set(None),
         created_at: Set(chrono::Utc::now()),
@@ -764,7 +767,6 @@ async fn test_count_and_batch_update_alarm_status_api() {
         crop_image_id: Set("crop3".to_string()),
         crop_image_rel_path: Set("crop_path3".to_string()),
         rule_type: Set("roi".to_string()),
-        severity: Set("critical".to_string()),
         status: Set("processed".to_string()),
         handled_at: Set(Some(chrono::Utc::now())),
         created_at: Set(chrono::Utc::now()),
@@ -1270,4 +1272,203 @@ async fn test_face_recognition_tight_margin_persists_pending_review() {
         }
     }
     assert!(found_ws_match);
+}
+
+/// AC10：`severity` 下线后的 API 契约——
+/// 响应体不得再出现该字段，且传入 `?severity=...` 必须被静默忽略（不报错、不筛选）。
+///
+/// 破坏性字段移除在单二进制交付下前后端同步变更，但契约仍需被测试钉住：
+/// 缺了这条，日后有人把 `severity` 当「未知参数校验」加回来就无人拦截。
+#[tokio::test]
+async fn test_alarm_api_omits_severity_and_ignores_severity_filter() {
+    let (app, state, token) = setup_test_app().await;
+
+    // 插一条告警，供列表/计数返回
+    let now = chrono::Utc::now();
+    let alarm = db::entity::alarm::ActiveModel {
+        id: sea_orm::NotSet,
+        event_id: Set("evt-severity-contract".to_string()),
+        camera_id: Set("CAM-SEV".to_string()),
+        alarm_type_id: Set("rule_sev".to_string()),
+        occurred_at: Set(now),
+        target_label: Set("person".to_string()),
+        confidence: Set(0.9),
+        track_id: Set(7),
+        bbox_json: Set("{}".to_string()),
+        image_id: Set("img".to_string()),
+        image_rel_path: Set("path".to_string()),
+        crop_image_id: Set("crop".to_string()),
+        crop_image_rel_path: Set("crop_path".to_string()),
+        rule_type: Set("roi".to_string()),
+        status: Set("unprocessed".to_string()),
+        handled_at: Set(None),
+        created_at: Set(now),
+    };
+    AlarmRepo::insert(&state.db, alarm).await.unwrap();
+
+    let get_json = |uri: &'static str, token: String, app: axum::Router| async move {
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("Authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "uri={uri}");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+    };
+
+    // 1. 列表响应中的告警对象不含 severity 键
+    let json = get_json("/api/v1/alarms?limit=10", token.clone(), app.clone()).await;
+    let items = json["data"].as_array().expect("data 应为数组");
+    assert!(!items.is_empty(), "应至少返回刚插入的一条告警");
+    for item in items {
+        assert!(
+            item.get("severity").is_none(),
+            "AC10：列表响应不得包含 severity 字段，got: {item}"
+        );
+    }
+
+    // 2. 传入 ?severity=critical 被忽略：不报错、且不缩小结果集
+    let with_param = get_json(
+        "/api/v1/alarms?limit=10&severity=critical",
+        token.clone(),
+        app.clone(),
+    )
+    .await;
+    assert_eq!(
+        with_param["data"].as_array().map(|a| a.len()),
+        Some(items.len()),
+        "AC10：?severity=critical 必须被忽略，不得筛选掉任何记录"
+    );
+
+    // 3. count 接口同样忽略该参数
+    let count_plain = get_json("/api/v1/alarms/count", token.clone(), app.clone()).await;
+    let count_sev = get_json(
+        "/api/v1/alarms/count?severity=critical",
+        token.clone(),
+        app.clone(),
+    )
+    .await;
+    assert_eq!(
+        count_plain["data"]["total"], count_sev["data"]["total"],
+        "AC10：count 接口的 ?severity 同样必须被忽略"
+    );
+}
+
+/// AC7：`/system/overview` 的 `todayAlarms` 必须与告警列表同基准（`occurred_at`，帧时间）。
+///
+/// 构造刻意**不对称**：补录 2 条（帧今/入库昨）+ 时移 1 条（帧昨/入库今）。
+/// - 按 `occurred_at`（正确）：2
+/// - 按 `created_at`（回退）：1
+/// 两侧数量不等，因此这条断言能真正区分两种实现；
+/// 若各构造 1 条，两种实现都得到 1，测试会变成无保护的空洞断言。
+///
+/// 边界一律相对**本地零点**构造，使断言不依赖运行机器的时区。
+#[tokio::test]
+async fn test_system_overview_today_alarms_uses_frame_time() {
+    let (app, state, token) = setup_test_app().await;
+
+    // 本地零点对应的 UTC 时刻（`DateTimeUtc`，与实体列类型一致）。
+    //
+    // 必须用与实现相同的算法（DST 感知），不能拿「此刻的偏移」直接回推：
+    // 夏令时切换日的零点自身偏移与此刻不同，固定偏移会让 oracle 与实现差 1 小时，
+    // 在 UTC+8 上不会暴露，但在 DST 时区会变成假失败。
+    let local_midnight = api::routes::system::local_today_start();
+
+    let rows = [
+        // 补录：帧时间在今日，入库时间在昨日
+        (
+            "evt-ov-backfill-1",
+            local_midnight + chrono::Duration::hours(1),
+            local_midnight - chrono::Duration::hours(3),
+        ),
+        (
+            "evt-ov-backfill-2",
+            local_midnight + chrono::Duration::hours(2),
+            local_midnight - chrono::Duration::hours(2),
+        ),
+        // 时移：帧时间在昨日，入库时间在今日
+        (
+            "evt-ov-shifted",
+            local_midnight - chrono::Duration::hours(1),
+            local_midnight + chrono::Duration::hours(3),
+        ),
+    ];
+
+    let mut expected_today = 0u32;
+    for (event_id, occurred_at, created_at) in rows {
+        if occurred_at >= local_midnight {
+            expected_today += 1;
+        }
+        AlarmRepo::insert(
+            &state.db,
+            db::entity::alarm::ActiveModel {
+                id: sea_orm::NotSet,
+                event_id: Set(event_id.to_string()),
+                camera_id: Set("CAM-OV".to_string()),
+                alarm_type_id: Set("rule_ov".to_string()),
+                occurred_at: Set(occurred_at),
+                target_label: Set("person".to_string()),
+                confidence: Set(0.9),
+                track_id: Set(1),
+                bbox_json: Set("{}".to_string()),
+                image_id: Set(String::new()),
+                image_rel_path: Set(String::new()),
+                crop_image_id: Set(String::new()),
+                crop_image_rel_path: Set(String::new()),
+                rule_type: Set("roi".to_string()),
+                status: Set("unprocessed".to_string()),
+                handled_at: Set(None),
+                created_at: Set(created_at),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/system/overview")
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let today_alarms = json["data"]["todayAlarms"].as_u64().expect("todayAlarms");
+
+    // 跨零点竞态防护：若墙钟在构造时与端点调用之间跨过本地零点，
+    // 端点会用「新的一天」作下界，而这里期望的是「旧的一天」——两者不可比。
+    // 检测到跨天则重新计算期望值，避免把偶发失败误判为回归。
+    let midnight_now = api::routes::system::local_today_start();
+    let expected_today = if midnight_now == local_midnight {
+        expected_today
+    } else {
+        // 跨天后重算：只统计仍在「今天」的行（本次构造下恒为 0）。
+        rows.iter()
+            .filter(|(_, occurred_at, _)| *occurred_at >= midnight_now)
+            .count() as u32
+    };
+
+    assert_eq!(
+        today_alarms as u32, expected_today,
+        "todayAlarms 必须按 occurred_at 统计（应为 {expected_today}）；\
+         若回退为 created_at 会得到 1"
+    );
+
+    // 只有在未跨天时才能用「不得等于 1」这个强断言。
+    if midnight_now == local_midnight {
+        assert_ne!(
+            today_alarms as u32, 1,
+            "todayAlarms=1 说明落入了 created_at 口径（时移记录被误计）"
+        );
+    }
 }

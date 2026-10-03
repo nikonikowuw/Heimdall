@@ -24,7 +24,6 @@ import { cn, buildQuerySignature } from '@/lib/utils'
 import { wsClient } from '@/lib/wsClient'
 import {
   type AlarmRecord,
-  type AlarmSeverity,
   type AlarmStatus,
   type Camera,
   type CaptureRecord,
@@ -49,7 +48,6 @@ import {
   type AlarmStatusFilter,
   type RecognitionStatusFilter,
   type RuleTypeFilter,
-  type SeverityFilter,
   type TargetLabelFilter,
 } from './filters'
 import { isAlarmSoundEnabled, playAlarmAlertSound, setAlarmSoundEnabled } from './sound'
@@ -158,7 +156,6 @@ export function AlarmsPage(): React.ReactElement {
   const [selectedCameraId, setSelectedCameraId] = useState<string>('')
   const [selectedTargetLabel, setSelectedTargetLabel] = useState<string>('')
   const [selectedRuleType, setSelectedRuleType] = useState<RuleTypeFilter>(FILTER_ALL)
-  const [selectedSeverity, setSelectedSeverity] = useState<SeverityFilter>(FILTER_ALL)
   /*
    * 告警与识别的处理状态分开持有。二者取值域无交集（`unprocessed`/`processed` vs
    *`confirmed`/`pending_review`/`rejected`），共用一份 `string` state 会让
@@ -295,7 +292,6 @@ export function AlarmsPage(): React.ReactElement {
     selectedCameraId,
     selectedTargetLabel,
     selectedRuleType,
-    selectedSeverity,
     activeStatusFilter,
     selectedTrackId,
     timeRange.quickPreset,
@@ -316,7 +312,6 @@ export function AlarmsPage(): React.ReactElement {
     // 若在此处无条件计数，会出现「重置角标显示 1 项筛选，界面上却找不到对应控件」。
     if (activeTab !== 'recognition' && selectedTargetLabel) count++
     if (activeTab === 'alarms' && selectedRuleType !== FILTER_ALL) count++
-    if (activeTab === 'alarms' && selectedSeverity !== FILTER_ALL) count++
     if (activeStatusFilter !== FILTER_ALL) count++
     if (selectedTrackId !== null) count++
     if (timeRange.quickPreset !== 'today') count++
@@ -327,7 +322,6 @@ export function AlarmsPage(): React.ReactElement {
     selectedTargetLabel,
     activeTab,
     selectedRuleType,
-    selectedSeverity,
     activeStatusFilter,
     selectedTrackId,
     timeRange.quickPreset,
@@ -341,7 +335,6 @@ export function AlarmsPage(): React.ReactElement {
     setSelectedCameraId('')
     setSelectedTargetLabel('')
     setSelectedRuleType(FILTER_ALL)
-    setSelectedSeverity(FILTER_ALL)
     setAlarmStatus(FILTER_ALL)
     setRecognitionStatus(FILTER_ALL)
     setSelectedTrackId(null)
@@ -397,7 +390,6 @@ export function AlarmsPage(): React.ReactElement {
     const camId = selectedCameraId || undefined
     const targetLbl = selectedTargetLabel || undefined
     const ruleTypeParam = selectedRuleType === FILTER_ALL ? undefined : selectedRuleType
-    const severityParam = selectedSeverity === FILTER_ALL ? undefined : selectedSeverity
     const statusParam = activeStatusFilter === FILTER_ALL ? undefined : activeStatusFilter
     const keyword = debouncedSearchQuery.trim() || undefined
     const { startTime: startMs, endTime: endMs } = resolveEffectiveTimeRange(timeRange)
@@ -418,7 +410,6 @@ export function AlarmsPage(): React.ReactElement {
             status: statusParam,
             targetLabel: targetLbl,
             ruleType: ruleTypeParam,
-            severity: severityParam,
             q: keyword,
             startTime: startMs,
             endTime: endMs,
@@ -433,7 +424,6 @@ export function AlarmsPage(): React.ReactElement {
             status: statusParam,
             targetLabel: targetLbl,
             ruleType: ruleTypeParam,
-            severity: severityParam,
             q: keyword,
             startTime: startMs,
             endTime: endMs,
@@ -536,7 +526,6 @@ export function AlarmsPage(): React.ReactElement {
     selectedCameraId,
     selectedTargetLabel,
     selectedRuleType,
-    selectedSeverity,
     activeStatusFilter,
     selectedTrackId,
     timeRange,
@@ -587,7 +576,6 @@ export function AlarmsPage(): React.ReactElement {
       alarmTypeId: string
       targetLabel: string
       ruleType: string
-      severity: AlarmSeverity
       cropImageRelPath: string
       imageRelPath: string
       occurredAt: number
@@ -608,7 +596,6 @@ export function AlarmsPage(): React.ReactElement {
       const matchesCamera = !selectedCameraId || selectedCameraId === p.cameraId
       const matchesTarget = !selectedTargetLabel || selectedTargetLabel === p.targetLabel
       const matchesRule = selectedRuleType === FILTER_ALL || selectedRuleType === p.ruleType
-      const matchesSeverity = selectedSeverity === FILTER_ALL || selectedSeverity === p.severity
       const matchesStatus = alarmStatus === FILTER_ALL || alarmStatus === 'unprocessed'
       const isLiveTime = matchesTimeRange(timeRange, p.occurredAt)
       const matchesSearch = matchesSearchTerm(liveFilterRef.current.searchQuery, [
@@ -625,7 +612,6 @@ export function AlarmsPage(): React.ReactElement {
         matchesCamera &&
         matchesTarget &&
         matchesRule &&
-        matchesSeverity &&
         matchesStatus &&
         isLiveTime &&
         matchesSearch
@@ -645,7 +631,6 @@ export function AlarmsPage(): React.ReactElement {
           cropImageId: '',
           cropImageRelPath: p.cropImageRelPath || '',
           ruleType: p.ruleType,
-          severity: p.severity,
           status: 'unprocessed',
           handledAt: null,
           createdAt: Date.now(),
@@ -757,7 +742,6 @@ export function AlarmsPage(): React.ReactElement {
     selectedCameraId,
     selectedTargetLabel,
     selectedRuleType,
-    selectedSeverity,
     alarmStatus,
     recognitionStatus,
     soundEnabled,
@@ -774,7 +758,6 @@ export function AlarmsPage(): React.ReactElement {
     const camId = selectedCameraId || undefined
     const targetLbl = selectedTargetLabel || undefined
     const ruleTypeParam = selectedRuleType === FILTER_ALL ? undefined : selectedRuleType
-    const severityParam = selectedSeverity === FILTER_ALL ? undefined : selectedSeverity
     const statusParam = activeStatusFilter === FILTER_ALL ? undefined : activeStatusFilter
 
     Promise.all([
@@ -784,7 +767,6 @@ export function AlarmsPage(): React.ReactElement {
           status: statusParam,
           targetLabel: targetLbl,
           ruleType: ruleTypeParam,
-          severity: severityParam,
           startTime: startMs,
           endTime: endMs,
         })
@@ -812,14 +794,7 @@ export function AlarmsPage(): React.ReactElement {
         recognition: recsCount !== null ? recsCount.total : prev.recognition,
       }))
     })
-  }, [
-    timeRange,
-    selectedCameraId,
-    selectedTargetLabel,
-    selectedRuleType,
-    selectedSeverity,
-    activeStatusFilter,
-  ])
+  }, [timeRange, selectedCameraId, selectedTargetLabel, selectedRuleType, activeStatusFilter])
 
   // 单条告警状态切换
   const handleToggleAlarmStatus = useCallback(
@@ -1083,24 +1058,6 @@ export function AlarmsPage(): React.ReactElement {
                 { value: FILTER_ALL, label: t('filter.allRuleTypes') },
                 { value: 'roi', label: t('filter.ruleRoi') },
                 { value: 'line', label: t('filter.ruleLine') },
-              ]}
-            />
-          )}
-
-          {/* 严重级别筛选 */}
-          {activeTab === 'alarms' && (
-            <SelectField<SeverityFilter>
-              label={t('filter.allSeverities')}
-              value={selectedSeverity}
-              emphasis={selectedSeverity !== FILTER_ALL}
-              onChange={(severity) => {
-                setSelectedSeverity(severity)
-                setPage(1)
-              }}
-              options={[
-                { value: FILTER_ALL, label: t('filter.allSeverities') },
-                { value: 'warning', label: t('filter.severityWarning') },
-                { value: 'critical', label: t('filter.severityCritical') },
               ]}
             />
           )}

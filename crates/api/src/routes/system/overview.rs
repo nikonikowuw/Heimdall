@@ -33,10 +33,18 @@ pub async fn get_overview(
     );
 
     let db = &state.db;
-    let today_start = chrono::Utc::now()
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .unwrap_or_else(|| chrono::Utc::now().naive_utc());
+
+    // “今日”起点必须与**设备本地零点**对齐，而不是 UTC 零点。
+    //
+    // 告警列表的默认时间窗由前端按本地零点计算（`AlarmsPage.tsx` 的
+    // `getInitialTodayRange`），而卡片原本取 UTC 零点：UTC+8 下每天 00:00–08:00
+    // 这 8 小时内「今日告警」会少算当天的告警，与列表数字互相矛盾。
+    //
+    // 时区取进程本地时区（设备时区由系统设置页经 `timedatectl set-timezone` 写入，
+    // 与 `TimeStatus.timezone` 同源；单机部署下与浏览器本地时区一致）。
+    // 最小根文件系统缺 tzdata 时 `chrono::Local` 回退为 UTC，即退回原先行为，
+    // 不会 panic（见下方 `local_today_start`）。
+    let today_start = local_today_start();
 
     let total_cameras = db::CameraRepo::count_all(db).await.unwrap_or(0) as u32;
     let active_cameras = db::CameraRepo::count_healthy(db).await.unwrap_or(0) as u32;
@@ -149,7 +157,60 @@ pub async fn get_overview(
     }))
 }
 
-/// 检测 NPU 指标（统一调用 infer 跨平台接口，不可用时返回 None）
+/// 设备本地「今日零点」对应的 UTC 时刻。
+///
+/// 时间列以 RFC3339 落盘，绑定必须用带时区的 `DateTimeUtc`
+/// （见 [数据库规范](../../../.trellis/spec/db/backend/database-guidelines.md#表与查询)），
+/// 所以返回 `DateTime<Utc>` 而非 `NaiveDateTime`。
+///
+/// **不能**用「当前偏移」直接回推零点：在夏令时切换日，零点自身的偏移与此刻不同
+/// （如欧洲 DST 切日），会差 1 小时。这里先按当前偏移推断本地日期，
+/// 再用**该本地时刻自身**的偏移去解释它（`from_local_datetime`）。
+///
+/// 公开给集成测试作为 oracle：测试必须与实现同算法，
+/// 否则测的是「两边算得一样」而不是行为正确性（参见本函数原先在测试里的手抄副本，
+/// 它用固定偏移，在 DST 时区会与实现差 60 分钟）。
+///
+/// 缺 tzdata 时 `chrono::Local` 退化为 UTC，即退回修复前行为，不会 panic。
+pub fn local_today_start() -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+
+    let naive_midnight = match (chrono::Utc::now() + *chrono::Local::now().offset())
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+    {
+        Some(naive) => naive,
+        None => return chrono::Utc::now(),
+    };
+
+    match chrono::Local.from_local_datetime(&naive_midnight) {
+        // 常规情况
+        chrono::LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc),
+        // 推后一小时的 DST 切换日：零点出现两次，取第一次
+        chrono::LocalResult::Ambiguous(earliest, _) => earliest.with_timezone(&chrono::Utc),
+        // 前跳的 DST 切换日：本地不存在零点（如某些时区的 00:00 被跳过），
+        // 回退到纯函数按当前偏移估算
+        chrono::LocalResult::None => {
+            today_start_utc(chrono::Utc::now(), *chrono::Local::now().offset())
+        }
+    }
+}
+
+/// 给定「当前时刻」与「本地时区偏移」，求该时区下今日零点对应的 UTC 时刻。
+///
+/// 抽成纯函数以便稳定测试：调用方不从环境读时区，测试也无须改 `TZ`
+/// （改进程环境变量会让同进程的其他测试受影响）。
+fn today_start_utc(
+    now: chrono::DateTime<chrono::Utc>,
+    offset: chrono::FixedOffset,
+) -> chrono::DateTime<chrono::Utc> {
+    (now + offset)
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .map(|local_midnight| (local_midnight - offset).and_utc())
+        .unwrap_or(now)
+}
+
 fn detect_npu_metrics() -> Option<types::NpuMetrics> {
     let monitor = infer::global_monitor();
     let devices = monitor.collect_all();
@@ -199,4 +260,99 @@ fn detect_npu_metrics() -> Option<types::NpuMetrics> {
         active_sessions: total_sessions,
         inference_count: total_inference_count,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Timelike};
+
+    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc
+            .with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("valid UTC timestamp in tests")
+    }
+
+    fn offset_hours(hours: i32) -> chrono::FixedOffset {
+        chrono::FixedOffset::east_opt(hours * 3600).expect("valid offset in tests")
+    }
+
+    /// UTC+8 下，UTC 时间 2026-10-02T02:00Z 的「今日」应从本地零点
+    /// 2026-10-01T16:00Z 起算——而不是 UTC 零点 2026-10-02T00:00Z。
+    ///
+    /// 这正是修复前的缺陷：00:00–08:00（UTC+8）区间内卡片会漏算当天的告警。
+    #[test]
+    fn today_start_uses_local_midnight_not_utc_midnight() {
+        let start = today_start_utc(utc(2026, 10, 2, 2, 0, 0), offset_hours(8));
+
+        assert_eq!(
+            start,
+            utc(2026, 10, 1, 16, 0, 0),
+            "UTC+8 的今日零点应换算为前一日 16:00Z"
+        );
+        assert_ne!(start, utc(2026, 10, 2, 0, 0, 0), "不得退回 UTC 零点口径");
+    }
+
+    /// 边界自洽：起始时刻本身必须落在设备本地零点（偏移后的钟面时间为 00:00:00）。
+    #[test]
+    fn today_start_lands_on_local_midnight() {
+        for hours in [-8i32, -5, 0, 5, 8, 13] {
+            let offset = offset_hours(hours);
+            // 选一个落在本地 00:30 的时刻，确保「今日」不是前一天
+            let local_now = chrono::NaiveDate::from_ymd_opt(2026, 10, 2)
+                .expect("valid date")
+                .and_hms_opt(0, 30, 0)
+                .expect("valid time");
+            let now = (local_now - offset).and_utc();
+
+            let start_local = today_start_utc(now, offset) + offset;
+
+            assert_eq!(start_local.hour(), 0, "hours={hours}");
+            assert_eq!(start_local.minute(), 0, "hours={hours}");
+            assert_eq!(start_local.second(), 0, "hours={hours}");
+            assert_eq!(
+                start_local.date_naive(),
+                chrono::NaiveDate::from_ymd_opt(2026, 10, 2).expect("valid date"),
+                "hours={hours}"
+            );
+        }
+    }
+
+    /// 负偏移（美洲时区）同样成立：UTC-5 下本地 00:30 对应 UTC 同日 05:30，
+    /// 今日零点应为 UTC 05:00。
+    #[test]
+    fn today_start_handles_negative_offsets() {
+        assert_eq!(
+            today_start_utc(utc(2026, 10, 2, 5, 30, 0), offset_hours(-5)),
+            utc(2026, 10, 2, 5, 0, 0)
+        );
+    }
+
+    /// 跨月/跨年边界不得串日期。
+    #[test]
+    fn today_start_crosses_month_and_year_boundaries() {
+        let cst = offset_hours(8);
+
+        // UTC 2026-12-31T17:00Z = 本地 2027-01-01T01:00 → 今日零点 2026-12-31T16:00Z
+        assert_eq!(
+            today_start_utc(utc(2026, 12, 31, 17, 0, 0), cst),
+            utc(2026, 12, 31, 16, 0, 0)
+        );
+
+        // UTC 2026-10-31T17:00Z = 本地 2026-11-01T01:00 → 今日零点 2026-10-31T16:00Z
+        assert_eq!(
+            today_start_utc(utc(2026, 10, 31, 17, 0, 0), cst),
+            utc(2026, 10, 31, 16, 0, 0)
+        );
+    }
+
+    /// 缺 tzdata / 未知时区时偏移为 0，退化为 UTC 零点，不得 panic。
+    #[test]
+    fn today_start_falls_back_to_utc_when_offset_is_zero() {
+        assert_eq!(
+            today_start_utc(utc(2026, 10, 2, 11, 30, 0), offset_hours(0)),
+            utc(2026, 10, 2, 0, 0, 0)
+        );
+    }
 }

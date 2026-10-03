@@ -25,7 +25,6 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
   t,
 }: AlarmTableRowProps): React.ReactElement {
   const isProcessed = alarm.status === 'processed'
-  const isCritical = alarm.severity === 'critical'
 
   return (
     <tr
@@ -43,11 +42,7 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
         }
       }}
       className={`cursor-pointer transition-colors focus-visible:bg-[var(--accent-soft)]/40 focus-visible:outline-none ${
-        isSelected
-          ? 'bg-[var(--accent-soft)]/30'
-          : isCritical
-            ? 'bg-[var(--status-danger-soft)] hover:bg-[var(--status-danger-soft)]'
-            : 'hover:bg-[var(--accent-soft)]/20'
+        isSelected ? 'bg-[var(--accent-soft)]/30' : 'hover:bg-[var(--accent-soft)]/20'
       }`}
     >
       {onToggleSelect && (
@@ -104,17 +99,6 @@ export const AlarmTableRow = React.memo(function AlarmTableRow({
       </td>
       <td className="px-3 py-2 font-semibold text-[var(--text-primary)]">{alarm.targetLabel}</td>
       <td className="px-3 py-2 font-mono text-[11px]">{getRuleTypeLabel(alarm.ruleType, t)}</td>
-      <td className="px-3 py-2">
-        <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
-            isCritical
-              ? 'bg-[var(--status-danger-soft)] text-[var(--status-danger)]'
-              : 'bg-[var(--status-warning-soft)] text-[var(--status-warning)]'
-          }`}
-        >
-          {alarm.severity || 'WARNING'}
-        </span>
-      </td>
       <td className="px-3 py-2 font-mono text-[11px]">
         {((alarm.confidence ?? 0) * 100).toFixed(0)}%
       </td>
