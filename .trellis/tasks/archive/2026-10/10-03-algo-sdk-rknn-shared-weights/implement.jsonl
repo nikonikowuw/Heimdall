@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md", "reason": "算法 SDK 规范、C ABI 扩展协议与平台运行时约定"}
+{"file": ".trellis/spec/infer/backend/inference-backends.md", "reason": "推理后端选择、RKNN 核心掩码与共享权重生命周期"}
+{"file": ".trellis/spec/guides/ffi-guidelines.md", "reason": "FFI 跨层边界、ABI 布局断言与内存安全准则"}
+{"file": ".trellis/spec/guides/concurrency-guidelines.md", "reason": "并发与专用线程隔离、锁外析构准则"}
+{"file": ".trellis/spec/infer/backend/index.md", "reason": "infer 推理引擎入口与契约"}
