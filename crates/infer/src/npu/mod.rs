@@ -7,9 +7,21 @@
 
 #[cfg(target_os = "linux")]
 pub mod ascend;
+pub mod inventory;
+pub mod ledger;
+pub mod manager;
 pub mod monitor;
 #[cfg(target_os = "linux")]
 pub mod rknn;
+pub mod solver;
+
+pub use inventory::{DeviceInventory, DeviceTopology};
+pub use ledger::{
+    ExecutionReservation, ExecutionState, LedgerConfig, PlacementLedger, ReservationId, WeightKey,
+    WeightOwner, WeightState,
+};
+pub use manager::{PlacementLedgerSnapshot, PlacementManager};
+pub use solver::{PlacementDecision, PlacementError, PlacementSolver};
 
 use std::fmt;
 

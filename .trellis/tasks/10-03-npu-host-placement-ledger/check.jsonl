@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/infer/backend/index.md", "reason": "infer 模块质量门禁"}
+{"file": ".trellis/spec/infer/backend/inference-backends.md", "reason": "推理后端与资源生命周期规范"}
+{"file": ".trellis/spec/infer/backend/inference-runtime-health.md", "reason": "Worker 运行时健康校验"}
+{"file": ".trellis/spec/guides/concurrency-guidelines.md", "reason": "并发模型与停机隔离要求"}

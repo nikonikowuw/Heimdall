@@ -25,6 +25,11 @@ pub use worker::{
     WorkerState, DEFAULT_INFER_SHUTDOWN_TIMEOUT,
 };
 
-// NPU 监控模块
+// NPU 监控与放置账本模块
 pub use npu::monitor::{global_monitor, NpuMonitor, NpuMonitorEvent};
-pub use npu::{NpuDevice, NpuDeviceMetrics, NpuDeviceType, NpuError};
+pub use npu::{
+    DeviceInventory, DeviceTopology, ExecutionReservation, ExecutionState, LedgerConfig, NpuDevice,
+    NpuDeviceMetrics, NpuDeviceType, NpuError, PlacementDecision, PlacementError, PlacementLedger,
+    PlacementLedgerSnapshot, PlacementManager, PlacementSolver, ReservationId, WeightKey,
+    WeightOwner, WeightState,
+};

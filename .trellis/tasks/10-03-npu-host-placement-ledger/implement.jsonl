@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/infer/backend/index.md", "reason": "infer 模块规范入口"}
+{"file": ".trellis/spec/infer/backend/inference-backends.md", "reason": "推理后端、算力租约与隔离协议"}
+{"file": ".trellis/spec/infer/backend/inference-runtime-health.md", "reason": "Worker 运行时健康与代际隔离"}
+{"file": ".trellis/spec/guides/concurrency-guidelines.md", "reason": "并发模型、通道与停机隔离规范"}
+{"file": ".trellis/spec/guides/conventions.md", "reason": "全局约定与防御性错误处理"}

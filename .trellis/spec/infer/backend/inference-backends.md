@@ -74,6 +74,28 @@ CoreML 计算单元、RKNN 核心掩码、映射缓存和输出 RAII 的约束�
    - `QuarantineSupervisor` 由独立的非阻塞后台线程以固定间隔（`REAPER_POLL_INTERVAL = 1s`）轮询 `join_handle.is_finished()`；
    - 仅当物理 OS 线程真正退出后才回收其 JoinHandle，并记入隔离恢复指标，杜绝句柄悬挂或静默泄漏。
 
+## NPU 双层放置账本与多核调度 (PlacementLedger & PlacementSolver)
+
+为支持多核 NPU 平台的细粒度核心分配、卡亲和以及物理权重显存复用，`crates/infer/src/npu/` 构建了双层账本与确定性求解器架构：
+
+1. **硬件拓扑探测与代际管理 (`DeviceInventory`)**：
+   - 探测系统内的 NPU 设备及核心拓扑（如 RK3588 3核掩码 0b111、RK3576 2核掩码 0b011、RK3568 单核掩码 0b001）；
+   - 维护 `topology_generation` 代际编号；热插拔或重新探测时代际自增，但已分配的旧代际凭据在释放时保持宽容兼容，杜绝资源悬挂。
+2. **确定性放置求解器 (`PlacementSolver`)**：
+   - **Manual 模式**：严格校验目标设备与核心索引（越界或设备不支持设核即刻报错），满足显式绑定保障；
+   - **Auto 模式**：
+     - `spread` 策略：在可用物理核心中选择当前活跃实例数最少的核心；多核同分时基于原子累加计数器进行确定性轮转，消除负载倾斜；
+     - `pack` 策略：优先复用已加载目标模型权重或承载相同算法组的核心；
+     - 单核/无核心切分设备自动回退为平台级托管（`runtimeManaged`）。
+   - **离线配额隔离**：严格限制高优先级实时视频分析与低优先级离线批处理（如人脸特征重提取）的并发 Worker 数量，防止离线任务挤占实时计算资源。
+3. **执行与权重双层账本 (`PlacementLedger`)**：
+   - **ExecutionLedger**：管理 `ExecutionReservation` 的状态转移（`Reserved` -> `Ready` -> `Quarantined` / `Released`）；
+   - **WeightLedger**：以 `(device_id, core_mask, model_key)` 为物理权重归属键，支持权重单航班（single-flight）加载与复用；请求被取消或失败时保持所有权完备，避免连坐与内存泄露；
+   - **短锁并发安全**：所有账本状态变更必须在内部互斥锁 `<50µs` 内完成，严禁在持锁期间执行 IO、FFI、等待 future 或线程阻塞。
+4. **防雪崩隔离熔断器 (`QuarantineBreaker`)**：
+   - 账本在准入申请时主动联动 `quarantined_workers_count()`；
+   - 当系统内由于底层驱动卡顿被隔离的 Worker 数量达到安全阈值（默认 5）时，立即拦截新的推理实例准入，防止资源雪崩与系统崩溃。
+
 ## 验证
 
 - 无硬件测试验证类型/形状、坐标范围、配置与失败分支；测试规则见 [全局约定](../../guides/conventions.md#测试)。
