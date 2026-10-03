@@ -255,3 +255,49 @@ Implemented explicit hardware fallback policy, platform_id-based resolution, and
 ### Next Steps
 
 - 归档子任务 2 (`10-03-npu-host-placement-ledger`)，推进后续子任务 3（算法包热加载与物理权重复用）。
+
+## [2026-10-03] SDK placement 注入与 RKNN 共享权重运行时 (10-03-algo-sdk-rknn-shared-weights)
+
+### Summary
+
+实现了 NPU 多核分配与卡亲和架构的 SDK 注入与 RKNN 共享权重运行时（Subtask 3），包括 `InitContext` 放置元数据扩展、`rknn_dup_context` 物理权重共享与 Route A 独占移交所有权模型、`AvAlgoPlacementExtensionV1` C ABI 虚表与回执自动上报机制、彻底剥离进程级 `RKNN_CORE_MASK` 环境变量覆盖，以及彻底消除 RK3588 人脸识别算法包内的全局串行 Actor 和邮箱队列，达成真正多实例直通多核并行推理。
+
+### Main Changes
+
+- **`InitContext` 放置元数据扩展与 Builder**：
+  - 在 `crates/algo-sdk/src/plugin.rs` 增加 `wire_placement: Option<WirePlacementMetadata>`、`with_placement()` 与 `target_core_mask()`；
+  - 同步更新了 `crates/algo-sdk/src/models/yolo.rs` 与各算法包所有调用点；
+  - 在 `crates/algo-sdk/src/macros.rs` 中自动从配置私有字段 `__heimdall_placement` 解析并注入 `InitContext`。
+- **C ABI Placement 扩展与回执上报**：
+  - 在 `crates/algo-sdk/src/macros.rs` 中实现 `av_algo_get_placement_extension` 导出；
+  - 实例创建成功后生成 `AvAlgoInstanceReceiptPod`（ACKNOWLEDGED 状态），实例销毁时生成 `AvAlgoCleanupReceiptPod`（CLEANED 状态）并记录入全局循环回执表。
+- **RKNN 共享权重运行时与 Route A 独占移交**：
+  - 在 `crates/algo-sdk/src/runtime/platforms/rockchip.rs` 中绑定 `rknn_dup_context` C 符号；
+  - 实现 `RknnRootWeight` RAII 句柄与引用计数，支持在独立会话上派生子上下文并立即调用 `rknn_set_core_mask`；
+  - 子会话 `RknnSession` 拥有 `Send + !Sync` 特征，严格移交给独占 OS Worker 线程执行；
+  - 彻底移除 `std::env::var("RKNN_CORE_MASK")` 进程级环境变量修改，核心绑定完全收敛在会话级别。
+- **消除人脸识别全局串行 Actor (`algo-packages/rknn/rk3588/face_recognition`)**：
+  - 废弃全局串行 `InferenceWorker` 与跨实例邮箱队列；
+  - 实现弱引用根权重池 `SharedModelRoots`，各 `FaceRecognizer` 实例直接持有专属的 `FaceSessions`，在实例专用 OS Worker 线程中直接同步执行 YOLOv8-Face、EdgeFace 等推理，实现完全无竞争的真正硬件多核并行。
+- **自动化测试矩阵**：
+  - 编写 `crates/algo-sdk/tests/shared_weights_tests.rs` 覆盖 Builder 提取、实例级分核无环境变量副作用、自检硬件硬门拦截以及 Placement 扩展回执生命周期；
+  - 确保 macOS、RK3568、RK3576、RK3588 所有算法包全部编译通过且单元测试通过（RK3588 67/67 通过）。
+- **规范同步**：更新 `.trellis/spec/algo-sdk/backend/algo-sdk-guidelines.md`。
+
+### Testing
+
+- [OK] `cargo fmt --all -- --check` 通过。
+- [OK] `cargo clippy --all-targets -- -D warnings` 全工作区与各平台算法包通过。
+- [OK] `cargo nextest run --workspace` 1020 项测试全绿。
+- [OK] `algo-packages/macos` 37 项测试全绿。
+- [OK] `algo-packages/rknn/rk3568` 88 项测试全绿。
+- [OK] `algo-packages/rknn/rk3576` 34 项测试全绿。
+- [OK] `algo-packages/rknn/rk3588` 67 项测试全绿。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进子任务 4 (`10-03-npu-host-orchestration-wiring`)：宿主 Coordinator 与 Pipeline 集成、动态分核绑定与端到端回归。
