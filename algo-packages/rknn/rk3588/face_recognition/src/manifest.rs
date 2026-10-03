@@ -218,50 +218,9 @@ impl LoadedPackage {
             .resolve_model_path(
                 &root,
                 "EMBEDDER_MODEL_PATH",
-                "model/facelivtv2_l_realistic_final_super_rk3588_fp16.rknn",
-            )
-            .or_else(|_| {
-                env.resolve_model_path(
-                    &root,
-                    "EMBEDDER_MODEL_PATH",
-                    "model/facelivtv2_m_realistic_final_super_rk3588_fp16.rknn",
-                )
-            })
-            .or_else(|_| {
-                env.resolve_model_path(
-                    &root,
-                    "EMBEDDER_MODEL_PATH",
-                    "model/facelivtv2_m_realistic_final_super_fp16.rknn",
-                )
-            })
-            .or_else(|_| {
-                env.resolve_model_path(
-                    &root,
-                    "EMBEDDER_MODEL_PATH",
-                    "model/facelivtv2_l_realistic_final_super_fp16.rknn",
-                )
-            })
-            .or_else(|_| {
-                env.resolve_model_path(
-                    &root,
-                    "EMBEDDER_MODEL_PATH",
-                    "model/edgeface_base_distill_fp16.rknn",
-                )
-            })
-            .or_else(|_| {
-                env.resolve_model_path(
-                    &root,
-                    "EMBEDDER_MODEL_PATH",
-                    "model/edgeface_s_surv_distill_rk3568.rknn",
-                )
-            })
-            .or_else(|_| {
-                env.resolve_model_path(
-                    &root,
-                    "EMBEDDER_MODEL_PATH",
-                    "model/edgeface_s_gamma_05_rk3568_fp16.rknn",
-                )
-            })?;
+                "model/w600k_r50.rknn",
+            )?;
+           
 
         verify_model_file(&detector_path)?;
         verify_model_file(&embedder_path)?;
