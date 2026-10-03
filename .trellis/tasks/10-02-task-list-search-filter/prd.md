@@ -59,17 +59,29 @@
 
 ## Acceptance Criteria
 
-- [ ] 输入任务名、摄像头名、摄像头 ID 的任一片段均可命中对应任务；大小写不敏感；查询串首尾空格被忽略。
-- [ ] 点击「已布防 / 未布防」药丸后，卡片矩阵只显示对应 `desiredEnabled` 的任务；每档显示计数；重复点击同一档回到「全部」或保持选中（实现择一，行为需在组件测试中固定）。
-- [ ] 多算法任务（`algorithmInstances` 长度 > 1）在按其非主实例算法筛选时**仍被命中**，有单测覆盖。
-- [ ] 算法下拉的每个选项都对应至少一个任务（选项派生自实际在用集合）；标签显示友好名，`algorithmApi.list()` 失败/缺失时回落原始 `algorithmId` 且不阻塞任务列表渲染。
-- [ ] 文本 + 状态 + 算法三维度同时生效时为 AND 语义，有单测覆盖。
-- [ ] 无匹配时展示独立空态且可一键清除筛选；`cameras.length === 0` 时不渲染筛选栏。
-- [ ] `PageHeader` 的「任务总数 / 已布防」在任意筛选状态下数值不变。
-- [ ] `/` 快捷键在任务页聚焦任务筛选框；`CreateTaskModal` 打开时不抢焦点。
-- [ ] 三语 i18n 键齐全且对齐（`zh-CN` / `zh-TW` / `en`）。
-- [ ] `cd web && pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm check:cycles && pnpm build` 全绿。
-- [ ] spec 更新：`.trellis/spec/web/frontend/` 记录任务列表检索契约（维度、AND/OR 语义、计数口径）。
+- [x] 输入任务名、摄像头名、摄像头 ID 的任一片段均可命中对应任务；大小写不敏感；查询串首尾空格被忽略。
+  （`taskFilter.test.ts` 覆盖归一化与三字段命中）
+- [x] 点击「已布防 / 未布防」药丸后，卡片矩阵只显示对应 `desiredEnabled` 的任务；每档显示计数；重复点击同一档回到「全部」或保持选中（实现择一，行为需在组件测试中固定）。
+  （实现选「保持选中」；`TaskFilterBar.test.tsx` 的 `keeps the current bucket selected when it is clicked again` 固定该行为）
+- [x] 多算法任务（`algorithmInstances` 长度 > 1）在按其非主实例算法筛选时**仍被命中**，有单测覆盖。
+  （`matches a task through any of its instances, not just the primary one`）
+- [x] 算法下拉的每个选项都对应至少一个任务（选项派生自实际在用集合）；标签显示友好名，`algorithmApi.list()` 失败/缺失时回落原始 `algorithmId` 且不阻塞任务列表渲染。
+  （`deriveAlgorithmOptions` 单测 + `TasksPage` 改 `Promise.allSettled` 使算法取数失败不阻塞）
+- [x] 文本 + 状态 + 算法三维度同时生效时为 AND 语义，有单测覆盖。
+  （`combines all three dimensions with AND semantics`）
+- [x] 无匹配时展示独立空态且可一键清除筛选；`cameras.length === 0` 时不渲染筛选栏。
+  （`TasksPage.tsx` 第四分支 + `clearFilters`；门控 `cameras.length > 0 &&`）
+- [x] `PageHeader` 的「任务总数 / 已布防」在任意筛选状态下数值不变。
+  （KPI 用全量 `entries.length` / `totalArmed`，与 `visibleEntries` 分离）
+- [x] `/` 快捷键在任务页聚焦任务筛选框；`CreateTaskModal` 打开时不抢焦点。
+  （收尾时补 4 条单测钉住该 AC：聚焦成功/无搜索框不消费/模态打开不抢焦点/`Shift+/` 仍归帮助面板；
+  变异测试确认「模态守护」用例可捕获回归。此前仅有手工核对。）
+- [x] 三语 i18n 键齐全且对齐（`zh-CN` / `zh-TW` / `en`）。
+  （三语各 283 键，新增 `filter.*` 各 11 键；`catalog.test.ts` 强制键对齐与字面量可解析）
+- [x] `cd web && pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm check:cycles && pnpm build` 全绿。
+  （实测：lint 零告警；**621 tests / 78 files**；模块图 277 模块 788 依赖无环；build 成功）
+- [x] spec 更新：`.trellis/spec/web/frontend/` 记录任务列表检索契约（维度、AND/OR 语义、计数口径）。
+  （`component-guidelines.md` 新增「列表检索与筛选」章节，含 4 条实现中收敛出的契约）
 
 ## Out of Scope
 

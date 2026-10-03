@@ -22,5 +22,7 @@
   "parent": null,
   "relatedFiles": [],
   "notes": "",
-  "meta": {}
+  "meta": {
+    "handoff": "交付已入库（29e5003 feat / 396eeaf spec / 3ba4d6d task）。收尾轮核验记录：\n验收：AC 11 项全部满足，逐项证据见 prd.md；implement.md 实施清单全部勾选。\n门禁实测：web lint 零告警 / typecheck / 621 tests / check:cycles(277模块788依赖无环) / build 全绿。\n收尾补齐：/ 快捷键聚焦筛选框原先零测试覆盖（仅手工核对），新增 4 条单测钉住该 AC\n（聚焦成功、无搜索框不消费事件、模态打开不抢焦点、Shift+/ 仍归帮助面板）；\n变异测试（把 / 分支移到 modalOpen 守卫之前）确认「模态不抢焦点」用例可捕获回归。\n实施偏离（已核实为等价简化）：计划中的页面层 preNormalized useMemo 未落地——\nfilterTasks 内部已先归一化再进 .filter()，同为循环外只做一次；\nmatchesTaskQuery 的 preNormalized 形参保留并有单测。\n未验证项（需真实浏览器，如实保留未勾选）：双主题视觉、窄视口横向滚动。"
+  }
 }
