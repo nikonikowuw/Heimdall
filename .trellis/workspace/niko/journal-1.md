@@ -209,4 +209,49 @@ Implemented explicit hardware fallback policy, platform_id-based resolution, and
 
 ### Next Steps
 
-- 推进子任务 2 (`10-03-npu-host-placement-ledger`)：构建宿主 NPU 拓扑探测、核心分配账本与世代屏障。
+- [x] 推进子任务 2 (`10-03-npu-host-placement-ledger`)：构建宿主 NPU 拓扑探测、核心分配账本与世代屏障。
+
+## [2026-10-03] NPU 双层账本、放置求解与生命周期状态机 (10-03-npu-host-placement-ledger)
+
+### Summary
+
+实现了 NPU 多核分配与卡亲和架构的宿主资源追踪与求解器（Subtask 2），包括硬件设备拓扑建模与代际感知（`DeviceInventory`）、确定性放置求解器（`PlacementSolver`，支持 Manual 严格校验、Auto spread 轮转均衡与 pack 复用）、执行/权重双层短锁账本（`PlacementLedger`）及门面接口（`PlacementManager`），全面落地防雪崩隔离熔断器与 T06–T12, T19 自动化测试矩阵。
+
+### Main Changes
+
+- **硬件设备拓扑建模与代际感知 (`DeviceInventory`)**：
+  - 在 `crates/infer/src/npu/inventory.rs` 中抽象 `DeviceTopology` 与 `DeviceInventory`，支持动态代际递增（`topology_generation`）；
+  - 覆盖多平台拓扑：RK3588 3核（0b111掩码）、RK3576 2核（0b011掩码）、RK3568 单核（0b001掩码）及无核心切分平台。
+- **确定性放置求解器 (`PlacementSolver`)**：
+  - 在 `crates/infer/src/npu/solver.rs` 中实现纯 CPU 确定性求解逻辑（<1ms）：
+  - `Manual` 模式：严格校验目标设备 ID、核心索引及设备核划分能力（越界/不支持即刻报错）；
+  - `Auto` 模式：`spread` 策略根据当前核心负载均衡分配，同分时基于累加计数器确定性轮转；`pack` 策略优先复用已有权重与同组核心；单核自动退化为 `runtimeManaged`；
+  - 严格离线 Worker 配额隔离，防止离线重提取任务挤占实时视频推理流。
+- **双层短锁并发账本 (`PlacementLedger`)**：
+  - 在 `crates/infer/src/npu/ledger.rs` 中使用 `parking_lot::Mutex` 短锁保证状态更新 <50µs，持锁内杜绝 IO/FFI/await；
+  - `ExecutionLedger`：跟踪 `ExecutionReservation`（`Reserved` -> `Ready` -> `Quarantined`/`Released`），支持实例启动前取消无残留原子回滚；
+  - `WeightLedger`：以 `(device_id, core_mask, model_key)` 为物理权重管理键，提供单航班加载插槽（single-flight loading slot），并发等待与 future 取消不连坐正在进行的加载；
+  - 宽容代际释放：硬件拓扑更新代际增加时，旧代际产生的 reservation 仍可平滑无损释放。
+- **防雪崩隔离熔断器 (`QuarantineBreaker`)**：
+  - 账本准入主动联动 `quarantined_workers_count()`，当底层驱动卡顿导致的隔离 Worker 数超标时，立即熔断拒绝新实例准入。
+- **统一门面 (`PlacementManager`)**：
+  - 在 `crates/infer/src/npu/manager.rs` 中封装 Inventory、Solver 与 Ledger，导出运行态监控快照 `PlacementLedgerSnapshot`。
+- **自动化测试矩阵 (T06–T12, T19)**：
+  - 在 `crates/infer/tests/placement_ledger_tests.rs` 中完整覆盖取消回滚、并发单航班加载、Auto spread 同分轮转、Manual 优先与离线配额、隔离实例防复用、拓扑代际平滑释放、防雪崩熔断及冷却期定时器世代复用。
+- **规范同步**：更新 `.trellis/spec/infer/backend/inference-backends.md`。
+
+### Testing
+
+- [OK] `cargo fmt --all -- --check` 通过。
+- [OK] `cargo clippy --all-targets -- -D warnings` 全工作区通过。
+- [OK] `cargo nextest run --workspace` 1016 项测试全绿。
+- [OK] `algo-packages/macos` 37 项测试全绿。
+- [OK] `algo-packages/rknn/{rk3568, rk3576, rk3588}` cargo clippy 全部无告警通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 归档子任务 2 (`10-03-npu-host-placement-ledger`)，推进后续子任务 3（算法包热加载与物理权重复用）。
