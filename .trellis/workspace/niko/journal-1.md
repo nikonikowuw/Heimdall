@@ -300,4 +300,59 @@ Implemented explicit hardware fallback policy, platform_id-based resolution, and
 
 ### Next Steps
 
-- 推进子任务 4 (`10-03-npu-host-orchestration-wiring`)：宿主 Coordinator 与 Pipeline 集成、动态分核绑定与端到端回归。
+- 推进子任务 4 (`10-03-npu-persistence-revision-barrier`)：配置持久化、版本栅栏、局部故障隔离与端到端回归。
+
+## [2026-10-03] NPU 亲和配置持久化、版本栅栏与单实例局部隔离 (10-03-npu-persistence-revision-barrier)
+
+### Summary
+
+实现了 NPU 亲和配置持久化、版本栅栏、宿主 Coordinator 局部故障隔离与原子事务（Subtask 4），包括 `V25` 数据库迁移与 `affinity_json` 字段支持、单实例版本栅栏与两阶段配置收敛、`TaskRepo::save_task_with_instances` 内原子 `stream_mode` 持久化、显式 `instance_id` 批次与跨任务安全校验、冷启动多实例单故障隔离不连坐机制，以及覆盖 T04/T05/T15-T18/T22-T24/T30/T39/T40 的端到端集成测试矩阵。
+
+### Main Changes
+
+- **类型系统与校验 (`crates/types`)**：
+  - 增加 `TypeError::InvalidAffinity`；
+  - 为 `AffinityIntent` 增加 `normalized()`、`is_equivalent_to()` 与 `is_affinity_equivalent()` 比较逻辑；
+  - `TaskAlgorithmInstanceConfig` 增加 `affinity: Option<AffinityIntent>`，在 `validate()` 中校验合法性（拒绝空 `deviceId`、非法 `policy`）。
+- **数据库 Schema 迁移与实体 (`crates/db`)**：
+  - 添加 `V25__algorithm_instance_affinity.sql`，给 `algorithm_instances` 增加 `affinity_json TEXT NOT NULL DEFAULT '{"mode":"auto","policy":"spread"}'`；
+  - 更新实体 `algorithm_instance::Model` 与 `affinity_intent()` 辅助解析方法；
+  - `AlgorithmInstanceRepo` 的 `mark_apply_applied`、`mark_apply_pending` 与 `mark_apply_failed` 施加单实例版本栅栏（`WHERE instance_id = ? AND desired_revision = target_revision`），受并发修改时返回 `Ok(None)` 杜绝过期覆盖。
+- **任务仓储事务原子性与实例校验 (`crates/db/src/repository/task.rs`)**：
+  - `SaveTaskWithInstancesParams` 增加 `stream_mode: Option<StreamMode>`，在单一 SQLite 事务内原子持久化 `cameras.stream_mode`，失败整体回滚；
+  - 校验显式 `instance_id`：批次唯一性、同算法一致性、跨任务防篡改；
+  - 比较新旧亲和意图，仅在非等价亲和意图发生改变时推进 `desired_revision += 1` 并将状态置为 `Pending`，等价自动策略不造成颠簸；
+  - 缺省 `instance_id` 时自动匹配同算法已有实例，保留已有 ID 与亲和意图。
+- **管线冷启动单实例故障隔离 (`crates/pipeline/src/coordinator.rs`)**：
+  - `InstanceLaunchConfig` 增加 `desired_revision` 字段与 `with_desired_revision` 链式方法；
+  - `start_camera_pipeline_inner` 在冷启动时遍历算法实例，遇到租约获取或 Worker 创建失败时记录单实例故障并继续初始化其余实例；仅当该路所有实例均失败时才整路回滚，避免局部故障连坐全路视频分析；
+  - 成功启动后通过 `params.instances.retain(...)` 过滤有效实例，使运行时信息真实反映活跃实例。
+- **HTTP API DTO 与路由 (`crates/api/src/routes/task.rs`)**：
+  - `TaskAlgorithmInstanceDto` 与 `TaskAlgorithmInstanceSummaryDto` 增加 `affinity: Option<AffinityIntent>` 字段；
+  - `save_task_config_handler` 移除独立的 `update_stream_mode`，直接传递 `dto.stream_mode` 进入任务事务原子更新；
+  - `sync_pipeline_with_models` 将已持久化的 `desired_revision` 传递至 `InstanceLaunchConfig`。
+- **全方位测试矩阵**：
+  - `crates/db/tests/migration_tests.rs`: `test_v25_migration_adds_affinity_json_with_default`（T39 默认值与向后兼容）；
+  - `crates/db/tests/affinity_repo_tests.rs`: T04（过期版本栅栏拒绝）、T05（原子 stream_mode 回滚与持久化）、T17/T18（等价亲和防颠簸与亲和变更代际推进）、T22/T23（显式 instance_id 校验）；
+  - `crates/pipeline/tests/coordinator_partial_failure_tests.rs`: T24（冷启动单实例隔离与全故障回滚）；
+  - `crates/api/tests/affinity_persistence_barrier_tests.rs`: T15/T16（HTTP API 亲和校验）、T30/T40（DTO 驼峰序列化与版本冲突 40903 拦截）。
+- **规范同步**：
+  - 同步更新 `.trellis/spec/api/backend/api-guidelines.md` 与 `.trellis/spec/infer/backend/inference-backends.md`。
+
+### Testing
+
+- [OK] `cargo fmt --all -- --check` 通过。
+- [OK] `cargo clippy --all-targets -- -D warnings` 全工作区与各平台算法包通过。
+- [OK] `cargo nextest run --workspace` 1029 项测试全绿。
+- [OK] `algo-packages/macos` 37 项测试全绿。
+- [OK] `algo-packages/rknn/rk3568` 88 项测试全绿。
+- [OK] `algo-packages/rknn/rk3576` 34 项测试全绿。
+- [OK] `algo-packages/rknn/rk3588` 67 项测试全绿。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 归档子任务 4 (`10-03-npu-persistence-revision-barrier`)，推进子任务 5（API 观测与前端可视化）。
