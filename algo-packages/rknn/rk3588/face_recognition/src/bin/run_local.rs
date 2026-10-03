@@ -184,6 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instance_id: "local_hardware_test",
         is_self_test: false,
         fallback_policy_override: None,
+        wire_placement: None,
     };
     // 阈值覆盖通过正常的 Deserialize 路径构造，确保 explicit_fields 生效，
     // 从而让命令行优先级高于包内 `.env`。

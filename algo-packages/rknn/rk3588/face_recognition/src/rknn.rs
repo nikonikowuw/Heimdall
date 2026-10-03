@@ -203,6 +203,8 @@ type RknnOutputsGetFn = unsafe extern "C" fn(
 type RknnOutputsReleaseFn =
     unsafe extern "C" fn(ctx: RknnContext, n_outputs: u32, outputs: *mut RknnOutput) -> c_int;
 type RknnSetCoreMaskFn = unsafe extern "C" fn(ctx: RknnContext, core_mask: c_int) -> c_int;
+type RknnDupContextFn =
+    unsafe extern "C" fn(src_ctx: *mut RknnContext, dest_ctx: *mut RknnContext) -> c_int;
 type RknnCreateMemFromFdFn = unsafe extern "C" fn(
     ctx: RknnContext,
     fd: i32,
@@ -221,6 +223,7 @@ type RknnSetIoMemFn = unsafe extern "C" fn(
 pub struct RknnRuntime {
     _lib: libloading::Library,
     rknn_init: RknnInitFn,
+    pub rknn_dup_context: Option<RknnDupContextFn>,
     rknn_destroy: RknnDestroyFn,
     rknn_query: RknnQueryFn,
     rknn_inputs_set: RknnInputsSetFn,
@@ -238,6 +241,7 @@ impl std::fmt::Debug for RknnRuntime {
         formatter
             .debug_struct("RknnRuntime")
             .field("core_mask_supported", &self.rknn_set_core_mask.is_some())
+            .field("dup_context_supported", &self.rknn_dup_context.is_some())
             .field(
                 "dma_buf_io_supported",
                 &(self.rknn_create_mem_from_fd.is_some()
@@ -302,6 +306,7 @@ impl RknnRuntime {
             let rknn_outputs_release = *library
                 .get(b"rknn_outputs_release\0")
                 .map_err(|error| missing_symbol("rknn_outputs_release", error))?;
+            let rknn_dup_context = library_symbol(&library, b"rknn_dup_context\0");
             let rknn_set_core_mask = library_symbol(&library, b"rknn_set_core_mask\0");
             let rknn_create_mem_from_fd = library_symbol(&library, b"rknn_create_mem_from_fd\0");
             let rknn_destroy_mem = library_symbol(&library, b"rknn_destroy_mem\0");
@@ -310,6 +315,7 @@ impl RknnRuntime {
             Ok(Arc::new(Self {
                 _lib: library,
                 rknn_init,
+                rknn_dup_context,
                 rknn_destroy,
                 rknn_query,
                 rknn_inputs_set,
@@ -418,6 +424,7 @@ struct HardwareBackend {
     ctx: RknnContext,
     dma_mem_cache: HashMap<DmaIdentity, DmaMemEntry>,
     access_tick: u64,
+    _root_weight: Option<Arc<RknnRootWeight>>,
 }
 
 /// 安全的 RKNN 推理会话。该类型只实现 Send，由上层专用 worker 线程独占使用。
@@ -494,12 +501,191 @@ impl Drop for RknnSession {
     }
 }
 
+/// RKNN 根模型权重所有权托管句柄。
+///
+/// 遵循路线 A 规范：由控制面或共享注册表通过 `rknn_init` 加载一次物理权重。
+/// 子会话通过 `rknn_dup_context` 派生，并通过持有的 `Arc<RknnRootWeight>` 维持生命周期。
+/// 根权重必须在所有子会话均已 `rknn_destroy` 后才被销毁。
+pub struct RknnRootWeight {
+    runtime: Arc<RknnRuntime>,
+    ctx: RknnContext,
+    pub input_attr: RknnTensorAttr,
+    pub output_attrs: Vec<RknnTensorAttr>,
+    contract: RknnModelContract,
+}
+
+impl std::fmt::Debug for RknnRootWeight {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RknnRootWeight")
+            .field("ctx", &self.ctx)
+            .field(
+                "input_dims",
+                &&self.input_attr.dims[..self.input_attr.n_dims as usize],
+            )
+            .field("output_count", &self.output_attrs.len())
+            .finish()
+    }
+}
+
+// SAFETY: RknnRootWeight 仅持有只读物理权重句柄，其 ctx 不用于并发推理，支持跨线程共享。
+unsafe impl Send for RknnRootWeight {}
+// SAFETY: RknnRootWeight 仅持有只读物理权重句柄，跨线程共享只读调用派生。
+unsafe impl Sync for RknnRootWeight {}
+
+impl Drop for RknnRootWeight {
+    fn drop(&mut self) {
+        if self.ctx != 0 {
+            // SAFETY: ctx 由当前根权重独占拥有，drop 时安全销毁底层物理模型上下文。
+            let status = unsafe { (self.runtime.rknn_destroy)(self.ctx) };
+            if status != RKNN_SUCC {
+                tracing::warn!(status, "rknn_destroy root context 失败");
+            }
+            self.ctx = 0;
+        }
+    }
+}
+
+impl RknnRootWeight {
+    pub fn load(
+        runtime: Arc<RknnRuntime>,
+        model_path: &Path,
+        contract: RknnModelContract,
+    ) -> Result<Arc<Self>, AlgoError> {
+        let metadata = std::fs::metadata(model_path).map_err(|error| AlgoError::ModelLoad {
+            reason: format!("读取 RKNN 模型元数据失败 ({model_path:?}): {error}"),
+        })?;
+        if !metadata.is_file() {
+            return Err(AlgoError::ModelLoad {
+                reason: format!("RKNN 模型路径不是普通文件: {model_path:?}"),
+            });
+        }
+        if metadata.len() == 0 || metadata.len() > MAX_MODEL_BYTES {
+            return Err(AlgoError::ModelLoad {
+                reason: format!("RKNN 模型大小非法: {} bytes", metadata.len()),
+            });
+        }
+        let mut model_bytes = std::fs::read(model_path).map_err(|error| AlgoError::ModelLoad {
+            reason: format!("读取 RKNN 模型文件失败 ({model_path:?}): {error}"),
+        })?;
+        if model_bytes.is_empty() || model_bytes.len() as u64 > MAX_MODEL_BYTES {
+            return Err(AlgoError::ModelLoad {
+                reason: format!("读取到的 RKNN 模型大小非法: {} bytes", model_bytes.len()),
+            });
+        }
+        let model_len = u32::try_from(model_bytes.len()).map_err(|_| AlgoError::ModelLoad {
+            reason: format!(
+                "RKNN 模型超过 Runtime uint32 长度限制: {} bytes",
+                model_bytes.len()
+            ),
+        })?;
+
+        let mut ctx = 0;
+        // SAFETY: model_bytes 在同步 rknn_init 调用期间保持连续且有效，由 runtime 加载。
+        let status = unsafe {
+            (runtime.rknn_init)(
+                &mut ctx,
+                model_bytes.as_mut_ptr().cast::<c_void>(),
+                model_len,
+                0,
+                null_mut(),
+            )
+        };
+        if status != RKNN_SUCC || ctx == 0 {
+            if ctx != 0 {
+                // SAFETY: runtime 返回了非零 context，失败分支成对销毁。
+                unsafe { (runtime.rknn_destroy)(ctx) };
+            }
+            return Err(AlgoError::ModelLoad {
+                reason: format!("rknn_init 初始化模型失败，错误码: {status}"),
+            });
+        }
+
+        let query_result = RknnSession::query_attributes(&runtime, ctx, &contract);
+        let (input_attr, output_attrs) = match query_result {
+            Ok(attributes) => attributes,
+            Err(error) => {
+                // SAFETY: 查询属性失败，成对销毁初始化的 context。
+                unsafe { (runtime.rknn_destroy)(ctx) };
+                return Err(error);
+            }
+        };
+
+        Ok(Arc::new(Self {
+            runtime,
+            ctx,
+            input_attr,
+            output_attrs,
+            contract,
+        }))
+    }
+
+    pub fn create_child_session(
+        self: &Arc<Self>,
+        core_mask: Option<u32>,
+    ) -> Result<RknnSession, AlgoError> {
+        let dup_fn = self
+            .runtime
+            .rknn_dup_context
+            .ok_or_else(|| AlgoError::ModelLoad {
+                reason: "librknnrt 缺少 rknn_dup_context 符号，无法共享权重".to_string(),
+            })?;
+
+        let mut child_ctx = 0;
+        let mut root_ctx = self.ctx;
+        // SAFETY: root_ctx 为有效的已初始化根模型上下文，dup_fn 派生独立子上下文。
+        let status = unsafe { dup_fn(&mut root_ctx, &mut child_ctx) };
+        if status != RKNN_SUCC || child_ctx == 0 {
+            return Err(AlgoError::ModelLoad {
+                reason: format!("rknn_dup_context 派生子会话失败: {status}"),
+            });
+        }
+
+        let mask = core_mask.unwrap_or(0x07) as c_int;
+        if let Some(set_core_mask) = self.runtime.rknn_set_core_mask {
+            // SAFETY: child_ctx 为当前函数独占的派生上下文，设核生效。
+            let core_status = unsafe { set_core_mask(child_ctx, mask) };
+            if core_status != RKNN_SUCC {
+                // SAFETY: 设核失败，销毁当前派生的子上下文。
+                unsafe { (self.runtime.rknn_destroy)(child_ctx) };
+                return Err(AlgoError::ModelLoad {
+                    reason: format!("rknn_set_core_mask({mask}) 失败，错误码: {core_status}"),
+                });
+            }
+            tracing::info!(core_mask = mask, "RK3588 子会话 core_mask 设置生效");
+        }
+
+        Ok(RknnSession {
+            backend: HardwareBackend {
+                runtime: Arc::clone(&self.runtime),
+                ctx: child_ctx,
+                dma_mem_cache: HashMap::new(),
+                access_tick: 0,
+                _root_weight: Some(Arc::clone(self)),
+            },
+            input_attr: self.input_attr,
+            output_attrs: self.output_attrs.clone(),
+            contract: self.contract.clone(),
+        })
+    }
+}
+
 impl RknnSession {
-    /// 从模型文件初始化并校验 RKNN 会话。
+    /// 从模型文件初始化并校验 RKNN 会话（默认三核）。
     pub fn new(
         runtime: Arc<RknnRuntime>,
         model_path: &Path,
         contract: RknnModelContract,
+    ) -> Result<Self, AlgoError> {
+        Self::new_with_core_mask(runtime, model_path, contract, None)
+    }
+
+    /// 从模型文件初始化并校验 RKNN 会话，显式指定 target_core_mask。
+    pub fn new_with_core_mask(
+        runtime: Arc<RknnRuntime>,
+        model_path: &Path,
+        contract: RknnModelContract,
+        core_mask: Option<u32>,
     ) -> Result<Self, AlgoError> {
         let metadata = std::fs::metadata(model_path).map_err(|error| AlgoError::ModelLoad {
             reason: format!("读取 RKNN 模型元数据失败 ({model_path:?}): {error}"),
@@ -551,11 +737,8 @@ impl RknnSession {
         }
 
         if let Some(set_core_mask) = runtime.rknn_set_core_mask {
-            // RK3588 为三核 NPU，按规范默认启用三核并行加速 (RKNN_NPU_CORE_0_1_2 = 7)；支持环境变量 RKNN_CORE_MASK 覆盖。
-            let mask = std::env::var("RKNN_CORE_MASK")
-                .ok()
-                .and_then(|v| v.parse::<c_int>().ok())
-                .unwrap_or(7);
+            // RK3588 为三核 NPU，按规范默认启用三核并行加速 (RKNN_NPU_CORE_0_1_2 = 7)；支持显式 core_mask。
+            let mask = core_mask.unwrap_or(0x07) as c_int;
             // SAFETY: ctx 已成功初始化，传入目标 core_mask 掩码。
             let core_status = unsafe { set_core_mask(ctx, mask) };
             if core_status != RKNN_SUCC {
@@ -622,6 +805,7 @@ impl RknnSession {
                 ctx,
                 dma_mem_cache: HashMap::new(),
                 access_tick: 0,
+                _root_weight: None,
             },
             input_attr,
             output_attrs,

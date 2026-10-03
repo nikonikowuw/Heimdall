@@ -355,6 +355,19 @@ pub type AvAlgoGetPlacementExtensionFn =
 - 宿主在下发给 `instance_create` 的实例 JSON 配置顶层注入私有字段 `__heimdall_placement`；
 - **配置剥离保护机制**：`export_algo!` 宏在调用业务插件配置反序列化前，先通过 `deserialize_config_stripping_placement` 将 `__heimdall_placement` 剥离并留存，业务插件无论是否标记 `#[serde(deny_unknown_fields)]` 均可安全解析，杜绝未知字段反序列化失败崩溃；
 - 算法包如需获取放置元数据，可由 SDK 内部机制消费或传递给底层 InitContext Builder。
+
+### RKNN 物理共享权重与多实例直通推理 (Route A)
+
+- **`rknn_dup_context` 符号绑定**：SDK 运行时动态从 `librknnrt.so` 加载 `rknn_dup_context(src: *mut RknnContext, dst: *mut RknnContext) -> c_int`。
+- **Route A 独占移交所有权模型**：
+  - 根权重（Root Context）由 `RknnRootWeight` 托管（`Arc<RknnRootWeight>`，RAII drop 调用 `rknn_destroy`）；
+  - 各算法实例通过 `root.create_child_session(core_mask)` 派生出独占子会话（Child Context），并立即在子会话上调用 `rknn_set_core_mask(child, core_mask)`；
+  - 子会话封装为 `RknnSession`（拥有 `Send + !Sync` 特征），独占移交给该实例专属的 OS Worker 线程；
+  - 彻底剥离进程级 `std::env::var("RKNN_CORE_MASK")` 环境变量覆盖，核心配置完全收敛在会话级别；
+  - 子会话严格绑定根权重生命周期，析构时优先销毁子会话句柄，最后释放根权重句柄。
+- **消除算法包内全局串行 Actor**：
+  - 算法包（如 `rk3588/face_recognition`）废弃全局串行 `InferenceWorker` 与跨实例邮箱队列；
+  - 各 `FaceRecognizer` 实例直接持有属于本实例的专用 `FaceSessions`，在宿主专用的 OS Worker 线程中直接同步执行推理，实现完全无竞争的真正硬件多核并行。
 - `AV_GALLERY_BULK_REMOVE` 只读 `id`，`feature_bytes` / `feature_len` 置空；`entry_count == 0`、任一 `feature_bytes` 为空或 `feature_len == 0`（INSERT）均返回 `AV_ERR_INVALID_ARG`。
 - 任一条失败即整体返回错误：调用方不得当成「已同步」。宿主在批量失败时按自己的快照走全量重建自愈（见 [API 规范](../../api/backend/api-guidelines.md#真人脸检索降级状态)）。
 - 算法包侧由 `export_face_gallery!` 宏展开实现，同样包在 `catch_unwind` 中并设置 `last_error`。
@@ -480,9 +493,12 @@ pub struct InitContext<'a> {
     pub instance_id: &'a str,
     pub is_self_test: bool,
     pub fallback_policy_override: Option<FallbackPolicy>,   // 加法式新增
+    pub wire_placement: Option<WirePlacementMetadata>,     // 宿主 NPU 放置与亲和元数据
 }
 impl<'a> InitContext<'a> {
     pub fn with_fallback_policy_override(self, policy: FallbackPolicy) -> Self;
+    pub fn with_placement(self, placement: Option<WirePlacementMetadata>) -> Self;
+    pub fn target_core_mask(&self) -> Option<u32>;
 }
 ```
 

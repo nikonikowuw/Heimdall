@@ -192,6 +192,9 @@ pub type RknnSetIoMemFn = unsafe extern "C" fn(
     attr: *mut RknnTensorAttr,
 ) -> c_int;
 
+pub type RknnDupContextFn =
+    unsafe extern "C" fn(ctx_in: *mut RknnContext, ctx_out: *mut RknnContext) -> c_int;
+
 /// 动态加载的 librknnrt C API 符号表
 pub struct RknnRuntime {
     _lib: libloading::Library,
@@ -206,6 +209,7 @@ pub struct RknnRuntime {
     pub rknn_create_mem_from_fd: Option<RknnCreateMemFromFdFn>,
     pub rknn_destroy_mem: Option<RknnDestroyMemFn>,
     pub rknn_set_io_mem: Option<RknnSetIoMemFn>,
+    pub rknn_dup_context: Option<RknnDupContextFn>,
 }
 
 impl std::fmt::Debug for RknnRuntime {
@@ -216,6 +220,7 @@ impl std::fmt::Debug for RknnRuntime {
                 "zero_copy_supported",
                 &(self.rknn_create_mem_from_fd.is_some() && self.rknn_set_io_mem.is_some()),
             )
+            .field("weight_sharing_supported", &self.rknn_dup_context.is_some())
             .finish()
     }
 }
@@ -296,6 +301,7 @@ impl RknnRuntime {
             let rknn_create_mem_from_fd = lib.get(b"rknn_create_mem_from_fd\0").ok().map(|s| *s);
             let rknn_destroy_mem = lib.get(b"rknn_destroy_mem\0").ok().map(|s| *s);
             let rknn_set_io_mem = lib.get(b"rknn_set_io_mem\0").ok().map(|s| *s);
+            let rknn_dup_context = lib.get(b"rknn_dup_context\0").ok().map(|s| *s);
 
             Ok(Arc::new(Self {
                 _lib: lib,
@@ -310,6 +316,7 @@ impl RknnRuntime {
                 rknn_create_mem_from_fd,
                 rknn_destroy_mem,
                 rknn_set_io_mem,
+                rknn_dup_context,
             }))
         }
     }
@@ -364,6 +371,8 @@ pub struct RknnSessionOptions {
     ///
     /// 加法式新增：默认 [`FallbackPolicy::Allow`]，与历史行为逐位一致。
     pub fallback_policy: FallbackPolicy,
+    /// 是否优先使用物理权重共享 (通过 rknn_dup_context)
+    pub share_weights: bool,
 }
 
 impl Default for RknnSessionOptions {
@@ -371,6 +380,7 @@ impl Default for RknnSessionOptions {
         Self {
             core_mask: RKNN_NPU_CORE_AUTO,
             fallback_policy: FallbackPolicy::default(),
+            share_weights: true,
         }
     }
 }
@@ -380,6 +390,7 @@ impl RknnSessionOptions {
         Self {
             core_mask,
             fallback_policy: FallbackPolicy::default(),
+            share_weights: true,
         }
     }
 
@@ -387,12 +398,19 @@ impl RknnSessionOptions {
         Self {
             core_mask,
             fallback_policy: FallbackPolicy::default(),
+            share_weights: true,
         }
     }
 
     /// 加法式新增：显式指定回退策略，保留既有核心掩码
     pub fn with_fallback_policy(mut self, fallback_policy: FallbackPolicy) -> Self {
         self.fallback_policy = fallback_policy;
+        self
+    }
+
+    /// 显式控制是否使用物理权重共享
+    pub fn with_share_weights(mut self, share_weights: bool) -> Self {
+        self.share_weights = share_weights;
         self
     }
 }
@@ -403,8 +421,255 @@ enum RknnBackend {
         ctx: RknnContext,
         dma_mem_cache: HashMap<i32, DmaMemEntry>,
         access_tick: u64,
+        root_weight: Option<Arc<RknnRootWeight>>,
     },
     Fallback,
+}
+
+/// 物理模型权重的根持有者（驻留底层唯一的物理权重显存，通过 rknn_dup_context 派生子会话）
+pub struct RknnRootWeight {
+    ctx: RknnContext,
+    runtime: Arc<RknnRuntime>,
+    pub model_path: PathBuf,
+    pub input_attr: RknnTensorAttr,
+    pub output_attrs: Vec<RknnTensorAttr>,
+}
+
+impl std::fmt::Debug for RknnRootWeight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RknnRootWeight")
+            .field("model_path", &self.model_path)
+            .field("ctx", &self.ctx)
+            .field("output_count", &self.output_attrs.len())
+            .finish()
+    }
+}
+
+// SAFETY: 路线 A 保证 Root Context 在加载后仅用于并发受控地派生 child context，
+// 且仅在最后一个 Arc 引用释放时由 Drop 安全销毁底层 root context。
+unsafe impl Send for RknnRootWeight {}
+unsafe impl Sync for RknnRootWeight {}
+
+impl Drop for RknnRootWeight {
+    fn drop(&mut self) {
+        if self.ctx != 0 {
+            tracing::debug!(model = ?self.model_path, "销毁物理根模型权重 Context");
+            unsafe {
+                (self.runtime.rknn_destroy)(self.ctx);
+            }
+            self.ctx = 0;
+        }
+    }
+}
+
+impl RknnRootWeight {
+    /// 从文件加载物理模型权重并初始化 Root Context
+    pub fn load(runtime: Arc<RknnRuntime>, model_path: &Path) -> Result<Self, AlgoError> {
+        let mut model_bytes = std::fs::read(model_path).map_err(|e| AlgoError::Internal {
+            reason: format!("读取 RKNN 模型文件失败 ({model_path:?}): {e}"),
+        })?;
+
+        let mut ctx: RknnContext = 0;
+        let ret = unsafe {
+            (runtime.rknn_init)(
+                &mut ctx,
+                model_bytes.as_mut_ptr() as *mut c_void,
+                model_bytes.len() as u32,
+                0,
+                null_mut(),
+            )
+        };
+
+        if ret != RKNN_SUCC || ctx == 0 {
+            return Err(AlgoError::Internal {
+                reason: format!("rknn_init 初始化根模型权重失败，错误码: {ret}"),
+            });
+        }
+
+        // 查询输入输出数量
+        let mut io_num = RknnInputOutputNum {
+            n_input: 0,
+            n_output: 0,
+        };
+        let ret = unsafe {
+            (runtime.rknn_query)(
+                ctx,
+                RKNN_QUERY_IN_OUT_NUM,
+                &mut io_num as *mut _ as *mut c_void,
+                std::mem::size_of::<RknnInputOutputNum>() as u32,
+            )
+        };
+        if ret != RKNN_SUCC {
+            unsafe { (runtime.rknn_destroy)(ctx) };
+            return Err(AlgoError::Internal {
+                reason: format!("rknn_query(IN_OUT_NUM) 失败，错误码: {ret}"),
+            });
+        }
+
+        // 查询输入属性
+        let mut input_attr = RknnTensorAttr::default();
+        input_attr.index = 0;
+        let ret = unsafe {
+            (runtime.rknn_query)(
+                ctx,
+                RKNN_QUERY_INPUT_ATTR,
+                &mut input_attr as *mut _ as *mut c_void,
+                std::mem::size_of::<RknnTensorAttr>() as u32,
+            )
+        };
+        if ret != RKNN_SUCC {
+            unsafe { (runtime.rknn_destroy)(ctx) };
+            return Err(AlgoError::Internal {
+                reason: format!("rknn_query(INPUT_ATTR) 失败，错误码: {ret}"),
+            });
+        }
+
+        // 查询输出属性
+        let mut output_attrs = Vec::with_capacity(io_num.n_output as usize);
+        for i in 0..io_num.n_output {
+            let mut out_attr = RknnTensorAttr::default();
+            out_attr.index = i;
+            let ret = unsafe {
+                (runtime.rknn_query)(
+                    ctx,
+                    RKNN_QUERY_OUTPUT_ATTR,
+                    &mut out_attr as *mut _ as *mut c_void,
+                    std::mem::size_of::<RknnTensorAttr>() as u32,
+                )
+            };
+            if ret != RKNN_SUCC {
+                unsafe { (runtime.rknn_destroy)(ctx) };
+                return Err(AlgoError::Internal {
+                    reason: format!("rknn_query(OUTPUT_ATTR) index {i} 失败，错误码: {ret}"),
+                });
+            }
+            output_attrs.push(out_attr);
+        }
+
+        Ok(Self {
+            ctx,
+            runtime,
+            model_path: model_path.to_path_buf(),
+            input_attr,
+            output_attrs,
+        })
+    }
+
+    /// 基于 rknn_dup_context 派生专属于实例 Worker 的独立 Child Context
+    pub fn dup_child(self: &Arc<Self>, core_mask: c_int) -> Result<RknnSession, AlgoError> {
+        let dup_fn = self
+            .runtime
+            .rknn_dup_context
+            .ok_or_else(|| AlgoError::Internal {
+                reason: "当前 librknnrt 未导出 rknn_dup_context 符号".to_string(),
+            })?;
+
+        let mut child_ctx: RknnContext = 0;
+        let mut root_ctx = self.ctx;
+        let ret = unsafe { (dup_fn)(&mut root_ctx, &mut child_ctx) };
+        if ret != RKNN_SUCC || child_ctx == 0 {
+            return Err(AlgoError::Internal {
+                reason: format!("rknn_dup_context 派生失败，错误码: {ret}"),
+            });
+        }
+
+        // 在移交给 Worker 线程前或内部设置核心掩码
+        if let Some(set_core_mask) = self.runtime.rknn_set_core_mask {
+            if core_mask != RKNN_NPU_CORE_AUTO {
+                let ret = unsafe { (set_core_mask)(child_ctx, core_mask) };
+                if ret != RKNN_SUCC && ret != -13 {
+                    unsafe { (self.runtime.rknn_destroy)(child_ctx) };
+                    return Err(AlgoError::Internal {
+                        reason: format!("为派生会话设置核心掩码 {core_mask} 失败，错误码: {ret}"),
+                    });
+                }
+            }
+        }
+
+        Ok(RknnSession {
+            backend: RknnBackend::Hardware {
+                runtime: Arc::clone(&self.runtime),
+                ctx: child_ctx,
+                dma_mem_cache: HashMap::new(),
+                access_tick: 0,
+                root_weight: Some(Arc::clone(self)),
+            },
+            input_attr: self.input_attr,
+            output_attrs: self.output_attrs.clone(),
+        })
+    }
+}
+
+/// 进程内全局物理权重共享提供者 (RknnSharedWeightProvider)
+pub struct RknnSharedWeightProvider {
+    roots: std::sync::Mutex<HashMap<PathBuf, std::sync::Weak<RknnRootWeight>>>,
+}
+
+impl std::fmt::Debug for RknnSharedWeightProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RknnSharedWeightProvider")
+            .field("active_roots", &self.active_roots_count())
+            .finish()
+    }
+}
+
+impl RknnSharedWeightProvider {
+    pub fn global() -> &'static Self {
+        static INSTANCE: std::sync::OnceLock<RknnSharedWeightProvider> = std::sync::OnceLock::new();
+        INSTANCE.get_or_init(|| Self {
+            roots: std::sync::Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// 获取或创建共享权重的 Child 会话
+    pub fn acquire_child_session(
+        &self,
+        runtime: &Arc<RknnRuntime>,
+        model_path: &Path,
+        core_mask: c_int,
+    ) -> Result<RknnSession, AlgoError> {
+        let canonical_path = model_path
+            .canonicalize()
+            .unwrap_or_else(|_| model_path.to_path_buf());
+        let mut guard = self
+            .roots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let root = if let Some(weak) = guard.get(&canonical_path) {
+            weak.upgrade()
+        } else {
+            None
+        };
+
+        let root_arc = match root {
+            Some(arc) => arc,
+            None => {
+                if runtime.rknn_dup_context.is_none() {
+                    return RknnSession::new_with_core_mask(
+                        Arc::clone(runtime),
+                        model_path,
+                        core_mask,
+                    );
+                }
+                let new_root =
+                    Arc::new(RknnRootWeight::load(Arc::clone(runtime), &canonical_path)?);
+                guard.insert(canonical_path, Arc::downgrade(&new_root));
+                new_root
+            }
+        };
+
+        root_arc.dup_child(core_mask)
+    }
+
+    /// 当前驻留的物理权重根模型数量
+    pub fn active_roots_count(&self) -> usize {
+        let guard = self
+            .roots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.values().filter(|w| w.strong_count() > 0).count()
+    }
 }
 
 /// 安全的 RKNN 推理会话 (RAII 自动管理释放)
@@ -446,6 +711,7 @@ impl Drop for RknnSession {
             ref runtime,
             ref mut ctx,
             ref mut dma_mem_cache,
+            ref mut root_weight,
             ..
         } = self.backend
         {
@@ -462,6 +728,9 @@ impl Drop for RknnSession {
                 }
                 *ctx = 0;
             }
+
+            // 显式在 child ctx 销毁之后再释放 root_weight，确保先子后根
+            let _ = root_weight.take();
         }
     }
 }
@@ -510,8 +779,19 @@ impl RknnSession {
         model_path: &Path,
         options: RknnSessionOptions,
     ) -> Result<Self, AlgoError> {
+        let full_path = package_root.join(model_path);
         match RknnRuntime::load(package_root) {
-            Ok(rt) => Self::new_with_core_mask(rt, model_path, options.core_mask),
+            Ok(rt) => {
+                if options.share_weights && rt.rknn_dup_context.is_some() {
+                    RknnSharedWeightProvider::global().acquire_child_session(
+                        &rt,
+                        &full_path,
+                        options.core_mask,
+                    )
+                } else {
+                    Self::new_with_core_mask(rt, &full_path, options.core_mask)
+                }
+            }
             Err(e) => match options.fallback_policy {
                 FallbackPolicy::Allow => {
                     tracing::warn!(
@@ -519,11 +799,11 @@ impl RknnSession {
                         package_root = ?package_root,
                         "未检测到物理 librknnrt.so，启用开发调试回退会话 (debug_cpu_fallback_path)"
                     );
-                    Self::new_fallback(model_path)
+                    Self::new_fallback(&full_path)
                 }
                 FallbackPolicy::RequireHardware => Err(hardware_unavailable_error(
                     package_root,
-                    model_path,
+                    &full_path,
                     &format!(
                         "无法加载平台运行时 librknnrt.so（{}）",
                         describe_load_failure(&e)
@@ -566,19 +846,14 @@ impl RknnSession {
             });
         }
 
-        // 设置核心掩码（优先读取环境变量覆盖，否则使用调用方显式配置）
+        // 设置核心掩码（由调用方显式配置，不读环境变量）
         if let Some(set_core_mask) = runtime.rknn_set_core_mask {
-            let mask = std::env::var("RKNN_CORE_MASK")
-                .ok()
-                .and_then(|v| v.parse::<c_int>().ok())
-                .unwrap_or(core_mask);
-
-            if mask != RKNN_NPU_CORE_AUTO {
+            if core_mask != RKNN_NPU_CORE_AUTO {
                 // SAFETY: ctx 是有效初始化的上下文
-                let ret = unsafe { (set_core_mask)(ctx, mask) };
+                let ret = unsafe { (set_core_mask)(ctx, core_mask) };
                 // 单核硬件如 RK3568 对非默认掩码可能返回 -13 (RKNN_ERR_DEVICE_UNAVAILABLE)，进行容忍
                 if ret != RKNN_SUCC && ret != -13 {
-                    tracing::warn!(ret, mask, "设置 RKNN NPU 核心掩码失败，回退默认调度");
+                    tracing::warn!(ret, core_mask, "设置 RKNN NPU 核心掩码失败，回退默认调度");
                 }
             }
         }
@@ -664,6 +939,7 @@ impl RknnSession {
                 ctx,
                 dma_mem_cache: HashMap::new(),
                 access_tick: 0,
+                root_weight: None,
             },
             input_attr,
             output_attrs,

@@ -268,7 +268,9 @@ impl<S: YoloSpec, D: YoloDecoder + Default> AlgoPlugin for GenericDetector<S, D,
             Some(&env),
             ctx.fallback_policy_override,
         );
-        let session = RuntimeSession::open_with_policy(ctx.package_root, &model_file, policy)?;
+        let core_mask = ctx.target_core_mask();
+        let session =
+            RuntimeSession::open_with_options(ctx.package_root, &model_file, policy, core_mask)?;
 
         let transform = HwLetterbox::new(S::INPUT_DIM.0, S::INPUT_DIM.1);
         let decoder = D::default();
@@ -375,6 +377,7 @@ mod tests {
             instance_id: "inst-0",
             is_self_test: false,
             fallback_policy_override: None,
+            wire_placement: None,
         };
 
         let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
@@ -433,6 +436,7 @@ mod tests {
             instance_id: "inst-self-test",
             is_self_test: true,
             fallback_policy_override: None,
+            wire_placement: None,
         };
 
         match TestHelmetDetector::init(&ctx, StandardYoloConfig::default()) {
@@ -468,6 +472,7 @@ mod tests {
             instance_id: "inst-dev",
             is_self_test: false,
             fallback_policy_override: None,
+            wire_placement: None,
         };
 
         let detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
@@ -491,6 +496,7 @@ mod tests {
             instance_id: "inst-local-dev",
             is_self_test: false,
             fallback_policy_override: Some(FallbackPolicy::Allow),
+            wire_placement: None,
         };
 
         let detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
@@ -513,6 +519,7 @@ mod tests {
             instance_id: "inst-self-test-explicit",
             is_self_test: true,
             fallback_policy_override: Some(FallbackPolicy::Allow),
+            wire_placement: None,
         };
 
         match TestHelmetDetector::init(&ctx, StandardYoloConfig::default()) {
@@ -539,6 +546,7 @@ mod tests {
             instance_id: "inst-self-test-env",
             is_self_test: true,
             fallback_policy_override: None,
+            wire_placement: None,
         };
 
         match TestHelmetDetector::init(&ctx, StandardYoloConfig::default()) {
@@ -586,6 +594,7 @@ mod tests {
             instance_id: "inst-custom",
             is_self_test: false,
             fallback_policy_override: None,
+            wire_placement: None,
         };
 
         let mut detector = CustomTestDetector::init(&ctx, StandardYoloConfig::default())
@@ -618,6 +627,7 @@ mod tests {
             instance_id: "inst-config-update",
             is_self_test: false,
             fallback_policy_override: None,
+            wire_placement: None,
         };
 
         let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
@@ -668,6 +678,7 @@ mod tests {
             instance_id: "inst-health",
             is_self_test: false,
             fallback_policy_override: None,
+            wire_placement: None,
         };
         let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
             .expect("init should succeed");
@@ -716,6 +727,7 @@ mod tests {
             instance_id: "inst-emitter",
             is_self_test: false,
             fallback_policy_override: None,
+            wire_placement: None,
         };
         let mut detector = TestHelmetDetector::init(&ctx, StandardYoloConfig::default())
             .expect("init should succeed");

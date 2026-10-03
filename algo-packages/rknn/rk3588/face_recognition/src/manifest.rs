@@ -214,13 +214,8 @@ impl LoadedPackage {
                     "model/scrfd_2.5g_bnkps_640x640_rk3568_mixed.rknn",
                 )
             })?;
-        let embedder_path = env
-            .resolve_model_path(
-                &root,
-                "EMBEDDER_MODEL_PATH",
-                "model/w600k_r50.rknn",
-            )?;
-           
+        let embedder_path =
+            env.resolve_model_path(&root, "EMBEDDER_MODEL_PATH", "model/w600k_r50.rknn")?;
 
         verify_model_file(&detector_path)?;
         verify_model_file(&embedder_path)?;

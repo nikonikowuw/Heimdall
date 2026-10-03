@@ -44,6 +44,7 @@ fn test_fire_smoke_detection_pipeline() {
         instance_id: "fire_smoke_integration_test",
         is_self_test: true,
         fallback_policy_override: None,
+        wire_placement: None,
     };
 
     let config = InstanceConfig {

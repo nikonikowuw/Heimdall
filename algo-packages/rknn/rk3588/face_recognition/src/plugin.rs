@@ -14,10 +14,12 @@ use algo_sdk::plugin::{AlgoPlugin, InitContext};
 use crate::align::align_face_pixels;
 use crate::config::InstanceConfig;
 use crate::quality::{compute_quality, FaceQualityExt as _};
-use crate::SharedModels;
+use crate::worker::FaceSessions;
+use crate::SharedModelRoots;
 
 pub struct FaceRecognizer {
-    pub models: Arc<SharedModels>,
+    pub sessions: FaceSessions,
+    pub roots: Arc<SharedModelRoots>,
     pub config: InstanceConfig,
     /// 仅用于当前算法实例内部的 best-shot 去重与特征融合，不向 C ABI/宿主输出内部 trackId。
     pub tracker: crate::bytetrack::ByteTracker,
@@ -62,9 +64,11 @@ impl AlgoPlugin for FaceRecognizer {
         config
             .validate()
             .map_err(|reason| AlgoError::ConfigParse { reason })?;
-        let models = crate::shared_models(ctx.package_root)?;
+        let roots = crate::shared_model_roots(ctx.package_root)?;
+        let sessions = roots.create_face_sessions(ctx.target_core_mask())?;
         Ok(Self {
-            models,
+            sessions,
+            roots,
             config: config.clone(),
             tracker: crate::bytetrack::ByteTracker::new(face_tracker_config(&config)),
             best_shots: crate::best_shot::BestShotManager::new(),
@@ -79,8 +83,8 @@ impl AlgoPlugin for FaceRecognizer {
         // 1. 预处理：人脸和人体模型均使用 640x384，共用同一份 RGA RGB 输出。
         let (buf, mode) = cv::letterbox(
             &frame,
-            self.models.detector_width,
-            self.models.detector_height,
+            self.roots.detector_width,
+            self.roots.detector_height,
             [114, 114, 114],
         )?;
         let PreprocessMode::Letterbox(layout) = mode else {
@@ -93,16 +97,11 @@ impl AlgoPlugin for FaceRecognizer {
         let min_face_score = self.config.detection_confidence_threshold;
         let min_person_score = self.config.person_confidence_threshold;
         let (persons, raw_faces) = if buf.as_dma_buf_layout().is_some() {
-            self.models
-                .worker
-                .detect_dma_buf(buf, layout, min_face_score, min_person_score)?
+            self.sessions
+                .detect_dma_buf(&buf, &layout, min_face_score, min_person_score)?
         } else if let Some(host_bytes) = buf.as_host_bytes() {
-            self.models.worker.detect_host(
-                host_bytes.to_vec(),
-                layout,
-                min_face_score,
-                min_person_score,
-            )?
+            self.sessions
+                .detect_host(host_bytes, &layout, min_face_score, min_person_score)?
         } else {
             return Err(AlgoError::Preprocess {
                 reason: "预处理输出既无有效 DMA-BUF 布局，也无 Host 内存视图".to_string(),
@@ -243,7 +242,7 @@ impl FaceRecognizer {
             frame_id,
         ) {
             // ROI 裁切失败与设备侧推理失败共用同一退避重试路径。
-            let extract = || -> Result<[f32; 512], AlgoError> {
+            let mut extract = || -> Result<[f32; 512], AlgoError> {
                 let aligned = extract_aligned_face(frame, face)?;
                 // 先判开关再拼装 tag：落盘关闭时不得在常驻采样路径上做字符串分配。
                 if crate::align::debug_dump_enabled() {
@@ -253,7 +252,7 @@ impl FaceRecognizer {
                         quality.score,
                     );
                 }
-                self.models.worker.embed_host(aligned)
+                self.sessions.embed_host(&aligned)
             };
             match extract() {
                 Ok(normalized) => {

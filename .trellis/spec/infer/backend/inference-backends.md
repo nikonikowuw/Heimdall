@@ -55,7 +55,9 @@ CoreML 计算单元、RKNN 核心掩码、映射缓存和输出 RAII 的约束�
    - **超时退火**：若 60 秒内无新任务介入，定时器触发显式退火，释放暖机实例并彻底销毁底层 RKNN/NPU 驱动会话，安全回收 CMA 显存。
 3. **业务多实例与底层 NPU 复用边界**：
    - **业务层（Multi-Instance）**：每路摄像头拥有独立的 `AlgoInstance`（如 `FaceRecognizer`）与独立的 `InferenceWorker`，状态（ByteTrack 跟踪器、Kalman 矩阵、ROI 多边形与 FPS 计数）严格隔离；
-   - **硬件层（Shared NPU Context）**：受硬件显存严苛约束的算法（如人脸识别 YOLOv8-Face + EdgeFace），底层使用 `Weak<SharedModels>` 单例由专属 OS 线程独占硬件 RKNN Context，多路业务实例与无状态离线提取（`av_algo_extract_face`）分时共享排队推理。
+   - **硬件层（Shared NPU Context 与多核直通）**：
+     - 单核/显存严苛受限平台（如 RK3568 CMA 16MB）：由包内轻量单例协调或分时复用；
+     - 多核扩展平台（如 RK3588/RK3576，D1 架构）：基于 `rknn_dup_context`（Route A 独占移交）实现物理模型权重单份驻留，各实例持有专属子会话并绑定独立 NPU 核心掩码，在实例专属 OS Worker 线程中直接同步推理，彻底消除包内全局串行 Actor 与排队延迟。
 
 ## Worker 有界退出与故障隔离协议 (Quarantine Supervisor)
 

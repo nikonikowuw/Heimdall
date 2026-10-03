@@ -628,6 +628,11 @@ pub struct AvAlgoPlacementExtensionV1 {
 pub type AvAlgoGetPlacementExtensionFn =
     unsafe extern "C" fn(requested_api_version: u32) -> *const AvAlgoPlacementExtensionV1;
 
+// SAFETY: AvAlgoPlacementExtensionV1 仅包含 C 函数指针与保留指针，跨线程只读安全
+unsafe impl Send for AvAlgoPlacementExtensionV1 {}
+// SAFETY: AvAlgoPlacementExtensionV1 仅包含 C 函数指针与保留指针，跨线程只读安全
+unsafe impl Sync for AvAlgoPlacementExtensionV1 {}
+
 static_assertions::assert_eq_size!(AvFaceCandidate, [u8; 32]);
 static_assertions::assert_eq_align!(AvFaceCandidate, u64);
 static_assertions::assert_eq_size!(AvGalleryBulkEntry, [u8; 24]);

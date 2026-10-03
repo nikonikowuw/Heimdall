@@ -53,7 +53,7 @@ pub use math::{
     NormBox,
 };
 pub use model::{Core, InferenceSession, ModelWeights, SharedWeights};
-pub use plugin::{AlgoPlugin, InitContext};
+pub use plugin::{AlgoPlugin, InitContext, WirePlacementMetadata, WireWeightBinding};
 pub use testing::{MockEmitter, MockFrame, MockFrameBuilder, MockSession, MockWeights};
 pub use track::{
     box_iou, ByteTrackConfig, ByteTracker, KalmanBoxTracker, Rect, STrack, TrackDetection,

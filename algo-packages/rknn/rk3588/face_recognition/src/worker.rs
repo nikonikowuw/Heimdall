@@ -185,8 +185,133 @@ pub struct WorkerSessions {
     pub person_detector: bool,
 }
 
+/// 独立算法实例独占的 RKNN 推理会话集合（路线 A）。
+///
+/// 每个会话均从 `SharedModelRoots` 派生，拥有绑定的独占 core_mask，
+/// 仅实现 `Send`，在专用的实例调用线程中直接执行同步推理，
+/// 彻底消除跨实例的全局锁和邮箱排队阻塞。
+#[derive(Debug)]
+pub struct FaceSessions {
+    pub detector: RknnSession,
+    pub embedder: RknnSession,
+    pub person_detector: Option<RknnSession>,
+    pub registration_detector: Option<RknnSession>,
+}
+
+// SAFETY: FaceSessions 内部所有 RKNN 会话均独占使用，只在线程间转移所有权。
+unsafe impl Send for FaceSessions {}
+
+impl FaceSessions {
+    pub fn new(
+        detector: RknnSession,
+        embedder: RknnSession,
+        person_detector: Option<RknnSession>,
+        registration_detector: Option<RknnSession>,
+    ) -> Self {
+        Self {
+            detector,
+            embedder,
+            person_detector,
+            registration_detector,
+        }
+    }
+
+    pub fn detect_host(
+        &mut self,
+        data: &[u8],
+        layout: &LetterboxLayout,
+        min_face_score: f32,
+        min_person_score: f32,
+    ) -> Result<(Vec<PersonCandidate>, Vec<RawFace>), AlgoError> {
+        let persons = self
+            .person_detector
+            .as_mut()
+            .and_then(|p_session| {
+                let attrs = p_session.output_attrs.clone();
+                p_session
+                    .infer_with_host_int8(data, |output| {
+                        decode_person_output(output, &attrs, layout, min_person_score)
+                    })
+                    .map_err(|e| {
+                        tracing::warn!(error = %e, "人体检测推理失败，回退到纯人脸推导");
+                        e
+                    })
+                    .ok()
+            })
+            .unwrap_or_default();
+        let faces = decode_detector(&mut self.detector, data, layout, min_face_score)?;
+        Ok((persons, faces))
+    }
+
+    pub fn detect_dma_buf(
+        &mut self,
+        buffer: &CvBuffer,
+        letterbox: &LetterboxLayout,
+        min_face_score: f32,
+        min_person_score: f32,
+    ) -> Result<(Vec<PersonCandidate>, Vec<RawFace>), AlgoError> {
+        let layout = buffer
+            .as_dma_buf_layout()
+            .ok_or_else(|| AlgoError::Preprocess {
+                reason: "worker 收到的 buffer 没有 DMA-BUF 布局".to_string(),
+            })?;
+        let persons = self
+            .person_detector
+            .as_mut()
+            .and_then(|p_session| {
+                let attrs = p_session.output_attrs.clone();
+                p_session
+                    .infer_with_dma_buf_int8(&layout, |output| {
+                        decode_person_output(output, &attrs, letterbox, min_person_score)
+                    })
+                    .map_err(|e| {
+                        tracing::warn!(error = %e, "人体检测推理失败，回退到纯人脸推导");
+                        e
+                    })
+                    .ok()
+            })
+            .unwrap_or_default();
+        let attrs = self.detector.output_attrs.clone();
+        let faces = self.detector.infer_with_dma_buf(&layout, |output| {
+            decode_detector_output(output, &attrs, letterbox, min_face_score)
+        })?;
+        Ok((persons, faces))
+    }
+
+    pub fn detect_registration_host(
+        &mut self,
+        data: &[u8],
+        layout: &LetterboxLayout,
+        min_face_score: f32,
+    ) -> Result<Vec<RawFace>, AlgoError> {
+        let session = self
+            .registration_detector
+            .as_mut()
+            .unwrap_or(&mut self.detector);
+        let attrs = session.output_attrs.clone();
+        session.infer_with_host_bytes(data, |output| {
+            decode_detector_output(output, &attrs, layout, min_face_score)
+        })
+    }
+
+    pub fn embed_host(&mut self, data: &[u8]) -> Result<[f32; 512], AlgoError> {
+        self.embedder.infer_with_host_bytes(data, |output| {
+            let RknnInferenceOutput::Float32(values) = output else {
+                return Err(AlgoError::Inference {
+                    reason: "特征提取输出类型不是 Float32".to_string(),
+                });
+            };
+            let values = values.first().ok_or_else(|| AlgoError::Inference {
+                reason: "EdgeFace 没有返回 embedding 输出".to_string(),
+            })?;
+            normalize_embedding(values)
+        })
+    }
+}
+
 /// 一个固定容量 mailbox 和一个固定 OS 线程承载 detector/embedder 两个 RKNN context。
 pub struct InferenceWorker {
+    sessions: Mutex<Option<FaceSessions>>,
     queue: Arc<WorkerQueue>,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -217,6 +342,14 @@ impl Drop for InferenceWorker {
 }
 
 impl InferenceWorker {
+    pub fn from_sessions(sessions: FaceSessions) -> Self {
+        Self {
+            sessions: Mutex::new(Some(sessions)),
+            queue: Arc::new(WorkerQueue::new()),
+            thread_handle: Mutex::new(None),
+        }
+    }
+
     pub fn start(package: &LoadedPackage) -> Result<(Arc<Self>, WorkerSessions), AlgoError> {
         let runtime = RknnRuntime::load(&package.root)?;
         let detector_contract = RknnModelContract {
@@ -472,6 +605,7 @@ impl InferenceWorker {
         let result = match ready_rx.recv_timeout(WORKER_REPLY_TIMEOUT) {
             Ok(Ok(sessions)) => Ok((
                 Arc::new(Self {
+                    sessions: Mutex::new(None),
                     queue: Arc::clone(&queue),
                     thread_handle: Mutex::new(thread_handle.take()),
                 }),
@@ -499,6 +633,11 @@ impl InferenceWorker {
         min_face_score: f32,
         min_person_score: f32,
     ) -> Result<(Vec<PersonCandidate>, Vec<RawFace>), AlgoError> {
+        if let Ok(mut guard) = self.sessions.lock() {
+            if let Some(ref mut sessions) = *guard {
+                return sessions.detect_host(&data, &layout, min_face_score, min_person_score);
+            }
+        }
         let (reply, response) = sync_channel(1);
         self.try_send(InferenceRequest::DetectHost {
             data,
@@ -516,6 +655,11 @@ impl InferenceWorker {
         layout: LetterboxLayout,
         min_face_score: f32,
     ) -> Result<Vec<RawFace>, AlgoError> {
+        if let Ok(mut guard) = self.sessions.lock() {
+            if let Some(ref mut sessions) = *guard {
+                return sessions.detect_registration_host(&data, &layout, min_face_score);
+            }
+        }
         let (reply, response) = sync_channel(1);
         self.try_send(InferenceRequest::DetectRegistrationHost {
             data,
@@ -533,6 +677,16 @@ impl InferenceWorker {
         min_face_score: f32,
         min_person_score: f32,
     ) -> Result<(Vec<PersonCandidate>, Vec<RawFace>), AlgoError> {
+        if let Ok(mut guard) = self.sessions.lock() {
+            if let Some(ref mut sessions) = *guard {
+                return sessions.detect_dma_buf(
+                    &buffer,
+                    &letterbox,
+                    min_face_score,
+                    min_person_score,
+                );
+            }
+        }
         let (reply, response) = sync_channel(1);
         self.try_send(InferenceRequest::DetectDma {
             buffer,
@@ -545,6 +699,11 @@ impl InferenceWorker {
     }
 
     pub fn embed_host(&self, data: Vec<u8>) -> Result<[f32; 512], AlgoError> {
+        if let Ok(mut guard) = self.sessions.lock() {
+            if let Some(ref mut sessions) = *guard {
+                return sessions.embed_host(&data);
+            }
+        }
         let (reply, response) = sync_channel(1);
         self.try_send(InferenceRequest::EmbedHost { data, reply })?;
         receive_response(response)

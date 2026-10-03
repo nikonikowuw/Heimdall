@@ -50,6 +50,7 @@ fn test_real_rknn_hardware_inference_if_available() {
         instance_id: "hardware_test_instance",
         is_self_test: true,
         fallback_policy_override: None,
+        wire_placement: None,
     };
 
     let config = InstanceConfig::default();

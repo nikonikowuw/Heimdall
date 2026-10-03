@@ -70,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instance_id: "local_hardware_test",
         is_self_test: false,
         fallback_policy_override: None,
+        wire_placement: None,
     };
     let mut recognizer = FaceRecognizer::init(&init_ctx, InstanceConfig::default())?;
     println!(

@@ -31,19 +31,193 @@ use image::RgbImage;
 pub use extract::{av_algo_extract_face, fuse_spherical_average_embeddings, fuse_tta_embeddings};
 use manifest::LoadedPackage;
 use plugin::FaceRecognizer;
-pub use worker::{InferenceWorker, WorkerQueueStats, WorkerSessions};
+pub use rknn::{RknnModelContract, RknnRootWeight, RknnRuntime};
+pub use worker::{FaceSessions, InferenceWorker, WorkerQueueStats, WorkerSessions};
 
 const MAX_PREPROCESS_BYTES: usize = 128 * 1024 * 1024;
 
 static SHARED_MODELS: OnceLock<Mutex<HashMap<PathBuf, Weak<SharedModels>>>> = OnceLock::new();
+static SHARED_ROOTS: OnceLock<Mutex<HashMap<PathBuf, Weak<SharedModelRoots>>>> = OnceLock::new();
 
 fn shared_model_registry() -> &'static Mutex<HashMap<PathBuf, Weak<SharedModels>>> {
     SHARED_MODELS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 已验证 manifest 身份与模型输入输出契约的共享 worker。
+fn shared_roots_registry() -> &'static Mutex<HashMap<PathBuf, Weak<SharedModelRoots>>> {
+    SHARED_ROOTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 已验证 manifest 身份与模型输入输出契约的共享根权重集合（路线 A）。
+#[derive(Debug)]
+pub struct SharedModelRoots {
+    pub detector: Arc<RknnRootWeight>,
+    pub embedder: Arc<RknnRootWeight>,
+    pub person_detector: Option<Arc<RknnRootWeight>>,
+    pub registration_detector: Option<Arc<RknnRootWeight>>,
+    pub detector_width: u32,
+    pub detector_height: u32,
+    pub registration_detector_width: u32,
+    pub registration_detector_height: u32,
+    pub has_registration_detector: bool,
+    pub embedder_width: u32,
+    pub embedder_height: u32,
+}
+
+impl SharedModelRoots {
+    /// 基于目标核心掩码为独立实例派生子会话。
+    pub fn create_face_sessions(&self, core_mask: Option<u32>) -> Result<FaceSessions, AlgoError> {
+        let detector = self.detector.create_child_session(core_mask)?;
+        let embedder = self.embedder.create_child_session(core_mask)?;
+        let person_detector = self
+            .person_detector
+            .as_ref()
+            .map(|r| r.create_child_session(core_mask))
+            .transpose()?;
+        let registration_detector = self
+            .registration_detector
+            .as_ref()
+            .map(|r| r.create_child_session(core_mask))
+            .transpose()?;
+
+        Ok(FaceSessions::new(
+            detector,
+            embedder,
+            person_detector,
+            registration_detector,
+        ))
+    }
+}
+
+pub fn shared_model_roots(package_root: &Path) -> Result<Arc<SharedModelRoots>, AlgoError> {
+    let key = package_root
+        .canonicalize()
+        .map_err(|error| AlgoError::ModelLoad {
+            reason: format!("算法包根目录无法规范化 ({package_root:?}): {error}"),
+        })?;
+    {
+        let registry = shared_roots_registry()
+            .lock()
+            .map_err(|_| AlgoError::Internal {
+                reason: "RKNN 模型根权重 registry 锁已中毒".to_string(),
+            })?;
+        if let Some(roots) = registry.get(&key).and_then(Weak::upgrade) {
+            return Ok(roots);
+        }
+    }
+
+    let package = LoadedPackage::load(&key)?;
+    let runtime = RknnRuntime::load(&package.root)?;
+
+    let detector_contract = RknnModelContract {
+        input_width: package.detector_width,
+        input_height: package.detector_height,
+        input_channels: 3,
+        output_shapes: manifest::DETECTOR_OUTPUT_SHAPES.to_vec(),
+    };
+    let embedder_contract = RknnModelContract {
+        input_width: package.embedder_width,
+        input_height: package.embedder_height,
+        input_channels: 3,
+        output_shapes: vec![[1, 512, 1, 1]],
+    };
+    let is_yolov6 = package
+        .person_detector_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.contains("yolov6"))
+        .unwrap_or(false);
+
+    let person_detector_contract = RknnModelContract {
+        input_width: package.detector_width,
+        input_height: package.detector_height,
+        input_channels: 3,
+        output_shapes: if is_yolov6 {
+            manifest::YOLOV6_PERSON_DETECTOR_OUTPUT_SHAPES.to_vec()
+        } else {
+            manifest::PERSON_DETECTOR_OUTPUT_SHAPES.to_vec()
+        },
+    };
+    let registration_detector_contract = RknnModelContract {
+        input_width: package.registration_detector_width,
+        input_height: package.registration_detector_height,
+        input_channels: 3,
+        output_shapes: manifest::DETECTOR_640X640_OUTPUT_SHAPES.to_vec(),
+    };
+
+    let detector = RknnRootWeight::load(
+        Arc::clone(&runtime),
+        &package.detector_path,
+        detector_contract,
+    )?;
+    let embedder = RknnRootWeight::load(
+        Arc::clone(&runtime),
+        &package.embedder_path,
+        embedder_contract,
+    )?;
+
+    let registration_detector = if package.registration_detector_path.is_file() {
+        match RknnRootWeight::load(
+            Arc::clone(&runtime),
+            &package.registration_detector_path,
+            registration_detector_contract,
+        ) {
+            Ok(root) => Some(root),
+            Err(e) => {
+                tracing::warn!(%e, "可选 640x640 人脸注册根模型初始化失败，回退使用 640x384");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let person_detector = if package.person_detector_path.is_file() {
+        match RknnRootWeight::load(
+            Arc::clone(&runtime),
+            &package.person_detector_path,
+            person_detector_contract,
+        ) {
+            Ok(root) => Some(root),
+            Err(e) => {
+                tracing::warn!(%e, "可选人体检测根模型初始化失败，使用纯人脸推导");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let roots = Arc::new(SharedModelRoots {
+        detector,
+        embedder,
+        has_registration_detector: registration_detector.is_some(),
+        registration_detector,
+        person_detector,
+        detector_width: package.detector_width,
+        detector_height: package.detector_height,
+        registration_detector_width: package.registration_detector_width,
+        registration_detector_height: package.registration_detector_height,
+        embedder_width: package.embedder_width,
+        embedder_height: package.embedder_height,
+    });
+
+    let mut registry = shared_roots_registry()
+        .lock()
+        .map_err(|_| AlgoError::Internal {
+            reason: "RKNN 模型根权重 registry 锁已中毒".to_string(),
+        })?;
+    if let Some(existing) = registry.get(&key).and_then(Weak::upgrade) {
+        Ok(existing)
+    } else {
+        registry.insert(key, Arc::downgrade(&roots));
+        Ok(roots)
+    }
+}
+
+/// 已验证 manifest 身份与模型输入输出契约的共享 worker（兼容层）。
 #[derive(Debug)]
 pub struct SharedModels {
+    pub roots: Arc<SharedModelRoots>,
     pub worker: Arc<InferenceWorker>,
     pub detector_width: u32,
     pub detector_height: u32,
@@ -71,24 +245,20 @@ pub fn shared_models(package_root: &Path) -> Result<Arc<SharedModels>, AlgoError
         }
     }
 
-    let package = LoadedPackage::load(&key)?;
-    let (worker, sessions) = InferenceWorker::start(&package)?;
-    if !sessions.registration_detector || !sessions.person_detector {
-        tracing::warn!(
-            registration_detector = sessions.registration_detector,
-            person_detector = sessions.person_detector,
-            "RK3568 人脸算法包以降级会话集启动，请核对 model/ 下模型与 librknnrt 版本"
-        );
-    }
+    let roots = shared_model_roots(package_root)?;
+    let sessions = roots.create_face_sessions(None)?;
+    let worker = Arc::new(InferenceWorker::from_sessions(sessions));
+
     let models = Arc::new(SharedModels {
+        roots: Arc::clone(&roots),
         worker,
-        detector_width: package.detector_width,
-        detector_height: package.detector_height,
-        registration_detector_width: package.registration_detector_width,
-        registration_detector_height: package.registration_detector_height,
-        has_registration_detector: sessions.registration_detector,
-        embedder_width: package.embedder_width,
-        embedder_height: package.embedder_height,
+        detector_width: roots.detector_width,
+        detector_height: roots.detector_height,
+        registration_detector_width: roots.registration_detector_width,
+        registration_detector_height: roots.registration_detector_height,
+        has_registration_detector: roots.has_registration_detector,
+        embedder_width: roots.embedder_width,
+        embedder_height: roots.embedder_height,
     });
 
     let mut registry = shared_model_registry()

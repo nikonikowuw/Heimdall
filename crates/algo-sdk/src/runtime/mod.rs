@@ -127,12 +127,25 @@ impl RuntimeSession {
         model_rel_path: &Path,
         policy: FallbackPolicy,
     ) -> Result<Self, AlgoError> {
+        Self::open_with_options(package_root, model_rel_path, policy, None)
+    }
+
+    /// 携带核心掩码与回退策略打开会话（逐实例亲和绑定与共享权重支持）
+    pub fn open_with_options(
+        package_root: &Path,
+        model_rel_path: &Path,
+        policy: FallbackPolicy,
+        core_mask: Option<u32>,
+    ) -> Result<Self, AlgoError> {
         #[cfg(feature = "rknn")]
         {
             // `RknnSessionOptions` 为 `#[non_exhaustive]`，但本 crate 内部可用结构体更新语法。
             let options = platforms::rockchip::RknnSessionOptions {
+                core_mask: core_mask
+                    .map(|m| m as std::ffi::c_int)
+                    .unwrap_or(platforms::rockchip::RKNN_NPU_CORE_AUTO),
                 fallback_policy: policy,
-                ..Default::default()
+                share_weights: true,
             };
             let session = platforms::rockchip::RknnSession::open_or_fallback(
                 package_root,
@@ -144,6 +157,7 @@ impl RuntimeSession {
 
         #[cfg(not(feature = "rknn"))]
         {
+            let _ = core_mask;
             // 本 SDK 未编译任何硬件平台驱动，"真实硬件"在该构建下物理上不存在。
             if policy == FallbackPolicy::RequireHardware {
                 return Err(hardware_unavailable_error(

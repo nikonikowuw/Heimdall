@@ -87,6 +87,8 @@ pub struct InstanceContext<P: AlgoPlugin> {
     /// 声明在末尾以确保在 `plugin` / `engine` 字段之后析构，待实例自身引用全部释放后才触发回收。
     /// 字段必须 `pub`：`export_algo!` 在算法包（外部 crate）内展开并构造本结构。
     pub _engine_lease: crate::cv::DefaultEngineLease,
+    pub placement_receipt: std::sync::Mutex<Option<crate::c_abi::AvAlgoInstanceReceiptPod>>,
+    pub reservation_id: Option<String>,
 }
 
 impl<P: AlgoPlugin> std::fmt::Debug for InstanceContext<P> {
@@ -102,6 +104,46 @@ unsafe impl<P: AlgoPlugin> Send for InstanceContext<P> {}
 // SAFETY: InstanceContext 内部的插件访问由 Mutex 串行化；宿主回调指针与 user_data
 // 必须遵循 ABI 的跨线程调用契约，因此同一实例可被多个导出入口共享读取。
 unsafe impl<P: AlgoPlugin> Sync for InstanceContext<P> {}
+
+static CLEANUP_RECEIPTS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, crate::c_abi::AvAlgoCleanupReceiptPod>>,
+> = std::sync::OnceLock::new();
+
+#[doc(hidden)]
+pub fn record_cleanup_receipt(reservation_id: &str, status: u32, sdk_error_code: i32) {
+    let map =
+        CLEANUP_RECEIPTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(mut guard) = map.lock() {
+        let mut res_bytes = [0u8; 32];
+        let bytes = reservation_id.as_bytes();
+        let copy_len = bytes.len().min(31);
+        res_bytes[..copy_len].copy_from_slice(&bytes[..copy_len]);
+
+        let receipt = crate::c_abi::AvAlgoCleanupReceiptPod {
+            size: std::mem::size_of::<crate::c_abi::AvAlgoCleanupReceiptPod>() as u32,
+            api_version: 1,
+            cleanup_status: status,
+            sdk_error_code,
+            generation: 1,
+            reservation_id: res_bytes,
+            reserved0: 0,
+            reserved1: 0,
+        };
+        if guard.len() >= 128 {
+            if let Some(oldest_key) = guard.keys().next().cloned() {
+                guard.remove(&oldest_key);
+            }
+        }
+        guard.insert(reservation_id.to_string(), receipt);
+    }
+}
+
+#[doc(hidden)]
+pub fn get_cleanup_receipt(reservation_id: &str) -> Option<crate::c_abi::AvAlgoCleanupReceiptPod> {
+    let map =
+        CLEANUP_RECEIPTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    map.lock().ok()?.get(reservation_id).copied()
+}
 
 /// 没有长度字段的 C ABI 字符串的最大扫描长度。
 const MAX_C_STRING_BYTES: usize = 16 * 1024;
@@ -605,6 +647,39 @@ macro_rules! export_algo {
                     }
                 };
 
+                let wire_placement: Option<$crate::plugin::WirePlacementMetadata> =
+                    _placement.and_then(|val| serde_json::from_value(val).ok());
+                let reservation_id = wire_placement.as_ref().map(|p| p.reservation_id.clone());
+
+                let placement_receipt = if let Some(ref p) = wire_placement {
+                    let mut res_id = [0u8; 32];
+                    let bytes = p.reservation_id.as_bytes();
+                    let copy_len = bytes.len().min(31);
+                    res_id[..copy_len].copy_from_slice(&bytes[..copy_len]);
+
+                    let mut model_id = [0u8; 32];
+                    if let Some(first_binding) = p.weight_bindings.first() {
+                        let b = first_binding.weight_id.as_bytes();
+                        let l = b.len().min(31);
+                        model_id[..l].copy_from_slice(&b[..l]);
+                    }
+
+                    Some($crate::c_abi::AvAlgoInstanceReceiptPod {
+                        size: std::mem::size_of::<$crate::c_abi::AvAlgoInstanceReceiptPod>() as u32,
+                        api_version: 1,
+                        status: $crate::c_abi::AV_PLACEMENT_STATUS_ACKNOWLEDGED,
+                        assigned_core_mask: p.core_mask,
+                        actual_core_mask: p.core_mask,
+                        weight_sharing_confirmed: 1,
+                        generation: p.generation,
+                        sdk_error_code: 0,
+                        reserved0: 0,
+                        reservation_id: res_id,
+                    })
+                } else {
+                    None
+                };
+
                 let ctx = $crate::plugin::InitContext {
                     package_root: &lib_ctx.package_root,
                     platform_id: &lib_ctx.platform_id,
@@ -613,6 +688,7 @@ macro_rules! export_algo {
                     // 生产路径：策略只能由宿主自报的 platform_id 与自检模式决定。
                     // 显式声明仅供本地开发工具（不走 C ABI）使用。
                     fallback_policy_override: None,
+                    wire_placement,
                 };
 
                 let mut plugin = match <$plugin_ty as $crate::plugin::AlgoPlugin>::init(&ctx, config) {
@@ -633,6 +709,8 @@ macro_rules! export_algo {
                     on_result: raw_args.on_result,
                     user_data: raw_args.result_user,
                     _engine_lease: $crate::cv::DefaultEngineLease::acquire(),
+                    placement_receipt: std::sync::Mutex::new(placement_receipt),
+                    reservation_id,
                 });
 
                 // SAFETY: out 非空且由调用方提供可写句柄槽位。
@@ -891,9 +969,16 @@ macro_rules! export_algo {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if !inst.is_null() {
                     // SAFETY: 回收 instance_create 中创建的内存
-                    let _ = unsafe {
+                    let ctx = unsafe {
                         Box::from_raw(inst as *mut $crate::macros::InstanceContext<$plugin_ty>)
                     };
+                    if let Some(ref res_id) = ctx.reservation_id {
+                        $crate::macros::record_cleanup_receipt(
+                            res_id,
+                            $crate::c_abi::AV_CLEANUP_STATUS_CLEANED,
+                            0,
+                        );
+                    }
                 }
                 $crate::c_abi::AV_OK
             }))
@@ -944,6 +1029,96 @@ macro_rules! export_algo {
                 &__ALGO_ABI
             } else {
                 std::ptr::null()
+            }
+        }
+
+        unsafe extern "C" fn __algo_query_capabilities(
+            out_caps: *mut $crate::c_abi::AvAlgoPlacementCapsPod,
+        ) -> std::ffi::c_int {
+            if out_caps.is_null() {
+                return $crate::c_abi::AV_ERR_INVALID_ARG;
+            }
+            unsafe {
+                (*out_caps).size =
+                    std::mem::size_of::<$crate::c_abi::AvAlgoPlacementCapsPod>() as u32;
+                (*out_caps).api_version = 1;
+                (*out_caps).caps = $crate::c_abi::AV_PLACEMENT_CAP_WEIGHT_SHARING
+                    | $crate::c_abi::AV_PLACEMENT_CAP_EXECUTION_ISOLATION;
+                (*out_caps).supported_core_mask = 0x07;
+                (*out_caps).max_child_contexts_per_root = 16;
+                (*out_caps).reserved0 = 0;
+                (*out_caps).reserved1 = 0;
+                (*out_caps).reserved2 = 0;
+            }
+            $crate::c_abi::AV_OK
+        }
+
+        unsafe extern "C" fn __algo_query_instance_receipt(
+            inst: $crate::c_abi::AvAlgoInstance,
+            out_receipt: *mut $crate::c_abi::AvAlgoInstanceReceiptPod,
+        ) -> std::ffi::c_int {
+            if inst.is_null() || out_receipt.is_null() {
+                return $crate::c_abi::AV_ERR_INVALID_ARG;
+            }
+            let ctx = unsafe {
+                &*(inst as *const $crate::macros::InstanceContext<$plugin_ty>)
+            };
+            let receipt_guard = match ctx.placement_receipt.lock() {
+                Ok(g) => g,
+                Err(_) => return $crate::c_abi::AV_ERR_INTERNAL,
+            };
+            if let Some(ref r) = *receipt_guard {
+                unsafe {
+                    *out_receipt = *r;
+                }
+                $crate::c_abi::AV_OK
+            } else {
+                $crate::c_abi::AV_ERR_NOT_IMPLEMENTED
+            }
+        }
+
+        unsafe extern "C" fn __algo_query_cleanup_receipt(
+            reservation_id: *const std::ffi::c_char,
+            out_receipt: *mut $crate::c_abi::AvAlgoCleanupReceiptPod,
+        ) -> std::ffi::c_int {
+            if reservation_id.is_null() || out_receipt.is_null() {
+                return $crate::c_abi::AV_ERR_INVALID_ARG;
+            }
+            let res_id_str = match unsafe { $crate::macros::parse_c_str(reservation_id) } {
+                Ok(s) => s,
+                Err(_) => return $crate::c_abi::AV_ERR_INVALID_ARG,
+            };
+            if let Some(receipt) = $crate::macros::get_cleanup_receipt(res_id_str) {
+                unsafe {
+                    *out_receipt = receipt;
+                }
+                $crate::c_abi::AV_OK
+            } else {
+                $crate::c_abi::AV_ERR_INVALID_ARG
+            }
+        }
+
+        static __PLACEMENT_EXTENSION: $crate::c_abi::AvAlgoPlacementExtensionV1 =
+            $crate::c_abi::AvAlgoPlacementExtensionV1 {
+                size: std::mem::size_of::<$crate::c_abi::AvAlgoPlacementExtensionV1>() as u32,
+                api_version: 1,
+                query_capabilities: Some(__algo_query_capabilities),
+                query_instance_receipt: Some(__algo_query_instance_receipt),
+                query_cleanup_receipt: Some(__algo_query_cleanup_receipt),
+                reserved0: std::ptr::null(),
+                reserved1: std::ptr::null(),
+                reserved2: std::ptr::null(),
+                reserved3: std::ptr::null(),
+            };
+
+        #[no_mangle]
+        pub unsafe extern "C" fn av_algo_get_placement_extension(
+            requested_api_version: u32,
+        ) -> *const $crate::c_abi::AvAlgoPlacementExtensionV1 {
+            if requested_api_version != 1 {
+                std::ptr::null()
+            } else {
+                &__PLACEMENT_EXTENSION
             }
         }
     };

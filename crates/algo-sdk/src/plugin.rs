@@ -10,6 +10,31 @@ use crate::error::AlgoError;
 use crate::frame::SafeFrame;
 use crate::runtime::FallbackPolicy;
 
+/// 宿主注入算法配置的 Wire Placement 元数据 (`__heimdall_placement`)
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WirePlacementMetadata {
+    pub version: u32,
+    pub reservation_id: String,
+    pub group_id: String,
+    pub generation: u64,
+    pub device_id: String,
+    pub runtime_device_index: u32,
+    pub strategy: String,
+    pub core_mask: u32,
+    pub required: bool,
+    pub weight_sharing: String,
+    #[serde(default)]
+    pub weight_bindings: Vec<WireWeightBinding>,
+}
+
+/// 单个模型物理权重引用绑定
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WireWeightBinding {
+    pub model_key: String,
+    pub weight_id: String,
+    pub generation: u64,
+}
+
 /// 算法实例初始化上下文
 #[derive(Debug)]
 pub struct InitContext<'a> {
@@ -31,6 +56,8 @@ pub struct InitContext<'a> {
     /// **该字段不可翻越安装自检硬门**：`is_self_test == true` 时策略恒为
     /// [`FallbackPolicy::RequireHardware`]，本字段被忽略。
     pub fallback_policy_override: Option<FallbackPolicy>,
+    /// 宿主下发的硬件放置与多核亲和元数据
+    pub wire_placement: Option<WirePlacementMetadata>,
 }
 
 impl<'a> InitContext<'a> {
@@ -50,6 +77,7 @@ impl<'a> InitContext<'a> {
             instance_id,
             is_self_test,
             fallback_policy_override: None,
+            wire_placement: None,
         }
     }
 
@@ -60,6 +88,17 @@ impl<'a> InitContext<'a> {
     pub fn with_fallback_policy_override(mut self, policy: FallbackPolicy) -> Self {
         self.fallback_policy_override = Some(policy);
         self
+    }
+
+    /// 注入宿主放置元数据
+    pub fn with_placement(mut self, placement: Option<WirePlacementMetadata>) -> Self {
+        self.wire_placement = placement;
+        self
+    }
+
+    /// 获取期望的 NPU 核心掩码 (若宿主下发)
+    pub fn target_core_mask(&self) -> Option<u32> {
+        self.wire_placement.as_ref().map(|p| p.core_mask)
     }
 
     /// 加载当前算法包根目录下的私有 `.env` 文件（不污染全局环境）
